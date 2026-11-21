@@ -44,7 +44,9 @@
 
 /* ── Panel: the reserved gutter ── */
 :is(.thread-stack, .thread-stack-off) > .session-history[data-thread-map="panel"] {
-  padding-left: calc(clamp(24px, 4%, 40px) + var(--thread-map-w, 184px) + var(--thread-map-gap) + var(--thread-sliver-room, 0px));
+  /* chat-reading.css centres the column, never closer to the edge than this room. */
+  --history-left: calc(clamp(24px, 4%, 40px) + var(--thread-map-w, 184px) + var(--thread-map-gap) + var(--thread-sliver-room, 0px));
+  padding-left: var(--history-left);
 }
 .thread-map[data-shape="panel"] {
   width: var(--thread-map-w, 184px);
@@ -251,7 +253,8 @@
 /* ── Rail: marks in the left padding, the labelled tree on hover / focus / tap ── */
 /* The text steps further in (`--thread-map-rail-step`), so the marks never touch it. */
 :is(.thread-stack, .thread-stack-off) > .session-history[data-thread-map="rail"] {
-  padding-left: calc(clamp(24px, 4%, 40px) + var(--thread-map-rail-step) + var(--thread-sliver-room, 0px));
+  --history-left: calc(clamp(24px, 4%, 40px) + var(--thread-map-rail-step) + var(--thread-sliver-room, 0px));
+  padding-left: var(--history-left);
 }
 .thread-map[data-shape="rail"] {
   width: 20px;

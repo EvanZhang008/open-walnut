@@ -1,7 +1,8 @@
 .thread-stack > .session-history { min-height: 0; }
 /* Depth >= 1: the scroll box gives the sliver its room on the left. */
 .thread-stack[data-sliver] > .session-history {
-  padding-left: calc(clamp(24px, 4%, 40px) + var(--thread-sliver-room, 0px));
+  --history-left: calc(clamp(24px, 4%, 40px) + var(--thread-sliver-room, 0px));
+  padding-left: var(--history-left);
 }
 /* The sliver hugs the content column; the outline rail moves out past it. */
 .thread-stack[data-sliver] > .session-history > .session-toc {

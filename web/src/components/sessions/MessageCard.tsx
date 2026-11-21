@@ -20,8 +20,11 @@ import '@/styles/step-rows.css';
 /** A task the message is to, from or about, as a pill (a click opens it). */
 export function TaskPill({ taskId, tooltip }: { taskId: string; tooltip?: string }) {
   const label = useTaskLabel(taskId);
+  // Its card re-checks its cut when the label arrives (it loads after the card is drawn).
+  const pillRef = useCutCue<HTMLAnchorElement>(label?.title, 'card');
   return (
     <a
+      ref={pillRef}
       className="provenance-chip provenance-chip-task task-link op-card-to-pill"
       data-task-id={taskId}
       href={taskPath(taskId)}
@@ -87,7 +90,7 @@ export function CardMain({ title, titleCopy, summary, open, onToggle }: {
   onToggle: () => void;
 }) {
   // The card shows its chevron at rest while its words are cut (cut-cue.ts).
-  const mainRef = useCutCue<HTMLButtonElement>(`${title ?? ''}\n${summary ?? ''}`, true);
+  const mainRef = useCutCue<HTMLButtonElement>(`${title ?? ''}\n${summary ?? ''}`, 'parent');
   return (
     <>
       <button

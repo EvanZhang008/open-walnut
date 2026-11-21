@@ -30,7 +30,6 @@ import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { StepIcon, toolDisplayName, toolStepIcon } from './StepIcon';
 import { useCutCue } from './cut-cue';
-import '@/styles/chat-reading.css';
 import { InFoldBody, InStepList, RunLive, useInFoldBody, useInStepList, useRunLive } from './fold-body-context';
 
 /** The most calls a run lays out as rows of an opened fold (ToolRunShell `flat`). */
@@ -293,7 +292,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   const [open, setOpen] = useRowDisclosure(disclosureId, false);
   const inStepList = useInStepList();
   // Its step row shows the chevron at rest while its first line is cut (cut-cue.ts).
-  const stepRef = useCutCue<HTMLButtonElement>(`${open}\n${inStepList}\n${text.length}`);
+  const stepRef = useCutCue<HTMLButtonElement>(`${open}\n${inStepList}\n${thinkingFirstLine(text)}`);
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;

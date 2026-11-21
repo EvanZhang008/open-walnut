@@ -170,7 +170,7 @@ function check(kind: string, state: string, l: Lines) {
 async function cueOf(row: Locator): Promise<{ cut: boolean; cue: number | null; text: string }> {
   return row.evaluate((head: Element) => {
     const card = head.closest('.provenance-card') ?? head;
-    const parts = [...card.querySelectorAll<HTMLElement>('.op-card-title, .op-card-summary, .op-card-to, .tool-run-label, .tool-run-detail')]
+    const parts = [...card.querySelectorAll<HTMLElement>('.op-card-title, .op-card-summary, .op-card-to, .op-card-to-pill, .op-card-to-text, .tool-run-label, .tool-run-detail')]
       .filter((el) => { const inner = el.closest('.op-card-detail, .tool-run-body'); return !(inner && card.contains(inner)); });
     const cut = parts.some((el) => el.scrollWidth > el.clientWidth + 1);
     const chev = card.querySelector<HTMLElement>(':scope > .op-card-main .op-card-more-chevron, :scope > .tool-run-toggle .tool-run-chevron, :scope .tool-run-chevron');

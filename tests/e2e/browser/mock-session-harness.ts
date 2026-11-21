@@ -46,8 +46,8 @@ export async function takeLine(page: Page, ...rowIds: string[]) {
 }
 
 /** `stream`: what the stream subscribe answers (a panel opened, or reloaded, mid-turn).
- *  `record`: more fields of the session record (its question anchors, say). */
-/** `rpcs`: socket requests answered here by method (e.g. `session:get-queue`), the rest go to the server. */
+ *  `record`: more fields of the session record (its question anchors, say).
+ *  `rpcs`: socket requests answered here by method (e.g. `session:get-queue`), the rest go to the server. */
 export async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle', stream: { blocks: unknown[]; isStreaming: boolean } = { blocks: [], isStreaming: false }, record: Record<string, unknown> = {}, rpcs: Record<string, unknown> = {}) {
   await page.addInitScript(({ stream, rpcs }) => {
     const OrigWebSocket = window.WebSocket;

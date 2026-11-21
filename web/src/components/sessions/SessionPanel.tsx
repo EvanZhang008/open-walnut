@@ -2706,7 +2706,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     onQuoteInChat: quoteInChat,
     readTimeline: timelineShare,
   }), [sessionId, session?.engine, taskPhase, initialPromptText, session?.cwd, session?.host, session?.lane, optimisticMsgs, queueSyncProp,
-    handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, dismissFailed, onSessionClick,
+    handleEdit, handleDelete, handleRetry, session?.cwdGone?.history, session?.archived, dismissFailed, onSessionClick,
     handleFileOpen, quoteInChat, timelineShare]);
 
   // Shift+Tab in a composer: the session's next mode.
