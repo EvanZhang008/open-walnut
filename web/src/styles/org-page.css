@@ -290,6 +290,8 @@
 }
 .org-detail-sub { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12px; }
 .org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+/* "Tasks" before the task pills: they count tasks, the threads pill before them threads for him. */
+.org-pills-label { align-self: center; margin-left: 4px; color: var(--fg-muted, #86868B); font-size: 11px; }
 .org-pill {
   display: inline-flex;
   align-items: center;

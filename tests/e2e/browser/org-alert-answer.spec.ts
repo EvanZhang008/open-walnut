@@ -320,7 +320,7 @@ test('a decision letter: its two actions in the row, one click answers it, the r
   // The VP's header counts its threads, never its tasks' asks (4ea0b2f06): the letter is a row
   // of its Tasks, and the row going is what answering it shows.
   const counts = page.getByTestId('org-detail-counts')
-  await expect(counts.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/, { timeout: 60_000 })
+  await expect(counts.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads? for you$/, { timeout: 60_000 })
   await expect(counts).not.toContainText('Needs you')
   const menu = await openAnswer(page, ids.letter, 'letter')
   const options = menu.getByTestId('org-answer-letter')

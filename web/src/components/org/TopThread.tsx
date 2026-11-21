@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import { sharedAnswers } from '@open-walnut/thread-view';
+import { sharedAnswers, threadCountLabel } from '@open-walnut/thread-view';
 import type { ImageAttachment } from '@/api/chat';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { isBoolean, usePageView } from '@/utils/view-memory';
@@ -91,7 +91,7 @@ export function TopThread({ task, sessionId, threads, list, at }: {
     <div ref={rootRef} className="top-thread" data-testid="top-thread" data-count={n} data-thread-id={t.id}>
       <div className="top-thread-bar">
         <button type="button" className="top-thread-step" data-testid="top-thread-prev" aria-label="Previous thread" disabled={i === 0} onClick={() => step(i - 1)}>{'‹'}</button>
-        <span className="top-thread-pos" data-testid="top-thread-pos">{i + 1} / {n}</span>
+        <span className="top-thread-pos" data-testid="top-thread-pos" title={`${i + 1} of ${threadCountLabel(n)} for you`}>{i + 1} / {n}</span>
         <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{'›'}</button>
         {n - i - 1 > 0 && <span className="top-thread-left" data-testid="top-thread-left">{n - i - 1} more</span>}
         <button type="button" className="top-thread-hide" data-testid="top-thread-hide" aria-expanded={true} onClick={() => setHidden(true)}

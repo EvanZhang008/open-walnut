@@ -118,7 +118,11 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
  *  "N open" (2026-11-03, the user: "remove xx open not needed also show thread and number").
  *  `keepsThreads` (the CEO, a VP, `nodeKeepsThreads`): its threads first, always, "0 threads" in grey,
  *  and no Needs you of its own (2026-11-03, the user: "the little red should be thread instead of need
- *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. */
+ *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. Each number says what
+ *  it counts (2026-11-21, a review on his data: "8 threads" over a Threads list whose All chip read 61,
+ *  "32 Waiting / snoozed" beside a Waiting / Snoozed chip of 38): the threads pill counts the threads
+ *  for him (Needs you and Done, thread-groups.ts threadsForHim), "for you"; the pills after "Tasks"
+ *  count its tasks, not threads. */
 function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
@@ -137,9 +141,10 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
           onClick={onThreads}
           title={shown ? `${threadCountLabel(shown)} for you${threads?.title ? `: ${threads.title}` : ''}` : 'Show Threads'}
         >
-          <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)}
+          <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)} for you
         </button>
       )}
+      {keepsThreads && headerPills(tabs, approvals, keepsThreads).length > 0 && <span className="org-pills-label" data-testid="org-pills-tasks-label">Tasks</span>}
       {headerPills(tabs, approvals, keepsThreads).map((p) => pill(p.tab, p.n))}
     </span>
   );

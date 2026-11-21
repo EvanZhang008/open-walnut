@@ -128,7 +128,7 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   // snoozed; the question is in its Tasks, never a Needs you of the node.
   const counts = detail.getByTestId('org-detail-counts')
   await expect(counts.locator('> *').first()).toHaveAttribute('data-testid', 'org-pill-threads')
-  await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads')
+  await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads for you')
   await expect(counts).not.toContainText('Needs you')
   await expect(counts).toContainText('1 Not started')
   await expect(counts).not.toContainText('Waiting / snoozed')

@@ -119,6 +119,28 @@ describe('the top steps through the Threads view\'s own list', () => {
     expect(topIndex([], null, 2)).toBe(-1)
   })
 
+  // 2026-11-21, a review on his data: pinning a Waiting card put it on the top's first page while it
+  // kept its old place, "1 / 6" jumped to "2 / 7". A pin is a place in his list, never something for
+  // him: the top's list and its N stay, and the card on show stays on show.
+  it('pinning a card that waits on nobody leaves the top as it was; pinning one of its own keeps the card on show', () => {
+    const all = realNode()
+    const before = topThreads(all, NOW)
+    const onShow = before[0]!.id
+    const waiting = all.find((t) => t.state === 'pending')!
+    waiting.pinned = { at: at(119), by: 'human' }
+    const pinnedWaiting = topThreads(all, NOW)
+    expect(pinnedWaiting.map((t) => t.id)).toEqual(before.map((t) => t.id))
+    expect(threadCounts(all, NOW).shown).toBe(before.length)
+    expect(pinnedWaiting[topIndex(pinnedWaiting, onShow, 0)]!.id).toBe(onShow)
+    // Pinning a counted card sorts it first: the one on show is still the one on show, one place on.
+    const other = before.find((t) => !t.pinned && t.id !== onShow)!
+    all.find((t) => t.id === other.id)!.pinned = { at: at(119), by: 'human' }
+    const pinnedOwn = topThreads(all, NOW)
+    expect(pinnedOwn.length).toBe(before.length)
+    expect(pinnedOwn[0]!.id).toBe(other.id)
+    expect(pinnedOwn[topIndex(pinnedOwn, onShow, 0)]!.id).toBe(onShow)
+  })
+
   it('the hidden line counts them and the ones that need him', () => {
     const list = topThreads(realNode(), NOW)
     expect(hiddenLine(list)).toBe('18 threads (3 need you)')

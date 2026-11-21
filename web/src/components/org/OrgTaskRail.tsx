@@ -63,6 +63,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 import { useOpenTask } from '@/hooks/useOpenTask';
+import { threadCountLabel } from '@open-walnut/thread-view';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -419,7 +420,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
         <div className="org-top-tabs" role="group" aria-label={keepsBrief ? (briefOff ? 'Threads or Tasks' : 'Threads, Tasks or Brief') : 'Tasks'}>
           {keepsBrief && (
             <button type="button" aria-pressed={view === 'threads'} className={`org-top-tab${view === 'threads' ? ' is-on' : ''}`} data-testid="org-top-threads" onClick={() => onView('threads')}>
-              Threads{threadsCount > 0 && <span className="org-top-count">{threadsCount}</span>}
+              Threads{threadsCount > 0 && <span className="org-top-count" title={`${threadCountLabel(threadsCount)} for you`}>{threadsCount}</span>}
               {threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
             </button>
           )}

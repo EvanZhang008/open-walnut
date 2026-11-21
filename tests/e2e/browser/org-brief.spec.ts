@@ -189,7 +189,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   }
   // The node's header counts its threads, never its tasks' asks (those are this section).
   await expect(detail.getByTestId('org-pill-needs')).toHaveCount(0)
-  await expect(detail.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/)
+  await expect(detail.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads? for you$/)
   // A count in the header opens its section in the same list; Needs you stays open beside it.
   await detail.getByTestId('org-pill-notstarted').click()
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')

@@ -191,6 +191,7 @@ const SURFACES: Record<string, string> = {
   'web/src/components/org/OrgNodeDetail.tsx': 'the header\'s "N threads" pill: threadCounts of the live list, else user_status.threads',
   'web/src/components/org/top-thread-model.ts': 'the top of the chat: threadsForHim; its hidden line counts that list',
   'web/src/components/org/TopThread.tsx': 'steps through topThreads; a card that stops waiting on him gives its place to the next by itself',
+  'web/src/components/org/OrgTaskRail.tsx': 'the Threads tab\'s number (the header\'s count), titled "for you"',
   'web/src/components/org/useOrgThreads.ts': 'predicts user_status.threads after a write (statusWithThreads, threadCounts)',
   'web/src/hooks/status-prediction.ts': 'statusWithThreads: threadCounts of the list as drawn',
   'ios-native/Walnut/API/WalnutAPIThreads.swift': 'decodes shown_count and each thread\'s counted flag',
