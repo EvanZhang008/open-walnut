@@ -17,6 +17,7 @@
  * never disagree. It is an estimate, not an invoice; a request whose model has
  * no price is counted and named, never priced as zero.
  */
+import { projectOrInbox } from '../inbox-project.js';
 import { currentPriceSnapshot, ensurePriceBook, priceBookInfo, priceThresholds, resolvePrice, type UserPriceRates } from './price-book.js';
 import { DEFAULT_PRICING } from './pricing.js';
 import { priceBucket } from './session-cost-pricing.js';
@@ -384,7 +385,8 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
         for (const { p, subagent, sessionId, outside } of rows) {
           // No project to put an outside run under: its folder stands in.
           if (t.folder && !project) byProject.add(`dir:${t.folder.cwd}`, dirLabel(t.folder.cwd), date, p);
-          else byProject.add(project, project || 'Inbox', date, p);
+          // One Inbox row, whether a task says `Inbox` or an older one (or no task) says ''.
+          else byProject.add(projectOrInbox(project), projectOrInbox(project), date, p);
           const kind: WorkKind = workKindOf({ subagent, routineTask: task?.routine, sessionType: sessions.get(sessionId)?.type, outside });
           byKind.add(kind, WORK_KINDS[kind], date, p);
         }

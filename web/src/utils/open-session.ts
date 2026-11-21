@@ -9,6 +9,7 @@
 import { armSessionInboxLink, parseSessionInboxTarget } from '@/components/inbox/session-inbox-link';
 import { isPopoutPath, openTaskInApp } from '@/popout/openPopout';
 import { taskIdOfPath } from './task-path';
+import { isInboxProject } from '@open-walnut/core';
 
 /** Extra state a session deep link can carry (currently: the Inbox tab). */
 export interface OpenSessionOptions {
@@ -146,7 +147,8 @@ export function openTaskHere(taskId: string, navigate: (to: string) => void, opt
  * before the navigation — the draft is already open by the time home paints.
  */
 export function openDraftSessionOnHome(project: string | undefined, navigate: (to: string) => void): void {
-  window.dispatchEvent(new CustomEvent('session-launcher:open', { detail: project ? { project } : undefined }));
+  // The Inbox seeds no project: a draft says '' for it.
+  window.dispatchEvent(new CustomEvent('session-launcher:open', { detail: project && !isInboxProject(project) ? { project } : undefined }));
   navigate('/');
 }
 

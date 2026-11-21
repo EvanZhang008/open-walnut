@@ -8,6 +8,7 @@
  */
 import type { DraftColumn } from '@/components/sessions/draft-column';
 import type { HandedLaunch, HandedPlace } from './ext-panel-model';
+import { projectGroupKey } from '@/utils/project-display';
 
 export const HOME_PLACE_KEY = 'walnut-ext-home-place';
 
@@ -99,6 +100,6 @@ export function withHandedLaunch(d: DraftColumn, l: HandedLaunch): DraftColumn {
     ...rest, meta,
     cwd: p.cwd, host: p.host, cwdPinned: !!p.cwd, createCwd: p.createCwd === true,
     ...(p.hostLabel ? { hostLabel: p.hostLabel } : {}),
-    ...(p.projectSource ? { project: p.project ?? '', projectSource: p.projectSource } : {}),
+    ...(p.projectSource ? { project: projectGroupKey(p.project), projectSource: p.projectSource } : {}),
   };
 }

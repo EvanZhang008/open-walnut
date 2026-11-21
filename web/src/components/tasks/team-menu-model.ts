@@ -1,5 +1,6 @@
 import type { Task } from '@open-walnut/core';
 import { CEO_LABEL, VP_LABEL, isDirector, orgDisplayTitle } from '@open-walnut/org-tree';
+import { isInboxProject } from '@open-walnut/core';
 import { projectDisplayName } from '@/utils/project-display';
 import { isDoneTask } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
@@ -58,7 +59,7 @@ export const RELEASE_FILTER_FROM = 8;
  * row offers "Make it a Director" or "Remove from Directors".
  */
 export function directorEntry(tasks: readonly Task[], task: Pick<Task, 'id' | 'project' | 'org_role' | 'director' | 'phase' | 'status'>): { isDirector: boolean; open: number } | null {
-  if (task.org_role || !(task.project ?? '').trim() || isDoneTask(task)) return null;
+  if (task.org_role || isInboxProject(task.project) || isDoneTask(task)) return null;
   const open = subtasksOf(tasks, task.id).filter((t) => !isDoneTask(t)).length;
   return { isDirector: isDirector(task.director, open), open };
 }

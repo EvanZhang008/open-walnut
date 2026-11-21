@@ -15,6 +15,7 @@
  */
 import { DEFAULT_TASK_QUERY_FILTER_STATE, type TaskQueryFilterState } from './view-filter-model';
 import type { TpSort } from './tasks-page-sort';
+import { projectGroupKey } from '../../utils/project-display';
 
 export const LS_TASKS_PAGE_PROJECT = 'walnut-tasks-page-project';
 export const LS_TASKS_PAGE_SORT = 'walnut-tasks-page-sort';
@@ -48,14 +49,14 @@ function safeStore(): KeyStore | null {
 /**
  * Active project: `null` = All Tasks, `''` = Inbox, else a project name. Stored as
  * JSON so the empty string (a real value: Inbox) survives the round trip; a missing
- * or malformed key reads as All Tasks.
+ * or malformed key reads as All Tasks. The Inbox's name reads as '' too, the rail's key for it.
  */
 export function readActiveProject(store: KeyStore | null = safeStore()): string | null {
   try {
     const raw = store?.getItem(LS_TASKS_PAGE_PROJECT);
     if (!raw) return null;
     const v: unknown = JSON.parse(raw);
-    return typeof v === 'string' ? v : null;
+    return typeof v === 'string' ? projectGroupKey(v) : null;
   } catch {
     return null;
   }

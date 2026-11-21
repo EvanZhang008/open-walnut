@@ -6,7 +6,7 @@
  * `--settings {"enabledPlugins":{"<id>":false}}` (providers/claude-scope-settings.ts),
  * which overrides the user's own enabledPlugins for that one process: the plugin's
  * skills, agents and MCP servers stay out of its context. The user's settings files
- * are never written. A project without the key, and Inbox, spawn as before.
+ * are never written. A project without the key spawns as before (the Inbox too: it has settings of its own now).
  */
 import { ProjectSettingsError } from './project-launch-defaults.js';
 

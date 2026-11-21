@@ -37,6 +37,7 @@ import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
+import { isInboxProject } from '../../core/inbox-project.js'
 
 export const projectsV1Router = Router()
 
@@ -166,8 +167,8 @@ projectsV1Router.delete('/projects/:name', async (req: Request, res: Response, n
       return
     }
     const name = String(req.params.name ?? '')
-    if (!name.trim()) {
-      sendError(res, 400, 'bad_request', 'Inbox is not a project — nothing to delete')
+    if (isInboxProject(name)) {
+      sendError(res, 400, 'bad_request', 'The Inbox cannot be deleted: it is where every task without another project goes.')
       return
     }
     const cascade = req.query.remote === '1' || req.query.remote === 'true'

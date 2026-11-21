@@ -39,11 +39,12 @@ export function requestTagValue(taskId: string | undefined): string {
  * The project header's value: the project's name percent-encoded as UTF-8
  * (encodeURIComponent), so a space, a colon or a non-ASCII letter rides a header line
  * as it is meant; a proxy decodes it with decodeURIComponent (urllib.parse.unquote).
- * '' for a task in the Inbox, which sends no project header.
+ * '' for a task in the Inbox ('' or `Inbox`), which sends no project header.
  */
 export function requestProjectValue(project: string | undefined): string {
+  // Inline, not isInboxProject: this file has no dependencies (the host daemon's worker bundles it).
   const name = (project ?? '').trim()
-  return name ? encodeURIComponent(name) : ''
+  return name && name.toLowerCase() !== 'inbox' ? encodeURIComponent(name) : ''
 }
 
 /** The tag's own header lines: the session's, then its project's when it has one. */

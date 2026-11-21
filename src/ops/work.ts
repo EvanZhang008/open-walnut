@@ -12,7 +12,7 @@ import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
-import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
+import { isInboxProject, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
@@ -683,7 +683,7 @@ defineOp({
     'Read one project\'s registry metadata, including default_cwd, default_host and claude_plugins_off. ' +
     'This is not the project rename or merge operation.',
   input: {
-    name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
+    name: z.string().min(1).describe('Project name; `Inbox` holds the Inbox\'s own settings'),
   },
   bind: { method: 'GET', path: '/projects/:name/metadata' },
   tags: { readonly: true, remote: 'allow' },
@@ -703,7 +703,7 @@ defineOp({
     'workspace_source says where a new task of the project gets its code: a workspace provider, the folder it is made from, and its default inputs. ' +
     'Do not use project rename or merge for settings.',
   input: {
-    name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
+    name: z.string().min(1).describe('Project name; `Inbox` holds the Inbox\'s own settings'),
     default_cwd: z.string().nullable().optional().describe('Absolute default working directory; null clears it'),
     default_host: z.string().nullable().optional().describe('Default execution host alias; null clears it'),
     default_engine: z.enum(SESSION_ENGINE_IDS).nullable().optional().describe('Default coding engine for new tasks; null clears it (and its model)'),
@@ -777,7 +777,7 @@ defineOp({
   },
   handler: async (args, call) => {
     const project = String(args.project ?? '').trim();
-    if (!project) return { path: null, reason: 'Inbox has no registry row, so it has no tracking note.' };
+    if (isInboxProject(project)) return { path: null, reason: 'The Inbox has no tracking note.' };
     const { readNote } = await import('./core.js');
     const row = await projectRow(project, call);
     const recorded = recordedTrackingPath(row.metadata);
@@ -822,16 +822,16 @@ defineOp({
     + 'skeleton (status / workstreams / open questions / log) when the project has no note, ADOPTS an '
     + 'existing note at that path instead of overwriting it, and records the path in '
     + 'task_projects.metadata.tracking_note. Idempotent: call it before the first edit of a run and it '
-    + 'does nothing when the note is already there. Inbox is refused (it has no registry row). '
+    + 'does nothing when the note is already there. The Inbox is refused (it keeps no tracking note). '
     + 'Answers { path, created, adopted } — then edit the note with note_edit, never note_write.',
   input: {
     project: z.string().min(1).describe('Project name (exact, case-insensitive); Inbox is refused'),
   },
   handler: async (args, call) => {
     const project = String(args.project ?? '').trim();
-    // Refused HERE, before anything is written: setProjectMetadata refuses Inbox
-    // too, but by then the note would already exist as an orphan in the vault.
-    if (!project) throw new Error('Inbox has no registry row, so it can hold no tracking note — pass a project name.');
+    // Refused HERE, before anything is written: the Inbox keeps no tracking note
+    // (trackingNotePathFor has no path for it), and a note written first would be an orphan.
+    if (isInboxProject(project)) throw new Error('The Inbox keeps no tracking note: pass another project name.');
 
     const { readNote } = await import('./core.js');
     const { TRACKING_SKELETON, trackingNotePathFor } = await import('../core/tracking-note.js');

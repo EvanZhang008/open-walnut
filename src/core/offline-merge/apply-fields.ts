@@ -14,6 +14,7 @@
  * leaves nothing applied, and a failed row write takes its entries back (both retry).
  */
 
+import { isInboxProject, projectOrInbox } from '../inbox-project.js';
 import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { READ_MARKER_KEYS, type Task, type TaskPhase, type TaskStatus } from '../types.js';
@@ -66,7 +67,8 @@ export async function pairValidator(): Promise<(project: string, groupId: string
   return (project, groupId) => {
     if (!groupId) return true;
     const owner = byId.get(groupId);
-    return owner !== undefined && owner.toLowerCase() === project.toLowerCase();
+    // '' (a folder or a replica from before the Inbox was a project) and `Inbox` are one project.
+    return owner !== undefined && projectOrInbox(owner).toLowerCase() === projectOrInbox(project).toLowerCase();
   };
 }
 
@@ -210,7 +212,8 @@ async function applyFieldsOnce(
   // The project, settled before the lock when this write would move the task.
   const guess = resolveTaskFields({ mac: pre as never, fields, at: ctx.at, offset: ctx.offset, pairValid, textMerges });
   let settledName: string | undefined;
-  if (typeof guess.patch.project === 'string' && guess.patch.project) {
+  // A move into the Inbox needs no settling: it is local, never deleted, never claimed.
+  if (typeof guess.patch.project === 'string' && !isInboxProject(guess.patch.project)) {
     const settled = await settleProject(pre, fields, guess.patch.project, record);
     fields = settled.fields;
     extra.push(...settled.entries);
@@ -240,7 +243,7 @@ async function applyFieldsOnce(
       const res = resolveTaskFields({ mac: cur as never, fields, at: ctx.at, offset: ctx.offset, pairValid, textMerges });
       // A Mac edit since the read moved a text this write merges: never a diff in the lock.
       if (res.staleText?.length) { st.outcome = 'resettle'; return null; }
-      const moving = typeof res.patch.project === 'string' && res.patch.project ? res.patch.project : undefined;
+      const moving = typeof res.patch.project === 'string' && !isInboxProject(res.patch.project) ? res.patch.project : undefined;
       if (moving !== undefined && moving !== settledName) { st.outcome = 'resettle'; return null; }
       const entries: ConflictEntry[] = [...extra, ...res.conflicts.map((c): ConflictEntry => ({
         ...entryBase(record), kind: 'task-field', taskId, field: c.field, base: c.base, mac: c.mac, replica: c.replica,

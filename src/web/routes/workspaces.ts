@@ -140,7 +140,7 @@ function insideDir(root: string, p: string): boolean {
   return t === r || t.startsWith(r + '/')
 }
 
-/** The project's registry name, or null when there is no such project (Inbox has none). */
+/** The project's registry name (`Inbox` for the Inbox), or null when there is no such project. */
 async function projectNamed(raw: unknown): Promise<string | null> {
   const name = String(raw ?? '').trim()
   if (!name) return null

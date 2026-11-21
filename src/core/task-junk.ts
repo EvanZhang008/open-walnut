@@ -13,6 +13,7 @@
  * (an exact BM25 hit on a real task must never be filtered), plus a
  * title-level probe heuristic that ONLY the ledger applies (isLedgerJunk).
  */
+import { isInboxProject } from './inbox-project.js';
 import type { Task } from './types.js';
 
 /** Exact junk project names that don't match the structural patterns. */
@@ -27,8 +28,8 @@ const JUNK_PROJECT_EXACT = new Set(['vc', 'vp', 'personal2', 'e2e-test']);
  *  - an explicit denylist for the rest (VC, VP, Personal2)
  */
 export function isJunkProject(project: string | undefined | null): boolean {
-  const p = (project ?? '').trim();
-  if (!p) return false; // Inbox is not junk
+  if (isInboxProject(project)) return false; // Inbox is not junk
+  const p = project!.trim();
   if (p.startsWith('__')) return true;
   const lower = p.toLowerCase();
   if (JUNK_PROJECT_EXACT.has(lower)) return true;

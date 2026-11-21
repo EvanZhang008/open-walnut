@@ -15,6 +15,7 @@
  */
 
 import yaml from 'js-yaml';
+import { isInboxProject } from './inbox-project.js';
 
 /** Vault folder every project's tracking note lives under. */
 export const TRACKING_NOTE_DIR = 'Projects';
@@ -96,8 +97,8 @@ function isUsableSegment(folded: string): boolean {
  * same convention `config.favorites.notes` uses).
  *
  * `null` means "this name has no tracking note": the caller must SKIP the
- * project, never invent a path. Inbox ('' — the absence of a project) is one of
- * those: it has no registry row, so it can hold no metadata key either.
+ * project, never invent a path. The Inbox is one of those: it never had a tracking
+ * note, and becoming a real project (inbox-project.ts) gave it none.
  */
 export function trackingNotePathFor(project: string): string | null {
   const folder = projectNotesFolderFor(project);
@@ -110,6 +111,7 @@ export function trackingNotePathFor(project: string): string | null {
  * cannot be a folder, by the same rule as the tracking note.
  */
 export function projectNotesFolderFor(project: string): string | null {
+  if (isInboxProject(project)) return null;
   const folded = projectFolderName(project);
   return folded ? `${TRACKING_NOTE_DIR}/${folded}` : null;
 }

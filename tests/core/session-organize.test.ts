@@ -47,7 +47,7 @@ const DIGEST = {
   projects: ['walnut', 'Errands'],
 };
 
-/** A quick-start task lands in Inbox (no project) — that is what this pass files. */
+/** A quick-start task lands in the Inbox project — that is what this pass files. */
 async function makeQuickStartTask() {
   const { task } = await addTask({ title: 'Session: walnut' });
   return getTask(task.id);
@@ -119,7 +119,7 @@ describe('organizeQuickStartTask', () => {
       // Off means off: no model call, no digest walk, the task stays in Inbox.
       expect(sendMessageMock).not.toHaveBeenCalled();
       expect(digestMock).not.toHaveBeenCalled();
-      expect((await getTask(task.id)).project).toBe('');
+      expect((await getTask(task.id)).project).toBe('Inbox');
     } finally {
       await updateConfig({ agent: {} as never });
     }
@@ -127,7 +127,7 @@ describe('organizeQuickStartTask', () => {
 
   it('files an Inbox task into the suggested project', async () => {
     const task = await makeQuickStartTask();
-    expect(task.project).toBe('');
+    expect(task.project).toBe('Inbox');
     sendMessageMock.mockResolvedValue(textResult('{"project":"walnut"}'));
 
     await organizeQuickStartTask(task.id, '/Users/me/walnut', 'fix stuff');
@@ -156,7 +156,7 @@ describe('organizeQuickStartTask', () => {
     await organizeQuickStartTask(task.id, '/tmp/x');
 
     const after = await getTask(task.id);
-    expect(after.project).toBe('');
+    expect(after.project).toBe('Inbox');
   });
 
   it('leaves the task in Inbox when the model names a project that does not exist', async () => {
@@ -166,6 +166,6 @@ describe('organizeQuickStartTask', () => {
     await organizeQuickStartTask(task.id, '/tmp/x');
 
     const after = await getTask(task.id);
-    expect(after.project).toBe('');
+    expect(after.project).toBe('Inbox');
   });
 });

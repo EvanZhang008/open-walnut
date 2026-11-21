@@ -103,10 +103,10 @@ describe('task-outbox version skew: legacy ops carrying `category`', () => {
     expect(await outbox.applyOutboxOnPrimary()).toBe(1);
 
     const created = await tm.getTask('legacy-cloud-1');
-    expect(created.project).toBe('');   // Inbox, NOT 'Work'
+    expect(created.project).toBe('Inbox');   // the Inbox, NOT 'Work'
     expect(created.source).toBe('local');
-    // The category must not have leaked into the project registry either.
-    expect(await tm.getStoreProjects()).toEqual({});
+    // The category must not have leaked into the project registry either: only the Inbox's own row.
+    expect(Object.keys(await tm.getStoreProjects())).toEqual(['Inbox']);
   });
 
   it('does not resurrect a category even when a project of that name is claimed', async () => {
@@ -129,7 +129,7 @@ describe('task-outbox version skew: legacy ops carrying `category`', () => {
 
     expect(await outbox.applyOutboxOnPrimary()).toBe(1);
     const created = await tm.getTask('legacy-cloud-2');
-    expect(created.project).toBe('');
+    expect(created.project).toBe('Inbox');
     // Crucially it did NOT adopt the ms-todo claim of the same-named project.
     expect(created.source).toBe('local');
   });
@@ -166,6 +166,6 @@ describe('task-outbox version skew: legacy ops carrying `category`', () => {
     const fresh = await tm.getTask('cloud-proj-2');
     expect(fresh.project).toBe('Fresh');
     expect(fresh.source).toBe('local');
-    expect(Object.keys(await tm.getStoreProjects()).sort()).toEqual(['Fresh', 'Synced']);
+    expect(Object.keys(await tm.getStoreProjects()).sort()).toEqual(['Fresh', 'Inbox', 'Synced']);
   });
 });

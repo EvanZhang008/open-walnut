@@ -27,8 +27,8 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { wsClient } from '@/api/ws';
 import { fetchWithRetry } from '@/utils/fetch-retry';
 import { runWhenVisible } from '@/utils/page-visibility';
-import { fetchProjects, type ProjectSummary, type StartSource } from '@/api/projects';
-import type { SessionEngine, SessionMode } from '@open-walnut/core';
+import { fetchProjects, type ProjectListResponse, type ProjectSummary, type StartSource } from '@/api/projects';
+import { INBOX_PROJECT, isInboxProject, type SessionEngine, type SessionMode } from '@open-walnut/core';
 
 /** One registry row, flattened to what the UI actually reads. */
 export interface ProjectRegistryRow {
@@ -62,8 +62,11 @@ export interface UseProjectRegistryReturn {
    * this from the loaded task list.
    */
   projectNames: string[];
-  /** The rows themselves, name-sorted (the start picker reads each one's start source). */
+  /** The rows themselves, name-sorted (the start picker reads each one's start source). The Inbox
+   *  is not among them (nor in `projectNames`): every list shows it as its one fixed entry. */
   rows: readonly ProjectRegistryRow[];
+  /** The Inbox's own row (its settings), always local; a default row until the first load. */
+  inbox: ProjectRegistryRow;
   /** Case-insensitive membership test (project identity is NOCASE server-side). */
   isKnownProject: (name: string) => boolean;
   /** lowercased name → provider source ('local' | 'ms-todo' | 'jira' | …). Drives the one-letter badges. */
@@ -115,6 +118,7 @@ export type ProjectRegistryMutation =
 
 interface Snapshot {
   rows: readonly ProjectRegistryRow[];
+  inbox: ProjectRegistryRow;
   loaded: boolean;
   projectNames: string[];
   lowerSet: Set<string>;
@@ -158,8 +162,21 @@ function sortRows(rows: ProjectRegistryRow[]): ProjectRegistryRow[] {
   return [...rows].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function toRows(projects: ProjectSummary[]): ProjectRegistryRow[] {
-  return sortRows(projects.map((p) => ({
+/** The Inbox's row before the server named it (or from a server older than the Inbox project). */
+const DEFAULT_INBOX_ROW: ProjectRegistryRow = { name: INBOX_PROJECT, source: 'local', favorite: false };
+
+/** The server's rows plus the Inbox's slot as one more row: the optimistic ops find it by name. */
+function toRows(data: Pick<ProjectListResponse, 'projects' | 'inbox'>): ProjectRegistryRow[] {
+  const listed = (data.projects ?? []).filter((p) => !isInboxProject(p.name));
+  const inbox: ProjectSummary = {
+    name: INBOX_PROJECT,
+    source: 'local',
+    favorite: false,
+    counts: data.inbox?.counts ?? { todo: 0, active: 0, done: 0 },
+    ...(data.inbox?.metadata ? { metadata: data.inbox.metadata } : {}),
+    ...(data.inbox?.start_source ? { start_source: data.inbox.start_source } : {}),
+  };
+  return sortRows([...listed, inbox].map((p) => ({
     name: p.name,
     source: p.source,
     favorite: p.favorite,
@@ -188,7 +205,11 @@ function rowsEqual(a: readonly ProjectRegistryRow[], b: readonly ProjectRegistry
   return true;
 }
 
-function derive(rows: readonly ProjectRegistryRow[], loaded: boolean): Snapshot {
+function derive(all: readonly ProjectRegistryRow[], loaded: boolean): Snapshot {
+  // The Inbox rides the store as a row (so a settings patch finds it), but it is never listed:
+  // every surface draws it as its own fixed entry, and a folder never means "the Inbox".
+  const inbox = all.find((r) => isInboxProject(r.name)) ?? DEFAULT_INBOX_ROW;
+  const rows = all.filter((r) => r !== inbox);
   const projectNames: string[] = [];
   const lowerSet = new Set<string>();
   const sourceByName = new Map<string, string>();
@@ -206,14 +227,22 @@ function derive(rows: readonly ProjectRegistryRow[], loaded: boolean): Snapshot 
     if (!projectByCwd.has(cwd)) projectByCwd.set(cwd, r.name);
     projectDefaults.set(lower, { cwd, host: r.defaultHost ?? null });
   }
-  return { rows, loaded, projectNames, lowerSet, sourceByName, favoriteByName, projectByCwd, projectDefaults };
+  // Known (never "new") and local; its folder answers only for the Inbox itself.
+  lowerSet.add(inbox.name.toLowerCase());
+  sourceByName.set(inbox.name.toLowerCase(), 'local');
+  const inboxCwd = inbox.defaultCwd?.replace(/\/+$/, '');
+  if (inboxCwd) projectDefaults.set(inbox.name.toLowerCase(), { cwd: inboxCwd, host: inbox.defaultHost ?? null });
+  return { rows, inbox, loaded, projectNames, lowerSet, sourceByName, favoriteByName, projectByCwd, projectDefaults };
 }
 
 let snapshot: Snapshot = derive([], false);
+/** The rows `snapshot` was derived from, the Inbox's included. */
+let snapshotRows: readonly ProjectRegistryRow[] = [];
 
 function rebuild(): void {
   const next = pendingOps.reduce<readonly ProjectRegistryRow[]>((rows, op) => op.apply(rows), serverRows);
-  if (loadedOnce === snapshot.loaded && rowsEqual(next, snapshot.rows)) return;
+  if (loadedOnce === snapshot.loaded && rowsEqual(next, snapshotRows)) return;
+  snapshotRows = next;
   snapshot = derive(next, loadedOnce);
   // Copy the set: a subscriber that unsubscribes while notifying must not mutate
   // the set being walked.
@@ -239,7 +268,7 @@ function runLoad(): Promise<void> {
       // Only the newest load may write: an older answer arriving after a
       // fresh load started would put pre-write rows back on screen.
       if (loadSeq !== seq) return;
-      serverRows = toRows(data.projects ?? []);
+      serverRows = toRows(data);
       // Drop the optimistic ops this response already reflects. A request that
       // started BEFORE the route answered cannot carry the write, so its op stays.
       pendingOps = pendingOps.filter((op) => op.confirmedAt === 0 || op.confirmedAt > startedAt);
@@ -462,6 +491,7 @@ export function patchProjectLocal(name: string, patch: ProjectRowPatch): (ok: bo
 export function resolveProjectName(name: string): string {
   let current = (name ?? '').trim();
   if (!current) return '';
+  if (isInboxProject(current)) return INBOX_PROJECT;
   const seen = new Set<string>();
   for (;;) {
     const lower = current.toLowerCase();
@@ -508,6 +538,7 @@ export function resetProjectRegistryForTests(): void {
   loadSeq = 0;
   aliases.clear();
   if (debounce) { clearTimeout(debounce); debounce = null; }
+  snapshotRows = [];
   snapshot = derive([], false);
   for (const l of [...listeners]) l();
 }
@@ -545,6 +576,7 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
   return useMemo(() => ({
     projectNames: snap.projectNames,
     rows: snap.rows,
+    inbox: snap.inbox,
     isKnownProject,
     sourceByName: snap.sourceByName,
     favoriteByName: snap.favoriteByName,
@@ -563,9 +595,23 @@ export function useProjectEntry(project: string): { name: string; row: ProjectRe
   const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return useMemo(() => {
     const name = resolveProjectName(project);
-    const lower = name.toLowerCase();
-    return { name, row: snap.rows.find((r) => r.name.toLowerCase() === lower) ?? null };
+    return { name, row: name ? rowOf(snap, name) : null };
   }, [snap, project]);
+}
+
+/** A project's row by name, any case; the Inbox's own for the Inbox ('', undefined or `Inbox`);
+ *  none for `null`, a launch that takes no project's defaults (Ask Walnut, a fork). */
+function rowOf(snap: Snapshot, project: string | null | undefined): ProjectRegistryRow | null {
+  if (project === null) return null;
+  if (isInboxProject(project)) return snap.inbox;
+  const lower = project!.trim().toLowerCase();
+  return snap.rows.find((r) => r.name.toLowerCase() === lower) ?? null;
+}
+
+/** A row's launch defaults with the project they come from; empty when it sets none. */
+function launchDefaultsOf(row: ProjectRegistryRow | null): ProjectLaunchDefaults & { project?: string } {
+  const d = launchDefaultsOfRow(row);
+  return row && (d.engine || d.mode) ? { ...d, project: row.name } : {};
 }
 
 /** A row's launch defaults; empty when it sets none. */
@@ -578,23 +624,14 @@ export function launchDefaultsOfRow(row: ProjectRegistryRow | null | undefined):
   };
 }
 
-/** The launch defaults of `project` ('' = Inbox, none), live with the registry store. */
+/** The launch defaults of `project`, live with the registry store. No project ('') is the
+ *  Inbox, whose settings apply as the server's do (project-launch-defaults.ts); `null` takes none. */
 export function useProjectLaunchDefaults(project: string | null | undefined): ProjectLaunchDefaults & { project?: string } {
   const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return useMemo(() => {
-    const lower = (project ?? '').trim().toLowerCase();
-    if (!lower) return {};
-    const row = snap.rows.find((r) => r.name.toLowerCase() === lower);
-    const d = launchDefaultsOfRow(row);
-    return row && (d.engine || d.mode) ? { ...d, project: row.name } : {};
-  }, [snap, project]);
+  return useMemo(() => launchDefaultsOf(rowOf(snap, project)), [snap, project]);
 }
 
 /** The launch defaults of `project` as the store holds them now (a launch handler's read). */
 export function projectLaunchDefaultsNow(project: string | null | undefined): ProjectLaunchDefaults & { project?: string } {
-  const lower = (project ?? '').trim().toLowerCase();
-  if (!lower) return {};
-  const row = snapshot.rows.find((r) => r.name.toLowerCase() === lower);
-  const d = launchDefaultsOfRow(row);
-  return row && (d.engine || d.mode) ? { ...d, project: row.name } : {};
+  return launchDefaultsOf(rowOf(snapshot, project));
 }

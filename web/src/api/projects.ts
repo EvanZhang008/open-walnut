@@ -1,9 +1,10 @@
 /**
  * Project API client — Project is the single grouping layer.
  *
- * Inbox is the ABSENCE of a project ('' on the task). It has no registry row, so
- * it is never in `projects[]`, never renamable/deletable, and never claimable —
- * its task counts ride along as the separate `inbox` field of the list response.
+ * The Inbox is a project of its own (`Inbox`; older rows and clients say ''). It has a
+ * registry row and settings, but it is never in `projects[]` (every client shows it as one
+ * fixed entry), never renamable/deletable, and never claimable: its counts, name and
+ * settings ride along as the separate `inbox` field of the list response.
  *
  * Names can contain slashes and '%', so every path segment is
  * encodeURIComponent'd and the rename target rides in the request BODY.
@@ -99,8 +100,8 @@ export interface ProjectSummary {
 
 export interface ProjectListResponse {
   projects: ProjectSummary[];
-  /** Inbox has no registry row — only counts. */
-  inbox: { counts: ProjectCounts };
+  /** The Inbox's own slot: its counts, and (from a server where it is a project) its name and settings. */
+  inbox: { counts: ProjectCounts; name?: string; metadata?: ProjectMetadata; start_source?: StartSource | null };
 }
 
 export interface ProjectDetail {

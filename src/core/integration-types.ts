@@ -153,7 +153,7 @@ export interface IntegrationSync {
    *  container models genuinely diverge here and core must not guess:
    *   - `{ outcome: 'container-deleted' }` — the remote container AND the twins
    *     in it are gone (MS To-Do: the list was deleted). Core detaches the
-   *     local tasks (source='local', ext cleared, project='' = Inbox): data
+   *     local tasks (source='local', ext cleared, project='Inbox'): data
    *     preserved, binding honest.
    *   - `{ outcome: 'grouping-removed', fallbackProject }` — the platform has
    *     no container; only the grouping marker was removed and the remote
@@ -197,7 +197,7 @@ export interface IntegrationSync {
 
 // ── ProjectClaimFn: determines if a plugin owns a project ──
 // A project is the single grouping layer and carries at most one provider claim.
-// Never called for Inbox (the empty project), which is structurally unclaimable.
+// Never called for the Inbox (`Inbox`, or '' on older data), which is structurally unclaimable.
 
 export type ProjectClaimFn = (project: string) => boolean | Promise<boolean>;
 

@@ -1139,7 +1139,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     the web UI).
   - `priority`: `immediate|important|backlog|none`; `due_date`: ISO-8601
     (`YYYY-MM-DD` or full datetime) or `""` to clear; `project`: any project
-    name (`""` = Inbox; a new name auto-creates its registry row); `title`:
+    name (`"Inbox"` or `""` = the Inbox; a new name auto-creates its registry row); `title`:
     non-empty, ≤500 chars (trimmed); `description`: write-only, same caveat
     as `POST /tasks` (not present in the ProjectedTask response).
   - At least one field is required (`400 bad_request` on an empty body).
@@ -1205,7 +1205,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     the calendar is a legitimate intent and an end with no start is not a state
     worth keeping.
 - `GET /api/v1/tasks` additive filters (Wave 1, 2026-08): `project=` (exact,
-  case-insensitive; `""` = Inbox), `tag=` (exact member match), `q=`
+  case-insensitive; `"Inbox"` or `""` = the Inbox), `tag=` (exact member match), `q=`
   (case-insensitive substring on the title). Combinable with `status=`.
 - Adopt (additive, 2026-10-01): `PATCH /api/v1/tasks/:id` also accepts
   `parent_task_id` (a task id or unique prefix; `""` releases). The task becomes
@@ -4099,7 +4099,15 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
 
 - `GET /api/v1/projects` → `200 { "projects": [ { name, source,
   order_index?, metadata?, favorite, counts: { todo, active, done } } ],
-  "inbox": { "counts" } }`. Class A (the REPLICA reads its local store).
+  "inbox": { "counts", "name", "metadata", "start_source" } }`. Class A (the
+  REPLICA reads its local store). The Inbox is a real project since 2026-11-21
+  (`Inbox`, always `local`), but stays in its own `inbox` slot and never in
+  `projects`, so a client that shows one fixed Inbox entry never shows two;
+  the slot gained `name`, `metadata` (its settings) and `start_source`
+  (additive). `GET|PUT /api/v1/projects/Inbox/metadata` read and write its
+  settings; `DELETE` and rename of the Inbox answer `400`. Every task's
+  `project` is a name, never empty: an Inbox task says `"Inbox"`. Writes and
+  filters still take `""` as the Inbox.
 - `POST /api/v1/projects` body `{ "name", "source"? }` → idempotent create:
   `201 { name, source, created: true }` for a new row, `200 { …, created:
   false }` with the EXISTING row's source when the name is taken (a second

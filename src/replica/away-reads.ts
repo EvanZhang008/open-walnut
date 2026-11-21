@@ -38,6 +38,7 @@
  * answer the Mac makes never carries the field, so the Mac's DOM is unchanged.
  */
 
+import { isInboxProject } from '../core/inbox-project.js'
 import type { Request, Response, NextFunction, RequestHandler } from 'express'
 import { createBoardOffline, type OfflineSliceBoard } from '../providers/offline-board-core.js'
 import type { Overlay } from './overlay.js'
@@ -85,7 +86,8 @@ export function createdMatches(req: Request, row: Row): boolean {
   const ids = q(req, 'ids')
   if (ids !== undefined && !ids.split(',').includes(row.id)) return false
   const project = q(req, 'project')
-  if (project !== undefined && String(row.project ?? '') !== project) return false
+  // A filter of '' or `Inbox` is the Inbox, which a row says either way (older rows say '').
+  if (project !== undefined && (isInboxProject(project) ? !isInboxProject(String(row.project ?? '')) : String(row.project ?? '') !== project)) return false
   const pinned = q(req, 'pinned') ?? (q(req, 'working_set') === 'true' ? 'true' : undefined)
   if (pinned !== undefined && Boolean(row.pinned) !== (pinned === 'true')) return false
   const phase = q(req, 'phase')

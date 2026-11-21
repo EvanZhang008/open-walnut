@@ -16,6 +16,7 @@
 import { peekWorkingDirs, type WorkingDirEntry } from '@/api/sessions';
 import { HOME_PROJECT_NAME, isHomeFolder, namingHomeOf, shownFolderName } from '@/utils/home-folder';
 import { frecencyScore } from './path-selector/ranking';
+import { projectGroupKey } from '@/utils/project-display';
 import type { LaunchMemory } from '@/utils/engines';
 import type { SuggestField } from '@/api/tasks';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
@@ -598,7 +599,8 @@ export function applyDraftParse(
   const next: DraftColumn = { ...draft };
   let changed = false;
 
-  const project = kind === 'clear' ? undefined : parse.project?.trim();
+  // An AI pick of the Inbox is no pick: a draft says '' for the Inbox.
+  const project = kind === 'clear' ? undefined : projectGroupKey(parse.project).trim() || undefined;
   // The proposal ledger is filled BEFORE the ownership gates, so "the AI said
   // Walnut, the user launched under Fix Walnut" is recordable at all.
   const proposed: Partial<Record<DraftAiField, string>> = taskFieldSuggestions(draft, parse, opts, kind);

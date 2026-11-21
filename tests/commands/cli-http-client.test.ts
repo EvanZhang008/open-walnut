@@ -124,7 +124,8 @@ describe('open-walnut add → POST /api/v1/tasks', () => {
 
     logSpy.mockClear();
     await runAdd('Loose end', {}, { json: true });
-    expect(jsonOut<{ task: { project: string } }>().task.project).toBe('');
+    // Omitted, it lands in the Inbox, a project named Inbox (inbox-project.ts).
+    expect(jsonOut<{ task: { project: string } }>().task.project).toBe('Inbox');
   });
 
   it('surfaces the server error message (bad priority) and exits 1', async () => {

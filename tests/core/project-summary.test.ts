@@ -201,9 +201,12 @@ describe('maybeRefreshForTask', () => {
 
   it('never summarizes Inbox (no project = the unfiled pile)', async () => {
     const { task } = await addTask({ title: 'Loose thought' });
-    expect(task.project).toBe('');
+    // The Inbox is a project named Inbox now (inbox-project.ts), and still gets no summary.
+    expect(task.project).toBe('Inbox');
 
     expect(await maybeRefreshForTask(await getTask(task.id), 'web-api')).toBe(false);
+    // A row an older build left empty is the Inbox too.
+    expect(await maybeRefreshForTask({ ...(await getTask(task.id)), project: '' }, 'web-api')).toBe(false);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 

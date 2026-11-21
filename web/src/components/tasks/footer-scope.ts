@@ -1,5 +1,5 @@
 import type { Task } from '@open-walnut/core';
-import { INBOX_TAB } from './task-tabs';
+import { tabOfProject } from './task-tabs';
 import { recentActivityTime, type RecentSortMode } from './recent-activity-time';
 
 /** How many rows the Recent feed shows (TodoPanel's recentTasksLive slice). */
@@ -63,7 +63,8 @@ export function footerStatusScope(input: FooterScopeInput): FooterScope {
       && !input.customMemberIds.has(t.id));
   } else if (section === 'pinned') scope = tasks.filter(inPins);
   else {
-    const inProject = (t: Task) => !input.activeProject || (t.project || INBOX_TAB) === input.activeProject;
+    const active = tabOfProject(input.activeProject);
+    const inProject = (t: Task) => !input.activeProject || tabOfProject(t.project) === active;
     wholeBoard = !input.activeProject;
     scope = section === 'all' ? tasks.filter((t) => inProject(t) || inPins(t)) : tasks.filter(inProject);
   }

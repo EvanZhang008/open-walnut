@@ -172,7 +172,7 @@ describe('folder ops', () => {
     expect((mine as { result: Record<string, unknown> }).result.project).toBe('Marina')
 
     const nobody = await okOp('folder_create', { label: 'Loose' })
-    expect(nobody.project).toBe('')
+    expect(nobody.project).toBe('Inbox')
     expect(String(nobody.outcome)).toContain('in the Inbox')
   })
 

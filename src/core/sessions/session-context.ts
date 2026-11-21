@@ -103,7 +103,7 @@ import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
 import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js'
 import { taskDirForHost } from './task-dir-place.js'
-import { isAskPlacement, isAskTask } from './caller-placement.js'
+import { isAskPlacement, isAskTask, projectPlaceName } from './caller-placement.js'
 import { createHash } from 'node:crypto'
 import { versionedBlock } from './instruction-diff.js'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
@@ -498,7 +498,7 @@ export async function composeSessionContext(
     try {
       const { getTask } = await import('../task-manager.js')
       const task = opts?.task ?? await getTask(taskId)
-      const project = task.project ? `project "${task.project}"` : 'the Inbox (no project)'
+      const project = projectPlaceName(task.project)
       // The folder too: where its work lands (caller-placement.ts). A move after
       // spawn reaches the session as a place notice (place-notice.ts), which reads
       // these exact words back, since a resume replays this prompt unchanged.

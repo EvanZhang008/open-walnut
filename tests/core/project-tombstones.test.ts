@@ -135,8 +135,13 @@ describe('resolveProjectWrite', () => {
   const ledger = (rows: Array<Partial<ProjectTombstone> & { name: string }>) => (n: string) =>
     rows.find((r) => r.name.toLowerCase() === n.trim().toLowerCase()) as ProjectTombstone | undefined;
 
-  it('lets Inbox through untouched', () => {
-    expect(resolveProjectWrite('', live(), ledger([]))).toEqual({ kind: 'ok', name: '' });
+  it("lets the Inbox through ('' too), under its live row's spelling", () => {
+    expect(resolveProjectWrite('', live(), ledger([]))).toEqual({ kind: 'ok', name: 'Inbox' });
+    expect(resolveProjectWrite('  ', live('Inbox'), ledger([]))).toEqual({ kind: 'ok', name: 'Inbox' });
+    expect(resolveProjectWrite('inbox', live('Inbox'), ledger([]))).toEqual({ kind: 'ok', name: 'Inbox' });
+    // Even a stray tombstone on its name never blocks it.
+    expect(resolveProjectWrite('Inbox', live(), ledger([{ name: 'Inbox', redirect_to: null }])))
+      .toEqual({ kind: 'ok', name: 'Inbox' });
   });
 
   it('a LIVE row wins over a tombstone (that is what re-creating a project does)', () => {
@@ -184,7 +189,7 @@ describe('writers cannot resurrect a deleted project', () => {
     await deleteProject('Fix Walnut');
 
     const again = await ensureProject('Fix Walnut', 'ms-todo', { writer: 'ms-todo-pull' });
-    expect(again).toMatchObject({ name: '', blocked: true, created: false });
+    expect(again).toMatchObject({ name: 'Inbox', source: 'local', blocked: true, created: false });
     expect(Object.keys(await getStoreProjects())).not.toContain('Fix Walnut');
   });
 
@@ -193,7 +198,7 @@ describe('writers cannot resurrect a deleted project', () => {
     await deleteProject('Fix Walnut');
 
     const { task } = await addTask({ title: 'quick-start task', project: 'Fix Walnut' });
-    expect(task.project).toBe('');
+    expect(task.project).toBe('Inbox');
     expect(task.source).toBe('local');
     expect(Object.keys(await getStoreProjects())).not.toContain('Fix Walnut');
   });
@@ -241,16 +246,20 @@ describe('writers cannot resurrect a deleted project', () => {
     const { task } = await addTask({ title: 'T', project: 'Gone' });
     await deleteProject('Gone');
     // The delete itself moved it to Inbox; nothing re-files it later.
-    expect((await getTask(task.id))!.project).toBe('');
+    expect((await getTask(task.id))!.project).toBe('Inbox');
     await ensureProject('Gone', 'local', { writer: 'later-writer' });
-    expect((await getTask(task.id))!.project).toBe('');
+    expect((await getTask(task.id))!.project).toBe('Inbox');
   });
 
-  it('the empty project (Inbox) can never be tombstoned', async () => {
+  it("the Inbox ('' or its name) can never be deleted or tombstoned", async () => {
     await ensureProject('Marina');
-    await expect(deleteProject('')).rejects.toThrow(/Inbox is not a project/);
+    await expect(deleteProject('')).rejects.toThrow(/Inbox cannot be deleted/);
+    await expect(deleteProject('Inbox')).rejects.toThrow(/Inbox cannot be deleted/);
     expect(recordProjectTombstone({ name: '   ' })).toBe(false);
-    expect(await resolveProjectForWrite('')).toEqual({ name: '', blocked: false });
+    expect(recordProjectTombstone({ name: 'Inbox' })).toBe(false);
+    expect(getProjectTombstone('Inbox')).toBeUndefined();
+    expect(await resolveProjectForWrite('')).toEqual({ name: 'Inbox', blocked: false });
+    expect(await resolveProjectForWrite('Inbox')).toEqual({ name: 'Inbox', blocked: false });
   });
 });
 
@@ -286,7 +295,7 @@ describe('rename and merge redirect instead of blocking', () => {
     await deleteProject('Beta');
 
     const { task } = await addTask({ title: 'T', project: 'Alpha' });
-    expect(task.project).toBe('');
+    expect(task.project).toBe('Inbox');
   });
 
   it('a rename ONTO a deleted name re-opens it (a rename is a human gesture)', async () => {

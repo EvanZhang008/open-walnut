@@ -149,6 +149,16 @@ describe('a test run writes its own prefs copy', () => {
     expect((await api('GET', '/api/ordering', undefined, OTHER)).data).toMatchObject({ projects: ['Z'], separators: [{ id: 'sep_real' }] })
   })
 
+  it('ordering: the Inbox\'s slot is named Inbox once, whether an order says \'\' or Inbox', async () => {
+    // An older client keeps the Inbox's place as ''; every task now says `Inbox` (inbox-project.ts).
+    expect((await api('PUT', '/api/ordering/projects', { order: ['B', '', 'A', 'inbox'] }, RUN)).status).toBe(200)
+    const sep = { id: 'sep_inbox', tier: 'focus', mode: 'project', afterProject: '', beforeProject: 'A' }
+    expect((await api('PUT', '/api/ordering/separators', { separators: [sep] }, RUN)).status).toBe(200)
+    const own = (await api('GET', '/api/ordering', undefined, RUN)).data
+    expect(own.projects).toEqual(['B', 'Inbox', 'A'])
+    expect(own.separators).toEqual([{ id: 'sep_inbox', tier: 'focus', mode: 'project', afterProject: 'Inbox', beforeProject: 'A' }])
+  })
+
   it('the user\'s writes still land while a run holds its copy', async () => {
     expect((await api('PUT', '/api/ui-prefs', { prefs: { 'open-walnut-real-key': { v: 'y', ts: 4000 } } })).status).toBe(200)
     expect(await readFile(UI_PREFS_FILE)).toContain('open-walnut-real-key')

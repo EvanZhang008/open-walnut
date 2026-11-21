@@ -36,6 +36,7 @@ import { registry } from '../../core/integration-registry.js'
 import type { TaskSource } from '../../core/types.js'
 import type { SlimTask } from '../../core/task-manager.js'
 import { orgDisplayTitle, pickLead } from '../../core/org/org-tree.js'
+import { INBOX_PROJECT, isInboxProject } from '../../core/inbox-project.js'
 import { ProjectSettingsError } from '../../core/sessions/project-launch-defaults.js'
 
 export const projectsRouter = Router()
@@ -72,7 +73,8 @@ async function collectCounts(): Promise<{ byProject: Map<string, Counts>; inbox:
     // A plugin's own task (Task.plugin_only) is in no project count.
     if (t.title.startsWith('.metadata') || t.plugin_only) continue
     const project = (t.project || '').trim()
-    if (!project) { tally(inbox, t.phase); continue }
+    // The Inbox (its name, or the '' an older row has) counts in its own slot, as before.
+    if (isInboxProject(project)) { tally(inbox, t.phase); continue }
     const key = project.toLowerCase()
     let entry = byProject.get(key)
     if (!entry) { entry = emptyCounts(); byProject.set(key, entry) }
@@ -89,16 +91,19 @@ function leadOf(leads: readonly SlimTask[], project: string): { id: string; titl
 
 /**
  * Build the projects listing payload — registry rows + task counts + favorite
- * flag, plus Inbox counts. Envelope (NOT a bare array — Inbox has no registry
- * row and needs its own slot):
- *   { projects: [{ name, source, order_index?, metadata?, favorite, counts, lead?, start_source }], inbox: { counts } }
+ * flag, plus Inbox counts. Envelope (NOT a bare array): the Inbox keeps its own slot. It is a
+ * registry row now (inbox-project.ts), but every client already shows it as the one fixed
+ * entry, so it stays out of `projects` (an older client listing it twice) and its slot names
+ * it and carries its settings:
+ *   { projects: [{ name, source, order_index?, metadata?, favorite, counts, lead?, start_source }],
+ *     inbox: { counts, name?, metadata?, start_source? } }
  * `lead` (additive): the project's open lead, `{ id, title }`, when it has one.
  * `start_source` (additive): where a new task of it gets its code, or null (project-source.ts).
  * Shared by GET /api/projects and GET /api/v1/projects.
  */
 export async function buildProjectsPayload(): Promise<{
   projects: Array<Record<string, unknown>>
-  inbox: { counts: Counts }
+  inbox: { counts: Counts; name: string; metadata?: Record<string, unknown>; start_source?: unknown }
 }> {
   const [storeProjects, { byProject, inbox, tasks }, config] = await Promise.all([
     getStoreProjects(),
@@ -111,7 +116,10 @@ export async function buildProjectsPayload(): Promise<{
   const favorites = new Set(starred.map((p) => p.toLowerCase()))
 
   // A test run's project (src/core/test-run.ts) is in no list while only test work lives in it.
-  const shown = listedProjects(storeProjects, (name) => {
+  const inboxKey = Object.keys(storeProjects).find((name) => isInboxProject(name))
+  const inboxRecord = inboxKey ? storeProjects[inboxKey] : undefined
+  const listed = Object.fromEntries(Object.entries(storeProjects).filter(([name]) => !isInboxProject(name)))
+  const shown = listedProjects(listed, (name) => {
     const c = byProject.get(name.toLowerCase())
     return !!c && c.todo + c.active + c.done > 0
   })
@@ -136,7 +144,15 @@ export async function buildProjectsPayload(): Promise<{
     }
   })
 
-  return { projects, inbox: { counts: inbox } }
+  return {
+    projects,
+    inbox: {
+      counts: inbox,
+      name: inboxKey ?? INBOX_PROJECT,
+      ...(inboxRecord?.metadata ? { metadata: inboxRecord.metadata } : {}),
+      start_source: startSourceOf(inboxRecord?.metadata),
+    },
+  }
 }
 
 // GET /api/projects
@@ -237,7 +253,7 @@ projectsRouter.patch('/:name', async (req: Request, res: Response, next: NextFun
 })
 
 // DELETE /api/projects/:name — drop the registry row; its tasks fall back to
-// Inbox (project '').
+// the Inbox (which itself is never deleted).
 //
 // Provider-claimed projects: a plain DELETE is refused (409) because the remote
 // container still exists and the next pull would just recreate the project.
@@ -253,8 +269,8 @@ projectsRouter.patch('/:name', async (req: Request, res: Response, next: NextFun
 projectsRouter.delete('/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const name = req.params.name as string
-    if (!name.trim()) {
-      res.status(400).json({ error: 'Inbox is not a project — nothing to delete' })
+    if (isInboxProject(name)) {
+      res.status(400).json({ error: 'The Inbox cannot be deleted: it is where every task without another project goes.' })
       return
     }
     const cascade = req.query.remote === '1' || req.query.remote === 'true'

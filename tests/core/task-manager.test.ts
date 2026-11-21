@@ -53,9 +53,9 @@ describe('addTask', () => {
     expect(task.title).toBe('Test task');
     expect(task.status).toBe('todo');
     expect(task.priority).toBe('none');
-    // No project = Inbox. Inbox is structural (no registry row, unclaimable), so
-    // a default quick-add task is always local.
-    expect(task.project).toBe('');
+    // No project = the Inbox, a real project that no service can claim, so a
+    // default quick-add task is filed there and is always local.
+    expect(task.project).toBe('Inbox');
     expect(task.source).toBe('local');
     expect(task.session_ids).toEqual([]);
     expect(task.description).toBe('');

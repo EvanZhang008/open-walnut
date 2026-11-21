@@ -25,7 +25,7 @@
  * which engine is the default here.
  */
 import {
-  resolveModelSwitchValue, SESSION_MODES, VALID_SESSION_MODE_IDS,
+  INBOX_PROJECT, isInboxProject, resolveModelSwitchValue, SESSION_MODES, VALID_SESSION_MODE_IDS,
   type SessionEngine, type SessionMode,
 } from '../types.js';
 import { isKnownEngine } from '../agents/engine-registry.js';
@@ -82,18 +82,21 @@ export function readProjectLaunchDefaults(meta: Record<string, unknown> | null |
 
 /**
  * The project a launch's defaults belong to: the name a task, a draft or a phone carries may be one
- * the project was renamed or merged away from, and the survivor's are its defaults. '' for Inbox
- * or a deleted project.
+ * the project was renamed or merged away from, and the survivor's are its defaults. The Inbox
+ * (`Inbox`, or the '' older callers send) is a project with settings of its own, and a deleted
+ * project's task files there, so both answer `Inbox`. No project named at all (undefined: an
+ * ask, a launch that names none) answers '': no project's defaults apply, as before.
  */
 export async function launchProjectName(project: string | null | undefined): Promise<string> {
-  const trimmed = project?.trim() ?? '';
-  if (!trimmed) return '';
+  if (project === undefined || project === null) return '';
+  if (isInboxProject(project)) return INBOX_PROJECT;
+  const trimmed = project!.trim();
   const tm = await import('../task-manager.js');
   return Promise.resolve().then(() => tm.resolveProjectForWrite(trimmed, 'launch-defaults'))
-    .then((r) => (r?.blocked ? '' : r?.name || trimmed), () => trimmed);
+    .then((r) => (r?.blocked ? INBOX_PROJECT : r?.name || trimmed), () => trimmed);
 }
 
-/** The defaults of a project by name; empty for Inbox ('') or an unknown project. */
+/** The defaults of a project by name (the Inbox's own for '' or `Inbox`); empty for none named or an unknown project. */
 export async function projectLaunchDefaultsOf(project: string | null | undefined): Promise<ProjectLaunchDefaults> {
   const name = await launchProjectName(project);
   if (!name) return {};

@@ -1,4 +1,5 @@
 import { sendMessage } from '../model/model.js';
+import { isInboxProject } from './inbox-project.js';
 import { log } from '../logging/index.js';
 import { fastModelFor, fastModelRidesCli, fastCallText } from './cheap-model.js';
 import { screenTitle } from './title-answer.js';
@@ -166,10 +167,10 @@ const MAX_NEW_PROJECT_CHARS = 40;
 function newProjectName(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const name = value.trim();
-  if (!name) return undefined;
+  // The Inbox is where an unfiled task lands anyway: never a NEW project the model proposes.
+  if (isInboxProject(name)) return undefined;
   if (Array.from(name).length > MAX_NEW_PROJECT_CHARS) return undefined;
   if (/[/\\\n\r]/.test(name)) return undefined;
-  if (name.toLowerCase() === 'inbox') return undefined; // Inbox is the absence of a project
   return name;
 }
 

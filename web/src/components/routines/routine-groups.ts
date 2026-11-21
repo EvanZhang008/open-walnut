@@ -14,6 +14,7 @@
  */
 import type { Routine } from '@/api/routines';
 import { describeSchedule, describeTriggerOff, describeWake, describeClockWait, triggerRunState } from '@/utils/routine-format';
+import { projectGroupKey } from '@/utils/project-display';
 
 export const GLOBAL_GROUP_KEY = 'global';
 
@@ -73,7 +74,8 @@ export function offLabel(r: Routine): 'Paused' | 'Stopped' | 'Off' {
 }
 
 export function groupKeyOf(r: Routine): string {
-  const project = r.owner?.project ?? '';
+  // The Inbox ('' or its name) reads as global, as it always has.
+  const project = projectGroupKey(r.owner?.project);
   return project ? `project:${project}` : GLOBAL_GROUP_KEY;
 }
 
@@ -86,7 +88,7 @@ export function groupRoutines(routines: readonly Routine[]): RoutineGroup[] {
     let group = groups.get(key);
     if (!group) {
       const global = key === GLOBAL_GROUP_KEY;
-      const project = r.owner?.project ?? '';
+      const project = projectGroupKey(r.owner?.project);
       // A project the person named "Global" must not read as the global group.
       const name = global ? 'Global' : project.trim().toLowerCase() === 'global' ? `${project} (project)` : project;
       group = { key, name, global, routines: [], failing: 0 };

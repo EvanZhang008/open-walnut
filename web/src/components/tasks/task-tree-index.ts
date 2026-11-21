@@ -1,5 +1,6 @@
 import { matchIdRef, matchParentRef } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
+import { projectIdentity as projectKey } from '../../utils/project-display';
 
 /**
  * Parent links read off a task list in one pass per list.
@@ -13,11 +14,6 @@ import type { Task } from '@open-walnut/core';
  */
 
 type TaskRef = Pick<Task, 'id' | 'parent_task_id'>;
-
-/** Case-insensitive project identity, the registry's rule ('' = Inbox). */
-function projectKey(p: string | undefined): string {
-  return (p ?? '').trim().toLowerCase();
-}
 
 const NO_REFS: readonly string[] = [];
 

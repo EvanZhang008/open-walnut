@@ -41,6 +41,9 @@ describe('placeFromPrompt (reads back the lines session-context.ts writes)', () 
   it('the Inbox, no folder, no leader; an older prompt without a folder clause reads as no folder', () => {
     expect(placeFromPrompt('You are working on the task "T" (id mt-1, the Inbox (no project)).\n', 'mt-1'))
       .toEqual({ project: '', folder: null, leaderId: null })
+    // Today's wording for the Inbox reads back the same.
+    expect(placeFromPrompt('You are working on the task "T" (id mt-1, the Inbox).\n', 'mt-1'))
+      .toEqual({ project: '', folder: null, leaderId: null })
     expect(placeFromPrompt('You are working on the task "T" (id mt-1, project "acme").\n\nmore', 'mt-1'))
       .toEqual({ project: 'acme', folder: null, leaderId: null })
   })
@@ -407,7 +410,10 @@ describe('open items text: the place line', () => {
   it('the Inbox, and alongside open work', () => {
     const text = t.format({ ...base, subtasks: [{ id: 'mt-2', title: 'Child', phase: 'TODO' }], place: { project: '' } }, Date.now())
     expect(text).toContain('Walnut: still open for your task "Sync worker" (mt-1).')
-    expect(text).toContain('stands in the Inbox (no project).')
+    expect(text).toContain('stands in the Inbox.')
+    // The Inbox by name (every task has a project now) reads the same as the '' of older data.
+    const named = t.format({ ...base, subtasks: [{ id: 'mt-2', title: 'Child', phase: 'TODO' }], place: { project: 'Inbox' } }, Date.now())
+    expect(named).toContain('stands in the Inbox.')
     expect(text).toContain('- mt-2 [TODO] Child')
   })
   it('nothing open and no place: nothing', () => {

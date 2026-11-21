@@ -63,7 +63,8 @@ defineOp({
     'and its lead (the VP who owns it, when it has one), plus the Inbox counts. For the details (source, ' +
     'order, settings such as default_cwd/default_host, the project summary) pass {"name":"<project>"} for ' +
     'one project, or {"detail":true} for every project in full (large). ' +
-    'Tasks group by project, then by folder inside a project; a task with no project lives in the Inbox.',
+    'Tasks group by project, then by folder inside a project. Every task has a project: one created ' +
+    'without a project goes to the Inbox, a project of its own (local, never synced, never deleted).',
   input: {
     name: z.string().min(1).optional().describe('One project in full, by name (case-insensitive); "Inbox" for the Inbox counts'),
     detail: z.boolean().optional().describe('Every project in full: source, order, favorite, settings and summary (large)'),

@@ -12,6 +12,7 @@ import { taskRefTag } from '../utils/entity-refs.js'
 import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
+import { isInboxProject } from '../core/inbox-project.js'
 import { agentStatusView, summaryAt, SUMMARY_IS_HISTORY } from '../core/user-status.js'
 import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM, DESIGN_REVIEW_PARAM } from '../core/org/user-kind.js'
 import { WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
@@ -203,7 +204,7 @@ function lookupLabel(args: Record<string, unknown>): string {
 
 /** The line a defaulted (not asked-for) scope carries, so the ring is never mistaken for the board. */
 function scopeDefaultHint(scope: string | undefined, you: Record<string, unknown> | undefined): string {
-  const project = typeof you?.project === 'string' && you.project ? `project ${you.project}` : 'the Inbox'
+  const project = typeof you?.project === 'string' && !isInboxProject(you.project) ? `project ${you.project}` : 'the Inbox'
   const folder = typeof you?.group_label === 'string' && you.group_label ? `folder "${you.group_label}"` : 'your folder'
   return scope === 'folder'
     ? `Listed ${folder} in ${project} by default, because you called from inside a task. `
@@ -250,7 +251,7 @@ defineOp({
     // it lost the "waiting on the human" rows. Use phases= or completion=.
     completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes NEED_ACTION)'),
     phases: z.string().optional().describe(`Comma list of exact phases: ${PHASE_ORDER.join(' | ')}`),
-    project: z.string().optional().describe('Project name (exact, case-insensitive); "" for the Inbox'),
+    project: z.string().optional().describe('Project name (exact, case-insensitive); "Inbox" (or "") for the Inbox'),
     projects: z.string().optional().describe('Comma list of project names'),
     priorities: z.string().optional().describe('Comma list of immediate | important | backlog | none'),
     source: z.string().optional().describe('Task source (exact), e.g. "local"'),
@@ -533,7 +534,7 @@ const TIER_NAMES: Record<string, string> = { focus: 'Focus', satellite: 'Satelli
 /** One sentence naming where the task landed, or '' for a server too old to say. */
 function placementSentence(p: Placement | undefined): string {
   if (!p) return ''
-  const project = p.project ? `project ${p.project}` : 'the Inbox'
+  const project = isInboxProject(p.project) ? 'the Inbox' : `project ${p.project}`
   const folder = p.group_id
     ? `, folder "${p.group_label || p.group_id}"${p.folder_created ? ' (new, holding your task and this one)' : ''}`
     : ''
@@ -622,7 +623,7 @@ defineOp({
     'fix the cause and use task_start with that id, never create a duplicate. Placement: called from ' +
     'inside a task, the new task lands BESIDE yours by default: same project, your folder (Walnut makes ' +
     'one holding both when yours has none, and a subfolder of yours holding both when yours also holds ' +
-    'other work), same host and directory. Omit project for that. Name another project ("" = Inbox) only ' +
+    'other work), same host and directory. Omit project for that. Name another project (the Inbox too) only ' +
     'when the USER asked for that project, with user_words quoting what they said, naming it: without them the ' +
     'create is refused (409 project_elsewhere) and nothing is made. A project you picked yourself (from a ' +
     'repository, a directory or a reason you wrote) never counts; a lead files in the projects it leads. A folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
@@ -633,7 +634,7 @@ defineOp({
     'focus_tier changes board position, not execution.',
   input: {
     title: z.string().min(1).describe('Task title: a few words naming the specific subject, like a commit subject (under 60 characters; the server cuts a longer one from a session). The brief goes in message or description'),
-    project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
+    project: z.string().optional().describe('Project name; "Inbox" (or "") for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
     user_words: z.string().optional().describe('From inside a task, with a `project` that is not your own task\'s: exactly what the user said asking for that project (quoted, in their language; it must name the project). Not needed when project is omitted'),
     project_reason: z.string().optional().describe('Retired: an explanation no longer files work in another project; pass user_words'),
     confirm_new: z.boolean().optional().describe('After a 409 related_open_tasks only: true creates the task anyway, as a separate deliverable. Needs new_reason'),
@@ -874,7 +875,7 @@ defineOp({
     // null clears too: JSON callers reach for it first, and a refused clear read as a broken op.
     due_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
     start_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
-    project: z.string().optional().describe('Project name; "" = Inbox. A worker (a task with a leader) stays in its leader\'s project: moving it to another needs user_words'),
+    project: z.string().optional().describe('Project name; "Inbox" (or "") = the Inbox. A worker (a task with a leader) stays in its leader\'s project: moving it to another needs user_words'),
     user_words: z.string().optional().describe('With project, moving a worker out of its leader\'s project: exactly what the user said asking for that project (quoted, in their language; it must name the project). Without them the move is refused (409 project_elsewhere). '
       + `With phase, moving another task that asks the user off NEED_ACTION after he wrote in it (409 user_spoke_since quotes his words): ${USER_WORDS_BACK}`),
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),

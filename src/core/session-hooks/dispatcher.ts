@@ -14,6 +14,7 @@
  * per-session context cache is only consulted after a hook point matched.
  */
 
+import { projectOrInbox } from '../inbox-project.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { BusEvent } from '../event-bus.js';
 import type {
@@ -374,9 +375,9 @@ export class HookDispatcher {
       if (!modes.includes(sessionCtx.session.mode)) return false;
     }
     if (projects) {
-      const project = taskCtx?.task?.project ?? sessionCtx?.task?.project;
-      if (!project) return false;
-      if (!projects.includes(project)) return false;
+      // The Inbox is a project like any: a filter naming `Inbox` matches its tasks ('' on an older row too).
+      const project = projectOrInbox(taskCtx?.task?.project ?? sessionCtx?.task?.project);
+      if (!projects.some((p) => projectOrInbox(p) === project)) return false;
     }
     if (phases) {
       const phase = taskCtx?.newPhase ?? taskCtx?.task?.phase ?? sessionCtx?.task?.phase;

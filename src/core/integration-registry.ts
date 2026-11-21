@@ -5,6 +5,7 @@
 
 import type { RegisteredPlugin, ProjectClaimFn, IntegrationSync } from './integration-types.js';
 import { guardSync } from './private-tasks/sync-guard.js';
+import { isInboxProject } from './inbox-project.js';
 
 export type PluginTombstoneReason = 'disabled' | 'unloaded' | 'failed' | 'stale-code';
 
@@ -223,6 +224,8 @@ class IntegrationRegistry {
    * "all project should be created local by default, unless user or ai explicitly choose").
    */
   async getNamedClaimFor(project: string): Promise<RegisteredPlugin | undefined> {
+    // The Inbox is local by definition: no service names it, not even one that claims every name.
+    if (isInboxProject(project)) return undefined;
     const probe = `\u0000walnut-unconfigured-${Math.random().toString(36).slice(2)}`;
     const claimable = [...this.plugins.values()]
       .filter(p => p.claim && p.id !== 'local' && p.hasSync !== false)
@@ -244,10 +247,12 @@ class IntegrationRegistry {
    * Iterates claims by priority (highest first). First match wins.
    * Always returns something — 'local' plugin is the universal fallback (priority -1).
    *
-   * Inbox (the empty project) is structurally unclaimable, so callers never ask
-   * about it — it is always 'local'.
+   * The Inbox (`Inbox`, or the '' of older data) is structurally unclaimable: it is
+   * always 'local', even under a plugin whose claim takes every name.
    */
   async getForProject(project: string): Promise<RegisteredPlugin> {
+    const local = this.plugins.get('local');
+    if (isInboxProject(project) && local) return local;
     // Collect plugins with claims, sort by priority descending
     const claimable = [...this.plugins.values()]
       .filter(p => p.claim)
@@ -260,7 +265,6 @@ class IntegrationRegistry {
 
     // Should never reach here if 'local' is registered with priority -1,
     // but guard anyway
-    const local = this.plugins.get('local');
     if (local) return local;
 
     throw new Error('No plugin registered for project and no local fallback found.');

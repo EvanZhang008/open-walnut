@@ -13,6 +13,7 @@ import { closeDb } from '../../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
 import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { INBOX_PROJECT, isInboxProject } from '../../../src/core/inbox-project.js';
 
 function createApp() {
   const app = express();
@@ -91,14 +92,14 @@ describe('GET /api/tasks', () => {
     expect(res.body.tasks[0].title).toBe('HomeLab task');
   });
 
-  it('returns Inbox tasks with project="" and no category field', async () => {
+  it('returns Inbox tasks with project "Inbox" and no category field', async () => {
     await addTask({ title: 'Loose thought' });
 
     const app = createApp();
     const res = await request(app).get('/api/tasks');
     expect(res.status).toBe(200);
     expect(res.body.tasks).toHaveLength(1);
-    expect(res.body.tasks[0].project).toBe('');
+    expect(res.body.tasks[0].project).toBe(INBOX_PROJECT);
     expect(res.body.tasks[0]).not.toHaveProperty('category');
   });
 });
@@ -654,7 +655,7 @@ describe('POST /api/tasks', () => {
     expect(res.status).toBe(201);
     expect(res.body.task.priority).toBe('none');
     expect(res.body.task.status).toBe('todo');
-    expect(res.body.task.project).toBe('');
+    expect(res.body.task.project).toBe(INBOX_PROJECT);
     expect(res.body.task.source).toBe('local');
   });
 
@@ -689,7 +690,8 @@ describe('POST /api/tasks', () => {
     // NOCASE identity: the registry's spelling wins, so one project — not two.
     expect(res.body.task.project).toBe('HomeLab');
     const { getStoreProjects } = await import('../../../src/core/task-manager.js');
-    expect(Object.keys(await getStoreProjects())).toEqual(['HomeLab']);
+    // The Inbox is a registry row too; leave it out of the comparison.
+    expect(Object.keys(await getStoreProjects()).filter((p) => !isInboxProject(p))).toEqual(['HomeLab']);
   });
 
   it('rejects a provider-sourced task with no project (Inbox is local-only)', async () => {
@@ -1348,7 +1350,7 @@ describe('Cross-source project change', () => {
     const res = await request(app).patch(`/api/tasks/${task.id}`).send({ project: '' });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.project).toBe('');
+    expect(res.body.task.project).toBe(INBOX_PROJECT);
     // Inbox is structurally local-only, so the task can't keep a provider claim.
     expect(res.body.task.source).toBe('local');
   });

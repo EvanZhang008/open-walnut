@@ -6,7 +6,7 @@
  *  - claimed + plugin has NO hook → ProjectRemoteDeleteUnsupportedError, nothing changes
  *  - hook throws → cascade aborts BEFORE any local mutation (remote-first ordering)
  *  - { outcome: 'container-deleted' } → tasks detach (source='local', ext cleared,
- *    project='' = Inbox) and the registry row is dropped
+ *    project = 'Inbox') and the registry row is dropped
  *  - { outcome: 'grouping-removed', fallbackProject } → tasks move to the fallback
  *    project KEEPING their provider binding; the fallback row is ensured with the
  *    same claim; an empty fallbackProject is a contract bug and aborts pre-mutation
@@ -86,7 +86,7 @@ describe('deleteProjectCascade', () => {
     expect(result.remoteDeleted).toBe(false);
     expect(result.source).toBe('local');
     expect(await getProjectRecord('LocalProj')).toBeNull();
-    expect((await getTask(task.id))?.project).toBe('');
+    expect((await getTask(task.id))?.project).toBe('Inbox');
   });
 
   it('claimed project without hook → ProjectRemoteDeleteUnsupportedError, nothing changes', async () => {
@@ -127,7 +127,7 @@ describe('deleteProjectCascade', () => {
     expect(await getProjectRecord('OldList')).toBeNull();
     for (const id of [t1.id, t2.id]) {
       const after = await getTask(id);
-      expect(after?.project).toBe('');
+      expect(after?.project).toBe('Inbox');
       expect(after?.source).toBe('local');
       expect(after?.ext).toBeUndefined();
       expect(after?.sync_error).toBeUndefined();
@@ -200,6 +200,7 @@ describe('deleteProjectCascade', () => {
 
   it('rejects Inbox and unknown projects', async () => {
     await expect(deleteProjectCascade('')).rejects.toThrow(/Inbox/);
+    await expect(deleteProjectCascade('Inbox')).rejects.toThrow(/Inbox cannot be deleted/);
     await expect(deleteProjectCascade('NoSuch')).rejects.toThrow(/No project/);
   });
 });

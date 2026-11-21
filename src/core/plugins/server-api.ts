@@ -10,6 +10,7 @@ import type {
   PluginToolSpec,
   ProjectClaimFn,
 } from '../integration-types.js'
+import { INBOX_PROJECT, isInboxProject, projectOrInbox } from '../inbox-project.js'
 import { ambientTestRun } from '../test-run.js'
 import { notePluginName } from './plugin-caller.js'
 import fsp from 'node:fs/promises'
@@ -384,7 +385,7 @@ function publicFolder(folder: { group_id: string; label: string; project: string
   return {
     id: folder.group_id,
     label: folder.label,
-    project: folder.project ?? '',
+    project: projectOrInbox(folder.project),
     ...(folder.parent_id ? { parentId: folder.parent_id } : {}),
     memberCount: folder.member_ids.length,
   }
@@ -751,7 +752,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const asked = (input.project ?? '').trim()
         // A folder needs its project on the board: mint the registry row the way a task
         // filed under a new name would (local), and refuse a project the user deleted.
-        const project = asked ? await ensureProject(asked, 'local', { writer: `plugin/${pluginId}` }) : { name: '', blocked: false }
+        const project = isInboxProject(asked) ? { name: INBOX_PROJECT, blocked: false } : await ensureProject(asked, 'local', { writer: `plugin/${pluginId}` })
         if (project.blocked) throw new Error(`Project "${asked}" was deleted; a folder cannot bring it back.`)
         const created = await createFolder(input.label, project.name, input.parentId)
         // The web keeps folder labels in a registry of their own and refetches it on this
@@ -1108,7 +1109,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           // to the handler at once, with no lookup in between.
           const evTask = (event.data as { task?: Task } | undefined)?.task
           const maybeKept = !!evTask && typeof evTask === 'object' && event.name.startsWith('task:')
-            && (!!evTask.sync_hold || ((!evTask.source || evTask.source === 'local') && !!evTask.project))
+            && (!!evTask.sync_hold || ((!evTask.source || evTask.source === 'local') && !isInboxProject(evTask.project)))
           if (maybeKept && !(await providerVisible())(evTask)) return
           try { await handler(event) }
           catch (error) {

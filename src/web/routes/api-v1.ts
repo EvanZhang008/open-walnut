@@ -17,6 +17,7 @@
  * in cloud mode, LAN bypass otherwise). This router implements none.
  */
 
+import { projectOrInbox } from '../../core/inbox-project.js'
 import { INSTRUCTION_HOOK_PARTS_MAX } from '../../core/sessions/instruction-hook-parts.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -2737,11 +2738,12 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
     let tasks = withLiveActivityAll(phoneListedTasks(projection.tasks))
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
-    // Additive filters (Wave 1): project ('' = Inbox, case-insensitive like the
-    // registry), tag (exact), q (substring on title, case-insensitive).
+    // Additive filters (Wave 1): project ('' or `Inbox` = the Inbox, which a row says
+    // either way; case-insensitive like the registry), tag (exact), q (substring on title,
+    // case-insensitive).
     if (typeof req.query.project === 'string') {
-      const p = req.query.project.toLowerCase()
-      tasks = tasks.filter((t) => (t.project ?? '').toLowerCase() === p)
+      const p = projectOrInbox(req.query.project).toLowerCase()
+      tasks = tasks.filter((t) => projectOrInbox(t.project).toLowerCase() === p)
     }
     if (typeof req.query.tag === 'string' && req.query.tag) {
       // In stored form (`oncall` is `label:oncall`); a `created:` / `updated:` day matches the
@@ -3989,10 +3991,11 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
     const youGroup = rowField(you, 'group_id')
     const scope: SessionScope = asked === 'folder' && !youGroup ? 'project' : asked
     if (you && scope !== 'all') {
-      const youProject = rowField(you, 'project').toLowerCase()
+      // A session row of an Inbox task may say '' (made before the Inbox was a project) or `Inbox`.
+      const youProject = projectOrInbox(rowField(you, 'project')).toLowerCase()
       sessions = sessions.filter((s) => scope === 'folder'
         ? rowField(s, 'group_id') === youGroup
-        : rowField(s, 'project').toLowerCase() === youProject)
+        : projectOrInbox(rowField(s, 'project')).toLowerCase() === youProject)
     }
     res.json({
       sessions,

@@ -49,11 +49,10 @@ describe('?proj= encoding', () => {
     expect(projectFromUrl('_inbox')).toBe(INBOX_TAB);
   });
 
-  it('does NOT resurrect the legacy bare "inbox" token', () => {
-    // Honoring it would re-introduce the ambiguity it caused: a project named
-    // "inbox" is legal, so the bare token can't mean both. Old links degrade to
-    // "a project named inbox" → TodoPanel's stale-tab self-heal falls back to All.
-    expect(projectFromUrl('inbox')).toBe('inbox');
+  it('reads the bare "inbox" token (any case) as the Inbox, now that the Inbox is the project of that name', () => {
+    // The Inbox is a project named "Inbox" (src/core/inbox-project.ts), so no other
+    // project can hold that name and the old ambiguity is gone.
+    for (const token of ['inbox', 'Inbox', 'INBOX']) expect(projectFromUrl(token)).toBe(INBOX_TAB);
   });
 
   it('a retired ★ deep link decodes to a plain (non-existent) project name', () => {
@@ -63,7 +62,7 @@ describe('?proj= encoding', () => {
   });
 
   it('is injective — no two tab ids share a token', () => {
-    const ids = [INBOX_TAB, '', 'inbox', '_inbox', '_wip', 'Marina'];
+    const ids = [INBOX_TAB, '', '_inbox', '_wip', 'Marina'];
     const tokens = ids.map(projectToUrl);
     expect(new Set(tokens).size).toBe(ids.length);
     // …and every one decodes back to exactly what it encoded.
@@ -77,13 +76,11 @@ describe('?proj= encoding', () => {
     }
   });
 
-  it('keeps a project NAMED like a sentinel token deep-linkable', () => {
-    // The bug this scheme fixes: a project named "inbox" is legal, and its token
-    // must not decode back to a sentinel.
+  it('links the Inbox by its name to the Inbox tab', () => {
+    // The Inbox's own name is the Inbox: its link is the sentinel's token and reads back as the tab.
     for (const name of ['inbox', 'Inbox']) {
-      const token = projectToUrl(name);
-      expect(token).not.toBe('_inbox');
-      expect(projectFromUrl(token)).toBe(name);
+      expect(projectToUrl(name)).toBe('_inbox');
+      expect(projectFromUrl(projectToUrl(name))).toBe(INBOX_TAB);
     }
   });
 

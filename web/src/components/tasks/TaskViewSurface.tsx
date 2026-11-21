@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Task } from '@open-walnut/core'
+import { projectIdentity } from '@/utils/project-display'
 import {
   matchesTaskQuery,
   type NormalizedTaskQuery,
@@ -97,10 +98,10 @@ export function TaskViewSurface({
     [tasks, query.blocked],
   )
   const filtered = useMemo(() => {
-    const projectKey = activeProject?.toLowerCase()
+    const projectKey = activeProject === null ? undefined : projectIdentity(activeProject)
     const needle = localSearch.trim().toLowerCase()
     return tasks.filter((task: Task) => {
-      if (projectKey !== undefined && (task.project ?? '').toLowerCase() !== projectKey) return false
+      if (projectKey !== undefined && projectIdentity(task.project) !== projectKey) return false
       if (normalized && !matchesTaskQuery(task, normalized, queryContext)) return false
       if (needle && !task.title.toLowerCase().includes(needle)
         && !(task.project ?? '').toLowerCase().includes(needle)) return false

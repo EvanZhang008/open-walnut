@@ -3,7 +3,7 @@
  * src/core/private-tasks/): the task menus' Sync row, the details' Source fact and the create
  * surfaces' Local / <service> choice read it from here, so they say the same thing.
  */
-import type { SyncHold, Task } from '@open-walnut/core';
+import { isInboxProject, type SyncHold, type Task } from '@open-walnut/core';
 
 export type SyncStanding =
   /** Synced to `service`. */
@@ -23,7 +23,7 @@ export function syncStanding(task: TaskLike, projectSource: string | undefined):
   if (task.source && task.source !== 'local') return { kind: 'synced', service: task.source };
   if (hold?.state === 'checking') return { kind: 'checking', service: hold.target, hold };
   const service = hold?.target && hold.target !== 'local' ? hold.target
-    : projectSource && projectSource !== 'local' && (task.project ?? '').trim() ? projectSource : '';
+    : projectSource && projectSource !== 'local' && !isInboxProject(task.project) ? projectSource : '';
   return service ? { kind: 'kept', service, ...(hold ? { hold } : {}) } : { kind: 'local' };
 }
 

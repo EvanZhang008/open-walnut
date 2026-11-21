@@ -5,6 +5,8 @@
  */
 import type { ContextMenuItem } from '@/utils/context-menu';
 import type { SortBy } from './ViewDropdown';
+// Relative: this module is tested as a plain function, without the @open-walnut aliases.
+import { isInboxProject } from '../../../../src/core/inbox-project';
 
 /** The task orders a project can have, in menu order. The Projects heading offers the
  *  same list to set every project at once. */
@@ -14,7 +16,7 @@ export const PROJECT_SORT_OPTIONS: ReadonlyArray<readonly [SortBy, string]> = [
 
 /** The project a right-click landed on. */
 export interface ProjectMenuTarget {
-  /** '' = Inbox. */
+  /** '' (or `Inbox`) = the Inbox. */
   project: string;
   /** Current collapse state — only used to word the Collapse/Expand row. */
   collapsed?: boolean;
@@ -92,8 +94,9 @@ export function buildProjectMenuItems(
 ): ContextMenuItem[] {
   const { onToggleCollapse, onNewTask, onNewFolder, onNewSession, onNewSeparator, onToggleFavorite, onViewDetails } = actions;
   const { busy, rename, remove, pickSort, pickProject, editScripts } = dialogs;
-  // Every row below that acts on the REGISTRY needs a real project name.
-  const named = !!target.project;
+  // The Inbox keeps its short menu: it is never renamed, deleted, merged into another
+  // project or favorited. Its settings are its own, so it opens the detail pane like any project.
+  const named = !isInboxProject(target.project);
   return [
     {
       key: 'collapse',
@@ -140,7 +143,7 @@ export function buildProjectMenuItems(
     // The task menu's settings group, in its order: Pinned, Project, then each plugin field.
     ...settings.pinned,
     {
-      // Inbox is the absence of a project: there is nothing to move into another one.
+      // The Inbox is never merged into another project.
       key: 'move-project',
       label: 'Project',
       value: target.project,
@@ -189,7 +192,7 @@ export function buildProjectMenuItems(
     {
       key: 'details',
       label: 'View project details',
-      when: !!onViewDetails && named,
+      when: !!onViewDetails,
       onSelect: () => onViewDetails?.(target.project),
     },
     { divider: true },

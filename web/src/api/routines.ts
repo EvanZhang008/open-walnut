@@ -165,7 +165,7 @@ export interface RoutineMissedRun {
 /**
  * The task a routine delivers into, and that task's project (server:
  * src/core/routines/routine-owner.ts). Absent for one that files its own work;
- * `project: ''` is the Inbox. Both read as global on the Routines page.
+ * `project` is `Inbox` (or '' from an older server) for the Inbox. Both read as global on the Routines page.
  */
 export type RoutineOwner = { taskId: string; title: string; project: string };
 

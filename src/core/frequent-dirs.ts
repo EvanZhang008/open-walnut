@@ -15,6 +15,12 @@ import { FREQUENT_DIRS_FILE, PROJECTS_MEMORY_DIR, WALNUT_HOME } from '../constan
 import { isLocalFallbackFolder } from './sessions/task-dir-place.js'
 import type { SessionEngine } from './types.js'
 import { log } from '../logging/index.js'
+import { isInboxProject } from './inbox-project.js'
+
+/** A project a folder use votes for: never the Inbox, the unfiled pile ('' or 'Inbox'), which names no repository. */
+function votable(project: string | undefined): project is string {
+  return !!project && !isInboxProject(project)
+}
 
 // ── Types ──
 
@@ -189,7 +195,7 @@ export async function recordDirectory(cwd: string, hostArg: string | null, proje
     if (entry) {
       entry.count++
       entry.lastUsed = new Date().toISOString()
-      if (project) {
+      if (votable(project)) {
         // Legacy rows persisted before the project-only refactor have no
         // projectVotes key — treat that as an empty tally.
         entry.projectVotes ??= {}
@@ -197,7 +203,7 @@ export async function recordDirectory(cwd: string, hostArg: string | null, proje
       }
     } else {
       const votes: Record<string, number> = {}
-      if (project) votes[project] = 1
+      if (votable(project)) votes[project] = 1
       store.directories.push({
         cwd,
         host,
@@ -249,14 +255,14 @@ export async function recordDirectoryUses(uses: readonly DirectoryUse[]): Promis
       if (entry) {
         entry.count++
         if (!(Date.parse(entry.lastUsed) >= Date.parse(at))) entry.lastUsed = at
-        if (use.project) {
+        if (votable(use.project)) {
           entry.projectVotes ??= {}
           entry.projectVotes[use.project] = (entry.projectVotes[use.project] ?? 0) + 1
         }
       } else {
         store.directories.push({
           cwd: use.cwd, host: use.host, count: 1, lastUsed: at,
-          projectVotes: use.project ? { [use.project]: 1 } : {},
+          projectVotes: votable(use.project) ? { [use.project]: 1 } : {},
         })
       }
     }
@@ -329,7 +335,7 @@ async function compileFromSessionsInternal(): Promise<void> {
     // Build taskId → project map (Inbox tasks contribute no vote)
     const taskProjectMap = new Map<string, string>()
     for (const t of tasks) {
-      if (t.project) taskProjectMap.set(t.id, t.project)
+      if (votable(t.project)) taskProjectMap.set(t.id, t.project)
     }
 
     // Aggregate by cwd::host

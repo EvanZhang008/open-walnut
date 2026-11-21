@@ -12,6 +12,7 @@ import { TasksPageTable } from '@/components/tasks/TasksPageTable';
 import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { TpSort } from '@/components/tasks/tasks-page-sort';
+import { openCountsByProject, railProjectNames, tasksOfRailSelection } from '@/components/tasks/tasks-page-sort';
 import {
   LS_TASKS_PAGE_COLUMNS, parseColumns, serializeColumns, type TpColumnId,
 } from '@/components/tasks/tasks-table-columns';
@@ -45,7 +46,7 @@ import {
 } from '@open-walnut/task-query';
 import type { Task } from '@open-walnut/core';
 import { visibleInterval } from '@/utils/page-visibility';
-import { projectDisplayName } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
 import { MicInput } from '@/components/common/BoxMic';
@@ -198,36 +199,10 @@ export function DashboardPage() {
 
   // ── rail data: registry projects (incl. zero-task ones) ∪ task-derived names,
   //    ordered projectOrder-first then alphabetical. Inbox is separate/last. ──
-  const openCountByProject = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const t of tasks) {
-      if (t.status === 'done') continue;
-      const key = (t.project || '').toLowerCase();
-      m.set(key, (m.get(key) ?? 0) + 1);
-    }
-    return m;
-  }, [tasks]);
+  const openCountByProject = useMemo(() => openCountsByProject(tasks), [tasks]);
 
   const railProjects = useMemo<RailProjectItem[]>(() => {
-    // Union registry names with task-derived ones (case-insensitive; registry
-    // spelling is canonical when both exist).
-    const byLower = new Map<string, string>();
-    for (const name of projectNames) byLower.set(name.toLowerCase(), name);
-    for (const t of tasks) {
-      const p = t.project || '';
-      if (p && !byLower.has(p.toLowerCase())) byLower.set(p.toLowerCase(), p);
-    }
-    const names = Array.from(byLower.values());
-    const orderIndex = new Map(projectOrder.map((name, i) => [name.toLowerCase(), i]));
-    names.sort((a, b) => {
-      const ai = orderIndex.get(a.toLowerCase());
-      const bi = orderIndex.get(b.toLowerCase());
-      if (ai !== undefined && bi !== undefined) return ai - bi;
-      if (ai !== undefined) return -1;
-      if (bi !== undefined) return 1;
-      return a.localeCompare(b);
-    });
-    return names.map((name) => ({
+    return railProjectNames(projectNames, tasks, projectOrder).map((name) => ({
       name,
       source: sourceByName.get(name.toLowerCase()),
       favorite: favoriteByName.has(name.toLowerCase()),
@@ -244,7 +219,7 @@ export function DashboardPage() {
   // Collapse-all target set and the reorder baseline.
   const visibleProjectKeys = useMemo(() => {
     const keys = new Set<string>();
-    for (const t of tasks) keys.add(t.project || '');
+    for (const t of tasks) keys.add(projectGroupKey(t.project));
     return keys;
   }, [tasks]);
 
@@ -266,11 +241,7 @@ export function DashboardPage() {
   }, [allGroupsCollapsed, visibleProjectKeys]);
 
   // ── right pane data ──
-  const inScope = useMemo(() => {
-    if (activeProject === null) return tasks;
-    const key = activeProject.toLowerCase();
-    return tasks.filter((t) => (t.project || '').toLowerCase() === key);
-  }, [tasks, activeProject]);
+  const inScope = useMemo(() => tasksOfRailSelection(tasks, activeProject), [tasks, activeProject]);
 
   const stats = useMemo(() => ({
     todo: inScope.filter((t) => t.status !== 'done').length,

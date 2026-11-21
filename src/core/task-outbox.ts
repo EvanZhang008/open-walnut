@@ -47,6 +47,7 @@
  *      session ids, group_id) are NEVER written back onto the primary row.
  */
 
+import { INBOX_PROJECT, isInboxProject, projectOrInbox } from './inbox-project.js';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CLOUD_MODE, TASKS_DIR } from '../constants.js';
@@ -393,12 +394,12 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
     // primary knows whether this project is claimed by a sync plugin.
     //
     // SKEW RULE: an op from an old cloud box may carry `category` with an
-    // empty `project`. The task stays in Inbox ('') — the retired category
+    // empty `project`. The task stays in the Inbox — the retired category
     // must NEVER be revived as a project name (that would invent projects
     // on the primary and, for a claimed name, hand the task to a provider).
-    let snapshotProject = (snapshot.project ?? '').trim();
+    let snapshotProject = projectOrInbox(snapshot.project);
     let primarySource = 'local';
-    if (snapshotProject) {
+    if (!isInboxProject(snapshotProject)) {
       try {
         const ensured = await tm.ensureProject(snapshotProject, 'local', { writer: 'cloud-outbox' });
         // Take the name the registry decided on, not the phone's spelling: it is
@@ -413,7 +414,7 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
         log.task.warn('task-op: invalid project name from cloud op — filing in Inbox', {
           opId: op.opId, project: snapshotProject, err: String(err),
         });
-        snapshotProject = '';
+        snapshotProject = INBOX_PROJECT;
       }
     }
     const { id, sync_hold: replicaHold, ...rest } = snapshot;
@@ -528,8 +529,9 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   // Project move: mint the registry row exactly like the create branch does —
   // the raw update below writes the column only, and a phone-side move to a
   // brand-new project name must not leave a rowless project on the primary.
-  if (typeof patch.project === 'string' && patch.project.trim()
-      && patch.project.trim().toLowerCase() !== (existing.project || '').trim().toLowerCase()) {
+  // '' and `Inbox` are one project (the Inbox): an older replica's '' for an Inbox task is no move.
+  const movesProject = (to: string): boolean => projectOrInbox(to).toLowerCase() !== projectOrInbox(existing.project).toLowerCase();
+  if (typeof patch.project === 'string' && !isInboxProject(patch.project) && movesProject(patch.project)) {
     try {
       const requested = patch.project.trim();
       const ensured = await tm.ensureProject(requested, 'local', { writer: 'cloud-outbox' });
@@ -557,8 +559,7 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   // decides what a move does to where the task syncs (a synced task leaves its service, and one
   // moved into another service's project is held local there, never pushed to it). The raw
   // column write below would keep the old service inside the new project and push it.
-  if (typeof patch.project === 'string'
-      && patch.project.trim().toLowerCase() !== (existing.project || '').trim().toLowerCase()) {
+  if (typeof patch.project === 'string' && movesProject(patch.project)) {
     await tm.updateTask(existing.id, { project: patch.project }, { source: 'api', asyncPush: true });
     delete patch.project;
   }

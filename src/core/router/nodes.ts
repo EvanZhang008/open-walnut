@@ -1,4 +1,5 @@
 import { taskIdForKey } from '../task-create-idempotency.js';
+import { INBOX_PROJECT } from '../inbox-project.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { withOrgLock, OrgError, orgTasks } from '../org/org-store.js';
 import { readRouterAreas, updateRouterAreas, normalizeRouterAreas, taskArea, ensureAreasDataVersion, type RouterArea, type RouterAreasFile } from './areas.js';
@@ -153,7 +154,7 @@ export async function createRouterNode(input: RouterNodeInput): Promise<RouterNo
     });
     if (!prior) {
       try {
-        await addTask({ title: name, project: '', source: 'local', org_role: 'router', router_area_id: input.areaId, explicitId: taskId });
+        await addTask({ title: name, project: INBOX_PROJECT, source: 'local', org_role: 'router', router_area_id: input.areaId, explicitId: taskId });
       } catch (error) {
         if (!(error instanceof TaskIdTakenError)) throw error;
       }

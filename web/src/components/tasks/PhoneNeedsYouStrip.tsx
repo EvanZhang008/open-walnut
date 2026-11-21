@@ -18,7 +18,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { projectDisplayName } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { taskNeedsYou } from './needs-you';
 import { taskWaitsOnPrompt } from './PhoneRowExtras';
@@ -68,7 +68,7 @@ export function PhoneNeedsYouStrip({ tasks, onOpen }: { tasks: readonly Task[]; 
               <span className="phone-needs-you-title">{orgDisplayTitle(t) || 'Untitled task'}</span>
               <span className="phone-needs-you-meta">
                 <span className="phone-needs-you-reason">{needsYouReason(t)}</span>
-                {t.project ? <span className="phone-needs-you-project">{projectDisplayName(t.project)}</span> : null}
+                {projectGroupKey(t.project) ? <span className="phone-needs-you-project">{projectDisplayName(t.project)}</span> : null}
               </span>
             </button>
           </li>

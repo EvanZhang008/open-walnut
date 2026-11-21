@@ -65,6 +65,7 @@ import { stateSectionKey } from './worker-fold';
 import '@/styles/status-sections.css';
 import { ActionNeeded } from '@/components/actions/ActionNeeded';
 import { ownLineIsItem } from '@open-walnut/user-status';
+import { projectGroupKey } from '@/utils/project-display';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
@@ -361,7 +362,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
         <span className="status-card-body">
           {/* A row with a pull request: pr-pill.css gives its pill the line when the line is short. */}
           <span className={`status-card-meta${watchablePrUrls(task.tags).length ? ' status-card-meta-pr' : ''}`}>
-            <RowProjectName project={task.project || ''} className="status-card-project" onFilter={handlers.onFilterProject} />
+            <RowProjectName project={projectGroupKey(task.project)} className="status-card-project" onFilter={handlers.onFilterProject} />
             {pills}
             {alsoWorking}
             {reasonBelow ? null : shownReason}

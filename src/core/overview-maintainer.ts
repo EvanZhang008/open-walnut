@@ -23,6 +23,7 @@
  * - repeated events for the same task+phase are deduped;
  * - runs are serialized (one maintainer run at a time).
  */
+import { isInboxProject } from './inbox-project.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -432,7 +433,7 @@ export async function maybeRunForTaskEvent(
   source: string,
   runner: MaintainerRunner = defaultRunner,
 ): Promise<boolean> {
-  if (!task?.id || !task.project?.trim()) return false; // Inbox has no project skill
+  if (!task?.id || isInboxProject(task.project)) return false; // Inbox has no project skill
   if (task.parent_task_id) return false; // subtasks never trigger
   if (SKIP_SOURCE.test(source)) return false;
   if (await areaScoped(task.id, task)) return false;
@@ -445,7 +446,7 @@ export async function maybeRunForTaskEvent(
     if (oldest !== undefined) handled.delete(oldest);
   }
 
-  const location = resolveProjectSkillDir(task.project);
+  const location = resolveProjectSkillDir(task.project!);
   if (!location) {
     log.agent.debug('overview-maintainer: no skill for project, skipping', {
       taskId: task.id, project: task.project,

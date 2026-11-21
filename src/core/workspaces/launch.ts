@@ -14,6 +14,7 @@
  * "Preparing workspace…", and a failure shows the provider's error with Retry.
  */
 
+import { isInboxProject } from '../inbox-project.js'
 import type { Task } from '../types.js'
 import type { TaskWorkspace, WorkspacePendingStart } from './types.js'
 import { QuickStartError } from '../sessions/quick-start.js'
@@ -182,7 +183,7 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
           : await requestWorkspace(task.id, { provider: request!.provider, host: normHost(ctx.host), anchor: ctx.cwd, inputs: request?.inputs, pending: full })
         // quickStartSession returned before its auto-organize pass (the real start is a
         // retry on this task, which skips it), so an unfiled new task gets it here.
-        if (!ctx.existingTaskId && !updated.project) void organizeUnfiled(updated.id, ctx.cwd, pending.message)
+        if (!ctx.existingTaskId && isInboxProject(updated.project)) void organizeUnfiled(updated.id, ctx.cwd, pending.message)
         return { taskId: updated.id, task: updated, preparing: true }
       } catch (err) {
         if (err instanceof WorkspaceError) {

@@ -202,7 +202,7 @@ export interface OnCronFiredPayload extends SessionHookContext {
  *  corresponding context data is missing DENIES rather than passing through. */
 export interface SessionHookFilter {
   modes?: SessionMode[];
-  /** Project names. A hook filtered on projects never fires for Inbox tasks. */
+  /** Project names (`Inbox` for the Inbox's tasks). */
   projects?: string[];
   /** Task domain: fire only when the task lands in one of these phases. */
   phases?: TaskPhase[];

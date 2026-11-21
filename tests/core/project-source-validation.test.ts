@@ -6,7 +6,8 @@
  *  - a new project name auto-creates its registry row (ensureProject / addTask)
  *  - a project claimed by a provider rejects a task of a different source
  *    (ProjectSourceConflictError)
- *  - Inbox ('') has no row and can NEVER be claimed
+ *  - the Inbox is a registry row of its own (local, made at boot) and can NEVER be
+ *    claimed; '' still names it
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -121,14 +122,16 @@ describe('ensureProject', () => {
     expect(second).toMatchObject({ name: 'Marina', source: 'local', created: false });
 
     const projects = await getStoreProjects();
-    expect(Object.keys(projects)).toEqual(['Marina']);
+    expect(Object.keys(projects)).toEqual(['Inbox', 'Marina']);
   });
 
-  it('never registers Inbox', async () => {
+  it("answers the Inbox's own local row for '' and never makes a second one", async () => {
     const result = await ensureProject('');
-    expect(result).toMatchObject({ name: '', created: false });
-    expect(await getStoreProjects()).toEqual({});
-    expect(await getProjectRecord('')).toBeNull();
+    expect(result).toMatchObject({ name: 'Inbox', source: 'local', created: false });
+    // A provider asking for the Inbox still gets it local: no service can claim it.
+    expect(await ensureProject('inbox', 'ms-todo')).toMatchObject({ name: 'Inbox', source: 'local', created: false });
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox']);
+    expect(await getProjectRecord('')).toMatchObject({ name: 'Inbox', source: 'local' });
   });
 });
 
@@ -148,14 +151,17 @@ describe('addTask project registration', () => {
     await addTask({ title: 'First', project: 'Marina' });
     const { task } = await addTask({ title: 'Second', project: 'MARINA' });
     expect(task.project).toBe('Marina');
-    expect(Object.keys(await getStoreProjects())).toEqual(['Marina']);
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox', 'Marina']);
   });
 
-  it('leaves project empty (Inbox) when none is given', async () => {
+  it('files the task in the Inbox when no project is given', async () => {
     const { task } = await addTask({ title: 'Loose thought' });
-    expect(task.project).toBe('');
+    expect(task.project).toBe('Inbox');
     expect(task.source).toBe('local');
-    expect(await getStoreProjects()).toEqual({});
+    // The old empty value still means the Inbox.
+    const { task: explicit } = await addTask({ title: 'Explicit empty', project: '' });
+    expect(explicit.project).toBe('Inbox');
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox']);
   });
 
   it('inherits the claimed project source', async () => {
@@ -260,7 +266,18 @@ describe('updateTask project move', () => {
 
     await updateTask(task.id, { project: '' });
     const moved = await getTask(task.id);
-    expect(moved.project).toBe('');
+    expect(moved.project).toBe('Inbox');
+    expect(moved.source).toBe('local');
+  });
+
+  it("migrates a provider task to local when moved to the Inbox by its name", async () => {
+    await ensureProject('Synced', 'ms-todo');
+    const { task } = await addTask({ title: 'Move me by name', project: 'Synced' });
+    expect(task.source).toBe('ms-todo');
+
+    await updateTask(task.id, { project: 'Inbox' });
+    const moved = await getTask(task.id);
+    expect(moved.project).toBe('Inbox');
     expect(moved.source).toBe('local');
   });
 
@@ -330,8 +347,11 @@ describe('project metadata', () => {
     expect(rows.n).toBe(0);
   });
 
-  it('rejects settings on Inbox', async () => {
-    await expect(setProjectMetadata('', { default_cwd: '/tmp' })).rejects.toThrow(/Inbox/);
+  it("keeps settings on the Inbox like any project's ('' names it too)", async () => {
+    await expect(setProjectMetadata('', { default_cwd: '/tmp' })).resolves.toMatchObject({ default_cwd: '/tmp' });
+    expect(await getProjectMetadata('Inbox')).toMatchObject({ default_cwd: '/tmp' });
+    expect(await getProjectRecord('Inbox')).toMatchObject({ name: 'Inbox', source: 'local' });
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox']);
   });
 
   it('resolves the remote list name through the remote_list alias', async () => {
@@ -352,7 +372,7 @@ describe('renameProject', () => {
     expect({ count, merged }).toEqual({ count: 2, merged: false });
 
     const projects = await getStoreProjects();
-    expect(Object.keys(projects)).toEqual(['New']);
+    expect(Object.keys(projects)).toEqual(['Inbox', 'New']);
     expect(await getProjectMetadata('New')).toMatchObject({ default_cwd: '/tmp/old' });
   });
 
@@ -362,7 +382,7 @@ describe('renameProject', () => {
 
     const { count, merged } = await renameProject('Alpha', 'Beta');
     expect({ count, merged }).toEqual({ count: 1, merged: true });
-    expect(Object.keys(await getStoreProjects())).toEqual(['Beta']);
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox', 'Beta']);
   });
 
   it('refuses to merge into a project owned by another provider', async () => {
@@ -416,20 +436,20 @@ describe('assertValidProjectName', () => {
 describe('project name validation at the API surface', () => {
   it('ensureProject rejects a traversal name and creates nothing', async () => {
     await expect(ensureProject('../../.ssh')).rejects.toThrow(InvalidProjectNameError);
-    expect(await getStoreProjects()).toEqual({});
+    // Only the Inbox's own row (made at boot) is there.
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox']);
   });
 
-  it('ensureProject still treats Inbox ("") as a legal no-op, not a bad shape', async () => {
-    // '' short-circuits BEFORE shape validation — it is the legal ABSENCE of a
-    // project, never a row and never a directory.
-    await expect(ensureProject('')).resolves.toMatchObject({ name: '', created: false });
-    await expect(ensureProject('   ')).resolves.toMatchObject({ name: '', created: false });
+  it('ensureProject still accepts "" (the Inbox), not a bad shape', async () => {
+    // '' and whitespace name the Inbox, whose name always passes the shape gate.
+    await expect(ensureProject('')).resolves.toMatchObject({ name: 'Inbox', created: false });
+    await expect(ensureProject('   ')).resolves.toMatchObject({ name: 'Inbox', created: false });
   });
 
   it('renameProject rejects a bad TARGET but leaves the project intact', async () => {
     await addTask({ title: 'A', project: 'Real' });
     await expect(renameProject('Real', 'evil/../x')).rejects.toThrow(InvalidProjectNameError);
-    expect(Object.keys(await getStoreProjects())).toEqual(['Real']);
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox', 'Real']);
   });
 
   it('renameProject still allows renaming AWAY from a bad legacy name', async () => {
@@ -440,7 +460,7 @@ describe('project name validation at the API surface', () => {
     db.prepare('UPDATE task_projects SET name = ? WHERE name = ?').run('bad/name', 'Ok');
     const { count } = await renameProject('bad/name', 'Good');
     expect(count).toBe(0); // no tasks, registry row only
-    expect(Object.keys(await getStoreProjects())).toEqual(['Good']);
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox', 'Good']);
   });
 });
 
@@ -594,13 +614,13 @@ describe('project identity folds unicode case (JS side is the enforcer)', () => 
 
     const second = await ensureProject('ärger');
     expect(second).toMatchObject({ name: 'Ärger', created: false });
-    expect(Object.keys(await getStoreProjects())).toEqual(['Ärger']);
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox', 'Ärger']);
   });
 
   it('routes metadata for a unicode-case variant onto the same row', async () => {
     await ensureProject('Ärger');
     await setProjectMetadata('ärger', { default_cwd: '/tmp/a' });
     expect(await getProjectMetadata('Ärger')).toMatchObject({ default_cwd: '/tmp/a' });
-    expect(Object.keys(await getStoreProjects())).toEqual(['Ärger']);
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox', 'Ärger']);
   });
 });

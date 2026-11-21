@@ -15,7 +15,7 @@ import { useIntegrations } from '@/hooks/useIntegrations';
 import { draftKey } from '@/utils/drafts';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import type { Task as CoreTask } from '@open-walnut/core';
+import { INBOX_PROJECT, isInboxProject, type Task as CoreTask } from '@open-walnut/core';
 import type { BatchTaskOutcome } from '@/api/tasks';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
@@ -190,7 +190,7 @@ import { BUILTIN_TIERS, isBuiltinTier, isRetiredTier, type FocusTier, type Custo
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskHere } from '@/utils/open-session';
-import { projectDisplayName, taskProjectLabel } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey, projectIdentity, taskProjectLabel } from '@/utils/project-display';
 
 type Task = CoreTask & {
   has_description?: boolean;
@@ -206,7 +206,7 @@ function isTierSection(s: string): boolean {
 }
 
 /** Inline split-pane target. Project is the single grouping layer, so 'project' is
- *  the only kind; Inbox ('') has no registry row and therefore no detail pane. */
+ *  the only kind; the Inbox's pane is named `Inbox` (its settings, no rename or delete). */
 type DetailTarget =
   | { type: 'project'; project: string }
   | null;
@@ -894,9 +894,9 @@ function addFolderNesting(
 // The pinned tiers' order (group + project clustering) lives in
 // '@/utils/pinned-tier-order', shared with the phone's Swift twin.
 
-/** Case-insensitive project identity, the registry's rule ('' = Inbox). */
+/** Case-insensitive project identity, the registry's rule; '' and 'Inbox' are both the Inbox. */
 function sameProjectKey(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+  return projectIdentity(a) === projectIdentity(b);
 }
 
 
@@ -946,8 +946,8 @@ function folderOwnerProject(
   meta: { project: string } | undefined,
   member: Task | undefined,
 ): string | undefined {
-  if (meta) return meta.project || '';
-  return member ? (member.project || '') : undefined;
+  if (meta) return projectGroupKey(meta.project);
+  return member ? projectGroupKey(member.project) : undefined;
 }
 
 /**
@@ -1198,7 +1198,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         groupId={head.groupId}
         label={head.label}
         count={0}
-        project={folderProject ?? (task.project || '')}
+        project={folderProject ?? projectGroupKey(task.project)}
         depth={depth}
         folderDepth={head.depth}
         collapsed={head.collapsed}
@@ -1217,7 +1217,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         count={groupInfo.count}
         // folderProject is the resolved owner (folderMeta first); the lead task's
         // own project is the fallback for surfaces that don't pass it.
-        project={folderProject ?? (task.project || '')}
+        project={folderProject ?? projectGroupKey(task.project)}
         depth={depth}
         folderDepth={groupInfo.depth}
         hidden={groupInfo.headerHidden}
@@ -3103,7 +3103,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // `proj` is the GROUP key ('' = Inbox). A Project chip that excludes it is
     // never switched away: the focus override below keeps the task on screen and
     // names the chip that hides it (spec 5.12).
-    const proj = task.project || '';
+    const proj = projectGroupKey(task.project);
     // A row the panel already draws (a click on it, a link to a row on screen) needs no fold
     // opened: the person's folds stay as they left them, and nothing above the row grows under
     // the pointer (2026-11-10 review: opening a completed task opened the project run the user
@@ -3746,7 +3746,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!isCustom) {
       // Project labels ride the items too (withProjectLabels), whenever two projects
       // share the tier; which of them are drawn is the visible pass's call.
-      const projects = new Set(tierTasks.map((t) => t.project || ''));
+      const projects = new Set(tierTasks.map((t) => projectGroupKey(t.project)));
       if (projects.size < 2) return withChips;
       return withProjectLabels(withChips, tier, runProjectOf(nested, (id) => byId.get(id), folderParents));
     } // project-mode lines anchor folders → plain DOM rows
@@ -4528,7 +4528,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (staysInOwnFolder || fileTo) return;
       const projectOf = (id: string) => {
         const t = pinnedTaskMap.get(id) ?? tasks.find((x) => x.id === id);
-        return t ? (t.project || '') : undefined;
+        return t ? projectGroupKey(t.project) : undefined;
       };
       // Only when ≥2 distinct project runs are visible (mirrors renderTierItems'
       // showFolders gate) — with a single invisible folder the gesture is plain
@@ -4538,7 +4538,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const distinct = new Set<string>();
       for (const id of tierIds) {
         const t = pinnedTaskMap.get(id);
-        if (t) distinct.add(t.project || '');
+        if (t) distinct.add(projectGroupKey(t.project));
       }
       if (distinct.size < 2) return;
       // One named ROW → the project of the run it sits in. A chip stands in for its
@@ -4619,7 +4619,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const overTier: FocusTier = finalTierOf(activeId) ?? 'satellite';
 
       const gid = collapsed.gid;
-      const ownProject = folderMeta?.[gid]?.project ?? pinnedTaskMap.get(orderedMembers[0])?.project ?? '';
+      const ownProject = projectGroupKey(folderMeta?.[gid]?.project ?? pinnedTaskMap.get(orderedMembers[0])?.project);
       const sameTier = snapTierOf(activeId) === overTier;
 
       // Live global order (sentinel present once, members already collapsed out).
@@ -4901,7 +4901,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // every task update (each one set two states for nothing and drew the panel a second time).
   const liveGroupKeys = useSameSet(useMemo(() => {
     const keys = new Set<string>();
-    for (const t of tasks) keys.add(t.project || '');
+    for (const t of tasks) keys.add(projectGroupKey(t.project));
     return keys;
   }, [tasks]));
 
@@ -5353,7 +5353,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       for (const id of arr) {
         if (!tierDisplayTaskIds.has(id)) continue;
         const t = pinnedTaskMap.get(id);
-        if (t) set.add(t.project || '');
+        if (t) set.add(projectGroupKey(t.project));
       }
       map.set(tier, set);
     };
@@ -5486,13 +5486,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (groupBy === 'project') {
       const runs = new Map<string, Task[]>();
       for (const task of topLevel) {
-        const key = task.project || '';
+        const key = projectGroupKey(task.project);
         const run = runs.get(key);
         if (run) run.push(task); else runs.set(key, [task]);
       }
       topLevel.length = 0;
       for (const [project, run] of runs) { sortRun(run, sortForProject(project)); topLevel.push(...run); }
-      for (const children of childrenOf.values()) sortRun(children, sortForProject(children[0]?.project || ''));
+      for (const children of childrenOf.values()) sortRun(children, sortForProject(projectGroupKey(children[0]?.project)));
     } else {
       sortRun(topLevel, sortBy);
       for (const children of childrenOf.values()) sortRun(children, sortBy);
@@ -5578,7 +5578,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Manual order: store order IS the truth, so a change among manually ordered
   // tasks (a drag, Move up) lands at once. Projects can mix modes, hence the projection.
   const manualIds = useMemo(
-    () => new Set(filtered.filter((t) => sortForProject(t.project || '') === 'manual').map((t) => t.id)),
+    () => new Set(filtered.filter((t) => sortForProject(projectGroupKey(t.project)) === 'manual').map((t) => t.id)),
     [filtered, sortForProject],
   );
 
@@ -5663,7 +5663,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    * the destination through the SAME mechanism the New Project row uses keeps the
    * folder on screen, in its new home.
    *
-   * Two guards: Inbox ('') is skipped, since freshProjects holding '' would
+   * Two guards: the Inbox ('' or 'Inbox') is skipped, since freshProjects holding it would
    * duplicate the Inbox bucket the memo appends by itself; and registration waits
    * for the server's answer, so a refused (or duplicate, in-flight) move leaves no
    * phantom empty group behind.
@@ -5689,7 +5689,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const accepted = await Promise.resolve(onMoveFolderToProject(groupId, project));
     if (accepted === false) return false;
     if (migrating > 0) projectRegistry.refresh();
-    if (project) setFreshProjects((prev) => (prev.includes(project) ? prev : [...prev, project]));
+    if (!isInboxProject(project)) setFreshProjects((prev) => (prev.includes(project) ? prev : [...prev, project]));
     return true;
   }, [onMoveFolderToProject, tasks, folderParents, taskGroups, projectRegistry.sourceByName, projectRegistry.loaded, projectRegistry.refresh, confirm]);
   useLayoutEffect(() => { requestMoveFolderRef.current = requestMoveFolder; }, [requestMoveFolder]);
@@ -5703,7 +5703,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (groupBy === 'none') return [];
     const map = new Map<string, Task[]>();
     for (const task of sorted) {
-      const proj = task.project || '';
+      const proj = projectGroupKey(task.project);
       if (!map.has(proj)) map.set(proj, []);
       map.get(proj)!.push(task);
     }
@@ -5711,6 +5711,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const lower = new Set(Array.from(map.keys(), (k) => k.toLowerCase()));
     const freshEmpty: string[] = [];
     for (const fp of freshProjects) {
+      if (isInboxProject(fp)) continue; // the Inbox's group is '' and is appended below
       if (!lower.has(fp.toLowerCase())) { map.set(fp, []); lower.add(fp.toLowerCase()); freshEmpty.push(fp); }
     }
     const freshSet = new Set(freshEmpty);
@@ -5788,7 +5789,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const t of tasks) if (t.group_id) liveMembership.add(t.group_id);
     for (const [gid, meta] of Object.entries(folderMeta)) {
       if (liveMembership.has(gid)) continue;
-      const key = (meta.project ?? '').toLowerCase();
+      const key = projectGroupKey(meta.project).toLowerCase();
       let arr = map.get(key);
       if (!arr) { arr = []; map.set(key, arr); }
       arr.push({ groupId: gid, label: taskGroups?.[gid] ?? gid });
@@ -5915,7 +5916,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const fullGrouped = useMemo(() => {
     const map = new Map<string, Task[]>();
     for (const task of tasks) {
-      const proj = task.project || '';
+      const proj = projectGroupKey(task.project);
       if (!map.has(proj)) map.set(proj, []);
       map.get(proj)!.push(task);
     }
@@ -5977,7 +5978,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // its own chevron would. Every fold a row can hide in is listed in
   // tests/web/locate-reveal-ratchet.test.ts with the call here that opens it.
   revealAncestorsRef.current = (task: Task) => {
-    const proj = task.project || '';
+    const proj = projectGroupKey(task.project);
     if (queryFoldedProjects.has(proj)) setQueryFoldedProjects((prev) => {
       const next = new Set(prev);
       next.delete(proj);
@@ -6595,7 +6596,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Also primes scroll restoration so the task stays visible after refetch.
   const handleUnparent = useLeanCallback((taskId: string) => {
     if (!onReparentTask) return;
-    ensureManualSort(tasks.find((t) => t.id === taskId)?.project || '');
+    ensureManualSort(projectGroupKey(tasks.find((t) => t.id === taskId)?.project));
     scrollAfterReparentRef.current = taskId;
     onReparentTask(taskId, null);
   }, [onReparentTask, ensureManualSort, tasks]);
@@ -6886,7 +6887,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const batchMoveToProject = useLeanCallback(async (project: string) => {
     if (!onMoveTask) return; // never confirm a destructive move we then can't perform
-    const moving = selectionInfo.tasks.filter((t) => (t.project || '') !== project);
+    const moving = selectionInfo.tasks.filter((t) => !sameProjectKey(t.project, project));
     // ONE confirm for the whole batch when any member crosses a provider boundary —
     // per-task requestMoveTask would stack a dialog per task. Same fail-closed rule
     // as requestMoveTask: an unloaded registry must not read as "nothing migrates".
@@ -6937,9 +6938,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [holdRecentRow, onStartSession]);
 
   const showProjectDetail = useLeanCallback((project: string) => {
-    // Inbox has no registry row, so there is nothing to show for it.
-    if (!project) return;
-    setDetailTarget({ type: 'project', project });
+    // The Inbox's group key is ''; its pane reads and saves the Inbox's own settings.
+    setDetailTarget({ type: 'project', project: isInboxProject(project) ? INBOX_PROJECT : project });
     onClearFocus?.();
   }, [onClearFocus]);
   // "Set up source…" in a draft's project picker opens this pane (utils/project-settings-open.ts).
@@ -6970,7 +6970,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const visible: string[] = [];
     const seen = new Set<string>();
     for (const t of tasks) {
-      const p = t.project || '';
+      const p = projectGroupKey(t.project);
       if (!seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); visible.push(p); }
     }
     const lower = new Set(current.map((n) => n.toLowerCase()));
@@ -7050,7 +7050,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const runs: string[] = [];
       const span = new Map<string, { top: number; bottom: number }>();
       for (const r of rows) {
-        const proj = pinnedTaskMap.get(r.id)?.project ?? '';
+        const proj = projectGroupKey(pinnedTaskMap.get(r.id)?.project);
         const rect = r.el.getBoundingClientRect();
         const seen = span.get(proj);
         if (seen) {
@@ -7126,7 +7126,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (mode === 'project') {
       const runs: string[] = [];
       for (const id of tierIds) {
-        const p = pinnedTaskMap.get(id)?.project ?? '';
+        const p = projectGroupKey(pinnedTaskMap.get(id)?.project);
         if (!runs.includes(p)) runs.push(p);
       }
       // One folder means no boundary between folders. Say which mode does divide
@@ -7318,7 +7318,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const id of tierIdsAtRest.get(tier) ?? ids) {
       const t = pinnedTaskMap.get(id);
       if (!t) continue;
-      const p = t.project || '';
+      const p = projectGroupKey(t.project);
       distinctProjects.add(p);
       projectRowCount.set(p, (projectRowCount.get(p) ?? 0) + 1);
     }
@@ -7365,7 +7365,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const sepList = sorted ? NO_SEPARATORS : sepPreview ? upsertSeparator(separators, sepPreview) : separators;
     const sepPlacement = sepMode === 'project' ? placeSeparators({
       ids,
-      projectOf: (id) => { const t = pinnedTaskMap.get(id); return t ? (t.project || '') : null; },
+      projectOf: (id) => { const t = pinnedTaskMap.get(id); return t ? projectGroupKey(t.project) : null; },
       // A group is one unit: without this a line anchored to a card that later
       // joined a cluster ends up between two members and splits it.
       groupOf: (id) => pinnedTaskMap.get(id)?.group_id ?? null,
@@ -7565,7 +7565,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       const task = pinnedTaskMap.get(id);
       if (!task) continue;
-      const proj = task.project || '';
+      const proj = projectGroupKey(task.project);
       // With labels, the label sentinel opened this run; a card a cross-tier drag
       // dropped into another project's run is drawn in THAT run, where it will land.
       if (!showFolders) enterRun(proj);
@@ -7591,8 +7591,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           projectCollapsed={runHidden(showFolders && prevProject !== null ? prevProject : proj)}
           selectMode={selectMode}
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
-          onMoveUp={i > 0 && pinnedTaskMap.get(ids[i - 1])?.project === task.project && pinnedTaskMap.get(ids[i - 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i - 1], tier) : undefined}
-          onMoveDown={i < ids.length - 1 && pinnedTaskMap.get(ids[i + 1])?.project === task.project && pinnedTaskMap.get(ids[i + 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i + 1], tier) : undefined}
+          onMoveUp={i > 0 && sameProjectKey(pinnedTaskMap.get(ids[i - 1])?.project, task.project) && pinnedTaskMap.get(ids[i - 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i - 1], tier) : undefined}
+          onMoveDown={i < ids.length - 1 && sameProjectKey(pinnedTaskMap.get(ids[i + 1])?.project, task.project) && pinnedTaskMap.get(ids[i + 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i + 1], tier) : undefined}
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} landingDepth={task.id === activeDragPinnedId ? dragLandingDepth : undefined}
           filterOverrideReason={task.id === filterOverrideId || task.id === fadingOverrideId ? filterOverrideNode : undefined} />
       );
@@ -7889,8 +7889,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // By project: a waiting task sits in its project's fold.
       if (projectFoldsOn && !isWatched(t) && !isBackground(t)) {
         const region = pinnedTaskIds?.has(t.id) && effectiveSection !== 'tasks' ? (getTier(t.id) ?? 'satellite') : 'list';
-        if (stateSectionNoNeeds(t, regionRules.snoozed) === 'waiting' && foldRegions.get(region)?.get(t.project || '')?.waiting.some((x) => x.id === t.id)) {
-          const fold = projectFoldKey(region, t.project || '', 'waiting');
+        if (stateSectionNoNeeds(t, regionRules.snoozed) === 'waiting' && foldRegions.get(region)?.get(projectGroupKey(t.project))?.waiting.some((x) => x.id === t.id)) {
+          const fold = projectFoldKey(region, projectGroupKey(t.project), 'waiting');
           if (locate && !openProjectFolds.has(fold)) toggleProjectFold(fold);
           return 'fold';
         }

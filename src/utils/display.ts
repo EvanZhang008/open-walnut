@@ -1,3 +1,4 @@
+import { isInboxProject } from '../core/inbox-project.js';
 import chalk from 'chalk';
 import type { Task, DashboardData } from '../core/types.js';
 import { statusSymbol, prioritySymbol, shortDate } from './format.js';
@@ -75,7 +76,7 @@ function formatTaskLine(task: Task, maxTitleLen: number): string {
   const sym = statusSymbol(task.status);
   const pri = prioritySymbol(task.priority);
   const id = task.id.slice(0, 8);
-  const group = task.project ? chalk.dim(`[${task.project}]`) : '';
+  const group = isInboxProject(task.project) ? '' : chalk.dim(`[${task.project}]`);
   const title = task.title.length > maxTitleLen
     ? task.title.slice(0, maxTitleLen - 1) + '…'
     : task.title;
@@ -180,7 +181,7 @@ export function renderTaskList(tasks: Task[]): void {
     const sym = statusSymbol(task.status);
     const id = chalk.dim(task.id.slice(0, 8));
     const pri = prioritySymbol(task.priority);
-    const group = task.project ? chalk.dim(`[${task.project}]`) : '';
+    const group = isInboxProject(task.project) ? '' : chalk.dim(`[${task.project}]`);
     const date = chalk.dim(shortDate(task.updated_at));
 
     let coloredStatus: string;

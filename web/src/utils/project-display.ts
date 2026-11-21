@@ -2,10 +2,27 @@
 // Relative import: the markdown test tier has no @open-walnut aliases.
 import { askProjectDisplay } from '../../../src/core/sessions/ask-list';
 import { orgDisplayTitle } from '../../../src/core/org/org-tree';
+import { isInboxProject } from '../../../src/core/inbox-project';
 
 export function projectDisplayName(project: string | undefined | null): string {
-  const name = project ?? '';
-  return name === '' ? 'Inbox' : askProjectDisplay(name);
+  return isInboxProject(project) ? 'Inbox' : askProjectDisplay(project ?? '');
+}
+
+/**
+ * The key a board, list or rail groups a task's project under: '' for the Inbox, whatever a
+ * row calls it ('Inbox' since every task has a project, '' from an older row or client), else
+ * the name as stored. The Inbox's group, its fold, sort and order prefs have always been keyed
+ * '', so they keep working, and the Inbox can never show as a second group beside its own.
+ * Values a write sends may name it either way: the server files both into the Inbox.
+ */
+export function projectGroupKey(project: string | undefined | null): string {
+  return isInboxProject(project) ? '' : (project ?? '');
+}
+
+/** A project's identity for comparing two names, the registry's rule: case-insensitive and
+ *  trimmed, '' for the Inbox however a row names it. */
+export function projectIdentity(project: string | undefined | null): string {
+  return projectGroupKey(project).trim().toLowerCase();
 }
 
 /** What owns a session: its task, or at least the project the session record carries. */
@@ -25,7 +42,7 @@ export function sessionDisplayName(title: string, owner?: SessionOwner | null): 
  *  same (an ask's placeholder, "Quick question · Mentor", once and not twice). */
 export function taskReferenceLabel(task: { title: string; project?: string; org_role?: string; org_name?: string }): string {
   const title = orgDisplayTitle(task);
-  if (!task.project) return title;
+  if (isInboxProject(task.project)) return title;
   const project = projectDisplayName(task.project);
   return project.toLowerCase() === title.toLowerCase() ? title : `${project} / ${title}`;
 }

@@ -98,7 +98,9 @@ export function createOpenItemsText() {
     ];
     if (items.place) {
       const p = items.place;
-      const where = (p.project.trim() ? `project "${oneLine(p.project, TITLE_MAX)}"` : 'the Inbox (no project)')
+      // The Inbox ('' or `Inbox`), inline: this body references nothing at module scope (isInboxProject's rule).
+      const inbox = !p.project.trim() || p.project.trim().toLowerCase() === 'inbox';
+      const where = (inbox ? 'the Inbox' : `project "${oneLine(p.project, TITLE_MAX)}"`)
         + (p.folder ? `, folder "${oneLine(p.folder, TITLE_MAX)}"` : '');
       const leader = p.leaderId ? `; its leader is "${oneLine(p.leader || 'untitled', TITLE_MAX)}" (${p.leaderId})` : '';
       lines.push(`Your task "${title}" (${items.task.id}) stands in ${where}${leader}. Trust this over your prompt; `

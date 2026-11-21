@@ -39,6 +39,7 @@
  * chunks of rows (related-open-tasks.ts), tests run them straight through.
  */
 
+import { isInboxProject } from '../inbox-project.js';
 import {
   type Terms, DESC_CHARS, relatedTerms, descriptionSentences, boilerplateOf, withoutBoilerplate,
   familyMap, inFamilies, isCjkTerm,
@@ -176,7 +177,8 @@ export function* rankSteps<T extends RankableTask>(
   const idf = (t: string): number => Math.max(0, Math.log((n + 1) / ((df.get(t) ?? 0) + 0.5)));
   const weight = (terms: Iterable<string>): number => { let w = 0; for (const t of terms) w += idf(t); return w; };
   const wQTitle = weight(qTitle.keys());
-  const projectKey = (ctx.project ?? '').trim().toLowerCase();
+  // The Inbox ('' or `Inbox`) is the unfiled pile: sharing it says nothing, so it gets no boost.
+  const projectKey = isInboxProject(ctx.project) ? '' : ctx.project!.trim().toLowerCase();
 
   const out: Scored<T>[] = [];
   for (const p of prepared) {

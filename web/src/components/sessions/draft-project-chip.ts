@@ -10,6 +10,7 @@
 import type { DraftColumn } from './draft-column';
 import { projectDisplayName } from '../../utils/project-display';
 import { shownFolderName } from '@/utils/home-folder';
+import { isInboxProject } from '../../../../src/core/inbox-project';
 
 type ChipDraft = Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf' | 'walnut' | 'cwd' | 'aiFields'> & Partial<Pick<DraftColumn, 'host'>>;
 
@@ -42,7 +43,7 @@ export interface DraftProjectCtx {
 
 /** Start will create this project (same rule the old pill's "new" badge used). */
 export function draftProjectIsNew(draft: ChipDraft, isKnownProject: (name: string) => boolean): boolean {
-  return !draft.taskId && !draft.forkOf && !draft.walnut && !!draft.project && !isKnownProject(draft.project);
+  return !draft.taskId && !draft.forkOf && !draft.walnut && !isInboxProject(draft.project) && !isKnownProject(draft.project!);
 }
 
 /**
@@ -68,7 +69,7 @@ export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftP
       title: `This task is filed under ${name}. Picking another project moves the task now.`,
     };
   }
-  if (!draft.project && draft.projectSource !== 'user') {
+  if (isInboxProject(draft.project) && draft.projectSource !== 'user') {
     if (!ctx.always) return null;
     return {
       key: 'Project:', name, isNew: false, ai: false, action: ctx.hasMenu ? 'menu' : 'flyout',
@@ -85,7 +86,7 @@ export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftP
       ? `Walnut picked a new project, ${name}, from what you typed. Starting creates it. ${where}`
       : `Walnut picked ${name} from what you typed. ${where}`;
   } else if (draft.projectSource === 'user') {
-    title = draft.project ? `Your pick. ${where}` : `Your pick: no project. ${where}`;
+    title = !isInboxProject(draft.project) ? `Your pick. ${where}` : `Your pick: no project. ${where}`;
   } else if (draft.projectSource === 'seed') {
     title = `${isNew ? `${create} ` : ''}Set when this draft opened. ${where}`;
   } else {
@@ -103,9 +104,9 @@ export function draftProjectProvenance(draft: ChipDraft, isKnownProject: (name: 
   if (draft.aiFields?.has('project')) {
     return isNew ? "Walnut's pick from what you typed, created when you start" : "Walnut's pick from what you typed";
   }
-  if (draft.projectSource === 'user') return draft.project ? 'Your pick' : 'Your pick: no project';
+  if (draft.projectSource === 'user') return !isInboxProject(draft.project) ? 'Your pick' : 'Your pick: no project';
   if (draft.projectSource === 'seed') return 'Set when this draft opened';
-  if (draft.project && draft.projectSource === 'folder') {
+  if (!isInboxProject(draft.project) && draft.projectSource === 'folder') {
     return isNew
       ? 'New, created when you start (named after the folder)'
       : `Set by the folder ${shownFolderName(draft.cwd, draft.host)}`;

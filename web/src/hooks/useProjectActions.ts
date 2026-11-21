@@ -21,7 +21,7 @@
  * the old name in every picker until a reload.
  */
 import { useCallback, useState } from 'react';
-import type { Task } from '@open-walnut/core';
+import { INBOX_PROJECT, isInboxProject, type Task } from '@open-walnut/core';
 import { useConfirm, useAlert, usePrompt } from '@/hooks/useConfirm';
 import { fetchProjectDetail, renameProject, deleteProject } from '@/api/projects';
 import { renameProjectLocal, removeProjectLocal } from '@/hooks/useProjectRegistry';
@@ -29,7 +29,7 @@ import { useTasksContextSafe, type TasksContextValue } from '@/contexts/TasksCon
 import { projectDisplayName } from '@/utils/project-display';
 
 /**
- * Move every loaded task of `from` onto `to` ('' = Inbox) in the shared task
+ * Move every loaded task of `from` onto `to` (`Inbox` for the Inbox) in the shared task
  * store. The board groups by `task.project`, so this is what renames the group
  * header the same frame the user confirms. The patch is held as pending until
  * `settle` (the write answered): a list read another writer's bulk event starts
@@ -103,6 +103,8 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
   }, [alert, onChanged, tasksStore]);
 
   const rename = useCallback(async (project: string) => {
+    // The Inbox is never renamed (the server refuses it too); no menu offers it.
+    if (isInboxProject(project)) return;
     const next = await prompt({
       title: `Rename project “${projectDisplayName(project)}”`,
       message: 'Renaming onto an existing project merges them (case-insensitive).',
@@ -118,7 +120,8 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
   // what renaming onto an existing name already means: one project, the other's
   // tasks and folders inside it. The server's rename is that merge.
   const mergeInto = useCallback(async (project: string, target: string) => {
-    if (!project || !target || target.toLowerCase() === project.toLowerCase()) return;
+    // The Inbox is never merged away, and it is no project to merge into.
+    if (isInboxProject(project) || isInboxProject(target) || target.toLowerCase() === project.toLowerCase()) return;
     const from = projectDisplayName(project);
     const to = projectDisplayName(target);
     const ok = await confirm({
@@ -135,6 +138,7 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
   // remote container itself (IRREVERSIBLE), so the confirm spells that out.
   // Source isn't threaded into the menus, so fetch the detail lazily here.
   const remove = useCallback(async (project: string) => {
+    if (isInboxProject(project)) return; // never deleted: every other project's tasks fall back to it
     setBusy(true);
     let source = 'local';
     let total = 0;
@@ -166,7 +170,7 @@ export function useProjectActions({ onChanged }: ProjectActionsOptions = {}): Pr
     // Only a LOCAL claim has a knowable destination (Inbox). A cascade can land
     // its tasks in the plugin's fallback project instead ('grouping-removed'), so
     // guessing here would show the wrong group for a second — let the refetch say.
-    const movedTasks = isClaimed ? null : moveLoadedTasks(tasksStore, project, '');
+    const movedTasks = isClaimed ? null : moveLoadedTasks(tasksStore, project, INBOX_PROJECT);
     try {
       await deleteProject(project, isClaimed ? { remote: true } : undefined);
       settleRegistry(true);

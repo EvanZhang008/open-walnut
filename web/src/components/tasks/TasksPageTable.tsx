@@ -34,7 +34,7 @@ import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { projectDisplayName } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 interface TasksPageTableProps {
@@ -214,7 +214,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, menuRef, { minHeight: 160, onAnchorLost: () => setOpen(false) });
-  const project = task.project || '';
+  const project = projectGroupKey(task.project);
 
   useEffect(() => {
     if (!open) return;

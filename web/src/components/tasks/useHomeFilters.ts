@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
+import { projectGroupKey } from '@/utils/project-display';
 import { log } from '@/utils/log';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import { useNotifications } from '@/contexts/notifications';
@@ -65,7 +66,7 @@ export function orderFilterProjects(tasks: readonly Pick<Task, 'project'>[], pro
   const byLower = new Map<string, string>();
   let inbox = false;
   for (const t of tasks) {
-    const p = t.project || '';
+    const p = projectGroupKey(t.project);
     if (!p) { inbox = true; continue; }
     if (!byLower.has(p.toLowerCase())) byLower.set(p.toLowerCase(), p);
   }
@@ -327,7 +328,7 @@ export function useCreatedOutsideToast(
     const id = `filter-outside-${task.id}`;
     notify({
       id, kind: 'sort', severity: 'info', persistent: false, dedupKey: id,
-      title: `Saved to ${projectLabel(task.project || '')}. ${hiddenByText(reasons)}`,
+      title: `Saved to ${projectLabel(projectGroupKey(task.project))}. ${hiddenByText(reasons)}`,
       action: { label: 'Show', kind: 'callback' },
       onAction: () => showTask(task, reasons.map((r) => r.dim), 'toast'),
     });

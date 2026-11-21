@@ -1134,7 +1134,7 @@ function parseTaskOpParams(p: Record<string, unknown>): import('../task-outbox.j
     }
     if (raw.type === 'reorder-pins') return { opId, type: 'reorder-pins', at, taskIds: taskIds as string[] };
     const project = typeof raw.project === 'string' ? raw.project : null;
-    if (project === null) throw new SessionControlError('reorder op requires op.project (string; "" = Inbox)', 400);
+    if (project === null) throw new SessionControlError('reorder op requires op.project (string; "Inbox", or "", = the Inbox)', 400);
     return { opId, type: 'reorder', at, project, taskIds: taskIds as string[] };
   }
   if (raw.type !== 'create' && raw.type !== 'update') {

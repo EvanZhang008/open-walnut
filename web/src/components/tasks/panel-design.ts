@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { Task } from '@open-walnut/core';
+import { projectGroupKey } from '../../utils/project-display';
 import { isBackground, isWatched, projectRuns, sortSectionTasks, stateSectionNoNeeds, type StatusSectionKey } from './status-sections';
 
 export type PanelDesign = 'status' | 'project';
@@ -91,7 +92,7 @@ export function foldTasksByProject(
     seen.add(t.id);
     // Needs you stays in the list in this design: only a parked or snoozed one folds.
     if (stateSectionNoNeeds(t, snoozed) !== 'waiting') continue;
-    const key = t.project || '';
+    const key = projectGroupKey(t.project);
     let f = out.get(key);
     if (!f) { f = { waiting: [] }; out.set(key, f); }
     f.waiting.push(t);

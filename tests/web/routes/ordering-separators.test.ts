@@ -18,6 +18,7 @@ import request from 'supertest'
 import { orderingRouter } from '../../../src/web/routes/ordering.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
+import { INBOX_PROJECT } from '../../../src/core/inbox-project.js'
 
 function createApp() {
   const app = express()
@@ -83,13 +84,13 @@ describe('PUT /api/ordering/separators', () => {
     expect(get.body.separators[0]).toEqual({ id: 'sep_a1', tier: 'focus', mode: 'project', afterProject: 'marina', beforeProject: 'acme' })
   })
 
-  it('keeps a folder anchor that is "" — Inbox is a real folder, not "no folder"', async () => {
+  it('saves a folder anchor of "" (an older client) as "Inbox": the Inbox is a real folder, not "no folder"', async () => {
     const app = createApp()
     await request(app).put('/api/ordering/separators')
       .send({ separators: [{ id: 'sep_c', tier: 'focus', mode: 'project', afterProject: 'acme', beforeProject: '' }] })
       .expect(200)
     const get = await request(app).get('/api/ordering')
-    expect(get.body.separators[0]).toEqual({ id: 'sep_c', tier: 'focus', mode: 'project', afterProject: 'acme', beforeProject: '' })
+    expect(get.body.separators[0]).toEqual({ id: 'sep_c', tier: 'focus', mode: 'project', afterProject: 'acme', beforeProject: INBOX_PROJECT })
   })
 
   it('a top-of-tier line stores NO afterProject — absent is how "no folder above" is spelled', async () => {

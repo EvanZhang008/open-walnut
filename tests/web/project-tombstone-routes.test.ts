@@ -27,6 +27,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { _resetForTesting } from '../../src/core/task-manager.js'
 import { closeDb } from '../../src/core/task-db.js'
+import { INBOX_PROJECT } from '../../src/core/inbox-project.js'
 
 let server: HttpServer
 let port: number
@@ -110,7 +111,7 @@ describe('DELETE closes the name', () => {
 
     // The writer that used to re-mint the row: a plain create naming the project.
     const after = await createTask('A8 probe plain', 'Fix Walnut')
-    expect(after.project).toBe('')
+    expect(after.project).toBe(INBOX_PROJECT)
     expect(await projectNames()).not.toContain('Fix Walnut')
   })
 
@@ -131,7 +132,7 @@ describe('DELETE closes the name', () => {
     await del('/api/projects/Fix%20Walnut')
 
     const sneaky = await createTask('lower case try', 'fix walnut')
-    expect(sneaky.project).toBe('')
+    expect(sneaky.project).toBe(INBOX_PROJECT)
     expect(await projectNames()).not.toContain('fix walnut')
   })
 
@@ -145,7 +146,7 @@ describe('DELETE closes the name', () => {
     await bootServer()
 
     const after = await createTask('after restart', 'Fix Walnut')
-    expect(after.project).toBe('')
+    expect(after.project).toBe(INBOX_PROJECT)
   })
 })
 
@@ -200,9 +201,9 @@ describe('PATCH leaves a redirect', () => {
     await del('/api/projects/New%20Name')
 
     const viaOld = await createTask('via the old name', 'Old Name')
-    expect(viaOld.project).toBe('')
+    expect(viaOld.project).toBe(INBOX_PROJECT)
     const viaNew = await createTask('via the new name', 'New Name')
-    expect(viaNew.project).toBe('')
+    expect(viaNew.project).toBe(INBOX_PROJECT)
     expect(await projectNames()).toEqual([])
   })
 })

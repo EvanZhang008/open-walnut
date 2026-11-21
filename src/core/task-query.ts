@@ -1,6 +1,7 @@
 import type { Task, TaskPhase, TaskPriority } from './types.js';
 import { PIN_TIER_POLICY, VALID_PRIORITIES, migrateFocusTier } from './types.js';
 import { effectiveTags, namesDerivedTag, normalizeTag } from './tag-model.js';
+import { projectOrInbox } from './inbox-project.js';
 
 export type TaskCompletion = 'todo' | 'in_progress' | 'complete';
 export type TimeBasis = 'created' | 'updated' | 'created_or_updated' | 'due' | 'completed';
@@ -420,9 +421,10 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   }
   if (!matchesArray(task.phase, query.phases)) return false;
 
-  const project = (task.project || '').toLowerCase();
+  // The Inbox is one project however it is named: '' (an older client's filter or row) or its name.
+  const project = projectOrInbox(task.project).toLowerCase();
   if (query.projects !== undefined
-      && !query.projects.some((candidate) => candidate.toLowerCase() === project)) return false;
+      && !query.projects.some((candidate) => projectOrInbox(candidate).toLowerCase() === project)) return false;
   // Legacy 'high'/'medium'/'low' rows must answer the canonical filter.
   if (!matchesArray(normalizeTaskPriority(task.priority), query.priorities)) return false;
   if (!matchesArray(task.source, query.sources)) return false;

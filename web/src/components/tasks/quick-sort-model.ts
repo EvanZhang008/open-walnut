@@ -13,6 +13,7 @@ import type { CustomTierDef } from '@/api/focus';
 import { boardMoveIds, homeBoardTier } from './home-board-model';
 import { shownTier } from '@/api/focus';
 import { resolveParentRef } from './task-tree-index';
+import { projectIdentity } from '@/utils/project-display';
 
 export type SortView = 'tasks' | 'projects';
 
@@ -98,7 +99,8 @@ export interface SortProject {
   lastTouched: string;
 }
 
-export const projectKey = (t: Pick<Task, 'project'>) => (t.project ?? '').trim().toLowerCase();
+/** A task's project key: case-insensitive, '' for the Inbox (`Inbox` or an older '' alike). */
+export const projectKey = (t: Pick<Task, 'project'>) => projectIdentity(t.project);
 
 /** Open work the user sorts: not done, not an org node or plugin task, not an Ask conversation. */
 export function isSortable(t: Task): boolean {

@@ -17,6 +17,7 @@
  * Pure decision (`replyInsteadOf`) plus one read of the request ledger; never throws, so a ledger
  * that cannot be read costs nothing but the check.
  */
+import { isInboxProject } from '../inbox-project.js';
 import type { SessionRequest } from '../session-requests.js';
 import type { LetterSender, LetterType } from './types.js';
 
@@ -108,7 +109,8 @@ export async function findReplyInstead(
       const t = id ? tasks.get(id) : undefined;
       if (!id || !t || t.phase === 'COMPLETE') return undefined;
       // Main, the sender's own lead (its project's), or a task above it.
-      const ownLead = t.org_role === 'lead' && !!project && (t.project === project || (t.org_leads ?? []).includes(project));
+      // The Inbox ('' or `Inbox`) is no one's team, so it has no lead (org-tree.ts projectKey).
+      const ownLead = t.org_role === 'lead' && !isInboxProject(project) && (t.project === project || (t.org_leads ?? []).includes(project!));
       return t.org_role === 'main' || ownLead || above.has(id) ? id : undefined;
     };
     const hit = replyInsteadOf({ type, senderTaskId: sender.taskId, senderSessionId: sender.sessionId }, candidates, live, nowMs);

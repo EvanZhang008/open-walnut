@@ -1,5 +1,6 @@
 import { listedProjects } from './test-run.js';
 import { getStoreProjects, listTasksSlim, getProjectMetadata } from './task-manager.js';
+import { INBOX_PROJECT, isInboxProject } from './inbox-project.js';
 
 const MAX_PROJECTS = 20;
 const MAX_TITLES_PER_LINE = 3;
@@ -17,7 +18,7 @@ const MAX_SUMMARY_CHARS = 350;
 const MAX_CRITERIA_SUMMARY_CHARS = 160;
 
 /** Inbox is rendered under this label; it is NOT a selectable project name. */
-export const INBOX_LABEL = 'Inbox';
+export const INBOX_LABEL = INBOX_PROJECT;
 
 export interface ProjectDigest {
   digest: string;
@@ -107,16 +108,16 @@ export async function buildProjectDigest(): Promise<ProjectDigest> {
 
   // Registry rows first, so a claimed-but-quiet project still gets listed with
   // its canonical spelling (the registry is the source of truth for spelling).
+  // The Inbox's own registry row is not a pick: it is the default, rendered last.
   for (const name of Object.keys(storeProjects)) {
-    if (name.trim()) ensureProjectEntry(name);
+    if (!isInboxProject(name)) ensureProjectEntry(name);
   }
 
   const inbox: ProjectDetails = { name: INBOX_LABEL, openCount: 0, titles: [] };
 
   for (const task of tasks) {
     if (task.title.startsWith('.metadata') || task.plugin_only) continue;
-    const name = task.project?.trim();
-    const details = name ? ensureProjectEntry(name) : inbox;
+    const details = isInboxProject(task.project) ? inbox : ensureProjectEntry(task.project!);
     if (task.phase !== 'COMPLETE') details.openCount += 1;
     addTitle(details.titles, task.title);
   }

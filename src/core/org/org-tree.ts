@@ -25,6 +25,7 @@ import type { DirectorChoice, OrgRole, TaskPhase } from '../types.js';
 import { askProjectDisplay } from '../sessions/ask-list.js';
 import { fallbackUserState, storedUserState, type UserState, type UserStatus } from '../user-status.js';
 import { isDirector } from './org-directors.js';
+import { isInboxProject } from '../inbox-project.js';
 // The team's news (its tasks' own words) rides the same import for the web (@open-walnut/org-tree).
 export * from './team-news.js';
 export * from './instructions-author.js';
@@ -105,7 +106,8 @@ export interface OrgNodeRef {
 
 export interface OrgProjectNode {
   kind: 'project';
-  /** '' = the Inbox. */
+  /** '' = the Inbox (a real project named Inbox since 2026-11-21: the org keeps the node's key
+   *  and value it always had, so a pin, a saved row and a thread about it still find it). */
   project: string;
   /** The project's lead, once Walnut has made one. */
   lead?: OrgNodeRef;
@@ -198,8 +200,15 @@ export function isOrgWork(task: Pick<OrgTaskLike, 'org_role' | 'plugin_only' | '
     && !task.title.startsWith('.metadata');
 }
 
+/** A project's key in the org: its name folded, and '' for the Inbox whatever it is called
+ *  ('' from an older row, or its name `Inbox`). */
 export function projectKey(project: string | undefined): string {
-  return (project ?? '').trim().toLowerCase();
+  return isInboxProject(project) ? '' : (project ?? '').trim().toLowerCase();
+}
+
+/** A project as the org names it: its name, and '' for the Inbox (see projectKey). */
+function orgProjectName(project: string | undefined): string {
+  return isInboxProject(project) ? '' : (project ?? '').trim();
 }
 
 /** An Org node's key: the CEO, or a VP by its project. The Org page's row keys are the same
@@ -362,7 +371,7 @@ export function pickLead<T extends OrgTaskLike>(tasks: readonly T[], project: st
  * way out. Undefined while it still leads its project or another one.
  */
 export function successorOf<T extends OrgTaskLike>(tasks: readonly T[], lead: OrgTaskLike): T | undefined {
-  const project = (lead.project ?? '').trim();
+  const project = orgProjectName(lead.project);
   if (lead.org_role !== 'lead' || !project || lead.org_leads?.length) return undefined;
   const now = pickLead(tasks, project);
   return now && now.id !== lead.id && leadsAlso(now, project) ? now : undefined;
@@ -376,7 +385,7 @@ function better(a: OrgTaskLike, b: OrgTaskLike): boolean {
 
 /** The project whose lead leads `project`, when that is another project's lead. */
 function vpOf(lead: OrgTaskLike, project: string): string | undefined {
-  const own = (lead.project ?? '').trim();
+  const own = orgProjectName(lead.project);
   return own && projectKey(own) !== projectKey(project) ? own : undefined;
 }
 
@@ -415,7 +424,7 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
     }
     workers.sort((a, b) => compareWork(a, b, at));
     return {
-      kind: 'task', id: t.id, title: t.title, project: (t.project ?? '').trim(), phase: t.phase,
+      kind: 'task', id: t.id, title: t.title, project: orgProjectName(t.project), phase: t.phase,
       userState, hasSession: hasSession(t), director: isDirector(t.director, workers.length), workers, counts,
     };
   };
@@ -424,7 +433,7 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
   const placeRoot = (t: OrgTaskLike) => {
     const node = nodeOf(t);
     const key = projectKey(t.project);
-    const bucket = teamsByProject.get(key) ?? { project: (t.project ?? '').trim(), teams: [] };
+    const bucket = teamsByProject.get(key) ?? { project: orgProjectName(t.project), teams: [] };
     bucket.teams.push(node);
     teamsByProject.set(key, bucket);
   };
@@ -456,13 +465,13 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
   // A lead whose project has no open work right now still leads it, and so does
   // every project put under it.
   for (const t of tasks) {
-    if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || !(t.project ?? '').trim()) continue;
+    if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || !orgProjectName(t.project)) continue;
     for (const name of [t.project!, ...(t.org_leads ?? [])]) {
       const key = projectKey(name);
       if (!key || teamsByProject.has(key) || projects.some((p) => projectKey(p.project) === key)) continue;
       const lead = pickLead(tasks, name);
       if (!lead || lead.phase === 'COMPLETE') continue;
-      const project = projectKey(lead.project) === key ? (lead.project ?? '').trim() : name.trim();
+      const project = projectKey(lead.project) === key ? orgProjectName(lead.project) : name.trim();
       const vp = vpOf(lead, project);
       projects.push({
         kind: 'project', project, needsLead: false, teams: [], counts: { ...ZERO }, lead: refOf(lead), contactId: lead.id,
@@ -494,7 +503,6 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
 /** The project a name points at, case-insensitively; '' or "inbox" is the Inbox. */
 export function findProjectNode(tree: OrgTree, name: string): OrgProjectNode | undefined {
   const key = projectKey(name);
-  if (key === 'inbox') return tree.projects.find((p) => !p.project) ?? tree.projects.find((p) => projectKey(p.project) === key);
   return tree.projects.find((p) => projectKey(p.project) === key);
 }
 

@@ -12,6 +12,7 @@
  * run or a plugin's own task. Reviewer subtasks are their own rows (their title says
  * "review"); a task's review count is how many it had.
  */
+import { projectOrInbox } from '../inbox-project.js';
 import type { SessionEngine, Task } from '../types.js';
 import { SCORE_DIMENSIONS, type ReviewScore } from '../peers/structured-reply.js';
 import { builderLabel, REVIEW_RE, splitBuilders } from '../agents/engine-split.js';
@@ -446,7 +447,7 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
     // Any session it held: a task that failed on one engine and finished on another still had the error.
     const errored = anySessionErrored || t.last_start?.state === 'failed' || (t.start_failures ?? 0) > 0;
     candidates.push({
-      byCost, byPick, taskId: t.id, title: t.title, project: t.project ?? '', key: byCost.key, done,
+      byCost, byPick, taskId: t.id, title: t.title, project: projectOrInbox(t.project), key: byCost.key, done,
       hours: hours !== null && Number.isFinite(hours) && hours >= 0 ? hours : null,
       // A task that never ran cost nothing: a known $0, not an unknown.
       costUsd: spend?.costUsd ?? 0, partialCost: !notStarted && (!spend || spend.unpriced > 0 || spend.unknown > 0), noUsage: !notStarted && usageUnknown(spend),
@@ -479,7 +480,8 @@ export function aggregateEngineCompare(input: CompareInput): EngineCompare {
   const labels = entryLabels(builders);
   const entries = builders.map((b) => ({ key: b.key, label: labels.get(b.key)!, weight: b.weight }));
   const splitOn = entries.length >= 2;
-  const inProject = (c: Candidate) => input.project === undefined || c.project === input.project;
+  // A saved pick of '' (from before the Inbox was a project) still picks the Inbox.
+  const inProject = (c: Candidate) => input.project === undefined || c.project === projectOrInbox(input.project);
   const splitTasks = candidates.filter((c) => c.split && inProject(c)).length;
   // 'auto': the split's own tasks once it is on and assigned enough in the period to compare, else every task.
   // Decided on the whole period, so choosing a project never flips which tasks count.

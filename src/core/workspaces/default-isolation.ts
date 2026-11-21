@@ -131,8 +131,8 @@ const realDeps: DefaultWorkspaceDeps = {
     const { experimentalEnabled } = await import('../experimental.js')
     return experimentalEnabled((await getConfig()).experimental, ISOLATION_EXPERIMENT)
   },
+  // The Inbox ('' from an older row, or `Inbox`) has settings like any project: launchProjectName names it.
   async projectIsolation(project) {
-    if (!project?.trim()) return undefined
     const { launchProjectName } = await import('../sessions/project-launch-defaults.js')
     const name = await launchProjectName(project)
     if (!name) return undefined
@@ -150,7 +150,6 @@ const realDeps: DefaultWorkspaceDeps = {
     return tm.listTasks()
   },
   async projectSource(project) {
-    if (!project?.trim()) return null
     const { getConfig } = await import('../config-manager.js')
     const { experimentalEnabled } = await import('../experimental.js')
     if (!experimentalEnabled((await getConfig()).experimental, 'project_first_start')) return null

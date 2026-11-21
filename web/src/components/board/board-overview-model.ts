@@ -31,6 +31,7 @@
  */
 import { matchIdRef, refNamesId } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
+import { projectIdentity } from '@/utils/project-display';
 import type { BoardChoice, BoardMessage, BoardProject, BoardProjectStatus, BoardReminder, BoardSeen } from './board-model';
 import { reminderDue } from './board-items-model';
 import { deriveDisplayStatus, resolveTaskSessionId, taskCircleClass, taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
@@ -623,8 +624,7 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
   }
   const titles = new Map<string, string>(members.map((m) => [m.task.id, m.task.title]));
   if (owner) titles.set(ownerId, owner.title);
-  const spans = new Set([owner?.project ?? '', ...members.map((m) => m.task.project ?? '')]
-    .map((p) => p.trim().toLowerCase())).size > 1;
+  const spans = new Set([owner?.project, ...members.map((m) => m.task.project)].map(projectIdentity)).size > 1;
   const opts: DescribeOptions = { formatWaitUntil: input.formatWaitUntil };
 
   const rowOf = (task: Task, depth: number, parentId: string): OverviewRow => {

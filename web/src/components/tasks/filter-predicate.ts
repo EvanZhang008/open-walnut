@@ -23,9 +23,11 @@ import {
 import { buildTaskQueryContext, safeNormalizeTaskQuery } from './task-query-state';
 import { matchesDateFilter } from './task-date-filter';
 import { FILTER_DIMS, type FilterDim, type FilterLists, type FilterState } from './filter-bar-types';
+import { projectGroupKey } from '../../utils/project-display';
 import {
   dateLabel,
   dimLabel,
+  hasName,
   isDimDefault,
   listChipLabel,
   orderStatus,
@@ -204,7 +206,7 @@ export function showValueFor(state: FilterState, task: Task, dim: FilterDim): Fi
   };
   switch (dim) {
     case 'status': return append(task.phase as TaskPhase);
-    case 'project': return append(task.project || '');
+    case 'project': return hasName(state.projects, projectGroupKey(task.project)) ? state : append(projectGroupKey(task.project));
     case 'date': return { ...state, date: '' };
     case 'source': return append(task.source || undefined);
     case 'priority': return append(normalizeTaskPriority(task.priority));

@@ -86,7 +86,7 @@ export interface TaskPatch {
 export interface TaskFolder {
   id: string
   label: string
-  /** The project the folder belongs to; '' is the Inbox. */
+  /** The project the folder belongs to; the Inbox is the project `Inbox` (a folder an older Walnut made may still say ''). */
   project: string
   parentId?: string
   /** Tasks filed directly in this folder. */
@@ -95,7 +95,7 @@ export interface TaskFolder {
 
 export interface TaskFolderCreateInput {
   label: string
-  /** '' is the Inbox. */
+  /** `Inbox` for the Inbox ('' is still accepted and means the same). */
   project: string
   /** Nest inside this folder, which must belong to the same project. */
   parentId?: string

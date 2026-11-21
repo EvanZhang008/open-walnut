@@ -15,6 +15,7 @@
  * taken (apply-v2.ts).
  */
 
+import { projectOrInbox } from '../inbox-project.js'
 import { pluginOnlyForCaller } from '../plugins/plugin-task-visibility.js'
 import { pointTaskAtSession, slotOfMode } from '../sessions/task-session-link.js'
 
@@ -70,7 +71,7 @@ export function createdRow(id: string, fields: Record<string, unknown>, placemen
   const keptBy = keptByMaker(maker)
   const pinned = keptBy ? false : placement.tier ? true : typeof fields.pinned === 'boolean' ? fields.pinned : madeByHuman(maker) ? true : undefined
   return {
-    id, phase: 'TODO', status: 'todo', priority: 'none', project: placement.project ?? '', created_at: iso, updated_at: iso,
+    id, phase: 'TODO', status: 'todo', priority: 'none', project: projectOrInbox(placement.project), created_at: iso, updated_at: iso,
     ...(placement.groupId ? { group_id: placement.groupId } : {}),
     ...(placement.parentTaskId ? { parent_task_id: placement.parentTaskId } : {}),
     ...(placement.tier && !keptBy ? { focus_tier: placement.tier } : {}),

@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { INBOX_PROJECT, isInboxProject, projectOrInbox } from '../core/inbox-project.js';
 import { outputJson } from '../utils/json-output.js';
 import { apiGet, reportApiError } from '../utils/api-client.js';
 import { requireDirectRunners } from './direct-registry.js';
@@ -49,10 +50,11 @@ export async function runProjects(globals: GlobalOptions): Promise<void> {
     try {
       const { sessions } = await apiGet<{ sessions: ProjectedSessionSlim[] }>('/api/v1/sessions');
       for (const s of sessions) {
-        if (!s.project) continue;
-        const list = sessionsByProject.get(s.project) ?? [];
+        // An Inbox session may say '' (made before the Inbox was a project) or `Inbox`: one row.
+        const key = projectOrInbox(s.project);
+        const list = sessionsByProject.get(key) ?? [];
         list.push(s.id);
-        sessionsByProject.set(s.project, list);
+        sessionsByProject.set(key, list);
       }
     } catch { /* degrade: counts only */ }
 
@@ -61,13 +63,13 @@ export async function runProjects(globals: GlobalOptions): Promise<void> {
     // "active" number. memoryFiles is deliberately ABSENT here (not an empty
     // array): the v1 surface has no project-memory endpoint, and a
     // shape-preserving lie is worse than a missing field.
-    const rows = [...payload.projects];
-    // Inbox has no registry row, so the payload carries its counts separately.
-    // Listed under the CLI's historical "no project" placeholder, and only when
-    // it actually holds tasks (an empty store must still print nothing).
+    // The Inbox rides its own slot of the payload (old clients show one fixed Inbox entry), never
+    // the projects list: one row named Inbox, and only when it holds tasks (an empty store must
+    // still print nothing).
+    const rows = payload.projects.filter((p) => !isInboxProject(p.name));
     const inbox = payload.inbox.counts;
     if (inbox.todo + inbox.active + inbox.done > 0) {
-      rows.push({ name: '(none)', counts: inbox });
+      rows.push({ name: INBOX_PROJECT, counts: inbox });
     }
     const projects: ProjectInfo[] = rows
       .map((p) => ({

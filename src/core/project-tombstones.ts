@@ -30,6 +30,7 @@
 
 import { getDb as getDbOrThrow } from './task-db.js';
 import { log } from '../logging/index.js';
+import { INBOX_PROJECT, isInboxProject } from './inbox-project.js';
 
 /** getDb() rethrows a failed open forever; the ledger must degrade to a no-op
  *  instead (unit-test envs without the native binding, read-only replicas). A
@@ -139,7 +140,9 @@ export function recordProjectTombstone(args: {
   reason?: string;
 }): boolean {
   const name = (args.name ?? '').trim();
-  if (!name) return false;
+  // The Inbox is never removed, so it never gets a tombstone (it would block every write
+  // that files a task there).
+  if (isInboxProject(name)) return false;
   const db = getDb();
   // A LOST TOMBSTONE IS HOW THE PROJECT GROWS BACK: report the miss so the
   // caller can log it loudly instead of degrading in silence.
@@ -265,8 +268,9 @@ export function resolveProjectWrite(
   findTombstone: (name: string) => ProjectTombstone | undefined = getProjectTombstone,
 ): ProjectWriteResolution {
   const requested = (name ?? '').trim();
-  // Inbox is the legal ABSENCE of a project — never a row, never a tombstone.
-  if (!requested) return { kind: 'ok', name: '' };
+  // The Inbox (a missing or empty name too) is the one project nobody removes: never a
+  // tombstone, and its live row's spelling when it has one (inbox-project.ts).
+  if (isInboxProject(requested)) return { kind: 'ok', name: findLiveRow(INBOX_PROJECT) ?? INBOX_PROJECT };
 
   const live = findLiveRow(requested);
   if (live) return { kind: 'ok', name: live };

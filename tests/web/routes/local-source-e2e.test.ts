@@ -19,6 +19,7 @@ import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { _resetForTesting } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { INBOX_PROJECT } from '../../../src/core/inbox-project.js';
 
 function createApp() {
   const app = express();
@@ -76,7 +77,7 @@ describe('Local source task — full E2E lifecycle', () => {
     // The body says why: one full quick-tier run (2026-10-30) got a 404 here that
     // five runs alone never did.
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(res.body.task.project).toBe('');
+    expect(res.body.task.project).toBe(INBOX_PROJECT);
     expect(res.body.task.source).toBe('local');
 
     // Clean up so the later source/tag filter assertions stay exact.

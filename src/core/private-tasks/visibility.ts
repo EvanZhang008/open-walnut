@@ -8,6 +8,7 @@
  * service (a local task there is local on purpose). A local task in a local project, or in the
  * Inbox, is ordinary and stays visible.
  */
+import { isInboxProject } from '../inbox-project.js';
 import type { ProjectRecord, Task } from '../types.js';
 
 type ProjectSources = Record<string, Pick<ProjectRecord, 'source'>>;
@@ -18,8 +19,9 @@ export function keptFromProviders(
 ): boolean {
   if (task.sync_hold) return true;
   if (task.source && task.source !== 'local') return false;
-  const name = (task.project ?? '').trim().toLowerCase();
-  if (!name) return false;
+  // The Inbox is local by definition: no service ever claims it.
+  if (isInboxProject(task.project)) return false;
+  const name = task.project!.trim().toLowerCase();
   const key = Object.keys(projects).find((k) => k.toLowerCase() === name);
   const source = key ? projects[key].source : undefined;
   return !!source && source !== 'local';

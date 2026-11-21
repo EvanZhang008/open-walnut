@@ -9,6 +9,7 @@ import { getConfig, updateConfig } from '../../core/config-manager.js'
 import type { Config } from '../../core/types.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
+import { INBOX_PROJECT, isInboxProject } from '../../core/inbox-project.js'
 
 export const orderingRouter = Router()
 
@@ -17,6 +18,34 @@ type Separator = NonNullable<NonNullable<Config['ordering']>['separators']>[numb
 /** A separator is decoration, so the ceiling is only there to keep a runaway
  *  client from growing config without bound. Well past any hand-placed count. */
 const MAX_SEPARATORS = 500
+
+/** A project in a saved order: the Inbox is `Inbox`, whatever spelling (or the '' of an older client) it came as. */
+function orderKey(project: string): string {
+  return isInboxProject(project) ? INBOX_PROJECT : project
+}
+
+/** A project order with the Inbox's slot named `Inbox` once ('' from an older client or config included). */
+function orderedProjects(order: readonly string[]): string[] {
+  let inbox = false
+  const out: string[] = []
+  for (const p of order) {
+    if (!isInboxProject(p)) { out.push(p); continue }
+    if (!inbox) out.push(INBOX_PROJECT)
+    inbox = true
+  }
+  return out
+}
+
+/** A saved separator with its folder anchors named as orderKey names them. */
+function separatorKeys(sep: Separator): Separator {
+  if (sep.mode !== 'project') return sep
+  return {
+    ...sep,
+    ...(sep.afterProject !== undefined ? { afterProject: orderKey(sep.afterProject) } : {}),
+    ...(sep.beforeProject !== undefined ? { beforeProject: orderKey(sep.beforeProject) } : {}),
+    ...(sep.project !== undefined ? { project: orderKey(sep.project) } : {}),
+  }
+}
 
 /** Accept only fully-formed rows and normalize the optional fields, so the
  *  renderer never has to defend against a half-written entry. Anything else is
@@ -54,14 +83,14 @@ function parseSeparator(raw: unknown): Separator | null {
       tier: r.tier,
       mode: r.mode,
       ...label,
-      // Absent stays absent: '' is Inbox, a real folder, so it cannot double as
-      // "no folder on that side".
-      ...(r.afterProject !== undefined ? { afterProject: r.afterProject as string } : {}),
-      ...(r.beforeProject !== undefined ? { beforeProject: r.beforeProject as string } : {}),
+      // Absent stays absent: '' is the Inbox (saved as `Inbox`), a real folder, so it
+      // cannot double as "no folder on that side".
+      ...(r.afterProject !== undefined ? { afterProject: orderKey(r.afterProject as string) } : {}),
+      ...(r.beforeProject !== undefined ? { beforeProject: orderKey(r.beforeProject as string) } : {}),
       // Legacy rows (a line that used to sit inside a run) keep their field so the
       // renderer can still resolve them to that folder's top edge.
       ...(r.project !== undefined && r.afterProject === undefined && r.beforeProject === undefined
-        ? { project: r.project as string }
+        ? { project: orderKey(r.project as string) }
         : {}),
     }
   }
@@ -84,10 +113,11 @@ export async function readOrdering(): Promise<Ordering> {
   return withTestRunOrdering({ projects: config.ordering?.projects ?? [], separators: config.ordering?.separators ?? [] })
 }
 
-/** `o` with the lists the current test run set (as is for a real request). */
+/** `o` with the lists the current test run set (as is for a real request), the Inbox named `Inbox` in both. */
 export function withTestRunOrdering(o: Ordering): Ordering {
   const own = testRunPrefsRead<Partial<Ordering>>('ordering')
-  return own ? { ...o, ...own } : o
+  const read = own ? { ...o, ...own } : o
+  return { ...read, projects: orderedProjects(read.projects ?? []), separators: (read.separators ?? []).map(separatorKeys) }
 }
 
 /** Set one part of the order: a test run's own copy, else config.yaml. */
@@ -147,7 +177,7 @@ orderingRouter.put('/projects', async (req: Request, res: Response, next: NextFu
       res.status(400).json({ error: 'order must be an array of strings' })
       return
     }
-    res.json({ projects: await writeOrdering('projects', order) })
+    res.json({ projects: await writeOrdering('projects', orderedProjects(order)) })
   } catch (err) {
     next(err)
   }

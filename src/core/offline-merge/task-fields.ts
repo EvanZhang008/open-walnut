@@ -16,6 +16,7 @@
  */
 
 import { fieldTimeOf, sameFieldValue } from '../task-field-times.js';
+import { projectOrInbox } from '../inbox-project.js';
 import { mergeText, mergeTextOffLoop, type TextMergeResult } from './text-merge.js';
 import { QUEUEABLE_TASK_FIELDS } from '../../providers/offline-host-core.js';
 
@@ -92,6 +93,8 @@ export function unqueueableFields(fields: Record<string, unknown>): string[] {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v));
+/** A project as the pair compares it: '' (a replica or row from before the Inbox was a project) is `Inbox`. */
+const projectOf = (v: unknown): string => projectOrInbox(str(v));
 const isUnknown = (v: unknown): boolean => v === UNKNOWN_BASE;
 
 /** One field (or the compound pair) by the section 7 table. */
@@ -137,14 +140,14 @@ function resolveOne(
 function pairWrite(mac: MacTask, fields: Record<string, FieldWrite>, pairValid?: ResolveInput['pairValid']): FieldWrite {
   const p = fields.project;
   const g = fields.group_id;
-  const macP = str(mac.project);
+  const macP = projectOf(mac.project);
   const macG = str(mac.group_id);
   const baseP = p ? p.base : macP;
   const baseG = g ? g.base : macG;
-  const valueP = p ? str(p.value) : macP;
+  const valueP = p ? projectOf(p.value) : macP;
   // A move to another project keeps the folder only when it belongs there.
   const valueG = g ? str(g.value) : (pairValid && valueP !== macP && !pairValid(valueP, macG) ? '' : macG);
-  const base = isUnknown(baseP) || isUnknown(baseG) ? UNKNOWN_BASE : { project: str(baseP), group_id: str(baseG) };
+  const base = isUnknown(baseP) || isUnknown(baseG) ? UNKNOWN_BASE : { project: projectOf(baseP), group_id: str(baseG) };
   return { base, value: { project: valueP, group_id: valueG } };
 }
 
@@ -184,7 +187,7 @@ export function resolveTaskFields(input: ResolveInput): Resolution {
   }
   if (fields.project || fields.group_id) {
     const at = Math.max(fields.project ? timeOf(fields.project) : -Infinity, fields.group_id ? timeOf(fields.group_id) : -Infinity);
-    const macPair = { project: str(mac.project), group_id: str(mac.group_id) };
+    const macPair = { project: projectOf(mac.project), group_id: str(mac.group_id) };
     const macAt = Math.max(fieldTimeOf(mac as never, 'project'), fieldTimeOf(mac as never, 'group_id'));
     const r = resolveOne(PAIR, macPair, pairWrite(mac, fields, input.pairValid), macAt, at, out);
     if (r?.bump) {

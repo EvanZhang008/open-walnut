@@ -76,7 +76,7 @@ import { getAgentsSnapshot, loadAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { beginSessionOpen } from '@/utils/session-open-latency';
 import { primeSessionOpenHistory } from '@/api/session-open-prime';
-import { projectDisplayName } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { discardDraft } from '@/utils/drafts';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -1542,7 +1542,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
    *  'user'` is what makes it final: the background parse (handleDraftAiParse) will
    *  never write over it again, however the sentence changes. */
-  const handleDraftProjectChange = useLeanCallback((draftId: string, project: string) => {
+  const handleDraftProjectChange = useLeanCallback((draftId: string, picked: string) => {
+    // A draft says '' for the Inbox (its "no project" pick), however the pick named it.
+    const project = projectGroupKey(picked);
     setDraftColumns(prev => prev.map(d => (d.id === draftId
       ? { ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }
       : d)));

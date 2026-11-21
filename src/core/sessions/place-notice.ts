@@ -31,7 +31,7 @@ import { createHash } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { SessionPlaceNoted, SessionRecord, Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
-import { isAskPlacement, sameProject } from './caller-placement.js';
+import { isAskPlacement, projectPlaceName, sameProject } from './caller-placement.js';
 import { HOOK_BOUNDARY_MS, heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 
 const kit = createEnvelopeKit();
@@ -83,7 +83,8 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function placeFromPrompt(prompt: string | undefined, taskId: string): ToldPlace | null {
   if (!prompt || !taskId) return null;
   const line = new RegExp(
-    `\\(id ${escapeRe(taskId)}, (?:project "(.*?)"|the Inbox \\(no project\\))(?:, folder "(.*?)")?\\)\\.(?:\\n|$)`,
+    // "the Inbox (no project)" is the wording before the Inbox was a project: a resume replays it.
+    `\\(id ${escapeRe(taskId)}, (?:project "(.*?)"|the Inbox(?: \\(no project\\))?)(?:, folder "(.*?)")?\\)\\.(?:\\n|$)`,
   ).exec(prompt);
   if (!line) return null;
   const leader = /Your task is a subtask of ".*?" \(id ([^\s)]+)\)/.exec(prompt);
@@ -93,8 +94,7 @@ export function placeFromPrompt(prompt: string | undefined, taskId: string): Tol
 /** What changed, oldest-first wording; empty = the session already knows. */
 export function placeChanges(told: ToldPlace, live: SessionPlace): string[] {
   const changes: string[] = [];
-  const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');
-  if (!sameProject(told.project, live.project)) changes.push(`${name(told.project)} became ${name(live.project)}`);
+  if (!sameProject(told.project, live.project)) changes.push(`${projectPlaceName(told.project)} became ${projectPlaceName(live.project)}`);
   if (told.folder !== undefined) {
     const same = told.folderId !== undefined
       ? (told.folderId || undefined) === live.folderId
@@ -114,7 +114,7 @@ export function placeChanges(told: ToldPlace, live: SessionPlace): string[] {
 /** The envelope the session reads ahead of the message it came with. */
 export function buildPlaceNoticeText(task: Pick<Task, 'id' | 'title'>, live: SessionPlace, changes: string[]): string {
   const where = [
-    live.project.trim() ? `project "${live.project.trim()}"` : 'the Inbox (no project)',
+    projectPlaceName(live.project),
     ...(live.folder ? [`folder "${live.folder}"`] : []),
   ].join(', ');
   const leader = live.leaderId

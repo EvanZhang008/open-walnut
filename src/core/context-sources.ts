@@ -12,6 +12,7 @@
  * Additional sources can be toggled via the agent definition's context_sources field.
  */
 
+import { isInboxProject } from './inbox-project.js';
 import type { AgentDefinition, ContextSourceId, Task } from './types.js';
 import { estimateTokens } from './daily-log.js';
 import { truncateToTokenBudget, truncateToTokenBudgetTail } from '../utils/token-truncate.js';
@@ -80,7 +81,7 @@ async function loadTaskDetails(task: Task, budget: number): Promise<string> {
  */
 async function loadProjectMemory(task: Task, budget: number): Promise<string> {
   const project = (task.project ?? '').trim();
-  if (!project) return '(task has no project — Inbox has no project memory)';
+  if (isInboxProject(project)) return '(task is in the Inbox: the Inbox has no project memory)';
   const { getProjectMemory } = await import('./project-memory.js');
   const result = getProjectMemory(project.toLowerCase());
   if (!result) return '(no legacy project memory for this project)';

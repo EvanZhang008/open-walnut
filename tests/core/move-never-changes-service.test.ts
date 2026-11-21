@@ -75,9 +75,11 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
-/** Every kind of destination a move can name, with the claim it ends with. */
-const DESTINATIONS: Array<{ name: string; project: string; claim: TaskSource }> = [
-  { name: 'the Inbox', project: '', claim: 'local' },
+/** Every kind of destination a move can name, with the claim it ends with and the project the
+ *  task is filed in when that differs from the name asked for ('' is the Inbox's older name). */
+const DESTINATIONS: Array<{ name: string; project: string; claim: TaskSource; filedIn?: string }> = [
+  { name: 'the Inbox', project: '', claim: 'local', filedIn: 'Inbox' },
+  { name: 'the Inbox by its name', project: 'Inbox', claim: 'local' },
   { name: 'a local project', project: 'Home-two', claim: 'local' },
   { name: 'a brand-new project name', project: 'Fresh idea', claim: 'local' },
   { name: 'another project of the same service', project: 'A-two', claim: 'svc-a' },
@@ -112,7 +114,7 @@ describe('a project move never gives a task a new outside service', () => {
         await updateTask(before.id, { project: d.project });
         const after = await getTask(before.id);
 
-        expect(after.project.toLowerCase()).toBe(d.project.toLowerCase());
+        expect(after.project.toLowerCase()).toBe((d.filedIn ?? d.project).toLowerCase());
         // The invariant: its service is the one it had, or none.
         expect([before.source, 'local']).toContain(after.source);
         // No service it was not on received anything of it.
@@ -121,8 +123,8 @@ describe('a project move never gives a task a new outside service', () => {
           expect(pushedIds(s.id)).not.toContain(before.id);
           if (made.child) expect(pushedIds(s.id)).not.toContain(made.child.id);
         }
-        // The destination keeps its own claim; a brand-new name is local.
-        if (d.project) expect((await getProjectRecord(d.project))?.source).toBe(d.claim);
+        // The destination keeps its own claim; a brand-new name is local; the Inbox's row is local.
+        expect((await getProjectRecord(d.project))?.source).toBe(d.claim);
 
         const synced = before.source !== 'local';
         if (!synced) {

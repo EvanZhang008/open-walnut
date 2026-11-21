@@ -15,6 +15,8 @@
  * own parent, a cycle) makes that folder a ROOT rather than dropping it.
  */
 
+import { projectIdentity } from '../../utils/project-display';
+
 /** The server's nesting ceiling: depth 0 (a top-level folder) to 4. */
 export const FOLDER_MAX_DEPTH = 5;
 
@@ -24,7 +26,8 @@ export interface FolderNode {
   parent_id?: string;
 }
 
-const projectKey = (p: string | undefined): string => (p ?? '').trim().toLowerCase();
+// Case-insensitive, and the Inbox is one project whether a folder says '' or 'Inbox'.
+const projectKey = projectIdentity;
 
 /**
  * folder id → parent folder id, NORMALISED: only links whose parent is listed and

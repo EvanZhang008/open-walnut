@@ -1,9 +1,9 @@
 /**
  * Shared constants for the task panel's project tab strip.
  *
- * Project is the single grouping layer and Inbox is the ABSENCE of a project
- * (`task.project === ''`), so the tab strip needs ids that can never collide
- * with a real project name:
+ * Project is the single grouping layer. The Inbox is a project of its own
+ * (`Inbox`), but older rows, saved tabs and links still name it `''`, so the
+ * tab strip keeps ids that can never collide with a real project name:
  *
  *   • `''`          — the **All** chip (no project scoping). Already unavailable
  *                     to a real project: a blank name is rejected server-side.
@@ -16,11 +16,19 @@
  * `name.trim()` off a text input can't realistically produce one.
  */
 
+// Relative import: unit tests load this module without the @open-walnut aliases.
+import { isInboxProject } from '../../../../src/core/inbox-project';
+
 /**
  * Inbox chip (tasks with no project). U+E000 = the first Unicode private-use
  * codepoint; see the collision note above. Rendered with the label "Inbox".
  */
 export const INBOX_TAB = '\uE000';
+
+/** A project's tab id: the Inbox (by name or by an older empty value) is INBOX_TAB. */
+export function tabOfProject(project: string | null | undefined): string {
+  return isInboxProject(project) ? INBOX_TAB : (project ?? '');
+}
 
 /**
  * localStorage key for the active project tab. Shared so MainPage's initial read
@@ -46,13 +54,10 @@ export const LS_TAB_KEY = 'walnut-todo-active-tab';
 // (project names are only case-insensitively unique, never reserved) — survives
 // a deep-link round trip.
 //
-// The old scheme wrote the BARE token 'inbox', which is exactly why a project
-// named "inbox" was unreachable. That legacy token is deliberately NOT accepted
-// on read: honoring it would re-introduce the ambiguity it caused. Old links
-// degrade gracefully instead — '?proj=inbox' now names a project that (almost
-// always) doesn't exist, and TodoPanel's stale-tab self-heal resets to All,
-// which is a sensible landing. If a project named "inbox" DOES exist, the old
-// link now correctly selects it. Both branches land somewhere sensible.
+// The old scheme wrote the BARE token 'inbox'. Since the Inbox became a project
+// named "Inbox" (any case names it), a bare 'inbox' or 'Inbox' token names the
+// Inbox again, and reads back as the INBOX_TAB sentinel; the written token stays
+// '_inbox'.
 //
 // The retired ★ tab's token ('_starred') is likewise not accepted: the starred
 // system is gone, so such a link self-heals to All like any other stale tab.
@@ -70,9 +75,12 @@ const URL_SENTINEL: Record<string, string> = {
   _inbox: INBOX_TAB,
 };
 
+/** A non-empty project name that names the Inbox ('' stays the All tab). */
+const namesInbox = (name: string): boolean => name.trim() !== '' && isInboxProject(name);
+
 /** Internal tab id → its `?proj=` token. */
 export function projectToUrl(project: string): string {
-  const token = SENTINEL_URL[project];
+  const token = SENTINEL_URL[namesInbox(project) ? INBOX_TAB : project];
   if (token) return token;
   // Reserve the whole '_' namespace for sentinels: a real name starting with '_'
   // is escaped by doubling so it can't be read as (or shadow) a token.
@@ -84,5 +92,5 @@ export function projectFromUrl(val: string): string {
   if (val.startsWith('__')) return val.slice(1);
   const sentinel = URL_SENTINEL[val];
   if (sentinel !== undefined) return sentinel;
-  return val;
+  return namesInbox(val) ? INBOX_TAB : val;
 }

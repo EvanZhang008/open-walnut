@@ -1,5 +1,6 @@
 export { EXPERIMENTAL_FEATURES, experimentalEnabled } from './experimental.js';
 export type { ExperimentalFlags, ExperimentalFeatureId } from './experimental.js';
+export { INBOX_PROJECT, isInboxProject, projectOrInbox } from './inbox-project.js';
 import { SESSION_EFFORT_IDS, type SessionEffort } from './session-effort.js';
 import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
 import type { TaskResultReport, TaskReviewScore } from './peers/structured-reply.js';

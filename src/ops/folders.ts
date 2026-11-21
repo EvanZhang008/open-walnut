@@ -8,6 +8,7 @@
  * task_create makes on its own; a leader asked to group its workers could not.
  */
 
+import { isInboxProject, projectOrInbox } from '../core/inbox-project.js';
 import { z } from 'zod';
 import { defineOp, type WalnutOp } from './registry.js';
 import { withOutcome } from './outcome.js';
@@ -37,15 +38,16 @@ defineOp({
   title: 'List task folders',
   description:
     'List task folders with their project, parent folder and task count. Pass project to see one ' +
-    'project\'s folders ("" = Inbox). The tasks of one folder: task_list with group_id.',
+    'project\'s folders ("Inbox" for the Inbox). The tasks of one folder: task_list with group_id.',
   input: {
-    project: z.string().optional().describe('Project name (case-insensitive); "" for the Inbox'),
+    project: z.string().optional().describe('Project name (case-insensitive); "Inbox" (or "") for the Inbox'),
   },
   handler: async ({ project }, call) => {
     const body = await call('GET', '/api/tasks/groups') as { groups?: FolderRow[] } | undefined;
-    const wanted = typeof project === 'string' ? project.trim().toLowerCase() : undefined;
+    // '' and `Inbox` are the Inbox, which a folder says either way (one an older build made says '').
+    const wanted = typeof project === 'string' ? projectOrInbox(project).toLowerCase() : undefined;
     const folders = (body?.groups ?? [])
-      .filter((g) => wanted === undefined || (g.project ?? '').toLowerCase() === wanted)
+      .filter((g) => wanted === undefined || projectOrInbox(g.project).toLowerCase() === wanted)
       .map((g) => ({
         id: g.group_id,
         label: g.label,
@@ -74,12 +76,12 @@ defineOp({
   title: 'Create a task folder',
   description:
     'Create an empty folder, top-level or nested under another folder of the same project (parent_id). ' +
-    'Omit project to create it in your own task\'s project (the Inbox from outside a task); "" = Inbox. ' +
+    'Omit project to create it in your own task\'s project (the Inbox from outside a task); "Inbox" (or "") = the Inbox. ' +
     'Folders nest up to 5 deep. Then file tasks into it with folder_add_tasks, or name it as group_id ' +
     'in task_create. The result\'s id is the folder id (g_...).',
   input: {
     label: z.string().trim().min(1).max(200).describe('Folder name'),
-    project: z.string().optional().describe('Project name; "" = Inbox. Omit for your own task\'s project (a parent folder decides it when given)'),
+    project: z.string().optional().describe('Project name; "Inbox" (or "") = the Inbox. Omit for your own task\'s project (a parent folder decides it when given)'),
     parent_id: FOLDER_ID.optional().describe('Folder id (g_...) to nest under; same project. Omit for a top-level folder'),
   },
   handler: async ({ label, project, parent_id }, call) => {
@@ -99,7 +101,7 @@ defineOp({
     const where = created?.parent_id ? `under folder ${created.parent_id}` : 'at the top level';
     return withOutcome(
       { id, ...(created ?? {}) },
-      `Folder "${created?.label ?? String(label)}" (${id}) created ${where} in ${created?.project || 'the Inbox'}. It is empty.`,
+      `Folder "${created?.label ?? String(label)}" (${id}) created ${where} in ${isInboxProject(created?.project) ? 'the Inbox' : created!.project}. It is empty.`,
       `File tasks into it: walnut tools call folder_add_tasks '{"id":"${id}","task_ids":["..."]}'; or pass group_id "${id}" to task_create.`,
     );
   },
@@ -112,11 +114,11 @@ defineOp({
   description:
     'Move one folder: parent_id nests it under another folder of the same project ("" = make it ' +
     'top-level); project moves it, with its subfolders and every task in them, to another project ' +
-    '("" = Inbox; a new name creates the project; tasks a sync plugin owns move on that service too). ' +
+    '("Inbox" or "" = the Inbox; a new name creates the project; tasks a sync plugin owns move on that service too). ' +
     'Pass exactly one of the two. To move a single task, use task_update with project.',
   input: {
     id: FOLDER_ID.describe('Folder id (g_...), from folder_list'),
-    project: z.string().optional().describe('Destination project name; "" = Inbox'),
+    project: z.string().optional().describe('Destination project name; "Inbox" (or "") = the Inbox'),
     parent_id: z.string().optional().describe('Folder id (g_...) to nest under, same project; "" = top level'),
   },
   handler: async ({ id, project, parent_id }, call) => {
@@ -141,7 +143,7 @@ defineOp({
     const tasks = moved?.moved_task_ids?.length ?? 0;
     const folders = moved?.moved_folder_ids?.length ?? 0;
     const failed = moved?.failed ?? [];
-    const where = moved?.project || 'the Inbox';
+    const where = isInboxProject(moved?.project) ? 'the Inbox' : moved!.project;
     const outcome = tasks === 0 && folders === 0 && failed.length === 0
       ? `The folder was already in ${where}. Nothing moved.`
       : `Moved ${folders} folder(s) and ${tasks} task(s) to ${where}.`

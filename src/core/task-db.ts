@@ -25,6 +25,7 @@ import type { Task } from './types.js';
 import { migratePhase } from './phase.js';
 import { normalizeTags, tagsAreNormal } from './tag-model.js';
 import { migrateFocusTier } from './types.js';
+import { INBOX_PROJECT, isInboxProject, projectOrInbox } from './inbox-project.js';
 import type { ExtIndexSpec } from './integration-types.js';
 import { TASK_DB_MAX_SUPPORTED_VERSION, TASK_DB_SCHEMA_VERSION } from './task-db-version.js';
 
@@ -342,9 +343,10 @@ export function rowToTask(row: Record<string, any>): Task {
   // Required-field fallbacks — the DB may have NULL where Task requires a value
   // (pre-migration data). Mirror the JSON-load defaults so downstream code
   // never sees `undefined` for these fields.
-  // project is nullable in SQL and optional on Task ('' = Inbox). Normalize to ''
-  // here so DB-loaded tasks never make callers choose between undefined and ''.
-  if (typeof task.project !== 'string') task.project = '';
+  // Every task has a project (inbox-project.ts). A NULL or empty column is a row an older
+  // build wrote (or an older leader's projection copied here): it reads as the Inbox, so no
+  // caller ever sees a task without a project.
+  if (typeof task.project !== 'string' || isInboxProject(task.project)) task.project = projectOrInbox(task.project);
   if (typeof task.session_ids === 'undefined') task.session_ids = [];
   if (typeof task.description === 'undefined') task.description = '';
   if (typeof task.summary === 'undefined') task.summary = '';
@@ -410,6 +412,10 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
       row[col] = val === null ? null : JSON.stringify(val);
     } else if (col === 'pinned') {
       row.pinned = val ? 1 : 0;
+    } else if (col === 'project') {
+      // The write backstop of "every task has a project": a missing, empty or cleared
+      // project is the Inbox, whichever door wrote it (tests/core/inbox-project-guard.test.ts).
+      row.project = projectOrInbox(typeof val === 'string' ? val : null);
     } else {
       row[col] = val;
     }
@@ -449,6 +455,17 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
     row.payload = null;
   }
 
+  return row;
+}
+
+/**
+ * taskToRow for a WHOLE row (an insert, a replace, a replica copy): a task object with no
+ * `project` key at all still lands in the Inbox, where taskToRow alone (a patch reader)
+ * would leave the column out and the insert would store NULL.
+ */
+export function taskToFullRow(task: Partial<Task>): Record<string, any> {
+  const row = taskToRow(task);
+  if (row.project === undefined || row.project === null) row.project = INBOX_PROJECT;
   return row;
 }
 

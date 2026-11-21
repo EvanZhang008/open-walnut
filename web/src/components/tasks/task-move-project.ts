@@ -9,6 +9,7 @@
  * Kept side-effect free so they can be tested without mounting TodoPanel:
  * tests/web/task-move-project.test.ts.
  */
+import { isInboxProject } from '../../../../src/core/inbox-project';
 
 /** Outcome of the cross-source question. `from`/`to` are provider source ids
  *  ('local' | 'ms-todo' | …) — only meaningful for the confirm copy. */
@@ -40,7 +41,7 @@ export function sourceDisplayName(source: string, plugins?: ReadonlyArray<{ id: 
  * old remote twin renamed "[Moved] …" + marked complete)?
  *
  * Mirrors the project-move branch of updateTask in src/core/task-manager.ts:
- *  - Inbox ('') is structurally local-only and never claimed → target 'local'.
+ *  - The Inbox ('' or `Inbox`) is structurally local-only and never claimed → target 'local'.
  *  - A project the registry doesn't know yet is created LOCAL (never the task's
  *    own service), so a synced task moved there leaves its service.
  *  - A LOCAL task filed under a provider-claimed project stays local (the
@@ -69,9 +70,9 @@ export function resolveMoveMigration(
   // Trim first — the backend trims before its registry lookup, and an untrimmed
   // name that misses the lookup here would silently read as "unknown → no confirm".
   const requested = targetProject.trim();
-  // Inbox has no registry row; every other name must be looked up case-insensitively
-  // (project identity is NOCASE server-side). An unknown name is created local.
-  const to = requested === ''
+  // The Inbox ('' or its name) is local-only and never claimed; every other name is looked up
+  // case-insensitively (project identity is NOCASE server-side). An unknown name is created local.
+  const to = isInboxProject(requested)
     ? 'local'
     : sourceByName.get(requested.toLowerCase()) ?? 'local';
   // Local stays local: folder-only move, no remote twin is ever created.

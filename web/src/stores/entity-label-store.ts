@@ -40,10 +40,12 @@ interface TaskLabelEntry {
 
 import { matchIdRef } from '../../../src/lib/id-ref';
 import { isTaskLookupToken, isTaskPrefixToken } from '../utils/task-id-shape';
-import { projectDisplayName, sessionDisplayName } from '../utils/project-display';
+import { projectDisplayName, projectGroupKey, sessionDisplayName } from '../utils/project-display';
 
+/** A label's project, as shown; none for the Inbox, so its tasks read by their title alone. */
 function shownProject(project: string | undefined): string | undefined {
-  return project ? projectDisplayName(project) : undefined;
+  const key = projectGroupKey(project);
+  return key ? projectDisplayName(key) : undefined;
 }
 
 type TaskLike = { id: string; title?: string; project?: string; org_role?: string; org_name?: string; session_id?: string; session_ids?: readonly string[] };

@@ -28,6 +28,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
+import { projectOrInbox } from '../core/inbox-project.js'
 import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
 import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
@@ -10488,7 +10489,8 @@ export class ClaudeCodeSession {
       // The task's project now (it may have moved since this session was made), else the one it was made in.
       const task = this.taskId ? await getTask(this.taskId).catch(() => undefined) : undefined
       if (task) project = task.project ?? ''
-      const pluginsOff = project.trim() ? readClaudePluginsOff(await getProjectMetadata(project)) : []
+      // A task's session reads its project's settings, the Inbox's included ('' on an older row names it).
+      const pluginsOff = task || project.trim() ? readClaudePluginsOff(await getProjectMetadata(projectOrInbox(project))) : []
       // A broken config file costs only the cap, never the project's plugin choice.
       const config = await getConfig().catch((err: unknown) => {
         log.session.warn('claude scope settings: config unreadable; no skill listing cap this spawn', { taskId: this.taskId, error: err instanceof Error ? err.message : String(err) })

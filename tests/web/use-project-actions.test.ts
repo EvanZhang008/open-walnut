@@ -291,7 +291,7 @@ describe('useProjectActions.remove', () => {
 
     expect(order).toEqual([
       'store-remove:Marina',
-      'patch-tasks:t1=,t2=:pending',
+      'patch-tasks:t1=Inbox,t2=Inbox:pending',
       'request-delete',
       'settle-remove:true',
       'settle-tasks',
@@ -332,5 +332,30 @@ describe('useProjectActions.remove', () => {
       t1: { project: 'Marina' },
       t2: { project: 'marina' },
     })
+  })
+})
+
+describe('useProjectActions on the Inbox', () => {
+  // The Inbox is a project named "Inbox" (src/core/inbox-project.ts), but it is never renamed,
+  // merged or deleted: every other project's tasks fall back to it. An older caller names it ''.
+  it('never renames, merges or deletes it, however it is named', async () => {
+    prompt.mockResolvedValue('Lagoon')
+    for (const name of ['Inbox', 'inbox', '']) {
+      const actions = useProjectActions({})
+      await actions.rename(name)
+      await actions.mergeInto(name, 'Lagoon')
+      await actions.remove(name)
+    }
+    expect(prompt).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(renameProject).not.toHaveBeenCalled()
+    expect(deleteProject).not.toHaveBeenCalled()
+    expect(order).toEqual([])
+  })
+
+  it('never merges a project into it', async () => {
+    await useProjectActions({}).mergeInto('Marina', 'Inbox')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(renameProject).not.toHaveBeenCalled()
   })
 })

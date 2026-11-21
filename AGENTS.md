@@ -139,7 +139,7 @@ cleanup are in `docs/reference/production-server.md`.
 
 ## What Is Walnut
 
-Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Folder → Task → Subtask`. A folder (`task.group_id`) is optional and belongs to exactly one project; a task with no project lives in the **Inbox** (`project = ''`). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
+Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Folder → Task → Subtask`. A folder (`task.group_id`) is optional and belongs to exactly one project; every task has one: a task not filed elsewhere lives in the **Inbox**, a real project (`Inbox`, `src/core/inbox-project.ts`; older data's `''` still reads as it). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Key Rules for Implementation
 
@@ -148,7 +148,7 @@ One line per rule; the full rule, its incident and its ratchet tests are in the 
 Tasks and teams (`docs/reference/tasks-and-teams.md`):
 
 - **Parse harness-owned data the harness's official way**: port the owner's own logic (the CLI's `parentUuid` chain walk); Walnut-invented bookkeeping only in Walnut-owned formats. (`docs/reference/session-lifecycle.md`)
-- `task_create` takes an optional `project`; an unknown name auto-creates the registry row (`task_projects`, source `'local'`). Inbox (`''`) has no registry row and can never be claimed by a sync provider.
+- `task_create` takes an optional `project`; an unknown name auto-creates the registry row (`task_projects`, source `'local'`). The Inbox (`Inbox`) is a registry row too: always `'local'`, never claimed by a sync provider, never renamed or deleted; ask `isInboxProject`, never `!project`.
 - **Work created from inside a task lands beside it** (`caller-placement.ts`): the caller's project, folder and tier, filed as its subtask; naming another project needs `project_reason`. (`docs/reference/tasks-and-teams.md`)
 - **Server brakes, never prompt-only**: subtasks at most 3 levels deep, per-host start slots with an explicit wait, and a session's task title cut to a few words. (`docs/reference/tasks-and-teams.md`)
 - **One issue is one task** (its fixes, comments and replies are its steps; it fans out with its own subagents or subtasks). **Work is handed by deliverable, never by component, and judged by meaning, never by the format of what a message names**: the sender searches several ways and reads each candidate's `deliverable`, `first_request` and `latest` (task_get, search rows, related tasks, task_send's answer); a title that gains a topic tells the task and its sender (`task-deliverable.ts`, `related-by-meaning.ts`, `title-topic-notice.ts`). (`docs/reference/tasks-and-teams.md`)

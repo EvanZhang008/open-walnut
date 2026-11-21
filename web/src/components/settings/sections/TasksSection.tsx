@@ -15,6 +15,7 @@ import { SmartTaskCreation } from './SmartTaskCreation';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { MicInput } from '@/components/common/BoxMic';
 import '@/styles/settings-mic.css';
+import { isInboxProject } from '@open-walnut/core';
 
 interface Props {
   config: Config;
@@ -67,10 +68,10 @@ export function TasksSection({ config, onSave, onReload }: Props) {
     (v) => saveDefaults({ platform: v }, 'tasks.platform'),
     { rowKey: 'tasks.platform' },
   );
-  // Empty = Inbox. Never persist a literal "Inbox": that would create a real project.
+  // Empty = Inbox, and so is a typed "Inbox": the default is saved unset, as before.
   const project = useCommitField<string>(
     config.defaults?.project ?? '',
-    (v) => saveDefaults({ project: v.trim() || undefined }, 'tasks.default-project'),
+    (v) => saveDefaults({ project: isInboxProject(v) ? undefined : v.trim() }, 'tasks.default-project'),
     { rowKey: 'tasks.default-project', kind: 'text' },
   );
   const saveTriage = (patch: Record<string, unknown>, rowKey: string) =>

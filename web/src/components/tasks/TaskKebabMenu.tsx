@@ -22,7 +22,7 @@ import { TaskMenuRows } from './TaskMenuRows';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 import { KebabIcon } from './KebabIcon';
-import { projectDisplayName } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 import { PinShortcutChoices, PinTierButton, type PinChoice } from './PinShortcutChoices';
 import { MicInput } from '@/components/common/BoxMic';
@@ -409,7 +409,7 @@ export function TaskActionMenuItems({
  * scroll closers must exempt `.task-kebab-project-flyout` — it is intentionally
  * outside their menu ref.
  */
-export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, current, onPick, onClose, preferSide }: {
+export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, current: currentName, onPick, onClose, preferSide }: {
   open: boolean;
   /** The trigger the flyout is placed against. Ignored when `anchorPoint` is set. */
   anchorRef: RefObject<HTMLElement | null>;
@@ -422,7 +422,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
   anchorPoint?: { x: number; y: number } | null;
   /** Horizontal alignment (see useMenuPlacement). Default 'right', as for a kebab. */
   align?: 'right' | 'left' | 'center';
-  /** Current project ('' = Inbox), shown with a ✓. null = no single current value. */
+  /** Current project ('' or `Inbox` = the Inbox), shown with a ✓. null = no single current value. */
   current: string | null;
   onPick: (project: string) => void;
   /** Dismiss request. Fired right after every `onPick` (so a host that stays
@@ -436,6 +436,8 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
   const { projectNames } = useProjectRegistry();
   const [filter, setFilter] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+  // The Inbox is its own fixed row (''): a task saying `Inbox` ticks it, and never adds a second.
+  const current = currentName === null ? null : projectGroupKey(currentName);
   const placement = useMenuPlacement(open, anchorRef, listRef, {
     minHeight: 160,
     preferSide,
@@ -527,7 +529,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
           // Re-picking the current project is a dismiss, not a move (no server
           // PATCH). Batch mode (current === null) always moves — there is no
           // single current value to compare against.
-          if (current === null || name !== current) onMove(name);
+          if (current === null || projectGroupKey(name) !== projectGroupKey(current)) onMove(name);
           afterAction();
         }}
         onClose={() => setOpen(false)}

@@ -83,9 +83,9 @@ describe('TaskReorderedEvent shape', () => {
     expect(reordered[0].data).not.toHaveProperty('category');
   });
 
-  it("carries project: '' for Inbox — an empty string, not omitted/null", async () => {
-    // '' is a REAL group (Inbox), so the payload must be present-but-empty. A
-    // consumer doing `if (project)` would silently drop every Inbox reorder.
+  it("names the Inbox for an older client's '' reorder, never omitted/null", async () => {
+    // An older client still names the Inbox ''. The event says the Inbox's name, so every
+    // listener groups it with the Inbox's tasks (which say "Inbox").
     const { task: a } = await addTask({ title: 'Inbox A' });
     const { task: b } = await addTask({ title: 'Inbox B' });
 
@@ -98,11 +98,30 @@ describe('TaskReorderedEvent shape', () => {
     const reordered = seen.filter((e) => e.name === EventNames.TASK_REORDERED);
     expect(reordered).toHaveLength(1);
     expect(reordered[0].data).toHaveProperty('project');
-    expect(reordered[0].data.project).toBe('');
+    expect(reordered[0].data.project).toBe('Inbox');
     expect(reordered[0].data.taskIds).toEqual([b.id, a.id]);
 
     // …and the reorder actually landed (the event isn't reporting a no-op).
-    const inboxOrder = (await listTasks()).filter((t) => (t.project || '') === '').map((t) => t.id);
+    // The tasks themselves are filed in the Inbox by name; '' reordered that same group.
+    const inboxOrder = (await listTasks()).filter((t) => t.project === 'Inbox').map((t) => t.id);
+    expect(inboxOrder).toEqual([b.id, a.id]);
+  });
+
+  it("carries project: 'Inbox' for a reorder of the Inbox by its name", async () => {
+    const { task: a } = await addTask({ title: 'Inbox A' });
+    const { task: b } = await addTask({ title: 'Inbox B' });
+
+    const seen = capture();
+    const res = await request(app)
+      .patch('/api/tasks/reorder')
+      .send({ project: 'Inbox', taskIds: [b.id, a.id] });
+    expect(res.status).toBe(200);
+
+    const reordered = seen.filter((e) => e.name === EventNames.TASK_REORDERED);
+    expect(reordered).toHaveLength(1);
+    expect(reordered[0].data.project).toBe('Inbox');
+    expect(reordered[0].data.taskIds).toEqual([b.id, a.id]);
+    const inboxOrder = (await listTasks()).filter((t) => t.project === 'Inbox').map((t) => t.id);
     expect(inboxOrder).toEqual([b.id, a.id]);
   });
 
@@ -148,10 +167,11 @@ describe('PROJECT_CREATED from ensureProject', () => {
     expect(created[0].data).toEqual({ name: 'Synced', source: 'ms-todo' });
   });
 
-  it('is a silent no-op for Inbox ("" and whitespace) — it has no registry row', async () => {
+  it('is silent for the Inbox ("" and whitespace): its row already exists from boot', async () => {
     const seen = capture();
-    expect(await ensureProject('')).toEqual({ name: '', source: 'local', created: false });
-    expect(await ensureProject('   ')).toEqual({ name: '', source: 'local', created: false });
+    expect(await ensureProject('')).toEqual({ name: 'Inbox', source: 'local', created: false });
+    expect(await ensureProject('   ')).toEqual({ name: 'Inbox', source: 'local', created: false });
+    expect(await ensureProject('Inbox')).toEqual({ name: 'Inbox', source: 'local', created: false });
     expect(seen.filter((e) => e.name === EventNames.PROJECT_CREATED)).toHaveLength(0);
   });
 

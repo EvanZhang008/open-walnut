@@ -75,8 +75,8 @@ describe('projection envelope (write side)', () => {
       expect(t).not.toHaveProperty('category');
       expect(typeof t.project).toBe('string');
     }
-    // Inbox rides as '' — present-but-empty, not absent (readers group on it).
-    expect(tasks.map((t) => t.project).sort()).toEqual(['', 'Marina']);
+    // The Inbox rides under its name, present and never absent (readers group on it).
+    expect(tasks.map((t) => t.project).sort()).toEqual(['Inbox', 'Marina']);
 
     // Nothing anywhere in the serialized file mentions category.
     expect(JSON.stringify(raw)).not.toContain('category');

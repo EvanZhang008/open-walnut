@@ -15,6 +15,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-tas
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
+import { INBOX_PROJECT } from '../../../src/core/inbox-project.js'
 
 let server: HttpServer
 let port: number
@@ -137,7 +138,7 @@ describe('PATCH /api/v1/tasks/:id', () => {
     const back = await patchTask(task.id, { project: '' })
     expect(back.status).toBe(200)
     const { task: inbox } = await back.json() as { task: { project: string } }
-    expect(inbox.project).toBe('')
+    expect(inbox.project).toBe(INBOX_PROJECT)
   })
 
   it('due_date "" clears the due date', async () => {

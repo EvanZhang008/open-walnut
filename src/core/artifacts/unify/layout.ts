@@ -17,6 +17,7 @@
  * later, a link in a message) maps the same way; a file the move had to rename (two old places,
  * one new name) is an exact entry ahead of them. The disk side is in migrate-notes.ts.
  */
+import { isInboxProject } from '../../inbox-project.js';
 import { projectFolderName, TRACKING_NOTE_DIR } from '../../tracking-note.js';
 import { drawingTarget, isDrawingFile, mapPath, mapVaultPath, matchRule, movedPath, TREE_TOP_NAMES, type MoveMap, type MoveRule } from './map.js';
 
@@ -25,9 +26,12 @@ export { drawingTarget, isDrawingFile, mapPath, mapVaultPath, matchRule, movedPa
 export const TREE_PROJECTS_DIR = 'projects';
 export const SHARED_MEMORY_KEY = '_shared';
 
-/** A project's folder in the tree, `projects/<folded name>`; null for Inbox and a name that cannot be a folder. */
+/**
+ * A project's folder in the tree, `projects/<folded name>`; null for the Inbox (`Inbox`, or the
+ * '' older data still says: its tasks live at the tree's root) and a name that cannot be a folder.
+ */
 export function projectDirOf(project: string | null | undefined): string | null {
-  const folded = project ? projectFolderName(project) : null;
+  const folded = isInboxProject(project) ? null : projectFolderName(project!);
   return folded ? `${TREE_PROJECTS_DIR}/${folded}` : null;
 }
 
@@ -45,7 +49,8 @@ const sortRules = (rules: MoveRule[]): MoveRule[] => [...rules].sort((a, b) => b
  */
 export function vaultRules(input: { topFolders: readonly string[]; projectsFolders: readonly string[]; projects: readonly string[] }): MoveRule[] {
   const rules: MoveRule[] = [{ from: '', to: 'notes/' }];
-  const folders = new Set(input.projects.map((p) => projectFolderName(p)).filter((f): f is string => !!f));
+  // The Inbox has no folder of its own: a vault folder named "Inbox" stays the user's.
+  const folders = new Set(input.projects.filter((p) => !isInboxProject(p)).map((p) => projectFolderName(p)).filter((f): f is string => !!f));
   const byLower = new Map<string, string>();
   for (const f of [...folders].sort()) if (!byLower.has(f.toLowerCase())) byLower.set(f.toLowerCase(), f);
   for (const f of input.projectsFolders) {

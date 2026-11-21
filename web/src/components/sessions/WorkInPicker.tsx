@@ -24,6 +24,7 @@ import type { DraftProjectStart, DraftRowUpdate } from './DraftWorkInPill';
 import type { DraftColumn } from './draft-column';
 import { draftHostOf, pickStartHost } from './draft-project-start';
 import { detectProjectForFolder, workInFolderKey, workInProjectLine, workInProjectOrder } from './draft-work-in';
+import { isInboxProject } from '@open-walnut/core';
 
 type Tab = 'projects' | 'folders';
 const isTab = (v: unknown): v is Tab => v === 'projects' || v === 'folders';
@@ -62,6 +63,8 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
   const q = query.trim().toLowerCase();
   const projects = workInProjectOrder(rows, (n) => favoriteByName.has(n.toLowerCase()), query, projectDisplayName);
   const inboxShown = !q || 'inbox'.includes(q);
+  // The Inbox row is ticked while the draft names no other project ('' or `Inbox` alike).
+  const inboxCurrent = isInboxProject(ps.project) && isInboxProject(draft.project);
   const pickProject = (name: string) => { ps.pick(name, { toHome: true }); onClose(); };
 
   // The draft's own folder first (not on a start from a source: its folder is the source's).
@@ -138,14 +141,14 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
           })}
           {inboxShown && (
             // No project ('' or none yet) is what Start sends either way: no project, so the Inbox.
-            <div className={`wip-row${!ps.project && !draft.project ? ' is-current' : ''}`} data-testid="work-in-project-inbox">
+            <div className={`wip-row${inboxCurrent ? ' is-current' : ''}`} data-testid="work-in-project-inbox">
               <button type="button" className="wip-pick" onClick={() => pickProject('')}>
                 <span className="wip-ico is-folder"><WorkInKindIcon kind="folder" /></span>
                 <span className="wip-text">
                   <span className="wip-name">Inbox</span>
                   <span className="wip-line">No project · works in a folder you pick</span>
                 </span>
-                {!ps.project && !draft.project && <WorkInCheckIcon />}
+                {inboxCurrent && <WorkInCheckIcon />}
               </button>
             </div>
           )}

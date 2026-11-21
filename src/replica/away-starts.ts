@@ -26,6 +26,7 @@
  *     session elsewhere) needs the Mac.
  */
 
+import { projectOrInbox } from '../core/inbox-project.js'
 import crypto from 'node:crypto'
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import type { ReplicaWrite } from './dispatch.js'
@@ -168,7 +169,8 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     const engine = str(b.engine)
     if (engine && engine !== 'claude' && engine !== 'claude-code') return needsLeaderAnswer('engine_needs_mac', 'Only a Claude Code session starts on this host while your Mac is away.')
     const project = str(task.project)
-    const meta = project ? await deps.projectMeta(project) : null
+    // The Inbox ('' on an older row) has settings like any project.
+    const meta = await deps.projectMeta(projectOrInbox(project))
     if (!deps.hostKey || str(meta?.default_host) !== deps.hostKey) {
       return needsLeaderAnswer('task_runs_elsewhere', 'This task\'s project runs its sessions on another machine; starting it needs your Mac.')
     }

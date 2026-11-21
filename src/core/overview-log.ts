@@ -21,6 +21,7 @@
  * Search: volumes are plain md under skills/ — covered by the search index's
  * skill kind; no separate index.
  */
+import { isInboxProject } from './inbox-project.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GLOBAL_SKILLS_DIR } from '../constants.js';
@@ -201,7 +202,7 @@ function subdirs(dir: string): string[] {
  */
 export function resolveProjectSkillDir(project: string): ProjectSkillLocation | null {
   const proj = (project ?? '').trim();
-  if (!proj || proj.includes('/') || proj.includes('\\') || proj.includes('..')) return null;
+  if (isInboxProject(proj) || proj.includes('/') || proj.includes('\\') || proj.includes('..')) return null;
   const target = proj.toLowerCase();
   for (const skillCategory of subdirs(GLOBAL_SKILLS_DIR)) {
     const hit = subdirs(path.join(GLOBAL_SKILLS_DIR, skillCategory))
@@ -225,7 +226,7 @@ export function appendSkillHistoryForProject(
   source?: string,
 ): OverviewLogAppendResult | null {
   const proj = (project ?? '').trim();
-  if (!proj) return null;
+  if (isInboxProject(proj)) return null;
   try {
     const location = resolveProjectSkillDir(proj);
     if (location) {

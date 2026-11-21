@@ -3,6 +3,7 @@ import path from 'node:path';
 import { CLAUDE_HOME, SESSIONS_DIR, TASKS_DIR, HOOK_LOG_FILE } from '../constants.js';
 import type { SessionSummary } from '../core/types.js';
 import { log } from '../logging/index.js';
+import { isInboxProject } from '../core/inbox-project.js';
 import Database from '../lib/sqlite.js';
 
 // Local TASK_DB_PATH copy (kept in sync with src/core/task-db.ts): hooks are
@@ -308,7 +309,7 @@ export function formatDailyLogEntry(
 
 /**
  * Derive the task's project name by reading the task store.
- * Returns the project name, or null for Inbox (empty project) / unknown task.
+ * Returns the project name, or null for the Inbox (`Inbox`, or '' on an older row) / unknown task.
  *
  * Raw SQL on its own read-only handle: this runs in a hook child process, which
  * must not touch the server's singleton connection.
@@ -331,7 +332,7 @@ export function deriveProjectPath(taskId: string): string | null {
         | { project: string | null }
         | undefined;
       if (!row) return null;
-      return row.project?.trim() || null;
+      return isInboxProject(row.project) ? null : row.project!.trim();
     } finally {
       try { db.close(); } catch { /* ignore */ }
     }

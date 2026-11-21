@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { projectOrInbox } from '../inbox-project.js';
 import { requireFrozenWorkspaceReady, resolveTaskLaunchReadOnly, validateLaunchChoices } from './task-launch-plan.js';
 import path from 'node:path';
 import { getTask, linkSession, updateTaskRaw } from '../task-manager.js';
@@ -1008,11 +1009,11 @@ export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'p
  * (a ready workspace). Which host a plain recorded cwd lives on: launch-place.ts.
  */
 export async function recordedPlace(task: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'>): Promise<{ cwd: string; ownerId: string; host?: string } | undefined> {
-  const project = (task.project ?? '').trim().toLowerCase();
+  const project = projectOrInbox(task.project).toLowerCase();
   let current: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'> | undefined = task;
   const seen = new Set<string>();
   while (current && !seen.has(current.id)) {
-    if ((current.project ?? '').trim().toLowerCase() !== project) return undefined;
+    if (projectOrInbox(current.project).toLowerCase() !== project) return undefined;
     // A ready isolated workspace is where the task's work lives (core/workspaces).
     const ws = workspaceCwdOf(current);
     if (ws) return { cwd: ws, ownerId: current.id, host: current.workspace!.host };

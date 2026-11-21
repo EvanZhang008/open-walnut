@@ -1,4 +1,7 @@
 import fsSync from 'node:fs';
+import path from 'node:path';
+import { INBOX_PROJECT, isInboxProject, projectOrInbox, sameProject } from './inbox-project.js';
+import { migrateInboxProject } from './inbox-migration.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import { getDb as getSessionDb } from './session-db.js';
@@ -32,7 +35,7 @@ import {
   type TaskQuerySort,
 } from './task-query.js';
 import { registry } from './integration-registry.js';
-import { dbGeneration, getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
+import { dbGeneration, getDb, inCopyApply, rowToTask, taskToFullRow, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { areaMarked, assertTaskHistoryRowReadable, assertTaskHistoryWrite, sessionDbHandle, taskHistoryWriteNeedsCheck } from './router/history-write.js';
@@ -252,7 +255,7 @@ let pendingRowShadow: RowShadow | null = null;
 const INSERT_COLS: readonly string[] = [...TASK_COLUMNS, 'payload'];
 
 function rowFingerprint(task: Task): RowFingerprint {
-  const partial = taskToRow(task);
+  const partial = taskToFullRow(task);
   const values = new Array<unknown>(INSERT_COLS.length);
   for (let i = 0; i < INSERT_COLS.length; i++) {
     const v = partial[INSERT_COLS[i]];
@@ -583,10 +586,26 @@ async function ensureInit(): Promise<void> {
       // after the first pass). Lives here because every project-memory reader
       // goes through a task lookup first.
       await migrateProjectMemoryDirs();
+      await migrateInboxProjectLocked();
       await seedProjectsFromConfig();
     }
     initialized = true;
   }
+}
+
+/**
+ * The Inbox is a real project (inbox-project.ts): its row exists and no task is left without
+ * a project. Under the write lock, like the seed below, so a concurrent whole-store write
+ * cannot reinsert a row from a snapshot taken before the move.
+ */
+async function migrateInboxProjectLocked(): Promise<void> {
+  await withWriteLockIfFree(async () => {
+    const result = await migrateInboxProject(getDb()!, path.dirname(TASK_DB_PATH));
+    if (result.created || result.taskIds.length || result.folderIds.length) {
+      invalidateRowShadow();
+      invalidateTaskStoreCache();
+    }
+  });
 }
 
 /**
@@ -600,7 +619,8 @@ async function ensureInit(): Promise<void> {
  * is never rewritten: the registry is the claim of record, and the v5 migration
  * already resolved conflicts once.
  *
- * Inbox (the empty project) deliberately has no row and can never be claimed.
+ * The Inbox's row is made by migrateInboxProject, local; a plugin reserving its name is
+ * never let claim it.
  *
  * Runs under the write lock (or inline when already held — it's on the ensureInit
  * path that writeStore's own callers await). Unlocked, its read-then-INSERT raced
@@ -620,7 +640,7 @@ async function seedProjectsFromConfig(): Promise<void> {
       const seen = new Set<string>();
       const addIfNew = (rawName: string, source: TaskSource) => {
         const name = (rawName ?? '').trim();
-        if (!name) return; // Inbox is never registered
+        if (isInboxProject(name)) return; // its row is migrateInboxProject's, and always local
         // Seeding reads UNVALIDATED names (plugin config + raw task rows), so
         // without this gate a bad name that reached a task row by any legacy
         // path gets laundered into the registry on the next boot. Skip, don't
@@ -826,7 +846,7 @@ async function loadStore(): Promise<TaskStore> {
   for (const row of groupRows) {
     taskGroups[row.id] = {
       label: row.label,
-      project: row.project ?? '',
+      project: projectOrInbox(row.project),
       ...(row.parent_id ? { parent_id: row.parent_id } : {}),
       ...(row.hidden ? { hidden: true } : {}),
     };
@@ -1083,7 +1103,7 @@ async function writeStore(store: TaskStore): Promise<void> {
       if (rec?.label) {
         groupInsert.run({
           id, label: rec.label, hidden: rec.hidden ? 1 : 0,
-          project: rec.project ?? '', parent_id: rec.parent_id ?? null,
+          project: projectOrInbox(rec.project), parent_id: rec.parent_id ?? null,
         });
       }
     }
@@ -1327,9 +1347,8 @@ export function resolveNewTaskTier(
 // carries at most ONE provider claim (`source`), and owns its settings in a
 // `metadata` JSON blob (the retired `.metadata_project` sentinel task).
 //
-// The empty project ('' = Inbox) NEVER has a row and can never be claimed. That
-// single rule replaces the whole old local-reservation config
-// machinery: an unclaimable bucket is now structural, not configured.
+// The Inbox (inbox-project.ts) is a row like any other, always local: no service can claim
+// it, and it is never renamed or deleted. Every write files a missing or empty project there.
 
 /**
  * MS To-Do list name for a project. New projects push to a list named after the
@@ -1345,7 +1364,7 @@ export async function remoteListNameFor(project: string): Promise<string> {
   return typeof alias === 'string' && alias.trim() ? alias : name;
 }
 
-/** All registry rows, keyed by their canonical spelling. Never includes Inbox. */
+/** All registry rows, keyed by their canonical spelling, the Inbox's included. */
 export async function getStoreProjects(): Promise<Record<string, ProjectRecord>> {
   const store = await readStoreView();
   return Object.fromEntries(
@@ -1356,13 +1375,17 @@ export async function getStoreProjects(): Promise<Record<string, ProjectRecord>>
   );
 }
 
-/** Registry row for a project name (case-insensitive). Null for Inbox/unknown. */
+/** Registry row for a project name (case-insensitive; '' is the Inbox's). Null for an unknown one. */
 export async function getProjectRecord(project: string): Promise<(ProjectRecord & { name: string }) | null> {
-  const name = (project ?? '').trim();
-  if (!name) return null;
+  const name = projectOrInbox(project);
   const projects = await getStoreProjects();
   const key = Object.keys(projects).find((k) => k.toLowerCase() === name.toLowerCase());
   return key ? { name: key, ...projects[key] } : null;
+}
+
+/** The Inbox's registry key in `projects` (its stored spelling), else its name. */
+function inboxKeyOf(projects: Record<string, ProjectRecord> | undefined): string {
+  return Object.keys(projects ?? {}).find((k) => isInboxProject(k)) ?? INBOX_PROJECT;
 }
 
 /**
@@ -1458,7 +1481,8 @@ export function assertValidProjectName(name: string): string {
  *
  * Takes the registry SNAPSHOT the caller already holds (each mint site runs
  * inside the store write lock) and answers with the name to use:
- *   - `project: ''` + `blocked: true` → the project is gone; file into Inbox.
+ *   - `project: 'Inbox'` + `blocked: true` → the project is gone; file into Inbox.
+ *   - a missing or empty name → the Inbox (every task has a project).
  *   - `redirectedFrom` set → the name was renamed/merged away and `project` is
  *     the survivor's canonical spelling.
  *   - `registryKey` → the existing row this resolves to (undefined = a new row).
@@ -1486,9 +1510,10 @@ function applyProjectWriteDecision(
     // Loud on purpose, and it names the WRITER: this line is how you find which
     // surface keeps trying to resurrect a project the human removed.
     log.task.warn('project write refused — that project was deleted', {
-      project: decision.from, writer, filedIn: 'Inbox',
+      project: decision.from, writer, filedIn: INBOX_PROJECT,
     });
-    return { project: '', blocked: true };
+    const inbox = findLiveRow(INBOX_PROJECT);
+    return { project: inbox ?? INBOX_PROJECT, ...(inbox ? { registryKey: inbox } : {}), blocked: true };
   }
   const project = decision.name;
   if (decision.kind === 'redirect') {
@@ -1512,7 +1537,7 @@ function applyProjectWriteDecision(
  * transaction is open.
  *
  * Consults the tombstone ledger before minting: a deleted name resolves to Inbox
- * (`name: ''`, `blocked: true`) and a renamed/merged one to its survivor.
+ * (`name: 'Inbox'`, `blocked: true`) and a renamed/merged one to its survivor.
  */
 function ensureProjectRowLocked(
   name: string,
@@ -1521,8 +1546,9 @@ function ensureProjectRowLocked(
   /** Settings a NEW row is born with (never written onto an existing row). */
   metadata?: Record<string, unknown>,
 ): { name: string; source: TaskSource; created: boolean; redirectedFrom?: string; blocked?: boolean } {
-  const trimmed = (name ?? '').trim();
-  if (!trimmed) return { name: '', source: 'local', created: false };
+  // A missing or empty name is the Inbox, which is always local (inbox-project.ts).
+  const trimmed = projectOrInbox(name);
+  if (isInboxProject(trimmed)) source = 'local';
   const db = getDb()!;
   // Existence check is done in JS with toLowerCase(), NOT by leaning on the
   // column's COLLATE NOCASE. SQLite's NOCASE folds ASCII A-Z only, while JS
@@ -1545,7 +1571,11 @@ function ensureProjectRowLocked(
   const decided = applyProjectWriteDecision(
     resolveProjectWrite(trimmed, findLiveRow), findLiveRow, writer,
   );
-  if (decided.blocked) return { name: '', source: 'local', created: false, blocked: true };
+  if (decided.blocked) {
+    const inbox = rows.find((r) => isInboxProject(r.name));
+    if (inbox) return { name: inbox.name, source: inbox.source as TaskSource, created: false, blocked: true };
+    return { ...ensureProjectRowLocked(INBOX_PROJECT, 'local', writer), blocked: true };
+  }
   const effective = decided.project;
   const redirect = decided.redirectedFrom ? { redirectedFrom: decided.redirectedFrom } : {};
   const existing = rows.find((r) => r.name.trim().toLowerCase() === effective.toLowerCase());
@@ -1623,10 +1653,10 @@ function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string, actor
  * there, so a caller can't silently re-claim a project by passing a source.
  *
  * Emits PROJECT_CREATED only on a real first create (web project lists update
- * live). Inbox ('') is a no-op: it has no row by design.
+ * live). A missing or empty name is the Inbox (its row, always local).
  *
  * Tombstones (see project-tombstones.ts): a name the human DELETED resolves to
- * Inbox — `{ name: '', blocked: true }` — and a renamed/merged one to its
+ * Inbox — `{ name: 'Inbox', blocked: true }` — and a renamed/merged one to its
  * survivor (`redirectedFrom` says which name was followed). `opts.human: true`
  * marks an EXPLICIT human create (POST /projects, the console's new-project
  * gesture): it clears the tombstone first, which is the only way a removed
@@ -1640,10 +1670,8 @@ export async function ensureProject(
   name: string; source: TaskSource; created: boolean;
   redirectedFrom?: string; blocked?: boolean;
 }> {
-  // Inbox short-circuits BEFORE shape validation: '' is the legal absence of a
-  // project, never a row, never a directory.
-  if (!(name ?? '').trim()) return { name: '', source: 'local', created: false };
-  const trimmed = assertValidProjectName(name);
+  // A missing or empty name is the Inbox, whose name always passes the shape gate.
+  const trimmed = assertValidProjectName(projectOrInbox(name));
 
   await ensureInit();
   const result = await withWriteLock(async () => {
@@ -1664,7 +1692,7 @@ function isValidProjectName(name: string): boolean {
  * sessions/folder-project.ts), decided and, when new, created with the folder
  * stamped on it in ONE locked step: two launches from two folders of the same
  * name cannot both take the free name, and no reader sees the new project
- * before it owns its folder. A deleted name gives the Inbox (`name: ''`) and a
+ * before it owns its folder. A deleted name gives the Inbox (`name: 'Inbox'`) and a
  * renamed one its survivor, as for every writer.
  */
 export async function ensureFolderProject(
@@ -1678,7 +1706,9 @@ export async function ensureFolderProject(
     // A local launch from the home folder files under "Home" (the draft says so for `~`).
     const home = !host || host === '__local__' ? os.homedir() : undefined;
     const name = folderProjectFor(store.projects ?? {}, cwd, host, isValidProjectName, home);
-    if (!name) return { name: '', source: 'local' as TaskSource, created: false };
+    // No project of its own (or one named like the Inbox): the Inbox, whose settings a
+    // launch never stamps.
+    if (!name || isInboxProject(name)) return ensureProjectRowLocked(INBOX_PROJECT, 'local', writer);
     return ensureProjectRowLocked(name, 'local', writer, {
       default_cwd: trimDir(cwd),
       ...(host ? { default_host: host } : {}),
@@ -1703,8 +1733,7 @@ export async function resolveProjectForWrite(
   name: string,
   writer = 'unknown',
 ): Promise<{ name: string; blocked: boolean; redirectedFrom?: string }> {
-  const trimmed = (name ?? '').trim();
-  if (!trimmed) return { name: '', blocked: false };
+  const trimmed = projectOrInbox(name);
   await ensureInit();
   const store = await readStore();
   const decided = resolveProjectForRegistryWrite(store.projects ?? {}, trimmed, writer);
@@ -1742,7 +1771,7 @@ export async function renameProject(
   newProject: string,
 ): Promise<{ count: number; merged: boolean }> {
   const from = (oldProject ?? '').trim();
-  if (!from) throw new InvalidProjectNameError('Cannot rename Inbox — it is the absence of a project.', '');
+  if (isInboxProject(from)) throw new InvalidProjectNameError('The Inbox keeps its name: it is where every task without another project goes. Move its tasks to another project instead.', from);
   // Shape validation on the TARGET only: an existing project with a bad legacy
   // name must stay renamable (that's how you fix it).
   const to = assertValidProjectName(newProject);
@@ -2050,7 +2079,7 @@ function remoteContainerIdsOf(tasks: Task[]): string[] {
  */
 export async function deleteProject(project: string): Promise<{ movedToInbox: number }> {
   const name = (project ?? '').trim();
-  if (!name) throw new Error('Inbox is not a project — nothing to delete.');
+  if (isInboxProject(name)) throw new Error('The Inbox cannot be deleted: it is where every task without another project goes.');
 
   await ensureInit();
   const { movedToInbox, taskIds, canonical, source } = await withWriteLock(async () => {
@@ -2072,8 +2101,9 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
       remoteListIds: remoteContainerIdsOf(affected),
       reason: 'deleted',
     });
+    const inbox = inboxKeyOf(projects);
     for (const task of affected) {
-      task.project = '';
+      task.project = inbox;
       task.updated_at = now;
     }
     if (key) {
@@ -2108,7 +2138,7 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
       task: null,
       taskIds,
       oldProject: canonical,
-      newProject: '',
+      newProject: INBOX_PROJECT,
       count: taskIds.length,
     }, ['web-ui'], { source: 'task-manager' });
   }
@@ -2196,7 +2226,7 @@ export async function deleteProjectCascade(project: string): Promise<{
   source: string;
 }> {
   const name = (project ?? '').trim();
-  if (!name) throw new Error('Inbox is not a project — nothing to delete.');
+  if (isInboxProject(name)) throw new Error('The Inbox cannot be deleted: it is where every task without another project goes.');
   await ensureInit();
 
   const record = await getProjectRecord(name);
@@ -2274,7 +2304,7 @@ export async function deleteProjectCascade(project: string): Promise<{
       if (survivorKey) {
         task.project = survivorKey; // binding kept — remote twin survives
       } else {
-        task.project = '';
+        task.project = inboxKeyOf(projects);
         task.source = 'local';
         task.ext = undefined;
         task.external_url = undefined;
@@ -2310,7 +2340,7 @@ export async function deleteProjectCascade(project: string): Promise<{
       task: null,
       taskIds,
       oldProject: record.name,
-      newProject: newProjectName,
+      newProject: newProjectName || INBOX_PROJECT,
       count: taskIds.length,
     }, ['web-ui'], { source: 'task-manager' });
   }
@@ -2344,14 +2374,14 @@ export async function getProjectMetadata(project: string): Promise<{
 
 /**
  * Merge `patch` into a project's registry metadata, creating the row when
- * absent. Returns the merged object. Inbox can't hold settings (no row).
+ * absent. Returns the merged object. '' is the Inbox, whose settings are its own like any
+ * project's.
  */
 export async function setProjectMetadata(
   project: string,
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const raw = (project ?? '').trim();
-  if (!raw) throw new Error('Inbox has no project settings — pass a project name.');
+  const raw = projectOrInbox(project);
   // The Claude plugins a project's sessions leave out: a list of plugin ids, [] clears it.
   const settings = checkClaudePluginsOffPatch(patch);
   // The launch defaults are checked before the row is made, against the row as it is (a model
@@ -2975,11 +3005,12 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // An explicit '' means "Inbox, on purpose" and must NOT fall through to the
     // config default (`??` alone can't express that — updateTask already honors
     // '' as Inbox, so create and update would otherwise disagree on the same value).
-    const askedForProject = (
+    // Every task has a project: whatever is left empty is the Inbox (inbox-project.ts).
+    const askedForProject = projectOrInbox(
       input.project !== undefined
         ? input.project
-        : (parentTask?.project ?? config.defaults.project ?? '')
-    ).trim();
+        : (parentTask?.project ?? config.defaults.project ?? ''),
+    );
 
     const projects = store.projects ?? {};
     const existingKeyFor = (n: string): string | undefined =>
@@ -3020,10 +3051,11 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
 
     // Source chain: parent (same project) → registry row → caller override → a plugin set up
     // for this exact name → local.
-    // Inbox is structurally local-only: no registry row exists for '' and no
-    // provider may claim it, so a provider-sourced task MUST name a project.
+    // Inbox is structurally local-only: no provider may claim it, so a
+    // provider-sourced task MUST name another project.
     let source: TaskSource;
-    if (!project) {
+    const inInbox = isInboxProject(project);
+    if (inInbox) {
       const demanded = parentHere?.source ?? input.source;
       if (demanded && demanded !== 'local') {
         throw new Error(
@@ -3074,11 +3106,11 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // in a project that syncs says so. A plugin's own task, a test's and a pull's are not judged.
     let syncHold: SyncHold | undefined;
     const onCompanion = placement() === 'cloud';
-    if (project && !keptBy && !input._skipPluginOps && onCompanion && input.source === 'local') {
+    if (!inInbox && !keptBy && !input._skipPluginOps && onCompanion && input.source === 'local') {
       // The cloud companion syncs nothing itself: it records the creator's Local choice, which
       // the primary honours when the create reaches it (task-outbox.ts).
       syncHold = { target: registrySource ?? 'local', state: 'chosen', by: 'user', reason: 'Kept local when it was created', at: now };
-    } else if (project && !keptBy && !input._skipPluginOps && !onCompanion) {
+    } else if (!inInbox && !keptBy && !input._skipPluginOps && !onCompanion) {
       const explicitLocal = input.source === 'local';
       // A subtask of a held parent is held the same way: a private parent's work is private.
       const parentHold = parentHere?.source === 'local' && parentHere.org_role !== 'lead' ? parentHere.sync_hold : undefined;
@@ -3111,7 +3143,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       const folder = folderRecord(store, input.group_id);
       if (!folder) throw new Error(`Folder "${input.group_id}" not found.`);
       if (!sameProject(folderProject(store, input.group_id), project)) {
-        throw new Error(`Folder "${folder.label}" belongs to "${folderProject(store, input.group_id) || 'Inbox'}", not "${project || 'Inbox'}".`);
+        throw new Error(`Folder "${folder.label}" belongs to "${projectOrInbox(folderProject(store, input.group_id))}", not "${project}".`);
       }
     }
 
@@ -3188,7 +3220,8 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     if (project && !registryKey) {
       store.projects = {
         ...projects,
-        [project]: { source, ...(testRun ? { metadata: testRunProjectMetadata(testRun) } : {}) },
+        // The Inbox is never a test run's project, whoever files its first task.
+        [project]: { source, ...(testRun && !inInbox ? { metadata: testRunProjectMetadata(testRun) } : {}) },
       };
       createdProject = { name: project, source };
     }
@@ -3241,9 +3274,12 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
 
 export interface ListTasksFilter {
   status?: string;
-  /** Exact project match. '' filters to Inbox; undefined = no project filter. */
+  /** Exact project match ('' or 'Inbox' filters to the Inbox); undefined = no project filter. */
   project?: string;
 }
+
+/** The Inbox's rows in SQL: its own name, and the empty value an older build left. */
+const INBOX_ROWS_SQL = "(project IS NULL OR TRIM(project) = '' OR project = 'Inbox' COLLATE NOCASE)";
 
 /**
  * List tasks, optionally filtered by status and/or project.
@@ -3256,7 +3292,10 @@ export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
     tasks = tasks.filter((t) => t.status === filter.status);
   }
   if (filter.project !== undefined) {
-    tasks = tasks.filter((t) => (t.project || '') === filter.project);
+    const wanted = filter.project;
+    tasks = isInboxProject(wanted)
+      ? tasks.filter((t) => isInboxProject(t.project))
+      : tasks.filter((t) => (t.project || '') === wanted);
   }
 
   return tasks.map(cloneTask);
@@ -3373,9 +3412,9 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
   const params: Record<string, string> = {};
   if (filter.status) { where.push('status = @status'); params.status = filter.status; }
   if (filter.project !== undefined) {
-    // project is nullable in SQL; '' (Inbox) must match both NULL and ''.
-    if (filter.project === '') {
-      where.push("(project IS NULL OR project = '')");
+    // The Inbox ('' or its name) matches its rows and any an older build left empty.
+    if (isInboxProject(filter.project)) {
+      where.push(INBOX_ROWS_SQL);
     } else {
       where.push('project = @project');
       params.project = filter.project;
@@ -3610,9 +3649,9 @@ export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: bo
       conds.push('0'); // `[].some(...)` is false — nothing matches.
     } else {
       const parts: string[] = [];
-      // project is nullable in SQL; '' (Inbox) must match both NULL and ''.
-      if (values.includes('')) parts.push("(project IS NULL OR project = '')");
-      const named = values.filter((v) => v !== '');
+      // The Inbox ('' or its name) matches its rows and any an older build left empty.
+      if (values.some((v) => isInboxProject(v))) parts.push(INBOX_ROWS_SQL);
+      const named = values.filter((v) => !isInboxProject(v));
       if (named.length > 0) {
         parts.push(inList('project', named, ' COLLATE NOCASE'));
         // SQLite NOCASE folds ASCII only, JS toLowerCase folds all of Unicode
@@ -4601,7 +4640,8 @@ export async function updateTask(
   // provider-sourced task moved there migrates to source='local'.
   let createdProject: { name: string; source: TaskSource } | undefined;
   if (updates.project !== undefined) {
-    const asked = updates.project.trim();
+    // '' is "move it to the Inbox": every task has a project.
+    const asked = projectOrInbox(updates.project);
     const projects = store.projects ?? {};
     const keyFor = (n: string): string | undefined =>
       Object.keys(projects).find((k) => k.toLowerCase() === n.trim().toLowerCase());
@@ -4613,21 +4653,21 @@ export async function updateTask(
     // provider task's remote binding (Inbox is local-only), which is a far bigger
     // side effect than refusing a move to a project that no longer exists.
     const decided = resolveProjectForRegistryWrite(projects, asked, 'updateTask');
-    if (asked && decided.blocked) {
+    if (decided.blocked) {
       log.task.warn('project move refused — target project was deleted', {
-        taskId: task.id, target: asked, keptIn: task.project || 'Inbox',
+        taskId: task.id, target: asked, keptIn: projectOrInbox(task.project),
       });
       delete (updates as { project?: string }).project;
     }
-    const requested = decided.blocked ? (task.project || '') : decided.project;
+    const requested = decided.blocked ? projectOrInbox(task.project) : decided.project;
     const registryKey = keyFor(requested);
     const newProject = registryKey ?? requested;  // canonical spelling wins
     let assigned = false;
-    const projectChanged = newProject.toLowerCase() !== (task.project || '').toLowerCase();
+    const projectChanged = newProject.toLowerCase() !== projectOrInbox(task.project).toLowerCase();
 
     if (projectChanged) {
       const config = await getConfig();
-      const targetSource: TaskSource | undefined = !newProject
+      const targetSource: TaskSource | undefined = isInboxProject(newProject)
         ? 'local'
         : registryKey ? projects[registryKey].source : undefined;
 
@@ -5439,7 +5479,7 @@ export class ProjectSourceConflictError extends Error {
  * Validate that a task's source is consistent with the target project's claim.
  *
  * Rules, in priority order:
- *  1. Inbox ('') is structurally local-only — no registry row exists for it and
+ *  1. The Inbox (inbox-project.ts; '' too) is structurally local-only — its row is local and
  *     no provider can claim it. This replaces the old config-level local
  *     reservation entirely (an unclaimable bucket is now a property of the model,
  *     not a config field the user has to maintain).
@@ -5461,7 +5501,7 @@ export function validateProjectSource(
   const name = (project ?? '').trim();
   const cfg = config as Record<string, unknown>;
 
-  if (!name) {
+  if (isInboxProject(name)) {
     if (intendedSource !== 'local') {
       return {
         ok: false,
@@ -6248,14 +6288,10 @@ function folderDepth(store: TaskStore, groupId: string): number {
  *  member for records that predate the v9 backfill (defensive only). */
 function folderProject(store: TaskStore, groupId: string): string {
   const rec = folderRecord(store, groupId);
-  if (rec?.project !== undefined) return rec.project;
-  return store.tasks.find((t) => t.group_id === groupId)?.project ?? '';
+  if (rec?.project !== undefined) return projectOrInbox(rec.project);
+  return projectOrInbox(store.tasks.find((t) => t.group_id === groupId)?.project);
 }
 
-/** Case-insensitive project identity (matches the registry's COLLATE NOCASE). */
-function sameProject(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? '').toLowerCase() === (b ?? '').toLowerCase();
-}
 
 /** Resolve a list of id-prefixes to full tasks, erroring on miss/ambiguity. */
 function resolveTasksByPrefix(store: TaskStore, idPrefixes: string[]): Task[] {
@@ -6395,7 +6431,7 @@ export async function placeInFolderBeside(
       resolvedLabel = label.trim() || source.title;
       store.task_groups = {
         ...(store.task_groups ?? {}),
-        [groupId]: { label: resolvedLabel, project: folderRecord(store, parentId)?.project ?? source.project ?? '', parent_id: parentId },
+        [groupId]: { label: resolvedLabel, project: projectOrInbox(folderRecord(store, parentId)?.project ?? source.project), parent_id: parentId },
       };
       // The source's earlier subtasks filed flat beside it move in with it, so
       // the family stays together (the ones already in their own subfolder stay).
@@ -6407,14 +6443,14 @@ export async function placeInFolderBeside(
     } else if (groupId) {
       resolvedLabel = folderRecord(store, groupId)?.label ?? source.title;
       if (!folderRecord(store, groupId)) {
-        store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
+        store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: projectOrInbox(source.project) } };
       }
       if (familyHome) source.family_group_id = groupId;
     } else {
       groupId = `g_${generateId()}`;
       created = true;
       resolvedLabel = label.trim() || source.title;
-      store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
+      store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: projectOrInbox(source.project) } };
       source.group_id = groupId;
       if (opts.nest) source.family_group_id = groupId;
     }
@@ -6802,7 +6838,8 @@ export async function createFolder(
     const store = await readStore();
     const trimmed = label.trim();
     if (!trimmed) throw new Error('Folder name cannot be empty.');
-    const proj = project.trim();
+    // '' is the Inbox (every folder, as every task, has a project).
+    const proj = isInboxProject(project) ? inboxKeyOf(store.projects) : project.trim();
     if (parentId !== undefined) {
       const parent = folderRecord(store, parentId);
       if (!parent) throw new Error(`Parent folder "${parentId}" not found.`);
@@ -6995,7 +7032,7 @@ export async function moveFolderToProject(
   const hasLiveMembers = store.tasks.some((t) => t.group_id === groupId);
   if (!plannedRoot && !hasLiveMembers) throw new Error(`Group "${groupId}" not found.`);
 
-  const requested = project.trim();
+  const requested = isInboxProject(project) ? inboxKeyOf(store.projects) : project.trim();
   const current = folderProject(store, groupId);
   // Canonical spelling wins so two casings can't split one project, and a name
   // about to mint a NEW registry row passes the shape gate (same rule as addTask).
@@ -7250,7 +7287,7 @@ export async function listGroups(): Promise<FolderListing[]> {
       label: rec.label,
       hidden: !!rec.hidden,
       member_ids: ids,
-      project: rec.project ?? (ids.length ? (store.tasks.find((t) => t.id === ids[0])?.project ?? '') : ''),
+      project: projectOrInbox(rec.project ?? (ids.length ? store.tasks.find((t) => t.id === ids[0])?.project : '')),
       ...(rec.parent_id ? { parent_id: rec.parent_id } : {}),
     });
     emitted.add(gid);
@@ -7262,7 +7299,7 @@ export async function listGroups(): Promise<FolderListing[]> {
       label: store.tasks.find((t) => t.id === ids[0])?.title ?? ids[0],
       hidden: false,
       member_ids: ids,
-      project: store.tasks.find((t) => t.id === ids[0])?.project ?? '',
+      project: projectOrInbox(store.tasks.find((t) => t.id === ids[0])?.project),
     });
   }
   return out;
@@ -8338,11 +8375,12 @@ export async function reorderTasks(
   // Case-INSENSITIVE: project identity ignores case everywhere else (NOCASE PK),
   // so an exact match here silently resolved to zero entries whenever the caller's
   // spelling differed from the stored one — and the reorder became a no-op.
-  const groupKey = (project || '').trim().toLowerCase();
+  // '' (an older client's Inbox) and the Inbox's name are one group.
+  const groupKey = projectOrInbox(project).toLowerCase();
   const groupEntries: { index: number; task: Task }[] = [];
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
-    if ((t.project || '').trim().toLowerCase() === groupKey) {
+    if (projectOrInbox(t.project).toLowerCase() === groupKey) {
       groupEntries.push({ index: i, task: t });
     }
   }
@@ -8464,7 +8502,8 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
       // (e.g. mapToLocal's '' for an Inbox-routed list) must not move an existing
       // synced task to Inbox — '' is structurally local-only, so that write would
       // strand the task (pushTask refuses Inbox) with sync_error on every tick.
-      if (taskData.project !== undefined && taskData.project.trim()) {
+      // A pulled list named like the Inbox is the same: the Inbox takes no synced task.
+      if (taskData.project !== undefined && !isInboxProject(taskData.project)) {
         existing.project = taskData.project.trim();
       }
       existing.ext = { ...existing.ext, ...taskData.ext };
@@ -8498,7 +8537,7 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
     const dup = store.tasks.find((t) =>
       t.source === taskData.source &&
       t.title === taskData.title &&
-      (t.project || '').trim().toLowerCase() === (taskData.project || '').trim().toLowerCase(),
+      sameProject(t.project, taskData.project),
     );
     if (dup) {
       dup.ext = { ...dup.ext, ...taskData.ext };
@@ -8528,8 +8567,10 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   // remote side still carries the retired tag re-mints the registry row here
   // on every pull (observed 2026-08-05: 7 tasks + a claimed 'Quick Start' row
   // resurrected minutes after the v5 data repair deleted them).
+  // A LOCAL import naming the Inbox is filed there like any local task (the Inbox is a
+  // real project now); a synced one still needs another project (below).
   if (pulledProject &&
-      (isRetiredQuickStartGroup(pulledProject) || isLegacyInboxGroup(pulledProject))) {
+      (isRetiredQuickStartGroup(pulledProject) || (isLegacyInboxGroup(pulledProject) && taskData.source !== 'local'))) {
     throw new Error(
       `addTaskFull: refusing to create task "${taskData.title}" under retired group "${pulledProject}" — ` +
       `that name is Inbox now, and provider-synced tasks need a real project`,
@@ -8540,14 +8581,14 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   // is exactly how a project deleted at 21:15 came back at 21:21); a renamed one
   // is followed to its survivor.
   const pullDecision = resolveProjectForRegistryWrite(store.projects ?? {}, pulledProject, 'sync-pull');
-  if (pulledProject && pullDecision.blocked) {
+  if (!isInboxProject(pulledProject) && pullDecision.blocked) {
     throw new Error(
       `addTaskFull: refusing to create task "${taskData.title}" under deleted project "${pulledProject}" — ` +
       `that project was removed here; re-create it if you want this item back`,
     );
   }
   const incomingProject = pullDecision.project;
-  if (!incomingProject) {
+  if (isInboxProject(incomingProject)) {
     if (taskData.source !== 'local') {
       throw new Error(
         `addTaskFull: refusing to create ${taskData.source} task "${taskData.title}" in Inbox — ` +
@@ -8778,12 +8819,18 @@ function prepareRawUpdate(
     (safeUpdates as Record<string, unknown>).wait_until = returningWaitUntil(task.id, defaultWaitUntil) ?? null;
   }
 
+  // Every task has a project: a raw write clearing it files the task in the Inbox (the
+  // row's own backstop is taskToRow; this keeps the in-memory task and its event the same).
+  if ('project' in safeUpdates && (safeUpdates.project === null || (typeof safeUpdates.project === 'string' && isInboxProject(safeUpdates.project)))) {
+    (safeUpdates as Record<string, unknown>).project = INBOX_PROJECT;
+  }
+
   // A folder never follows a task across projects (raw twin of the updateTask
   // rule): a sync-driven project move drops the membership. `null` is the
   // payload explicit-clear marker (taskToRow drops the key from the blob).
   if (
     typeof safeUpdates.project === 'string' &&
-    safeUpdates.project.toLowerCase() !== (task.project ?? '').toLowerCase() &&
+    !sameProject(safeUpdates.project, task.project) &&
     task.group_id && safeUpdates.group_id === undefined
   ) {
     (safeUpdates as Record<string, unknown>).group_id = null;
@@ -9149,6 +9196,7 @@ export async function addTasksBulk(
         const task: Task = {
           ...td,
           id: td.id ?? generateId(),
+          project: projectOrInbox(td.project),
           priority: sanitizePriority(td.priority),
           // Timestamps are non-optional: a row born without them has an LWW
           // threshold of 0, so every future remote echo beats it and the
@@ -9158,7 +9206,7 @@ export async function addTasksBulk(
           updated_at: td.updated_at ?? nowIso,
         } as Task;
         if (taskHistoryWriteNeedsCheck(undefined, task)) assertTaskHistoryWrite(undefined, task, historySessionDb());
-        const partial = taskToRow(task);
+        const partial = taskToFullRow(task);
         const bound: Record<string, unknown> = {};
         for (const col of insertCols) {
           bound[col] = partial[col] === undefined ? null : partial[col];
@@ -9419,7 +9467,7 @@ export async function projectSyncSourceOf(project: string | undefined): Promise<
 /** The outside source a task's project syncs to, or null (Inbox, a local project). */
 function projectSyncSource(store: TaskStore, project: string | undefined): TaskSource | null {
   const name = (project ?? '').trim();
-  if (!name) return null;
+  if (isInboxProject(name)) return null;
   const projects = store.projects ?? {};
   const key = Object.keys(projects).find((k) => k.toLowerCase() === name.toLowerCase());
   const source = key ? projects[key].source : undefined;

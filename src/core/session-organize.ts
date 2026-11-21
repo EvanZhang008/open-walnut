@@ -17,6 +17,7 @@
  * wait for the spawn — it runs fire-and-forget right from quick-start.ts.
  */
 
+import { isInboxProject } from './inbox-project.js';
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastCallBudgetMs, fastCallText, fastModelFor } from './cheap-model.js';
@@ -226,7 +227,7 @@ export async function organizeQuickStartTask(
   if (!current) return;
   // Only move while the task is still unfiled — anything else means a human or
   // the Personal AI already placed it.
-  if ((current.project ?? '') !== '') return;
+  if (!isInboxProject(current.project)) return;
 
   // No claim guard needed anymore: updateTask keeps a LOCAL task local on a
   // move into a provider-claimed project (the project is just a folder; nothing

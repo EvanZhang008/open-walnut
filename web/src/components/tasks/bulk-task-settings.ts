@@ -10,6 +10,7 @@
  */
 import type { ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
+import { projectIdentity } from '@/utils/project-display';
 import type { ContextMenuItem } from '@/utils/context-menu';
 import type { FocusTier } from '@/api/focus';
 
@@ -27,8 +28,8 @@ export function folderMemberTasks(tasks: readonly Task[], folderIds: ReadonlySet
 
 /** Open tasks of one project ('' = Inbox). Project identity is case-insensitive, as on the server. */
 export function projectMemberTasks(tasks: readonly Task[], project: string): Task[] {
-  const name = project.trim().toLowerCase();
-  return tasks.filter((t) => (t.project ?? '').trim().toLowerCase() === name && isOpenTask(t));
+  const name = projectIdentity(project);
+  return tasks.filter((t) => projectIdentity(t.project) === name && isOpenTask(t));
 }
 
 export type CommonTier =

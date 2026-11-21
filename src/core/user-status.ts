@@ -30,6 +30,7 @@
  */
 
 import { infraStopCause } from './session-error-kind.js';
+import { isInboxProject } from './inbox-project.js';
 import { endpointGaveUpWords, endpointWaitingWords } from './sessions/endpoint-unreachable.js';
 import type { SessionEndpointWait, SessionUsageLimit } from './types.js';
 import { limitAskWords, limitTimeWords, limitWaitingWords } from './sessions/usage-limit-model.js';
@@ -1603,8 +1604,8 @@ export function briefTeam<T extends BriefTask>(owner: BriefTask, tasks: readonly
     }
     return false;
   };
-  // Keyed as the Org tree keys projects (org-tree.ts projectKey); the Inbox ('') is no one's team.
-  const key = (p: string | undefined) => (p ?? '').trim().toLowerCase();
+  // Keyed as the Org tree keys projects (org-tree.ts projectKey); the Inbox ('' or `Inbox`) is no one's team.
+  const key = (p: string | undefined) => (isInboxProject(p) ? '' : p!.trim().toLowerCase());
   const projects = owner.org_role === 'lead'
     ? new Set([owner.project, ...(owner.org_leads ?? [])].map(key).filter(Boolean)) : null;
   // A plugin's own task (Task.plugin_only) is no one's team: the Brief never names it.

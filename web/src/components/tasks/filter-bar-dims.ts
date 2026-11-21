@@ -6,6 +6,7 @@
  */
 import { PHASE_LABELS } from '../../utils/session-status';
 import { projectDisplayName } from '../../utils/project-display';
+import { projectOrInbox } from '../../../../src/core/inbox-project';
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
 import {
   QUERY_PRIORITY_OPTIONS,
@@ -67,8 +68,9 @@ export function openGroupState(set: readonly TaskPhase[]): 'all' | 'some' | 'non
   return n === OPEN_PHASES.length ? 'all' : n > 0 ? 'some' : 'none';
 }
 
+/** Two project names name the same project: any case, and '' (an older saved value) is the Inbox. */
 export function sameName(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return projectOrInbox(a).toLowerCase() === projectOrInbox(b).toLowerCase();
 }
 
 // ── Labels ──

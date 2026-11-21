@@ -24,6 +24,7 @@ import { usePageView } from '@/utils/view-memory';
 import { clockRange, minutesOfDay } from '@/utils/calendar-date';
 import { EventCreateForm, type CreateEventInput, type EventPreview } from './EventCreateForm';
 import { NEW_TASK_TINT, useNewEventTint } from './item-tint';
+import { isInboxProject } from '@open-walnut/core';
 
 export type CreateKind = 'event' | 'task';
 /** A block shorter than this shows its title and time on one line. */
@@ -131,7 +132,8 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
       if (name.trim()) seen.set(name.trim().toLowerCase(), name.trim());
     }
     for (const task of tasks) {
-      if (task.title.startsWith('.metadata') || !task.project) continue;
+      // The Inbox is no name to pick here: leaving the project empty files there.
+      if (task.title.startsWith('.metadata') || !task.project || isInboxProject(task.project)) continue;
       const key = task.project.toLowerCase();
       if (!seen.has(key)) seen.set(key, task.project);
     }

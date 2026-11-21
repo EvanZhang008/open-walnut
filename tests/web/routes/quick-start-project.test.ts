@@ -4,7 +4,7 @@
  *
  * - `project: "Name"` files the new task under that project (registry row
  *   auto-created when unknown).
- * - Omitted/empty → Inbox ('').
+ * - Omitted/empty → the Inbox (`Inbox`).
  * - A name the registry gate rejects (path separators) → 400, not 500.
  * - `projectFromFolder`: the server decides the name (folder-project.ts): the
  *   folder's own project, else a new one named after it, made unique.
@@ -50,6 +50,7 @@ import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { _resetForTesting as resetTaskManager, getTask, getStoreProjects, getProjectMetadata, setProjectMetadata, ensureProject, deleteProject, renameProject } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { INBOX_PROJECT } from '../../../src/core/inbox-project.js';
 
 function createApp() {
   const app = express();
@@ -95,7 +96,7 @@ describe('POST /api/sessions/quick-start — project param', () => {
 
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
-    expect(task.project).toBe('');
+    expect(task.project).toBe(INBOX_PROJECT);
   });
 
   it('whitespace-only project → Inbox (trimmed away)', async () => {
@@ -105,7 +106,7 @@ describe('POST /api/sessions/quick-start — project param', () => {
 
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
-    expect(task.project).toBe('');
+    expect(task.project).toBe(INBOX_PROJECT);
   });
 
   it('rejects a non-string project with 400', async () => {
@@ -277,7 +278,7 @@ describe('POST /api/sessions/quick-start — project param', () => {
       .send({ cwd: '/home/me/.claude', message: 'go', project: 'me', projectFromFolder: true });
 
     expect(res.status).toBe(200);
-    expect((await getTask(res.body.taskId)).project).toBe('');
+    expect((await getTask(res.body.taskId)).project).toBe(INBOX_PROJECT);
     expect(Object.keys(await getStoreProjects())).not.toContain('me');
   });
 
@@ -294,7 +295,7 @@ describe('POST /api/sessions/quick-start — project param', () => {
 
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
-    expect(task.project).toBe('');
+    expect(task.project).toBe(INBOX_PROJECT);
     expect(Object.keys(await getStoreProjects())).not.toContain('Fix Walnut');
   });
 
@@ -307,7 +308,7 @@ describe('POST /api/sessions/quick-start — project param', () => {
       .send({ cwd: '/repos/tidepool', message: 'go', project: 'tidepool', projectFromFolder: true });
 
     expect(res.status).toBe(200);
-    expect((await getTask(res.body.taskId)).project).toBe('');
+    expect((await getTask(res.body.taskId)).project).toBe(INBOX_PROJECT);
     expect(Object.keys(await getStoreProjects())).not.toContain('tidepool');
   });
 

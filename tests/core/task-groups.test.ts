@@ -4,7 +4,7 @@
  * Covers the core store ops in task-manager.ts: groupTasks / addToGroup /
  * removeFromGroup / createFolder / deleteFolder / setFolderParent / renameGroup /
  * setGroupHidden / listGroups, plus the folder-model invariants:
- *  - a folder belongs to exactly ONE project ('' = Inbox is a real project):
+ *  - a folder belongs to exactly ONE project (the Inbox, '' too, is a real project):
  *    grouping or joining across projects throws ("A folder belongs to one
  *    project"); the compare is case-insensitive, matching the registry's
  *    COLLATE NOCASE
@@ -145,11 +145,11 @@ describe('groupTasks', () => {
     await expect(groupTasks([a, b])).rejects.toThrow(/A folder belongs to one project/);
   });
 
-  it("groups Inbox tasks together ('' is a valid project for a folder)", async () => {
+  it("groups Inbox tasks together (tasks made with '' land in the Inbox, a real project)", async () => {
     const [a, b] = await makeTasks(['Inbox A', 'Inbox B'], '');
     const result = await groupTasks([a, b], 'Inbox cluster');
     expect(result.member_ids.sort()).toEqual([a, b].sort());
-    expect((await folder(result.group_id))?.project).toBe('');
+    expect((await folder(result.group_id))?.project).toBe('Inbox');
   });
 
   it('treats project names case-insensitively (matches the registry COLLATE NOCASE)', async () => {
@@ -279,7 +279,7 @@ describe('filing into another project’s folder (`move`)', () => {
     const inbox = await createFolder('Inbox pile', '');
     await addToGroup(inbox.group_id, [x], { move: true });
     const back = await getTask(x);
-    expect(back.project).toBe('');
+    expect(back.project).toBe('Inbox');
     expect(back.group_id).toBe(inbox.group_id);
     expect((await folder(empty.group_id))?.member_ids).toEqual([]);
   });
@@ -308,7 +308,7 @@ describe('filing into another project’s folder (`move`)', () => {
     await expect(updateTask(c, { project: 'Acme' }, { joinGroupId: g.group_id }))
       .rejects.toThrow(/A folder belongs to one project/);
     const untouched = await getTask(c);
-    expect(untouched.project).toBe('');
+    expect(untouched.project).toBe('Inbox');
     expect(untouched.group_id).toBeUndefined();
   });
 
@@ -451,10 +451,16 @@ describe('createFolder', () => {
     });
   });
 
-  it("creates an Inbox folder for project ''", async () => {
+  it("creates an Inbox folder for project '' (filed as 'Inbox')", async () => {
     const created = await createFolder('Inbox pile', '');
-    expect(created.project).toBe('');
-    expect((await folder(created.group_id))?.project).toBe('');
+    expect(created.project).toBe('Inbox');
+    expect((await folder(created.group_id))?.project).toBe('Inbox');
+  });
+
+  it("creates an Inbox folder for project 'Inbox', any case, under the Inbox's own spelling", async () => {
+    const created = await createFolder('Inbox pile', 'inbox');
+    expect(created.project).toBe('Inbox');
+    expect((await folder(created.group_id))?.project).toBe('Inbox');
   });
 
   it('rejects an empty label', async () => {
@@ -763,19 +769,19 @@ describe('moveFolderToProject', () => {
     expect((await getTask(a)).project).toBe('Marina');
   });
 
-  it("moves a folder to Inbox ('') and back out again", async () => {
+  it("moves a folder to Inbox ('', filed as 'Inbox') and back out again", async () => {
     const f = await createFolder('Travels', 'Marina');
     const [a] = await makeTasks(['Member'], 'Marina');
     await addToGroup(f.group_id, [a]);
 
     const toInbox = await moveFolderToProject(f.group_id, '');
-    expect(toInbox.project).toBe('');
+    expect(toInbox.project).toBe('Inbox');
     expect(toInbox.moved_task_ids).toEqual([a]);
-    expect((await folder(f.group_id))?.project).toBe('');
-    expect((await getTask(a)).project).toBe('');
+    expect((await folder(f.group_id))?.project).toBe('Inbox');
+    expect((await getTask(a)).project).toBe('Inbox');
     expect((await getTask(a)).group_id).toBe(f.group_id);
-    // Inbox has no registry row, by design.
-    expect(await getProjectRecord('')).toBeNull();
+    // The Inbox is a real project: its row is local, never claimed.
+    expect(await getProjectRecord('')).toMatchObject({ name: 'Inbox', source: 'local' });
 
     const back = await moveFolderToProject(f.group_id, 'Marina');
     expect(back.moved_task_ids).toEqual([a]);
@@ -1058,11 +1064,11 @@ describe('moveFolderToProject', () => {
     expect(moved.moved_task_ids).toEqual([task.id]);
 
     const reloaded = await getTask(task.id);
-    expect(reloaded.project).toBe('');
+    expect(reloaded.project).toBe('Inbox');
     expect(reloaded.source).toBe('local');
     expect(reloaded.ext).toBeUndefined();
     expect(reloaded.group_id).toBe(f.group_id);
-    expect((await folder(f.group_id))?.project).toBe('');
+    expect((await folder(f.group_id))?.project).toBe('Inbox');
   });
 });
 

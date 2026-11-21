@@ -5,6 +5,7 @@ import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { SyncChoiceField } from './SyncChoice';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { projectGroupKey } from '@/utils/project-display';
 import {
   PRIORITY_CYCLE,
   PRIORITY_OPTIONS,
@@ -86,7 +87,7 @@ export function QuickTaskConfirm({
   // Badge a project the AI invented, but only while it's still absent from the
   // known list — the moment the user picks an existing name it isn't new anymore.
   const showNewProjectBadge = !!draft.projectIsNew
-    && !!draft.project?.trim()
+    && !!projectGroupKey(draft.project).trim()
     && !projectOptions.some((p) => p.toLowerCase() === draft.project!.trim().toLowerCase());
 
   return (

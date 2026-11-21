@@ -14,6 +14,7 @@
  * Pure: the fs checks (symlinks, the real path) are in store.ts.
  */
 
+import { isInboxProject } from '../inbox-project.js'
 import { projectNotesFolderFor } from '../tracking-note.js'
 import { DrawingInputError, SCENE_EXT } from './scene.js'
 
@@ -85,7 +86,7 @@ export interface TaskPlacement {
 
 /** The folder a task's drawings go in when it has none yet. */
 export function taskFolderFor(task: TaskPlacement): string {
-  const root = task.project ? projectNotesFolderFor(task.project) : INBOX_FOLDER
+  const root = isInboxProject(task.project) ? INBOX_FOLDER : projectNotesFolderFor(task.project!)
   if (!root) throw new DrawingInputError(`The project name "${task.project}" cannot be a folder in Notes`, 422)
   const name = `${foldName(task.title, 60) ?? 'Task'} (${folderSafeId(task.id)})`
   return `${root}/${name}`

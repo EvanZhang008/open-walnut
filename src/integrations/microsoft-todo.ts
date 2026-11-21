@@ -20,6 +20,7 @@ interface Subtask {
   updated_at: string;
 }
 import { generateId, routePulledListToProject } from '../utils/format.js';
+import { isInboxProject } from '../core/inbox-project.js';
 import {
   remoteListNameFor,
   getProjectRecord,
@@ -1538,10 +1539,10 @@ export async function pushTask(task: Task): Promise<{
 }> {
   // Guard: never push a task whose project is claimed by a different source.
   // Keeps ms-todo from creating remote lists for projects another plugin owns.
-  // Inbox ('') has no registry row and can never be claimed, so a provider task
-  // there is itself a bug — refuse rather than create an unnamed remote list.
+  // The Inbox ('' or `Inbox`) is local and can never be claimed, so a provider task
+  // there is itself a bug — refuse rather than create an "Inbox" remote list.
   const taskProject = task.project || '';
-  if (!taskProject) {
+  if (isInboxProject(taskProject)) {
     throw new Error(
       `pushTask: refusing to push task "${task.title}" to MS Todo — ` +
       `it has no project (Inbox tasks are local-only)`,

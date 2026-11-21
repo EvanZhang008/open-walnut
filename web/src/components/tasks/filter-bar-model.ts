@@ -7,7 +7,7 @@
  */
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
 import { COMPLETION_TO_PHASES } from '@open-walnut/task-query';
-import { INBOX_TAB } from './task-tabs';
+import { INBOX_TAB, tabOfProject } from './task-tabs';
 import { QUERY_PRIORITY_OPTIONS, TIME_PRESET_OPTIONS, type TaskQueryFilterState } from './view-filter-model';
 import {
   FILTER_DIMS,
@@ -118,7 +118,7 @@ export interface ProjectWrite {
 
 export function projectBookmark(projects: readonly string[]): string {
   if (projects.length !== 1) return '';
-  return projects[0] === '' ? INBOX_TAB : projects[0];
+  return tabOfProject(projects[0]);
 }
 
 export function writeProjectSet(projects: readonly string[]): ProjectWrite {

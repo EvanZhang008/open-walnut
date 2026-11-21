@@ -18,6 +18,8 @@
  * reorders what stays on screen.
  */
 
+import { projectGroupKey } from './project-display';
+
 /** The three fields the order reads. `group_id` is the row's folder. */
 export interface PinnedTierRow {
   id: string;
@@ -105,10 +107,10 @@ export function clusterTierByProject<T extends PinnedTierRow>(ids: string[], tas
         run.push(ids[j]);
         j++;
       }
-      blocks.push({ key: t.project || '', ids: run });
+      blocks.push({ key: projectGroupKey(t.project), ids: run });
       i = j;
     } else {
-      blocks.push({ key: t.project || '', ids: [ids[i]] });
+      blocks.push({ key: projectGroupKey(t.project), ids: [ids[i]] });
       i++;
     }
   }

@@ -16,6 +16,7 @@
  * Pure helpers here; the wiring is in TodoPanel.
  */
 import type { Task } from '@open-walnut/core';
+import { projectGroupKey } from '../../utils/project-display';
 
 /** A focus asked this soon after a gesture in the panel came from the panel itself (a row click). */
 export const PANEL_GESTURE_MS = 1_500;
@@ -54,7 +55,7 @@ export function locatePlaceSig(task: Task, facts: PlaceFacts): string {
     task.phase, task.status, us?.state ?? null, us?.kind ?? null, us?.snoozed ? 1 : 0, task.start_date ?? null,
     (task as { watched_at?: string | null }).watched_at ? 1 : 0,
     (task as { background_at?: string | null }).background_at ? 1 : 0,
-    task.project || '', task.group_id ?? null, task.parent_task_id ?? null,
+    projectGroupKey(task.project), task.group_id ?? null, task.parent_task_id ?? null,
     facts.tier, facts.passes ? 1 : 0, facts.held ? 1 : 0,
   ]);
 }

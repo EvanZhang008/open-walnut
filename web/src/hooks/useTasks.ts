@@ -2,7 +2,8 @@ import { matchParentRef } from '../../../src/lib/id-ref';
 import { useState, useEffect, useCallback, useMemo, useRef, startTransition } from 'react';
 import { useLeanCallback } from './useLeanCallback';
 import { useCommittedRef } from './useCommittedRef';
-import { READ_MARKER_KEYS, defaultWaitUntil } from '@open-walnut/core';
+import { INBOX_PROJECT, READ_MARKER_KEYS, defaultWaitUntil, isInboxProject, projectOrInbox } from '@open-walnut/core';
+import { projectGroupKey } from '@/utils/project-display';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
@@ -74,14 +75,15 @@ function mergeTask(existing: Task, incoming: Task): Task {
 }
 
 /** Rearrange tasks within ONE project group to match the given ID order.
- *  `project: ''` addresses Inbox (task.project undefined or ''). */
+ *  The Inbox's group is addressed as '' or `Inbox`, and holds rows saying either. */
 function applyReorder(tasks: Task[], project: string, taskIds: string[]): Task[] {
   const idOrder = new Map(taskIds.map((id, i) => [id, i]));
   const result = [...tasks];
   const inGroup: Task[] = [];
   const slots: number[] = [];
+  const key = projectGroupKey(project);
   for (let i = 0; i < result.length; i++) {
-    if ((result[i].project || '') === project) {
+    if (projectGroupKey(result[i].project) === key) {
       inGroup.push(result[i]);
       slots.push(i);
     }
@@ -93,6 +95,11 @@ function applyReorder(tasks: Task[], project: string, taskIds: string[]): Task[]
   return result;
 }
 
+
+/** The echo key of a reorder in one project group: one key for the Inbox, however it is named. */
+function reorderEcho(project: string): string {
+  return `reorder:${projectGroupKey(project)}`;
+}
 
 // ── Optimistic prediction functions ──
 
@@ -1058,11 +1065,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   });
 
-  // TASK_REORDERED payload is `{ project, taskIds }` — `project: ''` = Inbox. The
-  // echo key must stay lock-step with the `reorder:${project}` keys guarded below.
+  // TASK_REORDERED payload is `{ project, taskIds }`; the Inbox's may say '' or `Inbox`. The
+  // echo key must stay lock-step with the reorderEcho keys guarded below.
   useEvent('task:reordered', (data) => {
     const { project, taskIds } = data as { project: string; taskIds: string[] };
-    if (consumeEcho(`reorder:${project}`)) { scrollLog('drag-trace-ws-reordered-echo', { proj: project }); return; }
+    if (consumeEcho(reorderEcho(project))) { scrollLog('drag-trace-ws-reordered-echo', { proj: project }); return; }
     scrollLog('drag-trace-ws-reordered-APPLY', { proj: project, count: taskIds.length });
     setTasks((prev) => applyReorder(prev, project, taskIds));
   });
@@ -1155,7 +1162,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       status: 'todo',
       priority: (input.priority ?? 'none'),
       phase: 'TODO',
-      project: input.project ?? '',
+      project: projectOrInbox(input.project),
       ...(input.director ? { director: input.director } : {}),
       source: input.source ?? 'local',
       session_ids: [],
@@ -1300,15 +1307,17 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   }, [guardEcho, onOpError, predictPhase]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {
-    guardEcho(`reorder:${project}`);
+    guardEcho(reorderEcho(project));
     setTasks((prev) => applyReorder(prev, project, taskIds));
     withWriteRetry((opId) => tasksApi.reorderTasks(project, taskIds, { opId }))
       .catch(onOpError);
   }, [guardEcho, onOpError]);
 
-  const moveTask = useCallback((taskId: string, project: string, insertNearTaskId?: string) => {
+  const moveTask = useCallback((taskId: string, to: string, insertNearTaskId?: string) => {
+    // A move to the Inbox ('' from an older caller) files the row under the Inbox's name, as the server does.
+    const project = isInboxProject(to) ? INBOX_PROJECT : to;
     guardEcho(`move:${taskId}`);
-    guardEcho(`reorder:${project}`);
+    guardEcho(reorderEcho(project));
 
     // Optimistic local state: move task to the new project + reposition.
     // Also capture the new group order for the subsequent reorder API call.
@@ -1318,7 +1327,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // answer read before it would draw the task back in its old project, and nothing
     // would correct that, because the move's own echo is eaten by the guard above.
     const current = tasksNow.current.find((t) => t.id === taskId);
-    const sameProject = (current?.project || '').toLowerCase() === project.toLowerCase();
+    const sameProject = projectGroupKey(current?.project).toLowerCase() === projectGroupKey(project).toLowerCase();
     noteLocalEdits({ [taskId]: sameProject ? { project } : { project, group_id: undefined } }, true);
     let settled = false;
     const settle = () => { if (!settled) { settled = true; settleLocalEdits([taskId]); } };
@@ -1326,7 +1335,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     setTasks((prev) => {
       const result = prev.map((t) =>
         t.id !== taskId ? t
-          : (t.project || '').toLowerCase() === project.toLowerCase() ? { ...t, project }
+          : projectGroupKey(t.project).toLowerCase() === projectGroupKey(project).toLowerCase() ? { ...t, project }
           : { ...t, project, group_id: undefined }
       );
       let final: Task[];
@@ -1341,7 +1350,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         final = result;
       }
       newGroupOrder = final
-        .filter((t) => (t.project || '') === project)
+        .filter((t) => projectGroupKey(t.project) === projectGroupKey(project))
         .map((t) => t.id);
       return final;
     });
@@ -1400,10 +1409,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       }
 
       if (isUnparent && current) {
-        const project = current.project || '';
+        const project = projectGroupKey(current.project);
         optimisticGroupIds = {
           project,
-          ids: next.filter((t) => (t.project || '') === project).map((t) => t.id),
+          ids: next.filter((t) => projectGroupKey(t.project) === project).map((t) => t.id),
         };
       }
       return next;
@@ -1424,7 +1433,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         scrollLog('drag-trace-reparentTask-response', { id: taskId.slice(0,12), isUnparent });
         if (isUnparent && optimisticGroupIds) {
           const { project, ids } = optimisticGroupIds;
-          guardEcho(`reorder:${project}`);
+          guardEcho(reorderEcho(project));
           return withWriteRetry((opId) => tasksApi.reorderTasks(project, ids, { opId }));
         }
         setTasks((prev) => {

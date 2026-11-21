@@ -13,6 +13,7 @@
  * server. That hazard is exactly why they are no longer the default.
  */
 
+import { projectOrInbox } from '../core/inbox-project.js';
 import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { installDirectRunners } from './direct-registry.js';
@@ -102,7 +103,7 @@ export function installDirect(): void {
       };
 
       for (const task of tasks) {
-        const info = ensure(task.project ?? '(none)');
+        const info = ensure(projectOrInbox(task.project));
         info.taskCount++;
         if (task.status === 'done') info.doneTasks++;
         else info.activeTasks++;

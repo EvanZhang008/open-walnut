@@ -8,10 +8,10 @@
  *
  * Three things it is careful about:
  *
- *  · Inbox ('') is the ABSENCE of a project — no registry row, so nothing to
- *    rename, favorite, detail or delete. Those rows are gated on the name being
- *    non-empty, which leaves Inbox a short (and correct) menu: collapse, new
- *    task, new folder, and (on a tier) a separator, none of which need one.
+ *  · The Inbox ('' or `Inbox`) is never renamed, favorited, merged or deleted.
+ *    Those rows are gated on the project not being the Inbox, which leaves it a
+ *    short (and correct) menu: collapse, new task, new folder, (on a tier) a
+ *    separator, and its details, where its own settings are edited.
  *
  *  · Rename and Delete come from {@link useProjectActions}, the same hook the
  *    kebab menu uses. The dialog copy and the local-claim vs provider-claim
@@ -24,6 +24,7 @@
  *    through portals along the COMPONENT tree, and a press that reached either
  *    handle would arm a project reorder from inside the menu.
  */
+import { isInboxProject } from '@open-walnut/core';
 import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { ProjectScriptsDialog } from '@/components/workspaces/ProjectScriptsDialog';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
@@ -105,7 +106,7 @@ export function useProjectContextMenu(actions: ProjectMenuActions): ProjectConte
           onPick={(name) => {
             const from = projectPicker.state!.payload;
             // Inbox is not a project to merge into, and re-picking this project is a dismiss.
-            if (name && name.toLowerCase() !== from.toLowerCase()) void mergeInto(from, name);
+            if (!isInboxProject(name) && name.toLowerCase() !== from.toLowerCase()) void mergeInto(from, name);
           }}
           onClose={projectPicker.close}
         />

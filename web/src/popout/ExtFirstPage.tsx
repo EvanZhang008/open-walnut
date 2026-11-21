@@ -15,6 +15,7 @@ import { ownerHere, ownerWord, relayPillOf, taskOfOwner, type RelayState } from 
 import { taskPageTitle } from './ext-home-model';
 import { firstQuestionOf, type PanelPage, type VaultState } from './ext-panel-model';
 import { taskHead } from './ext-tasks-model';
+import { projectGroupKey } from '@/utils/project-display';
 
 /** A task with no conversation, opened from the first page: Home's detail, loaded when first needed. */
 const ExtTaskDetail = lazy(() => import('./ExtTaskDetail'));
@@ -122,7 +123,7 @@ export function ExtTaskPageHead({ taskId, tasks, onBack, keyed, vault, keyPresse
   const task = tasks.find((t) => t.id === taskId);
   const head = task ? taskHead(task) : null;
   return (
-    <ExtTaskHeader title={taskNameOf(task, taskId)} state={head?.state ?? ''} label={head?.label ?? ''} meta={task?.project ?? ''} onBack={onBack}
+    <ExtTaskHeader title={taskNameOf(task, taskId)} state={head?.state ?? ''} label={head?.label ?? ''} meta={projectGroupKey(task?.project)} onBack={onBack}
       keyed={keyed} vault={vault} keyPressed={keyPressed} />
   );
 }

@@ -4,6 +4,7 @@ import { shownState } from '@open-walnut/user-status';
 import { taskUserState } from '@/utils/session-status';
 import type { CustomTierDef } from '@/api/focus';
 import { resolveParentRef } from './task-tree-index';
+import { projectIdentity } from '@/utils/project-display';
 
 export type HomeBoardMode = 'pin' | 'status';
 /** The board's top switch: a column board, or the Sort cards (QuickSortView). */
@@ -56,7 +57,7 @@ export function buildHomeBoard(tasks: readonly Task[], custom: readonly CustomTi
   const definitions = mode === 'pin'
     ? pinBoardColumns(custom)
     : [{ id: 'needs', label: 'Needs you' }, { id: 'working', label: 'Working' }, { id: 'waiting', label: 'Waiting' }, { id: 'done', label: 'Done' }];
-  const projectKey = (t: Task) => (t.project ?? '').trim().toLowerCase();
+  const projectKey = (t: Task) => projectIdentity(t.project);
   const parentById = new Map<string, Task>();
   for (const t of visible) {
     const parent = t.parent_task_id ? resolveParentRef(visible, t.parent_task_id) : undefined;

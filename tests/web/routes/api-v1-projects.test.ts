@@ -17,6 +17,7 @@ import { projectsV1Router } from '../../../src/web/routes/projects-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { addTask, getTask, ensureProject, _resetForTesting } from '../../../src/core/task-manager.js'
+import { INBOX_PROJECT } from '../../../src/core/inbox-project.js'
 
 function createApp() {
   const app = express()
@@ -133,9 +134,9 @@ describe('DELETE /api/v1/projects/:name', () => {
 
     const list = await request(createApp()).get('/api/v1/projects')
     expect(list.body.projects.map((p: { name: string }) => p.name)).not.toContain('dropme')
-    // The task itself detached to the Inbox (project = '').
+    // The task itself detached to the Inbox.
     const moved = await getTask(task.id)
-    expect(moved?.project ?? '').toBe('')
+    expect(moved?.project).toBe(INBOX_PROJECT)
   })
 
   it('404 not_found for an unknown project', async () => {

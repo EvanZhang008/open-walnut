@@ -16,6 +16,7 @@
  * tests/web/tier-group-sentinels.test.ts.
  */
 import type { Task } from '@open-walnut/core';
+import { projectGroupKey } from '../../utils/project-display';
 import type { FocusTier } from '@/api/focus';
 import { isSeparatorId } from './tier-separators';
 import { folderAncestors } from './folder-tree';
@@ -148,12 +149,12 @@ export function runProjectOf(
   const runOfFolder = new Map<string, string>();
   for (const id of ids) {
     const row = rowOf(id);
-    if (row?.group_id && !runOfFolder.has(rootOf(row.group_id))) runOfFolder.set(rootOf(row.group_id), row.project || '');
+    if (row?.group_id && !runOfFolder.has(rootOf(row.group_id))) runOfFolder.set(rootOf(row.group_id), projectGroupKey(row.project));
   }
   return (id) => {
     const row = rowOf(id);
     if (!row) return undefined;
-    return (row.group_id ? runOfFolder.get(rootOf(row.group_id)) : undefined) ?? (row.project || '');
+    return (row.group_id ? runOfFolder.get(rootOf(row.group_id)) : undefined) ?? projectGroupKey(row.project);
   };
 }
 

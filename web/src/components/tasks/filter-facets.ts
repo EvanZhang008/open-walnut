@@ -8,6 +8,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { normalizeTaskPriority } from '@open-walnut/task-query';
+import { projectGroupKey } from '../../utils/project-display';
 import { FILTER_DIMS, type FacetCounts, type FilterDim, type FilterState } from './filter-bar-types';
 import { buildFilterEvalContext, dimPasses, passesChips, type FilterEvalContext } from './filter-predicate';
 
@@ -22,7 +23,7 @@ export const FACET_DIMS: readonly FilterDim[] = ['status', 'project', 'source', 
 export function taskFacetValues(task: Task, dim: FilterDim, ctx: FilterEvalContext): string[] {
   switch (dim) {
     case 'status': return [task.phase];
-    case 'project': return [task.project || ''];
+    case 'project': return [projectGroupKey(task.project)];
     case 'source': return task.source ? [task.source] : [];
     case 'priority': {
       const p = normalizeTaskPriority(task.priority);

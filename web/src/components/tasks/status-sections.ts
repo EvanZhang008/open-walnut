@@ -40,6 +40,7 @@
  * runs, and the stored open state. StatusSections.tsx draws them.
  */
 import type { Task } from '@open-walnut/core';
+import { projectGroupKey } from '../../utils/project-display';
 import { taskUserState } from '@/utils/session-status';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, limitedLine, needsLineOf, shownState, type NeedsCategory } from '@open-walnut/user-status';
 import { sameAskLine, waitingLine, waitingSentence } from '../board/board-status-model';
@@ -291,7 +292,7 @@ export interface ProjectRun {
 export function projectRuns(tasks: readonly Task[]): ProjectRun[] {
   const runs = new Map<string, Task[]>();
   for (const t of tasks) {
-    const key = t.project || '';
+    const key = projectGroupKey(t.project);
     const run = runs.get(key);
     if (run) run.push(t); else runs.set(key, [t]);
   }

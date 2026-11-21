@@ -12,7 +12,7 @@
  *
  *     explicit argument  →  the calling task's value  →  the container default
  *
- *   - project: the caller's project unless the call names one ('' = Inbox, on
+ *   - project: the caller's project unless the call names one (`Inbox`, or '' as older callers send, = the Inbox, on
  *     purpose).
  *   - folder:  only inside the caller's project, and the folder tree follows
  *     the subtask tree. The caller's folder when its open tasks are only the
@@ -56,6 +56,7 @@
  * the task beside its parent's folder when it takes the create.
  */
 
+import { isInboxProject, sameProject } from '../inbox-project.js';
 import { CLOUD_MODE } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { isCompanion } from '../server-role.js';
@@ -93,10 +94,8 @@ export type CallerPlacement =
   | { kind: 'ask'; task: CallerTask; session: CallerSession }
   | { kind: 'worker'; task: CallerTask; session: CallerSession };
 
-/** Case-insensitive project identity (matches the registry's COLLATE NOCASE). */
-export function sameProject(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
-}
+// One project? The shared rule ('' and `Inbox` are both the Inbox), kept importable from here.
+export { sameProject };
 
 /** '' / '__local__' / 'local' / undefined all mean this box. */
 export function normalizeHost(host: string | undefined | null): string {
@@ -182,6 +181,11 @@ async function resolveCallerOnReplica(sid: string): Promise<CallerPlacement> {
   return { kind: isAskPlacement({ project, walnut_agent: task?.walnut_agent === true, org_role: task?.org_role }) ? 'ask' : 'worker', task: callerTask, session };
 }
 
+/** How a project reads in a sentence to a session: `project "X"`, or `the Inbox` ('' or `Inbox`). */
+export function projectPlaceName(project: string | undefined): string {
+  return isInboxProject(project) ? 'the Inbox' : `project "${project!.trim()}"`;
+}
+
 /**
  * A Personal AI conversation: born `walnut_agent`, or filed under an agent's
  * `Ask …` project (the same two tests the chat drawer uses to list asks).
@@ -193,7 +197,7 @@ export function isAskTask(task: { walnut_agent?: boolean; project?: string }): b
 /** Moving an ask into a work project keeps its persona, not its placement defaults. */
 export function isAskPlacement(task: { walnut_agent?: boolean; project?: string; org_role?: string }): boolean {
   const project = (task.project ?? '').trim();
-  return /^ask /i.test(project) || (task.walnut_agent === true && (!project || task.org_role === 'main'));
+  return /^ask /i.test(project) || (task.walnut_agent === true && (isInboxProject(project) || task.org_role === 'main'));
 }
 
 /** What a create request asked for (undefined = not said). */
@@ -282,12 +286,12 @@ const INBOX_WORDS = /(^|[^a-z])inbox($|[^a-z])|\u6536\u4ef6\u7bb1/i;
  * edges ("Lantern Ops" in "put it under lantern-ops", "tidepool" for "Context
  * Hub"), or every word of it as a word ("the context of rail top" for "RailTopContext").
  * Part of a word never counts: "Personal" is not in "personally", "AI" not in "said". A
- * name in a script written without spaces (Chinese) is found anywhere in the words. ''
- * (the Inbox) is named by "inbox".
+ * name in a script written without spaces (Chinese) is found anywhere in the words. The
+ * Inbox ('' or `Inbox`) is named by "inbox" or its Chinese word.
  */
 export function projectNamedIn(words: string, project: string): boolean {
+  if (isInboxProject(project)) return INBOX_WORDS.test(words);
   const name = project.trim();
-  if (!name) return INBOX_WORDS.test(words);
   const whole = squash(name);
   if (!whole) return false;
   if (!/^[a-z0-9]+$/.test(whole)) return squash(words).includes(whole);
@@ -324,12 +328,11 @@ export function projectElsewhereRefusal(
   if (caller.task.orgLeads?.some((p) => sameProject(req.project!, p))) return null;
   const words = typeof req.user_words === 'string' ? req.user_words.replace(/\s+/g, ' ').trim() : '';
   if (words.length >= PROJECT_WORDS_MIN && projectNamedIn(words, req.project)) return null;
-  const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');
   const folder = caller.task.group_label ? `, folder "${caller.task.group_label}"` : '';
-  const quoted = words ? ` The words you passed ("${words.length > 120 ? `${words.slice(0, 120)}\u2026` : words}") do not name ${name(req.project)}.` : '';
-  return `Your task "${caller.task.title}" (${caller.task.id}) is in ${name(caller.task.project)}${folder}. `
+  const quoted = words ? ` The words you passed ("${words.length > 120 ? `${words.slice(0, 120)}\u2026` : words}") do not name ${projectPlaceName(req.project)}.` : '';
+  return `Your task "${caller.task.title}" (${caller.task.id}) is in ${projectPlaceName(caller.task.project)}${folder}. `
     + 'Omit project and the new task lands beside yours, as your subtask. '
-    + `File it in ${name(req.project)} only when the user asked for that: pass user_words with exactly what they `
+    + `File it in ${projectPlaceName(req.project)} only when the user asked for that: pass user_words with exactly what they `
     + 'said (quoted, in their language), naming that project. A project you picked yourself (from a repository, '
     + `a directory or a reason you wrote) is not the user's, and project_reason alone no longer files it there.${quoted}`;
 }
@@ -389,12 +392,11 @@ export async function workerMoveRefusal(input: {
     });
     return null;
   }
-  const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');
   return `"${input.task.title}" (${input.task.id}) is a worker of "${parent.title}" (${parent.id}), and a worker stays `
-    + `in its lead's project, ${name(parent.project ?? '')}. Move it to ${name(input.project)} only when the user asked `
+    + `in its lead's project, ${projectPlaceName(parent.project)}. Move it to ${projectPlaceName(input.project)} only when the user asked `
     + 'for that: pass user_words with exactly what they said (quoted, in their language), naming that project. '
     + 'A project you picked yourself is not the user\'s.'
-    + (words ? ` The words you passed ("${words.length > 120 ? `${words.slice(0, 120)}\u2026` : words}") do not name ${name(input.project)}.` : '');
+    + (words ? ` The words you passed ("${words.length > 120 ? `${words.slice(0, 120)}\u2026` : words}") do not name ${projectPlaceName(input.project)}.` : '');
 }
 
 /**

@@ -14,7 +14,7 @@ import { BOARD_TIER_POLICY } from '@/api/focus';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { useShowPriority } from '@/hooks/useShowPriority';
-import { projectDisplayName } from '@/utils/project-display';
+import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { MicInput } from '@/components/common/BoxMic';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
@@ -134,13 +134,12 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
       remaining = unscheduled.filter((t) => !pinnedShown.has(t.id));
     }
 
-    // ── Then by project. Inbox is the ABSENCE of a project, so its bucket key
-    // is '' (the same sentinel the rest of the app uses) and the "Inbox" label
-    // is applied only at render — keying on the literal 'Inbox' would silently
-    // merge a real project of that name into the no-project bucket. '' sorts last.
+    // ── Then by project. The Inbox's bucket key is '' (projectGroupKey: the key the
+    // rest of the board uses, whether a row says 'Inbox' or an older ''), and the
+    // "Inbox" label is applied only at render. '' sorts last.
     const byProject = new Map<string, Task[]>();
     for (const t of remaining) {
-      const key = t.project || '';
+      const key = projectGroupKey(t.project);
       const list = byProject.get(key);
       if (list) list.push(t);
       else byProject.set(key, [t]);
@@ -148,8 +147,7 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
     const projects = [...byProject.entries()].sort((a, b) =>
       a[0] === '' ? 1 : b[0] === '' ? -1 : a[0].localeCompare(b[0]));
     for (const [project, list] of projects) {
-      // Prefixed key: '' is a legal-but-ambiguous React key, and the prefix
-      // also keeps a project literally named 'inbox' distinct from the bucket.
+      // Prefixed key: '' is a legal-but-ambiguous React key.
       out.push({ key: `p:${project}`, label: projectDisplayName(project), kind: 'project', tasks: list });
     }
     return out;

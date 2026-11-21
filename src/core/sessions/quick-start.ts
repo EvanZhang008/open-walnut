@@ -14,6 +14,7 @@ import { addTask, getTask, updateTask, updateTaskRaw, getCustomTiers, ensureFold
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import { migrateFocusTier, type Task, type SessionEngine } from '../types.js';
+import { INBOX_PROJECT, isInboxProject } from '../inbox-project.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
 import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
@@ -302,7 +303,8 @@ async function projectDefaultsLaunch(params: QuickStartParams, model: string | u
   const projectName = params.existingTaskId
     ? (await getTask(params.existingTaskId).catch(() => null))?.project
     : params.project;
-  if (!projectName) return undefined;
+  // The Inbox (`Inbox`, or '' from an older row) is a project with settings of its own: they apply like any project's.
+  if (projectName === undefined) return undefined;
   const { hasLaunchDefaults, pickLaunchDefaults, projectLaunchDefaultsOf } = await import('./project-launch-defaults.js');
   if (!hasLaunchDefaults(await projectLaunchDefaultsOf(projectName))) return undefined;
   const { getConfig } = await import('../config-manager.js');
@@ -521,7 +523,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // Captured at creation: "the caller did not file this task anywhere" is the
   // gate for the auto-organize pass at the end. Reading task.project later
   // would race the pass's own write on a retry.
-  const callerSuppliedProject = project !== '';
+  // A launch filed in the Inbox ('' or `Inbox`) is still unfiled: the pass may file it.
+  const callerSuppliedProject = !isInboxProject(project);
 
   // Spill-to-disk: messages above the inline limit are saved to a temp file and
   // replaced with a short pointer prompt so Claude reads the full context via the Read tool.
@@ -686,7 +689,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       const resolved = await resolveProjectForWrite(project, `${source}:launch`);
       if (resolved.blocked) {
         log.web.warn(`${source}: launch project was deleted — filing the task in the Inbox`, { project });
-        project = '';
+        project = INBOX_PROJECT;
       } else {
         if (resolved.name !== project) {
           log.web.info(`${source}: launch project resolved`, { from: project, to: resolved.name });

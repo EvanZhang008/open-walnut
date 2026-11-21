@@ -21,7 +21,7 @@ export function registerCommands(program: Command): void {
     .command('tasks')
     .description('List tasks')
     .option('-s, --status <status>', 'Filter by status (todo/in_progress/done)')
-    .option('--project <project>', 'Filter by project (pass "" for Inbox)')
+    .option('--project <project>', 'Filter by project ("Inbox", or "", for the Inbox)')
     .action(async (options: Record<string, unknown>, cmd: Command) => {
       const { runTasks } = await import('./tasks.js');
       await runTasks(options, cmd.optsWithGlobals());

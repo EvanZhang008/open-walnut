@@ -9,6 +9,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { isInboxProject } from '../../core/inbox-project.js'
 import type { MessageParam } from '../../model/model.js'
 import type { DisplayMessageBlock } from '../../core/types.js'
 import type { CompactionResult } from '../../core/chat-history.js'
@@ -272,7 +273,7 @@ function readSkillProjectContext(skillCategory: string, name: string): string | 
  */
 function loadProjectContext(project: string): { path: string; content: string | null } {
   const proj = (project ?? '').trim();
-  if (!proj) return { path: '', content: null };
+  if (isInboxProject(proj)) return { path: '', content: null };
   const location = resolveProjectSkillDir(proj);
   const content = (location ? readSkillProjectContext(location.skillCategory, location.name) : null)
     ?? getProjectMemory(proj.toLowerCase())?.content

@@ -50,6 +50,7 @@
  * since nothing here will ever look at it. An ask's stamp is written only once its record is.
  */
 
+import { isInboxProject } from '../inbox-project.js';
 import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { RefusedWrite } from './patch-check.js';
@@ -312,6 +313,6 @@ function scheduleFollowups(sid: string, taskId: string, cwd: string, message: st
     // The ask still wears its placeholder (its project's name): the launch title replaces it.
     await autoTitleFromLaunch(sid, taskId, message, cwd, title).catch((err: unknown) => log.session.warn('offline handover: an adopted ask was not titled', { sessionId: sid, taskId, error: err instanceof Error ? err.message : String(err) }));
     // As a launch here: placement only for a task its launch left unfiled (an ask names its project).
-    if (!project) await organizeQuickStartTask(taskId, cwd, message).catch((err: unknown) => log.session.warn('offline handover: an adopted ask was not organized', { sessionId: sid, taskId, error: err instanceof Error ? err.message : String(err) }));
+    if (isInboxProject(project)) await organizeQuickStartTask(taskId, cwd, message).catch((err: unknown) => log.session.warn('offline handover: an adopted ask was not organized', { sessionId: sid, taskId, error: err instanceof Error ? err.message : String(err) }));
   })().catch(() => {});
 }

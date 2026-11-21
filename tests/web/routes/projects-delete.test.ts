@@ -18,6 +18,7 @@ import {
 } from '../../../src/core/task-manager.js';
 import { closeDb } from '../../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { INBOX_PROJECT } from '../../../src/core/inbox-project.js';
 import { registry } from '../../../src/core/integration-registry.js';
 import { createMockPlugin, createNoopSync } from '../../core/plugin-test-utils.js';
 
@@ -62,10 +63,11 @@ describe('deleteProject', () => {
     expect(del.body).toEqual({ project: 'Marina', movedToInbox: 2, remoteDeleted: false, source: 'local' });
 
     const tasks = await listTasks();
-    expect(tasks.find((t) => t.id === a.id)!.project).toBe('');
-    expect(tasks.find((t) => t.id === b.id)!.project).toBe('');
+    expect(tasks.find((t) => t.id === a.id)!.project).toBe(INBOX_PROJECT);
+    expect(tasks.find((t) => t.id === b.id)!.project).toBe(INBOX_PROJECT);
     const projects = await getStoreProjects();
-    expect(Object.keys(projects)).toEqual(['Other']);
+    // Marina's row is gone; the Inbox row it fell back to stays.
+    expect(Object.keys(projects).sort()).toEqual([INBOX_PROJECT, 'Other']);
 
     // Inbox counts show up on GET /
     const after = await request(app).get('/api/projects');
@@ -112,7 +114,7 @@ describe('deleteProject', () => {
     expect(hook).toHaveBeenCalledTimes(1);
     expect((await getStoreProjects())['Synced2']).toBeUndefined();
     const detached = (await listTasks()).find((t) => t.id === task.id)!;
-    expect(detached.project).toBe('');
+    expect(detached.project).toBe(INBOX_PROJECT);
     expect(detached.source).toBe('local');
   });
 

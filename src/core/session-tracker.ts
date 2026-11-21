@@ -21,6 +21,7 @@ import { isHostReplica } from './server-role.js';
 import { refuseProcessAction } from './sessions/replica-process-guard.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
+import { projectOrInbox } from './inbox-project.js';
 // Snapshot enforce-mode legacy-writer gate. session-snapshot-gate has ZERO
 // imports (deliberately — this file is imported by nearly everything, so the
 // gate lives in a leaf module to avoid a tracker ↔ snapshot-apply cycle).
@@ -1817,7 +1818,8 @@ export async function createSessionRecord(
       const record: SessionRecord = {
         claudeSessionId,
         taskId,
-        project,
+        // A task's session says its task's project: the Inbox by name, as the task does.
+        project: taskId ? projectOrInbox(project) : project,
         // init-only spawns pass 'idle': the CLI initialized then parked on its
         // FIFO — no turn is running, and defaulting to 'running' left a
         // permanent Running badge until the first real turn ended.
@@ -2038,7 +2040,7 @@ export async function importSessionRecord(opts: {
       const record: SessionRecord = {
         claudeSessionId: opts.claudeSessionId,
         taskId: opts.taskId,
-        project: opts.project,
+        project: opts.taskId ? projectOrInbox(opts.project) : opts.project,
         process_status: 'stopped',
         mode: opts.mode ?? 'default',
         last_status_change: now,

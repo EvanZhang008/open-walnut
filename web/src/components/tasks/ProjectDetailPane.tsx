@@ -1,9 +1,9 @@
 /**
  * Inline detail pane for ONE project registry row (`task_projects`).
  *
- * Project is the single grouping layer, so this is the only detail pane — Inbox is
- * the ABSENCE of a project (no registry row), which is why TodoPanel never opens
- * this for `project === ''`.
+ * Project is the single grouping layer, so this is the only detail pane. The Inbox is a
+ * project too (`Inbox`, src/core/inbox-project.ts): its pane shows and edits its settings,
+ * but it is never deleted and has no summary of its own, so those two sections are hidden.
  *
  * Counts render immediately from the already-loaded `tasks` prop; the registry row
  * (source / settings / AI summary / memory) arrives from GET /api/projects/:name/metadata.
@@ -17,7 +17,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, type CSSProperties } from 'react';
-import type { Task } from '@open-walnut/core';
+import { INBOX_PROJECT, isInboxProject, projectOrInbox, type Task } from '@open-walnut/core';
 import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useProjectEntry, patchProjectLocal, removeProjectLocal } from '@/hooks/useProjectRegistry';
@@ -39,7 +39,7 @@ import { ProjectCodeSource } from './ProjectCodeSource';
 import { useExperimental } from '@/hooks/useExperimental';
 
 interface ProjectDetailPaneProps {
-  /** Never '' — Inbox has no registry row. */
+  /** The project's name; the Inbox's is `Inbox` ('' reads as the Inbox too). */
   project: string;
   tasks: Task[];
   onClose: () => void;
@@ -63,7 +63,8 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const [scriptsOpen, setScriptsOpen] = useState(false);
   const confirm = useConfirm();
   const tasksStore = useTasksContextSafe();
-  const { name: entryName, row } = useProjectEntry(project);
+  const { name: entryName, row } = useProjectEntry(projectOrInbox(project));
+  const isInbox = isInboxProject(entryName);
   const projectFirst = useExperimental('project_first_start');
 
   const displayName = row?.name ?? detailName;
@@ -95,10 +96,11 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   // Counts from the loaded task list. Project identity is case-insensitive server-side,
   // so compare that way here too or a differently-cased task would go uncounted.
   const counts = useMemo(() => {
-    const key = entryName.toLowerCase();
+    // The Inbox's tasks may still say '' (an older row): projectOrInbox names them both.
+    const key = projectOrInbox(entryName).toLowerCase();
     const result = { todo: 0, active: 0, done: 0, total: 0 };
     for (const t of tasks) {
-      if ((t.project ?? '').toLowerCase() !== key) continue;
+      if (projectOrInbox(t.project).toLowerCase() !== key) continue;
       if (t.phase === 'TODO') result.todo++;
       else if (t.phase === 'COMPLETE') result.done++;
       else result.active++;
@@ -157,7 +159,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
     // Held until the delete answers, so a list read another writer starts meanwhile
     // does not draw the rows back under the project being deleted.
     const settleMoved = moved.length > 0
-      ? tasksStore?.patchTasksLocal(Object.fromEntries(moved.map((t) => [t.id, { project: '' }])), { pending: true })
+      ? tasksStore?.patchTasksLocal(Object.fromEntries(moved.map((t) => [t.id, { project: INBOX_PROJECT }])), { pending: true })
       : undefined;
     try {
       await deleteProject(displayName, isClaimed ? { remote: true } : undefined);
@@ -341,8 +343,9 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
         </div>
       </div>
 
-      {/* AI project summary (project-summary.ts, refreshed at task-count thresholds) */}
-      <div className="detail-section">
+      {/* AI project summary (project-summary.ts, refreshed at task-count thresholds). The
+          Inbox holds whatever has no other home, so it has none. */}
+      {!isInbox && <div className="detail-section">
         <div className="detail-section-title">
           About
           <button
@@ -357,7 +360,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
         {metadata.summary
           ? <AgentText compact unknownSource className="detail-memory-text" text={metadata.summary} />
           : <p className="detail-memory-text text-muted">No summary yet — generated automatically as tasks accumulate, or click ↻.</p>}
-      </div>
+      </div>}
 
       {/* Tracking note — the project's living status note in the vault. Absent
           entirely until something sets metadata.tracking_note. */}
@@ -374,7 +377,8 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
       {/* Delete — tasks always survive (they move to Inbox / the provider's
           fallback); what's destroyed is the grouping row and, for a synced
           project, the REMOTE container. */}
-      <div className="detail-section project-danger-section">
+      {/* The Inbox is never deleted: it is where every other project's tasks fall back to. */}
+      {!isInbox && <div className="detail-section project-danger-section">
         <button
           className="project-delete-btn"
           onClick={handleDelete}
@@ -388,7 +392,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           </p>
         )}
         {deleteError && <p className="project-delete-error">{deleteError}</p>}
-      </div>
+      </div>}
     </div>
   );
 }

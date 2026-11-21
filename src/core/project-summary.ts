@@ -30,6 +30,7 @@
  * definition the unfiled pile, not a stream of work worth describing.
  */
 
+import { isInboxProject } from './inbox-project.js';
 import { sendMessage } from '../model/model.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { log } from '../logging/index.js';
@@ -145,7 +146,7 @@ export async function generateProjectSummary(
   } = {},
 ): Promise<ProjectSummaryResult | null> {
   const name = (project ?? '').trim();
-  if (!name) return null; // Inbox
+  if (isInboxProject(name)) return null; // the Inbox gets no model-written summary
   try {
     const { listTasksSlim, getProjectMetadata } = await import('./task-manager.js');
     // Case-insensitive match: project identity is NOCASE, and a caller may pass
@@ -268,7 +269,7 @@ export async function refreshProjectSummary(
   opts: { tasks?: readonly SummaryTaskLike[]; purpose: CallPurpose; signal?: AbortSignal },
 ): Promise<boolean> {
   const name = (project ?? '').trim();
-  if (!name) return false;
+  if (isInboxProject(name)) return false;
   const generated = await generateProjectSummary(name, { tasks: opts.tasks, purpose: opts.purpose, signal: opts.signal });
   if (!generated) return false;
   const { setProjectMetadata } = await import('./task-manager.js');
@@ -293,7 +294,7 @@ export function regenerateSummaryOnDemand(
   project: string, signal?: AbortSignal, opts: { deadlineMs?: number } = {},
 ): Promise<boolean> {
   const name = (project ?? '').trim();
-  if (!name) return Promise.resolve(false);
+  if (isInboxProject(name)) return Promise.resolve(false);
   const key = name.toLowerCase();
   let run = onDemand.get(key);
   if (!run) {
@@ -374,7 +375,7 @@ export async function maybeRefreshForTask(task: Task | undefined, source: string
   // Inbox is the unfiled pile, not a stream of work — a summary of "whatever is
   // passing through" would be noise and a wasted model call per capture.
   const project = (task.project ?? '').trim();
-  if (!project) return false;
+  if (isInboxProject(project)) return false;
 
   if (BULK_SOURCE.test(source)) {
     const key = project.toLowerCase();
@@ -412,6 +413,7 @@ export async function runSummaryCatchUp(): Promise<number> {
   let refreshed = 0;
   let consecutiveFailures = 0;
   for (const name of projects) {
+    if (isInboxProject(name)) continue; // the Inbox's registry row gets no summary
     try {
       const tasks = projectSummaryTasks(all, name);
       const meta = await getProjectMetadata(name);

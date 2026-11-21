@@ -5,6 +5,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { priorityRank as nativePriorityRank } from '@open-walnut/task-query';
+import { projectGroupKey } from '../../utils/project-display';
 
 export type TpSortKey =
   | 'title' | 'priority' | 'due' | 'start' | 'session' | 'project'
@@ -78,7 +79,7 @@ export function compareTasks(a: Task, b: Task, sort: TpSort): number {
       return sign * d;
     }
     case 'project':
-      return sign * (a.project || '').localeCompare(b.project || '');
+      return sign * projectGroupKey(a.project).localeCompare(projectGroupKey(b.project));
   }
 }
 
@@ -87,25 +88,10 @@ export function sortTasks(tasks: Task[], sort: TpSort | null): Task[] {
   return [...tasks].sort((a, b) => compareTasks(a, b, sort));
 }
 
-/**
- * Group tasks by project for the All-Tasks grouped view.
- * Order: `projectOrder` first (case-insensitive), then alphabetical for
- * projects not in the order list. Inbox ('') is pinned last — same convention
- * as the home panel's grouped memo (it never enters `ordering.projects`).
- */
-export function groupTasksByProject(
-  tasks: Task[],
-  projectOrder: string[],
-): { project: string; tasks: Task[] }[] {
-  const map = new Map<string, Task[]>();
-  for (const t of tasks) {
-    const key = t.project || '';
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(t);
-  }
+/** Project names in the shared order: `projectOrder` first (case-insensitive), then by name. */
+export function orderProjectNames(names: readonly string[], projectOrder: readonly string[]): string[] {
   const orderIndex = new Map(projectOrder.map((name, i) => [name.toLowerCase(), i]));
-  const named = Array.from(map.keys()).filter((p) => p !== '');
-  named.sort((a, b) => {
+  return [...names].sort((a, b) => {
     const ai = orderIndex.get(a.toLowerCase());
     const bi = orderIndex.get(b.toLowerCase());
     if (ai !== undefined && bi !== undefined) return ai - bi;
@@ -113,8 +99,61 @@ export function groupTasksByProject(
     if (bi !== undefined) return 1;
     return a.localeCompare(b);
   });
+}
+
+/**
+ * Group tasks by project for the All-Tasks grouped view.
+ * Order: `projectOrder` first (case-insensitive), then alphabetical for
+ * projects not in the order list. The Inbox (key '', whether its rows say
+ * 'Inbox' or an older '') is ONE group pinned last — same convention as the
+ * home panel's grouped memo (it never enters `ordering.projects`).
+ */
+export function groupTasksByProject(
+  tasks: Task[],
+  projectOrder: string[],
+): { project: string; tasks: Task[] }[] {
+  const map = new Map<string, Task[]>();
+  for (const t of tasks) {
+    const key = projectGroupKey(t.project);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(t);
+  }
+  const named = orderProjectNames(Array.from(map.keys()).filter((p) => p !== ''), projectOrder);
   const order = map.has('') ? [...named, ''] : named;
   return order.map((project) => ({ project, tasks: map.get(project)! }));
+}
+
+/** Open tasks per project, keyed by the lowercased group key ('' = the Inbox). */
+export function openCountsByProject(tasks: readonly Task[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const t of tasks) {
+    if (t.status === 'done') continue;
+    const key = projectGroupKey(t.project).toLowerCase();
+    m.set(key, (m.get(key) ?? 0) + 1);
+  }
+  return m;
+}
+
+/**
+ * The /tasks rail's project rows: registry names (zero-task projects too) with the names
+ * tasks mention, case-insensitive (the registry's spelling wins), in the shared order. The
+ * Inbox is the rail's own fixed entry and never one of these rows.
+ */
+export function railProjectNames(registryNames: readonly string[], tasks: readonly Task[], projectOrder: readonly string[]): string[] {
+  const byLower = new Map<string, string>();
+  for (const name of registryNames) if (projectGroupKey(name)) byLower.set(name.toLowerCase(), name);
+  for (const t of tasks) {
+    const p = projectGroupKey(t.project);
+    if (p && !byLower.has(p.toLowerCase())) byLower.set(p.toLowerCase(), p);
+  }
+  return orderProjectNames(Array.from(byLower.values()), projectOrder);
+}
+
+/** The tasks a rail selection shows: every task for All (`null`), else one project's ('' = the Inbox). */
+export function tasksOfRailSelection<T extends Pick<Task, 'project'>>(tasks: readonly T[], active: string | null): readonly T[] {
+  if (active === null) return tasks;
+  const key = projectGroupKey(active).toLowerCase();
+  return tasks.filter((t) => projectGroupKey(t.project).toLowerCase() === key);
 }
 
 /**

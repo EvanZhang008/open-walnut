@@ -1,6 +1,7 @@
 import { matchParentRef } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
+import { projectGroupKey } from '../../utils/project-display';
 import { TaskCard, type CardGroupInfo } from './TaskCard';
 import { EmptyState } from '../common/EmptyState';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
@@ -65,7 +66,7 @@ export function TaskList({
   const grouped = useMemo(() => {
     const map = new Map<string, Task[]>();
     for (const task of tasks) {
-      const proj = task.project || '';
+      const proj = projectGroupKey(task.project);
       if (!map.has(proj)) map.set(proj, []);
       map.get(proj)!.push(task);
     }

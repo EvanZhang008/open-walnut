@@ -19,6 +19,7 @@
 import type { StartSource } from '@/api/projects';
 import type { DraftColumn } from './draft-column';
 import { clearAiFields } from './draft-column';
+import { isInboxProject } from '../../../../src/core/inbox-project';
 
 export type ProjectStartMode = 'off' | 'pick' | 'source';
 
@@ -55,7 +56,8 @@ export function startSourceOf(
   rows: readonly StartSourceRow[], name: string | undefined, resolve: (name: string) => string = (n) => n,
 ): { project: string; source: StartSource | null } {
   const current = resolve((name ?? '').trim()).trim();
-  if (!current) return { project: '', source: null };
+  // The Inbox (a draft's '' or its name) is the draft's no-project pick: no source of its own here.
+  if (isInboxProject(current)) return { project: '', source: null };
   const lower = current.toLowerCase();
   const row = rows.find((r) => r.name.toLowerCase() === lower);
   return { project: row?.name ?? current, source: row?.startSource ?? null };

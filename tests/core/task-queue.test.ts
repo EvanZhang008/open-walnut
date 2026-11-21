@@ -812,8 +812,14 @@ describe('applyTaskOp: order ops', () => {
       opId: 'or-1', type: 'reorder', at: new Date().toISOString(),
       project: '', taskIds: [t3.id, t1.id, t2.id],
     })).toEqual({ applied: true, reason: 'reordered' });
-    const inbox = (await tm.listTasks()).filter((t) => !t.project).map((t) => t.id);
+    // An older replica's '' names the Inbox, whose tasks now say `Inbox` (inbox-project.ts).
+    const inbox = (await tm.listTasks()).filter((t) => t.project === 'Inbox').map((t) => t.id);
     expect(inbox).toEqual([t3.id, t1.id, t2.id]);
+    expect(await outbox.applyTaskOp({
+      opId: 'or-1b', type: 'reorder', at: new Date().toISOString(),
+      project: 'Inbox', taskIds: [t2.id, t3.id, t1.id],
+    })).toEqual({ applied: true, reason: 'reordered' });
+    expect((await tm.listTasks()).filter((t) => t.project === 'Inbox').map((t) => t.id)).toEqual([t2.id, t3.id, t1.id]);
 
     await tm.togglePin(t1.id);
     await tm.togglePin(t2.id);

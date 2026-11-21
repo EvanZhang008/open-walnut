@@ -32,6 +32,21 @@ describe('org-tree', () => {
     expect(viaAlias.buildOrgTree).toBe(buildOrgTree)
   })
 
+  it('keeps one Inbox node, keyed as before, whether a task says "Inbox" or an older row says ""', () => {
+    // The Inbox is a real project named Inbox now (inbox-project.ts); the org keeps its node at
+    // project '' so a saved row, a pin and a thread about it still find it.
+    const tree = buildOrgTree([t({ project: 'Inbox' }), t({ project: '' }), t({ project: 'inbox' }), t({ project: 'Walnut' })])
+    const inbox = tree.projects.filter((p) => p.project === '')
+    expect(inbox).toHaveLength(1)
+    expect(inbox[0]!.teams).toHaveLength(3)
+    expect(inbox[0]!.teams.every((team) => team.project === '')).toBe(true)
+    expect(inbox[0]!.lead).toBeUndefined()
+    expect(inbox[0]!.needsLead).toBe(false)
+    expect(tree.projects.map((p) => p.project)).toEqual(['Walnut', ''])
+    expect(findProjectNode(tree, 'Inbox')).toBe(inbox[0])
+    expect(findProjectNode(tree, '')).toBe(inbox[0])
+  })
+
   it('counts open work only: no conversations, no org nodes, no sentinels, nothing complete', () => {
     const cases: [OrgTaskLike, boolean][] = [
       [t({ project: 'Walnut' }), true],

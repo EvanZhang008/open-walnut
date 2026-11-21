@@ -76,6 +76,7 @@ import { LaunchSourceNote } from './LaunchSourceNote';
 import { useFallbackModels } from '@/components/settings/sections/FallbackEngineRow';
 import { engineName } from '@/components/settings/sections/DefaultEngineRow';
 import { useProjectLaunchDefaults } from '@/hooks/useProjectRegistry';
+import { projectGroupKey } from '@/utils/project-display';
 import {
   defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, launchSourceRows, unnamedLaunchIsNotClaude, useGlobalDefaultEngine, type LaunchSourceRow,
 } from '@/utils/launch-source';
@@ -587,7 +588,7 @@ export function DraftSessionPanel({
   // The project's launch defaults (its settings; server: project-launch-defaults.ts): what a
   // launch that names no engine, model or mode starts on. Ask Walnut and a fork take none; a
   // repair files under Walnut, so Walnut's apply.
-  const projectDefaults = useProjectLaunchDefaults(isWalnut || isFork ? '' : isRepair ? 'Walnut' : draft.project);
+  const projectDefaults = useProjectLaunchDefaults(isWalnut || isFork ? null : isRepair ? 'Walnut' : draft.project);
   const globalEngine = useGlobalDefaultEngine();
   // Whether the project's engine runs on the draft's host is that host's answer too.
   const draftHostEngines = useHostEngineAvailability(draft.host);
@@ -695,7 +696,8 @@ export function DraftSessionPanel({
   // observation just records it, and a pill the user edits by hand is left
   // alone until the task itself moves again.
   const boundTask = useStoreTask(boundTaskId);
-  const boundProject = boundTask ? boundTask.project ?? '' : null;
+  // '' for the Inbox, the draft's own word for it, whether the task says `Inbox` or ''.
+  const boundProject = boundTask ? projectGroupKey(boundTask.project) : null;
   // The launch bar's project chip on a bound draft moves the task NOW, the same
   // write as the header kebab's Project row: Start reuses the existing task and
   // never refiles it, so a draft-only pick would be a control that does nothing.
@@ -708,7 +710,7 @@ export function DraftSessionPanel({
     }
     onProjectChange(draft.id, project);
     updateTask(boundTaskId, { project }).catch(() => {
-      fetchTask(boundTaskId).then((t) => onProjectChange(draft.id, t.project ?? '')).catch(() => {});
+      fetchTask(boundTaskId).then((t) => onProjectChange(draft.id, projectGroupKey(t.project))).catch(() => {});
     });
   }, [boundTaskId, taskStore, onProjectChange, draft.id]);
   const lastBoundProject = useRef<string | null>(null);

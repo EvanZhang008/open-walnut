@@ -8,6 +8,7 @@ import { useEffect, useMemo } from 'react';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { OptionPickerFlyout, useCursorFlyout, type FlyoutOption } from './CursorFlyout';
 import { IDLE_STEPS, projectKey, type SortFilter } from './quick-sort-model';
+import { projectIdentity } from '@/utils/project-display';
 
 const ALL = '__all';
 
@@ -46,7 +47,7 @@ export function QuickSortFilter({ filter, setFilter, tiers, counts, showProject 
     return [...seen].sort((a, b) => a[1].localeCompare(b[1]));
   }, [tasks]);
   const folders = useMemo(() => Object.entries(taskGroups)
-    .filter(([id]) => filter.project === null || (folderMeta[id]?.project ?? '').trim().toLowerCase() === filter.project)
+    .filter(([id]) => filter.project === null || projectIdentity(folderMeta[id]?.project) === filter.project)
     .sort((a, b) => a[1].localeCompare(b[1])), [taskGroups, folderMeta, filter.project]);
   const projectLabel = filter.project === null ? 'All projects' : projects.find(([k]) => k === filter.project)?.[1] ?? 'Inbox';
   const folderLabel = filter.folder === null ? 'All folders' : taskGroups[filter.folder] ?? 'Folder removed';
@@ -77,7 +78,7 @@ export function QuickSortFilter({ filter, setFilter, tiers, counts, showProject 
       current={filter.project === null ? ALL : `p:${filter.project}`} ariaLabel="Sort which project"
       onPick={v => {
         const project = v === ALL ? null : v.slice(2);
-        const keepFolder = filter.folder !== null && (project === null || (folderMeta[filter.folder]?.project ?? '').trim().toLowerCase() === project);
+        const keepFolder = filter.folder !== null && (project === null || projectIdentity(folderMeta[filter.folder]?.project) === project);
         setFilter({ ...filter, project, folder: keepFolder ? filter.folder : null });
         projectMenu.close();
       }} onClose={projectMenu.close} />}

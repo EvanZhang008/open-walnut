@@ -73,6 +73,7 @@ import { applyPinPatch, checkPinPatch, parsePinPatch } from './task-pin-patch.js
 import { parseQuickTask, quickParseEnabled, unparsedTask } from '../../core/quick-task-parse.js'
 import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
 import { parseCompletedWithinDays } from '../../core/task-recent-completed.js'
+import { projectOrInbox } from '../../core/inbox-project.js'
 import {
   SUGGEST_FIELDS,
   recordSuggestDiff,
@@ -1031,7 +1032,8 @@ tasksRouter.patch('/reorder', async (req: Request, res: Response, next: NextFunc
     }
 
     await reorderTasks(project, taskIds)
-    bus.emit(EventNames.TASK_REORDERED, { project, taskIds }, ['web-ui'], { source: 'api' })
+    // An older client's '' is the Inbox: every listener reads one name for one project.
+    bus.emit(EventNames.TASK_REORDERED, { project: projectOrInbox(project), taskIds }, ['web-ui'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {
     next(err)

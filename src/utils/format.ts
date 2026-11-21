@@ -69,7 +69,7 @@ export function isRetiredQuickStartGroup(name: string): boolean {
   return (name ?? '').trim().toLowerCase() === 'quick start';
 }
 
-/** The retired "Inbox" grouping name. Inbox is now the ABSENCE of a project. */
+/** The "Inbox" grouping name: a remote list of that name is the local Inbox (inbox-project.ts), which no service syncs. */
 export function isLegacyInboxGroup(name: string): boolean {
   return (name ?? '').trim().toLowerCase() === 'inbox';
 }

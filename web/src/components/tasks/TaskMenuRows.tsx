@@ -37,6 +37,7 @@ import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
+import { projectGroupKey } from '@/utils/project-display';
 
 /** The list half: what only a task LIST can do with its row. */
 export interface TaskMenuListActions {
@@ -176,7 +177,7 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
         <TaskActionMenuItems task={task} part="priority" isPinned={p.isPinned} isDone={isDone} onSetPriority={p.onSetPriority} afterAction={close} />
 
         <KebabGroup label="Move & transfer" hint="project · host · engine · source" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
-          {p.onMoveToProject && <MoveToProjectSection current={task.project || ''} onMove={p.onMoveToProject} afterAction={close} />}
+          {p.onMoveToProject && <MoveToProjectSection current={projectGroupKey(task.project)} onMove={p.onMoveToProject} afterAction={close} />}
           <MoveHostMenuItems task={task} afterAction={close} />
           <TransferMenuItem task={task} afterAction={close} />
           <ListMoves task={task} list={list} close={close} />

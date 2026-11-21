@@ -14,6 +14,7 @@
  * Additive on the wire: an older client ignores `owner`, and a box that cannot read
  * its task store answers the jobs as they were.
  */
+import { isInboxProject } from '../inbox-project.js';
 import { log } from '../../logging/index.js';
 
 export interface RoutineOwner {
@@ -56,7 +57,8 @@ export async function withRoutineOwners<T extends OwnedJob>(jobs: readonly T[], 
       let task = id ? byId.get(id) : undefined;
       if (task?.transferred_to && byId.has(task.transferred_to)) task = byId.get(task.transferred_to);
       if (!task) return job;
-      return { ...job, owner: { taskId: task.id, title: task.title ?? '', project: task.project ?? '' } };
+      // An Inbox task's routine is global: its owner names no project ('' as before the Inbox was one).
+      return { ...job, owner: { taskId: task.id, title: task.title ?? '', project: isInboxProject(task.project) ? '' : task.project ?? '' } };
     });
   } catch (err) {
     log.web.warn('routine owners unavailable', { error: err instanceof Error ? err.message : String(err) });

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isInboxProject } from '../inbox-project.js';
 import type { InboxFrozenInput, InboxItemPrepareResponse, InboxItemPlan, InboxLetterItem } from './types.js';
 import type { Task as CoreTask } from '../types.js';
 import { allLetterItems, inboxPrepareSchema } from './item-schema.js';
@@ -46,7 +47,8 @@ export async function prepareInboxItem(letterId: string, itemId: string, raw: un
   const pair = sourcePairKey(item.source.account, item.source.message);
   const claim = await lookupSourceClaim(trusted.key, pair, trusted.adapter).catch(error => { throw new ItemActionError('source_conflict', String(error)); });
   const receipts = await itemReceipts(trusted.key, pair, letterId, itemId);
-  const projects = [{ name: '' }, ...Object.keys(listedProjects(await getStoreProjects())).map(name => ({ name }))];
+  // The Inbox once, as the '' entry clients already show as their fixed Inbox choice (its registry row is not listed again).
+  const projects = [{ name: '' }, ...Object.keys(listedProjects(await getStoreProjects())).filter(name => !isInboxProject(name)).map(name => ({ name }))];
   const result: InboxItemPrepareResponse = { source: item.source, projects, restrictions: [], receipts };
   if ((claim?.created || claim?.confirmed) && action.kind === 'op' && ['create_task', 'attach_task', 'find_task'].includes(action.intent)) {
     const current = await currentItemTaskStatus(claim!.taskId);

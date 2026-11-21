@@ -119,21 +119,35 @@ describe('buildProjectMenuItems: a NAMED project', () => {
   })
 })
 
-describe('buildProjectMenuItems: Inbox is the ABSENCE of a project', () => {
+describe('buildProjectMenuItems: the Inbox keeps its short menu', () => {
   const inbox: ProjectMenuTarget = { project: '' }
 
-  it('keeps only the rows that need no registry row', () => {
+  it('keeps the rows that never rename, merge or delete it, and its details', () => {
     expect(labels(inbox, tierActions())).toEqual([
       'Collapse project',
       'New task',
       'New folder',
       'Add separator',
+      'View project details',
     ])
   })
 
-  it('drops rename, favorite, details, delete and the session launch', () => {
-    for (const key of ['rename', 'favorite', 'details', 'delete', 'new-session']) {
+  it('drops rename, favorite, delete and the session launch', () => {
+    for (const key of ['rename', 'favorite', 'delete', 'new-session']) {
       expect(row(inbox, tierActions(), key)?.when, key).toBe(false)
+    }
+  })
+
+  it('opens its details now that it is a project with settings', () => {
+    const actions = tierActions()
+    expect(row(inbox, actions, 'details')?.when).toBe(true)
+    row(inbox, actions, 'details')?.onSelect?.()
+    expect(actions.onViewDetails).toHaveBeenCalledWith('')
+  })
+
+  it('reads the same when the target names the Inbox (any case) as when it says the older empty value', () => {
+    for (const name of ['Inbox', 'inbox', ' INBOX ']) {
+      expect(labels({ project: name }, tierActions()), name).toEqual(labels(inbox, tierActions()))
     }
   })
 

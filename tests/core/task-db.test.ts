@@ -1028,10 +1028,12 @@ describe('task-db migration: correctness', () => {
     );
     expect(byId.get('d-1')).toBe('Work');
     expect(byId.get('d-2')).toBe('Life');
-    expect(byId.get('d-3')).toBe('');
-    expect(byId.get('d-4')).toBe('');
+    // The Inbox is a real project: rows routed there carry its name, never ''.
+    expect(byId.get('d-3')).toBe('Inbox');
+    expect(byId.get('d-4')).toBe('Inbox');
 
-    // Inbox never gets a registry row.
+    // The legacy migration mints no row for the Inbox: its row is the boot
+    // migration's (inbox-migration.ts), always local.
     const names = (db.prepare('SELECT name FROM task_projects ORDER BY name').all() as {
       name: string;
     }[]).map((r) => r.name);
@@ -1192,12 +1194,12 @@ describe('task-db migration: correctness', () => {
       .prepare('SELECT id, project, source, ext FROM tasks ORDER BY id')
       .all() as { id: string; project: string | null; source: string; ext: string | null }[];
     const byId = new Map(rows.map((r) => [r.id, r]));
-    expect(byId.get('i-1')!.project ?? '').toBe('');
+    expect(byId.get('i-1')!.project).toBe('Inbox');
     expect(byId.get('i-1')!.source).toBe('local');
     expect(byId.get('i-1')!.ext ?? null).toBeNull();
     expect(byId.get('i-2')!.source).toBe('ms-todo');
     expect(JSON.parse(byId.get('i-2')!.ext!)).toEqual({ 'ms-todo': { id: 'r-i2' } });
-    // Inbox never earns a registry row.
+    // The legacy migration mints no row for the Inbox (the boot migration does).
     const names = (getDb()!.prepare('SELECT name FROM task_projects ORDER BY name').all() as { name: string }[])
       .map((r) => r.name);
     expect(names).toEqual(['Acme']);

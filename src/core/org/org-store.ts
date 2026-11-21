@@ -17,6 +17,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { bus, EventNames } from '../event-bus.js';
 import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
+import { isInboxProject } from '../inbox-project.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
   DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, directorsOf, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
@@ -102,7 +103,8 @@ export function ensureMainTask(): Promise<Task> {
 /** A project's lead, made on first contact. Local: a lead is never pushed to a sync backend. */
 export function ensureProjectLead(project: string): Promise<Task> {
   const name = project.trim();
-  if (!name) return Promise.reject(new OrgError('no_lead_for_inbox', 400, 'The Inbox has no lead: talk to its tasks directly.'));
+  // The Inbox is the CEO's own project (inbox-project.ts): it never gets a lead of its own.
+  if (isInboxProject(name)) return Promise.reject(new OrgError('no_lead_for_inbox', 400, 'The Inbox has no lead: talk to its tasks directly.'));
   return serial(() => ensureLeadNow(name));
 }
 
@@ -356,8 +358,8 @@ async function tellTakeOver(lead: Task, project: string): Promise<void> {
 export async function setProjectVp(project: string, vp: string, guard: ProjectVpGuard = {}): Promise<ProjectVpResult> {
   const name = project.trim();
   const target = vp.trim();
-  if (!name) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox has no VP: its tasks are talked to one by one.');
-  if (/^inbox$/i.test(target)) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox is not a VP.');
+  if (isInboxProject(name)) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox has no VP: it is the CEO\'s own project, and its tasks are talked to one by one.');
+  if (isInboxProject(target) && target) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox is not a VP.');
   const { result, handovers, newLead } = await serial(() => moveProjectNow(name, target, guard));
   const { closeAfterHandover } = await import('./handover-close.js');
   for (const h of handovers) {
