@@ -1,0 +1,307 @@
+/**
+ * A standby target on another host (docs/reference/standby-copy.md, "A target on another
+ * host"), reached through that host's daemon over Walnut's own link (src/core/hosts/link.ts):
+ * no port, credential or daemon command of its own.
+ *
+ *   chunks     fs.writePart, one 1 MiB chunk a part: the daemon checks the part's sha256 (the
+ *              chunk's name) and only then renames it into chunks/, so a chunk is there whole or
+ *              not at all, and a batch cut off part way leaves every chunk it sent for the next
+ *   the batch  an upload (BatchUpload: the files that differ from the target's batch) written
+ *              into the target the same way, then `walnut standby receive apply` run there by
+ *              `exec.script` (receive.ts): the same StandbyTarget.commit a local target runs
+ *   reads      `walnut standby receive init` (makes the target owner-only, finishes an apply a
+ *              kill cut off, and exports its chunk list and current files when this side lacks
+ *              them), read back with fs.readRange
+ *
+ * The machine there needs the walnut program (`standby.walnut`, default `walnut`).
+ *
+ * A dropped link is dialled again and the command sent again for up to `linkWaitMs`; only
+ * commands that do the same thing twice are sent twice. An apply whose answer was lost is
+ * judged by what the target holds afterwards, never by sending it again.
+ */
+import crypto from 'node:crypto'
+import path from 'node:path'
+import zlib from 'node:zlib'
+import { promisify } from 'node:util'
+import { linkFailureKind, markLinkFailure } from '../../providers/link-failure.js'
+import { SCRIPT_MAX_TIMEOUT_MS } from '../../providers/host-script-core.js'
+import { runScriptOnHost } from '../hosts/host-script.js'
+import { sha256 } from './chunks.js'
+import { INCOMING, RECEIVE_MARK, type ApplyAnswer, type InitAnswer, type ManifestRef, type TargetExport, type VerifyAnswer } from './receive.js'
+import type { BatchFile, BatchManifest, BatchUpload, CommitResult, StandbyState, StandbyTransport } from './types.js'
+
+const gzip = promisify(zlib.gzip)
+const gunzip = promisify(zlib.gunzip)
+
+/** What this needs of a daemon link (DaemonConnection). A refusal comes back as `{ok: false}`. */
+export interface DaemonLink {
+  send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+  hasCapability?(name: string): boolean
+}
+
+export interface RemoteTargetOptions {
+  /** The link to the standby host's daemon; asked again after one drops (`link(host)` in the server). */
+  connect(): Promise<DaemonLink>
+  /** The target directory there (absolute). */
+  dir: string
+  /** The walnut program there, as a program and its arguments (default ['walnut']). */
+  walnut?: string[]
+  /** How long a dropped link is waited for before the batch fails (default 2 min). */
+  linkWaitMs?: number
+  /** Chunks in flight at once (default 8): enough to keep a slow link busy. */
+  window?: number
+  /** Variables for the receive runs there (tests: a kill point). */
+  env?: Record<string, string>
+}
+
+/** The host answered `{ok: false}`: the command ran and was refused. */
+export class RemoteRefusal extends Error {
+  readonly code: string
+  readonly have: number | undefined
+  constructor(cmd: string, reply: Record<string, unknown>) {
+    super(`${cmd}: ${typeof reply.error === 'string' ? reply.error : 'refused'}`)
+    this.name = 'RemoteRefusal'
+    this.code = typeof reply.code === 'string' ? reply.code : ''
+    this.have = typeof reply.have === 'number' ? reply.have : undefined
+  }
+}
+
+/** One part of an upload (the daemon's upload budget, ssh-upload-budget.ts). */
+const PART_BYTES = 1024 * 1024
+const READ_BYTES = 4 * 1024 * 1024
+const COMMAND_TIMEOUT_MS = 60_000
+const SHORT_RUN_MS = 2 * 60_000
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const nonce = () => crypto.randomBytes(6).toString('hex')
+
+export interface RemoteStats {
+  /** Daemon commands answered, and those sent again after a dropped link. */
+  commands: number
+  resent: number
+  /** Payload bytes written there (chunks and uploads, before base64). */
+  sentBytes: number
+}
+
+export class RemoteStandbyTarget implements StandbyTransport {
+  readonly stats: RemoteStats = { commands: 0, resent: 0, sentBytes: 0 }
+  /** The last apply's answer (its verify pass and the drift reports waiting). */
+  lastApply: ApplyAnswer | null = null
+  private link: DaemonLink | null = null
+  /** The target's current files as last read or made, and the manifest file they came from. */
+  private base: { ref: ManifestRef; files: BatchFile[] } | null = null
+  /** Chunk ids the target holds (null: not read yet, or dropped after a failure). */
+  private held: Set<string> | null = null
+  private viewed: { state: StandbyState; files: BatchFile[] } | null = null
+  private inflight = new Set<Promise<void>>()
+  private failed: unknown = null
+  private readonly dir: string
+  private readonly incoming: string
+
+  constructor(private readonly o: RemoteTargetOptions) {
+    if (!path.isAbsolute(o.dir)) throw new Error(`the standby directory on the host must be absolute: ${o.dir}`)
+    this.dir = path.resolve(o.dir)
+    this.incoming = path.join(this.dir, INCOMING)
+  }
+
+  private async conn(): Promise<DaemonLink> {
+    if (this.link) return this.link
+    try {
+      this.link = await this.o.connect()
+    } catch (err) {
+      // No route now: wait for it like a dropped one.
+      throw markLinkFailure(err instanceof Error ? err : new Error(String(err)), 'no-link')
+    }
+    return this.link
+  }
+
+  /** One daemon command, sent again over a new link while the link is down (only commands that may run twice). */
+  private async call(cmd: string, params: Record<string, unknown>, timeoutMs = COMMAND_TIMEOUT_MS): Promise<Record<string, unknown>> {
+    const until = Date.now() + (this.o.linkWaitMs ?? 120_000)
+    for (let attempt = 0; ; attempt++) {
+      let reply: Record<string, unknown>
+      try {
+        reply = await (await this.conn()).send(cmd, params, timeoutMs)
+      } catch (err) {
+        if (!linkFailureKind(err) || Date.now() >= until) throw err
+        this.link = null
+        this.stats.resent++
+        await sleep(Math.min(5_000, 250 * 2 ** attempt))
+        continue
+      }
+      this.stats.commands++
+      if (reply.ok === false) throw new RemoteRefusal(cmd, reply)
+      return reply
+    }
+  }
+
+  /**
+   * Write `data` at `remote` with fs.writePart: staged beside it, checked by size and sha256,
+   * then renamed into place. A part the daemon lost (a restart) is sent again from what it holds.
+   */
+  private async writeFile(remote: string, data: Buffer): Promise<void> {
+    const sha = sha256(data)
+    let restarted = false
+    for (let off = 0; ;) {
+      const part = data.subarray(off, off + PART_BYTES)
+      const final = off + part.length >= data.length
+      try {
+        await this.call('fs.writePart', { path: remote, offset: off, data: part.toString('base64'), final, size: data.length, sha256: sha })
+      } catch (err) {
+        if (!(err instanceof RemoteRefusal)) throw err
+        if (err.code === 'gap' && err.have !== undefined && err.have >= 0 && err.have < off) { off = err.have; continue }
+        // The staging went wrong under it (a torn part): once more from the start.
+        if ((err.code === 'checksum_mismatch' || err.code === 'size_mismatch') && !restarted) { restarted = true; off = 0; continue }
+        throw err
+      }
+      this.stats.sentBytes += part.length
+      if (final) return
+      off += part.length
+    }
+  }
+
+  private async readFile(remote: string): Promise<Buffer> {
+    const parts: Buffer[] = []
+    for (let start = 0; ;) {
+      const r = await this.call('fs.readRange', { path: remote, start, length: READ_BYTES })
+      const data = Buffer.from(typeof r.data === 'string' ? r.data : '', 'base64')
+      parts.push(data)
+      start += data.length
+      if (r.eof === true || !data.length) break
+    }
+    return Buffer.concat(parts)
+  }
+
+  /** `walnut standby receive <op>` there; its JSON answer. */
+  private async receive<T>(op: string, args: string[], timeoutMs = SHORT_RUN_MS): Promise<T> {
+    const env = Object.entries(this.o.env ?? {}).map(([k, v]) => `${k}=${v}`)
+    const argv = [...(env.length ? ['env', ...env] : []), ...(this.o.walnut ?? ['walnut']), 'standby', 'receive', op, this.dir, ...args]
+    const run = await runScriptOnHost('standby', { script: 'exec "$@"\n', args: argv, timeoutMs, maxOutputBytes: 8 * 1024 * 1024 }, {
+      dial: async () => this.conn(),
+    }).catch((err) => { if (linkFailureKind(err)) this.link = null; throw err })
+    this.stats.commands++
+    const line = run.stdout.split('\n').reverse().find((l) => l.startsWith(RECEIVE_MARK))
+    if (!line) {
+      const why = run.timedOut ? `it ran past ${Math.round(timeoutMs / 1000)} s and was stopped` : `exit ${run.code ?? 'none'}`
+      throw new Error(`standby receive ${op} on the host gave no answer (${why}): ${run.stderr.slice(-500).trim()}`)
+    }
+    const answer = JSON.parse(line.slice(RECEIVE_MARK.length)) as T & { error?: string }
+    if (typeof answer.error === 'string') throw new Error(`standby receive ${op} on the host: ${answer.error}`)
+    return answer
+  }
+
+  /** A receive op that does the same thing twice, sent again while the link is down. */
+  private async receiveAgain<T>(op: string, args: string[], timeoutMs = SHORT_RUN_MS): Promise<T> {
+    const until = Date.now() + (this.o.linkWaitMs ?? 120_000)
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.receive<T>(op, args, timeoutMs)
+      } catch (err) {
+        if (!linkFailureKind(err) || Date.now() >= until) throw err
+        this.stats.resent++
+        await sleep(Math.min(5_000, 250 * 2 ** attempt))
+      }
+    }
+  }
+
+  /** Forget what this side believes the target holds (after anything failed). */
+  private reset(): void {
+    this.base = null
+    this.held = null
+    this.viewed = null
+  }
+
+  async current(): Promise<{ state: StandbyState; files: BatchFile[] }> {
+    if (this.failed || this.inflight.size) {
+      await Promise.allSettled([...this.inflight])
+      this.failed = null
+      this.reset()
+    }
+    const exportTo = path.join(this.incoming, `export-${nonce()}.json.gz`)
+    const args = ['--export', exportTo, '--files', ...(this.base ? ['--have-manifest', JSON.stringify(this.base.ref)] : []), ...(this.held ? [] : ['--chunks'])]
+    const init = await this.receiveAgain<InitAnswer>('init', args)
+    const got = init.exported ? JSON.parse((await gunzip(await this.readFile(init.exported.path))).toString('utf8')) as TargetExport : {}
+    if (got.chunks) this.held = new Set(got.chunks)
+    let files: BatchFile[]
+    if (got.files) {
+      files = got.files
+      this.base = init.manifest ? { ref: init.manifest, files } : null
+    } else {
+      files = init.manifest && this.base ? this.base.files : []
+    }
+    this.viewed = { state: init.state, files }
+    return this.viewed
+  }
+
+  async missing(ids: string[]): Promise<Set<string>> {
+    if (!this.held) throw new Error('the target was not read yet (current() first)')
+    return new Set(ids.filter((id) => !this.held!.has(id)))
+  }
+
+  async putChunk(id: string, data: Buffer): Promise<void> {
+    if (sha256(data) !== id) throw new Error(`chunk ${id} does not match its hash`)
+    while (this.inflight.size >= (this.o.window ?? 8)) await Promise.race(this.inflight)
+    if (this.failed) throw this.failed
+    // The caller may reuse its buffer once this returns.
+    const own = Buffer.from(data)
+    const p: Promise<void> = this.writeFile(path.join(this.dir, 'chunks', id.slice(0, 2), id), own)
+      .then(() => { this.held?.add(id) }, (err) => { this.failed ??= err })
+      .finally(() => { this.inflight.delete(p) })
+    this.inflight.add(p)
+  }
+
+  async commit(manifest: BatchManifest): Promise<CommitResult> {
+    await Promise.allSettled([...this.inflight])
+    if (this.failed) { const err = this.failed; this.failed = null; this.reset(); throw err }
+    const viewed = this.viewed
+    if (!viewed) throw new Error('the target was not read yet (current() first)')
+    this.viewed = null
+    const before = new Map(viewed.files.map((f) => [f.p, f]))
+    const puts = manifest.files.filter((f) => { const b = before.get(f.p); return !b || JSON.stringify(b) !== JSON.stringify(f) })
+    const next = new Set(manifest.files.map((f) => f.p))
+    const dels = viewed.files.filter((f) => !next.has(f.p)).map((f) => f.p)
+    const { files: _files, ...head } = manifest
+    const upload: BatchUpload = {
+      format: 'walnut-standby-upload', version: 1, base: viewed.state.current?.batch ?? null, head, puts, dels,
+      hash: sha256(Buffer.from(JSON.stringify(manifest))),
+    }
+    const file = path.join(this.incoming, `upload-${manifest.batch}-${nonce()}.json.gz`)
+    try {
+      await this.writeFile(file, await gzip(Buffer.from(JSON.stringify(upload))))
+    } catch (err) {
+      this.reset()
+      throw err
+    }
+    let answer: ApplyAnswer
+    try {
+      answer = await this.receive<ApplyAnswer>('apply', ['--upload', file, '--verify'], SCRIPT_MAX_TIMEOUT_MS)
+    } catch (err) {
+      // Its answer was lost (the link went) or it was refused: what the target holds now says which.
+      const now = await this.receiveAgain<InitAnswer>('init', []).catch(() => null)
+      const took = now?.state.current?.batch === manifest.batch && now.state.current.takenAt === manifest.takenAt
+      this.reset()
+      if (!took) throw err
+      const changed = puts.filter((f) => { const b = before.get(f.p); return !b || b.h !== f.h || !!b.x !== !!f.x }).length
+      this.lastApply = null
+      return { batch: manifest.batch, written: changed, deleted: dels.length, unchanged: !changed && !dels.length }
+    }
+    // A batch that changed no content writes no manifest: the target keeps the one it had.
+    if (!answer.commit.unchanged && answer.manifest) this.base = { ref: answer.manifest, files: manifest.files }
+    this.lastApply = answer
+    return answer.commit
+  }
+
+  /** A verify pass there; answers its result and the drift reports not yet handed on. */
+  verify(opts: { deep?: boolean } = {}): Promise<VerifyAnswer> {
+    return this.receiveAgain<VerifyAnswer>('verify', opts.deep ? ['--deep'] : [], opts.deep ? SCRIPT_MAX_TIMEOUT_MS : SHORT_RUN_MS)
+  }
+
+  /** Mark the drift report taken at `at` as handed to Walnut Health. */
+  async markReported(at: string): Promise<void> {
+    await this.receiveAgain<{ marked: number }>('reported', ['--at', at])
+  }
+
+  /** The target's state, read there. */
+  async state(): Promise<StandbyState> {
+    return (await this.receiveAgain<InitAnswer>('init', [])).state
+  }
+}

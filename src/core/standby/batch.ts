@@ -28,7 +28,7 @@ import { DB_NAME, limiter, scanHome, sameStat, toSourceStat, type ScanEntry } fr
 import { namesAtMoment, type MomentNames } from './moment-names.js'
 import { openPinWorker, type Pin, type PinWorker } from './sqlite-pin.js'
 import { stageFile, type StageContext, type StageOutcome } from './stage.js'
-import { STANDBY_FORMAT, STANDBY_VERSION, chunkIds, type BatchFile, type BatchManifest, type CommitResult, type SourceStat, type StandbyTransport } from './types.js'
+import { STANDBY_FORMAT, STANDBY_VERSION, chunkIds, compareBatchPaths, type BatchFile, type BatchManifest, type CommitResult, type SourceStat, type StandbyTransport } from './types.js'
 
 export interface BatchOptions {
   home: string
@@ -343,7 +343,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       version: STANDBY_VERSION,
       batch: (state.current?.batch ?? 0) + 1,
       takenAt: new Date((pinned as Pin).pinnedAt).toISOString(),
-      files: [...out.values()].sort((a, b) => (a.p < b.p ? -1 : a.p > b.p ? 1 : 0)),
+      files: [...out.values()].sort(compareBatchPaths),
     }
     stats.files = manifest.files.length
     const commit = await opts.transport.commit(manifest)

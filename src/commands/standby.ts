@@ -4,6 +4,8 @@
  *   standby snapshot --to <dir> [--home <dir>]   one batch of the home into a local target
  *   standby verify <dir> [--deep]                find, save and repair direct edits of the copy
  *   standby status <dir>                         the current batch, its age, counts and bytes
+ *   standby receive <op> <dir> ...               the receiving side of a target on another host:
+ *                                                run there by the leader (src/core/standby/receive.ts)
  *
  * `--home` defaults to this Walnut's home; an ephemeral server's home works the same. Run
  * from the CLI, the batch cannot hold the server's writes (that gate lives in the server's
@@ -58,4 +60,20 @@ export async function runStandbyStatus(dir: string): Promise<void> {
   console.log(`${s.dir}: batch ${s.batch}, taken at ${s.takenAt} (${s.ageSeconds} s ago), ${s.fileCount} files, ${mb(s.bytes)}.`)
   console.log(s.lastVerify ? `Last verify: ${s.lastVerify.at}${s.lastVerify.deep ? ' (deep)' : ''}, ${s.lastVerify.drift} direct change(s).` : 'Never verified.')
   if (s.unreportedDrift) console.log(`${s.unreportedDrift} drift report(s) not yet sent to Walnut Health.`)
+}
+
+/** One receive op, answered as one line: RECEIVE_MARK and its JSON (remote-transport.ts reads it). */
+export async function runStandbyReceive(op: string, dir: string, options: Record<string, unknown>): Promise<void> {
+  const { RECEIVE_MARK, runReceiveOp } = await import('../core/standby/receive.js')
+  const str = (k: string) => (typeof options[k] === 'string' ? options[k] as string : undefined)
+  try {
+    const answer = await runReceiveOp(op, dir, {
+      export: str('export'), chunks: options.chunks === true, files: options.files === true, haveManifest: str('haveManifest'),
+      upload: str('upload'), verify: options.verify === true, deep: options.deep === true, at: str('at'),
+    })
+    console.log(RECEIVE_MARK + JSON.stringify(answer))
+  } catch (err) {
+    console.log(RECEIVE_MARK + JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+    process.exitCode = 1
+  }
 }

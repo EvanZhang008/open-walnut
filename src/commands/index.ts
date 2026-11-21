@@ -210,6 +210,19 @@ export function registerCommands(program: Command): void {
       const { runStandbyStatus } = await import('./standby.js');
       await runStandbyStatus(dir);
     });
+  standby.command('receive <op> <dir>').description('The receiving side of a standby copy on this machine, run by the leader through this machine\'s daemon (init, apply, verify, reported)')
+    .option('--export <file>', 'init: write the asked lists into this file of the target\'s .incoming/')
+    .option('--chunks', 'init: export the chunk ids the target holds')
+    .option('--files', 'init: export the current batch\'s files')
+    .option('--have-manifest <json>', 'init: skip the files when the current manifest is still this one')
+    .option('--upload <file>', 'apply: the batch upload in the target\'s .incoming/')
+    .option('--verify', 'apply: run a verify pass after the batch')
+    .option('--deep', 'verify: hash every file')
+    .option('--at <time>', 'reported: the drift report handed to Walnut Health')
+    .action(async (op: string, dir: string, options: Record<string, unknown>) => {
+      const { runStandbyReceive } = await import('./standby.js');
+      await runStandbyReceive(op, dir, options);
+    });
 
   program
     .command('sync')

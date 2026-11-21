@@ -36,6 +36,9 @@ export interface BatchFile {
   src: SourceStat
 }
 
+/** The order of a manifest's files (by path, as bytes would sort them in UTF-16): the leader and a receiver sort alike. */
+export const compareBatchPaths = (a: BatchFile, b: BatchFile): number => (a.p < b.p ? -1 : a.p > b.p ? 1 : 0)
+
 export function chunkIds(f: BatchFile): string[] {
   return f.b ?? (f.size === 0 ? [] : [f.h])
 }
@@ -86,8 +89,9 @@ export interface CommitResult {
 }
 
 /**
- * How a batch reaches a target. This phase has one, local (local-transport.ts: a target
- * directory on this machine). A remote one implements the same four calls.
+ * How a batch reaches a target: a directory on this machine (StandbyTarget, index.ts
+ * localTransport) or one on another host, reached through that host's daemon
+ * (remote-transport.ts). Both implement the same four calls.
  */
 export interface StandbyTransport {
   /** The target's current batch and its files (null before the first). */
@@ -101,4 +105,22 @@ export interface StandbyTransport {
    * switches in one step. A failure leaves its previous batch current and whole.
    */
   commit(manifest: BatchManifest): Promise<CommitResult>
+}
+
+/**
+ * A batch as a remote transport sends it (remote-transport.ts, receive.ts): the files that
+ * differ from the target's current batch `base` (all of them when `base` is null) and the
+ * paths gone since. The receiver rebuilds the whole manifest from its own current batch and
+ * takes it only when the rebuilt manifest's sha256 (of its JSON) is `hash`.
+ */
+export interface BatchUpload {
+  format: 'walnut-standby-upload'
+  version: 1
+  /** The batch the delta is against: the target's current one when the leader read it. */
+  base: number | null
+  head: Omit<BatchManifest, 'files'>
+  puts: BatchFile[]
+  dels: string[]
+  /** sha256 of JSON.stringify(manifest), the manifest the leader made. */
+  hash: string
 }

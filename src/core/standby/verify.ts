@@ -151,7 +151,7 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
     out.reportDir = await rec.write(out.batch ?? 0)
     const at = rec.at.toISOString()
     await writeState(t, { ...state, lastVerify: { at, drift: out.drift.length, deep: !!opts.deep } })
-    if (opts.deep) await collectChunks(t.chunks, files, chunkPath.bind(null, t))
+    if (opts.deep) await collectChunks(t.chunks, files, chunkPath.bind(null, t), rec.at.getTime())
     return out
   })
   result.ms = performance.now() - started
@@ -159,11 +159,24 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
   return result
 }
 
-/** Remove chunks no file of the current batch uses (left by a crash between the state write and the cleanup). */
-async function collectChunks(root: string, files: BatchFile[], where: (id: string) => string): Promise<void> {
+/**
+ * A chunk no file of the current batch uses, written this recently, is kept: a batch cut off
+ * part way (its link went) sent it, and the next batch takes it instead of sending it again.
+ */
+export const ORPHAN_CHUNK_KEEP_MS = 6 * 60 * 60_000
+
+/**
+ * Remove chunks no file of the current batch uses (left by a crash between the state write and
+ * the cleanup, or sent for a batch that never came), once they are older than ORPHAN_CHUNK_KEEP_MS.
+ */
+async function collectChunks(root: string, files: BatchFile[], where: (id: string) => string, now: number): Promise<void> {
   const keep = new Set<string>()
   for (const f of files) for (const id of chunkIds(f)) keep.add(path.relative(root, where(id)))
-  for (const rel of (await listTree(root)).files) if (!keep.has(rel)) await fs.rm(path.join(root, rel), { force: true }).catch(() => {})
+  for (const rel of (await listTree(root)).files) {
+    if (keep.has(rel)) continue
+    const st = await fs.lstat(path.join(root, rel)).catch(() => null)
+    if (st && now - st.mtimeMs > ORPHAN_CHUNK_KEEP_MS) await fs.rm(path.join(root, rel), { force: true }).catch(() => {})
+  }
 }
 
 /** Hand every drift report not yet reported to `report`, once each (a CLI pass or a commit leaves its reports for the server). */
