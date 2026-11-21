@@ -156,6 +156,15 @@ describe('the quiet hold union', () => {
     expect(sameHold(null, null)).toBe(true)
   })
 
+  it('a block on a task lets that task through, alone or beside a macOS Focus', () => {
+    const onTask = startFocus(IDLE_FOCUS, { now: T0, minutes: 25, taskId: 'task-interview' })
+    expect(desiredHold({ focus: onTask, focusQuietsWalnut: true, macosFocusName: null }))
+      .toEqual({ reason: 'Focus block', until: T0 + 25 * MIN, allowTasks: ['task-interview'] })
+    expect(desiredHold({ focus: onTask, focusQuietsWalnut: true, macosFocusName: 'Deep Work' }))
+      .toEqual({ reason: 'Focus block, macOS Focus: Deep Work', allowTasks: ['task-interview'] })
+    expect(sameHold({ reason: 'Focus block', allowTasks: ['a'] }, { reason: 'Focus block' })).toBe(false)
+  })
+
   it('a break never holds quiet', () => {
     const rest = completeBlock(IDLE_FOCUS, T0).state
     expect(rest.phase).toBe('break')

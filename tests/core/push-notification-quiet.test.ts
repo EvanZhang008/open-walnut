@@ -28,6 +28,14 @@ vi.mock('../../src/web/ws/handler.js', () => ({ clientCount }))
 vi.mock('../../src/core/config-manager.js', () => ({ getConfig, updatePushTokens: vi.fn() }))
 vi.mock('../../src/core/push/apns.js', () => ({ sendApns }))
 // The inbox as the reminder after quiet reads it: l-second was read meanwhile, the others wait.
+// The tasks a focus scope reads: a subtask under the focused task, and one elsewhere.
+vi.mock('../../src/core/task-manager.js', () => ({
+  scopeTaskLookup: async () => (id: string) => ({
+    'task-focus': { id: 'task-focus', project: 'Personal' },
+    'task-sub': { id: 'task-sub', project: 'Personal', parent_task_id: 'task-focus' },
+    'task-other': { id: 'task-other', project: 'Acme' },
+  } as Record<string, { id: string; project: string; parent_task_id?: string }>)[id],
+}))
 vi.mock('../../src/core/human-inbox/store.js', () => ({
   getLetter: async (id: string) => ({ id, read: id === 'l-second' }),
 }))
@@ -128,6 +136,20 @@ describe('letter push', () => {
     expect(payload).toContain('2 things waited for you')
     expect(payload).not.toContain('Second')
     expect(heldPushes().count).toBe(0)
+  })
+
+  it('a hold that names a task lets that task and its subtasks through, and holds the rest', async () => {
+    await setQuiet({ source: 'plugin:walnut-rhythm', scope: { tasks: ['task-focus'] } })
+    expect(await pushLetter({ ...letter('info'), senderTaskId: 'task-sub' })).toMatchObject({ sent: 2 })
+    expect(await pushLetter({ ...letter('info'), letterId: 'l-other', senderTaskId: 'task-other' }))
+      .toMatchObject({ attempted: false, reason: 'quiet mode is on' })
+    expect(await pushLetter({ ...letter('info'), letterId: 'l-none' })).toMatchObject({ reason: 'quiet mode is on' })
+  })
+
+  it('a second hold without a scope still holds the focused task', async () => {
+    await setQuiet({ source: 'plugin:walnut-rhythm', scope: { tasks: ['task-focus'] } })
+    await setQuiet({ source: 'user' })
+    expect(await pushLetter({ ...letter('info'), senderTaskId: 'task-focus' })).toMatchObject({ reason: 'quiet mode is on' })
   })
 
   it('what quiet holds outlives a restart, and goes out once quiet is off', async () => {

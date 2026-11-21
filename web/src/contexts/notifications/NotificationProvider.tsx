@@ -39,6 +39,7 @@ import { attentionBadgeCount, actionOf, mergeLoadedFeed } from './notification-m
 import { wireActionsOf } from './notification-actions';
 import { useQuietState } from './quiet';
 import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-model';
+import { useTaskStoreActions } from '../TasksContext';
 import { postSystemNotice } from './system-notice';
 import { firstToastUntilHealed, healedOnce } from './toast-once';
 import { armChime, playChime } from '@/utils/chime';
@@ -204,6 +205,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const quiet = useQuietState();
   const quietRef = useRef(quiet);
   quietRef.current = quiet;
+  // The task rows, for a quiet hold that lets one task through (a focus block on it).
+  const taskStore = useTaskStoreActions();
+  const taskStoreRef = useRef(taskStore);
+  taskStoreRef.current = taskStore;
 
   // Latest feed, for callbacks that need a SNAPSHOT rather than a dependency.
   // dismissFeed's clear-all path is the only such reader: depending on `feed`
@@ -295,7 +300,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     // Quiet mode demotes every toast to feed-only, except a permission ask while
     // the holds allow them (an agent is blocked on it).
-    const quietAllows = quietAllowsToast(quietRef.current, input.kind);
+    const quietAllows = quietAllowsToast(quietRef.current, input.kind, Date.now(), {
+      taskId: input.taskId,
+      lookup: (id) => taskStoreRef.current?.get(id) ?? undefined,
+    });
     if (!quietAllows) shouldToast = false;
 
     // Once per problem until it heals (toast-once.ts): the server's error reported again
@@ -354,7 +362,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // A system notification while the tab is hidden (permission + reminder), through the one
     // exit for notices outside the window: quiet holds every one (system-notice.ts).
     if (input.browserNotify && typeof document !== 'undefined' && document.hidden) {
-      postSystemNotice({ title: input.title, ...(input.body ? { body: input.body } : {}), tag: input.dedupKey });
+      postSystemNotice({
+        title: input.title, ...(input.body ? { body: input.body } : {}), tag: input.dedupKey,
+        ...(input.taskId ? { taskId: input.taskId, lookup: (id: string) => taskStoreRef.current?.get(id) ?? undefined } : {}),
+      });
     }
   }, [dismissToast]);
 

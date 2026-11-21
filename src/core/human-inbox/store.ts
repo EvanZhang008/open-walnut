@@ -474,6 +474,7 @@ function emitLetterEvent(
       textPreview,
       senderSessionId: record.sender.sessionId,
       senderTitle: record.sender.sessionTitle,
+      ...(record.sender.taskId ? { senderTaskId: record.sender.taskId } : {}),
       ...(record.origin ? { originKind: record.origin.kind, originName: record.origin.name } : {}),
       // No host when the sender's record could not be read: never filled in as `local`.
       ...(record.sender.host !== undefined ? { host: record.sender.host } : {}),

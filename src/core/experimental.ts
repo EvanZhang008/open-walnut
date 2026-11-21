@@ -205,6 +205,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'focus_workspace',
+    name: 'Focus spaces',
+    description: 'Make a focus space from a few projects or one task, and while you are in it Walnut shows only what is inside: Home, Tasks, search, the Org page and the rail count only its tasks, and everything else waits behind one number. A Rhythm focus block on a task lets that task\'s replies and pushes through while it keeps the rest quiet. Your tasks never move: a space is a list read beside the board, and Main still sees everything.',
+    default: false,
+  },
+  {
     id: 'switchable_leader',
     name: 'Standby copy of this Walnut',
     description: 'Every 30 seconds this Walnut copies its whole data folder, as it was at one moment, to the folder set as standby.dir in config.yaml (on this machine), keeps only complete copies there, and repairs and reports any file changed there directly. Off: nothing is copied and nothing runs.',

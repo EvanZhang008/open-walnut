@@ -62,7 +62,7 @@ async function pushNew(a: ApprovalView): Promise<void> {
     return
   }
   // Quiet holds it with every push; the one push after quiet says it waited (quiet-hold.ts).
-  if (await holdPushForQuiet('approval-push', { key: `approval:${a.id}`, title: 'An approval waits for you' })) return
+  if (await holdPushForQuiet('approval-push', { key: `approval:${a.id}`, title: 'An approval waits for you' }, { taskId: a.requester?.taskId })) return
   // One push, with the summary when it comes in time: a second push for it would ring the phone again.
   const waited = !a.context?.summary && needsSummary(a)
   const summary = a.context?.summary || (waited ? await summaryWithin(a.id, PUSH_SUMMARY_WAIT_MS) : '')

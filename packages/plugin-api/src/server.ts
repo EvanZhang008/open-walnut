@@ -514,6 +514,13 @@ export interface QuietInput {
   reason?: string
   /** Default true. */
   allowPermissions?: boolean
+  /**
+   * Task ids this hold lets through (their subtasks too): a focus block on one task keeps the
+   * rest quiet and lets that task's replies and pushes reach the person. Honoured while the
+   * person has focus spaces on (experimental `focus_workspace`); otherwise the hold silences
+   * every task, as before.
+   */
+  allowTasks?: string[]
 }
 
 /** Your plugin's ONE quiet hold (source `plugin:<pluginId>`). `set` replaces it. */

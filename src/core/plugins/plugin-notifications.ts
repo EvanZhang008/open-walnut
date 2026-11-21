@@ -17,6 +17,9 @@
  */
 import { bus, EventNames } from '../event-bus.js'
 import { clearQuiet, getQuiet, setQuiet, type QuietState } from '../quiet/quiet-state.js'
+import { experimentCache } from '../experimental-cache.js'
+
+const focusSpacesOn = experimentCache('focus_workspace')
 import { toDisposable, type Disposable } from './disposable.js'
 import { pluginOpName, validatePluginId } from './ids.js'
 import type { NotificationButton } from '../notifications/store.js'
@@ -173,7 +176,7 @@ export function createPluginNotifications(options: {
       async get(): Promise<QuietState> {
         return getQuiet()
       },
-      async set(input: { until?: number; reason?: string; allowPermissions?: boolean } = {}): Promise<void> {
+      async set(input: { until?: number; reason?: string; allowPermissions?: boolean; allowTasks?: string[] } = {}): Promise<void> {
         options.assertLive('notifications.quiet.set')
         holdCleanup ??= options.own(toDisposable(async () => { await clearQuiet(source, { owner }) }))
         await setQuiet({
@@ -182,6 +185,9 @@ export function createPluginNotifications(options: {
           ...(input.until !== undefined ? { until: input.until } : {}),
           ...(input.reason !== undefined ? { reason: input.reason } : {}),
           ...(input.allowPermissions !== undefined ? { allowPermissions: input.allowPermissions } : {}),
+          // A hold that lets its tasks through exists only while focus spaces are on.
+          ...(Array.isArray(input.allowTasks) && input.allowTasks.length && await focusSpacesOn.on()
+            ? { scope: { tasks: input.allowTasks } } : {}),
         })
       },
       async clear(): Promise<void> {

@@ -5455,6 +5455,16 @@ export async function listTasksByIds(ids: string[]): Promise<Task[]> {
   return out;
 }
 
+/**
+ * A synchronous lookup over the cached snapshot, for the focus-scope rule
+ * (focus-spaces/scope.ts): read-only, never hand its rows to a caller.
+ */
+export async function scopeTaskLookup(): Promise<(id: string) => Pick<Task, 'id' | 'project' | 'parent_task_id'> | undefined> {
+  await ensureInit();
+  const index = await taskIndex();
+  return (id) => index.get(id);
+}
+
 export async function getTask(idPrefix: string): Promise<Task> {
   // An exact id is the common case (every route and hook passes a full id) and
   // costs one map lookup; only a real prefix scans the snapshot.

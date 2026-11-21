@@ -18,7 +18,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
-import { getQuiet, logQuietSkipOnce, onQuietChanged, type QuietState } from '../quiet/quiet-state.js'
+import { getQuiet, logQuietSkipOnce, onQuietChanged, quietSuppresses, type QuietState } from '../quiet/quiet-state.js'
 import { isFollower } from '../server-role.js'
 import { deliverPush } from './deliver.js'
 import { ACTIVE_LEASE_MS, parseMode, selectDevices } from './letter-push-policy.js'
@@ -137,9 +137,15 @@ export function initQuietHold(): void {
  * True: quiet holds this push (the sender sends nothing now; the reminder after quiet covers it).
  * `channel` names the sender in the one log line per set of holds.
  */
-export async function holdPushForQuiet(channel: string, item: HeldPush): Promise<boolean> {
+export async function holdPushForQuiet(channel: string, item: HeldPush, about: { taskId?: string | null } = {}): Promise<boolean> {
   const quiet = await getQuiet()
   if (!quiet.active) return false
+  // A hold that names tasks (a focus block on one task, a focus space) lets a push about one of
+  // them through; every other hold still holds it.
+  if (about.taskId && quiet.holds.some((h) => h.scope)) {
+    const { scopeTaskLookup } = await import('../task-manager.js')
+    if (!quietSuppresses(quiet, { taskId: about.taskId, lookup: await scopeTaskLookup() })) return false
+  }
   await ensureLoaded()
   logQuietSkipOnce(channel, quiet)
   if (!held.has(item.key)) heldCount++

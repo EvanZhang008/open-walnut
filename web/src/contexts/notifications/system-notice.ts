@@ -15,7 +15,8 @@
 import { log } from '@/utils/log';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import { currentQuiet, onQuietState } from './quiet';
-import { effectiveQuiet, type QuietState } from './quiet-model';
+import { effectiveQuiet, quietLetsTaskThrough, type QuietState } from './quiet-model';
+import type { ScopeTaskLookup } from '@open-walnut/focus-scope';
 
 export interface SystemNotice {
   /** One notice per tag: a second post with the same tag replaces it. */
@@ -28,6 +29,9 @@ export interface SystemNotice {
   onClick?: () => void;
   /** The Mac app's notice id: its click comes back as `walnut:open-approval` with this id. */
   nativeId?: string;
+  /** The task it is about: a quiet hold whose scope holds it lets it through (a focus block on it). */
+  taskId?: string;
+  lookup?: ScopeTaskLookup;
 }
 
 /** shown: posted now. held: quiet holds it; the reminder after quiet covers it. off: no way to post. */
@@ -45,8 +49,9 @@ export function nativeNoticeHandler(): Handler | null {
 }
 
 /** May a notice go outside the window right now? Never during quiet, nor before it is known. */
-export function systemNoticeAllowed(q: QuietState, now = Date.now()): boolean {
-  return !q.unknown && !effectiveQuiet(q, now).active;
+export function systemNoticeAllowed(q: QuietState, now = Date.now(), n?: Pick<SystemNotice, 'taskId' | 'lookup'>): boolean {
+  if (q.unknown) return false;
+  return !effectiveQuiet(q, now).active || quietLetsTaskThrough(q, n?.taskId, n?.lookup, now);
 }
 
 const held = new Map<string, SystemNotice>();
@@ -56,7 +61,7 @@ let heldByQuiet = false;
 
 /** The Mac app's post: checks quiet itself, as it may run after a clear (the reminder's id). */
 function postNative(native: Handler, n: SystemNotice, q: QuietState): void {
-  if (!systemNoticeAllowed(q)) return;
+  if (!systemNoticeAllowed(q, Date.now(), n)) return;
   void native.postMessage({ op: 'post', id: n.nativeId, title: n.title, body: n.body ?? '' })
     .then((r) => log.info('notifications', 'system notice posted', { tag: n.tag, result: r as Record<string, unknown> }))
     .catch((err) => log.warn('notifications', 'system notice refused', { tag: n.tag, error: String(err) }));
@@ -64,7 +69,7 @@ function postNative(native: Handler, n: SystemNotice, q: QuietState): void {
 
 /** Post now under the quiet state `q` that allows it (every caller passes the state it checked). */
 function post(n: SystemNotice, q: QuietState): SystemNoticeResult {
-  if (!systemNoticeAllowed(q)) return 'held';
+  if (!systemNoticeAllowed(q, Date.now(), n)) return 'held';
   const native = nativeNoticeHandler();
   if (native && n.nativeId) {
     // The app posts an id once per run: the reminder's id is taken back first, so a later one shows.
@@ -92,7 +97,7 @@ function post(n: SystemNotice, q: QuietState): SystemNoticeResult {
 /** Raise a notice outside the window, or hold it while quiet lasts. */
 export function postSystemNotice(n: SystemNotice): SystemNoticeResult {
   const q = currentQuiet();
-  if (!systemNoticeAllowed(q)) {
+  if (!systemNoticeAllowed(q, Date.now(), n)) {
     held.set(n.tag, n);
     if (!q.unknown) heldByQuiet = true;
     return 'held';

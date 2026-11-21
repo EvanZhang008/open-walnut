@@ -17,12 +17,17 @@
  * new attention renderer outside a page that does not go through them.
  */
 import { IS_PERSISTENT, type NotificationKind } from './types';
+import { normalizeScope, scopeIsEmpty, taskInScope, type FocusScope, type ScopeTaskLookup } from '@open-walnut/focus-scope';
 
 export interface QuietHold {
   source: string;
   until?: number;
   reason?: string;
   since: number;
+  /** False: this hold silences permission asks too (absent reads true). */
+  allowPermissions?: boolean;
+  /** Tasks this hold lets through (a focus block on one task, a focus space). */
+  scope?: FocusScope;
 }
 
 export interface QuietState {
@@ -54,10 +59,13 @@ export function normalizeQuiet(raw: unknown): QuietState {
         if (!h || typeof h !== 'object') return [];
         const o = h as Record<string, unknown>;
         if (typeof o.source !== 'string' || typeof o.since !== 'number') return [];
+        const scope = normalizeScope(o.scope);
         return [{
           source: o.source, since: o.since,
           ...(typeof o.until === 'number' ? { until: o.until } : {}),
           ...(typeof o.reason === 'string' && o.reason ? { reason: o.reason } : {}),
+          ...(o.allowPermissions === false ? { allowPermissions: false } : {}),
+          ...(scopeIsEmpty(scope) ? {} : { scope }),
         }];
       })
     : [];
@@ -83,11 +91,25 @@ export function effectiveQuiet(q: QuietState, now = Date.now()): QuietState {
  * A host problem ('host') is the exception: nobody just did anything, and the
  * notification panel keeps listing it, so quiet holds its toast.
  */
-export function quietAllowsToast(q: QuietState, kind: NotificationKind, now = Date.now()): boolean {
+export function quietAllowsToast(
+  q: QuietState, kind: NotificationKind, now = Date.now(),
+  about: { taskId?: string | null; lookup?: ScopeTaskLookup } = {},
+): boolean {
   if (!IS_PERSISTENT[kind] && kind !== 'host') return true;
   const e = effectiveQuiet(q, now);
   if (!e.active) return true;
-  return kind === 'permission' && e.allowPermissions;
+  if (kind === 'permission' && e.allowPermissions) return true;
+  return quietLetsTaskThrough(e, about.taskId, about.lookup);
+}
+
+/**
+ * Does every live hold name this task in its scope (a focus block on it, a focus space holding
+ * it)? Then quiet lets what is about it through, the same rule the server's push gate reads.
+ */
+export function quietLetsTaskThrough(q: QuietState, taskId: string | null | undefined, lookup?: ScopeTaskLookup, now = Date.now()): boolean {
+  const e = effectiveQuiet(q, now);
+  if (!e.active || !taskId || e.holds.length === 0) return false;
+  return e.holds.every((h) => !!h.scope && taskInScope(h.scope, taskId, lookup ?? (() => undefined)));
 }
 
 function holdName(h: QuietHold): string {

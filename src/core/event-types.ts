@@ -1107,6 +1107,8 @@ export interface HumanInboxLetterEvent {
   textPreview: string;
   senderSessionId: string;
   senderTitle?: string;
+  /** The sender's task, when it has one: a focus scope that holds it lets the push through. */
+  senderTaskId?: string;
   /** Who the letter is from (human-inbox/letter-origin.ts): leads the notification and the push. */
   originKind?: string;
   originName?: string;
@@ -1347,6 +1349,13 @@ export interface QuietHold {
   reason?: string;
   /** Epoch ms the hold began. */
   since: number;
+  /** Present only when false: this hold silences permission asks too. */
+  allowPermissions?: boolean;
+  /**
+   * Tasks this hold lets through (a focus block on one task, a focus space): an interruption
+   * about a task inside it is not silenced by this hold (src/core/focus-spaces/scope.ts).
+   */
+  scope?: { projects?: string[]; tasks?: string[] };
 }
 
 /**

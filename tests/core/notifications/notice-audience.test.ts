@@ -168,7 +168,8 @@ describe('every push to the phone goes through the one quiet gate', () => {
       if (rel === 'core/push/quiet-hold.ts') continue
       expect(code(text), rel).toMatch(/holdPushForQuiet\(/)
     }
-    const ownReads = FILES.filter(({ rel, text }) => rel !== 'core/quiet/quiet-state.ts' && /\bquietSuppresses\(/.test(code(text))).map(f => f.rel)
+    // The gate itself reads it (a hold whose scope names the push's task lets it through).
+    const ownReads = FILES.filter(({ rel, text }) => rel !== 'core/quiet/quiet-state.ts' && rel !== 'core/push/quiet-hold.ts' && /\bquietSuppresses\(/.test(code(text))).map(f => f.rel)
     expect(ownReads).toEqual([])
   })
 })

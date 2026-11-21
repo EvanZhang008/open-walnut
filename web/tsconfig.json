@@ -32,6 +32,7 @@
       "@open-walnut/search-transcript": ["../src/core/task-search-transcript"],
       "@open-walnut/host-problem": ["../src/core/hosts/host-problem"],
       "@open-walnut/notice-audience": ["../src/core/notifications/audience"],
+      "@open-walnut/focus-scope": ["../src/core/focus-spaces/scope"],
       "@open-walnut/found-host-offer": ["../src/core/hosts/found-host-offer"],
       "@open-walnut/ask-list": ["../src/core/sessions/ask-list"],
       "@open-walnut/org-tree": ["../src/core/org/org-tree"],

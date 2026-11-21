@@ -313,6 +313,8 @@ export interface HoldSpec {
   reason: string
   /** Epoch ms; absent = until cleared. */
   until?: number
+  /** The block's task: its replies and pushes get through (Walnut honours it with focus spaces on). */
+  allowTasks?: string[]
 }
 
 /**
@@ -328,10 +330,17 @@ export function desiredHold(input: { focus: FocusState; focusQuietsWalnut: boole
   if (parts.length === 0) return null
   const reason = parts.map((part) => part.reason).join(', ')
   const ends = parts.every((part) => part.until !== undefined)
-  return ends ? { reason, until: Math.max(...parts.map((part) => part.until!)) } : { reason }
+  // The task the block is for is what the person works on: its answers are not an interruption,
+  // whatever else holds quiet with it.
+  const blockTask = input.focusQuietsWalnut && input.focus.phase === 'focus' && input.focus.taskId ? [input.focus.taskId] : null
+  return {
+    reason,
+    ...(ends ? { until: Math.max(...parts.map((part) => part.until!)) } : {}),
+    ...(blockTask ? { allowTasks: blockTask } : {}),
+  }
 }
 
 export function sameHold(a: HoldSpec | null, b: HoldSpec | null): boolean {
   if (a === null || b === null) return a === b
-  return a.reason === b.reason && a.until === b.until
+  return a.reason === b.reason && a.until === b.until && (a.allowTasks ?? []).join(',') === (b.allowTasks ?? []).join(',')
 }

@@ -28,6 +28,7 @@ export default defineConfig({
       '@open-walnut/search-transcript': path.resolve(import.meta.dirname, 'src/core/task-search-transcript.ts'),
       '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
       '@open-walnut/notice-audience': path.resolve(import.meta.dirname, 'src/core/notifications/audience.ts'),
+      '@open-walnut/focus-scope': path.resolve(import.meta.dirname, 'src/core/focus-spaces/scope.ts'),
       '@open-walnut/found-host-offer': path.resolve(import.meta.dirname, 'src/core/hosts/found-host-offer.ts'),
       '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
       '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),

@@ -25,6 +25,7 @@ import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { bus, EventNames } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import type { QuietHold, QuietState } from '../event-types.js'
+import { normalizeScope, scopeIsEmpty, taskInScope, type FocusScope, type ScopeTaskLookup } from '../focus-spaces/scope.js'
 
 export type { QuietHold, QuietState }
 
@@ -36,6 +37,11 @@ export interface SetQuietInput {
   /** Default true (see the module comment for why). */
   allowPermissions?: boolean
   /**
+   * Tasks this hold lets through (see QuietHold.scope). Absent or empty: it silences every
+   * task, as before.
+   */
+  scope?: FocusScope
+  /**
    * Which generation of the source set this hold (a plugin's api instance). Only
    * gates `clearQuiet(source, { owner })`: a replaced plugin generation disposing
    * late must not clear the hold its successor just set. Never persisted.
@@ -43,9 +49,15 @@ export interface SetQuietInput {
   owner?: string
 }
 
-interface StoredHold extends QuietHold {
+interface StoredHold extends Omit<QuietHold, 'allowPermissions' | 'scope'> {
   allowPermissions: boolean
+  scope?: FocusScope
   owner?: string
+}
+
+function scopeOf(raw: unknown): FocusScope | undefined {
+  const scope = normalizeScope(raw)
+  return scopeIsEmpty(scope) ? undefined : scope
 }
 
 const MAX_SOURCE_CHARS = 128
@@ -80,6 +92,7 @@ function normalizeHold(raw: unknown): StoredHold | null {
     allowPermissions: h.allowPermissions !== false,
     ...(until !== undefined ? { until } : {}),
     ...(reason ? { reason } : {}),
+    ...(scopeOf(h.scope) ? { scope: scopeOf(h.scope) } : {}),
   }
 }
 
@@ -98,6 +111,8 @@ function snapshot(now = Date.now(), from: Iterable<StoredHold> = holds.values())
       since: h.since,
       ...(h.until !== undefined ? { until: h.until } : {}),
       ...(h.reason ? { reason: h.reason } : {}),
+      ...(h.allowPermissions ? {} : { allowPermissions: false }),
+      ...(h.scope ? { scope: { ...(h.scope.projects ? { projects: [...h.scope.projects] } : {}), ...(h.scope.tasks ? { tasks: [...h.scope.tasks] } : {}) } } : {}),
     })),
   }
 }
@@ -207,6 +222,7 @@ export async function setQuiet(input: SetQuietInput): Promise<QuietState> {
   if (input.until !== undefined && input.until <= now) return clearQuiet(source)
   const existing = holds.get(source)
   const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, MAX_REASON_CHARS) : ''
+  const scope = scopeOf(input.scope)
   holds.set(source, {
     source,
     // Replacing a live hold keeps when quiet began; a lapsed one starts over.
@@ -214,6 +230,7 @@ export async function setQuiet(input: SetQuietInput): Promise<QuietState> {
     allowPermissions: input.allowPermissions !== false,
     ...(input.until !== undefined ? { until: input.until } : {}),
     ...(reason ? { reason } : {}),
+    ...(scope ? { scope } : {}),
     ...(input.owner ? { owner: input.owner } : {}),
   })
   await persist()
@@ -289,10 +306,27 @@ export async function clearQuiet(source: string, opts: { owner?: string } = {}):
   return snapshot()
 }
 
-/** Would quiet silence this interruption? Permission asks pass while allowed. */
-export function quietSuppresses(state: QuietState, opts: { permission?: boolean } = {}): boolean {
+export interface QuietSuppressOptions {
+  permission?: boolean
+  /** The task the interruption is about: a hold whose scope holds it lets it through. */
+  taskId?: string | null
+  /** How to read a task's project and parent (needed for a scope's subtasks and projects). */
+  lookup?: ScopeTaskLookup
+}
+
+/**
+ * Would quiet silence this interruption? Every live hold must let it through: a permission
+ * ask passes a hold that allows permissions, and an interruption about a task passes a hold
+ * whose scope holds that task.
+ */
+export function quietSuppresses(state: QuietState, opts: QuietSuppressOptions = {}): boolean {
   if (!state.active) return false
-  return !(opts.permission && state.allowPermissions)
+  if (state.holds.length === 0) return !(opts.permission && state.allowPermissions)
+  return state.holds.some((h) => {
+    if (opts.permission && h.allowPermissions !== false && state.allowPermissions) return false
+    if (h.scope && opts.taskId && taskInScope(h.scope, opts.taskId, opts.lookup ?? (() => undefined))) return false
+    return true
+  })
 }
 
 /** Subscribe to state changes in-process. Returns an unsubscribe. */

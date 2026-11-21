@@ -38,7 +38,7 @@ import { stripInternalLines } from '../lib/internal-lines.js'
 /**
  * Send a push notification if no WebSocket clients are connected.
  */
-async function maybePush(title: string, body: string, data?: Record<string, unknown>): Promise<void> {
+async function maybePush(title: string, body: string, data?: Record<string, unknown>, about: { taskId?: string } = {}): Promise<void> {
   // The PRIMARY owns push: it holds the token registry (config.yaml never syncs)
   // and the APNs key, and a replica relays `/api/push/*` to it (core/push/relay.ts).
   // A cloud box's own `push_tokens` rows are therefore not its to send from —
@@ -53,7 +53,7 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
   const tokens = (await getConfig()).push_tokens ?? []
   if (tokens.length === 0) return
   // Quiet mode (do not disturb) holds what would go now (quiet-hold.ts); the one after quiet says what waited.
-  if (await holdPushForQuiet('push', { key: `push:${title}`, title })) return
+  if (await holdPushForQuiet('push', { key: `push:${title}`, title }, about)) return
 
   const out = await deliverPush(tokens, { title, body, ...(data ? { data } : {}) })
   log.web.info('push: delivery', {
@@ -128,14 +128,16 @@ export function initPushNotifications(): void {
               'Walnut',
               // The reply as a person reads it: no status report lines (internal-lines.ts).
               data.result ? stripInternalLines(data.result).slice(0, 150) : 'New response',
-              { type: 'session_result', sessionId, agentId: lane.agentId, conversationId: lane.conversationId }
+              { type: 'session_result', sessionId, agentId: lane.agentId, conversationId: lane.conversationId },
+              { taskId: data.taskId }
             )
             break
           }
           await maybePush(
             'Session Complete',
             `Session ${sessionId?.slice(0, 8) ?? ''} finished`,
-            { type: 'session_result', sessionId }
+            { type: 'session_result', sessionId },
+            { taskId: data.taskId }
           )
           break
         }
@@ -157,14 +159,16 @@ export function initPushNotifications(): void {
             await maybePush(
               'Walnut',
               `The main AI hit an error: ${error?.slice(0, 150) ?? 'unknown error'}`,
-              { type: 'session_error', sessionId: data.sessionId, agentId: lane.agentId, conversationId: lane.conversationId }
+              { type: 'session_error', sessionId: data.sessionId, agentId: lane.agentId, conversationId: lane.conversationId },
+              { taskId: data.taskId }
             )
             break
           }
           await maybePush(
             'Session Error',
             error?.slice(0, 150) ?? 'A session encountered an error',
-            { type: 'session_error' }
+            { type: 'session_error' },
+            { taskId: data.taskId }
           )
           break
         }

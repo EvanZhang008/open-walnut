@@ -54,6 +54,8 @@ export interface LetterPushInput {
   kind: 'new' | 'reply'
   /** Who it is from (human-inbox/letter-origin.ts); absent on an event from an older store. */
   origin?: { kind: string; name: string }
+  /** The sending task: a focus scope that holds it lets the push through (quiet-hold.ts). */
+  senderTaskId?: string
 }
 
 /**
@@ -256,7 +258,7 @@ async function attemptLetterPush(
   // (quiet-hold.ts): it waits in the inbox, and the one push after quiet says it waited. Asked
   // after the device choice, so a letter no device takes is never held. The summary line stays
   // per letter, as this file promises.
-  if (await holdPushForQuiet('letter-push', { key: `letter:${letter.letterId}`, title: letter.subject })) {
+  if (await holdPushForQuiet('letter-push', { key: `letter:${letter.letterId}`, title: letter.subject }, { taskId: letter.senderTaskId })) {
     return finish({
       attempted: false, sent: 0, failed: 0, suppressed,
       reason: 'quiet mode is on',
@@ -321,6 +323,7 @@ export function initLetterPush(): void {
         type: data.type,
         textPreview: data.textPreview,
         kind: data.kind,
+        ...(data.senderTaskId ? { senderTaskId: data.senderTaskId } : {}),
         ...(data.originKind && data.originName ? { origin: { kind: data.originKind, name: data.originName } } : {}),
       })
     } catch (err) {
