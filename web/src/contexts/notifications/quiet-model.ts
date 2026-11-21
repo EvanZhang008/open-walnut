@@ -17,7 +17,7 @@
  * new attention renderer outside a page that does not go through them.
  */
 import { IS_PERSISTENT, type NotificationKind } from './types';
-import { normalizeScope, scopeIsEmpty, taskInScope, type FocusScope, type ScopeTaskLookup } from '@open-walnut/focus-scope';
+import { holdLetsTaskThrough, normalizeScope, scopeIsEmpty, type FocusScope, type ScopeTaskLookup } from '@open-walnut/focus-scope';
 
 export interface QuietHold {
   source: string;
@@ -109,7 +109,7 @@ export function quietAllowsToast(
 export function quietLetsTaskThrough(q: QuietState, taskId: string | null | undefined, lookup?: ScopeTaskLookup, now = Date.now()): boolean {
   const e = effectiveQuiet(q, now);
   if (!e.active || !taskId || e.holds.length === 0) return false;
-  return e.holds.every((h) => !!h.scope && taskInScope(h.scope, taskId, lookup ?? (() => undefined)));
+  return e.holds.every((h) => holdLetsTaskThrough(h, taskId, lookup));
 }
 
 function holdName(h: QuietHold): string {

@@ -25,11 +25,12 @@
  *        clipboard; saved here and named by path in the message, the phone's way
  *        (session-send-v1.ts). With an image the text may be empty.
  *        Both are the one send below.
- *   POST /quick/send { to?, text, images?, follow?, from_workspace? } → as /quick/main
+ *   POST /quick/send { to?, text, images?, follow? } → as /quick/main
  *        The quick bar's send (web/src/components/quickbar/): `to` is the task id the people list
  *        named (a VP, any task), Main when absent or `ceo`; `follow` streams that task's reply.
- *        In a focus space (`from_workspace`: the bar was opened in one) a line to anyone outside it
- *        is dropped out and left: no reply streams back into the focus (`followed: false`).
+ *        In a focus space (experiment focus_workspace) a line to anyone outside it is dropped out
+ *        and left: after `sent` the stream ends with `{ type: 'kept', reason: 'outside_focus' }`,
+ *        and the reply waits in that chat, never streaming back into the focus.
  *   GET  /quick/people?limit=                            → { people: [{ id, title, kind, state, line, needs, ... }], focus? }
  *        Who the bar can talk to: CEO, every VP, then open tasks, needing the user first (quick-people.ts).
  *        In a focus space, only its tasks, and `focus: { name, outside }` counts the rest.
@@ -219,16 +220,17 @@ quickInputV1Router.post('/quick/send', async (req: Request, res: Response, next:
     const to = typeof req.body?.to === 'string' ? req.body.to.trim() : ''
     const toMain = !to || to.toLowerCase() === 'ceo' || to.toLowerCase() === 'main'
     // A line dropped out of a focus space never brings its reply back into it.
-    if (req.body?.follow === true && await leavesFocus(req.body?.from_workspace, toMain ? null : to)) req.body.follow = false
-    await quickSend(req, res, toMain ? null : to, `text must be 1-${MAX_TEXT_CHARS} characters`, { testRunGuard: true })
+    const kept = req.body?.follow === true && await leavesFocus(toMain ? null : to).catch(() => false)
+    await quickSend(req, res, toMain ? null : to, `text must be 1-${MAX_TEXT_CHARS} characters`, { testRunGuard: true, kept })
   } catch (err) {
     next(err)
   }
 })
 
-/** The bar was opened in a focus space and this line goes outside it (Main included). */
-async function leavesFocus(fromWorkspace: unknown, taskId: string | null): Promise<boolean> {
-  if (typeof fromWorkspace !== 'string' || !fromWorkspace) return false
+/** The person is in a focus space and this line goes outside it (Main included). Never throws. */
+async function leavesFocus(taskId: string | null): Promise<boolean> {
+  const { focusSpacesFlag } = await import('../../core/focus-spaces/flag.js')
+  if (!(await focusSpacesFlag.on())) return false
   const { getActiveFocus } = await import('../../core/focus-spaces/active.js')
   const active = await getActiveFocus().catch(() => null)
   if (!active) return false
@@ -244,7 +246,7 @@ async function leavesFocus(fromWorkspace: unknown, taskId: string | null): Promi
  * One send for every quick box: the text (and screenshots) into Main's chat (`taskId` null) or one
  * task's, as the user's own message; `follow: true` streams the reply to it (sendAndFollow).
  */
-async function quickSend(req: Request, res: Response, taskId: string | null, badRequest: string, opts: { testRunGuard?: boolean } = {}): Promise<void> {
+async function quickSend(req: Request, res: Response, taskId: string | null, badRequest: string, opts: { testRunGuard?: boolean; kept?: boolean } = {}): Promise<void> {
   const images = extractValidImages(req.body?.images)
   const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
   if (text === null || taskId === '') {
@@ -266,7 +268,7 @@ async function quickSend(req: Request, res: Response, taskId: string | null, bad
     send = () => sendToTaskFromRequest(req, task, text, images)
   }
   if (req.body?.follow === true) {
-    await sendAndFollow(send, res)
+    await sendAndFollow(send, res, { kept: opts.kept })
     return
   }
   const answer = await send()
@@ -278,7 +280,7 @@ async function quickSend(req: Request, res: Response, taskId: string | null, bad
  * `follow: true`: one NDJSON stream with the send's outcome, then Main's reply to this message as
  * it is written (quick-main-follow.ts). Closing the request stops the follow, never the turn.
  */
-async function sendAndFollow(send: () => Promise<QuickMainResult>, res: Response): Promise<void> {
+async function sendAndFollow(send: () => Promise<QuickMainResult>, res: Response, opts: { kept?: boolean } = {}): Promise<void> {
   res.status(200)
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
@@ -301,6 +303,11 @@ async function sendAndFollow(send: () => Promise<QuickMainResult>, res: Response
     ...(sent.messageId ? { messageId: sent.messageId } : {}),
   })
   if (sent.held || !sent.sessionId) {
+    follower.stop()
+    return
+  }
+  if (opts.kept) {
+    line({ type: 'kept', reason: 'outside_focus' })
     follower.stop()
     return
   }

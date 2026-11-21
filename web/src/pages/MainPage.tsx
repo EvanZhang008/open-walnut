@@ -150,6 +150,7 @@ import { isWorkspaceUsable, workspaceOf } from '@/components/workspaces/workspac
 import { useFocusView } from '@/focus-spaces/useFocusView';
 import { FocusColumnCover } from '@/focus-spaces/FocusColumnCover';
 import { FocusBanner } from '@/focus-spaces/FocusBanner';
+import { mergeVisibleOrder } from '@/focus-spaces/focus-model';
 
 // The session columns, the focused task and the detail choice are layout record fields
 // (utils/layout-record.ts): kept on disk, so a Mac app relaunch (which drops
@@ -435,6 +436,17 @@ function taskIdOfSession(tasks: Iterable<Task>, sessionId: string): string | nul
   return null;
 }
 
+/** Session id -> the loaded task owning it, in one pass (a focus's column covers ask per column). */
+function sessionTaskMap(tasks: Iterable<Task>): Map<string, Task> {
+  const m = new Map<string, Task>();
+  for (const t of tasks) {
+    for (const sid of [t.session_id, t.exec_session_id, t.plan_session_id, ...(t.session_ids ?? [])]) {
+      if (sid && !m.has(sid)) m.set(sid, t);
+    }
+  }
+  return m;
+}
+
 interface MainPageProps {
   /** Whether MainPage is currently visible (route is /) */
   visible?: boolean;
@@ -452,6 +464,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // A focus space shows only its tasks on Home (experiment focus_workspace; null = no focus).
   const focusView = useFocusView();
   const focusTasks = useMemo(() => (focusView ? focusView.filter(tasks) : tasks), [focusView, tasks]);
+  // The panel shows only the focus, but its order writes cover the whole project and the whole
+  // store: the rows it hides keep their places (focus-model.ts mergeVisibleOrder).
+  const focusReorder = useLeanCallback((project: string, ids: string[]) => {
+    if (!focusView) { reorder(project, ids); return; }
+    const key = projectGroupKey(project);
+    reorder(project, mergeVisibleOrder(tasks.filter((t) => projectGroupKey(t.project) === key).map((t) => t.id), ids));
+  }, [focusView, tasks, reorder]);
+  const focusBakeOrder = useLeanCallback((ids: string[]) => {
+    bakeOrder(focusView ? mergeVisibleOrder(tasks.map((t) => t.id), ids) : ids);
+  }, [focusView, tasks, bakeOrder]);
+  // Session id -> its task, built once per task list for the column covers below.
+  const sessionTasks = useMemo(() => (focusView ? sessionTaskMap(tasks) : null), [focusView, tasks]);
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -3792,10 +3816,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           focusScope={focusScope}
           favorites={favorites}
           ordering={ordering}
-          onReorder={reorder}
+          onReorder={focusReorder}
           onMoveTask={moveTask}
           onReparentTask={reparentTask}
-          onBakeOrder={bakeOrder}
+          onBakeOrder={focusBakeOrder}
           taskGroups={taskGroups}
           hiddenGroups={hiddenGroups}
           folderMeta={folderMeta}
@@ -4018,10 +4042,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   alsoLast={idx > 0 && idx < 8 && idx === sessionColumns.length - 1 ? jumpBadgeLabel(9, keyEnv) : undefined}
                 />
               )}
-              {focusView && !isDraft && !isPending && (() => {
-                const colTask = taskIdOfSession(tasks, sid);
-                return colTask && !focusView.inScope(colTask)
-                  ? <FocusColumnCover active={focusView.active} title={tasks.find((t) => t.id === colTask)?.title} />
+              {focusView && sessionTasks && !isDraft && !isPending && (() => {
+                const colTask = sessionTasks.get(sid);
+                return colTask && !focusView.inScope(colTask.id)
+                  ? <FocusColumnCover active={focusView.active} title={colTask.title} />
                   : null;
               })()}
               {isDraft ? (

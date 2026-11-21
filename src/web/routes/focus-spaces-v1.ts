@@ -20,7 +20,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { sendError } from './cloud-send-words.js'
-import { experimentCache } from '../../core/experimental-cache.js'
+import { focusSpacesFlag } from '../../core/focus-spaces/flag.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 import {
   FocusSpaceError, MAX_FOCUS_SPACES, createFocusSpace, deleteFocusSpace, listFocusSpaces,
@@ -32,7 +32,6 @@ import {
 
 export const focusSpacesV1Router = Router()
 
-const flag = experimentCache('focus_workspace')
 
 /** A test run's copy: absent = it changed nothing yet (it reads the user's own). */
 interface RunFocus { spaces?: FocusSpace[]; active?: ActiveFocus | null }
@@ -51,9 +50,8 @@ async function runActive(own: RunFocus): Promise<ActiveFocus | null> {
 /** Gate every route: off answers 404, as a route that does not exist. */
 focusSpacesV1Router.use('/focus-spaces', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    if (await flag.on()) return next()
-    // Turned off in the middle of a focus: the hold must not outlive the switch.
-    if (!testRunPrefsRead<RunFocus>('focus-spaces') && await getActiveFocus()) await leaveFocus()
+    // Turned off in the middle of a focus, the server itself ends it (lifecycle.ts): a read never writes.
+    if (await focusSpacesFlag.on()) return next()
     sendError(res, 404, 'experiment_off', 'Focus spaces are an experiment that is off (Settings > Experimental).')
   } catch (err) { next(err) }
 })

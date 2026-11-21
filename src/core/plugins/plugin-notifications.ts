@@ -17,10 +17,8 @@
  */
 import { bus, EventNames } from '../event-bus.js'
 import { clearQuiet, getQuiet, setQuiet, type QuietState } from '../quiet/quiet-state.js'
-import { experimentCache } from '../experimental-cache.js'
+import { focusSpacesFlag } from '../focus-spaces/flag.js'
 import { log } from '../../logging/index.js'
-
-const focusSpacesOn = experimentCache('focus_workspace')
 import { toDisposable, type Disposable } from './disposable.js'
 import { pluginOpName, validatePluginId } from './ids.js'
 import type { NotificationButton } from '../notifications/store.js'
@@ -181,10 +179,10 @@ export function createPluginNotifications(options: {
         options.assertLive('notifications.quiet.set')
         holdCleanup ??= options.own(toDisposable(async () => {
           await clearQuiet(source, { owner })
-          await leaveBlockFocus()
+          await leaveBlockFocus(owner)
         }))
         const tasks = Array.isArray(input.allowTasks) ? input.allowTasks.filter((t) => typeof t === 'string' && t) : []
-        const scoped = tasks.length > 0 && await focusSpacesOn.on()
+        const scoped = tasks.length > 0 && await focusSpacesFlag.on()
         await setQuiet({
           source,
           owner,
@@ -194,40 +192,48 @@ export function createPluginNotifications(options: {
           // A hold that lets its tasks through exists only while focus spaces are on.
           ...(scoped ? { scope: { tasks } } : {}),
         })
-        if (scoped && input.showOnly) await enterBlockFocus(tasks, input.until)
-        else await leaveBlockFocus()
+        if (scoped && input.showOnly) await enterBlockFocus(tasks, input.until, owner)
+        else await leaveBlockFocus(owner)
       },
       async clear(): Promise<void> {
         await clearQuiet(source)
-        await leaveBlockFocus()
+        await leaveBlockFocus(owner)
       },
     },
   }
 }
 
 /**
- * A focus block on tasks also shows only them (a focus space of its own, `by: 'block'`), and
- * never takes the place of a focus the person chose: it enters only when there is none or the
- * one there is a block's, and its end leaves only a block's.
+ * A focus block on tasks also shows only them (a focus space of its own, `by: 'block'`, owned by
+ * the plugin generation that set it), and never takes the place of a focus the person chose: it
+ * enters only over none or a block's, checked and entered in one step (active.ts enterFocusIf).
  */
-async function enterBlockFocus(tasks: string[], until: number | undefined): Promise<void> {
+async function enterBlockFocus(tasks: string[], until: number | undefined, owner: string): Promise<void> {
   try {
-    const { enterFocus, getActiveFocus } = await import('../focus-spaces/active.js')
-    const now = await getActiveFocus()
-    if (now && now.by !== 'block') return
+    const { enterFocusIf } = await import('../focus-spaces/active.js')
     const { getTask } = await import('../task-manager.js')
     const title = tasks.length === 1 ? (await getTask(tasks[0]).catch(() => null))?.title : undefined
     const live = until !== undefined && until > Date.now() && until <= Date.now() + 24 * 3600_000
-    await enterFocus({ scope: { tasks }, name: title || 'Focus block', by: 'block', ...(live ? { until } : {}) })
+    await enterFocusIf(
+      { scope: { tasks }, name: title || 'Focus block', by: 'block', owner, ...(live ? { until } : {}) },
+      (prev) => !prev || prev.by === 'block',
+    )
+    blockOwners.add(owner)
   } catch (err) {
     log.notif.warn('focus block could not enter its focus space', { error: String(err) })
   }
 }
 
-async function leaveBlockFocus(): Promise<void> {
+/** Plugin generations that entered a block focus: only they ever ask to leave one. */
+const blockOwners = new Set<string>()
+
+/** The block focus this generation entered ends; another plugin's, or a newer generation's, stays. */
+async function leaveBlockFocus(owner: string): Promise<void> {
+  if (!blockOwners.has(owner)) return
   try {
     const { leaveFocus } = await import('../focus-spaces/active.js')
-    await leaveFocus({ onlyBy: 'block' })
+    await leaveFocus({ onlyBy: 'block', onlyOwner: owner })
+    blockOwners.delete(owner)
   } catch (err) {
     log.notif.warn('focus block could not leave its focus space', { error: String(err) })
   }

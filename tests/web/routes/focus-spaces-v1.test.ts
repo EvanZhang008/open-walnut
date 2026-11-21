@@ -117,7 +117,9 @@ describe('/api/v1/focus-spaces', () => {
     expect((await getQuiet()).holds).toEqual([])
   })
 
-  it('answers 404 while the experiment is off, and a focus left on ends', async () => {
+  // A focus left on when the switch goes off is ended by the server itself (lifecycle.ts,
+  // tests/core/focus-spaces/active.test.ts), never by a read: a test run's GET writes nothing.
+  it('answers 404 while the experiment is off, and the read changes nothing', async () => {
     const app = createApp()
     await request(app).put('/api/v1/focus-spaces/active').send({ scope: { tasks: ['t1'] } })
     expect((await getQuiet()).holds).toHaveLength(1)
@@ -125,7 +127,7 @@ describe('/api/v1/focus-spaces', () => {
     const res = await request(app).get('/api/v1/focus-spaces')
     expect(res.status).toBe(404)
     expect(res.body.error.code).toBe('experiment_off')
-    expect((await getQuiet()).holds).toEqual([])
+    expect((await getQuiet()).holds).toHaveLength(1)
   })
 
   it('a test run keeps its spaces and focus in its own copy', async () => {

@@ -8,7 +8,8 @@ import { searchNotesHybrid } from './notes-v2';
 import { noteHitLabel } from '../../../src/core/note-hit-label';
 import type { QuickPerson } from '@/components/quickbar/quickbar-people';
 
-export function fetchQuickPeople(limit = 12, signal?: AbortSignal): Promise<{ people: QuickPerson[] }> {
+/** `focus`: the person is in a focus space; its tasks are listed, `outside` more are left out. */
+export function fetchQuickPeople(limit = 12, signal?: AbortSignal): Promise<{ people: QuickPerson[]; focus?: { name: string; outside: number } }> {
   return apiGet('/api/v1/quick/people', { limit: String(limit) }, { signal, timeoutMs: 8_000 });
 }
 
@@ -39,6 +40,8 @@ export async function searchQuickNotes(q: string, signal?: AbortSignal): Promise
 export type QuickFollowLine =
   | { type: 'sent' | 'held'; taskId: string; sessionId: string | null; started: boolean; messageId?: string }
   | { type: 'delivered' }
+  /** In a focus space, a line to someone outside it: sent, and its reply waits in that chat. */
+  | { type: 'kept'; reason: 'outside_focus' }
   | { type: 'text'; delta: string }
   | { type: 'reset' }
   | { type: 'activity'; detail: string }

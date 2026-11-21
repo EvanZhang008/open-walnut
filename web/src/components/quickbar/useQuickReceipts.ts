@@ -51,6 +51,8 @@ export function applyLine(r: Receipt, line: QuickFollowLine, now = Date.now()): 
     case 'sent': return { ...r, state: 'sent', taskId: line.taskId, ...(line.sessionId ? { sessionId: line.sessionId } : {}), started: line.started };
     case 'held': return { ...r, state: 'held', taskId: line.taskId, endedAt: now };
     case 'delivered': return r.state === 'sent' ? { ...r, state: 'delivered' } : r;
+    // Sent out of a focus space: the reply is not followed into it (shown "Sent · ...", muted).
+    case 'kept': return { ...r, state: 'lost', error: 'its reply waits outside your focus', endedAt: now };
     case 'text': return { ...r, state: 'thinking', reply: r.reply + line.delta };
     case 'reset': return { ...r, reply: '' };
     case 'activity': return { ...r, state: 'thinking', activity: line.detail };

@@ -70,11 +70,13 @@ const FEED_INTEREST = [
   // A node's Threads and the inbox change on a person's tap (or an agent's op): one small frame
   // each, so the phone reads them again at once instead of on its next reopen.
   'org-threads:changed', 'human-inbox:letter', 'human-inbox:answered', 'human-inbox:state',
+  // The person entered or left a focus space (experiment focus_workspace): the phone reads it again.
+  'focus-space:changed',
 ]
 
-/** The frames a phone refetches on: `threads-changed` {task_id} and `inbox-changed` {}. Additive
- *  (2026-11-19): an older phone skips a frame it does not know. */
-const REFETCH_KINDS = new Set(['threads-changed', 'inbox-changed'])
+/** The frames a phone refetches on: `threads-changed` {task_id}, `inbox-changed` {} and
+ *  `focus-changed` {} (2026-11-21). Additive: an older phone skips a frame it does not know. */
+const REFETCH_KINDS = new Set(['threads-changed', 'inbox-changed', 'focus-changed'])
 
 /** The phone hears a task's live action at most this often (a turn's end goes at once). */
 const PHONE_ACTIVITY_MS = 15_000
@@ -262,6 +264,10 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
   }
   if (name.startsWith('human-inbox:')) {
     emitFeedEvent('inbox-changed', {})
+    return
+  }
+  if (name === EventNames.FOCUS_SPACE_CHANGED) {
+    emitFeedEvent('focus-changed', {})
     return
   }
   if (name.startsWith('task:')) {

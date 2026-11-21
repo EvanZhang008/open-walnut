@@ -33,6 +33,8 @@ export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onCl
   const [length, setLength] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Outside a focus, a space row can open its form instead of entering it.
+  const [editing, setEditing] = useState(false)
 
   const run = async (fn: () => Promise<void>) => {
     if (busy) return
@@ -79,36 +81,47 @@ export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onCl
             <div className="focus-panel-detail">Show only the projects or tasks you pick. Everything else waits, quietly, until you leave.</div>
           </div>
         )}
+      {/* The length first: a space row enters at once, so it is picked before one. */}
+      {!active && !editing && others.length > 0 && (
+        <>
+          <div className="focus-panel-caption">Stay for</div>
+          <div className="ask-card"><div className="ask-card-answer focus-length" role="radiogroup" aria-label="Stay for">
+            {FOCUS_LENGTHS.map((l) => (
+              <label key={l.label} className={`org-answer-check${length === l.minutes ? ' is-on' : ''}`}>
+                <input type="radio" name="focus-length" checked={length === l.minutes} onChange={() => setLength(l.minutes)} />{l.label}
+              </label>
+            ))}
+          </div></div>
+        </>
+      )}
       {others.length > 0 && (
         <>
-          <div className="focus-panel-caption">{active ? 'Switch to' : 'Your spaces'}</div>
+          <div className="focus-panel-caption">{active ? 'Switch to' : editing ? 'Pick a space to change' : 'Your spaces'}</div>
           <div className="ask-card-answer focus-options">
             <div className="org-answer-options" role="list">
               {others.map((s) => (
                 <button key={s.id} type="button" role="listitem" className="btn btn-sm" disabled={busy}
                   data-detail={scopeLine(s, titleOf)} title={scopeLine(s, titleOf)}
-                  onClick={() => enter(s.id)} data-testid={`focus-space-${s.id}`}>{s.name}</button>
+                  onClick={() => (editing ? setMode({ kind: 'form', space: s }) : enter(s.id))} data-testid={`focus-space-${s.id}`}>{s.name}</button>
               ))}
             </div>
           </div>
         </>
       )}
       {!active && spaces.length === 0 && <div className="focus-panel-empty">No spaces yet. Make one with the projects or tasks you want in front of you.</div>}
-      {!active && others.length > 0 && (
-        <div className="ask-card"><div className="ask-card-answer focus-length" role="radiogroup" aria-label="How long">
-          {FOCUS_LENGTHS.map((l) => (
-            <label key={l.label} className={`org-answer-check${length === l.minutes ? ' is-on' : ''}`}>
-              <input type="radio" name="focus-length" checked={length === l.minutes} onChange={() => setLength(l.minutes)} />{l.label}
-            </label>
-          ))}
-        </div></div>
-      )}
       {error && <div className="focus-panel-error" role="alert">{error}</div>}
       <div className="ask-card-answer focus-actions">
         {active && <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={leave} data-testid="focus-leave">Leave focus</button>}
         {activeSpace && <button type="button" className="btn btn-sm" onClick={() => setMode({ kind: 'form', space: activeSpace })}>Edit space</button>}
         {/* In a focus: leave it or change it; a new space is made from outside one. */}
         {!active && <button type="button" className={`btn btn-sm${spaces.length === 0 ? ' btn-primary' : ''}`} onClick={() => setMode({ kind: 'form' })} data-testid="focus-new-space">New space</button>}
+        {!active && others.length > 0 && (
+          <span className="ask-card-tools">
+            <button type="button" className="btn btn-sm" aria-pressed={editing} onClick={() => setEditing((e) => !e)} data-testid="focus-edit-spaces">
+              {editing ? 'Stop editing' : 'Edit a space'}
+            </button>
+          </span>
+        )}
       </div>
     </div>
   )

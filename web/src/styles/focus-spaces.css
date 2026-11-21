@@ -31,7 +31,8 @@
 .focus-length .org-answer-check { flex: 1 1 0; justify-content: center; }
 
 .focus-form-field { display: flex; flex-direction: column; gap: 4px; }
-.focus-form-projects { max-height: 172px; overflow-y: auto; overflow-x: hidden; }
+/* About five and a half rows: the cut row shows the list goes on. */
+.focus-form-projects { max-height: 196px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .focus-form-delete { margin-left: auto; }
 
 /* A chat column whose task is outside the focus: covered, never closed or moved, so the
@@ -76,3 +77,5 @@
 /* A caption sits as close to its list as to its input (the rows bring their own 4 px). */
 .focus-panel-caption + .focus-form-projects { margin-top: -4px; }
 .focus-banner-actions { margin-block: 0; flex: none; }
+/* On the Tasks page the banner lines up with the toolbar under it (tasks-page.css .tp-toolbar). */
+.tp-board > .focus-banner { padding: 0 20px; }

@@ -299,7 +299,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       shouldToast = false;
     }
     // Quiet mode demotes every toast to feed-only, except a permission ask while
-    // the holds allow them (an agent is blocked on it).
+    // the holds allow them (an agent is blocked on it), and one about a task inside
+    // every hold's scope (a focus). This window looks the task up in its own store:
+    // a subtask whose parent it has not loaded reads as outside, so its toast waits
+    // while the server's push (which reads every task) may go through.
     const quietAllows = quietAllowsToast(quietRef.current, input.kind, Date.now(), {
       taskId: input.taskId,
       lookup: (id) => taskStoreRef.current?.get(id) ?? undefined,

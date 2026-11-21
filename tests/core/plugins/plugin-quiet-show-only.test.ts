@@ -20,8 +20,10 @@ import { createPluginNotifications } from '../../../src/core/plugins/plugin-noti
 import { enterFocus, getActiveFocus, resetActiveFocus } from '../../../src/core/focus-spaces/active.js'
 import { getQuiet, stopQuiet } from '../../../src/core/quiet/quiet-state.js'
 
-function plugin() {
-  return createPluginNotifications({ pluginId: 'walnut-rhythm', own: (r) => r, assertLive: () => {} })
+function plugin(pluginId = 'walnut-rhythm') {
+  const owned: Array<{ dispose(): unknown }> = []
+  const api = createPluginNotifications({ pluginId, own: (r) => { owned.push(r as never); return r }, assertLive: () => {} })
+  return Object.assign(api, { dispose: async () => { for (const d of owned) await d.dispose() } })
 }
 
 beforeEach(async () => {
@@ -70,5 +72,24 @@ describe('quiet.set showOnly', () => {
     await plugin().quiet.set({ reason: 'Focus block', allowTasks: ['task-a'] })
     expect(await getActiveFocus()).toBeNull()
     expect((await getQuiet()).holds[0].scope).toEqual({ tasks: ['task-a'] })
+  })
+
+  // 2026-11-21 review: any plugin's clear, or an old generation disposed after a reload, ended
+  // Rhythm's block focus while its scoped hold stayed.
+  it('another plugin\'s quiet, or an older generation\'s end, leaves the block focus alone', async () => {
+    const old = plugin()
+    await old.quiet.set({ reason: 'Focus block', allowTasks: ['task-a'], showOnly: true })
+    const fresh = plugin()
+    await fresh.quiet.set({ reason: 'Focus block', allowTasks: ['task-a'], showOnly: true })
+    await old.dispose()
+    expect(await getActiveFocus()).toMatchObject({ by: 'block', name: 'Question bank practice' })
+
+    const other = plugin('walnut-mail')
+    await other.quiet.set({ reason: 'Inbox zero' })
+    await other.quiet.clear()
+    expect(await getActiveFocus()).toMatchObject({ by: 'block' })
+
+    await fresh.quiet.clear()
+    expect(await getActiveFocus()).toBeNull()
   })
 })

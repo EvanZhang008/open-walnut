@@ -6520,6 +6520,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }, { global: true, interest: ['plugin:runtime-changed'] })
 
+  // Focus spaces (experiment focus_workspace): the focus file and its quiet hold agree at start,
+  // and the switch turned off ends a focus left on (core/focus-spaces/lifecycle.ts).
+  if (!isFollower()) {
+    void import('../core/focus-spaces/lifecycle.js').then((m) => m.startFocusSpaces()).catch((err) => {
+      log.web.warn('focus spaces did not start', { error: String(err) })
+    })
+  }
+
   // A config save may complete one or more needs-config Plugins. Reload only
   // those owners; rebuilding the whole manager would interrupt every active Plugin.
   bus.subscribe('plugin-config-reload', async (event) => {
@@ -7888,6 +7896,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   bus.unsubscribe('task-outbox')
   bus.unsubscribe('main-ai')
   bus.unsubscribe('plugin-config-reload')
+  bus.unsubscribe('focus-spaces-switch')
   bus.unsubscribe('plugin-late-recovery')
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')

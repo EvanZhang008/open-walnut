@@ -10,6 +10,13 @@ import { receiptStatus } from '../../web/src/components/quickbar/QuickBarReceipt
 const base: Receipt = { id: 'r1', person: { id: 'v1', title: 'Walnut VP', kind: 'vp' }, text: 'ship it', images: [], state: 'sending', reply: '' };
 
 describe('applyLine', () => {
+  it('a line sent out of a focus space ends at Sent, its reply left in its chat', () => {
+    let r = applyLine(base, { type: 'sent', taskId: 'v1', sessionId: 's1', started: false });
+    r = applyLine(r, { type: 'kept', reason: 'outside_focus' }, 1000);
+    expect(r).toMatchObject({ state: 'lost', error: 'its reply waits outside your focus', endedAt: 1000 });
+    expect(receiptStatus(r)).toBe('Sent · its reply waits outside your focus');
+  });
+
   it('walks sending, delivered, thinking, replied', () => {
     let r = applyLine(base, { type: 'sent', taskId: 'v1', sessionId: 's1', started: false });
     expect([r.state, r.taskId, receiptStatus(r)]).toEqual(['sent', 'v1', 'Sent · in its queue']);

@@ -41,8 +41,8 @@ export interface QuickPerson {
  * No focus (or the experiment off): the list as it is.
  */
 export async function focusPeople(people: QuickPerson[]): Promise<{ people: QuickPerson[]; focus?: { name: string; outside: number } }> {
-  const { experimentCache } = await import('../../core/experimental-cache.js')
-  if (!(await (focusFlag ??= experimentCache('focus_workspace')).on())) return { people }
+  const { focusSpacesFlag } = await import('../../core/focus-spaces/flag.js')
+  if (!(await focusSpacesFlag.on())) return { people }
   const { getActiveFocus } = await import('../../core/focus-spaces/active.js')
   const active = await getActiveFocus()
   if (!active) return { people }
@@ -59,7 +59,6 @@ export async function focusPeople(people: QuickPerson[]): Promise<{ people: Quic
   }
   return { people: kept, focus: { name: active.name, outside } }
 }
-let focusFlag: import('../../core/experimental-cache.js').ExperimentCache | undefined
 
 /** Tasks matching the words, best first, open ones before finished ones. */
 const STATE_RANK: Record<string, number> = { needs: 0, read: 1, working: 2, waiting: 3, done: 4 }

@@ -78,3 +78,25 @@ export const FOCUS_LENGTHS: ReadonlyArray<{ label: string; minutes: number | nul
   { label: '2 h', minutes: 120 },
   { label: 'Until I leave', minutes: null },
 ]
+
+/**
+ * A new order of the rows a focus shows, merged back into the whole order: every row outside
+ * the focus keeps its slot, and the slots of the shown rows take them in their new order. A
+ * reorder written with only the shown ids would move every hidden row of the project to its end.
+ */
+export function mergeVisibleOrder(fullIds: readonly string[], newVisibleIds: readonly string[]): string[] {
+  const shown = new Set(newVisibleIds)
+  const out: string[] = []
+  let next = 0
+  for (const id of fullIds) out.push(shown.has(id) ? newVisibleIds[next++] : id)
+  // A shown id the whole order lacks (a row just made) goes last, as a write of it alone would.
+  while (next < newVisibleIds.length) out.push(newVisibleIds[next++])
+  return out
+}
+
+/** The line under the people in a focus space (quick/people `focus`), none outside one. */
+export function focusNoteOf(focus: { name: string; outside: number } | undefined): string | undefined {
+  if (!focus) return undefined
+  const left = focus.outside === 0 ? '' : ` · ${focus.outside} ${focus.outside === 1 ? 'task' : 'tasks'} outside it not listed`
+  return `In focus: ${focus.name}${left}. A line to anyone outside is sent, and its reply waits there.`
+}

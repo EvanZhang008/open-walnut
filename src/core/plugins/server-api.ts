@@ -41,8 +41,6 @@ import { clearAppState, disposeAppStateOwner, publishAppState } from '../session
 import { clearAppBrief, setAppBrief } from '../sessions/app-brief.js'
 import { registeredSyncOf } from './legacy-phase-sync.js'
 import { createPluginNotifications } from './plugin-notifications.js'
-/** The focus_workspace switch, read by every plugin's `walnut.focus.current()`. */
-let focusFlag: import('../experimental-cache.js').ExperimentCache | undefined
 import { createPluginLetters } from './plugin-letters.js'
 import { createPluginUi } from './plugin-status-items.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
@@ -988,8 +986,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     /** The focus space the person is in, as this plugin's App should treat it (focus-spaces/apps.ts). */
     focus: {
       async current() {
-        const { experimentCache } = await import('../experimental-cache.js')
-        if (!(await (focusFlag ??= experimentCache('focus_workspace')).on())) return null
+        const { focusSpacesFlag } = await import('../focus-spaces/flag.js')
+        if (!(await focusSpacesFlag.on())) return null
         const { registry } = await import('../integration-registry.js')
         const { pluginFocus } = await import('../focus-spaces/apps.js')
         return pluginFocus(pluginId, registry.get(pluginId)?.focusSpaces)

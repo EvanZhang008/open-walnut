@@ -25,7 +25,7 @@ import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { bus, EventNames } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import type { QuietHold, QuietState } from '../event-types.js'
-import { normalizeScope, scopeIsEmpty, taskInScope, type FocusScope, type ScopeTaskLookup } from '../focus-spaces/scope.js'
+import { holdLetsTaskThrough, normalizeScope, scopeIsEmpty, type FocusScope, type ScopeTaskLookup } from '../focus-spaces/scope.js'
 
 export type { QuietHold, QuietState }
 
@@ -306,6 +306,24 @@ export async function clearQuiet(source: string, opts: { owner?: string } = {}):
   return snapshot()
 }
 
+/**
+ * Every hold lets nothing through again (focus spaces turned off, focus-spaces/lifecycle.ts): a
+ * scope a plugin's hold carried goes, the hold itself stays.
+ */
+export async function dropQuietScopes(): Promise<void> {
+  await ensureLoaded()
+  let changed = false
+  for (const [source, hold] of holds) {
+    if (!hold.scope) continue
+    const { scope: _scope, ...rest } = hold
+    holds.set(source, rest)
+    changed = true
+  }
+  if (!changed) return
+  await persist()
+  publishIfChanged()
+}
+
 export interface QuietSuppressOptions {
   permission?: boolean
   /** The task the interruption is about: a hold whose scope holds it lets it through. */
@@ -324,7 +342,7 @@ export function quietSuppresses(state: QuietState, opts: QuietSuppressOptions = 
   if (state.holds.length === 0) return !(opts.permission && state.allowPermissions)
   return state.holds.some((h) => {
     if (opts.permission && h.allowPermissions !== false && state.allowPermissions) return false
-    if (h.scope && opts.taskId && taskInScope(h.scope, opts.taskId, opts.lookup ?? (() => undefined))) return false
+    if (holdLetsTaskThrough(h, opts.taskId, opts.lookup)) return false
     return true
   })
 }

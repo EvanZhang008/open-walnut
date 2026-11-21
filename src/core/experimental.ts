@@ -207,7 +207,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'focus_workspace',
     name: 'Focus spaces',
-    description: 'Make a focus space from a few projects or one task, and while you are in it Walnut shows only what is inside: Home, Tasks, search, the Org page and the rail count only its tasks, and everything else waits behind one number. A Rhythm focus block on a task lets that task\'s replies and pushes through while it keeps the rest quiet. Your tasks never move: a space is a list read beside the board, and Main still sees everything.',
+    description: 'Make a focus space from a few projects or one task, and while you are in it Walnut shows only what is inside: Home, the Tasks page and the board list only its tasks, chat columns of other tasks are covered, the quick bar lists only its tasks, and everything else waits behind one number with its notices and pushes held. Search and the Org page still show everything. A Rhythm focus block on a task enters a focus on that task. Your tasks never move: a space is a list read beside the board, and Main still sees everything.',
     default: false,
   },
   {

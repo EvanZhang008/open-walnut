@@ -164,7 +164,7 @@ describe('GET /api/v1/events', () => {
     }
   })
 
-  it('a node\'s Threads change and an inbox change reach the phone as refetch frames', async () => {
+  it('a node\'s Threads change, an inbox change and a focus change reach the phone as refetch frames', async () => {
     const sse = await connectSse(apiUrl('/api/v1/events'))
     try {
       await sse.waitFor((e) => e.event === 'snapshot')
@@ -174,6 +174,10 @@ describe('GET /api/v1/events', () => {
       bus.emit('human-inbox:state', { letterId: 'l1', field: 'read', value: true }, [], { source: 'human-inbox' })
       const inbox = await sse.waitFor((e) => e.event === 'inbox-changed')
       expect(inbox.data).toEqual({})
+      // Entering or leaving a focus space (experiment focus_workspace): the phone reads it again.
+      bus.emit('focus-space:changed', { active: null }, ['web-ui'], { source: 'focus-spaces' })
+      const focus = await sse.waitFor((e) => e.event === 'focus-changed')
+      expect(focus.data).toEqual({})
     } finally {
       sse.close()
     }

@@ -1780,6 +1780,20 @@ a newer node never changes an older one's. A chosen one is stored on the task as
   empty list there: a client that sees none while the node's `user_status.threads.shown` counts
   some says it could not read them.
 
+### Focus spaces (additive, 2026-11-21, experiment `focus_workspace`): `/focus-spaces`
+
+A focus space names a few projects and tasks; while the person is in one, clients show only its
+tasks (a task is inside when its project, case-insensitive with `""` as Inbox, is named, or it or
+an ancestor by `parent_task_id` is named). The focus is one per person, held by the server, and its
+quiet hold lets only pushes about tasks inside through. Every route answers `404 experiment_off`
+while the experiment is off; writes answer `501 not_supported_cloud` on the cloud companion.
+
+- `GET /focus-spaces` → `{ spaces: [{ id, name, projects, tasks, apps, createdAt, updatedAt }], active: { spaceId?, name, scope: { projects?, tasks? }, since, until?, by, owner? } | null, apps: [{ pluginId, name, declared? }] }`
+- `POST /focus-spaces { name, projects?, tasks?, apps? }` → `{ space }`; `PATCH /focus-spaces/:id`, `DELETE /focus-spaces/:id`
+- `PUT /focus-spaces/active { spaceId } | { scope, name? }, until?` → `{ active }` (`until`: epoch ms within 24 h)
+- `DELETE /focus-spaces/active?only_by=` → `{ ended }`
+- The events feed's `focus-changed` frame says to read `GET /focus-spaces` again.
+
 ### Quick input (additive, 2026-10-31): `/quick/ask`, `/quick/warm`, `/quick/main`, `/quick/task-message`, `/quick/tasks`
 
 What a launcher on the Mac calls (the Alfred workflow and Raycast extension in
@@ -4797,6 +4811,9 @@ One long-lived SSE stream that pushes slim updates so the app can keep its task 
      ignores the frame.
    - `event: inbox-changed` (added 2026-11-19) — `data: {}`: a letter arrived, was answered, read,
      pinned or archived. Read the inbox again; an older client ignores the frame.
+   - `event: focus-changed` (added 2026-11-21) — `data: {}`: the person entered, changed or left a
+     focus space (experiment `focus_workspace`). Read `GET /focus-spaces` again; an older client
+     ignores the frame.
 3. `: ping` comment every ~25s (heartbeat; ignore).
 
 **Client contract:** on (re)connect, apply the snapshot as a full replace, then apply live events incrementally. This feed keeps **no replay ring** and ignores `Last-Event-ID` — replaying pre-snapshot history would regress the fresh snapshot (a completed task flipping back to todo). Clients need no replay logic; every gap heals on the next snapshot.

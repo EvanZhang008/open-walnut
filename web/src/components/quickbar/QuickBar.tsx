@@ -19,6 +19,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { fetchQuickPeople, type QuickImage } from '@/api/quick';
+import { focusNoteOf } from '@/focus-spaces/focus-model';
 import { log } from '@/utils/log';
 import { addresseeOf, personOfRecent, readRecents, sectionPeople, startingPerson, type QuickPerson } from './quickbar-people';
 import { MODES, matchMode, modeSpec, type QuickMode } from './quickbar-modes';
@@ -96,6 +97,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
   const [pickedBySpeech, setPickedBySpeech] = useState(false);
   // The people list did not load (Walnut restarting, say): the bar says so, and reads it again.
   const [peopleFailed, setPeopleFailed] = useState(false);
+  const [focusNote, setFocusNote] = useState<string | undefined>(undefined);
   const peopleRetry = useRef<{ timer: ReturnType<typeof setTimeout> | null; attempt: number }>({ timer: null, attempt: 0 });
   // What the words are for (quickbar-modes.ts); in a mode the box holds a query, never the message.
   const [mode, setMode] = useState<QuickMode>('send');
@@ -139,10 +141,11 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
   const loadPeople = useLeanCallback(() => {
     const retry = peopleRetry.current;
     if (retry.timer) { clearTimeout(retry.timer); retry.timer = null; }
-    fetchQuickPeople(14).then(({ people: rows }) => {
+    fetchQuickPeople(14).then(({ people: rows, focus }) => {
       retry.attempt = 0;
       setPeopleFailed(false);
       setPeople(rows);
+      setFocusNote(focusNoteOf(focus));
       // The person the chip shows stays (words may be on their way to them), refreshed from the list.
       setPerson((cur) => (cur?.id ? rows.find((r) => r.id === cur.id) ?? cur : startingPerson(rows, readRecents())));
     }).catch((err: unknown) => {
@@ -511,6 +514,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
           modes={MODES}
           // During a take the words are a message: Enter still picks who gets them.
           startOnPeople={recording || stt.isTranscribing}
+          focusNote={focusNote}
           // The words in the box become the search or the question; Esc brings them back.
           onMode={(next) => { const words = text.trim(); enterMode(next, words, words.length > 0); }}
         />

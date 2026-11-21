@@ -95,3 +95,43 @@ export function focusAppMode(explicit: FocusAppMode | undefined, declared: 'scop
   if (explicit) return explicit === 'isolated' && declared === undefined ? 'inherit' : explicit
   return declared === 'scoped' ? 'isolated' : declared === 'shared' ? 'inherit' : 'off'
 }
+
+/**
+ * Does one quiet hold let an interruption about `taskId` through? Only a hold with a scope that
+ * holds the task. Quiet lets it through when every live hold does: the server's gate
+ * (quiet-state.ts quietSuppresses) and the window's (web quiet-model.ts) ask this one rule.
+ */
+export function holdLetsTaskThrough(hold: { scope?: FocusScope }, taskId: string | null | undefined, lookup?: ScopeTaskLookup): boolean {
+  return !!hold.scope && !!taskId && taskInScope(hold.scope, taskId, lookup ?? (() => undefined))
+}
+
+/** A saved focus space (server: store.ts; the window: focus-store.ts): it names, never moves. */
+export interface FocusSpace {
+  /** `fs-` and 8 hex digits: never a dot, so it can prefix a plugin's view keys safely. */
+  id: string
+  name: string
+  projects: string[]
+  tasks: string[]
+  /** Per app (plugin id): absent = what its manifest declares (`focusAppMode`). */
+  apps: Record<string, FocusAppMode>
+  createdAt: string
+  updatedAt: string
+}
+
+export const FOCUS_BY = ['person', 'block', 'quick-bar', 'agent'] as const
+export type FocusBy = typeof FOCUS_BY[number]
+
+/** The focus the person is in (server: active.ts). */
+export interface ActiveFocus {
+  /** The saved space, when it is one. */
+  spaceId?: string
+  name: string
+  scope: FocusScope
+  /** Epoch ms. */
+  since: number
+  /** Epoch ms; absent = until left. */
+  until?: number
+  by: FocusBy
+  /** Who entered it when that is not the person (a plugin generation, `<plugin>#<n>`): only it ends it. */
+  owner?: string
+}

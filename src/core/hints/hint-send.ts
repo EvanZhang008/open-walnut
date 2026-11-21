@@ -259,19 +259,14 @@ async function userFocusFor(target: HintTarget, hints: readonly EffectiveHint[])
   if (target.role !== 'main' && target.role !== 'lead') return undefined;
   if (!hints.some((h) => h.kind === 'user-focus' && h.enabled)) return undefined;
   try {
-    const { experimentCache } = await import('../experimental-cache.js');
-    if (!(await focusFlag(experimentCache).on())) return undefined;
+    const { focusSpacesFlag } = await import('../focus-spaces/flag.js');
+    if (!(await focusSpacesFlag.on())) return undefined;
     const { getActiveFocus } = await import('../focus-spaces/active.js');
     const active = await getActiveFocus();
     return active ? { name: active.name, ...(active.until !== undefined ? { until: active.until } : {}) } : null;
   } catch {
     return undefined;
   }
-}
-
-let focusFlagCache: import('../experimental-cache.js').ExperimentCache | null = null;
-function focusFlag(make: typeof import('../experimental-cache.js').experimentCache) {
-  return (focusFlagCache ??= make('focus_workspace'));
 }
 
 /** The thread this person's message files under, when the session is an Org node's. Never throws. */

@@ -14,21 +14,9 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
-import { normalizeScope, scopeIsEmpty, type FocusAppMode, type FocusScope } from './scope.js'
+import { normalizeScope, scopeIsEmpty, type FocusAppMode, type FocusScope, type FocusSpace } from './scope.js'
 
-export type { FocusAppMode }
-
-export interface FocusSpace {
-  /** `fs-` and 8 hex digits: never a dot, so it can prefix a plugin's view keys safely. */
-  id: string
-  name: string
-  projects: string[]
-  tasks: string[]
-  /** Per app (plugin id): absent = what its manifest declares (`focusAppMode`). */
-  apps: Record<string, FocusAppMode>
-  createdAt: string
-  updatedAt: string
-}
+export type { FocusAppMode, FocusSpace }
 
 export interface FocusSpaceInput {
   name?: unknown

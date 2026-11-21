@@ -17,26 +17,14 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { bus, EventNames } from '../event-bus.js'
-import { clearQuiet, setQuiet } from '../quiet/quiet-state.js'
-import { normalizeScope, scopeIsEmpty, type FocusScope } from './scope.js'
+import { clearQuiet, getQuiet, setQuiet } from '../quiet/quiet-state.js'
+import { FOCUS_BY, normalizeScope, scopeIsEmpty, type ActiveFocus, type FocusBy, type FocusScope } from './scope.js'
 import { FocusSpaceError, getFocusSpace, spaceScope, type FocusSpace } from './store.js'
 
 export const FOCUS_QUIET_SOURCE = 'focus-space'
 
-export const FOCUS_BY = ['person', 'block', 'quick-bar', 'agent'] as const
-export type FocusBy = typeof FOCUS_BY[number]
-
-export interface ActiveFocus {
-  /** The saved space, when it is one. */
-  spaceId?: string
-  name: string
-  scope: FocusScope
-  /** Epoch ms. */
-  since: number
-  /** Epoch ms; absent = until left. */
-  until?: number
-  by: FocusBy
-}
+export { FOCUS_BY }
+export type { ActiveFocus, FocusBy }
 
 export interface EnterFocusInput {
   spaceId?: string
@@ -46,6 +34,7 @@ export interface EnterFocusInput {
   /** Epoch ms. */
   until?: unknown
   by?: unknown
+  owner?: unknown
 }
 
 const MAX_MS = 24 * 60 * 60 * 1000
@@ -67,6 +56,7 @@ function readActive(raw: unknown, now: number): ActiveFocus | null {
     ...(typeof r.spaceId === 'string' ? { spaceId: r.spaceId } : {}),
     name: typeof r.name === 'string' && r.name ? r.name.slice(0, 60) : 'Focus',
     scope, since: r.since, ...(until !== undefined ? { until } : {}), by,
+    ...(typeof r.owner === 'string' && r.owner ? { owner: r.owner.slice(0, 120) } : {}),
   }
 }
 
@@ -74,16 +64,54 @@ function publish(): void {
   bus.emit(EventNames.FOCUS_SPACE_CHANGED, { active: current ?? null }, ['web-ui'], { source: 'focus-spaces' })
 }
 
+// Every change runs one at a time (enter, leave, a space's change, an end that came due): the
+// file, the quiet hold and the event move together, and a check before a change ("only over a
+// block's") holds until the change is made.
+let chain: Promise<unknown> = Promise.resolve()
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const run = chain.then(fn, fn)
+  chain = run.catch(() => undefined)
+  return run
+}
+
+function due(f: ActiveFocus | null | undefined, now: number): boolean {
+  return !!f && f.until !== undefined && f.until <= now
+}
+
+/** Inside `serial` only: the focus now, an ended one dropped. */
+async function loadLocked(now: number): Promise<ActiveFocus | null> {
+  if (current === undefined) current = readActive(await readJsonFile<unknown>(activeFile(), null), now)
+  if (due(current, now)) await leaveLocked()
+  return current ?? null
+}
+
+async function leaveLocked(): Promise<void> {
+  current = null
+  await writeJsonFile(activeFile(), null)
+  await clearQuiet(FOCUS_QUIET_SOURCE)
+  publish()
+}
+
+async function enterLocked(input: EnterFocusInput, now: number, allow?: (prev: ActiveFocus | null) => boolean): Promise<ActiveFocus | null> {
+  const prev = await loadLocked(now)
+  if (allow && !allow(prev)) return null
+  const next = await resolveFocus(input, prev, getFocusSpace, now)
+  current = next
+  await writeJsonFile(activeFile(), current)
+  await setQuiet({
+    source: FOCUS_QUIET_SOURCE,
+    reason: `Focus: ${next.name}`,
+    scope: next.scope,
+    ...(next.until !== undefined ? { until: next.until } : {}),
+  })
+  publish()
+  return next
+}
+
 /** The focus now (null: none), an ended one dropped. */
 export async function getActiveFocus(now = Date.now()): Promise<ActiveFocus | null> {
-  if (current === undefined) current = readActive(await readJsonFile<unknown>(activeFile(), null), now)
-  if (current && current.until !== undefined && current.until <= now) {
-    current = null
-    await writeJsonFile(activeFile(), null)
-    await clearQuiet(FOCUS_QUIET_SOURCE)
-    publish()
-  }
-  return current
+  if (current !== undefined && !due(current, now)) return current
+  return serial(() => loadLocked(now))
 }
 
 /**
@@ -121,44 +149,63 @@ export async function resolveFocus(
     since: previous && (previous.until === undefined || previous.until > now) ? previous.since : now,
     ...(input.until !== undefined ? { until: input.until } : {}),
     by,
+    ...(typeof input.owner === 'string' && input.owner ? { owner: input.owner.slice(0, 120) } : {}),
   }
 }
 
 /** Enter a saved space, or an unsaved scope. Replaces the focus there was. */
 export async function enterFocus(input: EnterFocusInput, now = Date.now()): Promise<ActiveFocus> {
-  const next = await resolveFocus(input, await getActiveFocus(now), getFocusSpace, now)
-  current = next
-  await writeJsonFile(activeFile(), current)
-  await setQuiet({
-    source: FOCUS_QUIET_SOURCE,
-    reason: `Focus: ${next.name}`,
-    scope: next.scope,
-    ...(next.until !== undefined ? { until: next.until } : {}),
-  })
-  publish()
-  return next
+  return (await serial(() => enterLocked(input, now)))!
+}
+
+/**
+ * Enter only when `allow` says so of the focus there is, checked and entered in one step (a focus
+ * block enters only over none or a block's). Null: refused, nothing changed.
+ */
+export async function enterFocusIf(input: EnterFocusInput, allow: (prev: ActiveFocus | null) => boolean, now = Date.now()): Promise<ActiveFocus | null> {
+  return serial(() => enterLocked(input, now, allow))
 }
 
 /** A saved space changed or went: the focus in it follows (its new list, or leaving). */
 export async function followSpaceChange(spaceId: string): Promise<void> {
-  const now = await getActiveFocus()
-  if (!now || now.spaceId !== spaceId) return
-  const space = await getFocusSpace(spaceId)
-  if (!space) { await leaveFocus(); return }
-  await enterFocus({ spaceId, by: now.by, ...(now.until !== undefined ? { until: now.until } : {}) })
+  await serial(async () => {
+    const was = await loadLocked(Date.now())
+    if (!was || was.spaceId !== spaceId) return
+    const space = await getFocusSpace(spaceId)
+    if (!space) { await leaveLocked(); return }
+    await enterLocked({ spaceId, by: was.by, ...(was.owner ? { owner: was.owner } : {}), ...(was.until !== undefined ? { until: was.until } : {}) }, Date.now())
+  })
 }
 
-/** Leave the focus. Returns the one that ended (null: there was none). */
-export async function leaveFocus(opts: { onlyBy?: FocusBy } = {}): Promise<ActiveFocus | null> {
-  const was = await getActiveFocus()
-  if (!was) return null
-  // A focus block ending (by 'block': a plugin's timer) leaves only the focus it entered, never one the person chose since.
-  if (opts.onlyBy && was.by !== opts.onlyBy) return null
-  current = null
-  await writeJsonFile(activeFile(), null)
-  await clearQuiet(FOCUS_QUIET_SOURCE)
-  publish()
-  return was
+/**
+ * Leave the focus. Returns the one that ended (null: there was none, or it was not the one named).
+ * `onlyBy`/`onlyOwner`: a focus block ending leaves only the focus it entered itself, never one the
+ * person chose since, nor another plugin's (or its own newer generation's) block.
+ */
+export async function leaveFocus(opts: { onlyBy?: FocusBy; onlyOwner?: string } = {}): Promise<ActiveFocus | null> {
+  return serial(async () => {
+    const was = await loadLocked(Date.now())
+    if (!was) return null
+    if (opts.onlyBy && was.by !== opts.onlyBy) return null
+    if (opts.onlyOwner !== undefined && was.owner !== opts.onlyOwner) return null
+    await leaveLocked()
+    return was
+  })
+}
+
+/**
+ * The file and the quiet hold agree (at start): a focus whose hold went (a crash between the two
+ * writes) holds again, and a hold whose focus ended or went lets go.
+ */
+export async function reconcileFocusQuiet(now = Date.now()): Promise<void> {
+  await serial(async () => {
+    const f = await loadLocked(now)
+    const hold = (await getQuiet()).holds.find((h) => h.source === FOCUS_QUIET_SOURCE)
+    if (!f && hold) await clearQuiet(FOCUS_QUIET_SOURCE)
+    if (f && !hold) {
+      await setQuiet({ source: FOCUS_QUIET_SOURCE, reason: `Focus: ${f.name}`, scope: f.scope, ...(f.until !== undefined ? { until: f.until } : {}) })
+    }
+  })
 }
 
 /** Tests: forget the in-memory copy (the file stays). */

@@ -41,11 +41,13 @@ interface PickerProps {
   onMode: (id: Exclude<QuickMode, 'send'>) => void;
   /** Opened during a take: the highlight starts on the first person, so Enter keeps the words a message. */
   startOnPeople: boolean;
+  /** In a focus space: a line under the people saying the tasks outside it are left out. */
+  focusNote?: string;
 }
 
 type Row = { kind: 'mode'; mode: ModeSpec } | { kind: 'person'; person: QuickPerson };
 
-export function QuickBarPicker({ sections, current, onPick, onClose, modes: modesNow, onMode, startOnPeople: onPeopleNow }: PickerProps) {
+export function QuickBarPicker({ sections, current, onPick, onClose, modes: modesNow, onMode, startOnPeople: onPeopleNow, focusNote }: PickerProps) {
   // Fixed while the list is open: a take that ends under it never moves the rows or the highlight.
   const [modes] = useState(modesNow);
   const [startOnPeople] = useState(onPeopleNow);
@@ -189,6 +191,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
             })}
           </div>
         ))}
+        {focusNote && !query.trim() && <div className="qb-picker-empty qb-picker-focus" data-testid="qb-picker-focus">{focusNote}</div>}
       </div>
     </div>
   );

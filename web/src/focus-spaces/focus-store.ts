@@ -12,29 +12,10 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '@/api/client'
 import { wsClient } from '@/api/ws'
 import { testRunLabel } from '@/api/test-run'
 import { log } from '@/utils/log'
-import type { FocusScope } from '@open-walnut/focus-scope'
+import type { ActiveFocus, FocusAppMode, FocusBy, FocusScope, FocusSpace } from '@open-walnut/focus-scope'
 
-export type FocusAppMode = 'inherit' | 'isolated' | 'off'
-export type FocusBy = 'person' | 'block' | 'quick-bar' | 'agent'
-
-export interface FocusSpace {
-  id: string
-  name: string
-  projects: string[]
-  tasks: string[]
-  apps: Record<string, FocusAppMode>
-  createdAt: string
-  updatedAt: string
-}
-
-export interface ActiveFocus {
-  spaceId?: string
-  name: string
-  scope: FocusScope
-  since: number
-  until?: number
-  by: FocusBy
-}
+// One set of types with the server (src/core/focus-spaces/scope.ts).
+export type { ActiveFocus, FocusAppMode, FocusBy, FocusSpace }
 
 /** A plugin with an App, and what its manifest declares for spaces (`focusSpaces`). */
 export interface FocusApp {
