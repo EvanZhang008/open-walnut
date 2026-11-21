@@ -63,6 +63,9 @@ parentPort.on('message', (m) => {
         ensureWal(file)
         const db = new Database(file, { readonly: true })
         db.exec('PRAGMA busy_timeout = 5000')
+        // The first read makes the -shm a WAL database needs: here, before the hold, so no
+        // file is made in the home's dirs after the batch's moment (moment-names.ts).
+        db.query('SELECT count(*) FROM sqlite_master').get()
         open.push({ file, db, wal: '' })
       }
       parentPort.postMessage({ ok: true })

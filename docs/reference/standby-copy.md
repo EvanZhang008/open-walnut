@@ -160,10 +160,24 @@ process), so on a busy server a batch is void more often; it is never wrong.
 
 ## Measured
 
-`scripts/standby-bench.ts <work dir> [--gb 20] [--files 100000]` builds a synthetic home and
-measures. On clouddev (ext4, 2026-11-21) see the numbers in the task's report; the scan of
-100k files is about 0.4 s, and the hold stays under the 0.5 s target because the scan runs
-outside it.
+`scripts/standby-bench.ts <work dir> [--gb 20] [--files 100000] [--append-ms 20]` builds a
+synthetic home and measures. On clouddev (ext4 on a shared, busy disk, 2026-11-21), a 21.8 GB
+home with 99,896 leader files and four WAL databases of 1.8 GB together:
+
+| What | Measured |
+|---|---|
+| Scan of the home | 1.0 to 1.1 s |
+| First batch (5 GB of unique chunks, 21.8 GB copy built) | 1,072 s, hold 99 ms |
+| Incremental batch, notes and two databases written all the time | hold p50 82 ms, p95 111 ms, max 111 ms (of it, names at the moment p50 55 ms); 2 of 20 void |
+| Incremental batch time | p50 28 s, p95 37 s: the two changed databases (1.5 GB) are serialized, hashed and built again in the copy whole |
+| Verify / deep verify | 1.1 s / 77 s, no drift |
+| Target size | 27.2 GB (the copy plus its chunks) |
+| An ungated writer appending to one file every 20 ms | 20 of 20 void ("late"): see below |
+
+**Writes the gate does not hold** void a batch when they land on a file between the moment
+and its read. Walnut still has about forty such appenders (`appendFile` in time tracking,
+session audit, the daily log, health records and others). At one append every 20 ms every
+batch was void; the runner's retries cover a slow appender, not a fast one.
 
 ## Not done yet
 
@@ -172,7 +186,13 @@ outside it.
   boot (`src/core/backup/restore-switch.ts`) and making it writable is phase B.
 - No change log ("about to change" / "done" lines): the scan is fast enough every 30 s.
 - A changed database is copied whole into the pin worker's memory each batch it changed (its
-  size in memory for a moment, then hashed; only changed chunks travel).
+  size in memory for a moment, then hashed; only changed chunks travel), and its file in the
+  copy is built again whole: about 28 s and 1.5 GB written per batch for the bench's databases.
+  Before this is on for real, the copy should clone the old file and write only the changed
+  chunks (APFS clones are free).
+- Walnut's own appenders do not pass the write gate yet; a frequent one voids batches (above).
+  Routing them through one gated append helper is the fix.
+- The target needs up to twice the home's size (the copy, and its chunks, which dedupe repeated content).
 - A rollback-journal (not WAL) database holds its writers while it is copied.
 - Debounced writes that are still in memory are not in a batch (the same as at a crash);
   a manual switch must flush first (phase B).

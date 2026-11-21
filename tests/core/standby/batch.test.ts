@@ -303,6 +303,16 @@ describe('the names at the moment come from the moment, not from the first scan'
     expect(fs.readFileSync(copyOf('user-own-folder/plan.md'), 'utf8')).toBe('before the moment\n')
   })
 
+  it('databases nobody has open (no -wal, no -shm) do not void the batch', async () => {
+    sb = await sandbox('closed-dbs')
+    write(sb.home, 'config.yaml', 'theme: dark\n')
+    for (const rel of ['tasks/tasks.sqlite', 'sessions.sqlite']) makeDb(sb.home, rel, 20).close()
+    expect(fs.existsSync(path.join(sb.home, 'sessions.sqlite-shm'))).toBe(false)
+    await settle()
+    const out = await batch()
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+  })
+
   it.skipIf(process.platform === 'win32')('a backslash is part of a file name on this platform, not a separator', async () => {
     sb = await sandbox('backslash')
     dbs.push(...seedHome(sb.home).dbs)
