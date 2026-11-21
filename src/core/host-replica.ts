@@ -37,7 +37,7 @@ import { notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 import type { Config } from './types.js'
 import { _resetAttachmentReplicaForTesting, forgetAttachments, syncAttachments } from './attachment-replica.js'
-import { replicaExtras, type Extras } from './host-replica-extras.js'
+import { memoryEntriesForHost, replicaExtras, type Extras } from './host-replica-extras.js'
 import { peekKindState } from './replication/replica-status.js'
 import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
@@ -555,7 +555,8 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     // The rest of the memory dir and the skills' references, for every target alike.
     const skills = kind === 'skills' ? await (await import('./skill-store.js')).listAllSkills() : []
     extras = await replicaExtras(kind, skills)
-    entries.push(...extras.entries)
+    // A host's memory copy leaves a kept-local task's files out (replication/host-private.ts); the companion keeps them.
+    entries.push(...(kind === 'memory' && !target.companion ? await memoryEntriesForHost(extras) : extras.entries))
   }
   const opts = kind === 'notes'
     ? { searchExclude: await searchExclude(config), keepExclude: [...keep.notesExclude, ...kept], tooBig: notesTooBig() }

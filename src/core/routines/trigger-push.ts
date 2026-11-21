@@ -121,17 +121,6 @@ function withoutDeliver(def: TriggerDef): TriggerDef {
   return rest;
 }
 
-/** Whether a check of the host reached by `aliases` delivers to `taskId` (host-private.ts keptOffHost). */
-async function keptOffFor(aliases: readonly string[]): Promise<(taskId: string) => boolean> {
-  const { hostPrivacyNow, keptOffHost } = await import('../replication/host-private.js');
-  const privacy = await hostPrivacyNow();
-  if (privacy.tasks.size === 0) return () => false;
-  const [{ sessionRowsForReplica }, { normalizeHostKey }] = await Promise.all([import('../session-tracker.js'), import('../host-slice.js')]);
-  const keys = new Set(aliases.map(normalizeHostKey));
-  const ownHere = new Set((await sessionRowsForReplica()).filter((s) => !!s.taskId && keys.has(normalizeHostKey(s.host))).map((s) => s.taskId));
-  return (taskId) => keptOffHost(taskId, privacy, ownHere);
-}
-
 /** `host` first, then the other aliases of its daemon, each once. */
 function aliasesOf(host: string, sameDaemon: readonly string[] | undefined): string[] {
   return [host, ...(sameDaemon ?? []).filter((h) => h !== host)].filter((h, i, all) => all.indexOf(h) === i);
@@ -163,7 +152,7 @@ export async function compileTriggersForHost(
   // Only the Mac hands clocks out; any other server pushes its checks alone.
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return compileTriggerDefs(jobs, aliases);
-  const keptOff = await keptOffFor(aliases);
+  const { keptOff } = await (await import('../replication/host-private.js')).keptOffHostNow(aliases);
   const { placeClocksForHost, noteWatchedTasks } = await import('./clock-placement.js');
   noteWatchedTasks(jobs);
   // Each alias's clocks are placed as its own (a clock's holder is the alias), one after

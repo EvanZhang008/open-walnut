@@ -9,6 +9,8 @@
  *                                   one of its sessions (an id, a prefix of 6 or more, a path
  *                                   segment), or it is a call of the task's own session that falls
  *                                   back on its own task when it names none (OWN_TASK_OPS)
+ *   a trigger of it                 refused the same way: a trigger call naming one of its triggers
+ *                                   (away-triggers.ts hostTriggers keptTrigger, asked by local-calls.ts)
  *   a message to it                 runs: away-sends.ts holds it for the Mac (the daemon's held op,
  *                                   the target named by id), delivered once when the Mac is back
  *   anything else                   runs, the kept task's own session's calls too (a search, a
@@ -55,6 +57,17 @@ export const OWN_TASK_OPS: Readonly<Record<string, readonly string[]>> = {
   org_get: ['of'],
   org_report: ['of'],
   task_watch: ['for'],
+  trigger_create: ['session'],
+}
+
+/** The trigger calls that name one trigger by `id` (a kept-local task's is refused: away-triggers.ts). */
+const TRIGGER_ID_OPS = ['trigger_pause', 'trigger_resume', 'trigger_delete', 'trigger_update', 'trigger_test']
+
+/** The trigger a call names by id, when it is one of TRIGGER_ID_OPS (local-calls.ts asks whether it is kept). */
+export function triggerIdOf(call: RelayedCall): string | null {
+  const { name, args } = opOf(call)
+  const id = TRIGGER_ID_OPS.includes(name) && args && typeof args === 'object' ? (args as { id?: unknown }).id : undefined
+  return typeof id === 'string' && id.trim() ? id.trim() : null
 }
 
 /** The messages away-sends.ts holds for the Mac when their target is kept. */
@@ -74,7 +87,9 @@ function namesKept(v: unknown, here: LocalTasksHere, skip?: ReadonlySet<string>,
   return false
 }
 
-const given = (v: unknown): boolean => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim())
+/** The words a call uses for "my own" (trigger_create's `session: "this"`): not another task. */
+const SELF_WORDS = new Set(['this', 'self', 'me'])
+const given = (v: unknown): boolean => v !== undefined && v !== null && !(typeof v === 'string' && (!v.trim() || SELF_WORDS.has(v.trim().toLowerCase())))
 
 /** The call's op and arguments (a tool call), or the payload itself (another capability). */
 function opOf(call: RelayedCall): { name: string; args: unknown } {
@@ -83,25 +98,36 @@ function opOf(call: RelayedCall): { name: string; args: unknown } {
   return { name: '', args: p?.args ?? p }
 }
 
-function refusal(call: RelayedCall, own: boolean, final: boolean): Record<string, unknown> {
-  const error = own
-    ? 'this session\'s task is kept local on your Mac, so this host\'s copies leave it out; your Mac answers this once it is back'
-    : 'that task is kept local on your Mac, so this host keeps no copy of it; your Mac answers once it is back'
+/** Said of every final refusal: the call left nothing behind, so the caller runs it again later. */
+const NOT_SAVED = 'Nothing was done or saved; run it again once your Mac is back.'
+
+function refusal(call: RelayedCall, about: 'own' | 'task' | 'trigger', final: boolean): Record<string, unknown> {
+  const what = about === 'own'
+    ? 'this session\'s task is kept local on your Mac, so this host\'s copies leave it out and your Mac answers this call.'
+    : about === 'trigger'
+      ? 'that trigger belongs to a task kept local on your Mac, so this host does not show or change it.'
+      : 'that task is kept local on your Mac, so this host keeps no copy of it and your Mac answers this call.'
+  // Not final, the daemon relays it to the Mac, which answers it now: nothing to run again.
+  const error = final ? `${what} ${NOT_SAVED}` : what
   return { relayId: call.relayId, errorCode: 'needs_leader', error, detail: { why: 'task_kept_local', ...(final ? { final: true } : {}) } }
 }
 
-/** The refusal of a call about a task the Mac keeps local, or null (it runs). `online`: a same-host send while the Mac answers. */
-export function keptLocalRefusal(call: RelayedCall, here: LocalTasksHere, online = false): Record<string, unknown> | null {
+/**
+ * The refusal of a call about a task the Mac keeps local, or null (it runs). `online`: a same-host
+ * send while the Mac answers. `triggerKept`: the trigger the call names (triggerIdOf) is such a task's.
+ */
+export function keptLocalRefusal(call: RelayedCall, here: LocalTasksHere, online = false, opts: { triggerKept?: boolean } = {}): Record<string, unknown> | null {
   if (here.tasks.size === 0 || call.capability === 'tools.list') return null
   const byCaller = here.sessions.has(call.callerSid)
   const { name, args } = opOf(call)
   // The Mac answers: a send of the kept task's session, or naming it, is the Mac's, as before.
-  if (online) return byCaller || namesKept(args, here) ? refusal(call, byCaller, false) : null
+  if (online) return byCaller || namesKept(args, here) ? refusal(call, byCaller ? 'own' : 'task', false) : null
+  if (opts.triggerKept && TRIGGER_ID_OPS.includes(name)) return refusal(call, 'trigger', true)
   const send = SEND_OPS.includes(name)
   // A message's target is held (away-sends.ts), its words are words: only another field counts.
-  if (namesKept(args, here, send ? new Set([...SEND_WORDS, 'to']) : undefined)) return refusal(call, false, true)
+  if (namesKept(args, here, send ? new Set([...SEND_WORDS, 'to']) : undefined)) return refusal(call, 'task', true)
   const own = OWN_TASK_OPS[name]
   if (!byCaller || !own) return null
   const a = args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {}
-  return own.some((k) => given(a[k])) ? null : refusal(call, true, true)
+  return own.some((k) => given(a[k])) ? null : refusal(call, 'own', true)
 }

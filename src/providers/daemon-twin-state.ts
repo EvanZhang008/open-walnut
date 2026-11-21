@@ -14,8 +14,10 @@
  * not, so a new kind of copy says how two names share it before it ships.
  *
  * Each also says what it carries of a task the Mac keeps local (core/replication/host-private.ts):
- * `filteredIn`, the module that builds it through that one filter, or `taskFree`, why it holds no
- * task's data. tests/core/replication/host-private-guard.test.ts holds every entry to it.
+ * `filteredIn`, the module that builds it through that one filter, with every part it ships
+ * (each filtered, or free of task data and why), or `taskFree`, why it holds no task's data.
+ * tests/core/replication/host-private-guard.test.ts holds every entry to it: each filtered part
+ * has a test that shows a kept task's rows or files leave it ("kept fixture: <command> <part>").
  */
 export type TwinRule =
   /** The same payload from every link, the one the name it goes by would send (daemonNames().keeper). */
@@ -29,17 +31,19 @@ export type TwinRule =
   /** Kept per session, sent over that session's own link. */
   | 'per-session'
 
-/** What a copy carries of a task kept local: built through host-private.ts in `filteredIn`, or none (`taskFree`, why). */
-export type HostPrivate = { filteredIn: string } | { taskFree: string }
+/** One part of a copy: left out for a kept task, or free of task data (why). */
+export type HostPrivatePart = 'filtered' | { taskFree: string }
+/** What a copy carries of a task kept local: built through host-private.ts in `filteredIn`, part by part, or none (`taskFree`, why). */
+export type HostPrivate = { filteredIn: string; parts: Readonly<Record<string, HostPrivatePart>> } | { taskFree: string }
 
 export const DAEMON_TWIN_STATE: Readonly<Record<string, { rule: TwinRule; where: string; hostPrivate: HostPrivate }>> = {
   'bridge.configure': { rule: 'one-name', where: 'DaemonConnection.pushBridgeConfig', hostPrivate: { taskFree: 'the bridge address and this host\'s credential to it' } },
-  'host.slice': { rule: 'all-names', where: 'DaemonConnection.pushHostSlice, host-slice.ts buildHostSlice', hostPrivate: { filteredIn: 'src/core/host-slice.ts' } },
-  'triggers.configure': { rule: 'all-names', where: 'DaemonConnection.pushTriggers, routines/trigger-push.ts', hostPrivate: { filteredIn: 'src/core/routines/trigger-push.ts' } },
+  'host.slice': { rule: 'all-names', where: 'DaemonConnection.pushHostSlice, host-slice.ts buildHostSlice', hostPrivate: { filteredIn: 'src/core/host-slice.ts', parts: { tasks: 'filtered', requests: 'filtered', boards: 'filtered', sessions: { taskFree: 'only the sessions that run on this host, whose CLI and transcript are here anyway' } } } },
+  'triggers.configure': { rule: 'all-names', where: 'DaemonConnection.pushTriggers, routines/trigger-push.ts', hostPrivate: { filteredIn: 'src/core/routines/trigger-push.ts', parts: { deliver: 'filtered', check: { taskFree: 'the check script runs on the host it was made for, whoever owns it' } } } },
   'server.configure': { rule: 'keeper-only', where: 'host-server/manager.ts reconcileOnce', hostPrivate: { taskFree: 'whether this host runs its own Walnut server, and how' } },
   'jobs.configure': { rule: 'keeper-only', where: 'plugin-jobs/manager.ts reconcileOnce (a plugin set to run on any alias runs)', hostPrivate: { taskFree: 'which plugin jobs run on this host and their schedules' } },
-  'replica.sync': { rule: 'one-name', where: 'host-replica.ts keepSettingsOf (the keep settings of the name it goes by)', hostPrivate: { filteredIn: 'src/core/host-replica.ts' } },
-  'attachments.sync': { rule: 'one-name', where: 'attachment-replica.ts, through host-replica.ts keepSettingsOf', hostPrivate: { filteredIn: 'src/core/host-replica.ts' } },
+  'replica.sync': { rule: 'one-name', where: 'host-replica.ts keepSettingsOf (the keep settings of the name it goes by)', hostPrivate: { filteredIn: 'src/core/host-replica.ts', parts: { notes: 'filtered', memory: 'filtered', skills: { taskFree: 'the shared skills and their references; a task\'s own skills are not in the skill list' } } } },
+  'attachments.sync': { rule: 'one-name', where: 'attachment-replica.ts, through host-replica.ts keepSettingsOf', hostPrivate: { filteredIn: 'src/core/host-replica.ts', parts: { files: 'filtered' } } },
   'leader.configure': { rule: 'no-name', where: 'leader/primary-leader.ts', hostPrivate: { taskFree: 'which server leads the hosts and how to reach it' } },
   'leader.spawnTemplate': { rule: 'no-name', where: 'spawn-template.ts (launch mode from the link host readiness)', hostPrivate: { taskFree: 'how this host launches an engine CLI, the same for every task' } },
   'workspace.configure': { rule: 'no-name', where: 'workspaces/daemon-client.ts', hostPrivate: { taskFree: 'the workspace providers this host may use, the same for every task' } },

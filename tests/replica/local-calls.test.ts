@@ -214,6 +214,30 @@ describe('local calls', () => {
     expect(router.answerBy[1]! - at).toBeGreaterThan(19_000)
   })
 
+  it('a trigger call naming a kept-local task\'s trigger is refused before it runs, final; the check is asked only away', async () => {
+    const asked: string[] = []
+    const sent: Array<Record<string, unknown>> = []
+    let leader = false
+    const handle = createLocalCalls({
+      request: async (cmd, params) => { sent.push({ cmd, ...params }); return { ok: true } },
+      hostKey: 'devbox', capabilities: () => ['caller-proof-v1'], leaderAnswers: () => leader,
+      localTasks: async () => ({ tasks: new Set(['kept-task-0001']), sessions: new Set() }),
+      keptTrigger: async (id) => { asked.push(id); return id === 'trig-kept-1' },
+    })
+    const settled = () => new Promise((r) => setTimeout(r, 20))
+    handle(event({ payload: { name: 'trigger_delete', args: { id: 'trig-kept-1' } } }))
+    await settled()
+    expect(router.calls).toEqual([])
+    expect(sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader', detail: { why: 'task_kept_local', final: true } })
+    handle(event({ relayId: 8, payload: { name: 'trigger_delete', args: { id: 'trig-open-1' } } }))
+    await settled()
+    expect(router.calls).toHaveLength(1)
+    leader = true
+    handle(event({ relayId: 9, payload: { name: 'trigger_pause', args: { id: 'trig-kept-1' } } }))
+    await settled()
+    expect(asked).toEqual(['trig-kept-1', 'trig-open-1'])
+  })
+
   it('an event that is no relay is ignored', async () => {
     const s = setup()
     s.handle({ ev: 'gateway-request', relayId: 'x' })

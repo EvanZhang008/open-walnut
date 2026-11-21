@@ -1293,6 +1293,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         hostKey: (env.WALNUT_HOST_KEY ?? '').trim() || null,
         capabilities: () => front.link.capabilities(),
         leaderAnswers: () => leaderAnswers(),
+        // A kept-local task's trigger in this host's set (away-triggers.ts): refused by name, as the task is.
+        keptTrigger: async (id) => {
+          const t = await import('../replica/away-triggers.js')
+          return t.hostTriggers({ request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs), copyJobs: t.routinesCopyJobs, log: (level, msg, data) => log.web[level](msg, data) }).keptTrigger(id)
+        },
       }))
     }
     // Its notes: the copy the daemon keeps, read through the follower link (WP6).

@@ -35,7 +35,7 @@ import { packRelayResult, relayedCallOf, serveRelayedCall, type KeptRelay, type 
 import { gatewayHubTimeoutMs } from '../providers/gateway-core.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../providers/daemon-frame-cap.js'
 import { refreshLocalTasksHere } from '../core/replication/kinds/local-tasks.js'
-import { keptLocalRefusal } from './kept-local-calls.js'
+import { keptLocalRefusal, triggerIdOf } from './kept-local-calls.js'
 
 /** The route refusals that go back with their own code: the daemon's away answer, and the two a caller retries. */
 const LIFTED = ['needs_leader', 'queue_full', 'throttled'] as const
@@ -92,6 +92,8 @@ export interface LocalCallsDeps {
   leaderAnswers(): boolean
   /** What this host's copy says the Mac keeps local (kinds/local-tasks.ts); absent: that copy. */
   localTasks?(): ReturnType<typeof refreshLocalTasksHere>
+  /** Whether trigger `id` of this host's set is a kept-local task's (away-triggers.ts hostTriggers); absent: none is. */
+  keptTrigger?(id: string): Promise<boolean>
 }
 
 /** The handler for the daemon's `gateway-request` events. */
@@ -122,7 +124,12 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
     const online = isOnlineSend(event, call)
     // Within what the daemon still waits for (an older daemon names none: the hub timeout).
     const left = call.answerInMs === undefined ? gatewayHubTimeoutMs() : Math.min(gatewayHubTimeoutMs(), call.answerInMs - ANSWER_MARGIN_MS)
-    void (deps.localTasks ?? refreshLocalTasksHere)().catch(() => ({ tasks: new Set<string>(), sessions: new Set<string>() })).then((here) => serveRelayedCall(call, {
+    // A trigger call naming one trigger, away: whether that trigger is a kept-local task's (kept-local-calls.ts).
+    const triggerId = !online && deps.keptTrigger ? triggerIdOf(call) : null
+    void Promise.all([
+      (deps.localTasks ?? refreshLocalTasksHere)().catch(() => ({ tasks: new Set<string>(), sessions: new Set<string>() })),
+      triggerId && !deps.leaderAnswers() ? deps.keptTrigger!(triggerId).catch(() => false) : false,
+    ]).then(([here, triggerKept]) => serveRelayedCall(call, {
       hostKey,
       hasCapability: daemonHas,
       label: 'replica',
@@ -140,7 +147,7 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
                 error: `this call reached this host's Walnut server with ${Math.max(0, Math.round(left / 1000))}s of its time left, too little to do it; nothing was done, try again`,
                 detail: { why: 'too_little_time', retryAfterMs: 1_000 },
               }
-            : keptLocalRefusal(c, here, online),
+            : keptLocalRefusal(c, here, online, { triggerKept }),
       send: (reply, kept) => send(online ? onlineReply(reply) : reply, kept),
     }))
   }

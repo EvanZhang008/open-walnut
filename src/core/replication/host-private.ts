@@ -131,11 +131,51 @@ export function hostPrivacyOf(
 
 /**
  * Whether one host's own copy for its daemon (host-slice.ts, routines/trigger-push.ts) leaves
- * out task `id`: kept, unless a session of its own runs on that host (`ownHere`: the tasks of the
- * host's sessions), whose CLI and transcript are there anyway.
+ * out task `id`: kept, unless a session of its own runs on that host (`ownHere`: tasksRunningOn),
+ * whose CLI and transcript are there anyway.
  */
 export function keptOffHost(id: string | undefined | null, p: HostPrivacy, ownHere: { has(id: string): boolean }): boolean {
   return !!id && p.tasks.has(id) && !ownHere.has(id)
+}
+
+/**
+ * The tasks with a session of their own on the host reached by `hostKeys` (one alias, or every
+ * alias of one daemon): the sessions that host's daemon copy lists (host-slice.ts inHostCopy).
+ * The one rule of "a session of this task runs on this host". `sessions`: the rows already read.
+ */
+export async function tasksRunningOn(hostKeys: readonly string[], sessions?: readonly SessionRecord[], now = Date.now()): Promise<Set<string>> {
+  const [{ normalizeHostKey, inHostCopy }, rows] = await Promise.all([
+    import('../host-slice.js'),
+    sessions ?? import('../session-tracker.js').then((m) => m.sessionRowsForReplica()),
+  ])
+  const keys = new Set(hostKeys.map(normalizeHostKey))
+  const out = new Set<string>()
+  for (const s of rows) if (s.taskId && keys.has(normalizeHostKey(s.host)) && inHostCopy(s, now)) out.add(s.taskId)
+  return out
+}
+
+/** What a host's daemon copy leaves out now: the privacy, and `keptOff` for the host reached by `hostKeys`. */
+export async function keptOffHostNow(
+  hostKeys: readonly string[], opts: { sessions?: readonly SessionRecord[]; now?: number } = {},
+): Promise<{ privacy: HostPrivacy; keptOff: (id: string | undefined | null) => boolean }> {
+  const privacy = await hostPrivacyNow()
+  if (privacy.tasks.size === 0) return { privacy, keptOff: () => false }
+  const ownHere = await tasksRunningOn(hostKeys, opts.sessions, opts.now)
+  return { privacy, keptOff: (id) => keptOffHost(id, privacy, ownHere) }
+}
+
+/** Ids in a text: the runs of letters, digits and hyphens a task or session id is made of. */
+const ID_TOKEN = /[A-Za-z0-9][A-Za-z0-9-]{5,}/g
+
+/**
+ * Whether a free text of the memory copy (a session summary's `Task: <id>` line, a compaction
+ * snapshot, a daily log) names a kept task or one of its sessions: such a file is that task's
+ * and leaves a host's copy whole (host-replica.ts).
+ */
+export function textKeptFromHosts(text: string, p: HostPrivacy): boolean {
+  if (p.tasks.size === 0) return false
+  for (const m of text.matchAll(ID_TOKEN)) if (p.tasks.has(m[0]) || p.sessions.has(m[0])) return true
+  return false
 }
 
 /** Whether a row of `kind` is kept off hosts, by the kind's own `owners` (a row of no one's never is). */

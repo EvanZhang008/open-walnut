@@ -38,7 +38,8 @@ let calls: Array<{ cmd: string; params: Record<string, unknown> }> = []
 let config: Config = {} as Config
 let afterSync: (() => void) | null = null
 
-vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => config }))
+// The rest is real: a host's memory round reads the task store for the tasks kept local (host-private.ts).
+vi.mock('../../src/core/config-manager.js', async (orig) => ({ ...(await orig<typeof import('../../src/core/config-manager.js')>()), getConfig: async () => config }))
 
 function write(rel: string, body: string): void {
   const abs = path.join(NOTES_DIR, rel)

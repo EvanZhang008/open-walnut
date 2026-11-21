@@ -21,7 +21,7 @@ import { NOTHING_HELD, createRowSetFollower, serialChain, type RowSetState } fro
 import { syncCopyKinds, type CopyKind, type CopyTarget } from '../../../src/core/replication/kinds/copy-kind.js'
 import { _resetReplicaStatusForTesting } from '../../../src/core/replication/replica-status.js'
 import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
-import { keptLocalRefusal } from '../../../src/replica/kept-local-calls.js'
+import { keptLocalRefusal, triggerIdOf } from '../../../src/replica/kept-local-calls.js'
 import { namesKeptLocal } from '../../../src/core/replication/kinds/local-tasks.js'
 
 const HOLD = { target: 'acme', state: 'chosen', at: '2026-11-21T00:00:00.000Z' }
@@ -255,6 +255,23 @@ describe('the host\'s own answer to a call about a kept task', () => {
       expect(own(name, name === 'task_create' ? { title: 'a subtask', project: 'Elsewhere' } : {}), name).toMatchObject({ errorCode: 'needs_leader', detail: { why: 'task_kept_local', final: true } })
     }
     expect(String(own('agent_memory_read')!.error)).toMatch(/this session's task is kept local/)
+    // It says the call left nothing behind and is to be run again.
+    expect(String(own('board_post')!.error)).toMatch(/Nothing was done or saved; run it again once your Mac is back\.$/)
+    expect(String(keptLocalRefusal(relayed(), here)!.error)).toMatch(/Nothing was done or saved; run it again once your Mac is back\.$/)
+    // trigger_create aims at the caller's own task unless it names another ("this" is its own).
+    for (const session of [undefined, 'this']) expect(own('trigger_create', { run: 'a', prompt: 'p', session }), String(session)).toMatchObject({ detail: { why: 'task_kept_local', final: true } })
+    expect(own('trigger_create', { run: 'a', prompt: 'p', session: 'open-task' })).toBeNull()
+  })
+
+  it('a trigger call naming one of its triggers: refused, final, for any caller; another trigger runs', () => {
+    const call = relayed({ payload: { name: 'trigger_pause', args: { id: 'trig-kept-1' } } })
+    expect(triggerIdOf(call)).toBe('trig-kept-1')
+    expect(triggerIdOf(relayed({ payload: { name: 'trigger_list', args: {} } }))).toBeNull()
+    const r = keptLocalRefusal(call, here, false, { triggerKept: true })
+    expect(r).toMatchObject({ errorCode: 'needs_leader', detail: { why: 'task_kept_local', final: true } })
+    expect(String(r!.error)).toMatch(/that trigger belongs to a task kept local.*Nothing was done or saved/)
+    expect(keptLocalRefusal(call, here, false, { triggerKept: false })).toBeNull()
+    expect(keptLocalRefusal(relayed({ payload: { name: 'trigger_list', args: {} } }), here, false, { triggerKept: true })).toBeNull()
   })
 
   it('a message to it runs: the host holds it for the Mac (away-sends.ts), whoever sends it', () => {

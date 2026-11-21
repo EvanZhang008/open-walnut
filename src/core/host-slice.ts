@@ -204,14 +204,12 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
   const sessionTaskIds = [...new Set(records.map((s) => s.taskId).filter((id): id is string => !!id))];
   // What this host never holds (host-private.ts): a task kept local and everything of it, unless
   // a session of that task runs here.
-  const [{ hostPrivacyNow, keptOffHost, ownedRowKept }, { BOARDS_KIND }, { REQUESTS_KIND }] = await Promise.all([
+  const [{ keptOffHostNow, ownedRowKept }, { BOARDS_KIND }, { REQUESTS_KIND }] = await Promise.all([
     import('./replication/host-private.js'),
     import('./replication/kinds/boards.js'),
     import('./replication/kinds/requests.js'),
   ]);
-  const privacy = await hostPrivacyNow();
-  const ownHere = new Set(sessionTaskIds);
-  const keptOff = (id: string | undefined | null): boolean => keptOffHost(id, privacy, ownHere);
+  const { privacy, keptOff } = await keptOffHostNow(list, { sessions: allSessions, now });
 
   const picked = new Map<string, OfflineSliceTask>();
   const leads: Task[] = [];

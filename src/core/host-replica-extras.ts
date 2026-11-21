@@ -2,7 +2,8 @@
  * What a replica's copy of the memory and skills holds beyond the two docs and each
  * skill's own document (stage 4d of docs/plan/walnut-companion-unified-replica.md). Every
  * target gets it, a host's daemon as much as the cloud companion: the console's and the
- * phone's memory and skill pages read it there while the Mac is away.
+ * phone's memory and skill pages read it there while the Mac is away. A host's memory copy
+ * leaves out the files of a task kept local (memoryEntriesForHost).
  *
  *   memory  every `.md` under memory/ but the two docs (daily logs, projects, sessions,
  *           knowledge, topics, compaction snapshots, agents, working memory), as
@@ -115,6 +116,34 @@ async function skillExtras(skills: Array<{ dirName: string; location?: string }>
       try { return await fsp.readFile(abs, 'utf8') } catch { return null }
     },
   }
+}
+
+/** Each memory file's verdict by its content hash, for one kept set: a file is read again only when it or the set changes. */
+let memoryVerdicts: { sig: string; byHash: Map<string, boolean> } = { sig: '', byHash: new Map() }
+
+/**
+ * The memory files a HOST takes (`f/<path>`): none of a task kept local (replication/host-private.ts
+ * textKeptFromHosts: a session summary whose Task line names it, a snapshot of one of its sessions,
+ * a daily log that cites it, a path with its id). The marker and the repo memories are no task's.
+ */
+export async function memoryEntriesForHost(extras: Extras): Promise<ExtraEntry[]> {
+  const { hostPrivacyNow, textKeptFromHosts } = await import('./replication/host-private.js')
+  const p = await hostPrivacyNow()
+  if (p.tasks.size === 0) return extras.entries
+  if (memoryVerdicts.sig !== p.sig) memoryVerdicts = { sig: p.sig, byHash: new Map() }
+  const out: ExtraEntry[] = []
+  for (const e of extras.entries) {
+    if (!e.k.startsWith('f/')) { out.push(e); continue }
+    let kept = memoryVerdicts.byHash.get(e.h)
+    if (kept === undefined) {
+      const body = await extras.body(e.k)
+      // A file that cannot be read now is left out this round, never sent unread.
+      kept = body === null || textKeptFromHosts(body, p)
+      if (body !== null) memoryVerdicts.byHash.set(e.h, kept)
+    }
+    if (!kept && !textKeptFromHosts(e.k, p)) out.push(e)
+  }
+  return out
 }
 
 /** The extra entries of `kind`. `skills` is the list the round already read (with each skill's location). */

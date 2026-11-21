@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Request, Response } from 'express'
 import { awayCalls, callIdOfWrite, type AwayCallsDeps } from '../../src/replica/away-calls.js'
-import { awayTriggers, mergeHereTriggers, type AwayTriggersDeps, type HereTrigger } from '../../src/replica/away-triggers.js'
+import { awayTriggers, keptHereTriggerIds, mergeHereTriggers, type AwayTriggersDeps, type HereTrigger } from '../../src/replica/away-triggers.js'
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import { OFFLINE_HEADER } from '../../src/replica/dispatch.js'
 import type { WriteActor } from '../../src/replica/write-port.js'
@@ -293,6 +293,76 @@ describe('triggers here', () => {
     const job = await run(triggers({}, JOB).h, { method: 'DELETE', path: '/v1/routines/mhere-made-01', body: {}, replicaWrite: write('op-j', sent) })
     expect(job).toMatchObject({ status: 503 })
     expect(sent).toHaveLength(3)
+  })
+
+  describe('a trigger of a task the Mac keeps local (kept-local-calls.ts)', () => {
+    const KEPT = { tasks: new Set(['mkept-task-01']), sessions: new Set(['mkept-sess-0001']) }
+    const OWN: HereTrigger[] = [
+      ...HERE,
+      // Delivers to the kept task (one of its sessions runs here), and one the routines copy withheld.
+      { id: 'mkept-deliv-1', state: 'armed', def: { id: 'mkept-deliv-1', name: 'Appraisal watch', everyMs: 60_000, check: { run: 'bash k.sh' }, deliver: { taskId: 'mkept-task-01', prompt: 'private words' } } },
+      { id: 'mkept-held-01', state: 'armed', def: { id: 'mkept-held-01', name: 'Withheld', everyMs: 60_000, check: { run: 'bash w.sh' } } },
+    ]
+    const kept = (over: Partial<AwayTriggersDeps> = {}) => {
+      const requests: Array<{ cmd: string; params: Record<string, unknown> }> = []
+      const h = awayTriggers({
+        actorOf: () => SESSION, hostKey: 'devbox', capabilities: () => ['follower-triggers-v1'],
+        request: async (cmd, params) => {
+          requests.push({ cmd, params })
+          if (cmd === 'follower.triggers') return { ok: true, host: 'devbox', triggers: typeof params.triggerId === 'string' ? OWN.filter((t) => t.id === params.triggerId) : OWN }
+          return { ok: true, result: { parsed: { fire: false } } }
+        },
+        findTask, session: async () => ({ taskId: 'mtask-lead-0001', cwd: '/work/lead' }),
+        copyJobs: async () => COPY, label: (i) => String(i.name ?? i.description), now: () => 5_000, log: () => {},
+        localTasks: async () => KEPT, ...over,
+      })
+      return { h, requests }
+    }
+    const away = { [OFFLINE_HEADER]: '1' }
+
+    it('is in no list here: one delivering to it, one the copy withheld; a trigger made here or in the copy still shows', async () => {
+      expect([...keptHereTriggerIds(OWN, new Set(COPY.map((j) => j.id)), KEPT)].sort()).toEqual(['mkept-deliv-1', 'mkept-held-01'])
+      // No routines copy kept here: only the target says it.
+      expect([...keptHereTriggerIds(OWN, null, KEPT)]).toEqual(['mkept-deliv-1'])
+      expect(keptHereTriggerIds(OWN, new Set(), { tasks: new Set(), sessions: new Set() }).size).toBe(0)
+      for (const includeDisabled of ['true', 'false']) {
+        const list = await run(kept().h, { method: 'GET', path: '/v1/routines', query: { includeDisabled } }, away)
+        const ids = list !== 'next' ? list.body.jobs.map((j: { id: string }) => j.id) : []
+        expect(ids).not.toContain('mkept-deliv-1')
+        expect(ids).not.toContain('mkept-held-01')
+        expect(ids).toContain('mhere-made-01')
+        expect(JSON.stringify(list)).not.toContain('private words')
+      }
+      expect(await run(kept().h, { method: 'GET', path: '/v1/routines/mkept-deliv-1' }, away)).toMatchObject({ status: 409, body: { error: { code: 'task_kept_local', why: 'task_kept_local' } } })
+    })
+
+    it('a pause, resume, delete or test naming it is refused, nothing sent; another trigger goes as before', async () => {
+      const sent: Sent[] = []
+      const { h, requests } = kept()
+      for (const req of [
+        { method: 'PATCH', path: '/v1/routines/mkept-deliv-1', body: { enabled: false } },
+        { method: 'PATCH', path: '/v1/routines/mkept-held-01', body: { enabled: true } },
+        { method: 'DELETE', path: '/v1/routines/mkept-deliv-1', body: {} },
+        { method: 'POST', path: '/v1/routines/check-test', body: { check: { run: 'bash k.sh' }, id: 'mkept-deliv-1' } },
+      ]) {
+        const r = await run(h, { ...req, replicaWrite: write('op-k', sent) })
+        expect(r, `${req.method} ${req.path}`).toMatchObject({ status: 409, body: { error: { code: 'task_kept_local' } } })
+        expect(r !== 'next' && String(r.body.error.message)).toMatch(/Nothing was done or saved; run it again once your Mac is back/)
+      }
+      expect(sent).toEqual([])
+      expect(requests.some((x) => x.cmd === 'follower.trigger.test')).toBe(false)
+      await run(h, { method: 'PATCH', path: '/v1/routines/mhere-made-01', body: { enabled: false }, replicaWrite: write('op-p', sent) })
+      expect(sent.map((x) => x.op)).toEqual(['trigger_pause'])
+    })
+
+    it('a create for it is refused here, nothing sent', async () => {
+      const sent: Sent[] = []
+      const body = { run: 'a', prompt: 'p', description: 'd', every: '5m', session: 'mkept-task-01' }
+      expect(await run(kept().h, { method: 'POST', path: '/v1/routines/trigger', body, replicaWrite: write('op-kc', sent) })).toMatchObject({ status: 409, body: { error: { code: 'task_kept_local' } } })
+      const own = kept({ session: async () => ({ taskId: 'mkept-task-01', cwd: '/work/k' }) })
+      expect(await run(own.h, { method: 'POST', path: '/v1/routines/trigger', body: { ...body, session: undefined }, replicaWrite: write('op-kc2', sent) })).toMatchObject({ status: 409 })
+      expect(sent).toEqual([])
+    })
   })
 
   it('a test runs once through follower.trigger.test in the caller\'s folder; a running test\'s id and an older daemon need the Mac', async () => {

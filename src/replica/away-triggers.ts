@@ -16,6 +16,10 @@
  *
  * The reads and the test need the daemon's `follower-triggers-v1`; without it the copy answers
  * alone and the test is handed back to the daemon's own away answer.
+ *
+ * A trigger of a task the Mac keeps local (core/replication/host-private.ts) is in this host's
+ * armed set (its check runs here) but in no copy: no list here shows it, and a call naming it is
+ * refused as kept-local-calls.ts refuses a call about that task (keptHereTriggerIds).
  */
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
@@ -28,6 +32,7 @@ import { parseTriggerWatch, TRIGGER_WATCH_INVALID } from '../core/routines/trigg
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
 import { parseWaitUntil } from '../core/task-wait-clock.js'
 import { log } from '../logging/index.js'
+import { namesKeptLocal, refreshLocalTasksHere, type LocalTasksHere } from '../core/replication/kinds/local-tasks.js'
 
 /** The daemon capability the reads and the test ride on. */
 export const FOLLOWER_TRIGGERS_CAP = 'follower-triggers-v1'
@@ -62,6 +67,8 @@ export interface AwayTriggersDeps {
   copyJobs(includeDisabled: boolean): Promise<Job[] | null>
   /** The server's trigger label (trigger-label.ts). */
   label(input: { name?: unknown; description?: unknown; prompt?: unknown; run?: unknown }): string
+  /** What this host's copy says the Mac keeps local (kinds/local-tasks.ts, the one local-calls.ts reads); absent: that copy. */
+  localTasks?(): Promise<LocalTasksHere>
   now?(): number
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }
@@ -90,11 +97,27 @@ export function withHere(job: Job | null, t: HereTrigger, host: string, now: num
   return { ...base, enabled: t.state === 'armed', state, ...(t.created ? { queued: true } : {}) }
 }
 
-/** The routines copy with this host's triggers over it: a delete here gone, one made here added. */
-export function mergeHereTriggers(copy: readonly Job[], here: readonly HereTrigger[], host: string, includeDisabled: boolean, now: number): Job[] {
-  const left = new Map(here.map((t) => [t.id, t]))
+/**
+ * The triggers of this host's set that are a kept-local task's: one that delivers to it or to one of
+ * its sessions, and, while the Mac keeps any task local, one the routines copy withheld (not in the
+ * copy, not made here). `copyIds` null: this replica keeps no routines copy, so only the first.
+ */
+export function keptHereTriggerIds(here: readonly HereTrigger[], copyIds: ReadonlySet<string> | null, kept: LocalTasksHere): Set<string> {
+  const out = new Set<string>()
+  if (kept.tasks.size === 0) return out
+  for (const t of here) {
+    const target = t.def?.deliver?.taskId
+    if ((typeof target === 'string' && namesKeptLocal(target, kept)) || (copyIds !== null && !copyIds.has(t.id) && !t.created)) out.add(t.id)
+  }
+  return out
+}
+
+/** The routines copy with this host's triggers over it: a delete here gone, one made here added, a kept-local task's left out. */
+export function mergeHereTriggers(copy: readonly Job[], here: readonly HereTrigger[], host: string, includeDisabled: boolean, now: number, kept: ReadonlySet<string> = new Set()): Job[] {
+  const left = new Map(here.filter((t) => !kept.has(t.id)).map((t) => [t.id, t]))
   const out: Job[] = []
   for (const job of copy) {
+    if (kept.has(String(job.id))) continue
     const t = left.get(String(job.id))
     if (!t) { out.push(job); continue }
     left.delete(t.id)
@@ -104,12 +127,16 @@ export function mergeHereTriggers(copy: readonly Job[], here: readonly HereTrigg
   return includeDisabled ? out : out.filter((j) => j.enabled !== false)
 }
 
-export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
-  const now = deps.now ?? Date.now
-  const host = deps.hostKey ?? ''
-  const hasCap = () => deps.capabilities()?.includes(FOLLOWER_TRIGGERS_CAP) === true
-  const needsMac = (what: string) => needsLeaderAnswer('routine_writes_need_mac', `${what} needs your Mac; nothing was changed.`)
+/** The words of a call about a kept-local task's trigger (kept-local-calls.ts KEPT_TRIGGER_WORDS). */
+export const KEPT_TRIGGER_MESSAGE = 'that trigger belongs to a task kept local on your Mac, so this host does not show or change it. Nothing was done or saved; run it again once your Mac is back.'
 
+type HostTriggerDeps = Pick<AwayTriggersDeps, 'request' | 'copyJobs' | 'localTasks' | 'log'>
+
+const localTasksOf = (deps: Pick<AwayTriggersDeps, 'localTasks'>): Promise<LocalTasksHere> =>
+  (deps.localTasks ?? refreshLocalTasksHere)().catch(() => ({ tasks: new Set<string>(), sessions: new Set<string>() }))
+
+/** This host's armed triggers (follower.triggers), and which are a kept-local task's: for the routes here and local-calls.ts. */
+export function hostTriggers(deps: HostTriggerDeps) {
   async function hereTriggers(id?: string): Promise<HereTrigger[] | null> {
     try {
       const r = await deps.request('follower.triggers', id ? { triggerId: id } : {}, READ_TIMEOUT_MS)
@@ -119,6 +146,41 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
       return null
     }
   }
+  /** The kept-local task's triggers among `here`, against the whole routines copy. */
+  async function keptOf(here: readonly HereTrigger[], copy?: readonly Job[] | null): Promise<Set<string>> {
+    const kept = await localTasksOf(deps)
+    if (kept.tasks.size === 0) return new Set()
+    const all = copy !== undefined ? copy : await deps.copyJobs(true)
+    return keptHereTriggerIds(here, all ? new Set(all.map((j) => String(j.id))) : null, kept)
+  }
+  /** Whether `id` is a kept-local task's trigger of this host's set (no daemon list: not one). */
+  async function keptTrigger(id: string): Promise<boolean> {
+    if ((await localTasksOf(deps)).tasks.size === 0) return false
+    const t = (await hereTriggers(id))?.find((x) => x.id === id)
+    return !!t && (await keptOf([t])).has(id)
+  }
+  return { hereTriggers, keptOf, keptTrigger }
+}
+
+/** The routines copy with each routine's owner, as this replica holds it (null: it keeps none). */
+export async function routinesCopyJobs(includeDisabled: boolean): Promise<Job[] | null> {
+  const [{ companionRoutinesCopy }, { withRoutineOwners }] = await Promise.all([
+    import('../core/replication/kinds/routines-follower.js'), import('../core/routines/routine-owner.js'),
+  ])
+  const copied = await companionRoutinesCopy({ includeDisabled })
+  return copied ? await withRoutineOwners(copied) as unknown as Job[] : null
+}
+
+export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
+  const now = deps.now ?? Date.now
+  const host = deps.hostKey ?? ''
+  const hasCap = () => deps.capabilities()?.includes(FOLLOWER_TRIGGERS_CAP) === true
+  const needsMac = (what: string) => needsLeaderAnswer('routine_writes_need_mac', `${what} needs your Mac; nothing was changed.`)
+
+  const { hereTriggers, keptOf, keptTrigger } = hostTriggers(deps)
+
+  const localTasks = (): Promise<LocalTasksHere> => localTasksOf(deps)
+  const keptAnswer = (): PortAnswer => refusalAnswer('task_kept_local', KEPT_TRIGGER_MESSAGE, { why: 'task_kept_local' })
 
   async function list(req: Request): Promise<PortAnswer | null> {
     const here = await hereTriggers()
@@ -126,16 +188,21 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
     const includeDisabled = req.query.includeDisabled === 'true'
     const copy = await deps.copyJobs(includeDisabled)
     if (!copy && !here.length) return null
-    return { answered: false, status: 200, body: { jobs: mergeHereTriggers(copy ?? [], here, host, includeDisabled, now()) } }
+    // Kept is judged against every routine of the copy, the paused ones too.
+    const kept = await keptOf(here, includeDisabled ? copy : undefined)
+    return { answered: false, status: 200, body: { jobs: mergeHereTriggers(copy ?? [], here, host, includeDisabled, now(), kept) } }
   }
 
   async function one(id: string): Promise<PortAnswer | null> {
     const t = (await hereTriggers(id))?.find((x) => x.id === id)
     if (!t) return null
+    const copy = await deps.copyJobs(true)
+    if ((await keptOf([t], copy)).has(id)) return keptAnswer()
     if (t.state === 'deleted') return refusalAnswer('not_found', `No trigger ${id}: it was deleted on this host`)
-    const job = (await deps.copyJobs(true))?.find((j) => j.id === id) ?? null
+    const job = copy?.find((j) => j.id === id) ?? null
     return { answered: false, status: 200, body: { job: withHere(job, t, host, now()) } }
   }
+
 
   async function create(req: Request, w: ReplicaWrite, actor: WriteActor): Promise<PortAnswer> {
     if (actor.kind !== 'session') return needsMac('A trigger a plugin job makes')
@@ -169,8 +236,11 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
     const me = await deps.session(actor.sid)
     const session = str(b.session) || 'this'
     if (session === 'this' && !str(me?.taskId)) return refusalAnswer('bad_request', 'no calling session; pass session: <taskId>')
+    const targetRef = session === 'this' ? str(me?.taskId) : session
+    // A task the Mac keeps local: this host holds none of it, so it arms nothing for it.
+    if (namesKeptLocal(targetRef, await localTasks())) return refusalAnswer('task_kept_local', 'that task is kept local on your Mac, so this host arms no trigger for it. Nothing was done or saved; run it again once your Mac is back.', { why: 'task_kept_local' })
     let task: TaskRow | null
-    try { task = await deps.findTask(session === 'this' ? str(me?.taskId) : session) } catch (err) { return refusalAnswer('bad_request', err instanceof Error ? err.message : String(err)) }
+    try { task = await deps.findTask(targetRef) } catch (err) { return refusalAnswer('bad_request', err instanceof Error ? err.message : String(err)) }
     if (!task) return needsLeaderAnswer('target_needs_mac', 'This host does not hold the task the trigger would wake; arming it needs your Mac. Nothing was armed.')
     if (task.phase === 'COMPLETE') return refusalAnswer('bad_request', `task ${task.id} is complete, so a fire could not land there; point the trigger at an open task`)
     const name = deps.label({ name: b.name, description, prompt, run })
@@ -188,6 +258,7 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
 
   async function change(req: Request, w: ReplicaWrite, actor: WriteActor, id: string): Promise<PortAnswer> {
     if (actor.kind !== 'session') return needsMac('A trigger change by a plugin job')
+    if (await keptTrigger(id)) return keptAnswer()
     let op = 'trigger_delete'
     if (req.method.toUpperCase() === 'PATCH') {
       const b = bodyOf(req)
@@ -210,6 +281,7 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
     const cwd = str(check.cwd) || str(me?.cwd)
     const limit = check.timeoutSeconds
     const id = str(b.id)
+    if (id && await keptTrigger(id)) return keptAnswer()
     let r: Record<string, unknown>
     try {
       r = await deps.request('follower.trigger.test', {
@@ -273,13 +345,7 @@ export async function wireAwayTriggers(o: {
       const rec = await getSessionByClaudeId(sid).catch(() => null)
       return rec ? { taskId: rec.taskId ?? null, cwd: rec.cwd ?? null } : null
     },
-    copyJobs: async (includeDisabled) => {
-      const [{ companionRoutinesCopy }, { withRoutineOwners }] = await Promise.all([
-        import('../core/replication/kinds/routines-follower.js'), import('../core/routines/routine-owner.js'),
-      ])
-      const copied = await companionRoutinesCopy({ includeDisabled })
-      return copied ? await withRoutineOwners(copied) as unknown as Job[] : null
-    },
+    copyJobs: routinesCopyJobs,
     label: (input) => labels.label(input),
     log: (level, msg, data) => log.web[level](msg, data),
   })

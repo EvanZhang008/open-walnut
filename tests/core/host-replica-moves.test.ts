@@ -16,7 +16,8 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-replica-moves'))
 vi.mock('../../src/core/skill-store.js', () => ({ listAllSkills: async () => [] }))
 const cfg = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
-vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => cfg.value }))
+// The rest is real: a host's memory round reads the task store for the tasks kept local (host-private.ts).
+vi.mock('../../src/core/config-manager.js', async (orig) => ({ ...(await orig<typeof import('../../src/core/config-manager.js')>()), getConfig: async () => cfg.value }))
 
 import { NOTES_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { forgetHostReplica, noteEntries, syncHostReplica, sha12, _resetHostReplicaForTesting, _hostReplicaSavedForTesting, type ReplicaTarget } from '../../src/core/host-replica.js'

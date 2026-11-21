@@ -12,8 +12,10 @@
  *     host-private.ts's filter, or is a reviewed sender of no one's rows;
  *   - every copy a host's daemon takes (providers/daemon-twin-state.ts, whose own ratchet lists
  *     every `.configure` / `.sync` command and `host.slice`) names the module that builds it
- *     through that filter, which calls it, or says why it holds no task's data, reviewed here.
- * The filters of the daemon's own copies are run in host-private-daemon-copies.test.ts.
+ *     through that filter, which calls it, and every part it ships: each filtered part has a test
+ *     with a kept-task fixture that shows its rows or files leave (titled
+ *     "kept fixture: <command> <part>"), each other part says why it holds no task's data; or the
+ *     copy says why it holds none at all, reviewed here.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -159,7 +161,7 @@ describe('nothing of a task kept local reaches a host: every copy kind', () => {
 })
 
 /** The calls of host-private.ts that build what a host takes. */
-const FILTERS = /\b(hostPrivacyNow|hostPrivacyOf|hostManifest|keptOffHost|ownedRowKept|searchKeyKeptFromHosts|keptVaultFolders)\(/
+const FILTERS = /\b(hostPrivacyNow|hostPrivacyOf|hostManifest|keptOffHost|keptOffHostNow|ownedRowKept|searchKeyKeptFromHosts|keptVaultFolders|textKeptFromHosts)\(/
 
 /** Whether module `f` calls the filter (outside its comments), not only imports it. */
 function callsFilter(f: string): boolean {
@@ -172,6 +174,20 @@ const REVIEWED_TASK_FREE_COPIES = [
   'turns.configure', 'net.configure', 'hooks.configure', 'skills.sync', 'secrets.sync', 'usage.budget.configure',
 ]
 
+/** Every test file's text, for the fixture titles. */
+function testTexts(): string {
+  const out: string[] = []
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (/\.test\.ts$/.test(e.name)) out.push(readFileSync(p, 'utf8'))
+    }
+  }
+  walk(path.join(ROOT, 'tests'))
+  return out.join('\n')
+}
+
 describe('nothing of a task kept local reaches a host: every copy its daemon takes', () => {
   it('names the module that builds it through host-private.ts, which calls the filter, or why it holds no task\'s data', () => {
     const entries = Object.entries(DAEMON_TWIN_STATE)
@@ -181,6 +197,22 @@ describe('nothing of a task kept local reaches a host: every copy its daemon tak
       if ('filteredIn' in e.hostPrivate) expect(callsFilter(e.hostPrivate.filteredIn), `${cmd}: ${e.hostPrivate.filteredIn} builds it through host-private.ts`).toBe(true)
       else expect(e.hostPrivate.taskFree.length, `${cmd}: say why it holds no task's data`).toBeGreaterThan(20)
     }
+  })
+
+  it('a filtered copy names every part it ships, and each filtered part has its kept-task fixture test', () => {
+    const tests = testTexts()
+    const missing: string[] = []
+    for (const [cmd, e] of Object.entries(DAEMON_TWIN_STATE)) {
+      if (!('filteredIn' in e.hostPrivate)) continue
+      const parts = Object.entries(e.hostPrivate.parts)
+      expect(parts.length, `${cmd}: name the parts it ships`).toBeGreaterThan(0)
+      expect(parts.some(([, v]) => v === 'filtered'), `${cmd}: a filtered copy filters some part`).toBe(true)
+      for (const [part, v] of parts) {
+        if (v === 'filtered') { if (!tests.includes(`kept fixture: ${cmd} ${part}`)) missing.push(`${cmd} ${part}`) }
+        else expect(v.taskFree.length, `${cmd} ${part}: say why it holds no task's data`).toBeGreaterThan(20)
+      }
+    }
+    expect(missing, 'each needs a test titled "kept fixture: <command> <part>" that shows a kept task\'s rows leave it').toEqual([])
   })
 
   it('a copy declared free of task data is one reviewed here', () => {
