@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database, { type Database as DatabaseType } from '../../src/lib/sqlite.js'
-import { copyDataSnapshot, snapshotStoreDatabases } from '../../src/commands/ephemeral-snapshot.js'
+import { copyDataSnapshot, snapshotSqliteStores, snapshotStoreDatabases } from '../../src/commands/ephemeral-snapshot.js'
 
 let root: string
 let home: string
@@ -83,5 +83,23 @@ describe('ephemeral snapshot stores', () => {
 
     expect(copied).toEqual([path.join('tasks', 'tasks.sqlite')])
     expect(fs.existsSync(path.join(dest, 'sessions.sqlite'))).toBe(false)
+  })
+
+  // 2026-11-21: the snapshot copied only tasks.sqlite and sessions.sqlite, so a data dir with the
+  // Threads database (org/threads.sqlite) booted with no threads, and every "on his data" check
+  // of the Threads view ran on stale JSON. Every user-data store is found by walking the dir.
+  it('copies every user-data store wherever it lives, and no index, private store or backup', () => {
+    const stores = [path.join('tasks', 'tasks.sqlite'), 'sessions.sqlite', path.join('org', 'threads.sqlite'),
+      path.join('router', 'areas', 'area-1', 'items.sqlite'), 'usage.sqlite', path.join('plugins', 'demo', 'data', 'plugin.sqlite')]
+    for (const rel of stores) { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); liveStore(rel, [`row-${path.basename(rel)}`]).close() }
+    const left = ['search.sqlite', 'notes-index.sqlite', path.join('health', 'health.sqlite'), path.join('places', 'places.sqlite'),
+      path.join('cache', 'applied-ops.sqlite'), path.join('tasks', 'tasks.sqlite.20261121.backup.sqlite')]
+    for (const rel of left) { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); liveStore(rel, ['x']).close() }
+
+    expect(snapshotSqliteStores(home)).toEqual([...stores].sort())
+    copyDataSnapshot(home, dest)
+
+    for (const rel of stores) expect(ids(path.join(dest, rel))).toEqual([`row-${path.basename(rel)}`])
+    for (const rel of left) expect(fs.existsSync(path.join(dest, rel))).toBe(false)
   })
 })

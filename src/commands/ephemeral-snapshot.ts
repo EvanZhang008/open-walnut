@@ -115,13 +115,39 @@ export function snapshotFilter(home: string): (src: string) => boolean {
 }
 
 /**
- * The stores a test server needs to look like the real Walnut. The copy filter
- * skips every SQLite file (a raw copy of a live WAL database can be torn), so
- * without this step the snapshot fell back to a months-old tasks.json and had
- * no sessions at all. Indexes (search, notes) stay out: they are regenerable
- * and large.
+ * The SQLite files the snapshot leaves out on purpose: regenerable indexes (search, notes), large
+ * and rebuilt on boot. Private stores (health, places) and caches never reach this step: their
+ * top-level folders are skipped (SNAPSHOT_SKIP_TOP_LEVEL).
  */
-export const SNAPSHOT_SQLITE_STORES = [path.join('tasks', 'tasks.sqlite'), 'sessions.sqlite']
+export const SNAPSHOT_SQLITE_INDEXES: ReadonlySet<string> = new Set(['search.sqlite', 'search-replica.sqlite', 'notes-index.sqlite'])
+
+/**
+ * Every store a test server needs to look like the real Walnut: each SQLite file under the data dir
+ * that is user data (tasks, sessions, the Threads database, a router area's items, a plugin's own
+ * store, usage), found by walking it, not named in a list. The copy filter skips every SQLite file
+ * (a raw copy of a live WAL database can be torn), so a store missing here is EMPTY in the snapshot:
+ * the snapshot once booted on a months-old tasks.json with no sessions, and later with no threads at
+ * all (org/threads.sqlite was not in the old fixed list), so every check of the Threads view "on his
+ * data" ran on stale JSON. Relative paths, sorted.
+ */
+export function snapshotSqliteStores(home: string, maxDepth = 6): string[] {
+  const out: string[] = []
+  const walk = (dir: string, depth: number) => {
+    let entries: fs.Dirent[] = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      const rel = path.relative(home, full)
+      const top = rel.split(path.sep)[0]
+      if (SNAPSHOT_SKIP_TOP_LEVEL.has(top) || top === 'tmp' || e.name === 'images') continue
+      if (e.isDirectory()) { if (depth < maxDepth) walk(full, depth + 1); continue }
+      // A store's own backup copies (tasks.sqlite.<stamp>.backup.sqlite) are not a second store.
+      if (e.isFile() && e.name.endsWith('.sqlite') && !e.name.endsWith('.backup.sqlite') && !SNAPSHOT_SQLITE_INDEXES.has(e.name)) out.push(rel)
+    }
+  }
+  walk(home, 0)
+  return out.sort()
+}
 
 /**
  * Copy each store with VACUUM INTO over a read-only connection: one consistent
@@ -129,7 +155,7 @@ export const SNAPSHOT_SQLITE_STORES = [path.join('tasks', 'tasks.sqlite'), 'sess
  * that is missing or fails to copy is left out (the test server then starts it
  * empty), and the failure is said on stderr.
  */
-export function snapshotStoreDatabases(home: string, dest: string, stores: readonly string[] = SNAPSHOT_SQLITE_STORES): string[] {
+export function snapshotStoreDatabases(home: string, dest: string, stores: readonly string[] = snapshotSqliteStores(home)): string[] {
   const copied: string[] = []
   for (const rel of stores) {
     const src = path.join(home, rel)
