@@ -10,6 +10,7 @@ import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
   memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, _resetMemoryLedgerForTesting,
   writeHeapSnapshot, SNAPSHOT_EVERY_MS,
+  watchMemoryBurst, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -110,6 +111,35 @@ describe('nudgeGcUnderPressure', () => {
     process.env.WALNUT_GC_NUDGE = '0';
     try { nudgeGcUnderPressure(1, gc, 99_999); } finally { delete process.env.WALNUT_GC_NUDGE; }
     expect(gc).not.toHaveBeenCalled();
+  });
+});
+
+describe('watchMemoryBurst', () => {
+  it('logs what was in flight once the footprint rises past BURST_RISE_MB within the window, then holds off', async () => {
+    const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {});
+    const off = registerBurstContext('test-context', () => [{ route: 'GET /api/example', ageMs: 1200 }]);
+    try {
+      const t = 10_000_000;
+      expect(await watchMemoryBurst(t, 2000)).toBe(false);
+      expect(await watchMemoryBurst(t + 30_000, 2000 + BURST_RISE_MB - 1)).toBe(false);
+      expect(await watchMemoryBurst(t + 60_000, 2000 + BURST_RISE_MB + 500)).toBe(true);
+      const line = warn.mock.calls.find((c) => c[0] === 'memory burst');
+      expect(line?.[1]).toMatchObject({ lowMb: 2000, riseMb: BURST_RISE_MB + 500, context: { 'test-context': [{ route: 'GET /api/example' }] } });
+      // Another rise inside BURST_EVERY_MS logs nothing.
+      expect(await watchMemoryBurst(t + 90_000, 2000 + BURST_RISE_MB * 3)).toBe(false);
+      // A rise against a low older than the window does not count.
+      expect(await watchMemoryBurst(t + 90_000 + BURST_EVERY_MS + BURST_WINDOW_MS, 2000 + BURST_RISE_MB * 3)).toBe(false);
+    } finally { off(); warn.mockRestore(); }
+  });
+
+  it('a context reader that throws is named, not fatal', async () => {
+    const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {});
+    const off = registerBurstContext('broken', () => { throw new Error('mid-reset'); });
+    try {
+      await watchMemoryBurst(0, 1000);
+      expect(await watchMemoryBurst(1, 1000 + BURST_RISE_MB)).toBe(true);
+      expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).toMatchObject({ context: { broken: 'unreadable: mid-reset' } });
+    } finally { off(); warn.mockRestore(); }
   });
 });
 

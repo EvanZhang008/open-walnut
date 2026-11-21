@@ -124,6 +124,11 @@ class MockLocalDaemonFileReader {
     return maxReadBytes();
   }
 
+  /** Mirrors the real static (the memory ledger's burst line): the double shares no reads. */
+  static readsInFlightNow(): Array<{ host: string; file: string; size: number; what: string; bytesSoFar: number }> {
+    return [];
+  }
+
   /** `glob`: only readFile expands a pattern (as in the real reader); every other
    *  method takes a `*` literally, so the path simply does not exist. */
   private async resolve(remotePath: string, glob = false): Promise<string | null> {

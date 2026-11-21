@@ -242,6 +242,53 @@ export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc()
   gc(false);
 }
 
+// ── What was running when memory jumped ────────────────────────────────────
+//
+// The live server jumps from about 2 GB to 4 to 9 GB for a minute or so a few times an
+// hour (2026-11-21: 9,007 MB at 09:38, back to 2.6 GB after a collection), with no stall,
+// no big HTTP answer and nothing in the logs that lines up. The jump is garbage something
+// built in a burst; what built it is whatever was in flight. Modules that run work which
+// can allocate a lot register a context reader (requests in flight, daemon file reads in
+// flight), and the health tick logs one `memory burst` line with all of them and the
+// process and engine numbers when the footprint rose by BURST_RISE_MB over the lowest
+// reading of the last BURST_WINDOW_MS. At most one line per BURST_EVERY_MS.
+export const BURST_RISE_MB = 1024;
+export const BURST_WINDOW_MS = 3 * 60_000;
+export const BURST_EVERY_MS = 15 * 60_000;
+
+const burstContexts = new Map<string, () => unknown>();
+/** Register what a module has in flight, read only when a burst is logged. Returns its unregister. */
+export function registerBurstContext(name: string, read: () => unknown): () => void {
+  burstContexts.set(name, read);
+  return () => { if (burstContexts.get(name) === read) burstContexts.delete(name); };
+}
+
+const recentRss: Array<{ at: number; rssMb: number }> = [];
+let lastBurstAt = -Infinity;
+
+/** Health-tick hook (every 30 s): log what was in flight when the footprint jumped. */
+export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb().rssMb): Promise<boolean> {
+  while (recentRss.length > 0 && now - recentRss[0]!.at > BURST_WINDOW_MS) recentRss.shift();
+  const low = recentRss.reduce((m, r) => Math.min(m, r.rssMb), rssMb);
+  recentRss.push({ at: now, rssMb });
+  if (rssMb - low < BURST_RISE_MB || now - lastBurstAt < BURST_EVERY_MS) return false;
+  lastBurstAt = now;
+  const context: Record<string, unknown> = {};
+  for (const [name, read] of burstContexts) {
+    try { context[name] = read(); } catch (err) { context[name] = `unreadable: ${err instanceof Error ? err.message : String(err)}`; }
+  }
+  // No heap walk here: at the peak it would stop the loop for seconds. The engine's own
+  // allocator counters are free; process numbers say strings (external) or buffers.
+  const j = await loadJsc();
+  const u = j?.memoryUsage();
+  log.obs.warn('memory burst', {
+    ...processMemoryMb(), lowMb: low, riseMb: rssMb - low, uptimeSec: Math.round(process.uptime()),
+    holdersMb: Math.round(readMemoryHolders().reduce((n, r) => n + r.bytes, 0) / MB),
+    ...(u ? { engineMb: mb(u.current), engineCommitMb: mb(u.currentCommit) } : {}), context,
+  });
+  return true;
+}
+
 // ── A heap snapshot on request ───────────────────────────────────────────
 //
 // The ledger names what each registered cache holds; a heap snapshot names everything
@@ -296,4 +343,6 @@ export function _resetMemoryLedgerForTesting(): void {
   nudgedFromMb = null;
   overWarnedAt.clear();
   lastSnapshotAt = -Infinity;
+  lastBurstAt = -Infinity;
+  recentRss.length = 0;
 }

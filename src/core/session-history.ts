@@ -75,6 +75,11 @@ interface ParsedHistoryCacheEntry {
    *  full-read request (Load earlier / delta warm-up) must fall through to the
    *  real full read, which overwrites this entry. */
   windowed?: boolean;
+  /** A windowed entry of a transcript past the reader's whole-file ceiling: no full
+   *  read of it can ever replace the window, so a caller that is not tail-bounded
+   *  (who would get this same tail from the over-ceiling path) is answered with it
+   *  too (windowedEntryServes). */
+  overCeiling?: boolean;
   /** Incremental append-read state (see readSessionHistory). Absent when the
    *  last read couldn't establish it (no resolvable path / stat failed). */
   inc?: HistoryIncrementalState;
@@ -857,6 +862,7 @@ async function tryIncrementalHistoryRead(
     cacheSet(sessionId, {
       mtimeMs: newMtimeMs, ...(newSize !== undefined ? { size: newSize } : {}), messages, approxChars, inc,
       ...(cached.windowed ? { windowed: true } : {}),
+      ...(cached.overCeiling ? { overCeiling: true } : {}),
       ...(orphanUnion.size > 0 ? { orphanFinishedIds: [...orphanUnion] } : {}),
     }, host);
 
@@ -1351,7 +1357,7 @@ export async function readSessionHistoryTailWindow(
   sessionId: string,
   cwd?: string,
   host?: string,
-  maxTailBytes = 4 * 1024 * 1024,
+  maxTailBytes = OVER_CEILING_TAIL_BYTES,
   parseOpts?: ParseSessionMessagesOptions,
 ): Promise<SessionHistoryMessage[] | null> {
   return (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, parseOpts))?.messages ?? null;
@@ -1444,7 +1450,43 @@ function seedWindowIncrementalState(sessionId: string, win: HistoryWindowRead, w
  * earlier, fork ancestor read) must reach the real full read, which overwrites the entry.
  */
 function windowedEntryServes(entry: ParsedHistoryCacheEntry, options: ReadHistoryOptions | undefined): boolean {
-  return !entry.windowed || (!!options?.maxColdReadBytes && entry.approxChars >= options.maxColdReadBytes);
+  if (!entry.windowed) return true;
+  if (options?.maxColdReadBytes) return entry.approxChars >= options.maxColdReadBytes;
+  return !!entry.overCeiling;
+}
+
+/** The tail an over-ceiling transcript is served from (and a tail window's default). */
+const OVER_CEILING_TAIL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Keep a tail window just read as the session's windowed cache entry, with its own
+ * incremental state so the next append reads only its new bytes. Not when a fresher or
+ * wider entry landed meanwhile (a timed-out preview finishing after a larger refresh),
+ * nor when a rewind was recorded while the window was read. Never written to the disk
+ * cache: that store feeds full-read fallbacks, which must not adopt a partial parse.
+ */
+async function cacheWindowRead(
+  sessionId: string, host: string | undefined, read: HistoryWindowRead, windowBytes: number,
+  mtimeMs: number, statSize: number, extra: { overCeiling?: true } = {},
+): Promise<void> {
+  // A rewind recorded while the window was read: the window may hold the rewound-away
+  // branch and the stat does not change with a rewind, so nothing is kept (the next read
+  // takes the filtered path).
+  if (await getInPlaceRewinds(sessionId)) return;
+  const current = cacheGet(sessionId, host);
+  if (current && isFresh(current, mtimeMs, statSize) && !(current.windowed && current.approxChars < windowBytes)) {
+    // The same tail already kept by a tail-bounded caller: it now answers every caller.
+    if (extra.overCeiling && current.windowed && !current.overCeiling) current.overCeiling = true;
+    return;
+  }
+  const inc = seedWindowIncrementalState(sessionId, read, windowBytes);
+  const orphans = getOrphanFinishedAgentIds(read.messages);
+  cacheSet(sessionId, {
+    mtimeMs, size: statSize, messages: read.messages, windowed: true, ...extra,
+    approxChars: inc ? Math.max(windowBytes, inc.parsedBytes - read.startByte) : windowBytes,
+    ...(inc ? { inc } : {}),
+    ...(orphans?.size ? { orphanFinishedIds: [...orphans] } : {}),
+  }, host);
 }
 
 /**
@@ -1789,28 +1831,12 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         prior, ...(read.text.endsWith('\n') ? {} : { partialLastLine: true }),
       });
       if (mtimeMs !== undefined) {
-        // No incremental state when a rewind was recorded while the window was read: the
-        // growth path does not look for cuts, so it would keep serving the rewound-away
-        // branch (the next read without state takes the filtered full read instead).
-        const rewoundMeanwhile = !!(await getInPlaceRewinds(sessionId));
-        // A timed-out preview may finish after the larger refresh. Never replace
-        // that fresh, more complete parse with its smaller window.
-        const current = cacheGet(sessionId, host);
-        if (!current || !isFresh(current, mtimeMs, statSize)
-            || (current.windowed && current.approxChars < options.maxColdReadBytes)) {
-          // The window's own incremental state: its next growth reads only the new bytes.
-          const inc = rewoundMeanwhile ? undefined : seedWindowIncrementalState(sessionId, read, options.maxColdReadBytes);
-          cacheSet(sessionId, {
-            mtimeMs, size: statSize, messages: win, windowed: true,
-            approxChars: inc ? Math.max(options.maxColdReadBytes, inc.parsedBytes - read.startByte) : options.maxColdReadBytes,
-            ...(inc ? { inc } : {}),
-            ...(getOrphanFinishedAgentIds(win)?.size
-              ? { orphanFinishedIds: [...getOrphanFinishedAgentIds(win)!] } : {}),
-          }, host);
-        }
+        // A full-width window of a file past the whole-file ceiling is the very tail the
+        // over-ceiling path serves: it answers every caller (windowedEntryServes).
+        const { DaemonFileReader: Reader } = await import('./daemon-file-reader.js');
+        const overCeiling = statSize > Reader.maxReadBytes() && options.maxColdReadBytes >= OVER_CEILING_TAIL_BYTES;
+        await cacheWindowRead(sessionId, host, read, options.maxColdReadBytes, mtimeMs, statSize, overCeiling ? { overCeiling: true } : {});
       }
-      // NOT written to the disk cache: that store feeds full-read fallbacks
-      // (SSH-down stale serving), which must never adopt a partial parse.
       //
       // Background warm-up (fire-and-forget): a plain full read re-seeds the
       // full cache + incremental state OFF the critical path, so the session's
@@ -1877,8 +1903,19 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         });
       }
     }
-    const tail = await readSessionHistoryTailWindow(sessionId, cwd, host, undefined, tailParseOpts);
-    if (tail) return handOff(tail);
+    // Without rewind cuts the tail is kept as an over-ceiling window entry: every later
+    // caller at the same stat is answered from it, and an append reads only its new
+    // bytes. Re-reading and re-parsing 4 MB per request (about 8 MB of strings each,
+    // up to 100 an hour on the maintainer's 940 MB session) was the largest single
+    // source of the server's uncollected garbage (heap snapshot, 2026-11-21).
+    const read = await readHistoryWindow(sessionId, cwd, host, OVER_CEILING_TAIL_BYTES, tailParseOpts);
+    if (read) {
+      // Keyed by the stat this read began from; a read refused without one is not kept.
+      if (!rewindCuts && mtimeMs !== undefined && statSize !== undefined && fileSize === statSize) {
+        await cacheWindowRead(sessionId, host, read, OVER_CEILING_TAIL_BYTES, mtimeMs, statSize, { overCeiling: true });
+      }
+      return handOff(read.messages);
+    }
     // Tail unavailable too: the previous parse, else a FAILED read. Never an empty
     // history: the file exists (it is over the ceiling), so [] would answer "this
     // conversation has no messages" and replace what the client shows (2026-11-16: an

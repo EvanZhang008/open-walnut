@@ -40,6 +40,7 @@ import { observe } from '../../core/observability/metrics.js'
 import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/route-condition.js'
 import { createRecoveryTransitionTracker } from '../../core/notifications/recovery-transition.js'
 import { isHandledFailure } from './handled-failure.js'
+import { registerBurstContext } from '../../core/observability/memory-ledger.js'
 
 // Extend Express Request to carry the request ID
 declare global {
@@ -155,6 +156,17 @@ function safeQuery(query: Record<string, unknown>): Record<string, unknown> | un
 /**
  * Express middleware: log every API request with timing + request ID.
  */
+/** Requests not answered yet, for the memory ledger's burst line (memory-ledger.ts). */
+const inFlight = new Map<string, { method: string; path: string; start: number }>()
+registerBurstContext('requests', () => {
+  // Newest first: a burst is built by what started in the last minutes, and open
+  // streams (SSE, long polls) would otherwise fill the list. Older ones are counted.
+  const now = Date.now()
+  const all = [...inFlight.values()].map((r) => ({ route: `${r.method} ${r.path}`, ageMs: now - r.start }))
+  const recent = all.filter((r) => r.ageMs < 5 * 60_000).sort((a, b) => a.ageMs - b.ageMs)
+  return { recent: recent.slice(0, 25), recentCount: recent.length, olderCount: all.length - recent.length }
+})
+
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
   // A request an earlier mount already logs (a host replica mounts this before
   // its away routes, server.ts) gets one line, not two.
@@ -172,6 +184,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   res.setHeader('X-Request-Id', reqId)
 
   const start = Date.now()
+  inFlight.set(reqId, { method: req.method, path: (req.originalUrl ?? '').split('?')[0] ?? '', start })
 
   // Exactly one line per request, whichever way the response ends. `finish` is
   // the ordinary path; `close` also fires for a response nobody ever ended (an
@@ -182,6 +195,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   const record = (aborted: boolean) => {
     if (logged) return
     logged = true
+    inFlight.delete(reqId)
     const duration = Date.now() - start
     const status = res.statusCode
     const method = req.method

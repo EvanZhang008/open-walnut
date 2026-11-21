@@ -7,6 +7,7 @@
 
 import path from 'node:path'
 import { log } from '../logging/index.js'
+import { registerBurstContext } from './observability/memory-ledger.js'
 import { link, linkTarget } from './hosts/link.js'
 import { ReadProgress, creditCurrentRead, currentReadProgress, runWithReadProgress } from './hosts/read-progress.js'
 import { isSelfHost } from '../replica/self-host.js'
@@ -93,7 +94,15 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   /** Reads moving a file's bytes now, by what they read (shareRead), each with the bytes that reached it so far. */
-  private static readsInFlight = new Map<string, { read: Promise<unknown>; bytes: () => number }>()
+  private static readsInFlight = new Map<string, { read: Promise<unknown>; bytes: () => number; path?: string }>()
+
+  /** The reads in flight for the memory ledger's burst line: host, file, what part, bytes so far. */
+  static readsInFlightNow(): Array<{ host: string; file: string; size: number; what: string; bytesSoFar: number }> {
+    return [...DaemonFileReader.readsInFlight].map(([key, r]) => {
+      const [host = '', file = '', size = '0', , what = ''] = key.split('\u0000')
+      return { host, file: (r.path ?? file).slice(-80), size: Number(size), what, bytesSoFar: r.bytes() }
+    })
+  }
 
   /**
    * One transfer for every reader of the same bytes of the same file as it stands.
@@ -130,7 +139,7 @@ export class DaemonFileReader implements SessionFileReader {
     let settled: number | null = null
     const bytes = (): number => settled ?? Math.max(0, progress.bytes())
     const read = runWithReadProgress(progress, run)
-    const entry = { read, bytes }
+    const entry = { read, bytes, path: remotePath }
     inFlight.set(key, entry)
     void read.finally(() => {
       // Frozen at settle, as a command's own count is; the closed progress takes no more commands.
@@ -865,3 +874,6 @@ export class DaemonFileReader implements SessionFileReader {
     return result
   }
 }
+
+// What the memory ledger's burst line names as in flight (observability/memory-ledger.ts).
+registerBurstContext('daemonReads', () => DaemonFileReader.readsInFlightNow())

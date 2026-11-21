@@ -30,6 +30,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 const delayedRanges = vi.hoisted(() => ({ small: false, entered: undefined as (() => void) | undefined, release: undefined as Promise<void> | undefined }));
 const wholeReads = vi.hoisted(() => [] as string[]);
 const failRanges = vi.hoisted(() => ({ on: false }));
+const rangeReads = vi.hoisted(() => [] as Array<{ path: string; start: number }>);
 vi.mock('../../src/core/daemon-file-reader.js', () => {
   const actual = mockLocalDaemonReader();
   class Reader extends actual.DaemonFileReader {
@@ -39,6 +40,7 @@ vi.mock('../../src/core/daemon-file-reader.js', () => {
     }
     // The window read takes bytes (its start is kept as a file offset), and readFileRange rides on it.
     async readFileRangeBuffer(remotePath: string, start: number) {
+      rangeReads.push({ path: remotePath, start });
       if (failRanges.on) return null;
       const result = await super.readFileRangeBuffer(remotePath, start);
       if (delayedRanges.small && result && result.fileSize - start <= 2048) {
@@ -77,6 +79,7 @@ beforeEach(async () => {
   delayedRanges.entered = undefined;
   delayedRanges.release = undefined;
   wholeReads.length = 0;
+  rangeReads.length = 0;
   failRanges.on = false;
 });
 
@@ -167,7 +170,7 @@ describe('whale-session bounded tail', () => {
   it('an over-ceiling tail that cannot be read serves the previous parse when there is one', async () => {
     const sid = 'whale-tail-fails-cached';
     await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
-    // A cold tail-bounded read caches its window (the over-ceiling tail itself is not cached).
+    // A cold tail-bounded read caches its window.
     const first = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true, maxColdReadBytes: 4096 });
     expect(first.map(m => m.text)).toContain('latest question');
     process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
@@ -176,6 +179,70 @@ describe('whale-session bounded tail', () => {
     failRanges.on = true;
     const again = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
     expect(again.map(m => m.text)).toContain('latest question');
+  });
+
+  // 2026-11-21 prod heap snapshot: re-reading and re-parsing the 4 MB tail of an
+  // over-ceiling transcript on every request (up to 100 an hour on a 940 MB session)
+  // left about 8 MB of strings per read for the collector.
+  it('an over-ceiling tail is read once per stat: the next caller is answered from the cache', async () => {
+    const sid = 'whale-cached-tail';
+    await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    const first = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    const readsAfterFirst = rangeReads.filter(r => r.path.endsWith(`${sid}.jsonl`)).length;
+    expect(readsAfterFirst).toBeGreaterThan(0);
+
+    const second = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(rangeReads.filter(r => r.path.endsWith(`${sid}.jsonl`)).length).toBe(readsAfterFirst);
+    expect(second.map(m => m.text)).toEqual(first.map(m => m.text));
+    expect(isWindowedHistory(second)).toBe(true);
+  });
+
+  it('an append to a cached over-ceiling tail reads only the new bytes and shows the new message', async () => {
+    const sid = 'whale-cached-grow';
+    await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    const sizeBefore = (await fsp.stat(jsonlPath(sid))).size;
+    rangeReads.length = 0;
+
+    await fsp.appendFile(jsonlPath(sid), JSON.stringify(asstLine('fresh answer', '2026-01-02T00:00:05.000Z')) + '\n');
+    const grown = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+
+    expect(grown.map(m => m.text)).toContain('fresh answer');
+    expect(grown.map(m => m.text)).toContain('latest question');
+    const reads = rangeReads.filter(r => r.path.endsWith(`${sid}.jsonl`));
+    expect(reads.length).toBeGreaterThan(0);
+    // The incremental read starts at the last line it already parsed (it re-checks that
+    // line), never at a new 4 KB window: far past where a fresh window would begin.
+    expect(reads.length).toBe(1);
+    expect(reads[0]!.start).toBeGreaterThan(sizeBefore - 400);
+  });
+
+  it('after an append, the next caller at the same stat is answered from the cache', async () => {
+    const sid = 'whale-cached-grow-twice';
+    await writeLines(sid, [...padding(60), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    await fsp.appendFile(jsonlPath(sid), JSON.stringify(asstLine('fresh answer', '2026-01-02T00:00:05.000Z')) + '\n');
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    rangeReads.length = 0;
+    const again = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(again.map(m => m.text)).toContain('fresh answer');
+    expect(rangeReads.filter(r => r.path.endsWith(`${sid}.jsonl`))).toEqual([]);
+  });
+
+  it('a full-width tail kept by a tail-bounded caller answers an unbounded caller too', async () => {
+    // The production shape at small scale: a 5 MB file past a 4.5 MB ceiling, opened by
+    // the UI's ?tail= read (a 4 MB cold window) before any unbounded caller.
+    const sid = 'whale-cold-then-full';
+    await writeLines(sid, [...padding(11_000), userLine('latest question', '2026-01-02T00:00:00.000Z')]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = String(Math.round(4.5 * 1024 * 1024));
+    await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true, maxColdReadBytes: 4 * 1024 * 1024 });
+    rangeReads.length = 0;
+    const unbounded = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(unbounded.map(m => m.text)).toContain('latest question');
+    expect(rangeReads.filter(r => r.path.endsWith(`${sid}.jsonl`))).toEqual([]);
   });
 
   it('the only empty answer is a missing source: every [] return in the reader is that one', () => {
