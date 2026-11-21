@@ -12,6 +12,9 @@
  *  2. He replies in the top card: the words are filed in that thread, which leaves the list (his
  *     reply makes it the node's move), so the next takes its place ("2 / 5") and the header reads 5.
  *  3. Hide: one line, "5 threads (2 need you) · Show"; still hidden after a reload; Show brings it back.
+ *  3b. A card whose words run past the top's room: the cut block fades at its end, and Show all
+ *     (or a click on its title) opens it whole in the Threads view beside the chat, scrolled to and
+ *     marked, while the top keeps its bound height and never folds into nothing.
  *  4. A task with Threads on and a letter to answer, in a Home column: the letter (not a thread)
  *     still shows in the strip, the thread under it. The switch off: today's strip alone.
  * The fixture is shared: this file makes its own project, tasks and letter, and puts the flags back.
@@ -245,6 +248,52 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await shot(page, '5-shown-again', page.getByTestId('org-detail'))
   expect(pageErrors).toEqual([])
   await keepVideo(page, 'vp')
+})
+
+test('a card cut off in the top fades at its end, and Show all opens it whole in the Threads view', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const why = { user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes.' }
+  const title = `Long field notes ${STAMP}`
+  const { thread } = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.lead}/threads/open`, { title, text: `${title}?`, state: 'needs', from: 'node', ...why }, ids.leadSid)
+  // Well under the summary's cap (THREAD_REPLY_MAX), so the Threads view holds every word of it.
+  const long = Array.from({ length: 30 }, (_, i) => `Bed ${i + 1}: soil turned, seedlings up.`).join('\n\n')
+  await patch(request, `/api/v1/tasks/${ids.lead}/threads/${thread.id}`, { reply: `${long}\n\nWhich bed gets the beans?`, state: 'needs', ...why }, ids.leadSid)
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  const detail = page.getByTestId('org-detail')
+  const top = topOf(page.getByTestId('org-chat'))
+  await expect(top).toHaveAttribute('data-thread-id', thread.id, { timeout: 30_000 })
+  const room = (await top.boundingBox())!
+  // Its words are cut: the block fades at its end, and the bar offers Show all.
+  await expect(top.locator('[data-clipped="true"]').first()).toBeVisible()
+  const mask = await top.locator('[data-clipped="true"]').first().evaluate((el) => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage)
+  expect(mask).toContain('linear-gradient')
+  await expect(top.getByTestId('top-thread-whole')).toBeVisible()
+  await shot(page, '8-clipped', detail)
+  // Show all: the Threads beside the chat bring the card into view and mark it.
+  await top.getByTestId('top-thread-whole').click()
+  const rail = page.getByTestId('org-rail')
+  const inRail = rail.locator(`[data-testid="org-thread"][data-thread-id="${thread.id}"]`)
+  await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
+  await expect(inRail).toBeInViewport()
+  await expect(inRail.getByTestId('org-thread-reply')).toContainText('Bed 30')
+  await shot(page, '9-show-all', detail)
+  // A click on its title does the same, and the top neither folds nor grows.
+  await expect(inRail).not.toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
+  await top.getByTestId('org-thread-head').click()
+  await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
+  await expect(top.getByTestId('org-thread-messages')).toHaveCount(0)
+  await expect(top.getByTestId('org-thread-reply')).toBeVisible()
+  const after = (await top.boundingBox())!
+  expect(Math.abs(after.height - room.height)).toBeLessThanOrEqual(2)
+  // Scrolled to its end, the block no longer fades.
+  await top.locator('[data-clipped="true"]').first().evaluate((el) => { el.scrollTop = el.scrollHeight })
+  await expect(top.getByTestId('org-thread-reply')).not.toHaveAttribute('data-clipped', 'true')
+  await patch(request, `/api/v1/tasks/${ids.lead}/threads/${thread.id}`, { close: 'acked' })
+  expect(pageErrors).toEqual([])
+  await keepVideo(page, 'show-all')
 })
 
 test('a task with Threads on: its letter still shows above its thread; the switch off shows today\'s strip', async ({ page, request }) => {

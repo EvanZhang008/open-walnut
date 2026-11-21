@@ -59,6 +59,15 @@
 .top-thread-step:focus-visible, .top-thread-hide:focus-visible, .top-thread-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .top-thread-pos { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 500; }
 .top-thread-left { margin-left: 4px; }
+/* Show all: the card's words are cut off, it opens whole in the Threads view (TopThread.tsx). */
+.top-thread-whole { all: unset; cursor: pointer; margin-left: 8px; padding: 2px 6px; border-radius: 6px; color: var(--accent, #0a84ff); font-weight: 500; }
+.top-thread-whole:hover { background: var(--bg-secondary); }
+.top-thread-whole:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A block of words with more below its end fades out there, never a line cut in half. */
+.top-thread-list [data-clipped="true"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
+}
 .top-thread-hide { all: unset; cursor: pointer; margin-left: auto; padding: 2px 6px; border-radius: 6px; }
 .top-thread-hide:hover { background: var(--bg-secondary); color: var(--fg); }
 .top-thread-list .org-thread[data-state="needs"] { border-color: color-mix(in srgb, var(--error, #ff3b30) 45%, var(--border)); }

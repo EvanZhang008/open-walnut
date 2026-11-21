@@ -335,17 +335,11 @@ enum OrgThreadModel {
         return "Moved to \(place)\(p.by == "walnut" ? " by Walnut" : "")\(why)"
     }
 
-    /// An answered one, one he acknowledged at work and a closed one read their group's word, so a
-    /// closed card reads Closed, never Done (2026-11-20, the user: "why the done here means close").
+    /// A card reads the group it is drawn in, the one rule (thread-groups.ts threadGroupOf), so a
+    /// closed card reads Closed, never Done or Moved, and a pending one Waiting / Snoozed (2026-11-20,
+    /// the user: "why the done here means close"; 2026-11-21, a review: a badge disagreed with its group).
     static func stateLabel(_ t: OrgThread, inView: Bool = true, now: Date = Date()) -> String {
-        if t.closed != nil || t.state == "answered" || isKnown(t) { return group(t, inView: inView, now: now).label }
-        switch t.state {
-        case "new": return "New"
-        case "working": return "Working"
-        case "needs": return "Needs you"
-        case "pending": return "Pending"
-        default: return t.state.capitalized
-        }
+        group(t, inView: inView, now: now).label
     }
 
     /// Where a thread the node opened itself came from (threads-model.ts THREAD_SOURCES).

@@ -50,7 +50,6 @@
  */
 import { useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, pinnedNow, sharedAnswers, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
@@ -67,20 +66,21 @@ import { THREAD_LIST_SOURCE, threadAnswerSource, threadOpenerSource, threadStand
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
 import { useExperimental } from '@/hooks/useExperimental';
-import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
+import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
-import { OrgThreadSnooze } from './OrgThreadSnooze';
+import { OrgThreadSnooze, SnoozedUntil } from './OrgThreadSnooze';
+import { threadBadge } from './thread-badge';
 import { PoppedThreadCard } from './PoppedThreadCard';
 import { TopicThreadBadge } from '@/components/topics/TopicThreadBadge';
 import { ThreadsTopicBar } from '@/components/topics/topic-entry';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadChoiceAnswer, answersChoice } from './ThreadChoiceAnswer';
-import { useFocusedThread } from './thread-focus';
+import { askThreadFocus, useFocusedThread } from './thread-focus';
 import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { Answer, Words } from './thread-card-text';
-import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown, threadGroupOf, type ThreadGroup } from '@open-walnut/thread-groups';
+import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown } from '@open-walnut/thread-groups';
 import { TaskChips } from './ThreadTaskChips';
 import { KnownBlock } from './ThreadKnown';
 import { OrgThreadsByState, isThreadFilter } from './OrgThreadsByState';
@@ -88,24 +88,6 @@ import type { ThreadFilter } from './ThreadsFilterBar';
 import '@/styles/org-threads.css';
 import '@/styles/notice-card.css';
 
-/**
- * A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). An
- * answered one, one held since his Acknowledge and a closed one read their group's word (Done or
- * Waiting / Snoozed, Working or Waiting / Snoozed, Closed or Archived: core/org/thread-groups.ts),
- * so a closed card never reads Done (2026-11-20, the user: "why the done here means close").
- */
-const STATE_LABEL: Record<Exclude<OrgThreadState, 'answered'>, string> = {
-  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, pending: 'Pending',
-};
-function stateLabel(t: OrgThread, group: ThreadGroup, known: boolean): string {
-  if (t.closed) return t.movedTo ? 'Moved' : THREAD_GROUP_LABELS[group];
-  if (t.askedIn) return t.askedIn.answered ? 'Decided in a task' : 'Asked in a task';
-  return t.state === 'answered' || known ? THREAD_GROUP_LABELS[group] : STATE_LABEL[t.state];
-}
-const STATE_DOT: Record<OrgThreadState, string> = {
-  new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
-  pending: 'var(--fg-muted, #86868B)',
-};
 /** What Walnut's stand-in summary line says it is (core/org/thread-view.ts SummaryLine). */
 const STAND_IN_NOTE: Record<Exclude<NonNullable<SummaryLine['from']>, 'none'>, (name: string) => string> = {
   answer: (name) => `From ${name}'s latest answer; ${name} has not written a summary yet`,
@@ -151,17 +133,6 @@ function closedWords(t: OrgThread, now: number): string {
   if (t.movedTo) return `Moved to ${t.movedTo.title} ${timeAgo(c.at, { now })}`;
   const who = c.by === 'human' ? '' : ' by the agent';
   return `${c.how === 'acked' ? THREAD_GROUP_LABELS.done : 'Dropped'}${who} ${timeAgo(c.at, { now })}`;
-}
-
-/** When a snoozed thread comes back, as a person says it: "Tomorrow, 9:00 AM", "Nov 9, 12:00 AM". */
-function backAt(until: string, now: number): string {
-  const d = new Date(until);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  const day = new Date(now);
-  if (day.toDateString() === d.toDateString()) return `today, ${time}`;
-  day.setDate(day.getDate() + 1);
-  if (day.toDateString() === d.toDateString()) return `tomorrow, ${time}`;
-  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`;
 }
 
 function oneLine(text: string, max: number): string {
@@ -254,16 +225,14 @@ function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
   );
 }
 
-/** A card's Snooze (Unsnooze while put aside) and its pin. */
+/** A card's Snooze (with Unsnooze while put aside) and its pin. */
 function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snoozed: boolean; state: OrgThreadsState; pinned: boolean }) {
   return (<>
     <OrgThreadSnooze
       title={t.title}
-      label={snoozed ? 'Snoozed' : 'Snooze'}
       current={snoozed ? t.snoozed?.until : undefined}
       onSnooze={(until) => void state.update(t.id, { snooze: until })}
     />
-    {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
     {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
     <button
       type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
@@ -315,7 +284,7 @@ function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed, onReadWhole }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
@@ -325,6 +294,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   focused: boolean;
   /** His view lists it now (thread-view.ts listedForHim): its group, and so its word. */
   listed: boolean;
+  /** Where the card is drawn in a bound room (the top of a chat): its title opens it whole elsewhere (its Conversation still unfolds in place). */
+  onReadWhole?: () => void;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
@@ -353,8 +324,10 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const deciding = known && inAcknowledged(t);
   const ackSays = !asked && !t.owner ? ackCardLine(t) : null;
   const back = backFromKnown(t);
-  // Its word is its group's (core/org/thread-groups.ts), the one it is drawn in.
-  const label = stateLabel(t, threadGroupOf(t, listed, now), known);
+  // Its word and dot are its group's (core/org/thread-groups.ts), the one it is drawn in (thread-badge.ts).
+  const badge = threadBadge(t, listed, now);
+  // In a bound room a click on its title reads it whole elsewhere (onReadWhole); in a list, it unfolds in place.
+  const onHead = () => (onReadWhole ? onReadWhole() : setOpen(!open));
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
   const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
@@ -374,11 +347,11 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
-      <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
+    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-group={badge.group} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
+      <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={onHead}>
         <span className="org-thread-state" data-testid="org-thread-state">
-          <i className={known ? 'is-known' : undefined} style={known ? undefined : { background: closed || asked ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
-          {label}
+          <i className={badge.group === 'known' ? 'is-known' : undefined} style={badge.group === 'known' ? undefined : { background: badge.dot }} />
+          {badge.label}
         </span>
         <span className="org-thread-meta">
           {pinned && (<>
@@ -396,7 +369,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>
       <TopicThreadBadge threadId={t.id} />
-      {snoozed && t.snoozed && <p className="org-thread-snoozed" data-testid="org-thread-snoozed-until">Snoozed until {backAt(t.snoozed.until, now)}</p>}
+      {snoozed && t.snoozed && <SnoozedUntil until={t.snoozed.until} now={now} />}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {/* It came here with its work from another node (core/org/thread-follow.ts), or left for one. */}
       {!closed && t.movedFrom && <p className="org-thread-follows" data-testid="org-thread-moved-from" title={t.movedFrom.why}>Moved here from {t.movedFrom.title}{t.movedFrom.why ? `: ${t.movedFrom.why}` : ''}</p>}
@@ -492,17 +465,19 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
 /** One thread of his list as every surface draws it: a thread of a task below is the ask card
  *  (PoppedThreadCard), the node's own the thread card. The Threads view and the top of the chat
  *  (TopThread) both draw through this, so one thread reads the same in both. */
-export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true }: {
+export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true, onReadWhole }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined; state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number; snoozed: boolean;
   /** A chat message's thread line just opened it (thread-focus.ts). */
   focused?: boolean;
   /** His view lists it now (listedForHim); the top of the chat shows only listed ones. */
   listed?: boolean;
+  /** Drawn in a bound room (the top of a chat): read it whole in the Threads view. */
+  onReadWhole?: () => void;
 }) {
   return t.owner && owner
-    ? <PoppedThreadCard node={owner.id} t={t} state={state} />
-    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} />;
+    ? <PoppedThreadCard node={owner.id} t={t} state={state} now={now} snoozed={snoozed} listed={listed} />
+    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} {...(onReadWhole ? { onReadWhole } : {})} />;
 }
 
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState = false }: Props) {
@@ -562,7 +537,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       <ThreadsTopicBar owner={owner} />
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {groups && all !== null && <OrgThreadsByState groups={groups} filter={filter} onFilter={setFilter} card={card} name={name} />}
+      {groups && all !== null && <OrgThreadsByState groups={groups} filter={filter} onFilter={setFilter} card={card} name={name} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">

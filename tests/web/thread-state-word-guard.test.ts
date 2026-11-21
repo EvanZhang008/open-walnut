@@ -98,12 +98,12 @@ describe('Threads show only his own group words', () => {
   it('"Done" is only the Done group\'s label: a closed thread reads Closed', () => {
     const hits = [...webFiles, ...iosFiles].flatMap((f) => doneLiterals(readFileSync(f, 'utf8')).map((l) => `${relative(ROOT, f)}: ${l}`));
     expect(hits, 'Done names a result waiting on its card; a closed card reads Closed').toEqual([]);
-    // The web's card word for an answered, held or closed thread is its group's.
-    const web = stripComments(readFileSync(join(ROOT, 'web/src/components/org/OrgThreads.tsx'), 'utf8'));
-    expect(web).toMatch(/if \(t\.closed\) return t\.movedTo \? 'Moved' : THREAD_GROUP_LABELS\[group\];/);
-    expect(web).toMatch(/return t\.state === 'answered' \|\| known \? THREAD_GROUP_LABELS\[group\] : STATE_LABEL\[t\.state\];/);
+    // Every card's word is its group's, whatever its state (web/src/components/org/thread-badge.ts,
+    // guarded shape by shape in tests/web/thread-badge.test.ts), on the phone too.
+    const web = stripComments(readFileSync(join(ROOT, 'web/src/components/org/thread-badge.ts'), 'utf8'));
+    expect(web).toMatch(/return \{ group, label: THREAD_GROUP_LABELS\[group\], dot: GROUP_DOT\[group\] \};/);
     const swift = stripComments(readFileSync(join(ROOT, 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'), 'utf8'));
-    expect(swift).toMatch(/if t\.closed != nil \|\| t\.state == "answered" \|\| isKnown\(t\) \{ return group\(t, inView: inView, now: now\)\.label \}/);
+    expect(swift).toMatch(/static func stateLabel\(_ t: OrgThread, inView: Bool = true, now: Date = Date\(\)\) -> String \{\s*group\(t, inView: inView, now: now\)\.label\s*\}/);
   });
 
   it('the scans catch the old words (self-check)', () => {

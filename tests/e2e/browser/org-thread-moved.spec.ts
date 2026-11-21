@@ -106,7 +106,7 @@ test('moving the task moves his thread to the other VP, and he follows it up the
   await page.getByTestId('org-threads-closed').click()
   const left = card(page, ids.thread)
   await expect(left.getByTestId('org-thread-closed')).toHaveText(/^Moved to /)
-  await expect(left.getByTestId('org-thread-state')).toHaveText('Moved')
+  await expect(left.getByTestId('org-thread-state')).toHaveText('Closed')
   await expect(left.getByTestId('org-thread-moved-to')).toContainText('Research the bot')
   await shot(page, '2-left')
 

@@ -13,6 +13,12 @@
  *     the closed one, reading Closed; an empty group says so.
  *  3. The pick is kept: the page loaded again opens on the chip he left.
  *  4. With ack_means_known off and nothing in Acknowledged, there is no Acknowledged chip.
+ *  5. Each card's state word is the group it is drawn under (a pending one reads Waiting / Snoozed).
+ *     A card snoozed with the keyboard leaves Done: a line stands in its place ("Moved to
+ *     Waiting / Snoozed", Show) and takes the focus; Show picks that chip and marks the card, which
+ *     says until when; its menu offers Unsnooze, which brings it back (another line, the other way).
+ *     Reopen in Closed leaves a line too; each line fades by itself.
+ *  6. In a long group the chips stay at the top of the pane while it scrolls (sticky).
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -178,5 +184,128 @@ test('each chip shows only its own group, every card of it, and the pick is kept
   await loadHome(page)
   await openLead(page)
   await expect(page.getByTestId('org-threads-chip')).toHaveText(['All 7', 'Needs you 1', 'Done 1', 'Working 1', 'Waiting / Snoozed 3', 'Closed 1', 'Archived 0'])
+  expect(pageErrors).toEqual([])
+})
+
+const note = (page: Page, id: string) => page.locator(`[data-testid="org-thread-move-note"][data-moved-id="${id}"]`)
+const cardIn = (page: Page, g: string, id: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"] [data-testid="org-thread"][data-thread-id="${id}"]`)
+/** The test id of the element holding the focus, and the line it is in. */
+const focusAt = (page: Page) => page.evaluate(() => {
+  const el = document.activeElement as HTMLElement | null
+  return { testId: el?.dataset.testid ?? el?.tagName ?? null, moved: el?.closest<HTMLElement>('[data-moved-id]')?.dataset.movedId ?? null }
+})
+
+test('a card says its group, and a card that moves leaves a line in its place with Show', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  await chip(page, 'all').click()
+  await expect.poll(async () => (await shownCards(page)).all.length, { timeout: 20_000 }).toBe(7)
+
+  // 5a. Every card's word is the label of the group it is drawn under.
+  const labels: Record<string, string> = { needs: 'Needs you', read: 'Done', working: 'Working', waiting: 'Waiting / Snoozed', known: 'Acknowledged', done: 'Closed', archived: 'Archived' }
+  const words = await page.getByTestId('org-thread-groups').evaluate((root) => [...root.querySelectorAll<HTMLElement>('section[data-testid="org-thread-group"]')].flatMap((sec) =>
+    [...sec.querySelectorAll<HTMLElement>('[data-testid="org-thread-state"]')].map((w) => ({ group: sec.dataset.group!, word: w.textContent?.trim() ?? '' }))))
+  expect(words.length).toBeGreaterThanOrEqual(5)
+  for (const w of words) expect(w.word, w.group).toBe(labels[w.group])
+  await expect(cardIn(page, 'waiting', ids.waiting).getByTestId('org-thread-state')).toHaveText('Waiting / Snoozed')
+  // The one snoozed before says until when; its button reads Snoozed.
+  const snoozed = cardIn(page, 'waiting', ids.snoozed)
+  await expect(snoozed.getByTestId('org-thread-snoozed-until')).toHaveText(/^Snoozed until \w/)
+  await expect(snoozed.getByTestId('org-thread-snooze')).toHaveText(/^Snoozed/)
+
+  // 5b. Done picked; the result is snoozed with the keyboard: Enter on Snooze, then on 2h.
+  await chip(page, 'read').click()
+  const read = cardIn(page, 'read', ids.read)
+  await expect(read).toBeVisible()
+  await read.getByTestId('org-thread-snooze').focus()
+  await page.keyboard.press('Enter')
+  const menu = page.getByTestId('org-thread-snooze-menu')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByTestId('org-thread-snooze-clear')).toHaveCount(0)
+  await menu.getByRole('button', { name: '2h', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await expect(menu).toHaveCount(0)
+  // It left Done: a line in its place names where it went, and holds the focus (never the page).
+  await expect(read).toHaveCount(0)
+  await expect(note(page, ids.read)).toContainText('Moved to Waiting / Snoozed')
+  await expect.poll(() => focusAt(page)).toEqual({ testId: 'org-thread-move-show', moved: ids.read })
+  await shot(page, '5-moved-line')
+  // Show picks Waiting / Snoozed and marks the card, which says until when.
+  await page.keyboard.press('Enter')
+  await expect(chip(page, 'waiting')).toHaveAttribute('aria-pressed', 'true')
+  const back = cardIn(page, 'waiting', ids.read)
+  await expect(back).toBeVisible()
+  await expect(back).toHaveAttribute('data-focused', 'true')
+  await expect(back.getByTestId('org-thread-state')).toHaveText('Waiting / Snoozed')
+  await expect(back.getByTestId('org-thread-snoozed-until')).toHaveText(/^Snoozed until (today|tomorrow), /)
+  await expect(back.getByTestId('org-thread-unsnooze')).toBeVisible()
+  await shot(page, '5-snoozed-card')
+  // Its menu opens on that time, with Unsnooze; a keyboard Unsnooze sends it back to Done.
+  await back.getByTestId('org-thread-snooze').click()
+  await expect(menu.getByTestId('org-thread-snooze-current')).toHaveText(/^Snoozed until (today|tomorrow), /)
+  await shot(page, '5-snoozed-menu')
+  await menu.getByTestId('org-thread-snooze-clear').focus()
+  await page.keyboard.press('Enter')
+  await expect(back).toHaveCount(0)
+  await expect(note(page, ids.read)).toContainText('Moved to Done')
+  await expect.poll(() => focusAt(page)).toEqual({ testId: 'org-thread-move-show', moved: ids.read })
+  await expect.poll(async () => {
+    const r = await page.request.get(`/api/v1/tasks/${ids.lead}/threads/${ids.read}`)
+    return ((await r.json()) as { thread?: { snoozed?: unknown } }).thread?.snoozed ?? null
+  }, { timeout: 15_000 }).toBeNull()
+
+  // 5c. Reopen in Closed: the line says where it went, and Show finds it there.
+  await chip(page, 'done').click()
+  await expect(note(page, ids.read)).toHaveCount(0)
+  await cardIn(page, 'done', ids.closed).getByTestId('org-thread-reopen').click()
+  const line = note(page, ids.closed)
+  await expect(line).toBeVisible()
+  const to = (await line.getAttribute('data-to'))!
+  expect(['read', 'working', 'waiting', 'needs']).toContain(to)
+  await expect(line).toContainText(`Moved to ${labels[to]}`)
+  await expect(page.locator('[data-testid="org-thread-group-empty"][data-group="done"]')).toHaveCount(0)
+  await shot(page, '5-reopened-line')
+  // Left alone, it fades and goes.
+  await expect(line).toHaveCount(0, { timeout: 12_000 })
+  await expect(page.locator('[data-testid="org-thread-group-empty"][data-group="done"]')).toHaveText('Nothing in Closed.')
+  await chip(page, to).click()
+  await expect(cardIn(page, to, ids.closed).getByTestId('org-thread-state')).toHaveText(labels[to])
+  await chip(page, 'all').click()
+  expect(pageErrors).toEqual([])
+})
+
+test('in a long group the chips stay at the top of the pane while it scrolls', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  for (let i = 0; i < 24; i++) await nodeThread(request, `Row ${i + 1} of the orchard ${STAMP}`, 'working')
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  await chip(page, 'working').click()
+  await expect.poll(async () => (await shownCards(page)).all.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(25)
+  const bar = page.getByTestId('org-threads-filter')
+  const scrolled = await bar.evaluate((el) => {
+    let s: HTMLElement | null = el.parentElement
+    while (s && !(/(auto|scroll)/.test(getComputedStyle(s).overflowY) && s.scrollHeight > s.clientHeight)) s = s.parentElement
+    if (!s) return null
+    s.scrollTop += 1200
+    return { top: s.getBoundingClientRect().top, scrollTop: s.scrollTop }
+  })
+  expect(scrolled, 'the Threads pane scrolls').not.toBeNull()
+  expect(scrolled!.scrollTop).toBeGreaterThan(1000)
+  await page.waitForTimeout(200)
+  const box = (await bar.boundingBox())!
+  expect(Math.abs(box.y - scrolled!.top)).toBeLessThanOrEqual(2)
+  // Nothing covers it: the chip at its own place is the topmost element there.
+  const hit = await chip(page, 'all').evaluate((el) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('[data-testid="org-threads-chip"]') === el })
+  expect(hit).toBe(true)
+  await shot(page, '6-sticky')
+  // A chip picked from there works.
+  await chip(page, 'needs').click()
+  expect((await shownCards(page)).all).toEqual([ids.needs])
+  await chip(page, 'all').click()
   expect(pageErrors).toEqual([])
 })

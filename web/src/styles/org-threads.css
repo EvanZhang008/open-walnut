@@ -145,8 +145,13 @@
 /* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
 .org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }
 
-/* The chips over the groups (ThreadsFilterBar): a filter, a click shows only that group. */
-.org-threads-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+/* The chips over the groups (ThreadsFilterBar): a filter, a click shows only that group. They stay
+   at the top of the pane while a long group scrolls under them (2026-11-21: in Archived's hundred
+   cards they scrolled away), on the pane's own background so no card shows through. */
+.org-threads-filter {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0 4px; padding: 8px 0 6px;
+  position: sticky; top: 0; z-index: 3; background: var(--bg);
+}
 .org-threads-chip {
   display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border-radius: 999px;
   border: 1px solid transparent; background: var(--bg-secondary, #f2f2f7); color: var(--fg, #1d1d1f);
@@ -164,3 +169,19 @@
 .org-thread-known-what { color: var(--fg-secondary, var(--fg)); }
 .org-thread-known-ends { font-size: 11px; color: var(--fg-muted, #86868b); }
 .org-thread-back { color: var(--accent, #0a84ff); }
+
+/* A card of a task below reads its group (thread-badge.ts): the orange needs dot only in Needs you. */
+.org-thread.is-popped:not([data-group="needs"]) .ask-card-question::before { background: var(--fg-muted, #86868b); }
+
+/* The line a card leaves where it stood when it moves to another group (thread-moves.ts): where it
+   went and Show, fading out over its last second. */
+.org-thread-move-note {
+  display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 6px 10px;
+  border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; color: var(--fg-muted, #86868b);
+  animation: org-thread-move-note-fade 6s linear forwards;
+}
+.org-thread-move-to { flex: none; color: var(--fg-secondary, var(--fg)); }
+.org-thread-move-words { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-thread-move-note .org-thread-link { flex: none; }
+@keyframes org-thread-move-note-fade { 0%, 83% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .org-thread-move-note { animation: none; } }

@@ -13,6 +13,10 @@
  *  4. A thread below asking him to pick carries its options: the card shows them as buttons (the
  *     recommended one first, marked), no Acknowledge; a click sends its label to the subtask's
  *     thread as his reply (2026-11-20, the user: "if you recommend this, why can I not just click it?").
+ *  5. Threads by state: his reply moves a card below to Working, leaving a line in Needs you;
+ *     snoozed there with the keyboard it leaves a line holding the focus; in Waiting / Snoozed it
+ *     says until when, its box follows the task up, and its menu's Unsnooze brings it back to
+ *     Working (2026-11-21, a review: no way back).
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -306,11 +310,91 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
     await expect(working).toBeVisible()
     if ((await working.getAttribute('data-open')) !== 'true') await working.getByTestId('org-thread-group-head').click()
     const card = inGroup('working')
+    // It reads its group now: no needs dot, a box that follows the task up, and a line in Needs you saying where it went.
+    await expect(card).toHaveAttribute('data-group', 'working')
+    await expect(card.getByTestId('org-thread-popped-input')).toHaveAttribute('placeholder', `Follow up with Task status foundation ${STAMP}`)
+    const dot = await card.locator('.ask-card-question').evaluate((el) => getComputedStyle(el, '::before').backgroundColor)
+    const needsDot = await page.evaluate(() => { const b = document.createElement('b'); b.style.color = 'var(--warning, #ff9500)'; document.body.append(b); const c = getComputedStyle(b).color; b.remove(); return c })
+    expect(dot).not.toBe(needsDot)
+    await expect(group('needs').locator(`[data-testid="org-thread-move-note"][data-moved-id="${id}"]`)).toContainText('Moved to Working')
     await expect(card.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
     await expect(card.getByTestId('org-thread-unread-by-task')).toHaveText(`Sent: Task status foundation ${STAMP} has not read it yet.`)
     const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
     expect(file.threads.find((t) => t.id === id)?.messages.find((m) => m.text === WORDS)?.delivery?.state).not.toBe('delivered')
     await shot(page, '6-left-needs')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await request.put('/api/config', { data: { experimental: { brief_off: false } } })
+  }
+})
+
+// 2026-11-21, a review on his data: a snoozed card below said neither when it comes back nor how to
+// bring it back, and a keyboard pick left the focus on the page. A card below stays on the lead
+// while his reply on it is on its way (thread-popup.ts), so that is when it is snoozed there.
+test('on, Threads by state: a card below snoozed says until when, and its Unsnooze brings it back', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const WORDS = `Order it in January ${STAMP}`
+  const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
+    title: `Seed catalogue ${STAMP}`, text: `Order the spring seed catalogue now or in January? ${STAMP}`, state: 'needs', from: 'node',
+    user_kind: 'user_own', user_kind_why: 'It is his own garden.',
+  }, ids.ownerSid)
+  const id = opened.thread.id
+  await flag(request, true)
+  const briefOff = await request.put('/api/config', { data: { experimental: { brief_off: true } } })
+  expect(briefOff.ok(), await briefOff.text()).toBe(true)
+  try {
+    // The task is busy in a long turn, so his reply stays on its way while the card is snoozed.
+    const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:45000' } })
+    expect(busy.ok(), await busy.text()).toBe(true)
+    await isolateUiPrefs(page)
+    await loadHome(page)
+    await openLead(page)
+    const chip = (g: string) => page.locator(`[data-testid="org-threads-chip"][data-group="${g}"]`)
+    const inGroup = (g: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"] [data-testid="org-thread"][data-thread-id="${id}"]`)
+    const line = page.locator(`[data-testid="org-thread-move-note"][data-moved-id="${id}"]`)
+    const focused = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.testid ?? document.activeElement?.tagName ?? null)
+    await chip('needs').click()
+    await expect(inGroup('needs')).toBeVisible({ timeout: 20_000 })
+    await expect(inGroup('needs').getByTestId('org-thread-popped-input')).toHaveAttribute('placeholder', `Answer Task status foundation ${STAMP}`)
+    await inGroup('needs').getByTestId('org-thread-popped-input').click()
+    await page.keyboard.type(WORDS, { delay: 10 })
+    await inGroup('needs').getByTestId('org-thread-popped-send').click()
+    // It left Needs you for Working: a line says so; Show picks Working.
+    await expect(line).toContainText('Moved to Working')
+    await line.getByTestId('org-thread-move-show').click()
+    await expect(chip('working')).toHaveAttribute('aria-pressed', 'true')
+    await expect(inGroup('working')).toBeVisible()
+    // Snoozed with the keyboard: Enter on Snooze, then on 2h.
+    await inGroup('working').getByTestId('org-thread-snooze').focus()
+    await page.keyboard.press('Enter')
+    const menu = page.getByTestId('org-thread-snooze-menu')
+    await menu.getByRole('button', { name: '2h', exact: true }).focus()
+    await page.keyboard.press('Enter')
+    await expect(inGroup('working')).toHaveCount(0)
+    await expect(line).toContainText('Moved to Waiting / Snoozed')
+    await expect.poll(focused).toBe('org-thread-move-show')
+    await shot(page, '7-snoozed-line')
+    // Show: Waiting / Snoozed, the card saying until when, Snoozed and Unsnooze on it.
+    await page.keyboard.press('Enter')
+    await expect(chip('waiting')).toHaveAttribute('aria-pressed', 'true')
+    const card = inGroup('waiting')
+    await expect(card).toHaveAttribute('data-group', 'waiting')
+    await expect(card.getByTestId('org-thread-snoozed-until')).toHaveText(/^Snoozed until (today|tomorrow), /)
+    await expect(card.getByTestId('org-thread-snooze')).toHaveText(/^Snoozed/)
+    await expect(card.getByTestId('org-thread-unsnooze')).toBeVisible()
+    await expect(card.getByTestId('org-thread-popped-input')).toHaveAttribute('placeholder', `Follow up with Task status foundation ${STAMP}`)
+    await shot(page, '8-snoozed-card')
+    await card.getByTestId('org-thread-snooze').click()
+    await expect(menu.getByTestId('org-thread-snooze-current')).toHaveText(/^Snoozed until (today|tomorrow), /)
+    await shot(page, '8-snoozed-menu')
+    await menu.getByTestId('org-thread-snooze-clear').click()
+    await expect(card).toHaveCount(0)
+    await expect(line).toContainText('Moved to Working')
+    await expect.poll(async () => {
+      const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; snoozed?: unknown }> }
+      return file.threads.find((t) => t.id === id)?.snoozed ?? null
+    }, { timeout: 15_000 }).toBeNull()
     expect(pageErrors).toEqual([])
   } finally {
     await request.put('/api/config', { data: { experimental: { brief_off: false } } })

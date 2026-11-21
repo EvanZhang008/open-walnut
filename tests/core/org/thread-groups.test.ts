@@ -17,9 +17,8 @@ import { THREAD_STATES, type OrgThread } from '../../../src/core/org/threads-mod
 import { ALL_SHOWS, ARCHIVE_AFTER_MS, THREAD_GROUPS, THREAD_GROUP_LABELS, groupThreads, threadGroupOf, threadStateOf, type ThreadGroup } from '../../../src/core/org/thread-groups.js'
 import { isKnown } from '../../../src/core/org/thread-known.js'
 import { snoozedNow } from '../../../src/core/org/thread-view.js'
+import { NOW, ago, threadShapes as shapes } from './thread-shapes'
 
-const NOW = Date.parse('2026-11-20T12:00:00.000Z')
-const ago = (ms: number) => new Date(NOW - ms).toISOString()
 
 /** The groups as they were before 2026-11-20 (needs, read, known, working, waiting, done), owner line aside. */
 function oldGroupOf(t: OrgThread, listed: boolean): string {
@@ -36,34 +35,6 @@ function oldGroupOf(t: OrgThread, listed: boolean): string {
 /** Where each old group may land now. */
 const OLD_TO_NEW: Record<string, readonly ThreadGroup[]> = {
   needs: ['needs'], read: ['read'], known: ['known', 'working', 'waiting'], working: ['working'], waiting: ['waiting'], done: ['done', 'archived'],
-}
-
-/** Every shape: state x closed (none, now, a day ago) x snoozed x asked in a task x acked (no, not placed, placed in each place) x listed. */
-function shapes(): Array<{ t: OrgThread; listed: boolean; name: string }> {
-  const out: Array<{ t: OrgThread; listed: boolean; name: string }> = []
-  let n = 0
-  for (const state of THREAD_STATES) {
-    for (const closed of [undefined, ago(60_000), ago(ARCHIVE_AFTER_MS)]) {
-      for (const snoozed of [false, true]) {
-        for (const asked of [undefined, false, true]) {
-          for (const ack of [undefined, 'working', 'waiting', 'closed', 'none']) {
-            for (const listed of [false, true]) {
-              const t = {
-                id: `th-${(n++).toString(16).padStart(12, '0')}`, title: 'Seed trays', state, createdAt: ago(3_600_000), updatedAt: ago(60_000),
-                messages: [{ id: 'tm-aaaaaaaaaaaa', at: ago(3_000_000), text: 'Order seed trays', via: 'chat' as const }],
-                ...(closed ? { closed: { how: 'acked' as const, at: closed, by: 'human' } } : {}),
-                ...(snoozed ? { snoozed: { until: new Date(NOW + 3_600_000).toISOString(), at: ago(60_000) } } : {}),
-                ...(asked !== undefined ? { askedIn: { task: 't-1', title: 'Trays', ask: 'Which size?', via: 'owner' as const, ...(asked ? { answered: true } : {}) } } : {}),
-                ...(ack ? { ackedAt: ago(1_000_000), ...(ack !== 'none' ? { ackPlaced: { to: ack as 'working', by: 'node' as const, at: ago(900_000) } } : {}) } : {}),
-              } as OrgThread
-              out.push({ t, listed, name: `${state} closed=${!!closed} snoozed=${snoozed} asked=${asked} ack=${ack} listed=${listed}` })
-            }
-          }
-        }
-      }
-    }
-  }
-  return out
 }
 
 describe('the groups of his Threads', () => {

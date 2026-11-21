@@ -9,6 +9,10 @@
  * are sent the card must never look unsent): his words under "Sent", then whether the task has read
  * them, from the message's own delivery. They are read from the thread's record (ThreadSentWords),
  * so a reload or a redraw keeps them. A failed send keeps his words in the box, with the reason.
+ *
+ * It reads as the group it is drawn in (thread-badge.ts): only in Needs you does it carry the needs
+ * dot and an "Answer" box; anywhere else the box follows the task up. Snoozed, it says until when
+ * and offers Unsnooze (OrgThreadSnooze), as the node's own cards do.
  */
 import { useEffect, useRef, useState } from 'react';
 import { AskCardFrame } from '@/components/actions/AskCard';
@@ -21,17 +25,26 @@ import { randomId } from '@/utils/random-id';
 import { AgentText } from '@/components/common/AgentText';
 import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
-import { OrgThreadSnooze } from './OrgThreadSnooze';
+import { OrgThreadSnooze, SnoozedUntil } from './OrgThreadSnooze';
+import { threadBadge } from './thread-badge';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { ThreadSentWords } from './ThreadSentWords';
 
-export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThread; state: OrgThreadsState }) {
+export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
+  node: string; t: OrgThread; state: OrgThreadsState; now: number;
+  /** It is put aside now: it says until when, with Unsnooze. */
+  snoozed: boolean;
+  /** His view lists it now (listedForHim): its group. */
+  listed: boolean;
+}) {
   const openTask = useOpenTask();
   const [failed, setFailed] = useState<string | null>(null);
   // One key per reply: a retry of the same send is filed once (threads-model.ts fileMessage).
   const key = useRef<{ text: string; key: string } | null>(null);
   const owner = t.owner!;
+  const { group } = threadBadge(t, listed, now);
+  const until = snoozed ? t.snoozed?.until : undefined;
   // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
   const detail = t.heldAsk ? t.heldAsk.reply : t.reply;
   // His reply this card sent, from the server's answer: shown at once, until the thread's record
@@ -57,7 +70,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
     }
   };
   return (
-    <li className="org-thread is-popped" data-testid="org-thread" data-thread-id={t.id} data-state={t.state} data-owner={owner.task_id}>
+    <li className="org-thread is-popped" data-testid="org-thread" data-thread-id={t.id} data-state={t.state} data-group={group} data-owner={owner.task_id} data-snoozed={until ? 'true' : undefined}>
       <AskCardFrame
         testId="org-thread-popped"
         data={{ 'data-can-answer': t.can_answer_now === false ? 'false' : 'true' }}
@@ -65,6 +78,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
         question={<AgentText compact inline {...threadSummarySource(t)} text={t.heldAsk?.ask || t.ask?.trim() || t.title} testId="org-thread-popped-ask" />}
         detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} testId="org-thread-popped-summary" /> : undefined}
         status={(<>
+          {until && <SnoozedUntil until={until} now={now} />}
           {t.can_answer_now === false && <p className="org-thread-stand-in-note" data-testid="org-thread-not-now">{owner.title} is not running now: your reply is kept and goes to it when it is back.</p>}
           <ThreadSentWords t={t} owner={owner.title} justSent={sent} />
           {failed && <p className="org-thread-error" role="alert" data-testid="org-thread-popped-failed">{failed}</p>}
@@ -73,7 +87,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
         answer={answersLetter(t) ? <ThreadLetterAnswer t={t} /> : (<>
           <ThreadOptions thread={t} onAnswer={reply} />
           <ReplyComposer
-            placeholder={`Answer ${owner.title}`}
+            placeholder={group === 'needs' ? `Answer ${owner.title}` : `Follow up with ${owner.title}`}
             draftKey={draftKey('thread-follow', t.id)}
             sessionId={null}
             taskId={owner.task_id}
@@ -87,7 +101,7 @@ export function PoppedThreadCard({ node, t, state }: { node: string; t: OrgThrea
             }}
           />
         </>)}
-        tools={<OrgThreadSnooze title={t.title} current={undefined} onSnooze={(until) => void state.update(t.id, { snooze: until })} />}
+        tools={<OrgThreadSnooze title={t.title} current={until} onSnooze={(until) => void state.update(t.id, { snooze: until })} />}
       />
     </li>
   );

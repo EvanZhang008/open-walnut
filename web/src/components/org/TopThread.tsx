@@ -12,8 +12,13 @@
  * the thread don't go away ... I have to manually click next"); the Threads view keeps it in Working
  * with his words. Hidden, it is one line that counts them, with Show; that choice is kept
  * (usePageView), for every chat alike.
+ *
+ * Its height stays bound, so long words scroll inside their own block; a block cut off fades at its
+ * end, and the bar offers "Show all", which opens the thread whole in the Threads view (scrolled to
+ * it and marked, thread-focus.ts), as a click on its title does (2026-11-21, a review on his data:
+ * the words stopped mid-line, and the title only folded the card in a room too small to show it).
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { sharedAnswers, threadCountLabel } from '@open-walnut/thread-view';
@@ -22,13 +27,46 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { ThreadItem } from './OrgThreads';
 import { useNamedTasks } from './useNamedTasks';
-import { setTopThreads, useFocusedThread } from './thread-focus';
+import { askThreadFocus, setTopThreads, useFocusedThread } from './thread-focus';
+import { ReplyThreadContext } from '@/components/sessions/reply-thread-line';
 import type { OrgThreadsState } from './useOrgThreads';
 import { TOP_HIDDEN_VIEW, hiddenLine, topIndex, topThreads } from './top-thread-model';
 import type { OrgThread } from '@/api/org-threads';
 import '@/styles/top-thread.css';
 
+/** The card's blocks of words that scroll inside themselves in the top (top-thread.css). */
+const WORD_BLOCKS = '.org-thread-summary, .org-thread-unread, .org-thread-conversation, .ask-card-detail';
 
+/**
+ * Is any of the card's words cut off? Each block that has more below its end is marked
+ * data-clipped (it fades there, top-thread.css), read again as the room, the words or the scroll
+ * change. `key` names the card on show.
+ */
+function useClippedWords(root: RefObject<HTMLElement | null>, key: string | undefined): boolean {
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = root.current;
+    if (!el || !key) { setClipped(false); return; }
+    const blocks = () => [...el.querySelectorAll<HTMLElement>(WORD_BLOCKS)];
+    const check = () => {
+      let any = false;
+      for (const b of blocks()) {
+        const more = b.scrollHeight - b.clientHeight > 1;
+        if (more) any = true;
+        if (more && b.scrollTop + b.clientHeight < b.scrollHeight - 1) b.dataset.clipped = 'true';
+        else delete b.dataset.clipped;
+      }
+      setClipped(any);
+    };
+    check();
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(check);
+    ro?.observe(el);
+    for (const b of blocks()) { ro?.observe(b); for (const c of b.children) ro?.observe(c); }
+    el.addEventListener('scroll', check, true);
+    return () => { ro?.disconnect(); el.removeEventListener('scroll', check, true); };
+  }, [root, key]);
+  return clipped;
+}
 
 /** The list the top steps through and the clock it was read at, ticking while the chat is open. */
 export function useTopThreads(threads: OrgThreadsState): { at: number; list: OrgThread[] } {
@@ -70,7 +108,11 @@ export function TopThread({ task, sessionId, threads, list, at }: {
   const rootRef = useRef<HTMLDivElement>(null);
   const focused = useFocusedThread(hidden ? undefined : task.id, list, rootRef, (x) => setAtId(x.id));
   const tasks = useNamedTasks(t?.tasks);
+  // The chat's host brings its own Threads into view (reply-thread-line.tsx): there the card reads whole.
+  const host = useContext(ReplyThreadContext);
+  const clipped = useClippedWords(rootRef, hidden || !t ? undefined : `${t.id}:${t.updatedAt}`);
   if (!t) return null;
+  const readWhole = host && host.chat === task.id ? () => { askThreadFocus(task.id, t.id); host.showOwn(); } : undefined;
   const n = list.length;
   const step = (to: number) => { const next = list[to]; if (next) { lastIndex.current = to; setAtId(next.id); } };
   const followUp = (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId });
@@ -94,12 +136,16 @@ export function TopThread({ task, sessionId, threads, list, at }: {
         <span className="top-thread-pos" data-testid="top-thread-pos" title={`${i + 1} of ${threadCountLabel(n)} for you`}>{i + 1} / {n}</span>
         <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{'›'}</button>
         {n - i - 1 > 0 && <span className="top-thread-left" data-testid="top-thread-left">{n - i - 1} more</span>}
+        {clipped && readWhole && (
+          <button type="button" className="top-thread-whole" data-testid="top-thread-whole" onClick={readWhole}
+            title="Its words are cut off here: open it whole in the Threads view">Show all</button>
+        )}
         <button type="button" className="top-thread-hide" data-testid="top-thread-hide" aria-expanded={true} onClick={() => setHidden(true)}
           title="Hide it to one line that counts the threads">Hide <span aria-hidden="true">{'˄'}</span></button>
       </div>
       <ul className="org-thread-list top-thread-list" data-testid="top-thread-list">
         <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={threads} onFollowUp={followUp}
-          name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} focused={focused === t.id} />
+          name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} focused={focused === t.id} {...(readWhole ? { onReadWhole: readWhole } : {})} />
       </ul>
     </div>
   );
