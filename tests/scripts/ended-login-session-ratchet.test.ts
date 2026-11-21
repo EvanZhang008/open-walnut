@@ -93,7 +93,11 @@ describe('no server starts in a directory that may be deleted', () => {
     const launches = lines.flatMap((l, i) => (/"\$\{server_argv\[(?:@|\$last)\]\}" web --port/.test(l) && !/^\s*#/.test(l) ? [i] : []))
     expect(launches.length).toBeGreaterThanOrEqual(2) // the launchd job and the nohup fallback
     for (const i of launches) {
-      const block = lines.slice(Math.max(0, i - 12), i + 1).join('\n')
+      // The whole command, however long its env list grows: back to the line that ends the
+      // statement before it (a blank or comment line, `{`, `then`, `do`, `;`, or a `local`).
+      let start = i
+      while (start > 0 && !/^\s*(#.*)?$|[{;]\s*$|\b(then|do)\s*$|^\s*local\s/.test(lines[start - 1])) start--
+      const block = lines.slice(start, i + 1).join('\n')
       expect(block, `launch at dev-prod.sh:${i + 1}`).toMatch(/\/bin\/sh -c 'cd "\$1" && shift && exec "\$@"' open-walnut\s*\\?\s*\n?\s*"\$SERVE_ROOT"/)
     }
   })
