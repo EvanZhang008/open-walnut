@@ -259,10 +259,10 @@ export async function stageDaemonServiceArtifact(
  * Remove staged versions nothing needs: every version dir except the ones whose
  * executable is in `keep` (the running service and its rollback target) and any
  * a live process of this account still runs (a plugin job the daemon started
- * from it). Linux only: /proc says what runs where; elsewhere nothing is removed.
+ * from it), and with `keepNewerThanMs` any staged that recently. Linux only: /proc says what runs where; elsewhere nothing is removed.
  * Only plain, private, sha-named dirs are touched. Returns the removed dirs.
  */
-export async function pruneDaemonServiceVersions(installRoot: string, keep: string[]): Promise<string[]> {
+export async function pruneDaemonServiceVersions(installRoot: string, keep: string[], opts: { keepNewerThanMs?: number } = {}): Promise<string[]> {
   if (process.platform !== 'linux') return []
   const versions = daemonArtifactVersionsDir(installRoot)
   const kept = new Set(keep.map((exe) => path.basename(path.dirname(exe))))
@@ -279,6 +279,8 @@ export async function pruneDaemonServiceVersions(installRoot: string, keep: stri
     const dir = path.join(versions, name)
     const stat = await fsp.lstat(dir).catch(() => null)
     if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077)) continue
+    // Staged a moment ago (an update that has not asked for its switch yet): never this one's to remove.
+    if (opts.keepNewerThanMs && Date.now() - stat.mtimeMs < opts.keepNewerThanMs) continue
     await fsp.rm(dir, { recursive: true, force: true })
     removed.push(dir)
   }

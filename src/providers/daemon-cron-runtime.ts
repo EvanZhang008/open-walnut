@@ -14,7 +14,7 @@ export { cliOneShotTime, nextCliCronMinute } from './daemon-cron-schedule.js'
 export { readCronMetadataStream, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 export { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 export { prepareDaemonServiceHandover, consumeDaemonServiceHandover } from './daemon-service-handover.js'
-export { startLauncherBeat } from './service-launcher-beat.js'
+export { askOwnPort, daemonServesCheck, startLauncherBeat } from './service-launcher-beat.js'
 
 export async function persistCronHooks(stateDir: string, config: unknown): Promise<void> {
   await fs.mkdir(stateDir, { recursive: true, mode: 0o700 })

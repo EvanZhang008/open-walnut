@@ -24,9 +24,9 @@ import { proveDaemonBoot } from './daemon-boot-proof.js'
 import { launchdSpawnsJobs } from './daemon-service-launchd.js'
 import { handBackStandIn } from './daemon-service-handback.js'
 import { daemonReady, daemonStays } from './daemon-service-ready.js'
-import { createLauncherControl, launcherKeeps } from './service-launcher-control.js'
+import { createLauncherControl } from './service-launcher-control.js'
 import { LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
-import { readLauncherFacts } from './service-launcher-beat.js'
+import { launcherKeeps, readLauncherFacts } from './service-launcher-beat.js'
 
 export { daemonReady, daemonStays, SERVICE_STAY_MS } from './daemon-service-ready.js'
 
@@ -424,7 +424,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       const after = await files.readConfig(configPath).catch(() => null)
       // With the launcher, also what it runs, goes back to and was asked for (its state names them, not the config).
       const keep = [after, before].map((text) => serviceExecutableOf(platform, scope, text)).filter((exe): exe is string => !!exe)
-      keep.push(...await launcherKeeps(root, backend).catch(() => []))
+      keep.push(...await launcherKeeps(root).catch(() => []))
       if (keep.length) {
         await pruneDaemonServiceVersions(root, keep).catch((error) => {
           process.stderr.write(`walnut daemon: old daemon versions were not pruned: ${String(error)}\n`)

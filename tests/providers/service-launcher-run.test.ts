@@ -36,7 +36,8 @@ function stub(name: string, mode = 'good'): string {
     'while :; do',
     '  m=$(cat "$d/$n.mode"); now=$(date +%s); [ "$m" = hangterm ] && trap "" TERM',
     '  case $m in hang|hangterm) ;; *) b=$(cat "$d/$n.busy" 2>/dev/null || echo 0); echo "$now $b $$" > "$WALNUT_LAUNCHER_DIR/hb.$$" && mv -f "$WALNUT_LAUNCHER_DIR/hb.$$" "$WALNUT_LAUNCHER_DIR/heartbeat";; esac',
-    '  if [ $r = 0 ] && [ "$m" != noready ]; then printf "pid=%s\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"; r=1; tr=$now; fi',
+    // <name>.adopts: the version says what it takes over (detached/adopts) before it is ready.
+    '  if [ $r = 0 ] && [ "$m" != noready ]; then [ -f "$d/$n.adopts" ] && echo host-exec > "$WALNUT_LAUNCHER_DIR/../detached/adopts"; printf "pid=%s\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"; r=1; tr=$now; fi',
     '  case $m in crash:*) [ $((now - tr)) -ge ${m#crash:} ] && exit 3;; quit:*) [ $((now - tr)) -ge ${m#quit:} ] && exit 0;; esac',
     // leave:N: a planned exit N s after ready (it prepared for an update an older Walnut runs), said first.
     '  case $m in leave:*) if [ $((now - tr)) -ge ${m#leave:} ]; then printf "pid=%s\\nreason=update\\n" $$ > "$WALNUT_LAUNCHER_DIR/leaving"; exit 1; fi;; esac',
@@ -372,6 +373,28 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     await until(() => result().id === back, 8_000, 'rollback answered')
     expect(kv(path.join(L, 'rollback')).reason).toBe('the new daemon did not answer as walnut-daemon-v2')
     await until(() => live('v1').length === 1, 5_000, 'v1 back')
+  })
+
+  it('a version that says nothing of what it takes over (no detached/adopts) gets the registry\'s work ended once it is ready', async () => {
+    const reg = path.join(state, 'detached')
+    fs.mkdirSync(reg)
+    fs.writeFileSync(path.join(reg, 'stop-detached.sh'), `#!/bin/sh\necho "stop $1" >> '${dir}/stops'\n`, { mode: 0o700 })
+    const v1 = stub('v1'); const v2 = stub('v2')
+    fs.writeFileSync(path.join(dir, 'v1.adopts'), '')
+    fs.writeFileSync(path.join(reg, 'adopts'), 'stale from an earlier version\n')
+    launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1 && fs.existsSync(path.join(L, 'ready')), 5_000, 'v1 ready')
+    // v1 wrote its own adopts (the stale one was removed before it started): nothing is ended.
+    expect(read(path.join(reg, 'adopts'))).toBe('host-exec\n')
+    await sleep(600)
+    expect(read(path.join(dir, 'stops'))).toBe('')
+    // v2 predates the registry: once ready, the work it cannot follow is ended, once.
+    const id = request(v2)
+    await until(() => result().id === id && result().outcome === 'committed', 8_000, 'commit')
+    await until(() => read(path.join(dir, 'stops')) !== '', 5_000, 'registry work ended')
+    expect(read(path.join(dir, 'stops'))).toBe(`stop ${reg}\n`)
+    expect(fs.existsSync(path.join(reg, 'adopts'))).toBe(false)
+    expect(read(path.join(L, 'launcher.log'))).toMatch(/takes over no detached work/)
   })
 
   it('a launcher and its trial killed mid-switch (a power loss): the next launcher runs the old version', async () => {

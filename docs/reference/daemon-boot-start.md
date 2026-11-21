@@ -98,7 +98,7 @@ Its own files are in `launcher/` in the install root:
 | `request` | `walnut daemon update` | a switch to `exe` (`prepared=0` until the old daemon prepared) or a put-back |
 | `result` | the launcher | the answer to a request: committed, rolledback, refused, failed |
 | `heartbeat` | the daemon, every 5 s | `<epoch> <busy until> <pid>` |
-| `ready` | the daemon | its pid, once its sessions are adopted and its port listens |
+| `ready` | the daemon | its pid, once its sessions are adopted, its port listens and it asked itself over that port (hello as itself, status of a session it adopted) and got the right answers |
 | `leaving` | the daemon | its pid, just before a planned exit (it prepared for an update an older Walnut runs): no crash |
 | `rollback`, `bad` | the launcher | the last put-back and why; the versions it refuses for a day |
 
@@ -122,6 +122,13 @@ A tick 10 s or more off the one before (a sleep, a paused VM, a clock change) mo
 probation clocks by the gap and gives the heartbeat 60 s more, so a wake ends nothing. A current
 version that is gone from disk is replaced by the good one, else the seed. An update whose unit or
 job restarts marks its switch prepared only after the restart.
+
+Once a version is the good one, the daemon removes the staged versions nobody needs: it keeps the
+current, the good and the one a pending switch asks for, any version a process runs, and any staged
+in the last hour (an update may be about to ask for it). Linux only, as the update's own prune. Before
+each start the launcher removes `detached/adopts`; a version that becomes ready without writing it
+(older than the detached-work registry, `src/providers/detached-registry.ts`) gets the registry's work
+ended by its stop script, as at a put-back.
 
 One launcher per install root: an flock (perl's flock on a Mac, which has no flock(1)), never
 handed to the daemon. A launcher that comes back while its daemon runs (pid and start time match)

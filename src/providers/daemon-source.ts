@@ -17461,7 +17461,19 @@ async function startDaemon() {
     if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID);
     else { try { fs.unlinkSync(SERVICE_FILE); } catch {} }
     // Sessions adopted and the port listening: the launcher may commit this version.
-    if (launcherBeat) void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID }).then(() => { if (launcherBeat) launcherBeat.idle(); });
+    // Ready only once the core flow answers over its own port (twin of daemon-standalone.ts).
+    if (launcherBeat && listeningPort) {
+      let WSClient = null;
+      try { WSClient = require('ws'); } catch { WSClient = globalThis.WebSocket || null; }
+      if (WSClient) {
+        const ask = cronRuntimeCore.askOwnPort(listeningPort, WSClient);
+        void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID },
+          () => cronRuntimeCore.daemonServesCheck(ask, { instanceId: DAEMON_INSTANCE_ID, version: DAEMON_VERSION, sid: sessions.keys().next().value })).then(() => { if (launcherBeat) launcherBeat.idle(); });
+      } else {
+        logMsg('warn', 'no WebSocket client for the ready check: ready without it');
+        void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID }).then(() => { if (launcherBeat) launcherBeat.idle(); });
+      }
+    }
     fs.writeFileSync(VERSION_FILE, DAEMON_VERSION);
     servedWalnuts.write();
     // The servers an earlier daemon kept running here (twin of daemon-standalone.ts).

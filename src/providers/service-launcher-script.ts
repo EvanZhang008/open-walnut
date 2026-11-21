@@ -188,11 +188,12 @@ l_bad() { # exe: refused when it failed here in the last day
   return 1
 }
 
-c_pid=; c_last=; c_own=0; c_at=0; c_exe=; c_code=; fails=0; next_start=0
+c_pid=; c_last=; c_own=0; c_at=0; c_adopt=0; c_exe=; c_code=; fails=0; next_start=0
 l_spawn() {
-  rm -f "$L/ready" "$L/leaving"
+  # adopts: what the version about to start says it takes over (detached-registry.ts); it writes it anew.
+  rm -f "$L/ready" "$L/leaving" "$STATE/detached/adopts"
   ( unset L_LOCKED; exec "$1" $ARGS ) 9>&- </dev/null >>"$STATE/daemon-service.out.log" 2>>"$STATE/daemon-service.err.log" &
-  c_pid=$!; c_own=1; c_at=$(l_now); c_exe=$1; c_code=
+  c_pid=$!; c_own=1; c_at=$(l_now); c_exe=$1; c_code=; c_adopt=1
   printf '%s\n%s\n%s\n' "$c_pid" "$1" "$(l_start_of "$c_pid")" > "$L/service.pid.tmp" && mv -f "$L/service.pid.tmp" "$L/service.pid"
   l_log "started $1 (pid $c_pid, phase $s_phase)"
 }
@@ -400,6 +401,15 @@ while :; do
     elif [ "$s_phase" = probation ] && [ $((w_n - s_since)) -ge "$K_PROB" ]; then
       s_good=$s_cur; s_gbuild=$s_build; s_phase=committed; s_since=$w_n; s_crash=0; l_write
       l_log "$s_cur stayed up for $K_PROB s: it is the good version now"
+    fi
+    # Ready, and it did not say what it takes over: a version older than the registry, so the work the
+    # registry holds has no one to follow it (it is ended, as at a put-back).
+    if [ "$c_adopt" = 1 ] && [ "$(l_get "$L/ready" pid)" = "$c_pid" ]; then
+      c_adopt=0
+      if [ ! -e "$STATE/detached/adopts" ] && [ -f "$STATE/detached/stop-detached.sh" ]; then
+        l_log "$c_exe takes over no detached work (no detached/adopts): ending the work in the registry"
+        l_bounded ${STOP_DETACHED_SECONDS} /bin/sh "$STATE/detached/stop-detached.sh" "$STATE/detached"
+      fi
     fi
     if [ -f "$L/heartbeat" ]; then
       hb_t=; hb_b=; hb_p=; read -r hb_t hb_b hb_p < "$L/heartbeat" 2>/dev/null

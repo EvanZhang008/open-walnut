@@ -254,7 +254,7 @@ import { execFile as execFileCb } from 'node:child_process'
 import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
 import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
 import { readCronBootId } from './daemon-cron-host.js'
-import { startLauncherBeat, type LauncherBeat } from './service-launcher-beat.js'
+import { askOwnPort, daemonServesCheck, startLauncherBeat, type LauncherBeat } from './service-launcher-beat.js'
 import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
@@ -14943,7 +14943,12 @@ if (action === '--start' || SERVICE_MODE) {
   if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID)
   else { try { fs.unlinkSync(SERVICE_FILE) } catch {} }
   // Sessions adopted and the port listening: the launcher may commit this version.
-  if (launcherBeat) void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID }).then(() => launcherBeat?.idle())
+  // Ready only once the core flow answers over its own port: hello as itself, status of a session it adopted.
+  if (launcherBeat && listeningPort) {
+    const ask = askOwnPort(listeningPort, WebSocket as unknown as Parameters<typeof askOwnPort>[1])
+    void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID },
+      () => daemonServesCheck(ask, { instanceId: DAEMON_INSTANCE_ID, version: DAEMON_VERSION, sid: sessions.keys().next().value })).then(() => launcherBeat?.idle())
+  }
   // The servers an earlier daemon kept running here: adopt or start them, now
   // that the port file they connect through is written.
   try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) }

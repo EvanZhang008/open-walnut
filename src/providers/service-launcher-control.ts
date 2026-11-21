@@ -165,11 +165,3 @@ export function createLauncherControl(o: {
     },
   }
 }
-
-/** The versions a prune must keep for the launcher: what it runs, what it goes back to, what it was asked for, its seed. */
-export async function launcherKeeps(stateDir: string, backend: 'systemd' | 'launchd' | 'cron'): Promise<string[]> {
-  const control = createLauncherControl({ stateDir, backend })
-  const facts = await control.facts()
-  const req = keyValues(await fs.readFile(path.join(stateDir, LAUNCHER_DIR_NAME, 'request'), 'utf8').catch(() => ''))
-  return [facts?.current, facts?.good, req.exe, await control.seed()].filter((exe): exe is string => !!exe && exe.startsWith('/'))
-}
