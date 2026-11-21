@@ -61,6 +61,12 @@ export const EXPERIMENTAL_FEATURES = [
   default: false,
 },
   {
+    id: 'voice_conversation',
+    name: 'Voice conversation',
+    description: 'A Talk button in a session\'s chat box: speak, and a pause sends what you said; the answer comes back as a short spoken reply read aloud (the full answer stays on screen), and talking again stops it. Uses ElevenLabs when a key is set in Settings, else this device\'s own voice.',
+    default: false,
+  },
+  {
     id: 'camera_capture',
     name: 'Camera in chat',
     description: 'A Camera item in the chat box\'s + menu: take a photo or record a video up to a minute (and take photos while it records), look at it, then retake it or send it. A video goes to the AI as a few stills and what was said in it, with the video file beside them. The camera is on only while its panel is open.',

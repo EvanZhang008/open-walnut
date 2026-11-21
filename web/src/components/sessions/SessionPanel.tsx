@@ -221,6 +221,8 @@ import { SessionReaderPane } from './SessionReaderPane';
 import { SessionReaderContext } from './reader-split';
 import { useReaderSplit } from './useReaderSplit';
 import { useExperimental } from '@/hooks/useExperimental';
+import { useVoiceConversation } from '@/hooks/useVoiceConversation';
+import { VoiceConversationBar, VoiceTalkButton } from './VoiceConversationBar';
 import { placeKeyOf } from './reading-place';
 import { TreeHalfContext, type TreeHalf } from './tree-half-context';
 import { pathBarHeading, pathBarLevelItems, pathBarSegments } from './tree-path-model';
@@ -2532,6 +2534,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     return sendFor(message, images, undefined, origin);
   }, [sendFor, deniedPromptId, sessionId]);
 
+  // Voice conversation (experimental): a pause sends what was said, with the voice-reply hint,
+  // so the answer opens with a short spoken part that is read aloud.
+  const voiceOn = useExperimental('voice_conversation');
+  const sendVoice = useCallback((text: string) => send(sessionId, text, undefined, { hints: { 'voice-reply': {} } }), [send, sessionId]);
+  const voice = useVoiceConversation(sessionId, sendVoice);
+
   const mainQuickActions = useMainQuickPlusActions(
     onQuestionPage ? null : sessionTask,
     promptOpen,
@@ -4304,8 +4312,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onEdit={editPendingComment}
             onRemove={commentsStore.remove}
           />
+          {voice.micError && !voice.open && (
+            <div className="composer-prompt-warning" role="alert" data-testid="voice-mic-error">{voice.micError}</div>
+          )}
+          {voice.open ? <VoiceConversationBar voice={voice} /> : (
           <ChatInput
             sendBlocked={macSessionAway}
+            sendSlot={voiceOn && !plainChat && !ownComposerLight && !macSessionAway ? <VoiceTalkButton onClick={voice.start} /> : undefined}
             // Any file goes to this session's host (api/file-upload.ts).
             fileTarget={{ sessionId }}
             drawingTarget={{ taskId: session?.taskId ?? liveStatus?.taskId ?? undefined, sessionId }}
@@ -4382,6 +4395,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             // the "+" menu, Bypass and the model are the main conversation's.
             light={ownComposerLight}
           />
+          )}
         </div>
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}

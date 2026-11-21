@@ -1,0 +1,146 @@
+/* Voice conversation in a session's composer seat (VoiceConversationBar.tsx). */
+
+.voice-bar {
+  /* The orb on the left; the state and the tools on one line; what was heard and said
+     below them across the whole width, so a narrow column still reads in full lines. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'orb title tools' 'orb text text';
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 4px;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--glass-frost-bg);
+  backdrop-filter: var(--glass-frost-blur);
+  -webkit-backdrop-filter: var(--glass-frost-blur);
+  border: 1px solid var(--glass-frost-border);
+  box-shadow: var(--card-shadow);
+}
+
+.voice-orb {
+  --voice-level: 0;
+  grid-area: orb;
+  align-self: start;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: white;
+  background: var(--accent);
+  /* The ring grows with the voice it hears (listening) or makes (speaking). */
+  box-shadow: 0 0 0 calc(4px + var(--voice-level) * 12px) var(--accent-subtle);
+  transition: box-shadow 0.08s linear, background 0.15s, opacity 0.15s;
+}
+
+.voice-orb:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.voice-orb:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.voice-bar.is-paused .voice-orb {
+  color: var(--fg);
+  background: var(--bg-secondary);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.voice-bar.is-waiting .voice-orb,
+.voice-bar.is-transcribing .voice-orb {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.voice-orb-spinner {
+  animation: voice-orb-spin 0.9s linear infinite;
+}
+
+@keyframes voice-orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+.voice-bar-text {
+  grid-area: text;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.voice-bar-text:empty {
+  display: none;
+}
+
+.voice-bar-title {
+  grid-area: title;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.voice-bar-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.voice-bar-line {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.voice-bar-who {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-right: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.voice-bar-error {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.voice-bar-tools {
+  grid-area: tools;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-bar-engine {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* A phone-wide column: the tools get a line of their own under the words. */
+@media (max-width: 600px) {
+  .voice-bar {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: 'orb title' 'orb text' 'tools tools';
+  }
+  .voice-bar-tools {
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb { transition: none; }
+  .voice-orb-spinner { animation: none; }
+}

@@ -10,7 +10,7 @@ import { isSecretKey, maskByKey, maskSecretTail, maskSecretTailInPlace, type Key
 /** Fields that hold provider/API secrets — masked before leaving the box. */
 export const SECRET_FIELDS = new Set([
   'bedrock_bearer_token', 'bearer_token', 'api_key', 'perplexity_api_key',
-  'openai_api_key', 'aws_secret_access_key', 'aws_access_key_id', 'key',
+  'openai_api_key', 'elevenlabs_api_key', 'aws_secret_access_key', 'aws_access_key_id', 'key',
   'hotspot_password',
   // Not the APNs private key itself (config only ever stores a PATH to it), but
   // the path names a file worth protecting and rides bug-report bundles that get

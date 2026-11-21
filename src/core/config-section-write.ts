@@ -116,6 +116,7 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   workspaces: 'merge',
   audio: 'merge',
   stt: 'merge',
+  tts: 'merge',
   jev: 'merge',
   push: 'merge',
   cloud_bridge: 'merge',

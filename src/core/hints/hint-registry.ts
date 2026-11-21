@@ -137,7 +137,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'voice-reply',
     label: 'Voice reply',
-    description: 'On a voice send from the phone: answer with a short spoken part first.',
+    description: 'On a voice send (voice mode on the phone or the web): answer with a short spoken part first.',
     allowed: ['on_request'],
     defaults: { enabled: true, triggers: ['on_request'], placement: 'after' },
     identity: (i) => (i.request ? 'voice' : null),

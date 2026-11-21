@@ -2241,6 +2241,20 @@ export interface Config {
    * under `stt`, so a replica older than it still takes the `stt` row.
    */
   stt_corrections?: Record<string, string[]>;
+  /**
+   * Text-to-speech for voice mode: the voice that reads a reply aloud
+   * (src/core/tts/). Unset engine = ElevenLabs when it has a key, else the
+   * client's own system voice.
+   */
+  tts?: {
+    engine?: 'elevenlabs' | 'device';
+    /** ElevenLabs API key (a literal, ${env:NAME} or ${file:name}); masked in every client view. */
+    elevenlabs_api_key?: string;
+    /** Default: eleven_flash_v2_5 (about 200 ms to first audio, half a credit per character). */
+    elevenlabs_model?: string;
+    /** Default: a premade voice that reads Chinese and English. */
+    elevenlabs_voice_id?: string;
+  };
   /** Speech-to-text configuration for voice input */
   stt?: {
     /**

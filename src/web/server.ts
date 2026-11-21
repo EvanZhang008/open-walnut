@@ -158,6 +158,7 @@ import { asksV1Router } from './routes/asks-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { leaderRouter } from './routes/leader.js'
 import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
+import { voiceV1Router } from './routes/voice-v1.js'
 import { inboxPayloadTooLargeHandler } from './routes/human-inbox-v1.js'
 import { pastesRouter } from './routes/pastes.js'
 import { mediaV1Router } from './routes/media-v1.js'
@@ -2942,6 +2943,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A host replica's leader door and front were started before the heavy init (above).
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
+  // Voice output (additive): the words voice mode says and its speech, for the web and the phone.
+  app.use('/api/v1', voiceV1Router)
   // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
   app.use('/api/v1', mediaV1Router)
   // Routines/cron (additive, Wave 2): full CRUD + toggle/run-now — B-class

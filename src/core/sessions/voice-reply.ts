@@ -1,6 +1,6 @@
 /**
  * Voice reply: the line a send carries when the person is TALKING to the session
- * (the phone's voice mode) and will hear the answer read aloud instead of reading it.
+ * (voice mode on the phone or the web) and will hear the answer read aloud instead of reading it.
  *
  * It is the `voice-reply` message hint (src/core/hints/hint-registry.ts): sent on
  * request, on every voice send, as a `<system-reminder>` block after the human's
@@ -24,10 +24,11 @@ import { composeHinted, renderHintBlock } from '../hints/hint-format.js';
 /** The `voice-reply` hint's text (src/core/hints/hint-registry.ts). */
 export const VOICE_REPLY_TEXT =
   'the user is talking to you by voice and will hear your final message read aloud. '
-  + 'Do the work as usual. Begin your final message with a short spoken answer: two to four plain sentences '
-  + 'in the language they spoke, saying what you did or found and what you need from them next. '
-  + 'No markdown, code, tables, links or file paths in that answer. '
-  + 'Put any detail after it, below a line that holds only ---. '
+  + 'Do the work as usual. Begin your final message with a short spoken answer, said the way you would say it '
+  + 'to them in a conversation: one to three short plain sentences in the language they spoke, saying what you did '
+  + 'or found and what you need from them next. '
+  + 'No markdown, code, tables, links, file paths or ids in that answer. '
+  + 'Put any detail after it, below a line that holds only ---, and when there is detail, end the spoken answer by saying the details are on screen. '
   + 'When you hand work to another task, ask it for a reply so you can tell them when it is done. '
   + 'This overrides the output style for this reply.';
 

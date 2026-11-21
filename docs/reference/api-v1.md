@@ -129,6 +129,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap, or a `POST /health/sync` call exceeds 500 items or 192 KB: split it) |
 | `bad_audio` | 422 | `POST /stt/transcribe`: this recording is undecodable (an m4a cut off before it was finalized), so re-uploading the same bytes cannot help. Additive: an older server answers `503 stt_unavailable` for the same case, and a client that treats 4xx as a verdict about the audio simply retires the recording sooner |
 | `stt_unavailable` | 503 | `POST /stt/transcribe`: the service cannot answer right now (no engine configured, engine down, the companion could not reach the primary box and has no key of its own). The recording is worth keeping and retrying |
+| `tts_unavailable` \| `tts_quota` \| `tts_failed` | 503 / 503 / 502 | `POST /voice/speak`: no voice engine on this server or it cannot be reached (speak with the device's own voice), the cloud voice's credits are used up for the month, or the engine refused the piece |
 | `primary_unreachable` | 503 | `POST /time/heartbeats` did not persist the batch: the primary could not be reached, or it was reached and its day-file write did not land. Keep the batch queued and retry; sample `id`s make the retry a no-op for anything that did land |
 | `primary_unreachable` (health) | 503 | Any `/health/*` call that could not be served by the primary (bridge down, its server down, a primary that predates the action, or a sync whose SQLite transaction did not commit). Nothing was stored; keep the batch and retry |
 | `store_mismatch` | 409 | `POST /health/sync` named a `storeId` the primary no longer has (the health data was deleted). Extra `storeId` is the new id: clear every sync anchor and resync from scratch under it |
@@ -330,6 +331,9 @@ path on the companion".
 | POST | `/api/v1/stt/transcribe` | Transcribe base64 audio (the primary's engine; on the companion the relay, its own engine, then OpenAI) |
 | POST | `/api/v1/stt/recordings/:id/live` | A piece of a take still being recorded, so the server transcribes as it goes (additive, 2026-10) |
 | GET/POST | `/api/v1/stt/vocab` | Read / add custom STT vocabulary words |
+| GET | `/api/v1/voice/status` | The voice voice mode reads answers with: `{ engine: 'elevenlabs' \| 'device', engines: [{ id, available, reason?, model?, voice? }] }`; `device` = the client speaks with its own system voice (additive, 2026-11) |
+| POST | `/api/v1/voice/spoken` | `{ text }` (a reply) → `{ text, language, truncated, chunks }`: what to say aloud (the part before a `---` line, no code, tables or paths, about 40 s at most, "The rest is on screen." when that limit cut it), in pieces; `{ text: null }` when nothing is speakable (additive, 2026-11) |
+| POST | `/api/v1/voice/speak` | `{ text, language?, previousText?, nextText? }` (one piece, at most 2,000 characters) → `audio/mpeg`, streamed. `503 tts_unavailable` when this server has no voice (speak with the device's), `503 tts_quota` when the cloud voice's credits are used up, `502 tts_failed` (additive, 2026-11) |
 | POST | `/api/v1/files/record-dir` | Record an "@"-picker folder |
 | GET | `/api/v1/files/recent-dirs` | Union of session + "@"-picker recents |
 | GET | `/api/v1/usage/summary\|daily\|by-source\|by-model\|by-agent\|recent\|pricing` | Usage detail breakdowns (501 on REPLICA; pricing works everywhere) |
