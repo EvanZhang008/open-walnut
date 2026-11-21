@@ -192,7 +192,9 @@ final class VerticalPagesSidewaysDragUITests: XCTestCase {
         let first = element(app, "inbox.row.\(F.letterIDs[0])")
         XCTAssertTrue(first.waitForExistence(timeout: 30), "the long letter is not in the Inbox")
         let last = element(app, "inbox.row.\(F.letterIDs[F.letterIDs.count - 1])")
-        let y = last.waitForExistence(timeout: 10) ? below(app, last) : nil
+        XCTAssertTrue(last.waitForExistence(timeout: 10), "the last letter row never showed")
+        // Under the rows, never across one: a row's own swipe actions slide it on purpose.
+        let y = try XCTUnwrap(below(app, last), "no room under the letter rows to drag the page")
         assertStaysPut(app, "inbox", drag: list, marker: first, shown: list, y: y)
 
         first.tap()

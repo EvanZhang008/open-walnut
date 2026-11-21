@@ -8,7 +8,9 @@ import Foundation
 /// what the app sends; a write is answered and forgotten.
 enum VerticalPagesFixture {
     static let threadID = "th-7e0000d1"
-    static let letterIDs = ["letter-wide-1", "letter-wide-2", "letter-wide-3"]
+    /// Two letters: the list leaves room under its rows for the drag, which over a row would set
+    /// off that row's own swipe actions (a full swipe archives it).
+    static let letterIDs = ["letter-wide-1", "letter-wide-2"]
     static let teamTaskIDs = ["task-wide-team", "task-wide-worker"]
     static let noteName = "top-thread-video-notes"
     static let notePath = "\(noteName).md"
