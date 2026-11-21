@@ -35,22 +35,6 @@ enum RecycleReason: String {
     case staleBundle = "stale_bundle"
 }
 
-extension RecycleReason {
-    /// Whether this recycle needs a new page process, or only the page loaded again.
-    ///
-    /// 2026-11-19/20: each swap's old process died while the window still showed its page, and
-    /// macOS charged that page's graphics (0.6 to 1 GB) to kernel_task until the app quit, even
-    /// with the page closed first. Most swaps were for a deploy (53 of 58 on the person's Mac),
-    /// which needs only the new bundle: that page reloads in its own process, which then frees
-    /// its old graphics itself. Only memory pressure still swaps the process.
-    var replacesProcess: Bool {
-        switch self {
-        case .footprint, .footprintForced: return true
-        case .staleBundle: return false
-        }
-    }
-}
-
 enum WatchdogVerdict: Equatable {
     case hold
     case recycle(RecycleReason)
@@ -103,6 +87,8 @@ struct WebContentPolicy {
     /// A fresh page legitimately spikes while it boots and hydrates.
     var minProcessAge: TimeInterval = 300
     var maxRecyclesPerHour = 3
+    /// A reload in place still loading after this long is given up on: the page gets a new process.
+    var reloadDeadline: TimeInterval = 60
     /// Log every Nth quiet sample; level changes always log.
     var reportEverySamples = 5
 
@@ -177,12 +163,31 @@ struct WebContentPolicy {
         } else {
             return .hold
         }
-        if sample.processAge < minProcessAge { return .suppressed(reason, why: "process_too_young") }
+        // A page loaded again in its process spikes while it boots, like a new process.
+        if state.pageAge(sample.processAge, now: now) < minProcessAge { return .suppressed(reason, why: "process_too_young") }
         if !gateOpen { return .suppressed(reason, why: "user_active") }
-        if state.recyclesWithin(3600, of: now) >= maxRecyclesPerHour {
+        // The hourly budget is for process swaps; a reload in place is cheap.
+        if replacesProcess(reason, state: state) && state.recyclesWithin(3600, of: now) >= maxRecyclesPerHour {
             return .suppressed(reason, why: "rate_limited")
         }
         return .recycle(reason)
+    }
+
+    /// Whether this recycle needs a new page process, or only the page loaded again.
+    ///
+    /// 2026-11-19/21: each swap's old process died while the window still showed its page, and
+    /// macOS charged that page's graphics (0.6 to 1.6 GB) to kernel_task until the app quit, even
+    /// with the page closed and its web view released first. A page loaded again in its own process
+    /// frees its old graphics itself (2026-11-21: kernel_task flat across a reload on screen). So a
+    /// deploy only reloads, and so does memory pressure the first time: most of a bloated page is its
+    /// graphics (1650 of 2517 MB on 11-21), which the reload gives back. Only a page that is over the
+    /// threshold again once the reloaded page has booted (`judgeReload`) gets a new process, which
+    /// then dies holding little: the reload did not help, so the memory is the process's own.
+    func replacesProcess(_ reason: RecycleReason, state: WebContentWatchdogState) -> Bool {
+        switch reason {
+        case .staleBundle: return false
+        case .footprint, .footprintForced: return state.reloadDidNotHelp
+        }
     }
 
     /// Whether the runtime should look for the user's next pause between samples:
@@ -205,7 +210,8 @@ struct WebContentPolicy {
 /// (or for its process to come of age) shows nothing. The notice shows only when
 /// the swap needs the person (text a reload would lose, the hourly budget spent)
 /// or has waited `quietWindow` for a pause that never came, and at most ONCE per
-/// page process: Later means not again in this process.
+/// page load: Later means not again until the page is loaded again (a new process
+/// or a reload in place).
 struct MemoryNoticeState {
     /// How long a critical page may wait for the quiet swap before the notice shows.
     static let quietWindow: TimeInterval = 300
@@ -254,6 +260,40 @@ struct WebContentWatchdogState {
     var lastLevel: FootprintLevel?
     var samplesSinceReport = 0
     var lastSuppression: String?
+    /// When the page was last loaded again in its own process. A new process forgets it
+    /// and the two below (`forgetReloads`).
+    private(set) var lastReloadAt: Date?
+    /// A reload for memory whose result the first sample of the booted page has not judged yet.
+    private(set) var memoryReloadPending = false
+    /// That sample was still over the recycle threshold: in this process, memory needs a swap.
+    private(set) var reloadDidNotHelp = false
+
+    /// How long the page now shown has been loading and growing: since its process started,
+    /// or since it was last loaded again in that process.
+    func pageAge(_ processAge: TimeInterval, now: Date) -> TimeInterval {
+        guard let at = lastReloadAt else { return processAge }
+        return min(processAge, now.timeIntervalSince(at))
+    }
+
+    mutating func recordReload(_ reason: RecycleReason, at now: Date) {
+        lastReloadAt = now
+        if reason != .staleBundle { memoryReloadPending = true }
+    }
+
+    /// Judged by the result, not by a clock: the first sample after a memory reload whose page
+    /// is past booting says whether the reload brought the process under the recycle threshold.
+    /// However long a hold (input, unsaved text) keeps the next recycle back, it stays decided.
+    mutating func judgeReload(_ sample: WebContentSample, policy: WebContentPolicy, now: Date) {
+        guard memoryReloadPending, pageAge(sample.processAge, now: now) >= policy.minProcessAge else { return }
+        memoryReloadPending = false
+        if sample.footprintBytes >= policy.recycleBytes { reloadDidNotHelp = true }
+    }
+
+    mutating func forgetReloads() {
+        lastReloadAt = nil
+        memoryReloadPending = false
+        reloadDidNotHelp = false
+    }
 
     func recyclesWithin(_ seconds: TimeInterval, of now: Date) -> Int {
         recycleTimes.filter { now.timeIntervalSince($0) < seconds }.count

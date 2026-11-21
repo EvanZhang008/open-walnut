@@ -66,7 +66,10 @@ struct WebContentPolicyTests {
         precondition(policy.verdict(for: sample(2_300, idle: 400, stale: true), state: state, now: now)
                      == .recycle(.footprint))
 
-        // Rate limit: three swaps an hour, then hold even when everything else says go.
+        // Rate limit: three swaps an hour, then hold even when everything else says go
+        // (a swap: this process's memory reload did not help).
+        state.recordReload(.footprint, at: now.addingTimeInterval(-3_000))
+        state.judgeReload(sample(2_400), policy: policy, now: now)
         for i in 0..<3 { state.recordRecycle(at: now.addingTimeInterval(TimeInterval(-600 * (i + 1)))) }
         precondition(policy.verdict(for: sample(2_300, idle: 999), state: state, now: now)
                      == .suppressed(.footprint, why: "rate_limited"))
@@ -276,12 +279,82 @@ struct WebContentPolicyTests {
         precondition(calls == 2, "WebContentWatchdog.swift has \(calls) evaluateJavaScript calls: a new one goes through askPage")
         precondition(source.contains("private func askPage("), "askPage is the one way to ask the page")
 
-        // A deploy reloads the page in its own process; only memory pressure swaps the process,
-        // whose death while on screen left its graphics to kernel_task (2026-11-20).
-        precondition(!RecycleReason.staleBundle.replacesProcess)
-        precondition(RecycleReason.footprint.replacesProcess && RecycleReason.footprintForced.replacesProcess)
-        precondition(source.contains("if reason.replacesProcess { self.recycle(reason, sample) } else { self.reloadInPlace(webView) }"),
-                     "the watchdog swaps the process only for a reason that needs it")
+        // A deploy reloads the page in its own process, and so does memory pressure until a
+        // reload is seen not to help: a process that died while on screen left its graphics to
+        // kernel_task (2026-11-20/21).
+        var reloads = WebContentWatchdogState()
+        precondition(!policy.replacesProcess(.staleBundle, state: reloads))
+        precondition(!policy.replacesProcess(.footprint, state: reloads), "memory pressure reloads first")
+        precondition(!policy.replacesProcess(.footprintForced, state: reloads))
+        // A deploy's reload is never judged as a memory reload.
+        reloads.recordReload(.staleBundle, at: now)
+        reloads.judgeReload(sample(2_300, age: 7_200), policy: policy, now: now.addingTimeInterval(policy.minProcessAge))
+        precondition(!policy.replacesProcess(.footprint, state: reloads), "a deploy's reload is not a memory reload that failed")
+        // The page loaded again is as young as a new process: no verdict while it boots.
+        precondition(policy.verdict(for: sample(2_300, age: 7_200, idle: 999), state: reloads, now: now.addingTimeInterval(60))
+                     == .suppressed(.footprint, why: "process_too_young"))
+        precondition(policy.verdict(for: sample(2_300, age: 7_200, idle: 999), state: reloads, now: now.addingTimeInterval(policy.minProcessAge))
+                     == .recycle(.footprint))
+
+        // The whole sequence: critical -> reload -> booting -> still critical -> new process.
+        var seq = WebContentWatchdogState()
+        let t0 = now
+        precondition(policy.verdict(for: sample(2_600, age: 7_200, idle: 60), state: seq, now: t0) == .recycle(.footprint))
+        precondition(!policy.replacesProcess(.footprint, state: seq))
+        seq.recordReload(.footprint, at: t0)
+        // Samples of the booting page judge nothing, however big.
+        seq.judgeReload(sample(3_000, age: 7_260), policy: policy, now: t0.addingTimeInterval(60))
+        precondition(!seq.reloadDidNotHelp && seq.memoryReloadPending)
+        // The first grown-up sample is still critical: the reload did not help.
+        seq.judgeReload(sample(2_400, age: 7_500), policy: policy, now: t0.addingTimeInterval(policy.minProcessAge))
+        precondition(seq.reloadDidNotHelp && !seq.memoryReloadPending)
+        // However long input or unsaved text holds the next recycle, it is a swap (no clock).
+        precondition(policy.replacesProcess(.footprint, state: seq))
+        precondition(policy.replacesProcess(.footprintForced, state: seq))
+        seq.judgeReload(sample(900, age: 20_000), policy: policy, now: t0.addingTimeInterval(14_000))
+        precondition(policy.replacesProcess(.footprint, state: seq), "decided once per process")
+        precondition(!policy.replacesProcess(.staleBundle, state: seq), "a deploy still only reloads")
+        seq.forgetReloads()
+        precondition(!policy.replacesProcess(.footprint, state: seq), "a new process starts over")
+        precondition(seq.pageAge(7_200, now: now) == 7_200)
+
+        // A reload that helped leaves the next memory recycle a reload again.
+        var helped = WebContentWatchdogState()
+        helped.recordReload(.footprint, at: t0)
+        helped.judgeReload(sample(800, age: 7_500), policy: policy, now: t0.addingTimeInterval(policy.minProcessAge))
+        precondition(!helped.memoryReloadPending && !policy.replacesProcess(.footprint, state: helped))
+
+        // The hourly budget holds only process swaps; a reload is cheap and never waits on it.
+        var spentBudget = WebContentWatchdogState()
+        for i in 0..<policy.maxRecyclesPerHour { spentBudget.recordRecycle(at: now.addingTimeInterval(TimeInterval(-60 * (i + 1)))) }
+        precondition(policy.verdict(for: sample(2_300, idle: 60), state: spentBudget, now: now) == .recycle(.footprint),
+                     "a reload is not held by the swap budget")
+        precondition(policy.verdict(for: sample(1_000, idle: 9_999, stale: true), state: spentBudget, now: now) == .recycle(.staleBundle))
+        spentBudget.recordReload(.footprint, at: now.addingTimeInterval(-600))
+        spentBudget.judgeReload(sample(2_400), policy: policy, now: now)
+        precondition(policy.verdict(for: sample(2_300, idle: 60), state: spentBudget, now: now) == .suppressed(.footprint, why: "rate_limited"),
+                     "a swap still is")
+
+        // The watchdog asks the policy, once, for both the swap and its log, and a reload that
+        // hangs past its deadline gets the new process.
+        precondition(source.contains("let newProcess = self.policyProvider().replacesProcess(reason, state: self.state)"))
+        precondition(source.contains("if newProcess { self.recycle(reason, sample) } else { self.reloadInPlace(reason, sample, webView) }"),
+                     "the watchdog swaps the process only when the policy says so")
+        precondition(source.contains("state.judgeReload(sample, policy: policy, now: now)") && source.contains("state.forgetReloads()"),
+                     "every sample judges a pending reload and a new process forgets it")
+        if let body = source.range(of: "private func reloadInPlace(")
+            .flatMap({ r in source.range(of: "\n    }\n", range: r.upperBound..<source.endIndex).map { source[r.upperBound..<$0.lowerBound] } }) {
+            let sheet = body.range(of: "window.attachedSheet == nil")
+            let record = body.range(of: "state.recordReload(reason")
+            let load = body.range(of: "webView.reloadFromOrigin()")
+            precondition(sheet != nil && record != nil && load != nil, "reloadInPlace checks the sheet, records and reloads")
+            precondition(sheet!.lowerBound < record!.lowerBound && record!.lowerBound < load!.lowerBound,
+                         "a reload is recorded only once it is sure to happen")
+            precondition(body.contains("webView.isLoading") && body.contains("self.recycle(reason, sample)"),
+                         "a reload still loading after its deadline gets a new process")
+        } else {
+            preconditionFailure("reloadInPlace not found")
+        }
 
         print("WebContent policy tests passed")
     }

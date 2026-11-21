@@ -8,8 +8,10 @@ import WebKit
 // the curve next to everything else), and asks WebContentPolicy whether to
 // replace the process. The replacement itself is the app delegate's job
 // (`recycle`): it tears the WKWebView down and builds a new one at the same
-// URL, which is the only way to get a NEW WebContent process. A plain
-// `reload()` keeps the process, and with it the compositor's high-water mark.
+// URL, which is the only way to get a NEW WebContent process. Most recycles
+// reload the page in its own process instead (WebContentPolicy.replacesProcess):
+// a process that dies while its page is on screen leaves that page's graphics
+// charged to kernel_task until the app quits.
 
 final class WebContentWatchdog {
     /// Re-read every sample so `defaults write` tunes a running app: no relaunch
@@ -125,6 +127,7 @@ final class WebContentWatchdog {
         removeNotice()
         breakdowns = BreakdownCadence()
         unsavedHoldUntil = nil
+        state.forgetReloads()
     }
 
     // MARK: Sampling
@@ -179,6 +182,7 @@ final class WebContentWatchdog {
             postToServer(level: serverLevel, message: "page process footprint \(megabytes(bytes))MB (\(level.rawValue))", fields: fields)
         }
 
+        state.judgeReload(sample, policy: policy, now: now)
         lastSample = sample
         lastFields = fields
         if breakdowns.due(level: level, now: now) { logBreakdown(pid: pid, level: level, fields: fields) }
@@ -245,28 +249,47 @@ final class WebContentWatchdog {
                 self.updateNotice(level: level, verdict: held, now: Date())
                 return
             }
+            let now = Date()
+            let newProcess = self.policyProvider().replacesProcess(reason, state: self.state)
             // A reload in place is cheap: only a process swap spends the hourly budget.
-            if origin == "watchdog" && reason.replacesProcess { self.state.recordRecycle(at: Date()) }
+            if origin == "watchdog" && newProcess { self.state.recordRecycle(at: now) }
             fields["reason"] = reason.rawValue
             fields["origin"] = origin
-            fields["how"] = reason.replacesProcess ? "new_process" : "reload"
+            fields["how"] = newProcess ? "new_process" : "reload"
             DesktopLogger.shared.log("webcontent_recycled", fields: fields)
             self.postToServer(level: "warn", message: "page process recycled (\(reason.rawValue), \(megabytes(sample.footprintBytes))MB)", fields: fields)
-            if reason.replacesProcess { self.recycle(reason, sample) } else { self.reloadInPlace(webView) }
+            if newProcess { self.recycle(reason, sample) } else { self.reloadInPlace(reason, sample, webView) }
         }
     }
 
-    /// A newer bundle, same process (RecycleReason.replacesProcess): the page loads again from the
+    /// Same process (WebContentPolicy.replacesProcess): the page loads again from the
     /// server, its pagehide writing drafts on the way out as on any reload.
     /// The loaded bundle is kept: the finished load records the new one, and a reload that fails
     /// leaves the page stale, so the next tick tries again.
-    private func reloadInPlace(_ webView: WKWebView) {
+    private func reloadInPlace(_ reason: RecycleReason, _ sample: WebContentSample, _ webView: WKWebView) {
         recycleInFlight = false
         // A sheet on the window (a file or print panel, a close being confirmed): not under it.
         guard let window = webView.window, window.attachedSheet == nil else { return }
+        state.recordReload(reason, at: Date())
+        stopPauseCheck()
+        lastSample = nil
+        breakdowns = BreakdownCadence()
         notice.reset()
         removeNotice()
         webView.reloadFromOrigin()
+        // A process this bloated can hang on the reload, and no sample runs while the page
+        // loads: a load still going after the deadline gets the new process after all.
+        let deadline = policyProvider().reloadDeadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self, weak webView] in
+            guard let self, let webView, self.webView === webView, webView.isLoading, !self.recycleInFlight else { return }
+            self.recycleInFlight = true
+            self.state.recordRecycle(at: Date())
+            DesktopLogger.shared.log("webcontent_recycled", fields: [
+                "reason": reason.rawValue, "origin": "reload_timeout", "how": "new_process",
+                "reloadDeadlineSec": String(Int(deadline)),
+            ])
+            self.recycle(reason, sample)
+        }
     }
 
     // MARK: Waiting for a pause
