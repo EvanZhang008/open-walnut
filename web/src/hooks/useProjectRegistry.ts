@@ -518,8 +518,10 @@ export function resolveProjectNameList(list: string[]): string[] {
   for (const raw of list) {
     const name = resolveProjectName(raw);
     if (name !== (raw ?? '').trim()) moved = true;
-    const key = name.toLowerCase();
-    if (!name || seen.has(key)) { moved = true; continue; }
+    // The Inbox's slot ('' on the board, projectGroupKey; `Inbox` from the server) is kept once,
+    // like any project, so a hand-arranged order keeps its place.
+    const key = isInboxProject(name) ? '' : name.toLowerCase();
+    if (seen.has(key)) { moved = true; continue; }
     seen.add(key);
     next.push(name);
   }

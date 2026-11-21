@@ -30,7 +30,7 @@ const projectsApi = vi.hoisted(() => ({ fetchProjects: vi.fn<() => Promise<unkno
 vi.mock('@/api/projects', () => projectsApi)
 
 const registry = await import('@/hooks/useProjectRegistry')
-const { useProjectRegistry, useProjectEntry, useProjectLaunchDefaults, projectLaunchDefaultsNow, patchProjectLocal, resetProjectRegistryForTests } = registry
+const { useProjectRegistry, useProjectEntry, useProjectLaunchDefaults, projectLaunchDefaultsNow, patchProjectLocal, resetProjectRegistryForTests, resolveProjectNameList } = registry
 
 const counts = { todo: 1, active: 0, done: 0 }
 const row = (name: string, metadata: Record<string, unknown> = {}) => ({ name, source: 'local', favorite: false, counts, metadata })
@@ -107,5 +107,12 @@ describe('the Inbox in the project registry', () => {
     expect(useProjectRegistry().projectNames).toEqual(['Marina'])
     settle(false)
     expect(useProjectRegistry().inbox.defaultCwd).toBeUndefined()
+  })
+
+  it('keeps the Inbox\'s slot once in a project order, whichever name it carries', async () => {
+    await load({ projects: [row('Marina')], inbox: { counts, name: 'Inbox' } })
+    // useOrdering reads the order through this: without the Inbox the order cannot rank it.
+    expect(resolveProjectNameList(['Marina', '', 'Reading'])).toEqual(['Marina', '', 'Reading'])
+    expect(resolveProjectNameList(['', 'Marina', 'Inbox'])).toEqual(['', 'Marina'])
   })
 })

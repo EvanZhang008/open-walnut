@@ -2744,6 +2744,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use(['/api/search-index', '/api/qmd'], searchIndexRouter)
   app.use('/api/push', pushRouter)
   app.use('/api/auth', authRouter)
+  // The frozen v1 says '' for the Inbox in every JSON answer (middleware/v1-inbox-wire.ts).
+  app.use('/api/v1', (await import('./middleware/v1-inbox-wire.js')).v1InboxWire)
   // First-boot claim flow (cloud mode) — publicly reachable by design; the
   // auth middleware exempts /api/v1/setup/* (see CLOUD_EXEMPT_PREFIXES).
   app.use('/api/v1/setup', setupRouter)

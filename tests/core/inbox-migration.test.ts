@@ -134,6 +134,9 @@ describe('migrateInboxProject', () => {
     const rows = getDb()!.prepare(`SELECT name, source FROM task_projects ORDER BY name`).all();
     expect(rows).toEqual([{ name: 'Inbox', source: 'local' }, { name: 'Inbox (ms-todo)', source: 'ms-todo' }]);
     expect(rowOf('s-0001')).toMatchObject({ project: 'Inbox (ms-todo)', source: 'ms-todo' });
+    // Its tasks stay in the service's list of the old name (no second list made on the next push).
+    const meta = getDb()!.prepare(`SELECT metadata FROM task_projects WHERE name = 'Inbox (ms-todo)'`).get() as { metadata: string };
+    expect(JSON.parse(meta.metadata)).toEqual({ remote_list: 'Inbox' });
     expect(rowOf('a-0001').project).toBe('Inbox');
     const record = JSON.parse(await fs.readFile(result.recordPath!, 'utf8'));
     expect(record).toMatchObject({ renamed: { from: 'Inbox', to: 'Inbox (ms-todo)', source: 'ms-todo' }, renamedTaskIds: ['s-0001'] });

@@ -133,6 +133,12 @@ export async function migrateInboxProject(db: InboxMigrationDb, dir: string, now
       // its service and its tasks under a name of its own (nothing claims the Inbox: it would
       // sync every unfiled task to that service).
       db.prepare('UPDATE task_projects SET name = ? WHERE name = ?').run(rowTo, row.name);
+      // A claimed one keeps living in its service's list of the old name (as renameProject
+      // keeps it): without the alias the next push would make a second list named rowTo.
+      if (row.source !== 'local') {
+        db.prepare(`UPDATE task_projects SET metadata = json_set(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, '$.remote_list', ?)
+          WHERE name = ? AND (metadata IS NULL OR NOT json_valid(metadata) OR COALESCE(TRIM(json_extract(metadata, '$.remote_list')), '') = '')`).run(row.name, rowTo);
+      }
       db.prepare('UPDATE tasks SET project = ? WHERE project = ? COLLATE NOCASE').run(rowTo, row.name);
       db.prepare('UPDATE task_groups SET project = ? WHERE project = ? COLLATE NOCASE').run(rowTo, row.name);
       log.task.warn('inbox migration: a project held the Inbox\'s name', { from: row.name, to: rowTo, source: row.source, tasks: now2.rowTaskIds.length });

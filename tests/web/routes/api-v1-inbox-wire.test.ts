@@ -69,6 +69,17 @@ describe('the Inbox on /api/v1', () => {
     }
   })
 
+  it('folders and the enriched list say "" for the Inbox too', async () => {
+    const a = await call('POST', '/api/v1/tasks', { title: 'Pair one' })
+    const b = await call('POST', '/api/v1/tasks', { title: 'Pair two' })
+    const grouped = await call('POST', '/api/v1/tasks/groups', { task_ids: [a.data.task.id, b.data.task.id], label: 'Errands folder' })
+    expect(grouped.status).toBeLessThan(300)
+    const groups = (await call('GET', '/api/v1/tasks/groups')).data.groups as { label: string; project: string }[]
+    expect(groups.find((g) => g.label === 'Errands folder')?.project).toBe('')
+    const enriched = (await call('GET', '/api/v1/tasks/enriched')).data.tasks as { id: string; project: string }[]
+    expect(enriched.find((t) => t.id === a.data.task.id)?.project).toBe('')
+  })
+
   it('the project order names the Inbox "" on v1 and Inbox on the web api', async () => {
     expect((await call('PUT', '/api/v1/ordering/projects', { order: ['Errands', '', 'Reading'] })).status).toBe(200)
     expect((await call('GET', '/api/v1/ordering')).data.projects).toEqual(['Errands', '', 'Reading'])
@@ -80,5 +91,18 @@ describe('the Inbox on /api/v1', () => {
     const res = await call('PATCH', '/api/v1/projects/Work', { name: 'inbox' })
     expect(res.status).toBe(400)
     expect(JSON.stringify(res.data)).toMatch(/Delete it instead/)
+  })
+})
+
+describe('inboxOnV1Wire', () => {
+  it('rewrites only a project naming the Inbox, at any depth, and never changes the answer in place', async () => {
+    const { inboxOnV1Wire } = await import('../../../src/web/middleware/v1-inbox-wire.js')
+    const task = { id: 't', project: 'Inbox', nested: { project: 'inbox' } }
+    const body = { tasks: [task, { id: 'u', project: 'Walnut' }], name: 'Inbox', board: { cards: [{ task: { project: 'Inbox' } }] } }
+    const out = inboxOnV1Wire(body)
+    expect(out).toEqual({ tasks: [{ id: 't', project: '', nested: { project: '' } }, { id: 'u', project: 'Walnut' }], name: 'Inbox', board: { cards: [{ task: { project: '' } }] } })
+    expect(task.project).toBe('Inbox')
+    const plain = { tasks: [{ id: 'u', project: 'Walnut' }] }
+    expect(inboxOnV1Wire(plain)).toBe(plain)
   })
 })
