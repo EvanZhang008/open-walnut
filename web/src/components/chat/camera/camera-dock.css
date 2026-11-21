@@ -35,21 +35,19 @@
   z-index: 2;
 }
 .camera-dock-spacer { flex: 1; }
-.camera-pill {
+.camera-hud {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   background: rgba(0, 0, 0, 0.58);
   color: #fff;
-  border: none;
   border-radius: 999px;
-  padding: 3px 10px;
-  font: 500 12px/1.4 var(--font-sans, -apple-system, system-ui, sans-serif);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
 }
-.camera-pill.is-button { cursor: pointer; }
-.camera-pill.is-button:disabled { cursor: default; }
-.camera-pill.is-off { color: #bbb; }
-.camera-pill.is-rec { background: #ff3b30; font-variant-numeric: tabular-nums; }
+.camera-hud.is-rec { background: #ff3b30; font-variant-numeric: tabular-nums; }
+.camera-sound[aria-pressed='false'] { opacity: 0.7; }
 .camera-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759; display: inline-block; }
 .camera-rec-dot { width: 7px; height: 7px; border-radius: 50%; background: #fff; display: inline-block; animation: camera-blink 1s steps(2, start) infinite; }
 @keyframes camera-blink { to { visibility: hidden; } }
@@ -106,21 +104,6 @@
 .camera-shutter.is-stop { background: #111; display: inline-flex; align-items: center; justify-content: center; }
 .camera-shutter.is-stop::after { content: ''; width: 14px; height: 14px; border-radius: 3px; background: #ff3b30; }
 .camera-shutter:disabled { opacity: 0.4; cursor: default; }
-.camera-btn {
-  border: none;
-  border-radius: 999px;
-  padding: 5px 13px;
-  background: #2c2c2e;
-  color: #fff;
-  font: 500 13px/1.4 var(--font-sans, -apple-system, system-ui, sans-serif);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.camera-btn:hover:not(:disabled) { background: #3a3a3c; }
-.camera-btn.is-primary { background: var(--accent, #007aff); }
-.camera-btn.is-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent, #007aff); }
-.camera-btn.is-quiet { background: none; color: #aeaeb2; }
-.camera-btn:disabled { opacity: 0.55; cursor: default; }
 .camera-dock-refused {
   display: flex;
   flex-direction: column;

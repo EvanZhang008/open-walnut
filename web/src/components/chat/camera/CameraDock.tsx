@@ -180,8 +180,8 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
                 : 'Your browser blocked it. Allow the camera for this site (the camera icon or the site settings in the address bar), then try again.')
               : cam.state === 'busy' ? 'Close the other app that uses it, then try again.' : 'Connect a camera, then try again.'}</span>
             <div className="camera-dock-row">
-              <button type="button" className="camera-btn is-primary" onClick={cam.restart}>Try again</button>
-              <button type="button" className="camera-btn" onClick={() => { onClose(); onPickFile(); }}>Pick a file instead</button>
+              <button type="button" className="btn btn-sm btn-primary" onClick={cam.restart}>Try again</button>
+              <button type="button" className="btn btn-sm" onClick={() => { onClose(); onPickFile(); }}>Pick a file instead</button>
             </div>
           </div>
         ) : capture ? (
@@ -194,18 +194,18 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
         {!refused && (
           <div className="camera-dock-top">
             {recorder.recording ? (
-              <span className="camera-pill is-rec" data-testid="camera-timer"><i className="camera-rec-dot" />{recordingLabel(recorder.elapsedMs)}</span>
+              <span className="camera-hud is-rec" data-testid="camera-timer"><i className="camera-rec-dot" />{recordingLabel(recorder.elapsedMs)}</span>
             ) : capture ? (
-              <span className="camera-pill">{capture.kind === 'photo' ? 'Photo' : capture.words.state === 'pending' ? 'Video · getting the words…' : `Video · ${capture.clip.stills.length} stills`}</span>
+              <span className="camera-hud">{capture.kind === 'photo' ? 'Photo' : capture.words.state === 'pending' ? 'Video · getting the words…' : `Video · ${capture.clip.stills.length} stills`}</span>
             ) : (
-              <span className="camera-pill" data-testid="camera-on"><i className="camera-live-dot" />{cam.state === 'live' ? 'Camera on' : 'Starting camera…'}</span>
+              <span className="camera-hud" data-testid="camera-on"><i className="camera-live-dot" />{cam.state === 'live' ? 'Camera on' : 'Starting camera…'}</span>
             )}
             {(mode === 'video' || recorder.recording) && !capture && (
-              <button type="button" className={`camera-pill is-button${sound ? '' : ' is-off'}`} disabled={recorder.recording} onClick={() => setSound((s) => !s)} aria-pressed={sound} >
+              <button type="button" className="btn btn-sm camera-sound" disabled={recorder.recording} onClick={() => setSound((s) => !s)} aria-pressed={sound} >
                 {ICON.mic}{sound ? 'Sound on' : 'Sound off'}
               </button>
             )}
-            {photosTaken > 0 && recorder.recording && <span className="camera-pill" data-testid="camera-photos-taken">{photosTaken === 1 ? '1 photo added' : `${photosTaken} photos added`}</span>}
+            {photosTaken > 0 && recorder.recording && <span className="camera-hud" data-testid="camera-photos-taken">{photosTaken === 1 ? '1 photo added' : `${photosTaken} photos added`}</span>}
             <span className="camera-dock-spacer" />
             {cam.canFlip && !capture && !recorder.recording && <button type="button" className="camera-round" onClick={cam.flip} aria-label="Switch camera" title="Switch camera">{ICON.flip}</button>}
             {!recorder.recording && <button type="button" className="camera-round" onClick={onClose} aria-label="Close camera" title="Close camera (Esc)">{ICON.close}</button>}
@@ -218,11 +218,11 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
         <div className="camera-dock-bar">
           {capture ? (
             <>
-              <button type="button" className="camera-btn" onClick={() => setCapture(null)}>Retake</button>
+              <button type="button" className="btn btn-sm" onClick={() => setCapture(null)}>Retake</button>
               <span className="camera-dock-spacer" />
-              {wordsPending && <button type="button" className="camera-btn is-quiet" onClick={skipWords}>Skip the words</button>}
-              <button type="button" className="camera-btn" disabled={wordsPending || keeping} onClick={() => { void keep(); }}>Add another</button>
-              <button type="button" className="camera-btn is-primary" disabled={wordsPending || keeping} onClick={() => { void keep().then((ok) => { if (ok) { onClose(); onSend(); } }); }}>{wordsPending ? 'Getting the words…' : 'Send'}</button>
+              {wordsPending && <button type="button" className="btn btn-sm" onClick={skipWords}>Skip the words</button>}
+              <button type="button" className="btn btn-sm" disabled={wordsPending || keeping} onClick={() => { void keep(); }}>Add another</button>
+              <button type="button" className="btn btn-sm btn-primary" disabled={wordsPending || keeping} onClick={() => { void keep().then((ok) => { if (ok) { onClose(); onSend(); } }); }}>{wordsPending ? 'Getting the words…' : 'Send'}</button>
             </>
           ) : (
             <>
@@ -244,7 +244,7 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
               <span className="camera-dock-spacer" />
               <span className="camera-dock-side">
                 {recorder.recording
-                  ? <button type="button" className="camera-btn" onClick={() => void shoot()} data-testid="camera-photo-while-recording">Take photo</button>
+                  ? <button type="button" className="btn btn-sm" onClick={() => void shoot()} data-testid="camera-photo-while-recording">Take photo</button>
                   : mode === 'video' && videoOk ? <span className="camera-dock-hint">up to 1:00</span> : null}
               </span>
             </>

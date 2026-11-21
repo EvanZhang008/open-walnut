@@ -10,6 +10,7 @@ import { FileCard, fileKindOf } from '@/components/common/FileCard';
 import { formatBytes } from '@/api/file-upload';
 import { clipHeaderName, type VideoClipRead } from '@open-walnut/attachment-headers';
 import { fetchPathSizes } from '@/api/files';
+import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/attachments.css';
 
 const KIND_LABEL: Record<ReturnType<typeof fileKindOf>, string> = {
@@ -79,6 +80,17 @@ function imageSrc(p: string, host?: string): string {
   return `/api/local-image?path=${encodeURIComponent(p)}${hostParam}`;
 }
 
+/** What was said in a recorded video, one click away (kept open over a rebuild, as every row disclosure). */
+function ClipWords({ path, words }: { path: string; words: string }) {
+  const disclosure = useDetailsDisclosure(disclosureIds.content('clip-words', path));
+  return (
+    <details className="message-attachment-said" {...disclosure}>
+      <summary>What was said</summary>
+      <p>{words}</p>
+    </details>
+  );
+}
+
 /** A recorded video's line on its sent card: what the AI got with it besides the file. */
 function clipLine(clip: VideoClipRead): string {
   const n = clip.stills.length;
@@ -142,12 +154,7 @@ export function MessageAttachments({ images, files, clips = [], host, onFileOpen
                 })}
               </div>
             )}
-            {clip.narration && (
-              <details className="message-attachment-said">
-                <summary>What was said</summary>
-                <p>{clip.narration}</p>
-              </details>
-            )}
+            {clip.narration && <ClipWords path={p} words={clip.narration} />}
           </div>
         );
       })}
