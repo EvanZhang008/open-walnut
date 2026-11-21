@@ -7316,7 +7316,9 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     // id set here; whatever it leaves goes to the server, never to handleLocal.
     // One side writes it (openOnline/endOnline): a relay never follows a follower.peer write of it.
     if (followerGateway.answersOnline(home) && offlineHost.localCandidate(home, callerSid, capability, payload)) {
-      var relay = function () { relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline); };
+      var relay = function () {
+        relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline);
+      };
       if (!offlineHost.openOnline(home, payload)) return relay();
       var ended = function () { offlineHost.endOnline(home, payload).then(function (r) { if (r) respond(r); else relay(); }); };
       if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, online: true, fallback: ended }, function (r) { respond(r); })) return;
