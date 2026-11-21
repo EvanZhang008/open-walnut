@@ -24,6 +24,7 @@ import { LANGUAGE_GUIDANCE, measureLanguage } from './language.js';
 import { messagesFromAsks, rulesTextOf, threadsFromRecords } from './inputs.js';
 import { PAIN_TITLES_FOR_JUDGE } from './pains.js';
 import { readPains } from './pains-store.js';
+import { backfillDropped, mergeGuidance, type MergeDeps } from './guidance-merge.js';
 import { recordPain } from './pain-record.js';
 
 export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates.js';
@@ -119,7 +120,7 @@ export function languageFinding(c: Candidate, replyLanguage: string | null, guid
 }
 
 /** The rule a finding becomes: its guidance line (added, or already listed), its skill, or none and why. */
-async function keepRule(node: Task, nodeName: string, c: Candidate, f: Finding, guidance: readonly string[], now: number): Promise<DayRule> {
+async function keepRule(node: Task, nodeName: string, c: Candidate, f: Finding, guidance: readonly string[], now: number, deps: MergeDeps): Promise<DayRule> {
   const date = localDate(now);
   const lineOf = async (text: string) => (await readGuidance(node.id)).findIndex((l) => normalizeForQuote(l.text) === normalizeForQuote(text)) + 1;
   let rule: DayRule = f.same_as ? { kind: 'existing', text: guidance[f.same_as - 1] ?? '', line: f.same_as } : { kind: 'none', text: 'no new rule' };
@@ -128,9 +129,15 @@ async function keepRule(node: Task, nodeName: string, c: Candidate, f: Finding, 
     const addedToday = (await readGuidance(node.id)).filter((l) => l.date === date).length;
     const added = await addGuidance(node.id, nodeName, { text: f.guidance, from: c.task.title.slice(0, 60), date }, { removed: state.removed, addedToday });
     if (added === 'added') await updateReflectionState(node.id, (s) => { s.written.push(normalizeForQuote(f.guidance)); }, now);
+    // A full day or file merges the lesson into the closest line instead (guidance-merge.ts); the record says why when it cannot.
+    const merged = added === 'day_full' || added === 'file_full'
+      ? await mergeGuidance(node, nodeName, { text: f.guidance, from: c.task.title.slice(0, 60), date }, deps, now).catch((err) => ({ kind: 'failed' as const, why: String(err) }))
+      : null;
     rule = added === 'added' ? { kind: 'guidance', text: f.guidance, line: await lineOf(f.guidance) }
       : added === 'known' ? { kind: 'existing', text: f.guidance, line: await lineOf(f.guidance) }
-      : { kind: 'none', text: `not added (${added}): ${f.guidance}` };
+      : merged?.kind === 'merged' ? { kind: 'guidance', text: merged.text, line: merged.line, was: merged.was }
+      : merged?.kind === 'same' ? { kind: 'existing', text: merged.text, line: merged.line }
+      : { kind: 'none', text: `not added (${added}${merged?.kind === 'failed' ? `; not merged: ${merged.why}` : ''}): ${f.guidance}` };
   }
   if (!f.skill) return rule;
   const wrote = await takeSkillWrite(node.id, now) ? await writeFindingSkill(node.id, nodeName, f.skill) : 'day_full';
@@ -177,7 +184,7 @@ export async function reflectOnCandidate(
         .then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
     }
   }
-  const rule = await keepRule(node, nodeName, c, f, guidance, now);
+  const rule = await keepRule(node, nodeName, c, f, guidance, now, deps);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
     finding: f, corrected, ...(held ? { held } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
@@ -248,6 +255,8 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     const leftToday = await recordBudgetLeft(node.id, left, dropped, now);
     log.task.info('reflection: the day\'s judge budget is spent', { nodeId: node.id, leftForLater: left.length, dropped: dropped.length, leftToday });
   }
+  // Lessons a full day dropped are taken up again, a few a pass, after this pass's own findings had their places.
+  await backfillDropped(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: dropped lessons not taken up', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   return result;
 }
 
@@ -257,7 +266,12 @@ export async function rememberDeletedGuidance(nodeId: string, nowMs: number): Pr
   const lines = await readGuidanceStrict(nodeId);
   if (!lines) return;
   await updateReflectionState(nodeId, (s) => {
-    for (const k of deletedSince(s.written, lines)) if (!s.removed.includes(k)) s.removed.push(k);
+    for (const k of deletedSince(s.written, lines)) {
+      if (!s.removed.includes(k)) s.removed.push(k);
+      // The lessons merged into a deleted line went with it: they are not written again either.
+      for (const m of s.mergedLessons ?? []) if (m.line === k && !s.removed.includes(m.lesson)) s.removed.push(m.lesson);
+      s.mergedLessons = (s.mergedLessons ?? []).filter((m) => m.line !== k);
+    }
     s.written = s.written.filter((k) => !s.removed.includes(k));
   }, nowMs);
 }

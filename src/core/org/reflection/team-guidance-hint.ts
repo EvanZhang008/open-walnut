@@ -77,10 +77,22 @@ function fit(rows: string[], room: number, more: (left: number) => string): stri
   return out;
 }
 
+const guidanceHead = (node: string | undefined): string => `Team guidance from ${node}: lessons its reflection took from this team's sessions. Follow them; the user's own words win.`;
+
+/**
+ * Characters still free for guidance lines so that every line shows in the hint of a session that is
+ * also told the org's skills (the tightest case), or less than 0 when some line already falls out
+ * (guidance-merge.ts: a merge never grows the lines past it). Pure.
+ */
+export function guidanceRoomLeft(nodeName: string, lines: readonly string[]): number {
+  const room = TEXT_ROOM - SKILLS_ROOM_MIN - guidanceHead(nodeName).length;
+  return room - lines.reduce((n, l) => n + l.length + 3, 0);
+}
+
 export function teamGuidanceText(s: TeamGuidanceState): string {
   const out: string[] = [];
   if (s.lines.length) {
-    const head = `Team guidance from ${s.node}: lessons its reflection took from this team's sessions. Follow them; the user's own words win.`;
+    const head = guidanceHead(s.node);
     const room = TEXT_ROOM - (s.skills?.length ? SKILLS_ROOM_MIN : 0) - head.length;
     out.push(head, ...fit(s.lines.map((l) => `- ${l}`), room, (n) => `- ... ${n} more in ${s.file}`));
   }

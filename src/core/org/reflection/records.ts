@@ -93,6 +93,28 @@ export async function addGuidance(
   });
 }
 
+/**
+ * Put `next` in the place of the line whose text is `oldText` (guidance-merge.ts: a lesson merged into
+ * it). 'gone' when that line is no longer in the file (the user edited or deleted it meanwhile):
+ * nothing is written then. Everything else in the file stays as it is.
+ */
+export async function replaceGuidanceLine(nodeId: string, nodeName: string, oldText: string, next: GuidanceLine): Promise<'replaced' | 'gone'> {
+  const file = guidanceFileOf(nodeId);
+  const key = normalizeForQuote(oldText);
+  return withFileLock(file, async () => {
+    const had = await fsp.readFile(file, 'utf-8').catch(() => null);
+    if (had === null) return 'gone';
+    const rows = had.split('\n');
+    const at = rows.findIndex((raw) => { const m = LINE_RE.exec(raw.trimEnd()); return !!m && normalizeForQuote(m[1]) === key; });
+    if (at < 0) return 'gone';
+    rows[at] = renderGuidance(nodeName, [next]).split('\n').find((l) => l.startsWith('- '))!;
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fsp.writeFile(tmp, rows.join('\n'), 'utf-8');
+    await fsp.rename(tmp, file);
+    return 'replaced';
+  });
+}
+
 /** Lines the reflection wrote before that are gone from the file now: the user deleted them. */
 export function deletedSince(before: readonly string[], now: readonly GuidanceLine[]): string[] {
   const kept = new Set(now.map((l) => normalizeForQuote(l.text)));
@@ -103,7 +125,11 @@ export function deletedSince(before: readonly string[], now: readonly GuidanceLi
  * The rule a finding became: a new guidance line (its number in the file), a skill (with the line
  * when one was added too), a line already listed, or none (and why, in `text`).
  */
-export interface DayRule { kind: 'guidance' | 'skill' | 'existing' | 'none'; text: string; line?: number; name?: string }
+export interface DayRule {
+  kind: 'guidance' | 'skill' | 'existing' | 'none'; text: string; line?: number; name?: string;
+  /** A lesson merged into a line (guidance-merge.ts): the line's text before, the undo. */
+  was?: string;
+}
 
 export interface DayEntry {
   at: string;
@@ -141,7 +167,7 @@ const SIGNAL_LABEL: Record<ReflectionSignal, string> = {
 export function ruleLine(r: DayRule | undefined): string {
   if (!r) return 'none';
   switch (r.kind) {
-    case 'guidance': return `guidance line ${r.line ?? '?'}: ${r.text}`;
+    case 'guidance': return `guidance line ${r.line ?? '?'}${r.was ? ` (merged; was: ${r.was})` : ''}: ${r.text}`;
     case 'skill': return `skill ${r.name ?? '?'}${r.line ? ` and guidance line ${r.line}` : ''}: ${r.text}`;
     case 'existing': return `already listed (guidance line ${r.line ?? '?'})${r.text ? `: ${r.text}` : ''}`;
     default: return `none${r.text ? ` (${r.text})` : ''}`;

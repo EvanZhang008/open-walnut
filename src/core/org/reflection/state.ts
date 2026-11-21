@@ -36,6 +36,14 @@ export interface ReflectionState {
   nightly?: string;
   /** The pain registry's part of the last nightly note that carried one (a hash): an unchanged part is not sent again. */
   painsNote?: string;
+  /** Lessons a full day or file once dropped that were taken up again (guidance-merge.ts), normalized: each once. */
+  backfilled?: string[];
+  /** Today's merge calls (guidance-merge.ts): at most MERGE_CALLS_PER_DAY_MAX. */
+  merges?: { date: string; count: number };
+  /** Lessons merged into a line (guidance-merge.ts), normalized, and the line that holds each now: the same lesson again needs no call. */
+  mergedLessons?: Array<{ lesson: string; line: string }>;
+  /** Failed tries of a dropped lesson the backfill has not settled yet (normalized lesson: count). */
+  backfillTries?: Record<string, number>;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
@@ -73,6 +81,10 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     skills: r.skills?.date === today && Number.isFinite(r.skills.count) ? r.skills : { date: today, count: 0 },
     ...(typeof r.nightly === 'string' ? { nightly: r.nightly } : {}),
     ...(typeof r.painsNote === 'string' ? { painsNote: r.painsNote } : {}),
+    ...(Array.isArray(r.backfilled) ? { backfilled: r.backfilled.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
+    ...(r.merges?.date === today && Number.isFinite(r.merges.count) ? { merges: r.merges } : {}),
+    ...(Array.isArray(r.mergedLessons) ? { mergedLessons: r.mergedLessons.filter((m): m is { lesson: string; line: string } => !!m && typeof m.lesson === 'string' && typeof m.line === 'string').slice(-500) } : {}),
+    ...(r.backfillTries && typeof r.backfillTries === 'object' ? { backfillTries: Object.fromEntries(Object.entries(r.backfillTries).filter(([, n]) => Number.isFinite(n))) } : {}),
   };
 }
 
