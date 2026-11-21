@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { inspectSqliteOffThread } from '../../lib/sqlite-inspect.js';
+import { inspectSqliteOffThread } from '../../lib/sqlite.js';
 import { classifyHomePath, homeEntries, homePathClass, outsideHomeEntries, type DataClass } from '../home-manifest/index.js';
 import { EXCLUDED_DIRS, backupTakes } from './scan.js';
 import { AVG_CHUNK, MAX_CHUNK, MIN_CHUNK, SMALL_FILE_BYTES, chunkStream } from './repo/chunker.js';

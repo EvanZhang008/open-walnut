@@ -221,7 +221,7 @@ const EXEMPT: Record<string, string> = {
   'src/hooks/on-stop.ts': 'a hook child process: opens the file read-only, reads, closes it in the same call',
   'src/hooks/shared.ts': 'hook helpers: each call opens the file and closes it before returning',
   'src/hooks/session-status-store.ts': 'opens the path it is given and closes it in the same call',
-  'src/lib/sqlite.ts': 'the VACUUM INTO worker: one read-only connection per copy, ended with the copy',
+  'src/lib/sqlite.ts': 'the VACUUM INTO and inspect workers: one read-only connection per copy or check, ended with it',
   'src/lib/hybrid-search/embed-worker.ts': 'an embedding worker\'s read-only connection, ended with the worker',
   'src/commands/ephemeral-snapshot.ts': 'copies a database once for an ephemeral server and closes it',
   'src/core/diagnostics/local-probes.ts': 'an in-memory database (`:memory:`), no file',
