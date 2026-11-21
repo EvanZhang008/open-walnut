@@ -159,10 +159,15 @@ describe('guard: every way a caller sid enters the server maps it', () => {
     expect(answer.slice(0, answer.indexOf('leadOf('))).toContain('canonicalCallerSid(')
     // A host answering alone maps it from its slice (tests/providers/offline-host-core.test.ts).
     const offline = await fs.readFile(path.join(root, 'src/providers/offline-host-core.ts'), 'utf8')
-    for (const fn of ['async function handle(', 'async function handleLocal(']) {
+    // handle maps it itself; a same-host delivery's gates (localCall) map it for handleLocal and the
+    // follower's online hand-off alike (localCandidate), so both reach it through localCall.
+    for (const fn of ['async function handle(', 'function localCall(']) {
       const at = offline.slice(offline.indexOf(fn))
       expect(at.slice(0, at.indexOf('\n  }\n')), fn).toContain('callerSidOf(home, rawCallerSid)')
     }
+    const local = offline.slice(offline.indexOf('async function handleLocal('))
+    expect(local.slice(0, local.indexOf('\n  }\n'))).toMatch(/localCall\(home, rawCallerSid/)
+    expect(offline).toMatch(/localCandidate: \([^)]*\)[^=]*=> localCall\(home, rawCallerSid/)
     const slice = await fs.readFile(path.join(root, 'src/core/host-slice.ts'), 'utf8')
     expect(slice).toContain('runtimeId: s.acpRuntimeId')
   })
