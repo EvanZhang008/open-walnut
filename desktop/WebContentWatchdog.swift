@@ -26,6 +26,10 @@ final class WebContentWatchdog {
     private var loadedBundle: String?
     private var servedBundle: String?
     private var recycleInFlight = false
+    /// Counts the page loads this watchdog was told about (`attach`, `pageReloaded`). A callback
+    /// that started before the latest one (a reload deadline, a page's answer, a crash reload)
+    /// sees a newer value and does nothing: the same web view may now show another load.
+    private var generation = 0
     private var reportedNoPid = false
     /// True while the server answers but cannot serve the web app.
     private var serverPageBroken = false
@@ -64,6 +68,7 @@ final class WebContentWatchdog {
         lastPid = 0
         loadedBundle = nil
         recycleInFlight = false
+        generation += 1
         resetForNewProcess()
         if timer == nil && WebContentPolicy.isEnabled(UserDefaults.standard) {
             let interval = policyProvider().sampleInterval
@@ -73,6 +78,24 @@ final class WebContentWatchdog {
             t.tolerance = interval / 6
             timer = t
         }
+    }
+
+    /// The app loaded the page again in the process it has (a server found again after a
+    /// restart): the same process, so what was learnt about it stays (its age, whether a memory
+    /// reload helped); only what belongs to the page goes, and the page boots like after a reload.
+    func pageReloaded(webView: WKWebView, window: NSWindow) {
+        guard self.webView === webView else { return attach(webView: webView, window: window) }
+        self.window = window
+        loadedBundle = nil
+        recycleInFlight = false
+        generation += 1
+        state.recordReload(.staleBundle, at: Date())
+        stopPauseCheck()
+        lastSample = nil
+        notice.reset()
+        removeNotice()
+        breakdowns = BreakdownCadence()
+        unsavedHoldUntil = nil
     }
 
     /// The page finished loading: remember which bundle it runs so a later
@@ -108,7 +131,9 @@ final class WebContentWatchdog {
         processStartedAt = now
         lastPid = 0
         resetForNewProcess()
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak webView] in
+        let gen = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+            guard let self, self.generation == gen else { return }
             webView?.reload()
         }
     }
@@ -232,9 +257,11 @@ final class WebContentWatchdog {
                 guard let self else { return }
                 self.checkUnsavedWork(reload: true, done)
             }
+        let gen = generation
         ask { [weak self, weak webView] unsaved in
-            guard let self, let webView = webView, self.webView === webView else {
-                self?.recycleInFlight = false
+            guard let self, self.generation == gen else { return }
+            guard let webView = webView, self.webView === webView else {
+                self.recycleInFlight = false
                 return
             }
             if unsaved {
@@ -280,8 +307,10 @@ final class WebContentWatchdog {
         // A process this bloated can hang on the reload, and no sample runs while the page
         // loads: a load still going after the deadline gets the new process after all.
         let deadline = policyProvider().reloadDeadline
+        let gen = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self, weak webView] in
-            guard let self, let webView, self.webView === webView, webView.isLoading, !self.recycleInFlight else { return }
+            guard let self, self.generation == gen, let webView, self.webView === webView,
+                  webView.isLoading, !self.recycleInFlight else { return }
             self.recycleInFlight = true
             self.state.recordRecycle(at: Date())
             DesktopLogger.shared.log("webcontent_recycled", fields: [

@@ -121,8 +121,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// (AppLink.swift); handed over once a page finishes loading.
     var pendingAppLinks: [URL] = []
     var consolePageLoaded = false
-    /// The server port the page in `webView` was built for (its bridges hold that port).
+    /// The server port the page in `webView` was built for (its bridges hold that port), and
+    /// whether its configuration strips the glass: a page built otherwise is rebuilt.
     var webViewPort: Int?
+    var webViewReducesGlass: Bool?
     /// The `walnut` command check runs once per launch (CommandLineTool.swift).
     var commandLineToolChecked = false
 
@@ -1636,12 +1638,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // A server found again on the port the page already talks to (a restart, every deploy):
         // the page loads again in its own process. Ending that process instead left the graphics
         // it held charged to kernel_task until the app quit (2026-11-21: +107 MB on one deploy).
-        if !newProcess, let page = webView, webViewPort == port {
+        if !newProcess, let page = webView, webViewPort == port,
+           webViewReducesGlass == WebContentPolicy.reduceGlass(UserDefaults.standard) {
             page.stopLoading()
             consolePageLoaded = false
             window.contentView = page
             window.title = "Walnut — localhost:\(port)"
-            webContentWatchdog?.attach(webView: page, window: window)
+            webContentWatchdog?.pageReloaded(webView: page, window: window)
             DesktopLogger.shared.log("webview_reused", fields: ["port": String(port)])
             page.load(URLRequest(url: url))
             return
@@ -1756,6 +1759,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = webView
         window.title = "Walnut — localhost:\(port)"
         webViewPort = port
+        webViewReducesGlass = WebContentPolicy.reduceGlass(UserDefaults.standard)
         webContentWatchdog?.attach(webView: webView, window: window)
 
         let request = URLRequest(url: url)
@@ -2405,6 +2409,8 @@ extension AppDelegate: WKUIDelegate {
 
 extension AppDelegate: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // A load the app itself replaced (stopLoading before loading the page again) is no failure.
+        if (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled { return }
         if serverProcess?.isRunning == false {
             showError("The Walnut server has stopped unexpectedly.")
         }

@@ -128,6 +128,8 @@ describe('a page process is ended only by a deliberate swap', () => {
     'desktop/main.swift:recyclePopout': 'a popout window\'s watchdog swap, asked by WebContentPolicy.replacesProcess like the main window\'s',
     'desktop/DemoApp.swift:run': 'the separate demo app starting or resetting its demo: a new demo server, never a deploy of the person\'s',
     'desktop/DemoApp.swift:webView': 'the demo app\'s page whose demo server is gone (failed provisional navigation)',
+    'desktop/main.swift:windowWillClose': 'a popout window the person closed: its page goes with it',
+    'desktop/QuickBarPanel.swift:tearDown': 'the quick bar\'s page, hidden longer than it is kept: it goes with the panel',
   }
 
   function enders(): string[] {
@@ -138,7 +140,7 @@ describe('a page process is ended only by a deliberate swap', () => {
       const fns = [...src.matchAll(/\bfunc\s+(\w+)/g)].map((m) => ({ name: m[1], at: m.index! }))
       fns.forEach((f, i) => {
         const body = src.slice(f.at, fns[i + 1]?.at ?? src.length)
-        if (/\bretireReplacedPage\(/.test(body)) out.push(`${file}:${f.name}`)
+        if (/\bretireReplacedPage\(|WebContentProcess\.close\(/.test(body)) out.push(`${file}:${f.name}`)
       })
     }
     return out
@@ -151,15 +153,26 @@ describe('a page process is ended only by a deliberate swap', () => {
 
   it('only a recycle asks loadWebUI for a new process; a server found again reuses the page', () => {
     const src = stripped('desktop/main.swift')
-    const calls = [...src.matchAll(/loadWebUI\(([^)]*)\)/g)]
-    const withNew = calls.filter((m) => /newProcess:\s*true/.test(m[1]))
-    expect(withNew).toHaveLength(1)
+    // Every call's arguments, cut at its matching parenthesis.
+    const calls = [...src.matchAll(/\bloadWebUI\(/g)].filter((m) => !src.slice(Math.max(0, m.index! - 5), m.index!).includes('func')).map((m) => {
+      let depth = 1, i = m.index! + m[0].length
+      while (i < src.length && depth > 0) { if (src[i] === '(') depth++; else if (src[i] === ')') depth--; i++ }
+      return { at: m.index!, args: src.slice(m.index! + m[0].length, i - 1) }
+    })
+    expect(calls.length).toBeGreaterThan(1)
+    const asking = calls.filter((c) => /newProcess:/.test(c.args))
+    expect(asking.map((c) => c.args), 'newProcess is passed only as the literal true').toEqual(asking.map((c) => c.args).filter((a) => /newProcess:\s*true\s*$/.test(a)))
+    expect(asking).toHaveLength(1)
     const fnOf = (at: number) => [...src.slice(0, at).matchAll(/\bfunc\s+(\w+)/g)].pop()?.[1]
-    expect(fnOf(withNew[0].index!)).toBe('recycleWebContent')
+    expect(fnOf(asking[0].at)).toBe('recycleWebContent')
     const load = src.slice(src.indexOf('func loadWebUI('), src.indexOf('func recycleWebContent('))
     const reuse = load.indexOf('if !newProcess, let page = webView, webViewPort == port')
     expect(reuse, 'loadWebUI loads an existing page for this port again').toBeGreaterThan(-1)
     expect(reuse).toBeLessThan(load.indexOf('let replaced = webView'))
     expect(load).toContain('webViewPort = port')
+    // The watchdog hears it as the same process loading its page again, not a new process.
+    const reuseBranch = load.slice(reuse, load.indexOf('return', reuse))
+    expect(reuseBranch).toContain('pageReloaded(webView: page')
+    expect(reuseBranch).not.toContain('.attach(')
   })
 })
