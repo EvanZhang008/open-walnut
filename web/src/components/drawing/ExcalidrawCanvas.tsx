@@ -424,7 +424,7 @@ export default function ExcalidrawCanvas({ scene, sceneKey, theme, autoFocus = f
       </WelcomeScreen>
     </Excalidraw>
       {menu && pill && !diagramBusy && (
-        <button type="button" className="drawing-diagram-pill" data-below={pill.below ? 'true' : undefined}
+        <button type="button" className="btn btn-sm drawing-diagram-pill" data-below={pill.below ? 'true' : undefined}
           style={{ left: pill.x, top: pillTop(pill, bottomRoom) }}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => menu.onMakeDiagram()}>

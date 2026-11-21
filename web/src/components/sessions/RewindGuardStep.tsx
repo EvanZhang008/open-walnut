@@ -51,9 +51,9 @@ export function RewindGuardStep({ guard, busy, error, onConversationOnly, onRest
         </div>
         {error && <div className="rewind-dialog-error">{error}</div>}
         <div className="app-modal-actions rewind-guard-actions">
-          <button type="button" className="app-modal-btn" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button type="button" className="app-modal-btn primary danger" onClick={onRestoreAnyway} disabled={busy}>Restore anyway</button>
-          <button type="button" className="app-modal-btn primary" onClick={onConversationOnly} disabled={busy}>
+          <button type="button" className="btn" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button type="button" className="btn btn-primary btn-danger" onClick={onRestoreAnyway} disabled={busy}>Restore anyway</button>
+          <button type="button" className="btn btn-primary" onClick={onConversationOnly} disabled={busy}>
             {busy ? 'Rewinding…' : 'Rewind conversation only'}
           </button>
         </div>

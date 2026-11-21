@@ -76,10 +76,10 @@ export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, on
               <>
                 {r.reply && <AgentText text={r.reply} className="qb-receipt-reply" {...(r.sessionId ? { sessionId: r.sessionId } : { unknownSource: true })} compact />}
                 <div className="qb-receipt-actions">
-                  {staysUntilDismissed(r) && <button type="button" className="qb-btn qb-btn-primary" onClick={() => onResend(r.id)}>Send again</button>}
-                  {staysUntilDismissed(r) && <button type="button" className="qb-btn" onClick={() => onPutBack(r)}>Put it back</button>}
-                  {r.taskId && <button type="button" className="qb-btn" onClick={() => onOpenChat(r)}>Open chat</button>}
-                  <button type="button" className="qb-btn qb-btn-quiet" onClick={() => onDismiss(r.id)}>Dismiss</button>
+                  {staysUntilDismissed(r) && <button type="button" className="btn btn-sm btn-primary" onClick={() => onResend(r.id)}>Send again</button>}
+                  {staysUntilDismissed(r) && <button type="button" className="btn btn-sm" onClick={() => onPutBack(r)}>Put it back</button>}
+                  {r.taskId && <button type="button" className="btn btn-sm" onClick={() => onOpenChat(r)}>Open chat</button>}
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => onDismiss(r.id)}>Dismiss</button>
                 </div>
               </>
             )}

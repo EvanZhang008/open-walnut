@@ -102,7 +102,7 @@ function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChan
         onChanged={onProjectChanged}
         rowSelector="[data-rail-project]"
         wrapClassName="tp-rail-kebab-wrap"
-        btnClassName="tp-rail-kebab-btn"
+        btnClassName="btn btn-icon btn-sm"
         {...(menuExtras?.length ? { extraItems: menuExtras } : {})}
       />
     </div>
@@ -240,7 +240,7 @@ export function TasksPageRail({
             <ProjectSourcePicker value={draftSource} onChange={setDraftSource} />
           </>
         ) : (
-          <button type="button" className="tp-rail-newproj-btn" onClick={() => setCreating(true)}>
+          <button type="button" className="btn btn-block btn-ghost" onClick={() => setCreating(true)}>
             ＋ New Project
           </button>
         )}

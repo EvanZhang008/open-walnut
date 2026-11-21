@@ -175,22 +175,9 @@
   -webkit-box-decoration-break: slice;
   box-decoration-break: slice;
 }
-.notice-cmd-copy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 18px;
-  margin-left: 2px;
-  padding: 0;
-  vertical-align: -4px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: none;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-.notice-cmd-copy:hover { background: var(--bg-hover); color: var(--fg); }
+/* A command's Copy sits in the line of text: the family's small icon key, its extra height
+   taken out of the line so the line keeps its height. */
+.notice-cmd-copy { margin: -4px 0 -4px 2px; vertical-align: middle; }
 /* "Details" / "Less": the rest of a notice cut to its few lines. */
 .notice-details-toggle {
   display: inline-flex;
@@ -209,25 +196,13 @@
 }
 .notice-details-toggle:hover { color: var(--fg); }
 /* Its other label, unseen, keeps "Details" and "Less" (and "Copy command" and "Copied") one width. */
-.notice-cmd-copy-words { display: inline-flex; flex-direction: column; align-items: flex-start; }
-:is(.notice-details-toggle, .notice-cmd-copy-words)::after { content: attr(data-other); height: 0; overflow: hidden; visibility: hidden; }
+.notice-details-toggle::after { content: attr(data-other); height: 0; overflow: hidden; visibility: hidden; }
 .notice-details-toggle:last-child { margin-bottom: 0; }
 /* Details and the command's Copy, one row under the words. */
 /* A narrow corner (beside a full-screen sheet) wraps Copy command under Details instead of past the card. */
 .notice-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 6px; }
 .notice-tools:last-child { margin-bottom: 0; }
 .notice-tools .notice-details-toggle { margin: 0; }
-.notice-cmd-copy--label {
-  width: auto;
-  height: auto;
-  gap: 4px;
-  padding: 2px 4px;
-  margin: 0;
-  vertical-align: baseline;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-}
 .nfc-perm-cmd-tools .notice-details-toggle { margin: 0; }
 /* The raw line behind a toast (the record's detail), opened from Details, under its label. */
 .notification-toast-log { flex: 0 0 100%; min-width: 0; margin: 2px 0 6px; cursor: text; }

@@ -570,7 +570,7 @@ test.describe('the merged lists at production density', () => {
     ).toHaveCount(0)
     await page.getByTestId('mail-compose-discard').click()
     // An empty new message is discarded without a question; the dialog only appears for typed text.
-    const confirm = page.locator('.app-modal-btn.primary')
+    const confirm = page.locator('.btn.btn-primary')
     if (await confirm.count()) await confirm.first().click()
     await expect(page.getByTestId('mail-composer')).toHaveCount(0, { timeout: 30_000 })
 

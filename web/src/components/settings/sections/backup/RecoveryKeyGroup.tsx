@@ -175,7 +175,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               control={
                 <span className="settings-inline-pair">
                   <SettingsButton onClick={() => setConfirmStartOver(false)} data-testid="backup-key-start-over-cancel">Cancel</SettingsButton>
-                  <SettingsButton variant="danger" className="backup-danger-button" onClick={() => void startOver()} busy={startingOver} busyLabel="Starting over..." data-testid="backup-key-start-over-yes">Start over</SettingsButton>
+                  <SettingsButton variant="danger-confirm" onClick={() => void startOver()} busy={startingOver} busyLabel="Starting over..." data-testid="backup-key-start-over-yes">Start over</SettingsButton>
                 </span>
               }
             />

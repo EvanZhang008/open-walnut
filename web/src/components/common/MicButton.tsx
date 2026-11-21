@@ -638,7 +638,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
               }}
             />
             <button
-              className="btn mic-vocab-add-btn"
+              className="btn btn-sm mic-vocab-add-btn"
               onClick={handleAddVocab}
               type="button"
               disabled={!vocabInput.trim()}
@@ -677,7 +677,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                       )}
                     </div>
                     <div className="mic-history-actions">
-                      <button type="button" className="mic-history-btn mic-history-menu-btn" title="Actions"
+                      <button type="button" className="btn btn-icon btn-sm" title="Actions"
                         aria-haspopup="menu" aria-expanded={actionMenuId === rec.id}
                         onClick={() => setActionMenuId(actionMenuId === rec.id ? null : rec.id)}>
                         {retranscribingId === rec.id ? '…' : '⋯'}
@@ -713,7 +713,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                             <span className="mic-history-alt-engine">{rec.engine ?? 'primary'}</span>
                             <span className="mic-history-lat">{fmtLatency(rec.result?.durationMs)}</span>
                             {text && (
-                              <button type="button" className="mic-history-btn" title="Insert this text"
+                              <button type="button" className="btn btn-sm" title="Insert this text"
                                 onClick={() => handleTextInsert(text)}>
                                 Insert
                               </button>
@@ -729,7 +729,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                               <span className="mic-history-alt-engine">{rec.secondary.engine}</span>
                               <span className="mic-history-lat">{fmtLatency(rec.secondary.durationMs)}</span>
                               {rec.secondary.text && (
-                                <button type="button" className="mic-history-btn" title="Insert the secondary engine's text"
+                                <button type="button" className="btn btn-sm" title="Insert the secondary engine's text"
                                   onClick={() => handleTextInsert(rec.secondary?.text)}>
                                   Insert
                                 </button>
@@ -760,7 +760,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                           {rec.secondary.error ? `Failed: ${rec.secondary.error}` : rec.secondary.text}
                         </span>
                         {rec.secondary.text && (
-                          <button type="button" className="mic-history-btn" title="Insert the secondary engine's text"
+                          <button type="button" className="btn btn-sm" title="Insert the secondary engine's text"
                             onClick={() => handleTextInsert(rec.secondary?.text)}>
                             Insert
                           </button>

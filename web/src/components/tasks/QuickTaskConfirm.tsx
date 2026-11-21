@@ -130,7 +130,7 @@ export function QuickTaskConfirm({
               "+ Due" ghost rather than a full chip. */}
           <button
             type="button"
-            className={`qtc-chip${draft.aiFields.has('start') ? ' qtc-chip-ai' : ''}`}
+            className="btn btn-sm qtc-field"
             disabled={submitting}
             onClick={() => { setDatePickerOpen(false); setEndPickerOpen(false); setStartPickerOpen((open) => !open); }}
           >
@@ -138,7 +138,7 @@ export function QuickTaskConfirm({
           </button>
           <button
             type="button"
-            className={`qtc-chip${draft.aiFields.has('end') ? ' qtc-chip-ai' : ''}${!draft.end ? ' qtc-chip-ghost' : ''}`}
+            className={`btn btn-sm qtc-field${!draft.end ? ' btn-ghost' : ''}`}
             disabled={submitting}
             onClick={() => { setDatePickerOpen(false); setStartPickerOpen(false); setEndPickerOpen((open) => !open); }}
           >
@@ -146,7 +146,7 @@ export function QuickTaskConfirm({
           </button>
           <button
             type="button"
-            className={`qtc-chip${draft.aiFields.has('due') ? ' qtc-chip-ai' : ''}${!draft.due ? ' qtc-chip-ghost' : ''}`}
+            className={`btn btn-sm qtc-field${!draft.due ? ' btn-ghost' : ''}`}
             disabled={submitting}
             onClick={() => { setStartPickerOpen(false); setEndPickerOpen(false); setDatePickerOpen((open) => !open); }}
           >
@@ -155,7 +155,7 @@ export function QuickTaskConfirm({
           {showPriority && (
             <button
               type="button"
-              className={`qtc-chip${draft.aiFields.has('priority') ? ' qtc-chip-ai' : ''}`}
+              className="btn btn-sm qtc-field"
               disabled={submitting}
               onClick={() => onChange({ priority: nextValue(PRIORITY_CYCLE, draft.priority) as ConfirmDraft['priority'] })}
             >

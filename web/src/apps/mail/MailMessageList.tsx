@@ -169,7 +169,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
         {narrow && (
           <button
             type="button"
-            className="mail-icon-btn"
+            className="btn btn-icon mail-icon-btn"
             data-testid="mail-show-mailboxes"
             onClick={onShowMailboxes}
             aria-label="Mailboxes"

@@ -611,7 +611,6 @@
 
 /* The next step after a plugin that brings a tunnel: the browser link page. */
 .apps-expose-guide { margin: 12px 0; }
-.apps-expose-guide .settings-notice-action .settings-button { text-decoration: none; white-space: nowrap; }
 
 /* ── Pinned and Recently used (AppQuickOpen.tsx, experiment apps_stay_open) ── */
 .apps-quick-grid {

@@ -105,26 +105,9 @@
   opacity: 0.6;
 }
 
-.mail-compose-drafts-chip {
-  flex: 0 0 auto;
-  padding: 3px 9px;
-  border: none;
-  border-radius: 999px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.mail-compose-drafts-chip:hover { background: var(--accent-subtle-hover); }
+.mail-compose-drafts-chip { flex: 0 0 auto; }
 
 .mail-compose-close-glyph { font-size: var(--font-size-xl); line-height: 1; }
-
-/* Destructive on HOVER, not at rest: a red icon sitting in the header of a draft nobody has
-   finished reads as an alarm about the draft. */
-.mail-round-btn.danger:hover:not(:disabled) { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 
 /* An accessible name for an icon-only control, off screen but in the accessibility tree. */
 .mail-visually-hidden {
@@ -172,7 +155,7 @@
 .mail-compose-new-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @container (max-width: 205px) {
   .mail-compose-new { gap: 5px; padding-inline: 7px; }
-  .mail-accounts-pane .mail-pane-head .mail-icon-btn { width: 24px; }
+  .mail-accounts-pane .mail-pane-head .mail-icon-btn { width: 24px; min-width: 24px; }
 }
 @container (max-width: 179px) {
   .mail-compose-new-label { display: none; }
@@ -426,37 +409,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.mail-compose-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.mail-compose-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
-.mail-compose-btn:disabled { opacity: 0.45; cursor: default; }
-
-.mail-compose-btn.primary {
-  border-color: transparent;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-}
-
-.mail-compose-btn.primary:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
-.mail-compose-btn.danger { color: var(--error); border-color: transparent; }
-.mail-compose-btn.danger:hover:not(:disabled) { background: rgba(255, 59, 48, 0.1); color: var(--error); }
 
 /* ── the status card ── */
 

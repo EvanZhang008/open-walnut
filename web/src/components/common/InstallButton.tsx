@@ -31,7 +31,7 @@ export function InstallButton({ target, label = 'Copy install command', classNam
   return (
     <span className={`install-btn-wrap ${className}`}>
       <button
-        className={`install-btn${state === 'error' ? ' install-btn--error' : ''}`}
+        className={`btn btn-sm${state === 'error' ? ' btn-danger' : ' btn-primary'}`}
         onClick={handleClick}
         title={INSTALL_COMMANDS[target]}
       >

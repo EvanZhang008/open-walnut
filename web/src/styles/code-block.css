@@ -262,35 +262,9 @@
   border-radius: var(--radius-sm);
 }
 
-.md-code-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 26px;
-  min-width: 26px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--md-code-ink);
-  font: 500 var(--font-size-sm)/1 var(--font-sans);
-  cursor: pointer;
-  transition: background-color 0.12s, color 0.12s;
-}
-/* Only a pointer that hovers: after a tap, a touch screen keeps :hover on the
-   button, which read as stuck. */
-@media (hover: hover) {
-  .md-code-btn:hover {
-    background: var(--md-code-hover);
-    color: var(--md-code-ink-strong);
-  }
-}
-.md-code-btn:active { background: var(--md-code-hover); }
-.md-code-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* The header's keys are the family's quiet tool (.btn.btn-ghost.btn-sm); the header itself is
+   monospace, its words are not. */
+.md-code-btn { font-family: var(--font-sans); }
 .md-code-icon {
   flex-shrink: 0;
   width: 14px;
@@ -301,12 +275,12 @@
 .md-code-icon-done { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-copy { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-done { display: block; }
-.md-code-copy[data-state="copied"] { color: var(--success); }
-.md-code-copy[data-state="failed"] { color: var(--warning); }
+.md-code-copy[data-state="copied"] :is(.md-code-icon, .md-code-copy-label) { color: var(--success, #34c759); }
+.md-code-copy[data-state="failed"] :is(.md-code-icon, .md-code-copy-label) { color: var(--warning, #ff9500); }
 
 /* Wrap: per block, `data-wrap` on the frame (code-block-actions.ts). A block
    with no line too long for it has nothing to wrap: no Wrap button.
-   On reads as on even under the pointer: the link blue, not hover's grey. */
+   On is the family's pressed key (aria-pressed, code-block-actions.ts). */
 .md-code[data-fits]:not([data-wrap]) .md-code-wrap { display: none; }
 /* A long finished block opens folded to its first ~30 lines, fading out
    over a "Show all N lines" button (code-block-actions.ts). Copy still takes
@@ -446,11 +420,6 @@
 /* A path's break points after its slashes count only on a wrapped block:
    Chromium breaks at a <wbr> even in `white-space: pre`. */
 .md-code:not([data-wrap]) wbr { display: none; }
-.md-code[data-wrap] .md-code-wrap,
-.md-code[data-wrap] .md-code-wrap:hover {
-  background: color-mix(in srgb, var(--md-code-link) 18%, transparent);
-  color: var(--md-code-link);
-}
 .markdown-body .md-code.md-code[data-wrap] > pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -464,7 +433,7 @@
    with air around it, and takes taps across the header's full 44px). */
 @media (pointer: coarse), (max-width: 640px) {
   .md-code { --md-code-head-h: 44px; }
-  .md-code-btn { position: relative; height: 34px; min-width: 44px; padding: 0 10px; }
+  .md-code-btn { position: relative; height: 34px; min-width: 44px; }
   .md-code-btn::after { content: ''; position: absolute; inset: -5px 0; }
   .md-code[data-collapsed] .md-code-more { height: 36px; border-radius: 18px; }
   .md-code[data-collapsed] .md-code-more::after { content: ''; position: absolute; inset: -4px 0; }
@@ -472,7 +441,6 @@
      a long block's three (Fold, Wrap, Copy) beside the whole language, and
      every block looks the same, folded or open. */
   .md-code-btn > svg { display: none; }
-  .md-code-btn { padding: 0 8px; }
 }
 
 /* A block that opens or closes a message adds no gap of its own to the

@@ -30,28 +30,11 @@
 .drawing-app-dialog .drawing-workspace[data-fullscreen="true"] { left: 0; }
 
 /* Controls: three kinds, one height. Only Walnut's own: the editor's buttons keep their style. */
-.drawing-icon-button, .drawing-quiet-button, .drawing-primary-button, .drawing-name-button,
-.drawing-workspace-file, .drawing-diagram-pill {
+.drawing-quiet-button, .drawing-primary-button, .drawing-workspace-file {
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
 }
-.drawing-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-secondary);
-  transition: background-color 120ms ease, color 120ms ease;
-}
-.drawing-icon-button:hover { background: var(--bg-hover); color: var(--fg); }
-.drawing-icon-button[aria-pressed="true"] { color: var(--fg); }
 .drawing-quiet-button,
 .drawing-primary-button {
   display: inline-flex;
@@ -77,8 +60,8 @@
   font-weight: 500;
 }
 .drawing-primary-button:hover { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
-:is(.drawing-icon-button, .drawing-quiet-button, .drawing-primary-button):disabled { opacity: .45; cursor: default; }
-:is(.drawing-icon-button, .drawing-quiet-button, .drawing-primary-button, .drawing-name-button, .drawing-workspace-file, .drawing-diagram-pill):focus-visible,
+:is(.drawing-quiet-button, .drawing-primary-button):disabled { opacity: .45; cursor: default; }
+:is(.drawing-quiet-button, .drawing-primary-button, .drawing-workspace-file):focus-visible,
 .drawing-library-dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* The list of drawings. */
@@ -161,19 +144,9 @@
   font-size: var(--font-size-md);
   font-weight: 500;
 }
-.drawing-workspace .drawing-name-button {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font-weight: inherit;
-  cursor: text;
-}
-.drawing-workspace .drawing-name-button:hover { background: var(--bg-hover); }
+.drawing-workspace .drawing-name-button { max-width: 100%; }
+/* The family key is a flex box: the name cuts to an ellipsis in its own span. */
+.drawing-name-button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .drawing-name-input {
   min-width: 0;
   height: 28px;
@@ -228,24 +201,13 @@
   text-align: center;
   padding: 16px;
 }
+/* Make a diagram: a key over the canvas, at the selection's corner. */
 .drawing-diagram-pill {
   position: absolute;
   z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
   transform: translate(-100%, -100%);
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-elevated);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
 }
 .drawing-diagram-pill[data-below="true"] { transform: translate(-100%, 0); }
-.drawing-diagram-pill:hover { background: var(--bg-secondary); }
 .drawing-diagram-note,
 .drawing-text-diagram {
   position: absolute;

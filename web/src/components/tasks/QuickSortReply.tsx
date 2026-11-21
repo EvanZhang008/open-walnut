@@ -101,8 +101,8 @@ export function QuickSortReply({ task, onSent, onClose }: { task: Task; onSent: 
     </div>
     {error && <div className="quick-sort-reply-error" role="alert">Couldn't send: {error}</div>}
     <div className="quick-sort-reply-actions">
-      <button type="button" className="quick-sort-btn is-skip" onClick={onClose} disabled={sending}>Cancel</button>
-      <button type="button" className="quick-sort-btn is-reply" data-sort-reply-send aria-disabled={empty || undefined} disabled={sending}
+      <button type="button" className="btn btn-ghost quick-sort-btn" onClick={onClose} disabled={sending}>Cancel</button>
+      <button type="button" className="btn btn-primary quick-sort-btn" data-sort-reply-send aria-disabled={empty || undefined} disabled={sending}
         onClick={gate.send} {...dictationWaitProps(gate, empty ? 'Type a reply first' : 'Send (Enter)')}>{sending ? 'Sending…' : error ? 'Retry' : 'Send'}</button>
     </div>
   </div>;

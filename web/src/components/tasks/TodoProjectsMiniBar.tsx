@@ -21,7 +21,7 @@ export const TodoProjectsMiniBar = memo(function TodoProjectsMiniBar({
     <div className="todo-minibar">
       <button
         type="button"
-        className="todo-minibar-btn"
+        className="btn btn-sm btn-ghost"
         title={label}
         aria-label={label}
         onClick={onCollapseExpandAll}
@@ -34,7 +34,7 @@ export const TodoProjectsMiniBar = memo(function TodoProjectsMiniBar({
           <span className="todo-minibar-sep" />
           <button
             type="button"
-            className="todo-minibar-btn todo-minibar-running"
+            className="btn btn-sm btn-ghost todo-minibar-running"
             title="Jump to the next task with a running session"
             onClick={onJumpRunning}
           >

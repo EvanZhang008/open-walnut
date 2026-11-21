@@ -203,39 +203,9 @@
   font-weight: 600;
 }
 
-/* A word, not an icon: the icon it replaced sat among five round toolbar icons and was never found.
-   Quiet outline so it never outshouts Reply; the accent is on hover only. */
-.mail-reader-unsub-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
-}
-
-.mail-reader-unsub-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
-  border-color: var(--border-strong);
-}
-
-.mail-reader-unsub-btn:disabled {
-  cursor: default;
-  opacity: 0.7;
-}
-
-.mail-reader-unsub-btn.ai .mail-reader-unsub-ai {
+/* Unsubscribe is a word, not an icon (the icon it replaced sat among five round toolbar icons and
+   was never found): a small family key. Its AI mark takes the accent. */
+.mail-reader-unsub-ai {
   color: var(--accent);
 }
 
@@ -440,23 +410,7 @@
   font-size: var(--font-size-sm);
 }
 
-.mail-attachment-viewer-btn {
-  flex: 0 0 auto;
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-  text-decoration: none;
-  cursor: pointer;
-}
-.mail-attachment-viewer-btn:hover { background: var(--bg-hover); }
-.mail-attachment-viewer-btn:disabled { cursor: progress; opacity: 0.7; }
+.mail-attachment-viewer-btn { flex: 0 0 auto; }
 
 .mail-attachment-viewer-body {
   flex: 1 1 auto;
@@ -776,43 +730,4 @@
   gap: 6px;
   align-self: center;
 }
-
-.mail-invite-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.mail-invite-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-}
-
-/* Hover never hides the answer: the mouse is still on the button right after the click. */
-.mail-invite-btn.chosen,
-.mail-invite-btn.chosen:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-  color: var(--accent-text);
-}
-
-.mail-invite-btn.chosen:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
-}
-
-.mail-invite-btn:disabled {
-  cursor: default;
-  opacity: 0.65;
-}
+/* Each answer is a small family key; the one picked is pressed (aria-pressed). */

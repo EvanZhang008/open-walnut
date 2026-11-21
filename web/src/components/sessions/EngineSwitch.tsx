@@ -251,8 +251,8 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
           {held && !moveTo ? <>, then sends: <em className="engine-switch-held">{held}</em></> : moveTo ? null : '.'}
         </span>
         {/* A move's held text is Walnut's handoff for the new host, never a message for here. */}
-        {!moveTo && <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here instead</button>}
-        <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(false)}>{moveTo ? 'Cancel move' : 'Cancel'}</button>
+        {!moveTo && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void cancel(true)}>Send here instead</button>}
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void cancel(false)}>{moveTo ? 'Cancel move' : 'Cancel'}</button>
       </div>
     );
   }
@@ -277,8 +277,8 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
           {moveTo ? <>The move to {moveTo} did not happen: {server.error}</> : <>The switch to {toName} did not start: {server.error}. The task stays on this session.</>}
           {held && !moveTo ? <> Your message was not sent: <em className="engine-switch-held">{held}</em></> : null}
         </span>
-        {held && !moveTo && <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here</button>}
-        <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => { setDismissedFail(server.id); if (held) void cancel(false); }}>Dismiss</button>
+        {held && !moveTo && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void cancel(true)}>Send here</button>}
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => { setDismissedFail(server.id); if (held) void cancel(false); }}>Dismiss</button>
       </div>
     );
   }
@@ -288,7 +288,7 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
         <span className="engine-switch-text">{refused.unconfirmed
           ? <>The switch to {engineName(catalog, refused.engine)} is not confirmed: {refused.error}</>
           : <>The switch to {engineName(catalog, refused.engine)} did not start: {refused.error}</>}</span>
-        <button type="button" className="engine-switch-btn" onClick={onUndo}>Dismiss</button>
+        <button type="button" className="btn btn-sm" onClick={onUndo}>Dismiss</button>
       </div>
     );
   }
@@ -298,7 +298,7 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
       <span className="engine-switch-text">
         Switches this task to <strong>{toName}</strong> with this conversation when you close the picker.
       </span>
-      <button type="button" className="engine-switch-btn" onClick={onUndo}>Undo</button>
+      <button type="button" className="btn btn-sm" onClick={onUndo}>Undo</button>
     </div>
   );
 }

@@ -374,7 +374,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
       <h1 className="settings-nav-title">Settings</h1>
       <button
         type="button"
-        className="settings-nav-find-button"
+        className="btn btn-icon settings-nav-find-button"
         aria-label="Find a setting"
         title="Find a setting"
         onClick={focusFilter}

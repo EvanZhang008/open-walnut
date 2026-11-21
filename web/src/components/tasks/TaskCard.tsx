@@ -169,7 +169,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
 
       {groupInfo && onUngroup && (
         <button
-          className="task-ungroup-btn"
+          className="btn btn-icon btn-sm task-ungroup-btn"
           onClick={(e) => { e.stopPropagation(); onUngroup(task.id); }}
           aria-label="Remove from group"
           title="Remove from group"

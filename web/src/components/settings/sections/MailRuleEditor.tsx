@@ -392,7 +392,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
                   setRow(row.key, { field, value: keep ? row.value : defaultValueOf(field) });
                 }} />
               {valueControl(row)}
-              <button type="button" className="mail-rules-icon-btn" aria-label={`Remove condition ${FIELD_LABELS[row.field]}`}
+              <button type="button" className="btn btn-icon btn-sm" aria-label={`Remove condition ${FIELD_LABELS[row.field]}`}
                 data-testid="mail-rule-remove-condition" onClick={() => { markDirty(); typedRef.current = false; setRows((prev) => prev.filter((one) => one.key !== row.key)); }}>
                 <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" /></svg>
               </button>

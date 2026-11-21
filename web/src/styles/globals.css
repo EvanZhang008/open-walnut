@@ -19,6 +19,8 @@
      3.7:1 (accent) and 2.0:1 (amber) against #F5F5F7, under WCAG's 4.5:1; these clear it
      (5.4:1 and 5.2:1). Dark surfaces do not need them, there the twins equal the originals. */
   --accent-text: #0060CC;
+  /* Text and icons on a solid --accent or --error fill (the main action, a destructive confirm). */
+  --on-accent: #FFFFFF;
   --priority-important-text: #9E5300;
   /* Virtual-group cluster outline — soft accent, strong enough to read as one box
      but never competing with a task's own status background. */
@@ -501,30 +503,7 @@ select {
   transition: opacity 0.2s ease, width 0.2s ease;
 }
 
-.sidebar-collapse-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  border: none;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color 0.15s, background 0.15s;
-}
-
-.sidebar-collapse-btn:hover {
-  color: var(--fg);
-  background: var(--accent-subtle);
-}
-
-.sidebar-collapse-btn svg {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-}
+.sidebar-collapse-btn { flex-shrink: 0; }
 
 .sidebar.collapsed {
   width: 56px;
@@ -1121,35 +1100,7 @@ select {
   background: var(--border);
 }
 
-.setup-copy-btn {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  font-size: 14px;
-  cursor: pointer;
-  padding: 2px 4px;
-  flex-shrink: 0;
-}
-
-.setup-copy-btn:hover {
-  color: var(--fg);
-}
-
-.setup-step-btn {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--accent);
-  background: none;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 4px 10px;
-  cursor: pointer;
-}
-
-.setup-step-btn:hover {
-  background: var(--accent);
-  color: var(--on-accent);
-}
+.setup-copy-btn { flex-shrink: 0; }
 
 /* ── Onboarding: hero (paste-into-Claude-Code) + alt paths ── */
 .setup-hero {
@@ -1250,21 +1201,6 @@ select {
   vertical-align: middle;
 }
 
-.setup-usable-btn {
-  flex-shrink: 0;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--on-accent);
-  background: var(--success);
-  border: 1px solid var(--success);
-  border-radius: var(--radius-sm);
-  padding: 5px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.setup-usable-btn:hover { filter: brightness(1.08); }
-
 /* Divider between "works now" and the main-agent-setup upsell. */
 .setup-divider {
   display: flex;
@@ -1287,24 +1223,6 @@ select {
 
 /* Install button */
 .install-btn-wrap { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.install-btn {
-  font-size: var(--font-size-sm); font-weight: 500;
-  color: var(--on-accent); background: var(--accent);
-  border: 1px solid var(--accent); border-radius: var(--radius-sm);
-  padding: 4px 12px; cursor: pointer;
-}
-.install-btn:hover { filter: brightness(1.1); }
-.install-btn--installing { opacity: 0.7; cursor: wait; }
-.install-btn--success { background: none; color: var(--success); border-color: var(--success); cursor: default; font-weight: 600; }
-.install-btn--error { border-color: var(--error); }
-.install-btn-error { font-size: var(--font-size-xs); color: var(--error); }
-.install-btn-spinner {
-  display: inline-block; width: 12px; height: 12px; margin-right: 4px;
-  border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
-  border-radius: 50%; animation: install-spin 0.6s linear infinite;
-  vertical-align: middle;
-}
-@keyframes install-spin { to { transform: rotate(360deg); } }
 
 /* Error suggestion link — actionable hint below error banners */
 .error-suggestion { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: var(--font-size-xs); color: var(--fg-secondary); flex-wrap: wrap; }
@@ -1335,18 +1253,13 @@ select {
 }
 
 /* Mobile sidebar toggle */
+/* Its look is the family's .btn-icon (PhoneTopBar.tsx); this is only where it sits. */
 .sidebar-toggle {
   display: none;
   position: fixed;
   top: 12px;
   left: 12px;
   z-index: 100;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  color: var(--fg);
-  font-size: var(--font-size-xl);
 }
 
 .sidebar-overlay {
@@ -1487,16 +1400,6 @@ select {
 .priority-picker-icon { width: 22px; text-align: center; font-size: var(--font-size-sm); font-weight: 700; }
 .priority-picker-check { margin-left: auto; color: var(--accent); font-size: var(--font-size-sm); }
 
-/* Sprint pill in todo panel meta row */
-.todo-item-sprint-pill {
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: rgba(0, 122, 255, 0.08);
-  color: var(--accent);
-  white-space: nowrap;
-}
-
 .badge-clickable {
   cursor: pointer;
   transition: opacity 0.15s, transform 0.1s;
@@ -1566,42 +1469,7 @@ select {
 .font-mono { font-family: 'SF Mono', 'Fira Code', monospace; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ===== Buttons ===== */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  font-weight: 500;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  color: var(--fg);
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
-}
-
-.btn:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--border-strong);
-}
-
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-
-.btn-primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-}
-
-.btn-sm {
-  padding: 5px 10px;
-  font-size: var(--font-size-sm);
-}
+/* ===== Buttons: the family lives in styles/buttons.css ===== */
 
 /* ===== Task List / Groups ===== */
 
@@ -2065,41 +1933,6 @@ select {
   animation: session-pulse 1.4s ease-in-out infinite;
 }
 
-/* "Fork in Walnut" action button — accent fill to distinguish from copy chips */
-.session-fork-btn {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--on-accent);
-  background: var(--accent);
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, opacity 0.15s;
-  line-height: 1.6;
-}
-
-.session-fork-btn:hover {
-  opacity: 0.85;
-}
-
-.session-fork-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.session-fork-btn-success {
-  background: var(--success);
-}
-
-.session-fork-wrapper {
-  position: relative;
-  display: inline-flex;
-}
 
 .session-fork-popover {
   /* Rendered in a portal on document.body with fixed coords (see SessionForkButton)
@@ -2367,22 +2200,6 @@ select {
   color: var(--fg-muted);
   white-space: nowrap;
   font-weight: 500;
-}
-
-.session-gap-divider-btn {
-  font-size: var(--font-size-xs);
-  font-family: inherit;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.session-gap-divider-btn:hover {
-  background: var(--bg-hover);
 }
 
 .session-detail-model-pill {
@@ -4584,27 +4401,14 @@ select {
 /* ── Background tasks: the chat's chip + the two-column reader ─────────────────
    The chat shows ONE row per spawn burst (`● Agent  type  model  title  Running
    16 tools`), never a card per agent and never an in-place dropdown; the row opens
-   the panel. It wears the old agent header's accent tint so a spawn still reads as
-   a spawn, and the title takes the remaining width. */
+   the panel. It is a full-width quiet row of the button family (btn-block btn-ghost); the
+   accent label and state icon say it is a spawn, and the title takes the remaining width. */
 .bg-tasks-chip {
-  display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 4px 6px; /* the column gap is CHIP_GAP_PX in BackgroundTasksPanel.tsx */
-  width: 100%;
   min-width: 0;
   margin: 4px 0;
-  padding: 5px 10px 5px 8px;
-  font-size: var(--font-size-sm);
-  text-align: left;
-  color: var(--fg-secondary);
-  background: var(--accent-subtle);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.bg-tasks-chip:hover { background: var(--accent-subtle-hover); color: var(--fg); border-color: var(--fg-muted); }
 .bg-tasks-chip-icon {
   display: inline-flex;
   align-items: center;
@@ -4652,10 +4456,7 @@ select {
   color: var(--fg);
 }
 .bg-tasks-chip--stacked .bg-tasks-chip-meta { margin-left: auto; }
-.bg-tasks-chip--running { border-color: var(--accent-subtle-hover); }
 .bg-tasks-chip--running .bg-tasks-chip-status { color: var(--accent); }
-.bg-tasks-chip--done { background: rgba(52, 199, 89, 0.06); }
-.bg-tasks-chip--done:hover { background: rgba(52, 199, 89, 0.12); }
 .bg-tasks-chip--done .bg-tasks-chip-icon { color: var(--success); }
 .bg-tasks-chip--failed .bg-tasks-chip-icon,
 .bg-tasks-chip--failed .bg-tasks-chip-status { color: var(--error); }
@@ -5085,29 +4886,6 @@ select {
   gap: 4px;
 }
 
-.msg-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 1;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
-}
-
-.msg-copy-btn:hover {
-  color: var(--fg);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.msg-copy-btn svg { flex-shrink: 0; }
 
 .msg-copy-label { white-space: nowrap; }
 
@@ -5411,35 +5189,6 @@ select {
   margin-left: 12px;
 }
 
-.memory-edit-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.memory-edit-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
-
-.memory-edit-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.memory-save-btn {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-}
 
 .memory-save-btn:hover {
   background: color-mix(in srgb, var(--accent) 85%, #000);
@@ -5541,27 +5290,6 @@ select {
 
 .agent-tab-combo.open {
   border-color: var(--accent);
-}
-
-/* Small tinted agent chip inside the combined trigger */
-.agent-combo-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.agent-combo-chip-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 90px;
 }
 
 .agent-tab-dot {
@@ -5727,11 +5455,6 @@ select {
 .chat-load-more {
   text-align: center;
   padding: 8px 0 4px;
-}
-
-.chat-load-more .btn {
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
 }
 
 .chat-message {
@@ -6222,42 +5945,15 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   font-size: var(--font-size-sm);
 }
 
-/* Task ID pills inside tool call blocks */
-.chat-tool-block .task-id-pill {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
-  font-size: 0.85em;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  cursor: pointer;
-  border: none;
-  transition: background 0.15s;
-}
-
-.chat-tool-block .task-id-pill:hover {
-  background: var(--accent-subtle-hover);
-}
-
-/* Session ID pills — clickable links to session detail page */
+/* Task and session references inside a tool call's text: links in the text (accent, underline on
+   hover), never a box of their own, and they wrap with the text around them. */
+.task-id-pill,
 .session-id-pill {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
-  font-size: 0.85em;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: var(--accent-subtle);
-  color: var(--accent);
+  color: var(--accent-text, var(--accent));
   cursor: pointer;
-  border: none;
-  transition: background 0.15s;
-  text-decoration: none;
 }
-
-.session-id-pill:hover {
-  background: var(--accent-subtle-hover);
-}
+.task-id-pill:hover,
+.session-id-pill:hover { text-decoration: underline; }
 
 .chat-tool-activity {
   padding: 8px 12px;
@@ -8124,15 +7820,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .mention-pick-btn {
   flex-shrink: 0;
   display: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--card-bg);
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  cursor: pointer;
 }
-.mention-row:hover .mention-pick-btn, .mention-row.selected .mention-pick-btn { display: inline-block; }
+.mention-row:hover .mention-pick-btn, .mention-row.selected .mention-pick-btn { display: inline-flex; }
 .mention-empty {
   padding: 6px 10px 8px;
   font-size: var(--font-size-sm);
@@ -8255,34 +7944,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 }
 
 /* ── Image attachment styles ── */
-
-/* Composer icon buttons are GHOSTS: no border, no box — only the textarea
-   carries a border in the composer row. Hover = soft tint circle. */
-.chat-attach-btn {
-  background: transparent;
-  border: none;
-  color: var(--fg-muted);
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: 50%;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s, background 0.15s;
-  flex-shrink: 0;
-}
-
-.chat-attach-btn:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.chat-attach-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
 
 /* ── Mic button (speech-to-text) ── */
 
@@ -8540,24 +8201,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .voice-panel-item:focus-within .voice-panel-hover-actions {
   opacity: 1;
 }
-.voice-panel-icon-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: var(--fg-muted);
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.voice-panel-icon-btn:hover {
-  color: var(--fg);
-  background: var(--bg-tertiary);
-}
-.voice-panel-icon-btn:disabled { opacity: 0.5; cursor: default; }
 .voice-panel-busy { font-size: var(--font-size-sm); }
 .voice-panel-text {
   font-size: var(--font-size-md);
@@ -8828,10 +8471,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   flex-shrink: 0;
   position: relative; /* anchors the ⋯ action menu */
 }
-.mic-history-menu-btn {
-  min-width: 26px;
-  color: var(--fg-muted);
-}
 .mic-history-menu {
   position: absolute;
   right: 0;
@@ -8859,26 +8498,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 }
 .mic-history-menu-item:hover { background: var(--bg-hover); }
 .mic-history-menu-item:disabled { opacity: 0.5; cursor: default; }
-.mic-history-btn {
-  padding: 1px 7px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--accent);
-  background: none;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.mic-history-btn:hover {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-}
-.mic-history-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .mic-transcribing {
   color: var(--accent);
   border-color: var(--accent);
@@ -9028,12 +8647,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   border-color: var(--accent);
 }
 
-.mic-vocab-add-btn {
-  padding: 4px 8px !important;
-  font-size: var(--font-size-md);
-  flex-shrink: 0;
-  line-height: 1;
-}
+.mic-vocab-add-btn { flex-shrink: 0; }
 
 .mic-vocab-status {
   padding: 2px 12px 4px;
@@ -10065,20 +9679,8 @@ body.walnut-dragging {
   animation: pulse 1.5s infinite;
 }
 
-/* Session header buttons — inherits pill base from .task-action-btn */
-.session-panel-close:hover { color: var(--error); background: rgba(255, 59, 48, 0.08); }
-.session-panel-pin.pinned { color: var(--accent); background: var(--accent-subtle); }
-.session-panel-pin:disabled { cursor: default; opacity: 0.3; }
-
-/* Lock button — toggles panel between the rotating region and the locked right region */
-.session-panel-lock.is-locked {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.session-panel-lock.is-locked:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
+/* Session header window buttons are .btn-icon.btn-sm (styles/buttons.css); Lock's on state is
+   its aria-pressed, Close is .btn-danger. */
 
 /* Session panel reorder animation is handled by @formkit/auto-animate attached
    to .main-page-sessions-area — no CSS needed for that. */
@@ -10176,17 +9778,8 @@ body.walnut-dragging {
 /* --- Plan Card Expand Button --- */
 .plan-card-expand-btn {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 6px;
-  border-radius: 6px;
-  cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, background 0.15s;
-  color: var(--fg-muted);
-  background: none;
-  border: none;
   flex-shrink: 0;
 }
 
@@ -10196,7 +9789,6 @@ body.walnut-dragging {
 
 .session-plan-card-header:hover .plan-card-expand-btn:hover {
   opacity: 1;
-  background: var(--bg-hover);
 }
 
 /* Touch devices: always show expand button at low opacity */
@@ -11017,7 +10609,7 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   gap: 3px;
-  height: 26px;
+  height: 30px;
   padding: 0 10px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
@@ -11025,24 +10617,6 @@ body.walnut-dragging {
   background: transparent;
   overflow: hidden;
 }
-.todo-minibar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  font-family: inherit;
-  line-height: 1;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.todo-minibar-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.todo-minibar-btn.on { color: var(--accent); background: var(--accent-subtle); }
 .todo-minibar-sep {
   width: 1px;
   height: 13px;
@@ -11050,7 +10624,6 @@ body.walnut-dragging {
   margin: 0 3px;
   flex: none;
 }
-.todo-minibar-running { color: var(--success); }
 .todo-minibar-running-dot {
   width: 6px;
   height: 6px;
@@ -12362,26 +11935,6 @@ body.walnut-dragging {
   gap: 4px;
   padding: 4px 8px 6px;
 }
-.todo-pinned-hidden-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  padding: 2px 7px;
-  border: 1px dashed var(--group-outline);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  line-height: 1.4;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.todo-pinned-hidden-chip:hover {
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--accent);
-  border-color: var(--accent);
-}
 .todo-pinned-hidden-chip-icon { font-size: var(--font-size-xs); opacity: 0.85; }
 .todo-pinned-hidden-chip-label {
   overflow: hidden;
@@ -12534,55 +12087,6 @@ body.walnut-dragging {
   font-weight: 500;
   white-space: nowrap;
 }
-.task-selection-group-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 9px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.task-selection-group-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-/* Secondary verbs in the selection bar (Complete / Delete) — outlined, so the
-   filled accent stays reserved for the primary Group action. */
-.task-selection-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  /* Tight horizontal padding: 5 verbs share a ~300px panel, and every px saved here is
-     a px that keeps the row from wrapping onto a third line. */
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg);
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.task-selection-action-btn:hover { background: rgba(0, 0, 0, 0.05); }
-.task-selection-action-danger { color: var(--error); border-color: color-mix(in srgb, var(--error) 35%, transparent); }
-.task-selection-action-danger:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }
-
-.task-selection-clear-btn {
-  padding: 4px 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.task-selection-clear-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-}
 
 /* Batch verbs live directly on the bar: [✓ Complete] [⑂ Group] [🗑 Delete] [More ▾].
    This replaced a [⑂ Group | ▾] split button whose caret half was only ~7px of accent
@@ -12600,9 +12104,6 @@ body.walnut-dragging {
   align-items: center;
 }
 .task-selection-action-icon svg { width: 12px; height: 12px; }
-.task-batch-more { gap: 3px; }
-.task-batch-more-caret { font-size: 9px; opacity: 0.7; }
-.task-selection-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 /* The batch menu: placed by useMenuPlacement like every kebab menu (TaskBatchMenu.tsx); this
    rule only carries its width. */
 .task-batch-dropdown {
@@ -13052,43 +12553,7 @@ body.walnut-dragging {
 .todo-detail-priority-pill.priority-important { background: rgba(255, 149, 0, 0.12); color: var(--warning); }
 .todo-detail-priority-pill.priority-backlog { background: var(--bg-tertiary); color: var(--fg-muted); }
 
-.todo-detail-sprint-pill {
-  font-size: var(--font-size-xs);
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  font-weight: 500;
-  line-height: 1.4;
-  background: rgba(0, 122, 255, 0.08);
-  color: var(--accent);
-}
-
-/* Sprint picker — interactive pill + dropdown */
-.sprint-picker-pill {
-  font-size: var(--font-size-xs);
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  font-weight: 500;
-  line-height: 1.4;
-  background: rgba(0, 122, 255, 0.08);
-  color: var(--accent);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.sprint-picker-pill:hover {
-  border-color: var(--accent);
-  background: rgba(0, 122, 255, 0.14);
-}
-.sprint-picker-empty-pill {
-  background: transparent;
-  color: var(--fg-muted);
-  border: 1px dashed var(--border);
-  font-weight: 400;
-}
-.sprint-picker-empty-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
+/* Sprint picker dropdown (its trigger is the button family) */
 .sprint-picker-dropdown {
   position: absolute;
   top: calc(100% + 4px);
@@ -13490,22 +12955,6 @@ body.walnut-dragging {
   color: var(--error);
   font-style: italic;
   cursor: help;
-}
-
-.global-notes-expand-btn {
-  background: none;
-  border: none;
-  padding: 2px 4px;
-  cursor: pointer;
-  color: var(--fg-muted);
-  font-size: 14px;
-  border-radius: var(--radius-xs);
-  line-height: 1;
-}
-
-.global-notes-expand-btn:hover {
-  color: var(--accent);
-  background: var(--accent-subtle);
 }
 
 .global-notes-body {
@@ -14328,25 +13777,12 @@ body.walnut-dragging {
   overflow-y: auto;
 }
 
-/* Project delete — quiet by default, unmistakably destructive on hover */
+/* Project delete: its key is .btn.btn-danger */
 .project-danger-section {
   margin-top: 16px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
-.project-delete-btn {
-  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
-  background: none;
-  color: var(--error);
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.project-delete-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--error) 10%, transparent);
-}
-.project-delete-btn:disabled { cursor: default; opacity: 0.6; }
 .project-delete-hint {
   margin: 6px 0 0;
   font-size: var(--font-size-xs);
@@ -14528,28 +13964,6 @@ body.walnut-dragging {
   margin-top: 8px;
   padding: 8px 8px 10px;
   border-top: 1px solid var(--border);
-}
-
-.todo-new-project-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 5px 8px;
-  border: 1px dashed color-mix(in srgb, var(--border) 80%, var(--fg-muted));
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-
-.todo-new-project-btn:hover {
-  color: var(--fg);
-  border-color: var(--fg-muted);
-  background: var(--bg-hover);
 }
 
 .todo-new-project-icon {
@@ -14976,29 +14390,6 @@ body.walnut-dragging {
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-}
-
-.source-filter-chip {
-  padding: 4px 12px;
-  border-radius: 14px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.source-filter-chip:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.source-filter-chip.active {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
 }
 
 /* ===== Filter Chip Bars (Segmented Control) ===== */
@@ -15429,52 +14820,27 @@ body.walnut-dragging {
   100% { opacity: 0; max-height: 0; margin: 0; padding: 0; overflow: hidden; }
 }
 
-/* ===== Unified task action pill buttons (match .badge pill style) ===== */
-/* Ghost style — no resting box; hover reveals a soft accent wash. */
+/* ===== Window keys of a session header and its drawers: .btn-icon.btn-sm; this class is
+   their hook (tests, the phone bar's finger size). ===== */
 .task-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-  min-width: 20px;
-  padding: 0 5px;
   flex-shrink: 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: var(--fg-muted);
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
 }
-.task-action-btn:hover { color: var(--accent); background: var(--accent-subtle); }
 .task-action-btn svg { display: block; }
 
-.task-expand-btn.active { color: var(--accent); background: rgba(0, 122, 255, 0.12); }
-.task-star-btn.starred { color: var(--warning); background: rgba(255, 149, 0, 0.12); }
-.task-star-btn:hover { color: var(--warning); background: rgba(255, 149, 0, 0.08); }
-.task-pin-btn.pinned { color: var(--accent); background: rgba(0, 122, 255, 0.12); }
-.task-pin-btn:hover { color: var(--accent); }
 .task-delete-btn { opacity: 0; transition: opacity 0.15s; }
 .todo-item:hover .task-delete-btn,
 .task-card:hover .task-delete-btn { opacity: 1; }
 .task-delete-btn:hover { color: var(--error); background: rgba(255, 69, 58, 0.12); }
 
-/* Remove-from-group affordance on a grouped /tasks card (hover-revealed, accent-tinted). */
+/* Remove-from-group affordance on a grouped /tasks card (hover-revealed; its look is .btn-icon). */
 .task-ungroup-btn {
   opacity: 0;
   transition: opacity 0.15s;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-  padding: 2px 5px;
-  font-size: var(--font-size-sm);
-  line-height: 1;
 }
 .task-card:hover .task-ungroup-btn { opacity: 0.7; }
-.task-ungroup-btn:hover { color: var(--accent); background: rgba(0, 122, 255, 0.12); opacity: 1; }
+.task-ungroup-btn:hover {
+  opacity: 1;
+}
 
 /* ===== Task Kebab Menu ===== */
 
@@ -15485,31 +14851,17 @@ body.walnut-dragging {
 }
 
 .task-kebab-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
   opacity: 0;
   transition: opacity 0.15s, background 0.15s, color 0.15s;
 }
 /* The dots are drawn (KebabIcon.tsx), so no font moves their ink: the button's flex
-   box centers them on the row's line in every engine. Sized in em, as the glyph was; an even
-   height (12px in a 22px button) starts on a whole pixel, so nothing rounds it off the line. */
+   box centers them on the row's line in every engine. An even height (12px in the 24px
+   .btn-icon.btn-sm) starts on a whole pixel, so nothing rounds it off the line. */
 .task-kebab-dots {
   display: block;
   flex: none;
-  width: 0.1875em;
-  height: 0.75em;
+  width: 3px;
+  height: 12px;
 }
 
 /* Show kebab on row hover or when menu is open */
@@ -15521,11 +14873,6 @@ body.walnut-dragging {
    <body> — it is no longer a descendant. The component sets data-menu-open. */
 .task-kebab-wrapper[data-menu-open] .task-kebab-btn {
   opacity: 1;
-}
-
-.task-kebab-btn:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 .task-kebab-menu {
@@ -15921,20 +15268,6 @@ a.task-kebab-info:hover {
   font-size: var(--font-size-xs);
   color: var(--accent);
 }
-.plugin-field-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 /* ── Kebab menu: Date section (collapsed row, calendar on click) ── */
 .task-kebab-date {
@@ -16025,19 +15358,6 @@ a.task-kebab-info:hover {
 }
 .dp-content { display: flex; flex-direction: column; gap: 6px; }
 .dp-pills { display: flex; gap: 4px; flex-wrap: wrap; }
-.dp-pill {
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: none;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.dp-pill:hover { background: var(--accent-subtle); color: var(--fg); }
-.dp-pill-none { border-style: dashed; color: var(--fg-muted); }
 /* "Tomorrow  8 AM  12 PM  6 PM": a quiet label leads the row, the chips stay the same size. */
 .dp-pills-tomorrow { align-items: center; }
 .dp-pills-label { font-size: var(--font-size-xs); color: var(--fg-muted); margin-right: 2px; }
@@ -16050,10 +15370,7 @@ a.task-kebab-info:hover {
 }
 .dp-time-input::placeholder { color: var(--fg-muted); }
 .dp-time-input:focus { outline: none; border-color: var(--accent); }
-.dp-time-set { color: var(--fg); }
-.dp-time-set:disabled { opacity: 0.5; cursor: not-allowed; }
 .dp-time-note { flex-basis: 100%; font-size: var(--font-size-xs); color: var(--error); }
-.dp-pill-none:hover { background: var(--error-subtle); color: var(--error); border-color: var(--error); }
 /* DatePicker's month (MonthGrid.tsx): Walnut's own, never the browser's date field. */
 .dp-month { display: flex; flex-direction: column; gap: 2px; min-width: 210px; }
 .dp-month-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; }
@@ -16580,34 +15897,6 @@ a.task-kebab-info:hover {
   justify-content: flex-end;
 }
 
-.cron-confirm-cancel {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  border: none;
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-
-.cron-confirm-cancel:hover {
-  background: var(--border-strong);
-}
-
-.cron-confirm-delete {
-  background: var(--error);
-  color: var(--on-accent);
-  border: none;
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-
-.cron-confirm-delete:hover {
-  opacity: 0.85;
-}
-
 .cron-job-schedule {
   margin-top: 6px;
   display: flex;
@@ -17001,22 +16290,6 @@ a.task-kebab-info:hover {
   position: relative;
 }
 
-.agent-menu-btn {
-  background: none;
-  border: 1px solid transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xl);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
-  line-height: 1;
-}
-
-.agent-menu-btn:hover {
-  background: var(--bg-secondary);
-  color: var(--fg);
-}
-
 .agent-menu {
   position: absolute;
   right: 0;
@@ -17074,16 +16347,6 @@ a.task-kebab-info:hover {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-}
-
-.agent-confirm-cancel {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  color: var(--fg);
 }
 
 .agent-confirm-delete {
@@ -17268,24 +16531,6 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   font-weight: 600;
   margin-right: 4px;
-}
-
-.tool-picker-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-family: var(--font-mono);
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--accent);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.tool-picker-chip:hover {
-  background: rgba(0, 122, 255, 0.2);
 }
 
 .tool-picker-categories {
@@ -17818,27 +17063,10 @@ a.task-kebab-info:hover {
   flex-shrink: 0;
 }
 
-.fmp-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  cursor: pointer;
-  font-size: var(--font-size-md);
-  line-height: 1;
-  padding: 3px 7px;
-}
-.fmp-btn:hover:not(:disabled) { background: var(--bg-secondary); }
-.fmp-btn:disabled { opacity: 0.4; cursor: default; }
-/* "Select folder" sits right-aligned, before the close button, with accent fill. */
+/* "Select folder" sits right-aligned, before the close button. */
 .fmp-select-folder {
   margin-left: auto;
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-  white-space: nowrap;
 }
-.fmp-select-folder:hover:not(:disabled) { background: var(--accent); opacity: 0.9; }
 .fmp-close { flex-shrink: 0; }
 
 .fmp-breadcrumb {
@@ -18083,6 +17311,7 @@ a.task-kebab-info:hover {
   gap: 6px;
   padding: 8px 10px;
 }
+/* The Sync field's two-way choice (SyncChoice.tsx); the detail fields are the button family (.qtc-field). */
 .qtc-chip {
   padding: 3px 10px;
   border: 1px solid var(--border);
@@ -18091,22 +17320,6 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
   cursor: pointer;
-}
-.qtc-chip-ai {
-  border-color: var(--accent);
-  color: var(--fg);
-}
-/* Empty due/end chip (calendar-style: usually unset) — borderless ghost that
-   firms up on hover. An AI-filled chip is never ghosted (qtc-chip-ai wins). */
-.qtc-chip-ghost:not(.qtc-chip-ai) {
-  border-color: transparent;
-}
-.qtc-chip-ghost:not(.qtc-chip-ai):hover {
-  border-color: var(--border);
-}
-.qtc-chip-manual {
-  background: var(--bg-secondary);
-  color: var(--fg);
 }
 /* A picked option of a two-way choice (the Sync field: Local / the project's service). */
 .qtc-chip-on {
@@ -19294,34 +18507,6 @@ a.task-kebab-info:hover {
   white-space: nowrap;
 }
 
-.model-picker .model-picker-btn {
-  font-size: var(--font-size-xs);
-  padding: 3px 8px;
-  border-radius: var(--radius-xs);
-  background: var(--accent);
-  color: var(--on-accent);
-  border: none;
-  cursor: pointer;
-}
-
-.model-picker .model-picker-btn:hover {
-  opacity: 0.85;
-}
-
-.model-picker .model-picker-btn-immediate {
-  font-size: var(--font-size-xs);
-  padding: 3px 8px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.model-picker .model-picker-btn-immediate:hover {
-  background: var(--bg-secondary);
-}
-
 /* Catalog rows the CLI marks disabled (org-restricted): visible, greyed, no Switch. */
 
 /* ===== Hooks Page ===== */
@@ -19618,22 +18803,7 @@ a.task-kebab-info:hover {
 
 /* Expand/collapse button */
 .cmd-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   margin-top: 6px;
-  padding: 4px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--accent);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.cmd-expand-btn:hover {
-  background: var(--accent-subtle);
 }
 .cmd-expand-chevron {
   font-size: 8px;
@@ -19647,12 +18817,6 @@ a.task-kebab-info:hover {
 /* Kebab menu (mirrors cron) */
 .cmd-menu-wrapper {
   position: relative;
-}
-.cmd-menu-btn {
-  min-width: 28px;
-  text-align: center;
-  font-size: 16px;
-  padding: 4px 6px !important;
 }
 .cmd-menu {
   position: absolute;
@@ -19716,15 +18880,6 @@ a.task-kebab-info:hover {
   gap: 6px;
   justify-content: flex-end;
 }
-.cmd-confirm-delete {
-  background: var(--error) !important;
-  border-color: var(--error) !important;
-  color: var(--on-accent) !important;
-}
-.cmd-confirm-delete:hover {
-  opacity: 0.9;
-}
-
 @keyframes cmdMenuFadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -20028,28 +19183,6 @@ a.task-kebab-info:hover {
   letter-spacing: 0.4px;
 }
 
-.usage-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 4px 10px;
-  border-radius: 999px;
-  background: var(--accent-subtle);
-  border: 1px solid var(--accent);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  transition: background 0.15s;
-}
-
-.usage-chip:hover {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.usage-chip:hover .usage-chip-dim {
-  color: rgba(255, 255, 255, 0.75);
-}
-
 .usage-chip-dim {
   font-size: var(--font-size-xs);
   text-transform: uppercase;
@@ -20067,13 +19200,6 @@ a.task-kebab-info:hover {
   opacity: 0.7;
 }
 
-.usage-chip-clear-all {
-  font-size: var(--font-size-sm);
-  color: var(--accent);
-  text-decoration: underline;
-  padding: 2px 4px;
-}
-
 /* Task surfaces reuse the usage chip visuals but sit in a DENSE toolbar area,
    so they drop the usage dashboard's 18px section gap and shrink a step. */
 .usage-filter-chips.task-filter-chips {
@@ -20083,14 +19209,8 @@ a.task-kebab-info:hover {
   border-bottom: 1px solid var(--border);
 }
 
-.task-filter-chips .usage-chip,
-.task-filter-chips .usage-filter-chips-label,
-.task-filter-chips .usage-chip-clear-all {
+.task-filter-chips .usage-filter-chips-label {
   font-size: var(--font-size-xs);
-}
-
-.task-filter-chips .usage-chip {
-  padding: 2px 6px 2px 8px;
 }
 
 /* Chart: gridlines, axis, interactive bars, tooltip */
@@ -20540,61 +19660,6 @@ td.usage-share-col {
   gap: 6px;
 }
 
-.execute-plan-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid #0d9488;
-  border-radius: 6px;
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  background: #0d9488;
-  color: var(--on-accent);
-  transition: opacity 0.15s, background 0.15s;
-  text-align: left;
-}
-
-.execute-plan-btn:hover:not(:disabled) {
-  background: #0f766e;
-}
-
-.execute-plan-btn:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
-.execute-plan-btn-secondary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  background: transparent;
-  color: var(--fg);
-  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
-  text-align: left;
-}
-
-.execute-plan-btn-secondary:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-  border-color: var(--fg-muted);
-}
-
-.execute-plan-btn-secondary:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
 .execute-plan-btn-desc {
   font-size: var(--font-size-xs);
   font-weight: 400;
@@ -20781,14 +19846,6 @@ td.usage-share-col {
 .plan-popup-header-actions .plan-preview-refresh:hover {
   background: var(--bg-hover);
   color: var(--fg);
-}
-
-.plan-popup-header-actions .execute-plan-btn,
-.plan-popup-header-actions .execute-plan-btn-secondary {
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-  border-radius: 6px;
 }
 
 .plan-popup-header-actions .execute-plan-btn-desc {
@@ -21225,15 +20282,6 @@ td.usage-share-col {
 
 .session-pill-status-dot.dot-error {
   background: var(--error);
-}
-
-.session-id-pill.session-pill-active {
-  cursor: pointer;
-  border-color: var(--success);
-}
-
-.session-id-pill.session-pill-active:hover {
-  background: rgba(52, 199, 89, 0.1);
 }
 
 /* ===== Tag Chips & Editor ===== */
@@ -21755,23 +20803,6 @@ a.tag-chip:focus-visible,
 .dock-quick-add-btn {
   align-self: center;
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-2xl);
-  font-weight: 400;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.dock-quick-add-btn:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border-color: var(--accent);
 }
 
 .dock-quick-add-form {
@@ -22145,16 +21176,6 @@ a.tag-chip:focus-visible,
   color: var(--fg);
 }
 
-/* Small danger button */
-.btn-danger {
-  color: var(--error);
-  border-color: var(--error);
-}
-
-.btn-danger:hover {
-  background: rgba(255, 59, 48, 0.08);
-}
-
 /* ===== AI Providers Section ===== */
 
 .provider-catalog {
@@ -22326,17 +21347,6 @@ a.tag-chip:focus-visible,
 
 .provider-models-editor {
   padding: 4px 0 0 0;
-}
-
-.provider-model-chip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
-  font-size: var(--font-size-md);
-  margin-bottom: 4px;
 }
 
 .chip-remove {
@@ -22671,42 +21681,12 @@ a.tag-chip:focus-visible,
   flex-shrink: 0;
 }
 
-.pending-session-dismiss-btn {
-  margin-top: 8px;
-  padding: 6px 16px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.pending-session-dismiss-btn:hover {
-  background: var(--bg-tertiary);
-}
-
 /* Retry + Dismiss action row in PendingSessionPanel */
 .pending-session-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
-}
-
-.pending-session-retry-btn {
-  padding: 6px 16px;
-  border-radius: 6px;
-  border: none;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.pending-session-retry-btn:hover {
-  background: var(--accent-hover);
 }
 
 /* ===== Draft Session Panel ("+" → an empty column, nothing on the server) =====
@@ -23194,7 +22174,7 @@ a.tag-chip:focus-visible,
 }
 
 /* Keyboard parity: a primary action, so it must be visibly reachable by Tab
-   (same ring recipe as .app-modal-btn.primary). */
+   (the family's ring, styles/buttons.css). */
 .draft-later-btn:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
@@ -23203,23 +22183,6 @@ a.tag-chip:focus-visible,
 /* Inline retry button in session error banner */
 .session-retry-btn {
   flex-shrink: 0;
-  padding: 3px 10px;
-  border-radius: var(--radius-xs);
-  border: none;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
-  white-space: nowrap;
-}
-.session-retry-btn:hover {
-  background: var(--accent-hover);
-}
-.session-retry-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 /* ===== Quick Start System Banner (in chat) ===== */
@@ -23291,82 +22254,13 @@ a.tag-chip:focus-visible,
   padding: 4px 12px;
 }
 
-/* Text-button style (no capsule) — matches .mode-toggle-pill / .side-question-pill. */
-.quick-access-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-  line-height: 1.4;
-}
-
-.quick-access-pill:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.quick-access-pill-icon {
-  font-size: var(--font-size-xs);
-}
-
-.quick-access-pill-label {
-  font-family: 'SF Mono', Menlo, monospace;
-  font-size: var(--font-size-xs);
-}
-
 /* ── New task button (TodoPanel toolbar) ──
    The task is the product object; starting a session is one path through its
-   shared draft. The 28px height matches .vd-trigger-icon so the toolbar remains
+   shared draft. A quiet .btn-sm (28px, as .vd-trigger-icon) so the toolbar remains
    one row. Keep the verb explicit while the search input can retain ~100px: below
    a 275px content box, collapse the label but never hide the create action. */
-.new-launcher-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  min-width: 28px;
-  height: 28px;
-  gap: 5px;
-  padding: 0 10px 0 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  /* Darken the system accent enough for 12px white text to clear WCAG AA in
-     both themes (6.07:1 light, 5.56:1 dark). The first declaration is the
-     fallback for browsers without color-mix(). */
-  background: #0060c0;
-  background: color-mix(in srgb, var(--accent) 78%, #000);
-  color: var(--on-accent);
-  font-family: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  box-shadow: var(--shadow-sm);
-  transition: background 0.15s, box-shadow 0.15s, transform 0.15s;
-}
-.new-launcher-btn:hover {
-  background: #0052a3;
-  background: color-mix(in srgb, var(--accent) 68%, #000);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
-}
-.new-launcher-btn:active {
-  box-shadow: none;
-  transform: translateY(0);
-}
-.new-launcher-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: 2px;
-}
+/* A key of the button family (.btn.btn-ghost.btn-sm): the toolbar is one quiet row. */
+.new-launcher-btn { flex: 0 0 auto; min-width: 28px; }
 .new-launcher-btn svg,
 .new-launcher-label { display: block; }
 /* A narrow toolbar folds the label to the plus icon: styles/toolbar-fit.css. */
@@ -23763,11 +22657,6 @@ a.tag-chip:focus-visible,
   flex-shrink: 0;
 }
 
-.btn-sm {
-  padding: 4px 10px;
-  font-size: var(--font-size-sm);
-}
-
 .repo-form-textarea {
   width: 100%;
   padding: 12px;
@@ -23792,34 +22681,6 @@ a.tag-chip:focus-visible,
   gap: 8px;
   justify-content: flex-end;
   margin-top: 20px;
-}
-
-/* Danger buttons (repositories, suggestion cards) */
-
-.btn-danger-outline {
-  background: transparent;
-  color: var(--error);
-  border: 1px solid var(--error);
-  border-radius: var(--radius-sm);
-  padding: 6px 14px;
-  font-size: var(--font-size-md);
-  cursor: pointer;
-}
-.btn-danger-outline:hover {
-  background: rgba(255, 59, 48, 0.08);
-}
-
-.btn-danger {
-  background: var(--error);
-  color: var(--on-accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 4px 12px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.btn-danger:hover {
-  opacity: 0.9;
 }
 
 /* ===== Notes Page ===== */
@@ -24181,23 +23042,6 @@ a.tag-chip:focus-visible,
 .notes-tree-actions {
   display: flex;
   gap: 4px;
-}
-
-.notes-tree-action-btn {
-  background: none;
-  border: none;
-  padding: 5px;
-  cursor: pointer;
-  color: var(--fg-muted);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  transition: background 0.15s, color 0.15s;
-}
-
-.notes-tree-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
 }
 
 .notes-tree-search {
@@ -24990,20 +23834,6 @@ a.file-link:hover {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-}
-
-.file-viewer-btn {
-  padding: 3px 8px;
-  font-size: var(--font-size-xs);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg);
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.file-viewer-btn:hover {
-  background: var(--bg-tertiary);
 }
 
 .file-viewer-close {
@@ -26040,21 +24870,6 @@ a.file-link:hover {
   flex-shrink: 0;
 }
 
-.session-terminal-btn {
-  font-size: var(--font-size-xs);
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  cursor: pointer;
-}
-.session-terminal-btn:hover { background: var(--bg-hover); }
-.session-terminal-btn-kill {
-  border-color: color-mix(in srgb, var(--error) 40%, transparent);
-  color: var(--error);
-}
-
 .session-terminal-close {
   font-size: 14px;
   line-height: 1;
@@ -26133,41 +24948,16 @@ a.file-link:hover {
 .session-terminal-error-icon { font-size: 32px; }
 .session-terminal-error-title { font-size: var(--font-size-lg); font-weight: 600; }
 .session-terminal-error-body { font-size: var(--font-size-md); color: var(--fg-muted); max-width: 480px; }
-.session-terminal-retry {
-  margin-top: 4px;
-  padding: 6px 16px;
-}
+.session-terminal-retry { margin-top: 4px; }
 
 /* ── Several terminals: tabs, split panes, the dock under Changed / Files / Web ── */
 .session-terminal-pill-slot { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.session-terminal-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-@media (hover: hover) {
-  .session-terminal-icon-btn:hover:not(:disabled) { color: var(--fg); background: var(--bg-hover); border-color: var(--border); }
-}
 /* A narrow terminal bar (a split column, a small window) keeps its controls: the words go first. */
 .session-terminal-panel-embedded { container: terminal-panel / inline-size; }
 @container terminal-panel (max-width: 640px) {
   .session-terminal-dock-btn span { display: none; }
 }
-.session-terminal-dock-btn { display: inline-flex; align-items: center; gap: 5px; font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; }
-.session-terminal-dock-btn:hover { color: var(--fg); }
 .session-terminal-dock-btn svg { display: block; width: 14px; height: 14px; }
-.session-terminal-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
-.session-terminal-icon-btn:disabled { opacity: 0.35; cursor: default; }
-.session-terminal-icon-btn svg { display: block; }
 
 .session-terminal-tabs {
   display: flex;
@@ -26325,23 +25115,7 @@ a.file-link:hover {
   background: var(--bg);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
-.session-terminal-selection-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.session-terminal-selection-btn:hover { background: var(--bg-hover); }
-.session-terminal-selection-btn svg { width: 13px; height: 13px; }
+.session-terminal-selection-pop svg { width: 13px; height: 13px; }
 
 .session-terminal-inline-note {
   display: flex;
@@ -26462,18 +25236,6 @@ a.file-link:hover {
   flex-shrink: 0;
 }
 
-.session-code-btn {
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  text-decoration: none;
-}
-.session-code-btn:hover { background: var(--bg-hover); }
-
 .session-code-body {
   flex: 1;
   min-height: 0;
@@ -26555,7 +25317,6 @@ a.file-link:hover {
 .session-web-address:focus { outline: none; border-color: var(--accent); }
 .session-web-address-invalid,
 .session-web-address-invalid:focus { border-color: var(--error); }
-.session-web-header .session-code-actions .session-code-btn:disabled { opacity: 0.5; cursor: default; }
 .session-web-iframe {
   flex: 1;
   width: 100%;
@@ -26630,18 +25391,6 @@ a.file-link:hover {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
 }
-
-.plugin-app-btn {
-  padding: 6px 14px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  cursor: pointer;
-  text-decoration: none;
-}
-.plugin-app-btn:hover { background: var(--bg-hover); }
 
 /* AgentDropdown — reveal rename/delete icon buttons only on row hover */
 .agent-dd-hover-btn { opacity: 0; transition: opacity 0.12s; }
@@ -27140,37 +25889,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   gap: 8px;
   margin-top: 20px;
 }
-.app-modal-btn {
-  padding: 6px 14px;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.app-modal-btn:hover { background: var(--bg-hover); }
-.app-modal-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.app-modal-btn.primary:hover { filter: brightness(1.08); }
-.app-modal-btn.primary.danger {
-  background: var(--error);
-  border-color: var(--error);
-}
-.app-modal-btn.primary:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: 2px;
-}
-/* A button that cannot act now must look it: no hover lift, no pointer. */
-.app-modal-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.app-modal-btn:disabled:hover { background: var(--bg-secondary); }
-.app-modal-btn.primary:disabled:hover { background: var(--accent); filter: none; }
-.app-modal-btn.primary.danger:disabled:hover { background: var(--error); }
 
 /* ============================================================================
    Permission Doctor — fix dialog + Settings → Permissions rows
@@ -28853,36 +27571,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   padding: 2px 8px;
   background: color-mix(in srgb, var(--accent) 5%, var(--bg-secondary));
 }
-.session-diff-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  font-size: var(--font-size-xs);
-  font-family: var(--font-mono);
-  line-height: 1.7;
-  color: var(--accent);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.session-diff-expand-btn:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.session-diff-expand-btn.is-dir {
-  font-variant-numeric: tabular-nums;
-  min-width: 44px;
-  justify-content: center;
-}
-.session-diff-expand-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-  pointer-events: none;
-}
 
 /* ── Auto hybrid layout: per-region split/unified segments ─────────────────
    In auto mode each hunk is sliced into its own <Diff> tables: in-place
@@ -29172,33 +27860,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-ask-pill {
   position: fixed;
   z-index: 9100;
-  background: var(--accent);
-  color: var(--on-accent);
-  border: none;
-  border-radius: 6px;
-  padding: 5px 12px;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
   white-space: nowrap;
-}
-.session-diff-ask-pill:hover { filter: brightness(1.08); }
-.session-diff-ask-pill::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -5px;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: var(--accent);
-}
-/* Flipped under the selection (no room above): arrow points up from the top edge. */
-.session-diff-ask-pill.below::after {
-  bottom: auto;
-  top: -5px;
-  border-top-color: transparent;
-  border-bottom-color: var(--accent);
 }
 
 /* ── Routines (panel + composer + cards) ── */
@@ -29265,20 +27927,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.routine-template-chip {
-  padding: 4px 10px;
-  border: none;
-  border-radius: 14px;
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-
-.routine-template-chip:hover {
-  background: color-mix(in srgb, var(--fg) 8%, var(--bg-tertiary));
 }
 
 .routine-composer-actions {
@@ -29509,7 +28157,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   align-items: center;
 }
 
-.routine-check-remove { color: var(--fg-secondary); }
 
 .routine-check-test {
   border: 1px solid var(--border);
@@ -32345,22 +30992,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    :focus-visible so the button is reachable by keyboard (Tab) — an
    opacity-0-only reveal is invisible to a keyboard user even while focused. */
 .task-start-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  line-height: 1;
-  padding: 0;
-  cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition: opacity 0.15s, background-color 0.12s, color 0.12s;
 }
 
 .todo-panel-item:hover .task-start-btn,
@@ -32370,11 +31004,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   opacity: 1;
 }
 
-.task-start-btn:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  opacity: 1;
-}
+.task-start-btn:hover { opacity: 1; }
 
 /* No margin rules on purpose: both host rows put a `flex: 1` title before this
    button, so the kebab's own `margin-left: auto` has no free space left to claim
@@ -33913,9 +32543,12 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 /* ── Quote pins: the selection pill and the passage popover ───────────────────
    Both are portalled to <body> and positioned by useMenuPlacement (fixed
-   top/right + a height cap), so they only own their looks here. */
+   top/right + a height cap), so they only own their looks here. The files' and
+   diffs' selection toolbar (SelectionAskPill, placed by placeToolbar) is the
+   same bar of quiet keys on the same surface. */
 .quote-pin-pill,
-.quote-pin-popover {
+.quote-pin-popover,
+.session-diff-ask-pill {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -33937,26 +32570,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .quote-pin-pill.is-compact .quote-pin-pill-btn > svg + span { display: none; }
 .quote-pin-pill:not(.is-compact) .quote-pin-compact-icon { display: none; }
 
-.quote-pin-pill-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border: none;
-  background: none;
-  border-radius: 6px;
-  color: var(--fg);
-  cursor: pointer;
-  font-size: var(--font-size-sm);
-  line-height: 1;
-  white-space: nowrap;
-}
-.quote-pin-pill-btn:hover { background: var(--bg-hover); }
-/* Inside the box: the box scrolls (overflow), so a ring drawn outside a row at its edge would be cut. */
-.quote-pin-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.quote-pin-pill-btn:disabled { opacity: 0.45; cursor: default; background: none; }
+/* The bar's keys are the family's quiet tools (btn btn-sm btn-ghost). Inside the box: the box
+   scrolls (overflow), so a ring drawn outside a key at its edge would be cut. */
+.quote-pin-pill-btn:focus-visible { outline-offset: -2px; }
 /* Ask here's caret sits flush against it: one control, two parts. */
-.quote-pin-pill-btn.quote-ask-mode-btn { padding: 4px 5px; margin-left: -3px; color: var(--fg-muted); }
+.quote-pin-pill-btn.quote-ask-mode-btn { margin-left: -3px; }
 /* Ask here and its caret: one control, two parts, side by side in the bar. */
 .quote-pin-ask-group { display: flex; align-items: center; }
 
@@ -33991,7 +32609,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   grid-template-columns: auto 1fr;
   column-gap: 8px;
   row-gap: 2px;
-  padding: 6px 9px;
   text-align: left;
   /* A narrow column's menu is narrower: its hints wrap instead of spilling out. */
   white-space: normal;
@@ -34000,14 +32617,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .quote-ask-mode > svg { grid-row: span 2; align-self: start; width: 16px; height: 16px; margin-top: 1px; color: var(--fg-secondary); }
 .quote-ask-mode > span:first-of-type { color: var(--fg); font-weight: 500; }
 .quote-ask-mode-hint { color: var(--fg-secondary); font-size: var(--font-size-sm); }
-/* One row lit at a time: the one under the pointer, else the one the keyboard is on,
-   else (focus not in the menu yet) the default way. */
-.quote-pin-pill-btn.quote-ask-mode:focus,
-.quote-pin-pill-btn.quote-ask-mode:hover,
-.quote-ask-modes:not(:focus-within) .quote-pin-pill-btn.quote-ask-mode.is-current { background: var(--bg-hover); }
-.quote-ask-modes:hover .quote-pin-pill-btn.quote-ask-mode:focus:not(:hover) { background: none; }
-/* The caret of an open menu looks pressed, as a dropdown's does. */
-.quote-pin-pill-btn[aria-expanded="true"] { background: var(--bg-hover); }
 
 /* The Comment box: the note that goes under the quote in the composer. */
 .quote-pin-comment {
@@ -34090,7 +32699,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   pointer-events: auto;
 }
 
-.msg-pin-btn.is-pinned { color: var(--accent); }
 
 /* The time reads as an age; the exact stamp rides a hover tooltip, because
    "how long ago" is the question a transcript actually gets asked. */
@@ -34204,8 +32812,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: var(--error);
   background: color-mix(in srgb, var(--error) 10%, transparent);
 }
-.rewind-dialog .app-modal-btn:disabled { opacity: 0.55; cursor: default; }
-.rewind-dialog .app-modal-btn.primary:disabled:hover { filter: none; }
 
 /* ─── Shared right-click menu (components/common/ContextMenu.tsx) ───────────
    One skin for every surface that replaces the browser's context menu. Looks
@@ -34591,7 +33197,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding: 4px 0;
 }
 .unsaved-work-what { min-width: 0; overflow-wrap: anywhere; }
-.unsaved-work-go { flex-shrink: 0; padding: 3px 10px; font-size: var(--font-size-sm); }
+.unsaved-work-go { flex-shrink: 0; }
 .unsaved-work-note { color: var(--fg-muted); font-size: var(--font-size-sm); }
 
 .stale-build-pill-sep {

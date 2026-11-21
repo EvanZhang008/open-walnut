@@ -98,7 +98,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
       {msgId && (
         <button
           type="button"
-          className={`msg-copy-btn msg-pin-btn${pinned ? ' is-pinned' : ''}`}
+          className="btn btn-sm btn-icon msg-copy-btn msg-pin-btn"
           onClick={onPin}
           title={pinned ? 'Unpin this message' : 'Pin this message (adds it to the outline)'}
           aria-label={pinned ? 'Unpin this message' : 'Pin this message'}
@@ -110,7 +110,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
       {reader && hasText && (
         <button
           type="button"
-          className="msg-copy-btn msg-read-split-btn"
+          className="btn btn-sm btn-icon msg-copy-btn msg-read-split-btn"
           data-testid="msg-read-split"
           onClick={onReadSplit}
           title="Read this in a split: it stays on top while you ask below"
@@ -122,7 +122,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
       {canRewind && (
         <button
           type="button"
-          className="msg-copy-btn msg-rewind-btn"
+          className="btn btn-sm btn-icon msg-copy-btn msg-rewind-btn"
           onClick={onRewind}
           title="Rewind the session back to this message"
           aria-label="Rewind to this message"
@@ -136,7 +136,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
       {walnutAdded && walnutAdded.count > 0 && (
         <button
           type="button"
-          className={`msg-copy-btn msg-walnut-added-btn${walnutAdded.open ? ' is-open' : ''}`}
+          className="btn btn-sm btn-ghost msg-copy-btn msg-walnut-added-btn"
           data-testid="walnut-added-toggle"
           onClick={(e) => { e.stopPropagation(); walnutAdded.onToggle(); }}
           aria-expanded={walnutAdded.open}

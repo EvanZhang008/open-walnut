@@ -117,17 +117,10 @@
   font-size: var(--font-size-lg);
   line-height: 1.4;
 }
-.phone-tier-empty-btn {
-  min-height: 44px;
-  padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--accent-text);
-  font-size: var(--font-size-lg);
-  font-weight: 500;
+/* Its one key is the family's .btn; a finger gets 44 px. */
+@media (pointer: coarse) {
+  .phone-tier-empty-btn { min-height: 44px; }
 }
-.phone-tier-empty-btn:active { background: var(--bg-secondary); }
 
 /* N12: a disabled row in the phone's session menu says why. */
 .phone-session-row-why {
@@ -158,16 +151,8 @@
   }
   .app-shell-navigation .session-history .msg-more-btn {
     position: absolute;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     width: 32px;
     height: 32px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--radius-lg);
-    background: transparent;
-    color: var(--fg-muted);
     opacity: 0.55;
     -webkit-tap-highlight-color: transparent;
   }
@@ -178,7 +163,6 @@
   }
   .app-shell-navigation .session-history .msg-more-btn:active {
     opacity: 1;
-    background: var(--bg-secondary);
   }
   .app-shell-navigation .session-history .session-msg-assistant .msg-more-btn {
     top: -4px;

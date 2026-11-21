@@ -45,7 +45,7 @@ function NewItemButton({ onPick }: { onPick: (t: VaultItemType) => void }) {
   const place = useMenuPlacement(newMenuOpen, trigger, menu, { minHeight: 120, onAnchorLost: () => setNewMenuOpen(false) })
   return (
     <>
-      <button ref={trigger} type="button" className="pw-icon-btn pw-new-btn" aria-label="New item" title="New item" aria-expanded={newMenuOpen} onClick={() => setNewMenuOpen((o) => !o)}><PlusIcon /></button>
+      <button ref={trigger} type="button" className="btn btn-icon pw-new-btn" aria-label="New item" title="New item" aria-expanded={newMenuOpen} onClick={() => setNewMenuOpen((o) => !o)}><PlusIcon /></button>
       {newMenuOpen && createPortal(
         <div className="pw-popover-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) setNewMenuOpen(false) }}>
           <div ref={menu} className="pw-menu" role="menu" onPointerDown={(e) => e.stopPropagation()}
@@ -240,7 +240,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
             <div className="pw-side-warn" role="note" data-testid="pw-no-recovery">
               <b>{status.recoveryUnsaved ? 'Recovery kit not saved' : 'No recovery code yet'}</b>
               <span>{status.recoveryUnsaved ? 'Your recovery code changed and the new kit was never saved. Make a new one.' : 'Forget your master password and nothing opens this vault.'}</span>
-              <button type="button" className="pw-btn pw-btn-small" onClick={() => navigate('/settings#passwords')}>Make a recovery kit</button>
+              <button type="button" className="btn btn-sm" onClick={() => navigate('/settings#passwords')}>Make a recovery kit</button>
             </div>
           )}
           <GeneratorToolButton />
@@ -298,8 +298,8 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
             {!!items?.length && <RecentAgentUse onSeeAll={() => pickSection('agents')} />}
             {!items?.length && (
               <div className="pw-gate-actions-row">
-                <button type="button" className="pw-btn pw-btn-primary" onClick={() => setEditing({ kind: 'new', type: 'login' })}><PlusIcon size={15} /> New login</button>
-                <button type="button" className="pw-btn" onClick={() => setImportDialogOpen(true)}><ImportIcon /> Import</button>
+                <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing({ kind: 'new', type: 'login' })}><PlusIcon size={15} /> New login</button>
+                <button type="button" className="btn btn-sm" onClick={() => setImportDialogOpen(true)}><ImportIcon /> Import</button>
               </div>
             )}
           </div>

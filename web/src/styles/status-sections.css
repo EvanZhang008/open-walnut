@@ -142,11 +142,8 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .needs-category-review { color: var(--warning); }
 .needs-category-look { color: var(--accent); }
 .needs-category-close { color: var(--success); }
-.status-card-needs-line .needs-close-btn {
-  flex: none; margin-left: auto; padding: 0 8px; height: 18px; border-radius: 9px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: var(--font-size-xs); line-height: 16px; cursor: pointer;
-}
-.status-card-needs-line .needs-close-btn:hover { background: var(--bg-secondary); }
+/* Close at the line's end: the family's link (btn btn-link), so the line keeps its height. */
+.status-card-needs-line .needs-close-btn { flex: none; margin-left: auto; }
 .status-section-card .pinned-phase-picker[data-row-mark="needs-read"] { color: var(--accent); }
 /* Waiting / snoozed: the row's wait or snooze mark, muted, and an unread dot that does not
    read as an ask (2026-11-02, the user: "looks kike they are waiting for my input"). */

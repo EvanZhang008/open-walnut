@@ -66,7 +66,7 @@ describe('the file Ask card under the file header', () => {
     expect(layer).toMatch(/placeFileCardBelow\(anchor, host, inset/);
     expect(layer).toMatch(/fileHeaderInset\(root, stickyBarOf\(/);
     const head = src('components/common/DocCommentCard.tsx');
-    expect(head).toMatch(/className="doc-comments-chip"[^>]*\{\.\.\.HEADER_ITEM\}/);
+    expect(head).toMatch(/className="btn btn-sm doc-comments-chip"[^>]*\{\.\.\.HEADER_ITEM\}/);
     expect(head).toMatch(/className="doc-comments-error"[^>]*\{\.\.\.HEADER_ITEM\}/);
   });
 });

@@ -266,7 +266,6 @@
 /* A narrow column: the info stretches to the column (never wider), the card fits in it. */
 .workspace-preparing-panel .pending-session-body { min-width: 0; }
 .workspace-preparing-panel .pending-session-info { align-self: stretch; min-width: 0; max-width: 100%; }
-.workspace-preparing-panel .pending-session-actions .pending-session-dismiss-btn { margin-top: 0; }
 .workspace-preparing-panel .script-run-card { margin: 12px auto 0; max-width: min(460px, 100%); width: 100%; box-sizing: border-box; }
 .script-run-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; min-width: 0; }
 .script-run-role { color: var(--fg-muted); font-size: var(--font-size-xs); white-space: nowrap; }

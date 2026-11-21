@@ -180,42 +180,9 @@
   flex: 1;
 }
 
-.mail-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.mail-icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
-.mail-icon-btn:disabled { opacity: 0.5; cursor: default; }
-
-/* The console's icon action: a 32px round hover target with its meaning in `title`. Shared by the
-   reader's toolbar and the composer's head, so it lives with the rest of the pane furniture. */
-.mail-round-btn {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 50%;
-  background: none;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.mail-round-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
-.mail-round-btn:active:not(:disabled) { background: var(--bg-tertiary); }
-.mail-round-btn:disabled { opacity: 0.35; cursor: default; }
+/* Icon keys are the family's .btn-icon. .mail-round-btn stays as the reader toolbar's hook (the
+   phone shows each one's name under its icon, phone-fixes-r4.css). */
+.mail-round-btn { flex: 0 0 auto; }
 
 .mail-text-btn {
   border: none;

@@ -132,8 +132,8 @@ export function FoundHostPrompts() {
           <li key={h.host} className="found-host-prompt found-host-not-now" data-host={h.host} data-testid="found-host-not-now">
             <p role="status">{notNowLine(h.label)}</p>
             <div className="found-host-actions">
-              <button type="button" className="setup-step-btn" onClick={() => openHostSettings(navigate, h.host)}>Open Remote Hosts</button>
-              <button type="button" className="setup-step-btn" aria-label={`Close: ${h.label} stays off`} onClick={() => setDeferred(prev => prev.filter(row => row.host !== h.host))}>OK</button>
+              <button type="button" className="btn btn-sm" onClick={() => openHostSettings(navigate, h.host)}>Open Remote Hosts</button>
+              <button type="button" className="btn btn-sm" aria-label={`Close: ${h.label} stays off`} onClick={() => setDeferred(prev => prev.filter(row => row.host !== h.host))}>OK</button>
             </div>
           </li>
         );
@@ -148,8 +148,8 @@ export function FoundHostPrompts() {
           <li key={h.host} className="found-host-prompt" data-host={h.host}>
             <p>{`Connect to ${h.label}?`}</p>
             <div className="found-host-actions">
-              <button type="button" className="setup-step-btn" disabled={pending.has(h.host)} onClick={() => void answer(h, 'yes')}>Connect</button>
-              <button type="button" className="setup-step-btn" disabled={pending.has(h.host)} onClick={() => void answer(h, 'not_now')}>Not now</button>
+              <button type="button" className="btn btn-sm" disabled={pending.has(h.host)} onClick={() => void answer(h, 'yes')}>Connect</button>
+              <button type="button" className="btn btn-sm" disabled={pending.has(h.host)} onClick={() => void answer(h, 'not_now')}>Not now</button>
               {errors[h.host] && <span className="found-host-error" role="alert">{errors[h.host]}</span>}
             </div>
           </li>
@@ -173,7 +173,7 @@ function FoundHostReadiness({ host, status }: { host: Found; status: HostStatus 
     const checking = actions.pending === 'check' || (typeof status.connectedAt === 'number' && now - status.connectedAt < READINESS_ANSWER_GRACE_MS);
     return <div className="rh-readiness-block">
       {checking ? <SetupProgress label={`Checking ${host.label}...`} /> : <p>Walnut could not check Claude Code on {host.label}. This host may need a daemon update. You can still open its files.</p>}
-      <button type="button" className="setup-step-btn" disabled={actions.pending === 'check'} onClick={() => void actions.checkAgain()}>Check again</button>
+      <button type="button" className="btn btn-sm" disabled={actions.pending === 'check'} onClick={() => void actions.checkAgain()}>Check again</button>
       {actions.failed === 'check' && <span role="alert">The check could not finish. Try again.</span>}
     </div>;
   }
@@ -182,7 +182,7 @@ function FoundHostReadiness({ host, status }: { host: Found; status: HostStatus 
     {verb && (fixRunning
       ? <div className="found-host-fix"><SetupProgress label={autofixProgressText(own ?? verb, host.label, actions.fixing?.startedAt ?? status.readiness?.fixing?.startedAt, now).text} /></div>
       : <div className="found-host-fix">
-          <button type="button" className="setup-step-btn" onClick={() => void actions.update(verb)}>
+          <button type="button" className="btn btn-sm" onClick={() => void actions.update(verb)}>
             {blocking?.fix?.state === 'failed' ? 'Try again' : `${verb === 'install' ? 'Install' : 'Update'} Claude Code on ${host.label}`}
           </button>
         </div>)}

@@ -85,19 +85,6 @@
 
 .backup-restore-latest { margin-left: 8px; vertical-align: 1px; }
 
-/* A destructive confirm here sits beside bordered buttons: it is one too, in red, not a link. */
-.settings-button.settings-button-danger.backup-danger-button {
-  padding: 0 12px;
-  border-color: var(--settings-error-text, var(--error));
-}
-/* A bordered button ends on the edge every other button ends on (no text-button overhang),
-   and its label sits centred in the room kept for the busy label. */
-.settings-row-actions .settings-button.settings-button-danger.backup-danger-button { margin-right: 0; }
-.settings-button.settings-button-danger.backup-danger-button .settings-button-stack > * { text-align: center; }
-.settings-button.settings-button-danger.backup-danger-button:hover:not(:disabled) {
-  text-decoration: none;
-  background: rgba(255, 59, 48, 0.08);
-}
 .backup-contents { display: contents; }
 /* Backups on, paused for a reason the row says: the switch is shown dimmed. */
 .backup-toggle-paused { opacity: 0.5; }

@@ -114,23 +114,23 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       )}
 
       <div className="hib-row-actions">
-        <button className="hib-row-btn hib-card-toggle" aria-expanded={indexRow ? undefined : expanded} aria-controls={indexRow ? undefined : bodyId} onClick={(event) => { event.stopPropagation(); if (indexRow) onOpen(); else toggleExpanded(); }}>
+        <button className="btn btn-sm hib-row-btn hib-card-toggle" aria-expanded={indexRow ? undefined : expanded} aria-controls={indexRow ? undefined : bodyId} onClick={(event) => { event.stopPropagation(); if (indexRow) onOpen(); else toggleExpanded(); }}>
           <span className="hib-card-chevron" aria-hidden="true">›</span>{!indexRow && expanded ? 'Collapse' : 'Read letter'}
         </button>
         <button
-          className="hib-row-btn"
+          className="btn btn-sm hib-row-btn"
           onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
         >
           {letter.pinned ? 'Unpin' : 'Pin'}
         </button>
         <button
-          className="hib-row-btn"
+          className="btn btn-sm hib-row-btn"
           onClick={(e) => { e.stopPropagation(); onToggleRead(); }}
         >
           {letter.read ? 'Mark unread' : 'Mark read'}
         </button>
         <button
-          className="hib-row-btn"
+          className="btn btn-sm hib-row-btn"
           onClick={(e) => { e.stopPropagation(); onToggleArchive(); }}
         >
           {letter.archived ? 'Unarchive' : 'Archive'}

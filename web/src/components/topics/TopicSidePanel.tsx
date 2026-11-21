@@ -113,8 +113,8 @@ export function TopicSidePanel({ topic, actions, sheet }: {
           <div className="topic-side-add" data-testid="topic-side-add">
             <MemberPicker picked={adding} onChange={setAdding} exclude={exclude} autoFocus />
             <span className="topic-person-actions">
-              <button type="button" className="app-modal-btn" onClick={() => setAdding(null)}>Cancel</button>
-              <button type="button" className="app-modal-btn primary" data-testid="topic-side-add-save" disabled={!adding.length} onClick={() => void add()}>Add {adding.length || ''}</button>
+              <button type="button" className="btn" onClick={() => setAdding(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" data-testid="topic-side-add-save" disabled={!adding.length} onClick={() => void add()}>Add {adding.length || ''}</button>
             </span>
           </div>
         ) : (

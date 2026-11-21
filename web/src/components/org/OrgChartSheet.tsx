@@ -303,7 +303,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
             <h2 className="org-sheet-title">Org chart</h2>
             <p className="org-sheet-hint">Drag a project onto another VP to put it under that VP. Nothing changes until you confirm.</p>
           </div>
-          <button type="button" className="task-action-btn org-sheet-close" onClick={onClose} aria-label="Close the org chart" title="Close">&times;</button>
+          <button type="button" className="btn btn-icon btn-sm task-action-btn" onClick={onClose} aria-label="Close the org chart" title="Close">&times;</button>
         </header>
         {done && <p className="oc-done" role="status" data-testid="org-chart-done">{done}</p>}
 

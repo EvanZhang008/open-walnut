@@ -4,10 +4,8 @@
  * with a Details button that opens the whole text. 2026-11-05: a daemon error showed one
  * ellipsized line with the command it named cut off, and no way to read or copy the rest.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { ICON_CHECK, ICON_COPY } from './Icons';
-import { copyTextRobust } from '@/utils/clipboard';
-import { log } from '@/utils/log';
+import { useLayoutEffect, useState, type RefObject } from 'react';
+import { CopyButton } from './CopyButton';
 
 export type NoticePart = { text: string } | { command: string };
 
@@ -25,7 +23,6 @@ export function noticeParts(text: string): NoticePart[] {
   return parts;
 }
 
-const COPIED_MS = 1500;
 
 /**
  * One command, as code, with a Copy button that never opens or dismisses the notice under it.
@@ -65,28 +62,9 @@ export function noticeCommands(...texts: Array<string | undefined>): string[] {
 
 /** Copy for a command; it says Copied for a moment. `label` shows words beside the icon. */
 export function CopyCommandButton({ command, label = false }: { command: string; label?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return (
-    <button
-      type="button"
-      className={label ? 'notice-cmd-copy notice-cmd-copy--label' : 'notice-cmd-copy'}
-      data-testid={label ? 'notice-copy-command' : 'notice-cmd-copy'}
-      aria-label={copied ? 'Copied' : `Copy ${command}`}
-      title={copied ? 'Copied' : 'Copy command'}
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        void copyTextRobust(command).then((r) => {
-          if (r === 'failed') { log.warn('notifications', 'notice command copy failed', { length: command.length }); return; }
-          setCopied(true);
-          clearTimeout(timer.current);
-          timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-        });
-      }}
-    >{copied ? ICON_CHECK : ICON_COPY}{label && <span className="notice-cmd-copy-words" data-other={copied ? 'Copy command' : 'Copied'}>{copied ? 'Copied' : 'Copy command'}</span>}</button>
-  );
+  return label
+    ? <CopyButton text={command} label="Copy command" kind="link" icon isolate className="notice-cmd-copy--label" data-testid="notice-copy-command" title="Copy command" />
+    : <CopyButton text={command} kind="icon" isolate className="notice-cmd-copy" data-testid="notice-cmd-copy" aria-label={`Copy ${command}`} title="Copy command" />;
 }
 
 /** A notice's words with each command made copyable (`copy: false`: as code only). */

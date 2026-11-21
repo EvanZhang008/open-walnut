@@ -32,7 +32,7 @@
    (2026-11-11, a real host: "Checking whether the session daemon is running on ..." left the address
    one word per line). */
 .fr-host-end { flex: 0 1 auto; max-width: 50%; min-width: 0; display: flex; align-items: center; justify-content: flex-end; }
-.fr-add.app-modal-btn { min-width: 64px; }
+.fr-add.btn { min-width: 64px; }
 
 .fr-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--font-size-sm); color: var(--fg-muted); text-align: right; min-width: 0; }
 .fr-state-ok { color: var(--fg); }
@@ -55,14 +55,14 @@
 .fr-failure-actions .fr-error { margin-top: 0; }
 
 .fr-hosts-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.fr-hosts-foot .fr-add-all.app-modal-btn { margin-top: 10px; }
+.fr-hosts-foot .fr-add-all.btn { margin-top: 10px; }
 .fr-empty { margin: 10px 0 0; font-size: var(--font-size-md); color: var(--fg-muted); }
 .fr-link {
   margin-top: 10px; padding: 2px 0; border: none; background: none; cursor: pointer;
   font-size: var(--font-size-md); color: var(--accent);
 }
 .fr-link:hover { text-decoration: underline; }
-.fr-link:focus-visible, .fr-modal .app-modal-btn:focus-visible {
+.fr-link:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }

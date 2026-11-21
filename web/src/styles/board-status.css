@@ -216,11 +216,4 @@
 /* Team stop (core/sessions/team-stop.ts): one quiet button, or the stopped line with the way back. */
 .bs-team-stop { margin: 4px 0 10px; font-size: var(--font-size-md); color: var(--fg-muted); }
 .bs-team-stop.is-stopped { color: var(--fg); padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); }
-.bs-team-stop-btn {
-  font: inherit; font-size: var(--font-size-sm); color: var(--fg-muted); background: none; border: 1px solid var(--border);
-  border-radius: 6px; padding: 2px 8px; cursor: pointer;
-}
-.bs-team-stop-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
-.bs-team-stop-btn:disabled { opacity: 0.6; cursor: default; }
-.bs-team-stop-btn.is-danger { color: var(--error); border-color: currentColor; }
 .bs-team-stop-error { color: var(--error); }

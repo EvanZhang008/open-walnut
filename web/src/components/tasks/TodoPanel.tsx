@@ -8153,7 +8153,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onDeleteAll={batchDelete}
           />
           <button
-            className="task-selection-clear-btn"
+            className="btn btn-sm btn-ghost task-selection-clear-btn"
             onClick={() => (selectMode ? exitSelectMode() : setSelectedIds(new Set()))}
           >
             Cancel
@@ -8362,7 +8362,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               {hiddenPinnedGroups.map((g) => (
                 <button
                   key={g.groupId}
-                  className="todo-pinned-hidden-chip"
+                  className="btn btn-sm btn-ghost"
                   onClick={() => handleUnhideGroup(g.groupId)}
                   title={`Unhide "${g.label}" (${g.count} task${g.count === 1 ? '' : 's'}) back into Focus`}
                 >

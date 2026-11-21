@@ -53,24 +53,24 @@ export function InboxPane({
     <div className={`notification-feed hib-inbox-pane${split ? ' hib-inbox-split' : ''}`} data-density={density} data-layout={layout}>
       <div className="hib-toolbar">
         <div className="hib-view-choices" role="group" aria-label="Inbox layout">
-          <button className="hib-row-btn" aria-pressed={!split} onClick={() => onLayoutChange('cards')}>Cards</button>
-          <button className="hib-row-btn" aria-pressed={split} onClick={() => onLayoutChange('split')}>Split</button>
+          <button className="btn btn-sm hib-row-btn" aria-pressed={!split} onClick={() => onLayoutChange('cards')}>Cards</button>
+          <button className="btn btn-sm hib-row-btn" aria-pressed={split} onClick={() => onLayoutChange('split')}>Split</button>
         </div>
         <div className="hib-view-choices" role="group" aria-label="Inbox density">
-          <button className="hib-row-btn" aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
-          <button className="hib-row-btn" aria-pressed={density === 'roomy'} onClick={() => setDensity('roomy')}>Roomy</button>
+          <button className="btn btn-sm hib-row-btn" aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>Compact</button>
+          <button className="btn btn-sm hib-row-btn" aria-pressed={density === 'roomy'} onClick={() => setDensity('roomy')}>Roomy</button>
         </div>
         {/* A pressed toggle, not a checkbox: it reads as a filter chip in the
             row of buttons and the state is visible without a label change. */}
         <button
-          className="hib-row-btn hib-filter-btn"
+          className="btn btn-sm hib-row-btn hib-filter-btn"
           aria-pressed={unreadOnly}
           onClick={onToggleUnreadOnly}
           title={unreadOnly ? 'Showing unread letters only' : 'Show unread letters only'}
         >
           Unread
         </button>
-        <button className="hib-row-btn" onClick={onToggleArchived}>
+        <button className="btn btn-sm hib-row-btn" onClick={onToggleArchived}>
           {showArchived ? '← Back to inbox' : 'Archived'}
         </button>
       </div>

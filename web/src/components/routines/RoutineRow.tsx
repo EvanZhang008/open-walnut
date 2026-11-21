@@ -319,8 +319,8 @@ export function RoutineRow({
             {confirmDelete ? (
               <>
                 <span className="routine-confirm-text cron-confirm-text">Delete this routine?</span>
-                <button type="button" className="btn btn-sm cron-confirm-cancel" onClick={() => setConfirmDelete(false)}>Cancel</button>
-                <button type="button" className="btn btn-sm routine-danger cron-confirm-delete" onClick={() => { setConfirmDelete(false); onDelete(routine.id); }}>Delete</button>
+                <button type="button" className="btn btn-sm" onClick={() => setConfirmDelete(false)}>Cancel</button>
+                <button type="button" className="btn btn-sm btn-primary btn-danger" onClick={() => { setConfirmDelete(false); onDelete(routine.id); }}>Delete</button>
               </>
             ) : (
               <>
@@ -333,7 +333,7 @@ export function RoutineRow({
                 {owner && (
                   <button type="button" className="btn btn-sm" onClick={() => openTaskHere(owner.taskId, navigate)}>Open task</button>
                 )}
-                <button type="button" className="btn btn-sm routine-delete" onClick={() => setConfirmDelete(true)}>Delete</button>
+                <button type="button" className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(true)}>Delete</button>
               </>
             )}
           </div>

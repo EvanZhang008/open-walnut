@@ -83,7 +83,7 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
           // tab, and a plugin letter has no session), so this opens the inbox where it is waiting.
           <button
             type="button"
-            className="mail-compose-btn"
+            className="btn"
             data-testid="mail-send-show-letter"
             onClick={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
           >
@@ -93,7 +93,7 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
         {canRetry(status) && (
           <button
             type="button"
-            className="mail-compose-btn primary"
+            className="btn btn-primary"
             data-testid="mail-send-retry"
             disabled={busy}
             onClick={() => { void retryMailComposerSend(); }}
@@ -104,19 +104,19 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
         {status.phase === 'sent' ? (
           <button
             type="button"
-            className="mail-compose-btn primary"
+            className="btn btn-primary"
             data-testid="mail-send-back"
             onClick={backToInbox}
           >
             Back to inbox
           </button>
         ) : status.phase === 'discarded' ? (
-          <button type="button" className="mail-compose-btn" onClick={closeMailComposer}>Close</button>
+          <button type="button" className="btn" onClick={closeMailComposer}>Close</button>
         ) : (
           <>
             <button
               type="button"
-              className="mail-compose-btn"
+              className="btn"
               data-testid="mail-send-edit"
               disabled={busy || status.phase === 'sending'}
               onClick={editMailComposerDraft}
@@ -125,7 +125,7 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
             </button>
             <button
               type="button"
-              className="mail-compose-btn danger"
+              className="btn btn-danger"
               data-testid="mail-send-discard"
               disabled={busy || status.phase === 'sending'}
               onClick={onDiscard}

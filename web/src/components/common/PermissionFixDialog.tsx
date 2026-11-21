@@ -223,17 +223,17 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
         )}
 
         <div className="app-modal-actions">
-          <button className="app-modal-btn" onClick={onClose}>
+          <button className="btn" onClick={onClose}>
             {state === 'granted' ? 'Done' : 'Close'}
           </button>
           {state !== 'granted' && showPromptButton && (
-            <button className="app-modal-btn primary" disabled={requesting} onClick={triggerPrompt}>
+            <button className="btn btn-primary" disabled={requesting} onClick={triggerPrompt}>
               {requesting ? 'Waiting for macOS dialog…' : 'Request access'}
             </button>
           )}
           {/* Only for a row whose steps carry no opener of their own. */}
           {state !== 'granted' && !showPromptButton && !aStepOpensSettings && (
-            <button className="app-modal-btn primary" onClick={openSettings}>
+            <button className="btn btn-primary" onClick={openSettings}>
               Open System Settings
             </button>
           )}

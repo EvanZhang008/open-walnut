@@ -19,24 +19,8 @@
   font-variant-numeric: tabular-nums; box-shadow: 0 0 0 2px var(--bg);
 }
 
-/* One quiet button for every topic action that is not the main one: no fill, no border, the
-   secondary text colour; a surface step on hover. `.is-icon` is a square of the same height. */
-.topic-ghost-btn {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; flex: none;
-  border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-secondary);
-  font: inherit; font-size: var(--font-size-md); font-weight: 500; cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-.topic-ghost-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.topic-ghost-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.topic-ghost-btn[aria-pressed="true"] { background: var(--bg-hover); color: var(--fg); }
-.topic-ghost-btn.is-icon { width: 28px; padding: 0; justify-content: center; }
-.topic-ghost-btn svg { flex: none; }
-
 /* The Org list's group: the section label as its siblings draw it, a small + at its end. */
 .org-topics-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.org-topics-head .org-topics-new { height: 20px; width: 20px; border-radius: 6px; color: var(--fg-muted); }
-.org-topics-head .org-topics-new svg { width: 12px; height: 12px; }
 .topic-group-avatar { position: relative; display: inline-block; flex: none; }
 .topic-group-avatar-slot { position: absolute; display: inline-flex; }
 .topic-group-avatar-slot.is-back { left: 0; top: 0; }
@@ -55,7 +39,6 @@
 .topic-head-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .topic-head-title { font-weight: 600; font-size: var(--font-size-lg); line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topic-head-sub { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topic-head-members { height: 32px; padding: 0 8px 0 4px; }
 .topic-head-count { font-size: var(--font-size-md); font-variant-numeric: tabular-nums; }
 .topic-main { flex: 1; min-height: 0; display: flex; position: relative; }
 .topic-conversation { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -254,8 +237,6 @@
 
 /* The Threads view's own row of actions */
 .org-threads-bar { display: flex; justify-content: flex-end; margin: -4px 0 4px; }
-.org-threads-bar .topic-ghost-btn { height: 26px; font-size: var(--font-size-md); }
-.org-threads-bar .topic-ghost-btn svg { width: 12px; height: 12px; }
 
 /* "Email from" (TopicMailFrom.tsx): the label, the mailbox button that opens its menu, and a note while none is chosen. */
 .topic-mail-from { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

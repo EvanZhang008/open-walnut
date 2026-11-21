@@ -291,9 +291,9 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
                 kind="warn"
                 action={
                   <span className="settings-addons-inline">
-                    <a className="settings-button settings-button-default" href="#permissions">
-                      <span className="settings-button-stack">
-                        <span className="settings-button-label">Open macOS Access</span>
+                    <a className="btn btn-sm" href="#permissions">
+                      <span className="btn-reserve">
+                        <span className="btn-label">Open macOS Access</span>
                       </span>
                     </a>
                     <SettingsButton onClick={openFix}>Fix it...</SettingsButton>

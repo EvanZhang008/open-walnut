@@ -262,7 +262,7 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
   if (!open) {
     return (
       <button
-        className="dock-quick-add-btn"
+        className="btn btn-icon dock-quick-add-btn"
         onClick={() => setOpen(true)}
         title="Add a task to Focus"
         aria-label="Add a task to Focus"

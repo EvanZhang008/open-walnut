@@ -68,7 +68,7 @@ export const SessionReaderPane = memo(function SessionReaderPane(p: SessionReade
         {p.canSide && (
           <button
             type="button"
-            className="session-reader-btn"
+            className="btn btn-icon btn-sm session-reader-btn"
             data-testid="session-reader-orient"
             onClick={() => p.onOrient(other)}
             title={other === 'side' ? 'Side by side' : 'One above the other'}
@@ -77,7 +77,7 @@ export const SessionReaderPane = memo(function SessionReaderPane(p: SessionReade
         )}
         <button
           type="button"
-          className="session-reader-btn"
+          className="btn btn-icon btn-sm session-reader-btn"
           data-testid="session-reader-close"
           onClick={p.onClose}
           title="Close the split"

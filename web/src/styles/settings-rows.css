@@ -173,7 +173,7 @@
    fade a second time (N07). */
 :is(.settings-row[aria-disabled='true'], [aria-disabled='true'] .settings-row)
   :is(.toggle-switch.settings-switch:disabled, .settings-checkbox-input:disabled,
-    .settings-segmented[aria-disabled='true'], .settings-button:disabled, .settings-input:disabled) {
+    .settings-segmented[aria-disabled='true'], .btn:disabled, .settings-input:disabled) {
   opacity: 1;
 }
 

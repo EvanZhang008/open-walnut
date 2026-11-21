@@ -234,7 +234,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
         {!empty && (
           <button
             type="button"
-            className={`btn btn-sm ${composing ? 'btn-secondary' : 'btn-primary'} routines-new-btn`}
+            className={`btn ${composing ? '' : 'btn-primary'} routines-new-btn`}
             aria-expanded={composing}
             aria-pressed={composing}
             title={composing ? 'Hide the new routine box' : undefined}

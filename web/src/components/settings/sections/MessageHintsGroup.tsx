@@ -169,12 +169,12 @@ function HintEditor({ hint, onSave, onReset }: {
         />
       ))}
       <div className="message-hint-actions">
-        <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={gate.send} data-testid={`hint-save-${hint.kind}`} {...dictationWaitProps(gate)}>
-          <span className="settings-button-label">Save</span>
+        <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={gate.send} data-testid={`hint-save-${hint.kind}`} {...dictationWaitProps(gate)}>
+          <span className="btn-label">Save</span>
         </button>
         {(hint.overridden || !hint.built_in) && (
-          <button type="button" className="settings-button settings-button-default" disabled={busy} onClick={() => void onReset()} data-testid={`hint-reset-${hint.kind}`}>
-            <span className="settings-button-label">{hint.built_in ? 'Reset to default' : 'Remove'}</span>
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void onReset()} data-testid={`hint-reset-${hint.kind}`}>
+            <span className="btn-label">{hint.built_in ? 'Reset to default' : 'Remove'}</span>
           </button>
         )}
       </div>
@@ -320,13 +320,13 @@ export function MessageHintsGroup() {
               </MicField>
               <button
                 type="button"
-                className="settings-button settings-button-default"
+                className="btn btn-sm"
                 data-testid="hint-add"
                 disabled={!newKind.trim() || (!newText.trim() && !addGate.micBusy && !addGate.waiting)}
                 onClick={addGate.send}
                 {...dictationWaitProps(addGate)}
               >
-                <span className="settings-button-label">Add</span>
+                <span className="btn-label">Add</span>
               </button>
             </span>
           )}

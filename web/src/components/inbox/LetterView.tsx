@@ -336,10 +336,10 @@ export function LetterView({
         <div className="hib-reader-tools">
           {shown && (
             <>
-              <button className="hib-row-btn" onClick={() => onTogglePin(shown)}>
+              <button className="btn btn-sm hib-row-btn" onClick={() => onTogglePin(shown)}>
                 {shown.pinned ? 'Unpin' : 'Pin'}
               </button>
-              <button className="hib-row-btn" onClick={() => onToggleArchive(shown)}>
+              <button className="btn btn-sm hib-row-btn" onClick={() => onToggleArchive(shown)}>
                 {shown.archived ? 'Unarchive' : 'Archive'}
               </button>
             </>
@@ -363,7 +363,7 @@ export function LetterView({
           )}
 
           {showOpenSession && openSessionHref && (
-            <button className="hib-row-btn" onClick={() => onNavigate(openSessionHref)}>
+            <button className="btn btn-sm hib-row-btn" onClick={() => onNavigate(openSessionHref)}>
               Open session ↗
             </button>
           )}
@@ -380,7 +380,7 @@ export function LetterView({
             {actions.map((action) => (
               <button
                 key={action.id}
-                className="hib-action-btn"
+                className="btn btn-block hib-action-btn"
                 disabled={busy}
                 onClick={() => {
                   if (!answerGate.waiting) pendingAction.current = action.id;
@@ -432,7 +432,7 @@ export function LetterView({
           </div>
         )}
 
-        {loadError && <div className="hib-note hib-note-error">{loadError} <button type="button" className="hib-row-btn" onClick={() => reload(false)}>Try again</button></div>}
+        {loadError && <div className="hib-note hib-note-error">{loadError} <button type="button" className="btn btn-sm hib-row-btn" onClick={() => reload(false)}>Try again</button></div>}
         {!letter && !loadError && <div className="hib-note">Opening…</div>}
         {letter && (
           <>

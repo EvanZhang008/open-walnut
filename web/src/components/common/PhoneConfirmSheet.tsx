@@ -83,7 +83,7 @@ export function PhoneConfirmSheet({
           <button
             ref={cancelRef}
             type="button"
-            className="phone-confirm-sheet-btn"
+            className="btn phone-confirm-sheet-btn"
             disabled={busy}
             onClick={() => close()}
           >
@@ -91,7 +91,7 @@ export function PhoneConfirmSheet({
           </button>
           <button
             type="button"
-            className={`phone-confirm-sheet-btn phone-confirm-sheet-btn-primary${destructive ? ' is-destructive' : ''}`}
+            className={`btn btn-primary${destructive ? ' btn-danger' : ''} phone-confirm-sheet-btn`}
             disabled={busy}
             aria-busy={busy || undefined}
             onClick={onConfirm}

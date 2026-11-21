@@ -163,7 +163,7 @@ export function TaskFilterChips({ query, onQueryChange, onClearAll }: Props) {
         ) : (
           <button
             key={c.key}
-            className="usage-chip"
+            className="btn btn-sm usage-chip"
             data-chip-key={c.key}
             onClick={c.onRemove}
             title={`Remove ${c.label} filter`}
@@ -178,7 +178,7 @@ export function TaskFilterChips({ query, onQueryChange, onClearAll }: Props) {
           only control that also resets the surface's own view state (onClearAll),
           so hiding it until a second chip appears made the single-condition case
           need two different gestures for the same intent. */}
-      <button className="usage-chip-clear-all" onClick={clearAll}>Clear all</button>
+      <button className="btn btn-sm btn-link" onClick={clearAll}>Clear all</button>
     </div>
   );
 }

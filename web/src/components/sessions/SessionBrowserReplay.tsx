@@ -311,13 +311,13 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
           {count ? `Replay · step ${i + 1} of ${count} · ${spanLine(ruler.seconds)}` : 'Replay'}
         </span>
         {onBack
-          ? <button type="button" className="session-browser-btn" onClick={onBack} data-testid="session-browser-replay-back" title="The live picture of the agent's tab">Live</button>
+          ? <button type="button" className="btn btn-sm" onClick={onBack} data-testid="session-browser-replay-back" title="The live picture of the agent's tab">Live</button>
           : null}
         {(liveTab || anyPage) && (
           <BrowserRevealButton taskId={taskId} tab={liveTab?.tab} device={liveTab?.device} step={liveTab ? undefined : pageStep?.id} testId="session-browser-replay-reveal" />
         )}
-        <button type="button" className="session-browser-btn" onClick={onLarge} aria-pressed={large} data-testid="session-browser-replay-size">{large ? 'Smaller' : 'Larger'}</button>
-        <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
+        <button type="button" className="btn btn-sm" onClick={onLarge} aria-pressed={large} data-testid="session-browser-replay-size">{large ? 'Smaller' : 'Larger'}</button>
+        <button type="button" className="btn btn-icon btn-sm session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-replay-hide">{CLOSE_GLYPH}</button>
       </header>
       <div className="session-browser-replay-body">

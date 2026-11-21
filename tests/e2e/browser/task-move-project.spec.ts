@@ -134,7 +134,7 @@ test('cross-provider drag: confirm gates the move; cancel keeps everything', asy
     await dragCardOnto(page, r, l)
     const modal = page.locator('.app-modal', { hasText: 'Move across providers?' })
     await modal.waitFor({ state: 'visible', timeout: 15_000 })
-    await modal.locator('.app-modal-btn', { hasText: 'Cancel' }).click()
+    await modal.locator('.btn', { hasText: 'Cancel' }).click()
     await page.waitForTimeout(800)
     const afterCancel = await taskState(page, r)
     expect(afterCancel?.project).toBe(projRemote)
@@ -143,7 +143,7 @@ test('cross-provider drag: confirm gates the move; cancel keeps everything', asy
     // Round 2: confirm → project moves and the task migrates to local.
     await dragCardOnto(page, r, l)
     await modal.waitFor({ state: 'visible', timeout: 15_000 })
-    await modal.locator('.app-modal-btn.primary').click()
+    await modal.locator('.btn.btn-primary').click()
     await expect.poll(async () => (await taskState(page, r))?.project, { timeout: 20_000 }).toBe(projLocal)
     expect((await taskState(page, r))?.source).toBe('local')
   } finally {

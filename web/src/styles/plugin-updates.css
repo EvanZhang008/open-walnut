@@ -164,16 +164,6 @@ button.plugin-update-chip--current:hover {
   outline-offset: 1px;
 }
 
-/*
- * The primary action gets the same 2px accent ring every other control in this slice has;
- * the UA's 1px auto outline was near invisible on the blue primary (N3-8). A card-coloured
- * inner ring separates the accent ring from the accent fill.
- */
-.plugin-update-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 2px var(--bg-secondary);
-}
 
 /*
  * One width for every label (N3-5): the visible label and the invisible widest one
@@ -201,21 +191,6 @@ button.plugin-update-chip--current:hover {
   grid-area: 1 / 1;
 }
 
-/*
- * Disabled reads as disabled in BOTH themes: muted foreground, no border, a 6% wash for the
- * button shape. Opacity alone was the wrong tool (N2-5): 0.72 on the dark card left the
- * text, background and border computed identical to an enabled secondary button, so the
- * only clue that Update was dead was clicking it. The muted token keeps the label legible
- * (light 3.3:1, dark 5.2:1), which is what a dimmed control should measure.
- */
-.plugin-update-disabled .btn[disabled],
-.plugin-update-disabled .btn[disabled]:hover {
-  opacity: 1;
-  color: var(--fg-muted);
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-  border-color: transparent;
-  cursor: not-allowed;
-}
 
 /* ---- Feedback line: one sentence, optional Details, never a timer ---- */
 
@@ -513,18 +488,6 @@ button.plugin-update-chip--current:hover {
 .plugin-update-slot {
   display: inline-flex;
   visibility: hidden;
-}
-
-/*
- * One control height on the row: `.btn-sm` is 28px, but `.btn-danger-outline` is declared
- * after it in globals.css with the same specificity, so its 6px/13px padding won (34px).
- * The compound selector wins on specificity and brings Remove to the same 28px (N14).
- */
-.plugin-store-installed .btn-danger-outline.btn-sm,
-.plugin-sources-group .btn-danger-outline.btn-sm {
-  padding: 4px 10px;
-  font-size: var(--font-size-sm);
-  line-height: 18px;
 }
 
 /*

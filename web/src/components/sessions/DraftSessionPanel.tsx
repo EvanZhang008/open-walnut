@@ -887,7 +887,7 @@ export function DraftSessionPanel({
         {/* Beside session columns on Home the draft's header is as tall as theirs: an empty tool
             row of the same make stands where theirs is, so the header lines meet across the strip. */}
         <div className="session-meta-row-2 draft-header-tool-row" aria-hidden="true">
-          <span className="session-panel-window-controls"><span className="task-action-btn draft-header-tool-spacer" /></span>
+          <span className="session-panel-window-controls"><span className="btn btn-icon btn-sm task-action-btn draft-header-tool-spacer" /></span>
         </div>
         <div className="session-panel-header-top">
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
@@ -922,7 +922,7 @@ export function DraftSessionPanel({
             />
           )}
           <button
-            className="task-action-btn session-panel-close"
+            className="btn btn-icon btn-sm btn-danger task-action-btn session-panel-close"
             onClick={phoneDraft.close}
             title="Discard this draft"
             aria-label="Discard draft session"

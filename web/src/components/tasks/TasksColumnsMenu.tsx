@@ -46,7 +46,7 @@ export function TasksColumnsMenu({ columns, scope, onChange }: TasksColumnsMenuP
       <button
         ref={btnRef}
         type="button"
-        className={`tp-cols-btn${open ? ' open' : ''}`}
+        className="btn btn-icon btn-sm tp-cols-btn"
         title="Choose columns"
         aria-label="Choose columns"
         aria-haspopup="menu"

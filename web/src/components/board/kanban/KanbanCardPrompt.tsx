@@ -119,7 +119,7 @@ export function KanbanCardPrompt({ request, onAnswered }: KanbanCardPromptProps)
       {failed && (
         <div className="kanban-prompt-error" data-testid="kanban-prompt-error" role="alert">
           Couldn't answer: the session did not take the answer.{' '}
-          <button type="button" className="kanban-text-btn" data-testid="kanban-prompt-retry" onClick={retry}>Retry</button>
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-prompt-retry" onClick={retry}>Retry</button>
         </div>
       )}
     </div>

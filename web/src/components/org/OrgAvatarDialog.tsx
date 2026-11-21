@@ -186,7 +186,7 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
               <div className="org-avatar-ask">
                 <MicInput value={prompt} setText={setPrompt} placeholder={`What should ${target.name} look like? (blank: one that fits its name)`} fieldClassName="mic-field-compact mic-field-grow"
                   maxLength={400} data-testid="org-avatar-prompt" data-draft-key={promptDraft.key ?? undefined} micRef={promptMic} onEnter={() => { if (!drawing) drawGate.send(); }} />
-                <button type="button" className="org-avatar-btn is-primary" disabled={drawing} data-testid="org-avatar-draw" onClick={() => drawGate.send()} {...dictationWaitProps(drawGate)}>{drawing ? 'Drawing…' : drawn.length ? 'Draw again' : 'Draw'}</button>
+                <button type="button" className="btn btn-primary" disabled={drawing} data-testid="org-avatar-draw" onClick={() => drawGate.send()} {...dictationWaitProps(drawGate)}>{drawing ? 'Drawing…' : drawn.length ? 'Draw again' : 'Draw'}</button>
               </div>
               {drawing && <p className="org-avatar-note" data-testid="org-avatar-drawing">Your AI is drawing three; this takes up to a minute.</p>}
               {drawn.length > 0 && (
@@ -214,10 +214,10 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             {error && <p className="org-avatar-error" role="alert" data-testid="org-avatar-error">{error}</p>}
           </div>
           <footer className="org-avatar-foot">
-            <button type="button" className="org-avatar-btn" disabled={busy || !current.custom} data-testid="org-avatar-reset" onClick={() => saveAs({ reset: true })}>Reset to default</button>
+            <button type="button" className="btn" disabled={busy || !current.custom} data-testid="org-avatar-reset" onClick={() => saveAs({ reset: true })}>Reset to default</button>
             <span className="org-avatar-gap" />
-            <button type="button" className="org-avatar-btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="org-avatar-btn is-primary" disabled={busy || ((blankTitle || (!picked && name.trim() === target.name.trim())) && !saveGate.micBusy && !saveGate.waiting)} data-testid="org-avatar-save" onClick={() => saveAs(picked)} {...dictationWaitProps(saveGate)}>{busy ? 'Saving…' : 'Save'}</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-primary" disabled={busy || ((blankTitle || (!picked && name.trim() === target.name.trim())) && !saveGate.micBusy && !saveGate.waiting)} data-testid="org-avatar-save" onClick={() => saveAs(picked)} {...dictationWaitProps(saveGate)}>{busy ? 'Saving…' : 'Save'}</button>
           </footer>
         </div>
       </div>

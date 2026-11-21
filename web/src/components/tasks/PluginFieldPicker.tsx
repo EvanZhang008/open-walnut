@@ -276,7 +276,7 @@ export function PluginFieldPill({ task, field }: {
     <>
       <button
         ref={btnRef}
-        className={`sprint-picker-pill${!current ? ' sprint-picker-empty-pill' : ''}`}
+        className={`btn btn-sm${!current ? ' btn-ghost' : ''}`}
         title={current ? `${field.label}: ${current}` : `Set ${field.label.toLowerCase()}`}
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
       >

@@ -40,33 +40,6 @@
   padding-right: 30px;
 }
 
-/* ── Single Normal⇄Full width toggle button in the editor header ──
-   Reuses the bookmark/raw-toggle button footprint so the toolbar reads as one
-   consistent row of icon buttons (Notion-style). Active = currently Full. */
-.notes-width-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.notes-width-btn:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-.notes-width-btn.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
 /* ── Raw markdown source view (Feature 2) ──
  * CodeMirror 6 mount point. As a direct child of .notes-editor-content it picks
  * up the width-mode cap above (single owner); height fills the pane and the
@@ -87,8 +60,3 @@
   height: 100%;
 }
 
-/* The </> raw-toggle button reuses the bookmark button footprint for visual parity. */
-.notes-raw-toggle-btn.active {
-  color: var(--accent);
-  background: var(--accent-subtle);
-}

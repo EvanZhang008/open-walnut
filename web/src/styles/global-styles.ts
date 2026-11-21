@@ -4,6 +4,7 @@
  * App statically these came last in the one bundle, after every component's styles, and the
  * cascade still depends on that: a global rule wins over a component rule just as specific.
  */
+import './buttons.css';
 import './globals.css';
 import './chat-palette.css';
 import './home-navigation.css';

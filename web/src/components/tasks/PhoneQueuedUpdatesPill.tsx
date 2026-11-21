@@ -13,7 +13,7 @@ export function PhoneQueuedUpdatesPill() {
   return (
     <button
       type="button"
-      className="phone-updates-pill"
+      className="btn btn-primary phone-updates-pill"
       data-testid="phone-updates-pill"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {

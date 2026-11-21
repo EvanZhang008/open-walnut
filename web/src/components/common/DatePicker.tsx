@@ -204,7 +204,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
       <div className="dp-pills">
         {date && (
           <button
-            className="dp-pill dp-pill-none"
+            className="btn btn-sm btn-ghost btn-danger dp-pill dp-pill-none"
             onClick={(e) => { e.stopPropagation(); onChange(null); }}
             aria-label="Clear date"
           >
@@ -214,7 +214,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
         {TIME_PILLS.map((p) => (
           <button
             key={p.label}
-            className="dp-pill"
+            className="btn btn-sm dp-pill"
             onClick={(e) => { e.stopPropagation(); handleTimePick(p.ms); }}
           >
             {p.label}
@@ -227,7 +227,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
           {tomorrowTimePills().map((p) => (
             <button
               key={p.label}
-              className="dp-pill"
+              className="btn btn-sm dp-pill"
               onClick={(e) => { e.stopPropagation(); onChange(p.date); }}
               aria-label={`Tomorrow ${p.label}`}
               data-tomorrow={p.label}
@@ -242,7 +242,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
         {dayPills.map((p) => (
           <button
             key={p.date}
-            className="dp-pill"
+            className="btn btn-sm dp-pill"
             onClick={(e) => { e.stopPropagation(); pickDay(p.date); }}
             data-date={p.date}
           >
@@ -271,7 +271,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
           {target ? (
             <button
               type="button"
-              className="dp-pill dp-time-set"
+              className="btn btn-sm btn-primary dp-pill dp-time-set"
               disabled={target.past}
               title={target.past ? PAST_NOTE : undefined}
               onClick={(e) => { e.stopPropagation(); applyTime(); }}

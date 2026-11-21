@@ -1229,7 +1229,7 @@ test.describe('Calendar view', () => {
     await page.mouse.up()
 
     await pickCalendarTaskSide(page)
-    const chips = page.locator('.cal-create-popover .qtc-chip')
+    const chips = page.locator('.cal-create-popover .qtc-field')
     await expect(chips.first()).toBeVisible()
     const labels = await chips.allTextContents()
     expect(labels.some((l) => l.startsWith('Start '))).toBe(true)

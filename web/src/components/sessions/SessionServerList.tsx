@@ -15,7 +15,7 @@ import type { SessionServer } from '@/api/session-servers';
 import { serverKey } from '@/hooks/useSessionServers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { copyTextRobust } from '@/utils/clipboard';
+import { CopyButton } from '@/components/common/CopyButton';
 import { formatAge, serverAge, openable, serverLabel, shortCommand } from './session-server-label';
 
 export interface SessionServerListProps {
@@ -132,8 +132,8 @@ function StopPopover({ server, anchor, placeAt, sent, onConfirm, onCancel }: {
       </div>
       <div className="session-server-popover-body">{stopScopeLine(server)}</div>
       <div className="session-server-popover-actions">
-        <button ref={cancelRef} type="button" className="session-server-btn" onClick={onCancel} disabled={sent}>Cancel</button>
-        <button type="button" className="session-server-btn session-server-btn-danger" data-testid="session-server-stop-confirm" onClick={onConfirm} disabled={sent}>
+        <button ref={cancelRef} type="button" className="btn btn-sm btn-ghost" onClick={onCancel} disabled={sent}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-primary btn-danger" data-testid="session-server-stop-confirm" onClick={onConfirm} disabled={sent}>
           {sent ? 'Stopping…' : 'Stop server'}
         </button>
       </div>
@@ -143,23 +143,7 @@ function StopPopover({ server, anchor, placeAt, sent, onConfirm, onCancel }: {
 }
 
 function CopyCommand({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(t);
-  }, [copied]);
-  return (
-    <button type="button" className={`session-server-btn session-server-btn-icon session-server-copy${copied ? ' session-server-copy-done' : ''}`}
-      title={copied ? 'Copied' : 'Copy the full command'} aria-label={copied ? 'Copied' : 'Copy the full command'}
-      onClick={() => { void copyTextRobust(command).then((r) => setCopied(r !== 'failed')); }}>
-      {copied ? (
-        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
-      ) : (
-        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="3.5" y="3.5" width="6.5" height="7" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M2 8V2.8C2 2.4 2.4 2 2.8 2H7" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>
-      )}
-    </button>
-  );
+  return <CopyButton text={command} kind="icon" className="session-server-copy" title="Copy the full command" aria-label="Copy the full command" />;
 }
 
 export function SessionServerList({
@@ -251,7 +235,7 @@ export function SessionServerList({
     // The same button says "Stopping…" while it runs: the row keeps its width and its focus.
     return (
       <button type="button"
-        className={`session-server-btn${inStrip ? ' session-servers-strip-stop' : ' session-server-row-stop'}${confirming?.key === key ? ' session-server-btn-armed' : ''}`}
+        className={`btn btn-sm session-server-btn${inStrip ? ' session-servers-strip-stop' : ' session-server-row-stop'}${confirming?.key === key ? ' btn-danger' : ''}`}
         disabled={s.stopScope === 'none' || busy}
         title={busy ? 'Stopping…' : stopTitle(s)}
         aria-label={busy ? `Stopping the server on port ${s.port}` : `Stop the server on port ${s.port}`}
@@ -358,7 +342,7 @@ export function SessionServerList({
       <div className="session-servers-list-title">
         <span>{title}{hostLabel ? ` on ${hostLabel}` : ''}</span>
         {onClose && (
-          <button type="button" className="session-server-btn session-server-btn-icon session-servers-list-close"
+          <button type="button" className="btn btn-icon btn-sm session-servers-list-close"
             onClick={onClose} aria-label="Close the server list" title="Close">
             <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8M8 2 2 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
           </button>
@@ -399,7 +383,7 @@ export function SessionServerList({
               <div className="session-server-row-actions">
                 {s.command && <CopyCommand command={s.command} />}
                 {openable(s) && !active ? (
-                  <button type="button" className="session-server-btn session-server-btn-open" onClick={() => onOpen(s)}
+                  <button type="button" className="btn btn-sm session-server-btn session-server-btn-open" onClick={() => onOpen(s)}
                     disabled={stopping.has(key)}
                     title={stopping.has(key) ? 'Stopping…' : `Open ${s.url} here`} aria-label={`Open the server on port ${s.port}`}
                     data-testid="session-server-open">

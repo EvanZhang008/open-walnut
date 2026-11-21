@@ -514,7 +514,7 @@ export function MarkdownEditorPanel({
           <div className="notes-editor-meta">
             {showLocate && onLocate && (
               <button
-                className="notes-bookmark-btn notes-locate-btn"
+                className="btn btn-icon notes-locate-btn"
                 onClick={onLocate}
                 aria-label="Locate in sidebar"
                 title="Locate in sidebar"
@@ -525,7 +525,7 @@ export function MarkdownEditorPanel({
             {showWidthToggle && <WidthToggleButton width={width} onChange={setWidth} />}
             {showRawToggle && (
               <button
-                className={`notes-bookmark-btn notes-raw-toggle-btn ${rawMode ? 'active' : ''}`}
+                className="btn btn-icon notes-raw-toggle-btn"
                 onClick={toggleRawMode}
                 aria-pressed={rawMode}
                 aria-label={rawMode ? 'Show rendered editor' : 'Show raw markdown'}
@@ -536,7 +536,7 @@ export function MarkdownEditorPanel({
             )}
             {showBookmark && onToggleFavorite && (
               <button
-                className={`notes-bookmark-btn ${isFavorite ? 'active' : ''}`}
+                className="btn btn-icon notes-bookmark-btn"
                 onClick={onToggleFavorite}
                 aria-pressed={!!isFavorite}
                 aria-label={isFavorite ? 'Remove bookmark' : 'Bookmark this note'}
@@ -621,7 +621,7 @@ function WidthToggleButton({ width, onChange }: { width: EditorWidth; onChange: 
   const isFull = width === 'full';
   return (
     <button
-      className={`notes-width-btn ${isFull ? 'active' : ''}`}
+      className="btn btn-icon notes-width-btn"
       onClick={() => onChange(isFull ? 'normal' : 'full')}
       aria-pressed={isFull}
       aria-label={isFull ? 'Switch to normal width' : 'Switch to full width'}
@@ -688,7 +688,7 @@ function ReloadBanner({
       <div className="notes-reload-banner conflict" role="status" data-testid="notes-needs-leader-banner">
         <span className="notes-reload-banner-text">{message ?? 'This change needs your Mac.'} Your text stays here, unsaved.</span>
         <div className="notes-reload-banner-actions">
-          <button className="notes-reload-banner-btn" onClick={onDismiss}>Keep editing</button>
+          <button className="btn btn-sm" onClick={onDismiss}>Keep editing</button>
         </div>
       </div>
     );
@@ -703,7 +703,7 @@ function ReloadBanner({
           Your text stays here, unsaved.
         </span>
         <div className="notes-reload-banner-actions">
-          <button className="notes-reload-banner-btn primary" onClick={onApply}>{message ? 'Try again' : 'Save as a new note'}</button>
+          <button className="btn btn-sm btn-primary" onClick={onApply}>{message ? 'Try again' : 'Save as a new note'}</button>
         </div>
       </div>
     );
@@ -717,11 +717,11 @@ function ReloadBanner({
           : 'This note changed on disk. Reload to see the latest?'}
       </span>
       <div className="notes-reload-banner-actions">
-        <button className="notes-reload-banner-btn primary" onClick={onApply}>
+        <button className="btn btn-sm btn-primary" onClick={onApply}>
           {conflict ? 'Load latest' : 'Reload'}
         </button>
         {!conflict && (
-          <button className="notes-reload-banner-btn" onClick={onDismiss}>
+          <button className="btn btn-sm" onClick={onDismiss}>
             Keep editing
           </button>
         )}

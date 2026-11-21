@@ -230,7 +230,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
         </SettingsButton>
       )}
       <a
-        className="settings-button settings-button-primary"
+        className="btn btn-sm btn-primary"
         href={mac.macOS ? TAILSCALE_MAC_APP_STORE_URL : TAILSCALE_DOWNLOAD_URL}
         target="_blank"
         rel="noopener noreferrer"
@@ -242,7 +242,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
   ) : mac.kind === 'not-running' ? (
     <span className="settings-addons-inline">
       {mac.loginUrl && (
-        <a className="settings-button settings-button-default" href={mac.loginUrl} target="_blank" rel="noopener noreferrer" data-testid="remote-access-sign-in">
+        <a className="btn btn-sm" href={mac.loginUrl} target="_blank" rel="noopener noreferrer" data-testid="remote-access-sign-in">
           Sign in
         </a>
       )}

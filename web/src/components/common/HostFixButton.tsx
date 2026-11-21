@@ -28,7 +28,7 @@ export function HostFixButton({ target, name, onNavigate }: { target: FixTarget;
   if (agentBlocked && !snapshot.pending) return null;
   return (
     <span className="host-agent-fix">
-      <button type="button" tabIndex={0} className="setup-step-btn host-agent-fix-button"
+      <button type="button" tabIndex={0} className="btn btn-sm host-agent-fix-button"
         data-testid="host-agent-fix" aria-label={`${label} for ${name}`} disabled={snapshot.pending}
         onClick={(event) => {
           event.stopPropagation();

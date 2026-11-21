@@ -131,7 +131,7 @@ export function PluginAppPage() {
             No installed plugin provides an app called <code>{appId}</code>. It may have been
             removed, or its plugin may be disabled.
           </p>
-          <Link className="plugin-app-btn" to="/">Back to Walnut</Link>
+          <Link className="btn" to="/">Back to Walnut</Link>
         </div>
       </div>
     );
@@ -146,7 +146,7 @@ export function PluginAppPage() {
             The page took more than {Math.round(LOAD_TIMEOUT_MS / 1000)} seconds to load. Retry
             reloads it from the plugin.
           </p>
-          <button className="plugin-app-btn" onClick={handleRetry}>Retry</button>
+          <button type="button" className="btn" onClick={handleRetry}>Retry</button>
         </div>
       ) : (
         <>

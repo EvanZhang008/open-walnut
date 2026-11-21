@@ -419,7 +419,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           control={
             <span className="settings-inline-pair">
               <SettingsButton onClick={() => { setConfirmDeletePrevious(false); setDeleteError(null) }} data-testid="backup-restore-delete-previous-cancel">Cancel</SettingsButton>
-              <SettingsButton variant="danger" className="backup-danger-button" onClick={() => void deletePrevious()} busy={deleting} busyLabel="Deleting..."
+              <SettingsButton variant="danger-confirm" onClick={() => void deletePrevious()} busy={deleting} busyLabel="Deleting..."
                 data-testid="backup-restore-delete-previous-yes">Delete</SettingsButton>
             </span>
           } />

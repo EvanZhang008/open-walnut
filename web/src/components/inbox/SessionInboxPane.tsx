@@ -126,7 +126,7 @@ export function SessionInboxPane({
           showOpenSession={false}
           headLeading={(
             <button
-              className="hib-row-btn hib-back-btn"
+              className="btn btn-sm hib-row-btn hib-back-btn"
               onClick={() => onOpenLetter(null)}
             >
               ← Letters

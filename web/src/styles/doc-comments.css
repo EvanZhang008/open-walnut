@@ -21,20 +21,13 @@
   pointer-events: auto;
 }
 
+/* "3 comments": the family's small key, in the header's top right. */
 .doc-comments-chip {
   position: absolute;
   top: var(--dc-top);
   right: 12px;
   z-index: 3;
-  padding: 2px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
 }
-.doc-comments-chip:hover { background: var(--bg-secondary); }
 .doc-comments-chip-sub { color: var(--fg-muted); }
 .doc-comments-chip-sub.is-outdated { color: hsl(28 80% 42%); }
 
@@ -191,24 +184,5 @@
   gap: 6px;
   margin-top: 6px;
 }
-.doc-comment-btn {
-  padding: 2px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.doc-comment-btn:disabled { opacity: 0.5; cursor: default; }
-.doc-comment-btn.is-primary {
-  border-color: hsl(28 85% 48%);
-  background: hsl(28 85% 48%);
-  color: var(--on-accent);
-}
-.doc-comment-btn.is-quiet {
-  margin-left: auto;
-  border-color: transparent;
-  background: none;
-  color: var(--fg-muted);
-}
+/* Delete sits at the row's end, away from Resolve. */
+.doc-comment-end { margin-left: auto; }

@@ -56,7 +56,7 @@ async function deleteTierViaUI(page: Page, label: string): Promise<void> {
   await modal.waitFor({ state: 'visible', timeout: 10_000 })
   const [res] = await Promise.all([
     page.waitForResponse((r) => r.url().includes('/api/focus/tiers/') && r.request().method() === 'DELETE', { timeout: 30_000 }),
-    modal.locator('.app-modal-btn.primary').click(),
+    modal.locator('.btn.btn-primary').click(),
   ])
   if (!res.ok()) throw new Error(`DELETE tier failed: ${res.status()} ${await res.text()}`)
   // 30s: the DELETE fans out task migrations + WS events; on a loaded machine the

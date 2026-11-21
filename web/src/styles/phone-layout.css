@@ -75,21 +75,6 @@
   .app-shell-navigation .phone-topbar .sidebar-toggle {
     position: static;
     display: inline-flex;
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--fg);
-  }
-
-  .app-shell-navigation .phone-topbar .sidebar-toggle[aria-expanded='true'] {
-    background: var(--accent-subtle);
-    color: var(--accent);
   }
 
   /* The title is centered on the whole bar, not between its buttons: it is laid
@@ -338,24 +323,18 @@
     height: 100dvh;
   }
 
+  /* The bar's keys are the family's .btn-icon at a finger's 44 px. */
   .app-shell-navigation .phone-topbar-btn {
     position: relative;
     z-index: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     width: 44px;
     height: 44px;
     flex: 0 0 44px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--fg);
   }
-
-  .app-shell-navigation .phone-topbar-back {
-    color: var(--accent);
+  /* The bar's icons are drawn at 22 px, larger than a toolbar's. */
+  .app-shell-navigation .phone-topbar-btn svg {
+    width: 22px;
+    height: 22px;
   }
 
   .app-shell-navigation .phone-topbar-right {
@@ -609,11 +588,9 @@
     user-select: none;
   }
 
-  .app-shell-navigation .phone-topbar-btn:active,
   .app-shell-navigation .phone-topbar-title:active,
   .app-shell-navigation .phone-status-row-btn:active,
-  .app-shell-navigation .sidebar .sidebar-link:active,
-  .phone-confirm-sheet-btn:active {
+  .app-shell-navigation .sidebar .sidebar-link:active {
     background: var(--bg-secondary);
   }
 
@@ -686,30 +663,10 @@
   gap: 8px;
 }
 
-.phone-confirm-sheet-btn {
-  flex: 1 1 0;
-  min-height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.phone-confirm-sheet-btn-primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.phone-confirm-sheet-btn-primary.is-destructive {
-  border-color: var(--error);
-  background: var(--error);
-}
-
-.phone-confirm-sheet-btn:disabled {
-  opacity: 0.6;
+/* Cancel and the confirm are family keys sharing the row, each a finger's 44 px tall. */
+.phone-confirm-sheet-btn { flex: 1 1 0; }
+@media (max-width: 768px), (pointer: coarse) {
+  .phone-confirm-sheet-btn { min-height: 44px; }
 }
 
 /* The home list scrolls its last row clear of the home indicator (C20). */

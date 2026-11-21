@@ -162,7 +162,7 @@ export function CreatePluginPage() {
           </p>
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn"
             data-testid="create-plugin-open-store"
             onClick={() => navigate(APPS_PATH)}
           >

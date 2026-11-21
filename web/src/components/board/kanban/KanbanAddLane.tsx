@@ -131,8 +131,8 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
           ))}
         </div>
         <div className="kanban-add-lane-actions">
-          <button type="button" className="kanban-btn is-primary" data-testid="kanban-add-lane-submit" aria-disabled={saving || undefined} onClick={gate.send} {...dictationWaitProps(gate)}>Add</button>
-          <button type="button" className="kanban-btn" data-testid="kanban-add-lane-cancel" onClick={close}>Cancel</button>
+          <button type="button" className="btn btn-sm btn-primary" data-testid="kanban-add-lane-submit" aria-disabled={saving || undefined} onClick={gate.send} {...dictationWaitProps(gate)}>Add</button>
+          <button type="button" className="btn btn-sm btn-ghost" data-testid="kanban-add-lane-cancel" onClick={close}>Cancel</button>
         </div>
       </div>
     </div>

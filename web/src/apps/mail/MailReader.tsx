@@ -62,7 +62,7 @@ export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
     <section className="mail-reader-pane" data-testid="mail-reader" data-message-id={open.messageId}>
       {narrow && !phone && (
         <div className="mail-pane-head mail-reader-back-bar">
-          <button type="button" className="mail-icon-btn" data-testid="mail-reader-back" onClick={closeMailMessage} aria-label="Back to the list">
+          <button type="button" className="btn btn-icon mail-icon-btn" data-testid="mail-reader-back" onClick={closeMailMessage} aria-label="Back to the list">
             <BackIcon />
           </button>
         </div>

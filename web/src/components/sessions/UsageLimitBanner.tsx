@@ -157,18 +157,18 @@ export function UsageLimitBanner({ sessionId, usageLimit, onChange }: {
         <div className="usage-limit-banner-actions">
           {/* Before the reset it is a try (the limit may refuse it again), so not the primary button;
               past the reset it is the continue, a moment before Walnut's own. */}
-          <button type="button" className={`usage-limit-btn${early ? '' : ' is-primary'}`} onClick={() => void run('continue')} disabled={busy !== null}
+          <button type="button" className={`btn btn-sm usage-limit-btn${early ? '' : ' btn-primary'}`} onClick={() => void run('continue')} disabled={busy !== null}
             title={early ? 'Send it a continue now. The limit has not reset yet, so it may stop again; then Walnut waits for the reset.' : 'Send it a continue now.'}>
             {busy === 'continue' ? 'Continuing…' : 'Continue now'}
           </button>
           {auto ? (
-            <button type="button" className="usage-limit-btn" onClick={() => void run('off')} disabled={busy !== null}
+            <button type="button" className="btn btn-sm usage-limit-btn" onClick={() => void run('off')} disabled={busy !== null}
               title="Walnut will not continue this session by itself. It then needs you.">
               {busy === 'off' ? 'Turning off…' : "Don't auto-continue"}
             </button>
           ) : early || !usageLimit.resetsAt ? (
             // Past the reset there is no reset to wait for: Continue now is the continue.
-            <button type="button" className="usage-limit-btn" onClick={() => void run('auto')} disabled={busy !== null}
+            <button type="button" className="btn btn-sm usage-limit-btn" onClick={() => void run('auto')} disabled={busy !== null}
               title="Walnut continues this session by itself when the limit resets.">
               {busy === 'auto' ? 'Turning on…' : 'Continue after reset'}
             </button>

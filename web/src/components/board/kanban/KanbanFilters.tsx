@@ -182,7 +182,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
         <div className="kanban-changed-actions">
           <button
             type="button"
-            className="kanban-text-btn"
+            className="btn btn-link btn-sm kanban-text-btn"
             data-testid="kanban-mark-seen"
             title="Count nothing as changed from now on"
             onClick={() => { seen.markAllSeen(); filter.setChip(null); }}
@@ -190,7 +190,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
           <button
             ref={changesBtn}
             type="button"
-            className="kanban-text-btn"
+            className="btn btn-link btn-sm kanban-text-btn"
             data-testid="kanban-changes-open"
             aria-haspopup="menu"
             aria-expanded={changesOpen}

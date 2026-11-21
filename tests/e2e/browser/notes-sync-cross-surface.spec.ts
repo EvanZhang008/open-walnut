@@ -284,7 +284,7 @@ test.describe('note bookmarks follow the vault', () => {
     const file = await revealInTree(page, BM_FOLDER, 'Doomed')
     await file.click({ button: 'right' })
     await page.locator('.notes-context-menu button.danger', { hasText: 'Delete' }).click()
-    await page.locator('.app-modal .app-modal-btn.primary.danger').click()
+    await page.locator('.app-modal .btn.btn-primary.btn-danger').click()
 
     // The row is gone — not merely stale-looking. A row that survives is a live
     // opener for a file that no longer exists.

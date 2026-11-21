@@ -286,10 +286,10 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
             )}
 
             <div className="app-modal-actions">
-              <button type="button" className="app-modal-btn" onClick={() => { draft.clear(); onClose(); }}>Cancel</button>
+              <button type="button" className="btn" onClick={() => { draft.clear(); onClose(); }}>Cancel</button>
               <button
                 type="submit"
-                className="app-modal-btn primary"
+                className="btn btn-primary"
                 data-testid="mail-add-submit"
                 disabled={busy || missing}
               >

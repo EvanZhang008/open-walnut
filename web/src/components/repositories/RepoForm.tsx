@@ -457,7 +457,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
                 title="SSH hostname (optional)"
               />
               {form.hosts.length > 1 && (
-                <button type="button" className="btn-icon btn-icon-danger" onClick={() => removeHost(i)} title="Remove host">
+                <button type="button" className="btn btn-icon btn-danger" onClick={() => removeHost(i)} title="Remove host">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               )}

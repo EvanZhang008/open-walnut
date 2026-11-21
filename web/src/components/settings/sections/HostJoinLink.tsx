@@ -88,8 +88,8 @@ export function HostJoinError({ error, liveLink, starting, onRetry, onStart, onS
 }) {
   const fix = joinFix(error.code, liveLink);
   const pageLink = (words: string) => (
-    <Link className="settings-button settings-button-default rh-join-fix" to="/settings#cloud" data-testid="host-network-open-cloud">
-      <span className="settings-button-stack"><span className="settings-button-label">{words}</span></span>
+    <Link className="btn btn-sm" to="/settings#cloud" data-testid="host-network-open-cloud">
+      <span className="btn-reserve"><span className="btn-label">{words}</span></span>
     </Link>
   );
   const why = fix === 'start' ? 'Start it here, and Walnut makes the link.'

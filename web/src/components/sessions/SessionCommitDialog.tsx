@@ -83,7 +83,7 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
       return (
         <div className="scd-status scd-status-error" data-testid="scd-load-error">
           <div>{loadError}</div>
-          <button type="button" className="app-modal-btn" onClick={() => void load()}>Try again</button>
+          <button type="button" className="btn" onClick={() => void load()}>Try again</button>
         </div>
       );
     }
@@ -134,7 +134,7 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
         <div className="scd-head">
           <div className="app-modal-title">Commit this session's changes</div>
           <div className="scd-head-actions">
-            <button type="button" className="app-modal-btn scd-reload" onClick={() => void load()} disabled={loading} title="Read the repositories again">
+            <button type="button" className="btn scd-reload" onClick={() => void load()} disabled={loading} title="Read the repositories again">
               {loading ? 'Reading…' : 'Reload'}
             </button>
             <button type="button" className="scd-close" onClick={onClose} aria-label="Close">×</button>
@@ -158,7 +158,7 @@ export function SessionCommitButton({ sessionId, disabled, onCommitted }: {
     <>
       <button
         type="button"
-        className="session-diff-commit-btn"
+        className="btn btn-sm session-diff-commit-btn"
         data-testid="session-commit-btn"
         onClick={() => setOpen(true)}
         disabled={disabled}

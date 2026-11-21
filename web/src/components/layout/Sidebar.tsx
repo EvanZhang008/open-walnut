@@ -403,7 +403,7 @@ export function Sidebar({
     >
       <div className="sidebar-header">
         <button
-          className="sidebar-collapse-btn"
+          className="btn btn-icon sidebar-collapse-btn"
           onClick={onToggleCollapse}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}

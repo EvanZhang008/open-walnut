@@ -115,7 +115,7 @@ export function ExtControl({ relay, here, tasks, owner, agents, keyed, vault, ke
               <span className="ext-control-setting-name">Stop all agents</span>
               <span className="ext-control-setting-line">Every tab an agent holds goes back.</span>
             </span>
-            <button type="button" className="ext-relay-row-btn is-stop" data-testid="ext-control-stop-all" disabled={!relay || relay.tabs.length === 0}
+            <button type="button" className="btn btn-sm btn-danger ext-relay-row-btn" data-testid="ext-control-stop-all" disabled={!relay || relay.tabs.length === 0}
               onClick={() => toParent({ type: 'relay-stop-all' })}>Stop all</button>
           </div>
           {settings && (

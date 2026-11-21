@@ -11,7 +11,7 @@ export function ItemOperationDetails({ plan, previous }: { plan: InboxItemPlan; 
   return <details className="hii-operation-details">
     <summary>Operation details</summary>
     <pre tabIndex={0}>{text}</pre>
-    <button type="button" className="hib-row-btn" onClick={() => {
+    <button type="button" className="btn btn-sm hib-row-btn" onClick={() => {
       void copyTextRobust(text).then(result => setCopied(result === 'failed' ? 'Could not copy. Select the source text instead.' : 'Copied'));
     }}>Copy operation details</button>
     {copied && <p>{copied}</p>}

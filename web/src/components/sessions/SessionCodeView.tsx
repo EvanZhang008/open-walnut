@@ -110,7 +110,7 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
         </div>
         <div className="session-code-actions">
           {info && phase === 'ready' && (
-            <a className="session-code-btn" href={info.url} target="_blank" rel="noreferrer" title="Open this editor in its own browser tab">
+            <a className="btn btn-sm" href={info.url} target="_blank" rel="noreferrer" title="Open this editor in its own browser tab">
               Open in tab
             </a>
           )}
@@ -123,7 +123,7 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
           <div className="session-code-error-title">Can't open embedded VS Code</div>
           <p className="session-code-error-body">{error.message}</p>
           {error.hint && <p className="session-code-error-hint">{error.hint}</p>}
-          <button className="session-code-btn" onClick={handleRetry}>Retry</button>
+          <button type="button" className="btn btn-sm" onClick={handleRetry}>Retry</button>
         </div>
       ) : (
         <div className="session-code-body">

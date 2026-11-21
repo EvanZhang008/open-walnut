@@ -254,11 +254,11 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
         </div>
         {asksOk && ws?.setup && (
           <div className="pending-session-actions">
-            <button className="pending-session-retry-btn" onClick={() => { void setupChoice('allow', ws.setup?.file_hash); }} disabled={!!setupBusy} data-testid="workspace-preparing-allow-setup"
+            <button className="btn btn-primary" onClick={() => { void setupChoice('allow', ws.setup?.file_hash); }} disabled={!!setupBusy} data-testid="workspace-preparing-allow-setup"
               title={`Run it now, and let this ${ws.setup.source} run by itself in new workspaces until it changes`}>
               {setupBusy === 'Starting setup…' ? setupBusy : 'Allow and run setup'}
             </button>
-            <button className="pending-session-dismiss-btn" onClick={() => { void setupChoice('start'); }} disabled={!!setupBusy} data-testid="workspace-preparing-start-anyway"
+            <button className="btn" onClick={() => { void setupChoice('start'); }} disabled={!!setupBusy} data-testid="workspace-preparing-start-anyway"
               title="Start the session in the workspace without running its setup">
               {setupBusy === 'Starting the session…' ? setupBusy : 'Start without it'}
             </button>
@@ -271,10 +271,10 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
         )}
         {setupHeld && !asksOk && (
           <div className="pending-session-actions">
-            <button className="pending-session-retry-btn" onClick={() => { void setupChoice('rerun'); }} disabled={!!setupBusy} data-testid="workspace-preparing-rerun-setup">
+            <button className="btn btn-primary" onClick={() => { void setupChoice('rerun'); }} disabled={!!setupBusy} data-testid="workspace-preparing-rerun-setup">
               {setupBusy === 'Starting setup…' ? setupBusy : 'Run setup again'}
             </button>
-            <button className="pending-session-dismiss-btn" onClick={() => { void setupChoice('start'); }} disabled={!!setupBusy} data-testid="workspace-preparing-start-anyway"
+            <button className="btn" onClick={() => { void setupChoice('start'); }} disabled={!!setupBusy} data-testid="workspace-preparing-start-anyway"
               title="Start the session in the workspace as it is now">
               {setupBusy === 'Starting the session…' ? setupBusy : 'Start anyway'}
             </button>
@@ -292,15 +292,15 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
         )}
         {idle && (
           <div className="pending-session-actions">
-            <button className="pending-session-dismiss-btn" onClick={onClose} data-testid="workspace-preparing-dismiss">Dismiss</button>
+            <button className="btn" onClick={onClose} data-testid="workspace-preparing-dismiss">Dismiss</button>
           </div>
         )}
         {failed && !setupHeld && (
           <div className="pending-session-actions">
-            <button className="pending-session-retry-btn" onClick={() => { void retry(); }} disabled={retrying} data-testid="workspace-preparing-retry">
+            <button className="btn btn-primary" onClick={() => { void retry(); }} disabled={retrying} data-testid="workspace-preparing-retry">
               {retrying ? 'Retrying…' : 'Retry'}
             </button>
-            <button className="pending-session-dismiss-btn" onClick={() => { void dismissStart(); }} data-testid="workspace-preparing-dismiss-start"
+            <button className="btn" onClick={() => { void dismissStart(); }} data-testid="workspace-preparing-dismiss-start"
               title="Give up this start: the task keeps its workspace, and no session starts">Dismiss</button>
           </div>
         )}

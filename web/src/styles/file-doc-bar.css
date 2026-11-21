@@ -107,8 +107,8 @@
 .fv-doc-bar .fv-html-tab.fv-mode-tab:hover { color: var(--fg); background: var(--bg-hover); }
 .fv-doc-bar .fv-html-tab.fv-mode-tab.active { color: var(--fg); font-weight: 600; background: none; }
 
-/* Media controls keep their words, at the bar's height. */
-.fv-doc-bar .fv-skip-btn,
+/* Media controls keep their words, at the bar's height: the skips are the family's quiet small
+   keys (.btn.btn-ghost.btn-sm); the speed is a select drawn to match. */
 .fv-doc-bar .fv-speed-select {
   height: 28px;
   display: inline-flex;
@@ -132,7 +132,6 @@
   cursor: pointer;
 }
 .fv-doc-bar .fv-speed-select:hover { background-color: var(--bg-hover); color: var(--fg); }
-.fv-doc-bar .fv-skip-btn:hover { color: var(--fg); background: var(--bg-hover); }
 
 /* Transient notes (Draft restored, Merged agent changes, Path copied). */
 .fv-doc-bar .fv-draft-note { margin-right: 6px; }

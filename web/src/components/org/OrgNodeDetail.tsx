@@ -127,7 +127,7 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
 function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
-    <button key={tab} type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
+    <button key={tab} type="button" className="btn btn-sm" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
       <i style={{ background: TAB_DOT[tab] }} />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
     </button>
   );
@@ -136,7 +136,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
       {keepsThreads && (
         <button
           type="button"
-          className="org-pill is-button"
+          className="btn btn-sm"
           data-testid="org-pill-threads"
           data-threads={shown}
           onClick={onThreads}

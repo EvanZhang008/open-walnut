@@ -6,7 +6,7 @@
  * button. A source checkout says so instead of a status, because its owner
  * updates it with git.
  */
-import { useCallback, useState } from 'react';
+import { CopyButton } from './CopyButton';
 import type { UpdateStatus } from '@/api/update';
 import { StableButton } from './HostProblemRows';
 import { updateCardView } from './update-card-view';
@@ -17,21 +17,11 @@ const CHECK_LABELS = ['Check now', 'Checking...'];
 
 /** The command chip plus Copy / Copied (the same shape the setup banner uses). */
 function CopyCommand({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => { /* clipboard blocked; the text stays selectable */ });
-  }, [command]);
-  const label = copied ? 'Copied' : 'Copy';
   return (
     <span className="setup-copy-wrap nfc-update-command">
-      <code className="setup-command" onClick={handleCopy} title="Click to copy" data-testid="nfc-update-command">{command}</code>
-      <button type="button" tabIndex={0} className="setup-copy-btn ab-copy-btn" onClick={handleCopy}
-        aria-label={copied ? label : 'Copy command'} title={copied ? label : 'Copy command'} data-testid="nfc-update-copy">
-        <span className="hpb-btn-stack" data-r1="Copied" data-r2="Copy"><span>{label}</span></span>
-      </button>
+      {/* A click on the command presses its Copy (one copy control per card). */}
+      <code className="setup-command" onClick={(e) => e.currentTarget.parentElement?.querySelector('button')?.click()} title="Click to copy" data-testid="nfc-update-command">{command}</code>
+      <CopyButton text={command} className="setup-copy-btn" aria-label="Copy command" title="Copy command" data-testid="nfc-update-copy" />
     </span>
   );
 }

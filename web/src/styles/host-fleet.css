@@ -291,7 +291,7 @@
   line-height: 17px;
 }
 
-.hf-dash .hf-problem .settings-button { flex: none; }
+.hf-dash .hf-problem .btn { flex: none; }
 
 .hf-dash .hf-action-error { margin: -4px 0 0; font-size: var(--font-size-sm); color: var(--settings-error-text); }
 

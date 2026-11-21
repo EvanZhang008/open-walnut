@@ -141,7 +141,7 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
         <button
           ref={buttonRef}
           type="button"
-          className={`session-header-labels-btn${open ? ' is-open' : ''}`}
+          className="btn btn-sm btn-ghost session-header-labels-btn"
           data-testid="session-header-labels"
           aria-haspopup="dialog"
           aria-expanded={open}

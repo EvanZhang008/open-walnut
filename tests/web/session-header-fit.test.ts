@@ -376,7 +376,7 @@ describe('Watch and Locate are window buttons of the header (2026-11-19, the use
     expect(TOOL_ITEMS.locate).toMatchObject({ kind: 'fixed' });
     // That both need the task (TASK_SLOT_IDS) is pinned in session-header-record-gate.test.ts.
     const panel = src('sessions/SessionPanel.tsx');
-    expect(panel).toMatch(/className="task-action-btn session-panel-locate"[^\n]*data-header-id="locate"/);
+    expect(panel).toMatch(/className="btn btn-icon btn-sm task-action-btn session-panel-locate"[^\n]*data-header-id="locate"/);
     expect(panel).toContain('data-testid="session-locate-btn"');
     expect(panel).toMatch(/<WatchButton [^\n]*className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn"/);
     // The kebab lost its Locate row, and the label row's Watch pill is gone.

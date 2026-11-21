@@ -36,7 +36,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
           <div className="cmd-card-actions">
             <div className="cmd-menu-wrapper">
               <button
-                className="btn btn-sm cmd-menu-btn"
+                className="btn btn-sm btn-icon cmd-menu-btn"
                 onClick={() => { setMenuOpen(!menuOpen); setConfirmDelete(false); }}
                 title="Actions"
               >
@@ -59,7 +59,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
                     <button className="btn btn-sm" onClick={() => { setConfirmDelete(false); setMenuOpen(false); }}>
                       Cancel
                     </button>
-                    <button className="btn btn-sm cmd-confirm-delete" onClick={() => { onDelete(command.name); setConfirmDelete(false); setMenuOpen(false); }}>
+                    <button className="btn btn-sm btn-primary btn-danger" onClick={() => { onDelete(command.name); setConfirmDelete(false); setMenuOpen(false); }}>
                       Delete
                     </button>
                   </div>
@@ -75,7 +75,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
         </pre>
       </div>
       {isLong && (
-        <button className="cmd-expand-btn" onClick={() => setExpanded(!expanded)}>
+        <button className="btn btn-sm btn-ghost cmd-expand-btn" onClick={() => setExpanded(!expanded)}>
           <span className={`cmd-expand-chevron${expanded ? ' rotated' : ''}`}>&#9660;</span>
           {expanded ? 'Show less' : 'Show more'}
         </button>

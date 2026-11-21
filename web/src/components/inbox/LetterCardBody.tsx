@@ -32,14 +32,14 @@ export function LetterCardBody({ letter, expanded, onOpen, onNavigate }: { lette
   return (
     <div className="hib-card-content" onClick={(event) => event.stopPropagation()}>
       {failed ? <div className="hib-note hib-note-error" role="alert">
-        Could not load this letter. <button className="hib-row-btn" onClick={() => setAttempt((value) => value + 1)}>Retry</button>
+        Could not load this letter. <button className="btn btn-sm hib-row-btn" onClick={() => setAttempt((value) => value + 1)}>Retry</button>
       </div> : detail ? <>
         {detail.bodyMissing ? <div className="hib-note">The letter body is unavailable.</div> :
           <LetterBody body={detail.body ?? ''} format={detail.bodyFormat} subject={detail.subject} bodyUrl={detail.bodyUrl} source={source} onClick={onBodyClick}
             onRefOpen={(ref) => { if (ref.kind === 'file') file.onFileOpen?.(ref.path, ref.line, undefined, ref.endLine); else openAgentRef(ref, navigate); }} />}
 
       </> : <div className="hib-note" role="status">Loading letter…</div>}
-      <button className="hib-row-btn hib-card-open" onClick={onOpen}>Open full letter</button>
+      <button className="btn btn-sm hib-row-btn hib-card-open" onClick={onOpen}>Open full letter</button>
     </div>
   );
 }

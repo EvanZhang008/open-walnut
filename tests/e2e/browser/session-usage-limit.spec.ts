@@ -130,7 +130,7 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   await expect(banner.getByRole('button', { name: "Don't auto-continue" })).toBeVisible()
   // Before the reset a continue may meet the limit again: one name for it, but not the primary
   // button, and its tooltip says what happens.
-  await expect(banner.getByRole('button', { name: 'Continue now' })).not.toHaveClass(/is-primary/)
+  await expect(banner.getByRole('button', { name: 'Continue now' })).not.toHaveClass(/btn-primary/)
   await expect(banner.getByRole('button', { name: 'Continue now' })).toHaveAttribute('title', /may stop again; then Walnut waits for the reset/)
   await shot(page, banner, '1-banner-waiting')
 

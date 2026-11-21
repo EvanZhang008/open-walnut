@@ -61,7 +61,7 @@ export function MailViewMenu({ grouped, warn, unreadOnly, onUnreadOnly }: {
       <button
         ref={button}
         type="button"
-        className={`mail-view-menu-btn${warn ? ' warn' : ''}`}
+        className={`btn btn-sm btn-ghost mail-view-menu-btn${warn ? ' warn' : ''}`}
         data-testid="mail-view-menu"
         data-grouped={grouped}
         aria-haspopup="menu"
@@ -69,8 +69,8 @@ export function MailViewMenu({ grouped, warn, unreadOnly, onUnreadOnly }: {
         aria-label={`${VIEW_MENU_ARIA}: ${grouped ? GROUPED : ALL_MAIL}`}
         onClick={open}
       >
-        {grouped ? GROUPED : ALL_MAIL}
-        <span className="mail-view-menu-caret" aria-hidden="true"><ChevronIcon size={9} /></span>
+        <span className="mail-view-menu-label">{grouped ? GROUPED : ALL_MAIL}</span>
+        <span className="btn-caret mail-view-menu-caret" aria-hidden="true"><ChevronIcon size={9} /></span>
       </button>
       {point && (
         <ContextMenu

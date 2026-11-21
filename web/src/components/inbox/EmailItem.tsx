@@ -71,13 +71,13 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
   return <article className="hii-item" data-item-id={item.id} aria-label={item.subject}>
     <h3 className="hii-subject">{item.subject}</h3>
     <div ref={summary} className={`hii-summary${expanded ? ' hii-summary-expanded' : ''}`}><AgentText compact host={sender?.host} sessionId={sender?.sessionId} unknownSource={sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)} text={item.summary || 'Email summary unavailable'} /></div>
-    {(truncated || expanded) && <button type="button" className="hib-row-btn hii-summary-toggle" aria-expanded={expanded}
+    {(truncated || expanded) && <button type="button" className="btn btn-sm hib-row-btn hii-summary-toggle" aria-expanded={expanded}
       aria-label={`${expanded ? 'Show less' : 'Show more'} for ${item.subject}`} onClick={() => setExpanded(v => !v)}>{expanded ? 'Show less' : 'Show more'}</button>}
     <div className="hii-source"><span>Mail</span><span>{accountText(item, duplicateLabels)}</span>
       <span>{item.display?.sender?.name || item.display?.sender?.address || 'Sender unavailable'}</span>
       <span>{mailDateText(item.display?.sentAt)}</span>
       {canOpenMail && item.source?.account && item.source?.message && !damaged
-        ? <button type="button" className="hib-row-btn" aria-label={`Open email for ${item.subject}`} title="Open this original email"
+        ? <button type="button" className="btn btn-sm hib-row-btn" aria-label={`Open email for ${item.subject}`} title="Open this original email"
           onClick={() => onNavigate(`/mail?${new URLSearchParams({ account: item.source.account, message: item.source.message, readOnly: '1' })}`)}>Open email</button>
         : null}
     </div>
@@ -85,7 +85,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
       {!canOpenMail && <p>Mail page unavailable. Copy the source below.</p>}
       <p>{item.display?.sender?.address}</p><p>Original date: {item.display?.sentAt || 'Date unavailable'}</p>
       <p>Account: <code>{item.source?.account || 'Unavailable'}</code></p><p>Message: <code>{item.source?.message || 'Unavailable'}</code></p>
-      <button type="button" className="hib-row-btn" aria-label={`Copy source for ${item.subject}`} onClick={copySource}>Copy source</button>
+      <button type="button" className="btn btn-sm hib-row-btn" aria-label={`Copy source for ${item.subject}`} onClick={copySource}>Copy source</button>
       {copied && <p>{copied}</p>}
     </details>
     <div className="hii-actions">
@@ -120,13 +120,13 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
             state.error !== blocked?.message ? state.error : '', state.pollExpired ? 'Still working. Check status.' : '',
             Object.entries(state.submitting).some(([key, value]) => key.startsWith('ai:') && value) ? 'Submitting…' : receiptText(ai)].filter(Boolean).join(' · ')}
         </span>
-        {task?.taskId && task.taskCreated !== false && <button type="button" className="hib-row-btn hii-task-link" onClick={() => onNavigate(taskPath(task.taskId!))}>{task.intent === 'attach_task' && task.delivery && ['queued', 'deferred'].includes(task.delivery) ? 'Attached · Open task' : 'Open task'}</button>}
+        {task?.taskId && task.taskCreated !== false && <button type="button" className="btn btn-sm hib-row-btn hii-task-link" onClick={() => onNavigate(taskPath(task.taskId!))}>{task.intent === 'attach_task' && task.delivery && ['queued', 'deferred'].includes(task.delivery) ? 'Attached · Open task' : 'Open task'}</button>}
       </div>
       <span className="hii-sr-only">{item.subject}</span>
     </div>
     <div className="hii-recovery">
-      <button type="button" className="hib-row-btn" onClick={() => void check()} aria-label={`Check status for ${item.subject}`}>Check status</button>
-      <button type="button" className={`hib-row-btn hii-retry-slot${retryAction ? '' : ' hii-inert-slot'}`}
+      <button type="button" className="btn btn-sm hib-row-btn" onClick={() => void check()} aria-label={`Check status for ${item.subject}`}>Check status</button>
+      <button type="button" className={`btn btn-sm hib-row-btn hii-retry-slot${retryAction ? '' : ' hii-inert-slot'}`}
         tabIndex={retryAction ? 0 : -1} aria-hidden={!retryAction}
         disabled={taskBusy || !!blocked || !retryAction}
         aria-label={`${retryLabel} for ${item.subject}`} onClick={e => { if (!task || !retryAction) return; trigger.current = e.currentTarget;

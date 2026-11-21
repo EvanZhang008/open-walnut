@@ -78,7 +78,7 @@ function GeneratorButton({ onUse }: { onUse: (pw: string) => void }) {
   const place = useMenuPlacement(generatorPopoverOpen, trigger, menu, { minHeight: 260, onAnchorLost: () => setGeneratorPopoverOpen(false) })
   return (
     <>
-      <button ref={trigger} type="button" className="pw-icon-btn" aria-label="Generate a password" title="Generate" aria-expanded={generatorPopoverOpen}
+      <button ref={trigger} type="button" className="btn btn-icon" aria-label="Generate a password" title="Generate" aria-expanded={generatorPopoverOpen}
         onClick={() => setGeneratorPopoverOpen((o) => !o)}><DiceIcon /></button>
       {generatorPopoverOpen && createPortal(
         <div className="pw-popover-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) setGeneratorPopoverOpen(false) }}>
@@ -143,7 +143,7 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
             <div className="pw-form-col">
               <div className="pw-input-group">
                 <input data-no-draft="secret" className="pw-input pw-mono" type={showPassword ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} aria-label="Password" value={f.password} onChange={(e) => set('password', e.target.value)} />
-                <button type="button" className="pw-icon-btn" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((s) => !s)}>{showPassword ? <EyeOffIcon /> : <EyeIcon />}</button>
+                <button type="button" className="btn btn-icon" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((s) => !s)}>{showPassword ? <EyeOffIcon /> : <EyeIcon />}</button>
                 {isLogin && <GeneratorButton onUse={(pw) => { set('password', pw); setShowPassword(true) }} />}
               </div>
               {isLogin && <StrengthMeter password={f.password} />}
@@ -182,10 +182,10 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
             <div key={i} className="pw-input-group">
               <input data-no-draft="secret" className="pw-input" spellCheck={false} placeholder="example.com" aria-label={`Website ${i + 1}`} value={u}
                 onChange={(e) => set('urls', f.urls.map((x, j) => (j === i ? e.target.value : x)))} />
-              {f.urls.length > 1 && <button type="button" className="pw-icon-btn" aria-label="Remove website" onClick={() => set('urls', f.urls.filter((_, j) => j !== i))}><CloseIcon /></button>}
+              {f.urls.length > 1 && <button type="button" className="btn btn-icon" aria-label="Remove website" onClick={() => set('urls', f.urls.filter((_, j) => j !== i))}><CloseIcon /></button>}
             </div>
           ))}
-          <button type="button" className="pw-link-btn" onClick={() => set('urls', [...f.urls, ''])}><PlusIcon size={14} /> Add website</button>
+          <button type="button" className="btn btn-link pw-link-btn" onClick={() => set('urls', [...f.urls, ''])}><PlusIcon size={14} /> Add website</button>
         </div>
       )}
 
@@ -196,10 +196,10 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
             <input data-no-draft="secret" className="pw-input pw-field-name" placeholder="Name" aria-label={`Field ${i + 1} name`} value={x.name} onChange={(e) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, name: e.target.value } : y)))} />
             <input data-no-draft="secret" className="pw-input" type={x.hidden ? 'password' : 'text'} placeholder="Value" aria-label={`Field ${i + 1} value`} value={x.value} onChange={(e) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, value: e.target.value } : y)))} />
             <label className="pw-chip-check" title="Hide the value"><input type="checkbox" checked={!!x.hidden} onChange={(e) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, hidden: e.target.checked } : y)))} />Hidden</label>
-            <button type="button" className="pw-icon-btn" aria-label="Remove field" onClick={() => set('fields', f.fields.filter((_, j) => j !== i))}><CloseIcon /></button>
+            <button type="button" className="btn btn-icon" aria-label="Remove field" onClick={() => set('fields', f.fields.filter((_, j) => j !== i))}><CloseIcon /></button>
           </div>
         ))}
-        <button type="button" className="pw-link-btn" onClick={() => set('fields', [...f.fields, { name: '', value: '' }])}><PlusIcon size={14} /> Add field</button>
+        <button type="button" className="btn btn-link pw-link-btn" onClick={() => set('fields', [...f.fields, { name: '', value: '' }])}><PlusIcon size={14} /> Add field</button>
       </div>
 
       <div className="pw-card pw-form">
@@ -227,8 +227,8 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
 
       {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
       <div className="pw-editor-actions">
-        <button type="button" className="pw-btn" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="pw-btn pw-btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+        <button type="button" className="btn btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="btn btn-sm btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
       </div>
     </form>
   )

@@ -63,7 +63,7 @@ export function StableButton({ label, labels, onClick, disabled, secondary, test
       type="button"
       // WebKit only tabs to buttons with an explicit tabindex.
       tabIndex={0}
-      className={`setup-step-btn hpb-btn${secondary ? ' hpb-btn-secondary' : ''}`}
+      className={`btn btn-sm hpb-btn${secondary ? ' btn-ghost hpb-btn-secondary' : ''}`}
       onClick={onClick}
       disabled={disabled}
       {...(testId ? { 'data-testid': testId } : {})}

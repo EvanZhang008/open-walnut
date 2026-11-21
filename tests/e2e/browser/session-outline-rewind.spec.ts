@@ -285,7 +285,7 @@ test.describe('Session outline, message time, and rewind', () => {
     // a bespoke one (the bare-blue unstyled button of 2026-09-03 came from a
     // class that did not exist).
     await expect(dialog).toHaveClass(/app-modal/)
-    await expect(dialog.locator('.app-modal-actions .app-modal-btn.primary')).toHaveCount(1)
+    await expect(dialog.locator('.app-modal-actions .btn.btn-primary')).toHaveCount(1)
 
     // The dry run reports the blast radius. The DEFAULT is an in-place rewind, so
     // the copy says the conversation goes back (not that a new session is spawned

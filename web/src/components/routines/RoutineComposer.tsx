@@ -87,7 +87,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual, autoFocus = 
           <button
             key={t.label}
             type="button"
-            className="routine-template-chip"
+            className="btn btn-sm"
             onClick={() => { mic.current?.clear(); setText(t.text); }}
             disabled={drafting}
           >
@@ -107,7 +107,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual, autoFocus = 
             no provider configured. */}
         <button
           type="button"
-          className="btn btn-sm btn-secondary"
+          className="btn btn-sm"
           onClick={() => onManual(text.trim())}
           disabled={drafting}
         >

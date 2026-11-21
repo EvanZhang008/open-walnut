@@ -1177,12 +1177,8 @@ export function NotesPage() {
             // overlay rather than editing that cross-owned component).
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
               <button
-                className="global-notes-expand-btn"
-                style={{
-                  position: 'absolute', top: 9, right: 16, zIndex: 5,
-                  background: 'var(--bg)', border: '1px solid var(--border)',
-                  display: 'inline-flex', alignItems: 'center', padding: 5,
-                }}
+                className="btn btn-icon global-notes-expand-btn"
+                style={{ position: 'absolute', top: 9, right: 16, zIndex: 5 }}
                 onClick={() => openPopout('note', { path: activeNotePath })}
                 aria-label="Open note in a new window"
                 title="Open in new window"

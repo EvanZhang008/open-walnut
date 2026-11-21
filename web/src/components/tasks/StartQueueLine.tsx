@@ -38,14 +38,14 @@ export function StartQueueLine({ task, onError }: { task: Task; onError?: (messa
       <span className="tdp-start-queue-text">{refused ? words.replace(/^Did not start:\s*/, '') : words}</span>
       <span className="tdp-start-queue-actions">
         {refused ? (
-          <button type="button" className="tdp-start-queue-btn tdp-start-queue-now" disabled={busy} onClick={() => { void act('start it', () => startTaskAsPerson(task.id)); }} data-testid="task-detail-start-refused-start">
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => { void act('start it', () => startTaskAsPerson(task.id)); }} data-testid="task-detail-start-refused-start">
             Start
           </button>
         ) : <>
-          <button type="button" className="tdp-start-queue-btn tdp-start-queue-now" disabled={busy} onClick={() => { void act('start it now', () => startQueuedNow(task.id)); }} data-testid="task-detail-start-queue-now">
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => { void act('start it now', () => startQueuedNow(task.id)); }} data-testid="task-detail-start-queue-now">
             Start now
           </button>
-          <button type="button" className="tdp-start-queue-btn" disabled={busy} onClick={() => { void act('cancel the queued start', () => cancelQueuedStart(task.id)); }} data-testid="task-detail-start-queue-cancel">
+          <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => { void act('cancel the queued start', () => cancelQueuedStart(task.id)); }} data-testid="task-detail-start-queue-cancel">
             Cancel
           </button>
         </>}

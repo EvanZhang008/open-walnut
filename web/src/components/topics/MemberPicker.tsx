@@ -104,8 +104,8 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
             It is a bot
           </label>
           <span className="topic-person-actions">
-            <button type="button" className="app-modal-btn" onClick={() => setPerson(null)}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="topic-person-add" disabled={!personOk && !personGate.micBusy && !personGate.waiting} onClick={personGate.send} {...dictationWaitProps(personGate)}>Add</button>
+            <button type="button" className="btn" onClick={() => setPerson(null)}>Cancel</button>
+            <button type="button" className="btn btn-primary" data-testid="topic-person-add" disabled={!personOk && !personGate.micBusy && !personGate.waiting} onClick={personGate.send} {...dictationWaitProps(personGate)}>Add</button>
           </span>
           <p className="topic-muted">They get the topic by email and can reply to it. Nothing is mailed until you send a message.</p>
         </div>

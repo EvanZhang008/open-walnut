@@ -243,7 +243,7 @@ test('delete from the open row asks to confirm and removes the job', async ({ pa
     await expect(card.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0)
 
     // Click the red Delete button to confirm
-    await card.locator('.cron-confirm-delete').click()
+    await card.locator('.routine-actions').getByRole('button', { name: 'Delete', exact: true }).click()
 
     // Row should disappear
     await expect(card).toBeHidden({ timeout: 5000 })
@@ -277,7 +277,7 @@ test('cancel delete keeps the job visible', async ({ page }) => {
     await expect(confirmText).toBeVisible()
 
     // Click Cancel
-    await card.locator('.cron-confirm-cancel').click()
+    await card.locator('.routine-actions').getByRole('button', { name: 'Cancel', exact: true }).click()
 
     // The confirm should disappear and the actions come back
     await expect(confirmText).toBeHidden()

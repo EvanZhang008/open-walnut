@@ -184,7 +184,7 @@ export function PasswordsSection({ config, onSave }: Props) {
       {status?.setUp && (
         <SettingsGroup heading="Browser extension">
           <SettingsRow label="Fill and save logins in Chrome and Firefox" help="Install the Walnut extension and connect it to this Walnut."
-            control={<Link className="settings-button settings-button-text" to="/settings#browser" data-testid="pw-open-browser-settings">Open</Link>} />
+            control={<Link className="btn btn-sm btn-link" to="/settings#browser" data-testid="pw-open-browser-settings">Open</Link>} />
         </SettingsGroup>
       )}
 

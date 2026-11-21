@@ -26,7 +26,7 @@ const ROOT = join(__dirname, '..', '..');
 const CHAT_CLASSES = [
   'session-msg', 'session-history', 'chat-input', 'chat-send', 'chat-plus', 'chat-tool', 'chat-message',
   'chat-thinking', 'chat-panel', 'tool-run', 'tool-result', 'bash-tool', 'provenance', 'process-fold',
-  'op-card', 'step-icon', 'msg-copy', 'msg-time', 'msg-pin', 'message-attachment',
+  'op-card', 'step-icon', 'msg-copy', 'msg-time', 'message-attachment',
   'inline-image', 'side-question', 'composer-model', 'composer-control', 'composer-direct', 'mode-toggle',
   'no-action', 'permission-request', 'ask-user', 'wn-msg', 'wn-text', 'wn-reply',
 ];

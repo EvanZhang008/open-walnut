@@ -8,7 +8,7 @@ export function RenderSkipDivider({ turns, rows, onShow }: { turns: number; rows
   return (
     <div className="session-gap-divider" data-testid="session-render-skip">
       <span className="session-gap-divider-label">{what} not shown here</span>
-      <button type="button" className="session-gap-divider-btn" onClick={onShow}>Show them</button>
+      <button type="button" className="btn btn-sm" onClick={onShow}>Show them</button>
     </div>
   );
 }

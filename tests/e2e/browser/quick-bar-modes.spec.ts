@@ -224,7 +224,7 @@ test('the Notes pill searches notes and Enter opens the note; Cmd-K on the Notes
   await expect(bar(page)).toBeHidden()
 
   await page.getByTestId('sidebar-quick-bar').click()
-  await page.locator('.qb-mode-pill.qb-mode-notes').click()
+  await page.locator('.qb-mode-pill[data-mode="notes"]').click()
   await expect(bar(page)).toHaveAttribute('data-mode', 'notes')
   await expect(box(page)).toBeFocused()
   await expect(page.locator('.qb-results-empty')).toHaveText('Type words from a note’s title or text.')

@@ -319,7 +319,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     data-testid={`plugin-config-owned-${plugin.id}`}
                     label={owner.label}
                     help={owner.help}
-                    control={<Link className="settings-button settings-button-text" to={`/settings#${owner.pane}`}>{owner.link}</Link>}
+                    control={<Link className="btn btn-sm btn-link" to={`/settings#${owner.pane}`}>{owner.link}</Link>}
                   />
                 );
               }

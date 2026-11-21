@@ -155,32 +155,6 @@
   gap: 8px;
   margin-top: 12px;
 }
-.status-item-btn {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--fg);
-  font-family: inherit;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  line-height: 26px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.status-item-btn:hover:not(:disabled) { background: var(--bg-hover); }
-.status-item-btn.is-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.status-item-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-.status-item-btn:disabled { opacity: 0.55; cursor: default; }
-.status-item-btn[aria-busy="true"] { opacity: 0.8; }
-.status-item-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 .status-item-popover-error {
   margin-top: 10px;
   font-size: var(--font-size-md);

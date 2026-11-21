@@ -24,7 +24,7 @@
 .session-usage-budget label { font-size: var(--font-size-sm); font-weight: 600; }
 .session-usage-edit-row { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
 .session-usage-edit-row .app-modal-input { margin-top: 0; min-width: 0; flex: 1; }
-.session-usage-edit-row .app-modal-btn { flex-shrink: 0; }
+.session-usage-edit-row .btn { flex-shrink: 0; }
 .session-usage-budget-facts { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: center; font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; }
 .session-usage-text-button { border: 0; background: transparent; color: var(--fg-secondary); text-decoration: underline; text-underline-offset: 3px; padding: 2px 0; font-size: var(--font-size-sm); cursor: pointer; }
 .session-usage-paused { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg); margin-bottom: 0; }
@@ -46,6 +46,6 @@
   .session-usage-dialog.app-modal { padding: 16px; }
   .session-usage-edit-row { flex-wrap: wrap; }
   .session-usage-edit-row .app-modal-input { flex-basis: 100%; }
-  .session-usage-edit-row .app-modal-btn { width: 100%; }
+  .session-usage-edit-row .btn { width: 100%; }
   .session-usage-total strong { font-size: 30px; }
 }

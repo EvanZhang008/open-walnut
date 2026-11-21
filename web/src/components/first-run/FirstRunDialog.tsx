@@ -111,11 +111,11 @@ function AddedFailure({ row, onUndo, onRetry }: { row: FirstRunHostRow; onUndo: 
       <div className="fr-failure-actions">
         {/* A machine that is not Linux never connects over SSH: trying again only fails again. */}
         {state.kind !== 'not_linux' && (
-          <button type="button" tabIndex={0} className="app-modal-btn primary" onClick={() => void retry()} disabled={retrying} data-testid={`first-run-retry-${row.alias}`}>
+          <button type="button" tabIndex={0} className="btn btn-primary" onClick={() => void retry()} disabled={retrying} data-testid={`first-run-retry-${row.alias}`}>
             {retrying ? 'Trying…' : 'Try again'}
           </button>
         )}
-        <button type="button" tabIndex={0} className="app-modal-btn" onClick={onUndo} disabled={retrying} data-testid={`first-run-undo-${row.alias}`}>
+        <button type="button" tabIndex={0} className="btn" onClick={onUndo} disabled={retrying} data-testid={`first-run-undo-${row.alias}`}>
           Don&apos;t add it
         </button>
         {retryError
@@ -158,7 +158,7 @@ function HostRow({ row, adding, addError, onAdd, onUndo }: {
               <button
                 type="button"
                 tabIndex={0}
-                className="app-modal-btn fr-add"
+                className="btn fr-add"
                 onClick={onAdd}
                 disabled={adding}
                 aria-label={`Add ${row.name}`}
@@ -267,7 +267,7 @@ function HostsStep({ hosts, saidYes, onSaidYes, onUndone, onAddByHand }: {
           <button
             type="button"
             tabIndex={0}
-            className="app-modal-btn fr-add-all"
+            className="btn fr-add-all"
             onClick={() => { for (const r of waiting) void add(r.alias); }}
             data-testid="first-run-add-all"
           >
@@ -379,11 +379,11 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
                   : 'You can add machines any time in Settings › Remote Hosts.'}
             </span>
             <span className="fr-actions">
-              {index > 0 && <button type="button" tabIndex={0} className="app-modal-btn" onClick={() => setIndex(index - 1)}>Back</button>}
+              {index > 0 && <button type="button" tabIndex={0} className="btn" onClick={() => setIndex(index - 1)}>Back</button>}
               <button
                 type="button"
                 tabIndex={0}
-                className={`app-modal-btn${primaryStrong ? ' primary' : ''}`}
+                className={`btn${primaryStrong ? ' btn-primary' : ''}`}
                 onClick={primary}
                 data-testid="first-run-primary"
               >

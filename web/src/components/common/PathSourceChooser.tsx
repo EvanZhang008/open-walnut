@@ -27,7 +27,7 @@ export function PathSourceChooser({ path, hosts, onPick, onCancel, buttonTestId 
           : 'The same path was written by different sources. Finding the machine each one is on…'}</p>
         <p className="board-file-source-path">{path}</p>
         {hosts && <div className="board-file-source-choices">{hosts.map((pick) => <button
-          key={pick.host} type="button" className="app-modal-btn" data-testid={buttonTestId} onClick={() => {
+          key={pick.host} type="button" className="btn" data-testid={buttonTestId} onClick={() => {
             const { open } = pick;
             onPick();
             open();

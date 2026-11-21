@@ -262,8 +262,8 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
             {error && <div className="project-scripts-error" data-testid="project-scripts-error">{error}</div>}
             {saveBlocked && !projectClash && <div className="project-scripts-save-hint" data-testid="project-script-save-hint">{saveBlocked}.</div>}
             <div className="app-modal-actions">
-              <button type="button" className="app-modal-btn" onClick={() => { setDraft(null); setError(null); setBadField(null); }}>Cancel</button>
-              <button type="submit" className="app-modal-btn primary" disabled={saving || (!draftReady && !gate.micBusy && !gate.waiting)} title={draftReady ? undefined : saveBlocked} data-testid="project-script-save" {...dictationWaitProps(gate)}>{saving ? 'Saving…' : takesOver ? (draft.id ? 'Save and replace' : 'Add and replace') : draft.id ? 'Save script' : 'Add script'}</button>
+              <button type="button" className="btn" onClick={() => { setDraft(null); setError(null); setBadField(null); }}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={saving || (!draftReady && !gate.micBusy && !gate.waiting)} title={draftReady ? undefined : saveBlocked} data-testid="project-script-save" {...dictationWaitProps(gate)}>{saving ? 'Saving…' : takesOver ? (draft.id ? 'Save and replace' : 'Add and replace') : draft.id ? 'Save script' : 'Add script'}</button>
             </div>
           </form>
   );

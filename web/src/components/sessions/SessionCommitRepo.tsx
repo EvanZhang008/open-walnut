@@ -284,7 +284,7 @@ export function SessionCommitRepo(props: {
           disabled={running}
         />
         <BoxMic boxRef={messageBox} text={message} setText={writeMessage} handleRef={messageMic} disabled={running} />
-        <button type="button" className="app-modal-btn scd-suggest" data-testid="scd-suggest" onClick={() => void suggest()} disabled={suggesting || running || counts.files === 0} title="Draft a message from the selected changes">
+        <button type="button" className="btn scd-suggest" data-testid="scd-suggest" onClick={() => void suggest()} disabled={suggesting || running || counts.files === 0} title="Draft a message from the selected changes">
           {suggesting ? 'Drafting…' : '✦ Suggest'}
         </button>
       </div>
@@ -293,18 +293,18 @@ export function SessionCommitRepo(props: {
         <span className="scd-muted">{counts.files} file{counts.files === 1 ? '' : 's'} selected{counts.hunks ? `, ${counts.hunks} change${counts.hunks === 1 ? '' : 's'}` : ''}</span>
         <span className="scd-spacer" />
         {canPr && (
-          <button type="button" className="app-modal-btn" data-testid="scd-pr" disabled={running || unpushed} title={unpushed ? 'Push your commits first' : undefined} onClick={() => { if (!prTitle.trim()) setPrTitle(subjectGuess); onConfirm('pr'); }}>
+          <button type="button" className="btn" data-testid="scd-pr" disabled={running || unpushed} title={unpushed ? 'Push your commits first' : undefined} onClick={() => { if (!prTitle.trim()) setPrTitle(subjectGuess); onConfirm('pr'); }}>
             Open PR
           </button>
         )}
         {canPush && (
-          <button type="button" className="app-modal-btn" data-testid="scd-push" disabled={running || nothingToPush} title={nothingToPush ? 'Nothing to push' : undefined} onClick={() => onConfirm('push')}>
+          <button type="button" className="btn" data-testid="scd-push" disabled={running || nothingToPush} title={nothingToPush ? 'Nothing to push' : undefined} onClick={() => onConfirm('push')}>
             Push
           </button>
         )}
         <button
           type="button"
-          className="app-modal-btn primary"
+          className="btn btn-primary"
           data-testid="scd-commit"
           disabled={running || !!blocked || counts.files === 0 || (!message.trim() && !commitGate.micBusy && !commitGate.waiting)}
           onClick={commitGate.send}
@@ -324,8 +324,8 @@ export function SessionCommitRepo(props: {
             {pushTarget.url && <div className="scd-muted scd-url">{pushTarget.url}</div>}
           </div>
           <div className="scd-confirm-actions">
-            <button type="button" className="app-modal-btn" onClick={() => onConfirm(null)}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="scd-confirm-ok" onClick={() => { onConfirm(null); void start({ action: 'push', branch: repo.branch, setUpstream: !repo.upstream }); }}>Push</button>
+            <button type="button" className="btn" onClick={() => onConfirm(null)}>Cancel</button>
+            <button type="button" className="btn btn-primary" data-testid="scd-confirm-ok" onClick={() => { onConfirm(null); void start({ action: 'push', branch: repo.branch, setUpstream: !repo.upstream }); }}>Push</button>
           </div>
         </div>
       )}
@@ -337,8 +337,8 @@ export function SessionCommitRepo(props: {
             <textarea ref={prBodyBox} className="scd-message" data-draft-key={prDraft.key ?? undefined} value={prBody} onChange={(e) => setPrBody(e.target.value)} placeholder="Description (optional)" rows={2} aria-label="Pull request description" />
           </MicField>
           <div className="scd-confirm-actions">
-            <button type="button" className="app-modal-btn" onClick={() => onConfirm(null)}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="scd-confirm-ok" disabled={!prTitle.trim()} onClick={prGate.send} {...dictationWaitProps(prGate)}>Open PR</button>
+            <button type="button" className="btn" onClick={() => onConfirm(null)}>Cancel</button>
+            <button type="button" className="btn btn-primary" data-testid="scd-confirm-ok" disabled={!prTitle.trim()} onClick={prGate.send} {...dictationWaitProps(prGate)}>Open PR</button>
           </div>
         </div>
       )}

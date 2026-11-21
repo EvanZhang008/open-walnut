@@ -13,6 +13,7 @@
  * title); `SetupBanner` is the framed standalone (the first-use card).
  * Dismissal is per state and version (host-banner-dismiss.ts), never global.
  */
+import { CopyButton } from './CopyButton';
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { checkLocalClaude, fixLocalClaude } from '@/api/local-claude';
@@ -235,7 +236,7 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
           <summary>Other ways to connect</summary>
           {!demo && <div className="setup-alt"><CopyCommand command={CLAUDE_CODE_INSTALL} /></div>}
           <div className="setup-alt">
-            <button type="button" className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>Use an API key or another provider</button>
+            <button type="button" className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>Use an API key or another provider</button>
           </div>
         </details>
       ) : (
@@ -248,7 +249,7 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
           )}
           <div className="setup-alt ab-local-alt">
             <span className="text-sm text-muted">Prefer an API key or Bedrock credentials instead?</span>
-            <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
+            <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
             {!install?.fixable && repair}
             {dismiss}
           </div>
@@ -280,7 +281,7 @@ function ProviderSection({ header, dismiss, health, onNavigateSettings }: {
       )}
       <div className="setup-alt ab-local-alt">
         <span className="text-sm text-muted">Use another provider instead?</span>
-        <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
+        <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>
         {dismiss}
@@ -306,7 +307,7 @@ function FixRow({ view, label, pending, error, onFix, repair }: {
       )}
       {manual && <CopyCommand command={manual} />}
       <div className="setup-alt">
-        <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
+        <button type="button" tabIndex={0} className="btn btn-sm" disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
           {view.failed ? 'Try again' : label}
         </button>
         {repair}
@@ -338,7 +339,7 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, o
           <ClaudeSignIn command={problem.commands[0] ?? 'claude'} />
           <div className="setup-alt">
             <span className="text-sm text-muted">Walnut checks again every 15 seconds and hides this once you are signed in.</span>
-            <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
+            <button type="button" tabIndex={0} className="btn btn-sm" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
             {repair}
             {error && <span className="text-sm text-muted">{error}</span>}
             {dismiss}
@@ -389,7 +390,7 @@ export function ClaudeSignIn({ command }: { command: string }) {
   if (!canOpenClaudeSignIn()) return <SignInCopy command={command} />;
   return (
     <div className="setup-alt">
-      <button type="button" className="setup-step-btn" disabled={opening} onClick={() => {
+      <button type="button" className="btn btn-sm" disabled={opening} onClick={() => {
         setOpening(true);
         setError(null);
         void openClaudeSignIn().catch(e => setError(e instanceof Error ? e.message : String(e))).finally(() => setOpening(false));
@@ -401,22 +402,11 @@ export function ClaudeSignIn({ command }: { command: string }) {
 
 /** The command chip and the same text Copy / Copied button the host rows use (one copy control per card). */
 function CopyCommand({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => { /* clipboard blocked, user can still select the text */ });
-  }, [command]);
-  const label = copied ? 'Copied' : 'Copy';
   return (
     <span className="setup-copy-wrap">
-      <code className="setup-command" onClick={handleCopy} title="Click to copy">{command}</code>
-      <button type="button" tabIndex={0} className="setup-copy-btn ab-copy-btn" onClick={handleCopy}
-        aria-label={copied ? label : 'Copy command'} title={copied ? label : 'Copy command'}>
-        {/* Copy and Copied share one width (the flip happens under the pointer). */}
-        <span className="hpb-btn-stack" data-r1="Copied" data-r2="Copy"><span>{label}</span></span>
-      </button>
+      {/* A click on the command presses its Copy (one copy control per card). */}
+      <code className="setup-command" onClick={(e) => e.currentTarget.parentElement?.querySelector('button')?.click()} title="Click to copy">{command}</code>
+      <CopyButton text={command} className="setup-copy-btn" aria-label="Copy command" title="Copy command" />
     </span>
   );
 }

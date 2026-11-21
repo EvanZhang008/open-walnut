@@ -10,26 +10,15 @@
  * re-probes and upgrades to a persistent shell once dtach can be built.
  */
 
-import { useCallback, useState } from 'react';
+import { CopyButton } from '@/components/common/CopyButton';
 import type { TerminalOpenPlain, TerminalSshFailed } from '@/api/terminal';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { END_REATTACH_HINT, END_UNCONFIRMED_TEXT } from '@/hooks/terminal-end-model';
 import { terminalStatusClass, terminalStatusLabel, type TerminalStatus } from '@/hooks/terminal-status-label';
 
-/** Copies exactly `command` (never the surrounding prose). */
+/** Copies exactly `command` (never the surrounding prose): the shared Copy button. */
 export function CopyCommandButton({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = useCallback(() => {
-    navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
-  }, [command]);
-  return (
-    <button className="session-terminal-btn" onClick={onCopy} title={`Copy: ${command}`}>
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
+  return <CopyButton text={command} title={`Copy: ${command}`} />;
 }
 
 /**
@@ -74,7 +63,7 @@ export function TerminalPlainNotice({ plain, retrying, disabled = false, onRetry
           )}
         </span>
         <CopyCommandButton command={plain.installCommand} />
-        <button className="session-terminal-btn" onClick={onRetry} disabled={retrying || disabled} title="Check for dtach again; if it can be built, this shell is replaced by a persistent one">
+        <button className="btn btn-sm" onClick={onRetry} disabled={retrying || disabled} title="Check for dtach again; if it can be built, this shell is replaced by a persistent one">
           {retrying ? 'Retrying…' : 'Retry'}
         </button>
       </div>
@@ -96,7 +85,7 @@ export function TerminalSshFailedCard({ failed, onRetry }: { failed: TerminalSsh
       <div className="session-terminal-error-title">Can't start terminal: ssh to {hostName} failed</div>
       <p className="session-terminal-error-body">{failed.hint}</p>
       {failed.detail && <pre className="session-terminal-ssh-detail">{failed.detail}</pre>}
-      <button className="session-terminal-btn session-terminal-retry" onClick={onRetry}>
+      <button type="button" className="btn session-terminal-retry" onClick={onRetry}>
         Retry
       </button>
     </div>
@@ -117,7 +106,7 @@ export function TerminalEndUnconfirmedNotice({ reason, ending, onRetry }: EndUnc
         <span className="session-terminal-plain-text" title={reason}>
           {END_UNCONFIRMED_TEXT} <span className="session-terminal-end-reason">Reason: {reason}. {END_REATTACH_HINT}</span>
         </span>
-        <button className="session-terminal-btn" onClick={onRetry} disabled={ending} title="Try to end the terminal again">
+        <button type="button" className="btn btn-sm" onClick={onRetry} disabled={ending} title="Try to end the terminal again">
           {ending ? 'Ending…' : 'Try again'}
         </button>
       </div>

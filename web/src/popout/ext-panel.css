@@ -101,7 +101,6 @@
 /* ── the Tasks tab (PopoutExtTasks) ── */
 .ext-tasks-save { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 /* A save that cannot go (the front tab is no web page): plainly off, with the reason beside it. */
-.ext-tasks-save .btn:disabled { opacity: 0.45; cursor: not-allowed; background: var(--bg-secondary); }
 .ext-tasks-save-why { flex-basis: 100%; }
 /* The row's head with its Add to Focus, which shows on hover or keyboard focus. */
 /* The hover band is the whole row, Add to Focus included (review R2-8: it was the head's alone,
@@ -196,8 +195,6 @@
   overflow: hidden;
 }
 .ext-ask-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 52px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--border); }
-.ext-ask-head .ask-walnut-menu-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); color: var(--fg-secondary); }
-.ext-ask-head .ask-walnut-menu-btn svg { width: 18px; height: 18px; }
 .ext-ask-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-left: 4px; }
 .ext-ask-title { font-weight: 650; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-ask-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); cursor: pointer; border-radius: var(--radius-xs); }
@@ -275,7 +272,6 @@
 .ext-ask-approval-what { grid-column: 1 / -1; font-size: var(--font-size-md); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .ext-ask-approval-who { min-width: 0; font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-ask-approval .approval-actions { margin-top: 0; gap: 6px; flex-wrap: nowrap; justify-self: end; }
-.ext-ask-approval .approval-actions .approval-btn { padding: 4px 10px; font-size: var(--font-size-sm); }
 /* The whole request under the title's row, across the card. */
 .ext-ask-approval > .approval-detail { grid-column: 1 / -1; margin-top: 0; min-width: 0; }
 .ext-ask-approval > .approval-detail summary { width: max-content; }
@@ -307,20 +303,13 @@
 .ext-home-loading { display: flex; align-items: center; gap: 8px; margin: 14px 12px; font-size: var(--font-size-md); }
 .ext-panel-detail { flex: 1; min-height: 0; overflow: auto; }
 
-/* The relay pill in the header: green while agents may use the browser, blue while one acts here. */
-.ext-relay-pill { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border: 1px solid transparent; border-radius: 999px; font: inherit; font-size: var(--font-size-sm); font-weight: 600; cursor: pointer; background: var(--bg-secondary); color: var(--fg-muted); }
-.ext-relay-pill.is-on { background: rgba(34, 160, 80, 0.12); color: #1f8a46; }
-.ext-relay-pill.is-tab { background: rgba(37, 99, 235, 0.12); color: #2457c5; }
-.ext-relay-pill.is-open { border-color: currentColor; }
-.ext-relay-pill:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
+/* The relay key in the header: its dot says the state, green while agents may use the browser,
+   blue while one acts here, hollow while off. */
+.ext-relay-pill { flex: none; }
 .ext-relay-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.9; }
+.ext-relay-pill.is-on .ext-relay-dot { background: var(--success); }
+.ext-relay-pill.is-tab .ext-relay-dot { background: var(--accent); }
 .ext-relay-pill.is-off .ext-relay-dot { background: none; border: 1.5px solid currentColor; box-sizing: border-box; }
-:root[data-theme="dark"] .ext-relay-pill.is-on { color: #5fd38a; background: rgba(95, 211, 138, 0.14); }
-:root[data-theme="dark"] .ext-relay-pill.is-tab { color: #8fb4ff; background: rgba(143, 180, 255, 0.14); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .ext-relay-pill.is-on { color: #5fd38a; background: rgba(95, 211, 138, 0.14); }
-  :root:not([data-theme]) .ext-relay-pill.is-tab { color: #8fb4ff; background: rgba(143, 180, 255, 0.14); }
-}
 
 /* The relay panel under the pill (useMenuPlacement places it; solid in both themes). */
 .ext-relay-panel { position: fixed; z-index: 60; left: 8px; width: auto; max-width: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); font-size: var(--font-size-md); }
@@ -335,9 +324,7 @@
 .ext-relay-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ext-relay-row-name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-relay-row-what { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ext-relay-row-btn { flex: none; padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--walnut-accent); font: inherit; font-size: var(--font-size-sm); font-weight: 600; cursor: pointer; }
-.ext-relay-row-btn:hover { background: var(--hover-bg); }
-.ext-relay-row-btn.is-stop { color: var(--error); }
+.ext-relay-row-btn { flex: none; }
 .ext-relay-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
 
 /* The strip under the composer while an agent acts in this tab. */

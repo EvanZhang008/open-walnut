@@ -130,7 +130,7 @@
   font-size: var(--font-size-xs);
   user-select: all;
 }
-.hc .setup-copy-btn { font-size: var(--font-size-xs); flex: none; }
+.hc .setup-copy-btn { flex: none; }
 
 /* A label that never changes its button's width (Retry / Retrying..., Copy / Copied):
    the longest labels it may show sit hidden in the same grid cell. */
@@ -140,7 +140,6 @@
 .hpb-btn-stack::after { grid-area: 1 / 1; text-align: center; }
 .hpb-btn-stack::before { content: attr(data-r1); visibility: hidden; }
 .hpb-btn-stack::after { content: attr(data-r2); visibility: hidden; }
-.hc-copy-failed { color: var(--error); }
 .hc-other {
   align-self: flex-start;
   padding: 0;

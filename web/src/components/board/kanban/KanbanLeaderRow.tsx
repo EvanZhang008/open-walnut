@@ -42,7 +42,7 @@ export function KanbanLeaderRow({ leader }: KanbanLeaderRowProps) {
         )}
         <button
           type="button"
-          className="kanban-icon-btn"
+          className="btn btn-icon btn-sm"
           data-testid="kanban-leader-row-open"
           aria-label={`Open ${leader.title}`}
           title={`Open ${leader.title}`}

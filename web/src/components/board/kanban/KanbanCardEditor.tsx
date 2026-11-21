@@ -131,9 +131,9 @@ export function KanbanCardEditor({ field, card, openedAt, api, onClose }: Kanban
       {conflict && (
         <div className="kanban-editor-conflict" data-testid="kanban-editor-conflict" role="alert">
           <span>{conflictWriter(conflict.by, ownerId, titleOf)} changed this while you were editing.</span>{' '}
-          <button type="button" className="kanban-text-btn" data-testid="kanban-editor-keep-mine"
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-editor-keep-mine"
             onMouseDown={(e) => e.preventDefault()} onClick={() => { setConflict(null); void write(false); }}>Keep mine</button>{' '}
-          <button type="button" className="kanban-text-btn" data-testid="kanban-editor-use-theirs"
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-editor-use-theirs"
             onMouseDown={(e) => e.preventDefault()} onClick={useTheirs}>Use theirs</button>
         </div>
       )}

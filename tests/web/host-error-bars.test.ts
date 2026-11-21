@@ -164,7 +164,7 @@ describe('buttons that flip their label keep their width', () => {
     expect(settings.getAttribute('tabindex')).toBe('0')
     expect(settings.className).toContain('hpb-btn-secondary')
     const copy = Array.from(el.querySelectorAll('button')).find((b) => (b.getAttribute('aria-label') ?? '').startsWith('Copy'))!
-    expect(copy.querySelector('.hpb-btn-stack')?.getAttribute('data-r1')).toBe('Copy failed')
-    expect(copy.querySelector('.hpb-btn-stack')?.getAttribute('data-r2')).toBe('Copied')
+    expect(copy.querySelector('.btn-reserve')?.getAttribute('data-r1')).toBe('Copy failed')
+    expect(copy.querySelector('.btn-reserve')?.getAttribute('data-r2')).toBe('Copied')
   })
 })

@@ -128,8 +128,6 @@
 .org-thread.is-pinned { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .org-thread-pin { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
 .org-thread-pin .thread-icon { flex: none; }
-.org-thread-pin-btn { display: inline-flex; align-items: center; justify-content: center; padding-left: 8px; padding-right: 8px; }
-.org-thread-pin-btn[aria-pressed="true"] { color: var(--accent); }
 .org-thread-closed { font-size: var(--font-size-sm); color: var(--fg-muted); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
 .org-thread-error { margin: 0 auto 0 0; font-size: var(--font-size-sm); color: var(--error); }

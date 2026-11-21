@@ -266,9 +266,9 @@ export function renderCodeBlockFrame(text: string, info: string | undefined, esc
     + '<span class="md-code-actions">'
     // A long block, unfolded: fold it again from wherever the reader is (the
     // header is stuck to the top of the screen through the whole block).
-    + (long ? `<button type="button" class="md-code-btn md-code-fold" data-md-code-action="fold" title="Show fewer lines">${FOLD_ICON}<span class="md-code-btn-label">Fold</span></button>` : '')
-    + `<button type="button" class="md-code-btn md-code-wrap" data-md-code-action="wrap" aria-pressed="false" aria-label="${wrapLabel}" title="${wrapLabel}">${WRAP_ICON}<span class="md-code-btn-label">Wrap</span></button>`
-    + `<button type="button" class="md-code-btn md-code-copy" data-md-code-action="copy" aria-label="${copyName}" title="Copy code">${COPY_ICON}${CHECK_ICON}<span class="md-code-copy-label md-code-btn-label">Copy</span></button>`
+    + (long ? `<button type="button" class="btn btn-ghost btn-sm md-code-btn md-code-fold" data-md-code-action="fold" title="Show fewer lines">${FOLD_ICON}<span class="md-code-btn-label">Fold</span></button>` : '')
+    + `<button type="button" class="btn btn-ghost btn-sm md-code-btn md-code-wrap" data-md-code-action="wrap" aria-pressed="false" aria-label="${wrapLabel}" title="${wrapLabel}">${WRAP_ICON}<span class="md-code-btn-label">Wrap</span></button>`
+    + `<button type="button" class="btn btn-ghost btn-sm md-code-btn md-code-copy" data-md-code-action="copy" aria-label="${copyName}" title="Copy code">${COPY_ICON}${CHECK_ICON}<span class="md-code-copy-label md-code-btn-label">Copy</span></button>`
     + '</span></div>'
     // Focusable, so a keyboard reaches a block's sideways scroll.
     + `<pre tabindex="0"><code${cls}${hl}>${body}</code></pre>${more}</div>\n`;

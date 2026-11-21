@@ -34,6 +34,3 @@
 .org-avatar-error { margin: 8px 0 0; font-size: var(--font-size-md); color: var(--error); }
 .org-avatar-foot { display: flex; gap: 8px; align-items: center; padding: 12px 18px 16px; border-top: 1px solid var(--border); }
 .org-avatar-gap { flex: 1; }
-.org-avatar-btn { padding: 5px 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: none; color: var(--fg); font: inherit; font-size: var(--font-size-md); cursor: pointer; white-space: nowrap; }
-.org-avatar-btn:disabled { opacity: .45; cursor: default; }
-.org-avatar-btn.is-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }

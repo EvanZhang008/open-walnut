@@ -119,7 +119,7 @@ export function EngineFallbackBanner({ taskId, sessionId, note, runsOn, onGone }
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
       </button>
       {(!sameEngine || note.from === 'claude') && <div className="engine-fallback-actions">
-        <button type="button" className="engine-fallback-btn" onClick={() => void switchBack()} disabled={busy !== null} data-testid="engine-fallback-switch">
+        <button type="button" className="btn btn-sm" onClick={() => void switchBack()} disabled={busy !== null} data-testid="engine-fallback-switch">
           {busy === 'switch' ? 'Switching…' : words.action}
         </button>
       </div>}

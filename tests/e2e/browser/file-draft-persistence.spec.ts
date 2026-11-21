@@ -276,7 +276,7 @@ test('deleting a drafted file does not leave a draft behind for that name', asyn
   await page.getByTestId('file-ctx-menu').getByRole('menuitem', { name: 'Delete', exact: true }).click()
   const modal = page.locator('.app-modal')
   await expect(modal).toBeVisible()
-  await modal.locator('.app-modal-btn.primary.danger').click()
+  await modal.locator('.btn.btn-primary.btn-danger').click()
   await expect(nodeByName(explorer, name)).toHaveCount(0, { timeout: 10_000 })
 
   // Recreate the SAME name with fresh content. The deleted file's body must not

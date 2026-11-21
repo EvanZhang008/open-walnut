@@ -105,7 +105,7 @@ function ClaudeCodeImportGroup({ engine, name }: { engine: string; name: string 
             {hostPicker}
             <button
               type="button"
-              className="settings-button settings-button-default"
+              className="btn btn-sm"
               data-testid={`cc-import-review-${engine}`}
               disabled={busy}
               onClick={() => void review(host)}
@@ -234,7 +234,7 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
         control={!written && !preview.upToDate ? (
           <button
             type="button"
-            className="settings-button settings-button-primary"
+            className="btn btn-sm btn-primary"
             data-testid={`cc-import-apply-${engine}`}
             disabled={applying || blocked}
             onClick={onApply}

@@ -238,7 +238,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       {need.category === 'close' && handlers.onSetPhase ? (
         <button
           type="button"
-          className="needs-close-btn"
+          className="btn btn-link needs-close-btn"
           data-testid="needs-close"
           title="Mark it complete"
           onClick={(e) => { e.stopPropagation(); handlers.onSetPhase?.(task.id, 'COMPLETE'); }}

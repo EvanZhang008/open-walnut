@@ -28,11 +28,11 @@ function MoveButtons({ name, index, count, disabled, onMove }: {
 }) {
   return (
     <span className="mail-rules-move">
-      <button type="button" className="mail-rules-icon-btn" data-move="up" aria-label={`Move up ${name}`}
+      <button type="button" className="btn btn-icon btn-sm" data-move="up" aria-label={`Move up ${name}`}
         disabled={disabled || index === 0} onClick={() => onMove(-1)}>
         <ArrowIcon dir="up" />
       </button>
-      <button type="button" className="mail-rules-icon-btn" data-move="down" aria-label={`Move down ${name}`}
+      <button type="button" className="btn btn-icon btn-sm" data-move="down" aria-label={`Move down ${name}`}
         disabled={disabled || index === count - 1} onClick={() => onMove(1)}>
         <ArrowIcon dir="down" />
       </button>

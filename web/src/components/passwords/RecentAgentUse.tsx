@@ -30,7 +30,7 @@ export function RecentAgentUse({ onSeeAll }: { onSeeAll: () => void }) {
           <span className="pw-agent-when" title={new Date(e.at).toLocaleString()}>{ago(e.at)}</span>
         </div>
       ))}
-      <button type="button" className="pw-btn pw-btn-small" onClick={onSeeAll}>See all in Agent Activity</button>
+      <button type="button" className="btn btn-sm" onClick={onSeeAll}>See all in Agent Activity</button>
     </div>
   )
 }

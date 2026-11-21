@@ -62,41 +62,8 @@
 }
 .session-browser-where { color: var(--fg-muted); font-size: var(--font-size-xs); }
 
-/* Buttons: the servers popover's (.session-server-btn), clear over the popover as its row
-   buttons are, so they look the same in both themes. */
-.session-browser-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  line-height: 1;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.session-browser-btn:hover:not(:disabled) { background: var(--bg-hover); }
-.session-browser-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.session-browser-btn:disabled { opacity: 0.45; cursor: default; }
-/* The boxed × (.session-server-btn-icon .session-servers-list-close). */
-.session-browser-btn--icon {
-  flex: 0 0 auto;
-  width: 26px;
-  padding: 0;
-  background: transparent;
-  color: var(--fg-muted);
-}
-/* Stop as quiet as the servers' Stop: red only under the pointer. */
-.session-browser-btn--stop { color: var(--fg-secondary); }
-.session-browser-btn--stop:hover:not(:disabled) { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
-.session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.session-browser-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, #000); }
+/* Buttons are the family's small keys (.btn-sm; the × is .btn-icon). */
+.session-browser-btn--icon { flex: 0 0 auto; }
 
 .session-browser-tabs {
   display: flex;

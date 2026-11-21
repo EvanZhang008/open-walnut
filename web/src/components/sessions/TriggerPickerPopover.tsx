@@ -201,7 +201,7 @@ function TriggerList({ loaded, onRetry, onPick, onDescribe, onIdea }: {
         </button>
         <div className="trigger-picker-ideas" role="group" aria-label="Ideas">
           {TRIGGER_IDEAS.map((idea) => (
-            <button key={idea.label} type="button" className="trigger-picker-idea" onClick={() => onIdea(idea)}>
+            <button key={idea.label} type="button" className="btn btn-sm trigger-picker-idea" onClick={() => onIdea(idea)}>
               {idea.label}
             </button>
           ))}

@@ -209,7 +209,7 @@ describe('rows name their host first (N10, N15)', () => {
     expect(li.querySelector('.hpb-headline')!.textContent).toBe('Claude Code on Sign box is not signed in.')
     const order = Array.from(li.querySelectorAll('.hpb-headline, button, .hpb-rest')).map((e) => e.className.split(' ')[0] + ':' + (e.textContent ?? '').trim().slice(0, 12))
     expect(order[0]).toBe('hpb-message:Claude Code ')
-    expect(order[1]).toMatch(/^setup-step-btn:Check again/)
+    expect(order[1]).toMatch(/^btn:Check again/)
     expect(order.findIndex((o) => o.startsWith('hpb-rest'))).toBeGreaterThan(1)
     expect(order[order.length - 1]).toMatch(/^setup-banner-dismiss/)
   })

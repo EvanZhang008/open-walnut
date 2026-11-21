@@ -99,7 +99,7 @@ export function ConnectExtensionPage() {
                 <span className="pw-ext-choice-note">They open their own tabs in a separate window, signed in as you, and ask you before they send, buy, post or delete anything. You can change this in the extension's Settings.</span>
               </span>
             </label>
-            <button type="button" className="pw-btn pw-btn-primary pw-ext-go" data-testid="connect-extension-go" disabled={phase === 'connecting'} onClick={() => void connect()}>
+            <button type="button" className="btn btn-primary pw-ext-go" data-testid="connect-extension-go" disabled={phase === 'connecting'} onClick={() => void connect()}>
               {phase === 'connecting' ? 'Connecting…' : 'Connect'}
             </button>
             {error && <p className="pw-ext-err" role="alert">{error}</p>}

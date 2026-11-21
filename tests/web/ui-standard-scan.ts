@@ -15,8 +15,14 @@ export { TOKEN_KINDS };
 
 export const WEB_SRC = path.join(__dirname, '../../web/src');
 
-/** The button family: a compound made only of these classes is the family itself. */
-export const FAMILY = new Set(['btn', 'btn-primary', 'btn-sm', 'btn-ghost', 'btn-icon', 'btn-danger', 'btn-danger-outline', 'btn-xs', 'btn-lg']);
+/**
+ * The button family (web/src/styles/buttons.css): a compound made only of these classes is the
+ * family itself. The last three are slots inside a key (a compound trigger's value and caret, a
+ * label that keeps the key's width), not variants.
+ */
+export const FAMILY = new Set(['btn', 'btn-sm', 'btn-primary', 'btn-danger', 'btn-ghost', 'btn-icon', 'btn-link', 'btn-block', 'btn-value', 'btn-caret', 'btn-reserve']);
+/** The family's own file: it is the one place that draws `.btn`. */
+export const FAMILY_CSS = 'styles/buttons.css';
 
 /** Properties that change how a control looks (layout-only ones like margin or order are fine). */
 const LOOK = /^(background|background-color|border|border-color|border-width|border-style|border-radius|padding|padding-inline|padding-block|font-size|font-weight|min-height|height|color|box-shadow)$/;
@@ -64,11 +70,69 @@ export function isOwnControl(selector: string): boolean {
   return cls.some((c) => /(-btn|-button|-pill|-chip)$/.test(c));
 }
 
-export type Counts = { restyledBtn: Record<string, number>; ownControl: Record<string, number>; rawAccent: Record<string, number> } & Record<TokenKind, Record<string, number>>;
+/**
+ * A phone's finger size: a rule that only sets a key's height or width inside a phone or
+ * coarse-pointer query (44 px targets). That is a size for the device, not a second look.
+ */
+const SIZE = /^(min-height|height|min-width|width)$/;
+function fingerSize(decls: Decl[]): boolean {
+  const look = decls.filter((d) => LOOK.test(d.prop) || SIZE.test(d.prop));
+  return look.length > 0 && look.every((d) => SIZE.test(d.prop) && d.atRules.some((a) => /pointer:\s*coarse|max-width/.test(a)));
+}
+
+export type Counts = {
+  restyledBtn: Record<string, number>;
+  ownControl: Record<string, number>;
+  rawAccent: Record<string, number>;
+  bareButton: Record<string, number>;
+} & Record<TokenKind, Record<string, number>>;
+
+/** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
+const CHOICE_ROLE = /\brole=["'{`]*(tab|radio|switch|checkbox|option|menuitemradio|menuitemcheckbox)\b/;
+
+/** The end of the JSX value that starts at `i` (a quoted string or a balanced `{...}`), exclusive. */
+function valueEnd(src: string, i: number): number {
+  let depth = 0;
+  let quote = '';
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) { quote = ''; if (depth === 0) return i + 1; } continue; }
+    if (c === '"' || c === "'" || c === '`') quote = c;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i + 1;
+  }
+  return i;
+}
+
+/** The opening tags of every `<button` in a TSX source (strings and `{...}` values skipped whole). */
+export function buttonTags(src: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(/<button\b/g)) {
+    let i = m.index! + 7;
+    while (i < src.length && src[i] !== '>') {
+      i = src[i] === '"' || src[i] === "'" || src[i] === '{' ? valueEnd(src, i) : i + 1;
+    }
+    out.push(src.slice(m.index!, i + 1));
+  }
+  return out;
+}
+
+/**
+ * A `<button>` drawn outside the family: no `btn` among the words of its className (a static
+ * string, a template, or an expression that names it), and not a choice control.
+ */
+export function isBareButton(tag: string): boolean {
+  if (CHOICE_ROLE.test(tag)) return false;
+  const at = tag.search(/\bclassName=/);
+  if (at < 0) return true;
+  const start = at + 'className='.length;
+  const value = tag.slice(start, valueEnd(tag, start));
+  return !/(^|[\s"'`{(])btn(?=$|[\s"'`}$])/.test(value);
+}
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out = { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])) } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
@@ -82,13 +146,17 @@ export function countAll(): Counts {
     for (const [, decls] of rules) {
       const sels = decls[0].selectors;
       const sets = (re: RegExp) => decls.some((d) => re.test(d.prop));
-      if (decls.some((d) => LOOK.test(d.prop)) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
+      if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
       else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some(isOwnControl)) bump(out.ownControl, rel);
     }
   }
   for (const file of walk(WEB_SRC, ['.css', '.ts', '.tsx']).sort()) {
     const n = (fs.readFileSync(file, 'utf8').match(/#(?:007aff|0a84ff)\b/gi) ?? []).length;
     if (n) out.rawAccent[path.relative(WEB_SRC, file)] = n;
+  }
+  for (const file of walk(WEB_SRC, ['.tsx']).sort()) {
+    const n = buttonTags(fs.readFileSync(file, 'utf8')).filter(isBareButton).length;
+    if (n) out.bareButton[path.relative(WEB_SRC, file)] = n;
   }
   return out;
 }

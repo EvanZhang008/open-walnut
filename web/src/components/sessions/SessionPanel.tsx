@@ -2854,11 +2854,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const locateLabel = onLocateTask ? 'Locate task' : 'Find on Home';
   const locateWhy = locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded');
   const locateButton = taskSlot === 'absent' ? null : taskSlot === 'spacer'
-    ? <button type="button" className="task-action-btn session-panel-locate" data-header-id="locate" {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
+    ? <button type="button" className="btn btn-icon btn-sm task-action-btn session-panel-locate" data-header-id="locate" {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
     : (
       <button
         type="button"
-        className="task-action-btn session-panel-locate"
+        className="btn btn-icon btn-sm task-action-btn session-panel-locate"
         data-header-id="locate"
         data-testid="session-locate-btn"
         disabled={!!locateWhy}
@@ -3408,10 +3408,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                         <div className="plan-popup-header-actions">
                           {showExecuteButtons && (
                             <>
-                              <button className="execute-plan-btn" onClick={handleExecuteContinue} disabled={executing}>
+                              <button className="btn btn-sm btn-primary execute-plan-btn" onClick={handleExecuteContinue} disabled={executing}>
                                 {executing ? 'Starting\u2026' : <><PlayGlyphIcon size={10} /> Execute</>}
                               </button>
-                              <button className="execute-plan-btn-secondary" onClick={handleClearContextExecute} disabled={executing}>
+                              <button className="btn btn-sm" onClick={handleClearContextExecute} disabled={executing}>
                                 Clear Context & Execute
                               </button>
                             </>
@@ -3509,7 +3509,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {locateButton}
               {minimize && !shownFullscreen && (
                 <button
-                  className="task-action-btn session-panel-minimize"
+                  className="btn btn-icon btn-sm task-action-btn session-panel-minimize"
                   data-header-id="minimize"
                   data-hidden={hid('minimize')}
                   onClick={() => minimize(sessionId)}
@@ -3524,7 +3524,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   Walnut slot has no strip and passes no onToggleLock. */}
               {onToggleLock && (
                 <button
-                  className={`task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
+                  className={`btn btn-icon btn-sm task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
                   data-header-id="lock"
                   data-hidden={hid('lock')}
                   onClick={() => onToggleLock(sessionId)}
@@ -3537,7 +3537,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               )}
               {!inset && (
                 <button
-                  className="task-action-btn session-panel-expand"
+                  className="btn btn-icon btn-sm task-action-btn session-panel-expand"
                   data-header-id="expand"
                   data-hidden={hid('expand')}
                   onClick={shownFullscreen ? exitFullscreen : enterFullscreen}
@@ -3552,7 +3552,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   the column underneath. Closing the column needs the normal view. */}
               {(onClose || shownFullscreen) && (
                 <button
-                  className="task-action-btn session-panel-close"
+                  className="btn btn-icon btn-sm btn-danger task-action-btn session-panel-close"
                   data-header-id="close"
                   onClick={shownFullscreen ? exitFullscreen : () => closePanel(sessionId)}
                   title={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab (the task keeps running)' : 'Close session panel'}
@@ -3645,7 +3645,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   {minimize && (
                     <button
                       type="button"
-                      className="task-action-btn session-panel-minimize"
+                      className="btn btn-icon btn-sm task-action-btn session-panel-minimize"
                       onClick={() => minimize(sessionId)}
                       title="Minimize to the taskbar: its chip opens this chat again (the chat stays here, it keeps running)"
                       aria-label="Minimize session to the taskbar"
@@ -3820,7 +3820,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             className="session-error-banner session-error-banner--warning"
             icon={<WarningTriangleIcon size={14} />}
             actions={(
-              <button className="session-retry-btn" onClick={handleRestart} disabled={restartBusy}>
+              <button className="btn btn-sm btn-primary session-retry-btn" onClick={handleRestart} disabled={restartBusy}>
                 {restartBusy ? 'Restarting...' : 'Restart'}
               </button>
             )}
@@ -3830,7 +3830,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         )}
         {session?.mode === 'auto' && session.autoPermissionDenial && (
           <PanelNotice className="session-error-banner session-error-banner--warning" icon={<WarningTriangleIcon size={14} />}
-            actions={<button className="session-retry-btn" onClick={() => void askAfterAutoDenial()} disabled={modeSwitchBusy}>
+            actions={<button className="btn btn-sm btn-primary session-retry-btn" onClick={() => void askAfterAutoDenial()} disabled={modeSwitchBusy}>
               {modeSwitchBusy ? 'Switching...' : 'Switch to asking'}
             </button>}>
             <span className="session-error-banner-text panel-notice-prose" data-testid="auto-permission-denial">

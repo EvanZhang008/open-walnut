@@ -192,31 +192,36 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
       <div className="notes-bubble-actions" {...{ [KEEP_SELECTION_ATTR]: '' }} onPointerDown={(event) => event.stopPropagation()}>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('bold') ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('bold')}
         onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleBold().run(); }}
         title="Bold (Cmd+B)"
       ><strong>B</strong></button>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('italic') ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('italic')}
         onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleItalic().run(); }}
         title="Italic (Cmd+I)"
       ><em>i</em></button>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('strike') ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('strike')}
         onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleStrike().run(); }}
         title="Strikethrough"
       ><s>S</s></button>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('code') ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('code')}
         onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleCode().run(); }}
         title="Inline code"
       ><code>{'</>'}</code></button>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('link') ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('link')}
         onMouseDown={(e) => { e.preventDefault(); setLink(); }}
         title="Link"
       >🔗</button>
@@ -225,19 +230,22 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
 
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('heading', { level: 1 }) ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('heading', { level: 1 })}
         onMouseDown={(e) => { e.preventDefault(); turnInto(editor, 'h1'); }}
         title="Heading 1"
       >H1</button>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('heading', { level: 2 }) ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('heading', { level: 2 })}
         onMouseDown={(e) => { e.preventDefault(); turnInto(editor, 'h2'); }}
         title="Heading 2"
       >H2</button>
       <button
         type="button"
-        className={`notes-bubble-btn ${editor.isActive('heading', { level: 3 }) ? 'active' : ''}`}
+        className="btn btn-icon"
+        aria-pressed={editor.isActive('heading', { level: 3 })}
         onMouseDown={(e) => { e.preventDefault(); turnInto(editor, 'h3'); }}
         title="Heading 3"
       >H3</button>
@@ -246,7 +254,7 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
       {onComment && (
         <button
           type="button"
-          className="notes-bubble-btn notes-bubble-ask"
+          className="btn btn-sm btn-ghost"
           data-testid="bubble-comment"
           onMouseDown={(e) => {
             e.preventDefault();
@@ -263,7 +271,7 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
       {onAskHere && (
         <button
           type="button"
-          className="notes-bubble-btn notes-bubble-ask"
+          className="btn btn-sm btn-ghost"
           data-testid="bubble-ask-here"
           onMouseDown={(e) => {
             e.preventDefault();
@@ -281,7 +289,7 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
       {onAsk && (
         <button
           type="button"
-          className="notes-bubble-btn notes-bubble-ask"
+          className="btn btn-sm btn-ghost"
           data-testid="bubble-ask-quote"
           onMouseDown={(e) => {
             e.preventDefault();

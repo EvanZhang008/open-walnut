@@ -854,7 +854,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   <button type="button" className="btn btn-sm" onClick={runCheckTest} disabled={checkTest.busy}>
                     {checkTest.busy ? 'Testing…' : 'Test check'}
                   </button>
-                  <button type="button" className="btn btn-sm routine-check-remove" onClick={removeCheck}>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={removeCheck}>
                     Remove check
                   </button>
                 </div>

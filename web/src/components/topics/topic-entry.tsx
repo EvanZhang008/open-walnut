@@ -70,11 +70,11 @@ export function AddToTopicMenuItem({ task, afterAction }: { task: Pick<Task, 'id
  * "New topic": opens the dialog with these members already picked. A quiet button (a plus and the
  * words, no fill), the way the panels around it draw theirs; `iconOnly` for a list's section head.
  */
-export function NewTopicButton({ members = [], testId = 'topic-new', className = 'topic-ghost-btn', iconOnly = false }: { members?: PickedMember[]; testId?: string; className?: string; iconOnly?: boolean }) {
+export function NewTopicButton({ members = [], testId = 'topic-new', className = '', iconOnly = false }: { members?: PickedMember[]; testId?: string; className?: string; iconOnly?: boolean }) {
   const on = useTopicsOn();
   if (!on) return null;
   return (
-    <button type="button" className={`${className}${iconOnly ? ' is-icon' : ''}`} data-testid={testId} title="New topic: a group chat with tasks, VPs and people"
+    <button type="button" className={`btn btn-sm ${iconOnly ? 'btn-icon' : 'btn-ghost'}${className ? ` ${className}` : ''}`} data-testid={testId} title="New topic: a group chat with tasks, VPs and people"
       aria-label={iconOnly ? 'New topic' : undefined} onClick={() => openNewTopic(members)}>
       {ICON_PLUS}
       {!iconOnly && <span>New topic</span>}

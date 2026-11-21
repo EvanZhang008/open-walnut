@@ -115,12 +115,6 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-ask-via:hover { color: var(--accent); text-decoration: underline; }
 .org-alert-link:hover { color: var(--accent); text-decoration: underline; }
 .org-alert-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-xs); }
-.org-ask-tool, .org-ask-tools .org-alert-snooze {
-  border: 0; background: transparent; padding: 1px 6px; border-radius: var(--radius-xs);
-  color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); cursor: pointer;
-}
-.org-ask-tool:hover:not(:disabled), .org-ask-tools .org-alert-snooze:hover { background: var(--bg-secondary); color: var(--fg); }
-.org-ask-tool:disabled { opacity: 0.5; cursor: default; }
 
 /* The answer, in the row: styles/inline-answer.css (OrgInlineAnswer imports it, Home's Action needed too). */
 

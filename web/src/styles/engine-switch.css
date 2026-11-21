@@ -24,16 +24,6 @@
   vertical-align: bottom;
   color: var(--fg-muted);
 }
-.engine-switch-btn {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  padding: 2px 8px;
-  cursor: pointer;
-}
-.engine-switch-btn:disabled { opacity: 0.5; cursor: default; }
 .engine-switch-spinner {
   width: 10px;
   height: 10px;

@@ -32,5 +32,5 @@ export function ShowHint({ hint, open }: { hint?: string; open: boolean }) {
   const [asked, setAsked] = useState(false)
   if (!hint) return null
   if (open || asked) return <p className="pw-hint-shown" data-testid="pw-hint-shown"><span>Hint:</span> {hint}</p>
-  return <button type="button" className="pw-link-btn pw-hint-link" onClick={() => setAsked(true)} data-testid="pw-show-hint">Show hint</button>
+  return <button type="button" className="btn btn-link pw-link-btn pw-hint-link" onClick={() => setAsked(true)} data-testid="pw-show-hint">Show hint</button>
 }

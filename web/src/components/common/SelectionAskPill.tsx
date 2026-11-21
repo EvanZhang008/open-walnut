@@ -20,8 +20,8 @@
  *    its position from the selection's current bounding rect (keeping its
  *    chosen side), so scrolling can't leave a stale pill covering unrelated
  *    lines. When the selection is gone, the pill dismisses itself.
- *  - Flips to the other side (arrow direction follows) when its own side has
- *    no viewport room, instead of covering the selected line at an edge.
+ *  - Flips to the other side when its own side has no viewport room, instead
+ *    of covering the selected line at an edge.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -169,32 +169,27 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, askHereOff, onCo
     onMouseDown: (e: ReactMouseEvent) => { e.preventDefault(); },
     onMouseUp: (e: ReactMouseEvent) => { e.stopPropagation(); },
   };
-  if (onAskHere || askHereOff) {
-    return createPortal(
-      <div
-        ref={btnRef as RefObject<HTMLDivElement>}
-        className={`session-diff-ask-pill has-two${pos?.below ? ' below' : ''}`}
-        style={style}
-        {...keepSelection}
-        data-testid="file-ask-pill"
-      >
-        {onComment && <button type="button" onClick={onComment} data-testid="file-comment" title="Comment on this passage, right at its words">Comment</button>}
-        {onAskHere && <button type="button" onClick={onAskHere} data-testid="file-ask-here" title="A question about this passage, answered beside it">Ask here</button>}
-        <button type="button" onClick={onCommit} data-testid="file-ask-quote" title={onAskHere ? 'Quote this passage in the chat' : askHereOff}>Quote in chat</button>
-      </div>,
-      document.body,
-    );
-  }
+  // One toolbar for both: a bar of the family's quiet keys, the same surface as the conversation's
+  // selection bar (QuotePinSelectionBar). With Ask here on offer the bar holds several actions.
+  const several = !!(onAskHere || askHereOff);
   return createPortal(
-    <button
-      ref={btnRef as RefObject<HTMLButtonElement>}
-      className={`session-diff-ask-pill${pos?.below ? ' below' : ''}`}
+    <div
+      ref={btnRef as RefObject<HTMLDivElement>}
+      className="session-diff-ask-pill"
       style={style}
       {...keepSelection}
-      onClick={onCommit}
+      data-testid={several ? 'file-ask-pill' : undefined}
     >
-      Ask about this
-    </button>,
+      {several ? (
+        <>
+          {onComment && <button type="button" className="btn btn-sm btn-ghost" onClick={onComment} data-testid="file-comment" title="Comment on this passage, right at its words">Comment</button>}
+          {onAskHere && <button type="button" className="btn btn-sm btn-ghost" onClick={onAskHere} data-testid="file-ask-here" title="A question about this passage, answered beside it">Ask here</button>}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onCommit} data-testid="file-ask-quote" title={onAskHere ? 'Quote this passage in the chat' : askHereOff}>Quote in chat</button>
+        </>
+      ) : (
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onCommit}>Ask about this</button>
+      )}
+    </div>,
     document.body,
   );
 }

@@ -78,7 +78,7 @@ export const AskWalnutMenuButton = forwardRef<HTMLButtonElement, MenuButtonProps
       <button
         ref={ref}
         type="button"
-        className={`task-action-btn ask-walnut-menu-btn${open ? ' is-open' : ''}`}
+        className="btn btn-icon btn-sm task-action-btn"
         data-testid="ask-walnut-menu"
         aria-label={`${label} list`}
         aria-haspopup="dialog"
@@ -290,7 +290,7 @@ export function AskWalnutDrawer({
           ) : (
             <button
               type="button"
-              className="task-action-btn ask-walnut-drawer-close"
+              className="btn btn-icon btn-sm task-action-btn ask-walnut-drawer-close"
               onClick={onClose}
               aria-label="Close the quick question list"
               title="Close"

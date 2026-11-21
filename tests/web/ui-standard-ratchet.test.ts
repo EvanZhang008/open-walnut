@@ -14,6 +14,9 @@
  *   - rawAccent: a literal #007aff / #0a84ff where var(--accent) belongs.
  *   - the token kinds (ui-token-scan.ts): rawColour, radiusNotToken, pillRadius, fontSizeOffScale,
  *     shadowLiteral, zIndexLiteral, spacingOffGrid: a value written where a token belongs.
+ *   - bareButton: a `<button>` in a TSX file whose className has no `btn` (the family in
+ *     web/src/styles/buttons.css), choice controls (role tab, radio, switch, checkbox, option)
+ *     aside. A new file starts at 0: every button it draws is `.btn` plus a variant.
  * The counts that exist today are in ui-standard-baseline.json and may only go down. A new file or
  * a higher count fails: use the family the standard names. A lower count fails too until the
  * baseline is lowered with `UI_STANDARD_RECORD=1` on this file, so the ratchet stays tight.
@@ -21,7 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, type Counts } from './ui-standard-scan';
+import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -35,6 +38,8 @@ function current(): Counts {
   // The family's home gives every card control the family's look, an approval's own buttons included.
   delete c.restyledBtn[FAMILY_HOME];
   delete c.ownControl[FAMILY_HOME];
+  // The family's own stylesheet draws `.btn` and its slots.
+  delete c.restyledBtn[FAMILY_CSS];
   return c;
 }
 
@@ -61,7 +66,7 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
       const { grew } = compare(kind, now[kind], was[kind]);
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);
@@ -84,6 +89,11 @@ describe('UI standard: one look per kind of control', () => {
     expect(isOwnControl('.kanban-icon-btn')).toBe(true);
     expect(isOwnControl('.row .pr-pill:hover')).toBe(true);
     expect(isOwnControl('.card-title')).toBe(false);
+    const bare = (src: string) => buttonTags(src).map(isBareButton);
+    expect(bare('<button className="btn btn-sm" onClick={() => a > b}>x</button>')).toEqual([false]);
+    expect(bare("<button className={`btn${on ? ' btn-primary' : ''}`}>y</button>")).toEqual([false]);
+    expect(bare('<button className="foo-btn" onClick={() => { if (x > 1) y() }}>z</button>')).toEqual([true]);
+    expect(bare('<button onClick={f}>n</button><button role="tab" className="t">t</button>')).toEqual([true, false]);
   });
 
   it('finds each value that is not a token', () => {

@@ -160,7 +160,7 @@
 .board-kanban .kanban-lane-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 8px 10px; min-height: 48px; }
 .board-kanban .kanban-lane-incoming { font-size: var(--font-size-xs); color: var(--kb-muted); font-style: italic; white-space: nowrap; }
 .board-kanban .kanban-lane-empty { font-size: var(--font-size-sm); color: var(--kb-muted); padding: 6px 2px; }
-.board-kanban .kanban-lane-show-all, .board-kanban .kanban-done-fold { align-self: flex-start; font-size: var(--font-size-sm); }
+.board-kanban .kanban-lane-show-all, .board-kanban .kanban-done-fold { align-self: flex-start; }
 .board-kanban .kanban-drop-line { height: 2px; margin: -5px 2px; border-radius: 1px; background: var(--accent); flex: 0 0 auto; }
 /* N3, R3-15: the card a keyboard drag holds, drawn lifted at its line in the target lane: the pointer
    drag's overlay copy (.kanban-drag-overlay, KanbanCard overlay), in the lane's flow. */
@@ -328,7 +328,7 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-card-waiting { font-size: var(--font-size-sm); color: var(--fg); overflow-wrap: anywhere; }
 .kanban-card-waiting-label { color: var(--fg-muted); }
 .kanban-card-waiting-until { color: var(--fg-muted); }
-.kanban-card-add-who { align-self: flex-start; color: var(--fg-muted); }
+.kanban-card-add-who { align-self: flex-start; }
 .kanban-card-parked { font-size: var(--font-size-sm); color: var(--kb-violet); opacity: 0.85; }
 /* N6: the lane name is the point of the row: the two buttons (together) wrap to a second line before it is cut. */
 .kanban-card-suggested { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font-size: var(--font-size-sm); color: var(--kb-muted); min-width: 0; }
@@ -366,12 +366,9 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
   border-color: var(--border); box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04); background: var(--bg-elevated);
 }
 .board-kanban .kanban-lanes.is-dragging .kanban-add-task:hover { background: none; color: var(--kb-muted); }
-.board-kanban .kanban-card-actions .kanban-icon-btn { width: 24px; height: 24px; position: relative; }
+.board-kanban .kanban-card-actions .kanban-icon-btn { position: relative; }
 /* A 28px hit area around each 24px button. */
 .board-kanban .kanban-card-actions .kanban-icon-btn::after { content: ''; position: absolute; inset: -2px; }
-.board-kanban .kanban-card-actions .kanban-icon-btn[aria-disabled="true"] { color: var(--fg-muted); opacity: 0.55; cursor: default; }
-.board-kanban .kanban-kebab { font-size: var(--font-size-lg); line-height: 1; }
-.board-kanban.is-read-only .kanban-card-actions .kanban-icon-btn[aria-disabled="true"] { cursor: default; }
 .kanban-card-prompt, .kanban-card-editor, .kanban-card-composer-host { cursor: default; }
 
 /* Menus (portalled to body): the check column and the flyout chevron. */
@@ -385,7 +382,6 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 /* N6: the card's status line grows in a row; in this column it would take every spare pixel. */
 .kanban-card-detail > * { flex: 0 0 auto; }
 .kanban-card-detail .kanban-detail-bar { display: flex; align-items: center; gap: 10px; }
-.kanban-card-detail .kanban-detail-back { font-size: var(--font-size-md); }
 .kanban-card-detail .kanban-detail-lane { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .kanban-card-detail .kanban-detail-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; overflow-wrap: anywhere; }
 .kanban-card-detail .kanban-detail-summary { margin: 0; color: var(--fg-secondary); line-height: 19px; overflow-wrap: anywhere; }

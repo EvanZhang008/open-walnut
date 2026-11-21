@@ -392,7 +392,7 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await pick(page, alpha, 'Remove')
       const confirm = page.getByTestId('rh-row-confirm')
       await expect(confirm).toContainText('Remove Alpha box?')
-      await expect(confirm.getByTestId('rh-row-confirm-remove')).toHaveClass(/settings-button-danger/)
+      await expect(confirm.getByTestId('rh-row-confirm-remove')).toHaveClass(/btn-danger/)
       await expect(confirm.getByTestId('rh-row-confirm-cancel')).toBeFocused()
       // No timer puts it back (the old armed buttons turned back after 3 s).
       await page.waitForTimeout(3_300)

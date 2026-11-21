@@ -68,22 +68,6 @@
 .mail-rules-empty { margin: 0; padding: 10px; color: var(--fg-muted); font-size: var(--font-size-md); }
 
 .mail-rules-move { display: inline-flex; gap: 2px; flex-shrink: 0; }
-.mail-rules-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-.mail-rules-icon-btn:hover:not(:disabled) { background: var(--accent-subtle); color: var(--fg); }
-.mail-rules-icon-btn:disabled { color: var(--fg-muted); opacity: 0.45; cursor: default; }
-.mail-rules-icon-btn:focus-visible,
 .mail-rules-picker:focus-visible,
 .mail-rules-picker-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mail-rules-moved { min-width: 44px; font-size: var(--font-size-sm); color: var(--accent-text); flex-shrink: 0; }

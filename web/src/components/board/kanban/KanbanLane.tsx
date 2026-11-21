@@ -130,11 +130,11 @@ function KanbanLaneInner(p: KanbanLaneProps) {
             <div className="kanban-lane-empty" data-testid="kanban-lane-empty">{p.visible ? 'No matching cards' : 'Nothing here'}</div>
           )}
           {done && !p.visible && shownIds.length > DONE_LANE_PREVIEW && (
-            <button type="button" className="kanban-text-btn kanban-lane-show-all" data-testid="kanban-lane-show-all"
+            <button type="button" className="btn btn-link btn-sm kanban-text-btn kanban-lane-show-all" data-testid="kanban-lane-show-all"
               onClick={() => p.onShowAll(!p.showAll)}>{p.showAll ? 'Show fewer' : `Show all ${shownIds.length}`}</button>
           )}
           {p.onFoldRail && (
-            <button type="button" className="kanban-text-btn kanban-done-fold" data-testid="kanban-done-fold" onClick={p.onFoldRail}>Fold to the rail</button>
+            <button type="button" className="btn btn-link btn-sm kanban-text-btn kanban-done-fold" data-testid="kanban-done-fold" onClick={p.onFoldRail}>Fold to the rail</button>
           )}
           <KanbanAddTask laneId={lane.id} laneName={lane.name} api={p.api} autoFocus={p.autoAdd} />
         </div>

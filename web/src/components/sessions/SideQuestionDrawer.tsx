@@ -702,7 +702,7 @@ function SideQuestionDrawerBody({
             <span className="side-question-popover-hint">multi-turn · kept out of the chat</span>
             <button
               type="button"
-              className="task-action-btn side-question-fullscreen"
+              className="btn btn-icon btn-sm task-action-btn side-question-fullscreen"
               onClick={isFullscreen ? exitFullscreen : enterFullscreen}
               disabled={!fullscreenPlace}
               title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}

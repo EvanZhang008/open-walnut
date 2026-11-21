@@ -48,11 +48,11 @@ function Field({ label, value, secret, mono, copyKey, copied, onCopy, extra }: {
         </span>
         <span className="pw-f-actions">
           {secret && (
-            <button type="button" className="pw-icon-btn" aria-label={shown ? `Hide ${label}` : `Show ${label}`} title={shown ? 'Hide' : 'Show'} onClick={() => setShown((s) => !s)}>
+            <button type="button" className="btn btn-icon" aria-label={shown ? `Hide ${label}` : `Show ${label}`} title={shown ? 'Hide' : 'Show'} onClick={() => setShown((s) => !s)}>
               {shown ? <EyeOffIcon /> : <EyeIcon />}
             </button>
           )}
-          <button type="button" className="pw-icon-btn" aria-label={`Copy ${label}`} title="Copy" onClick={() => onCopy(copyKey, value)}>
+          <button type="button" className="btn btn-icon" aria-label={`Copy ${label}`} title="Copy" onClick={() => onCopy(copyKey, value)}>
             {copied === copyKey ? <CheckIcon /> : <CopyIcon />}
           </button>
         </span>
@@ -95,7 +95,7 @@ function TotpField({ itemId, copied, onCopy }: { itemId: string; copied: string 
             <circle cx="11" cy="11" r="9" className="pw-ring-fg" strokeDasharray={`${(frac * 56.5).toFixed(2)} 56.5`} transform="rotate(-90 11 11)" />
             <text x="11" y="14.5" textAnchor="middle">{left}</text>
           </svg>
-          <button type="button" className="pw-icon-btn" aria-label="Copy verification code" title="Copy" onClick={() => onCopy('totp', code.code)}>
+          <button type="button" className="btn btn-icon" aria-label="Copy verification code" title="Copy" onClick={() => onCopy('totp', code.code)}>
             {copied === 'totp' ? <CheckIcon /> : <CopyIcon />}
           </button>
         </span>
@@ -127,12 +127,12 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
         <div className="pw-detail-actions">
           {!trashed && (
             <>
-              <button type="button" className={`pw-icon-btn${item.favorite ? ' pw-fav-on' : ''}`} aria-label={item.favorite ? 'Remove from favorites' : 'Add to favorites'} title="Favorite" disabled={busy}
+              <button type="button" className={`btn btn-icon${item.favorite ? ' pw-fav-on' : ''}`} aria-label={item.favorite ? 'Remove from favorites' : 'Add to favorites'} title="Favorite" disabled={busy}
                 onClick={() => void act(() => vaultApi.favorite(item.id, !item.favorite))}><StarIcon filled={!!item.favorite} /></button>
-              <button type="button" className="pw-btn" onClick={onEdit}><EditIcon /> Edit</button>
+              <button type="button" className="btn btn-sm" onClick={onEdit}><EditIcon /> Edit</button>
             </>
           )}
-          {trashed && <button type="button" className="pw-btn" disabled={busy} onClick={() => void act(() => vaultApi.restore(item.id))}><RestoreIcon /> Restore</button>}
+          {trashed && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void act(() => vaultApi.restore(item.id))}><RestoreIcon /> Restore</button>}
         </div>
       </div>
 
@@ -194,9 +194,9 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
       </div>
 
       <div className="pw-detail-foot">
-        {!trashed && <button type="button" className="pw-btn pw-btn-danger-text" disabled={busy} onClick={() => void act(() => vaultApi.trash(item.id))}><TrashIcon size={15} /> Delete</button>}
+        {!trashed && <button type="button" className="btn btn-sm btn-ghost btn-danger" disabled={busy} onClick={() => void act(() => vaultApi.trash(item.id))}><TrashIcon size={15} /> Delete</button>}
         {trashed && (
-          <button type="button" className="pw-btn pw-btn-danger" disabled={busy} onClick={() => void (async () => {
+          <button type="button" className="btn btn-sm btn-primary btn-danger" disabled={busy} onClick={() => void (async () => {
             if (!(await confirm({ title: `Delete "${item.title}" forever?`, message: 'It cannot be restored afterwards.', confirmLabel: 'Delete forever', danger: true }))) return
             await act(async () => { await vaultApi.remove(item.id); return null })
           })()}>

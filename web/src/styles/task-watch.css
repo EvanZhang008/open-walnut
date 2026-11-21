@@ -21,10 +21,5 @@
   html .app-shell-navigation .task-watch-btn { width: 44px; height: 44px; }
 }
 
-/* Among a session header's window buttons (SessionPanel): the row's button size at full
-   strength, the eye in the accent while the task is watched. */
-.task-watch-btn.task-action-btn { width: auto; height: 20px; padding: 0 5px; opacity: 1; }
-/* (Named by its header class: a selector ending in .task-action-btn reads as an overlay to
-   tests/web/overlays-opaque.test.ts.) */
-.session-panel-watch.is-watched { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
-.session-panel-watch.is-watched:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+/* Among a session header's window buttons (SessionPanel, .btn-icon.btn-sm): at full strength. */
+.task-watch-btn.task-action-btn { opacity: 1; }

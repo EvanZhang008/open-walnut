@@ -1,18 +1,5 @@
 /* Commit view of the Changed tab (SessionCommitDialog / SessionCommitRepo). */
 
-.session-diff-commit-btn {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  padding: 3px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.session-diff-commit-btn:hover:not(:disabled) { color: var(--fg); background: var(--bg-hover); }
-.session-diff-commit-btn:disabled { opacity: 0.5; cursor: default; }
-
 /* The modal never outgrows the viewport: header fixed, body scrolls. */
 .app-modal.scd-modal {
   width: min(880px, calc(100vw - 48px));
@@ -185,7 +172,6 @@
 
 .scd-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .scd-spacer { flex: 1; }
-.scd-modal .app-modal-btn:disabled { opacity: 0.5; cursor: default; }
 
 .scd-confirm {
   margin-top: 10px;

@@ -154,7 +154,7 @@ export function PromptWaitingPill({ containerRef, stacked }: { containerRef: Ref
   return (
     <button
       type="button"
-      className={`phone-prompt-pill${stacked ? ' is-stacked' : ''}${state.show ? '' : ' is-seen'}`}
+      className={`btn btn-primary phone-prompt-pill${stacked ? ' is-stacked' : ''}${state.show ? '' : ' is-seen'}`}
       data-testid="phone-prompt-pill"
       aria-hidden={state.show ? undefined : true}
       tabIndex={state.show ? undefined : -1}

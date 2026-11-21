@@ -54,25 +54,6 @@
 /* Always on their own line under the words, lined up with them (icon 16px + gap 10px), so they
    sit in one place at every column width. */
 .usage-limit-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 0 100%; padding-left: 26px; }
-.usage-limit-btn {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-/* A border on hover, never a fill: the button that appears under the pointer after a click must
-   not read as pressed. */
-.usage-limit-btn:hover:not(:disabled) { border-color: var(--accent); }
-.usage-limit-btn:disabled { opacity: 0.6; cursor: default; }
-.usage-limit-btn.is-primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
-.usage-limit-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: transparent; }
-.usage-limit-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .usage-limit-when { white-space: nowrap; }
 /* Walnut continued it after the reset: one quiet line with its dismiss. */
 .session-error-banner.usage-limit-banner.usage-limit-note {

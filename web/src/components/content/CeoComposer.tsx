@@ -194,8 +194,8 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
       {error && <div className="ceo-composer-error" role="alert">{error}</div>}
       <div className="ceo-composer-foot">
         <span className="ceo-composer-hint">⌘↵ to send</span>
-        <button type="button" className="content-action-btn" disabled={sending} onClick={() => onClose(false)}>Cancel</button>
-        <button type="button" className="content-action-btn ceo-composer-send" data-testid="ceo-composer-send" disabled={(!words && !gate.micBusy && !gate.waiting) || sending || waitingForList} onClick={gate.send} {...dictationWaitProps(gate)}>
+        <button type="button" className="btn btn-sm btn-ghost" disabled={sending} onClick={() => onClose(false)}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-primary" data-testid="ceo-composer-send" disabled={(!words && !gate.micBusy && !gate.waiting) || sending || waitingForList} onClick={gate.send} {...dictationWaitProps(gate)}>
           {sending ? 'Sending…' : 'Send'}
         </button>
       </div>

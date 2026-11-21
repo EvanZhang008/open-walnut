@@ -436,7 +436,7 @@ export const SessionTerminalPane = forwardRef<TerminalPaneHandle, SessionTermina
               onMouseDown={(e) => e.preventDefault()}
               data-testid="terminal-add-to-chat-pop"
             >
-              <button type="button" className="session-terminal-selection-btn" onClick={addSelection} title="Put the selected output in the message box (nothing is sent)">
+              <button type="button" className="btn btn-sm btn-ghost" onClick={addSelection} title="Put the selected output in the message box (nothing is sent)">
                 {ICON_CHAT}<span>Add to chat</span>
               </button>
             </div>
@@ -444,14 +444,14 @@ export const SessionTerminalPane = forwardRef<TerminalPaneHandle, SessionTermina
           {status === 'exited' && exitCode !== null && (
             <div className="session-terminal-inline-note" role="status">
               <span>{endedBy === 'window' ? 'Ended in another window.' : endedBy === 'other' ? 'This terminal was ended.' : `The shell exited${exitCode ? ` (code ${exitCode})` : ''}.`}</span>
-              <button type="button" className="session-terminal-btn" onClick={retry}>Restart</button>
-              <button type="button" className="session-terminal-btn" onClick={() => onDismissExited(slot)}>Close</button>
+              <button type="button" className="btn btn-sm" onClick={retry}>Restart</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => onDismissExited(slot)}>Close</button>
             </div>
           )}
           {status === 'error' && errorMessage && (
             <div className="session-terminal-inline-error">
               {errorMessage}
-              <button className="session-terminal-btn" onClick={retry}>Retry</button>
+              <button type="button" className="btn btn-sm" onClick={retry}>Retry</button>
             </div>
           )}
         </div>

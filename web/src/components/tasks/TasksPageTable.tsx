@@ -155,7 +155,7 @@ function PriorityCell({ task, onUpdate }: { task: Task; onUpdate: TasksPageTable
       <button
         ref={btnRef}
         type="button"
-        className="tp-cell-edit-btn"
+        className="btn btn-sm btn-ghost tp-cell-edit-btn"
         title="Set priority"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
@@ -248,7 +248,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
       <button
         ref={btnRef}
         type="button"
-        className="tp-cell-edit-btn"
+        className="btn btn-sm btn-ghost tp-cell-edit-btn"
         title="Move to project"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
@@ -542,7 +542,7 @@ export function TasksPageTable({
           <span className="tp-row-acts">
             <button
               type="button"
-              className="tp-act-btn tp-act-del"
+              className="btn btn-icon btn-sm btn-danger"
               title="Delete task"
               onClick={(e) => void handleDelete(e, t)}
             >
@@ -678,7 +678,7 @@ export function TasksPageTable({
                 onChanged={onProjectChanged}
                 rowSelector="[data-group-project]"
                 wrapClassName="tp-group-kebab-wrap"
-                btnClassName="tp-rail-kebab-btn"
+                btnClassName="btn btn-icon btn-sm"
                 {...(projectMenuExtras ? { extraItems: projectMenuExtras(project) } : {})}
               />
             )}

@@ -648,7 +648,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     <div className="task-kebab-wrapper" data-menu-open={open || undefined}>
       <button
         ref={btnRef}
-        className="task-kebab-btn"
+        className="btn btn-icon btn-sm task-kebab-btn"
         onClick={handleToggle}
         title="More actions"
         aria-label="More actions"

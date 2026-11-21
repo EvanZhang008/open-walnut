@@ -67,7 +67,7 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderG
 
   if (state === 'retrying') {
     return (
-      <button className="session-retry-btn" disabled>
+      <button className="btn btn-sm btn-primary session-retry-btn" disabled>
         <span className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5, display: 'inline-block', verticalAlign: 'middle', marginRight: 4 }} />
         {words?.busy ?? (remote ? 'Reconnecting\u2026' : 'Rechecking\u2026')}
       </button>
@@ -76,7 +76,7 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderG
 
   return (
     <button
-      className="session-retry-btn"
+      className="btn btn-sm btn-primary session-retry-btn"
       onClick={handleRetry}
       title={failure ?? words?.title ?? (remote
         ? 'Re-check the host and clear this error. The conversation is kept: send a message to resume the work.'

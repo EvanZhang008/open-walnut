@@ -258,13 +258,13 @@ export function PluginConnectionPanel({ pluginId, initial, onReport }: Props) {
             help={<span className="settings-addons-mono">{report.signIn.verificationUri}</span>}
             control={
               <a
-                className="settings-button settings-button-primary"
+                className="btn btn-sm btn-primary"
                 href={report.signIn.verificationUri}
                 target="_blank"
                 rel="noreferrer"
               >
-                <span className="settings-button-stack">
-                  <span className="settings-button-label">Open sign-in page</span>
+                <span className="btn-reserve">
+                  <span className="btn-label">Open sign-in page</span>
                 </span>
               </a>
             }

@@ -231,18 +231,18 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
       tools={<>
         <button
           type="button"
-          className="btn btn-sm org-ask-tool"
+          className="btn btn-sm btn-ghost org-ask-tool"
           data-testid="org-alert-quote"
           disabled={!canQuote}
           aria-label={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
           onClick={() => onQuote(a)}
         >Quote</button>
-        {task && <OrgWatchToggle task={task} className="org-ask-tool" />}
+        {task && <OrgWatchToggle task={task} className="btn btn-sm btn-ghost org-ask-tool" />}
         {/* Done and asking nothing: close it from the card (2026-11-03, the user: "see if can closed"). */}
         {a.category === 'close' && (
           <button
             type="button"
-            className="btn btn-sm org-ask-tool org-ask-close"
+            className="btn btn-sm btn-ghost org-ask-tool org-ask-close"
             data-testid="org-ask-close"
             onClick={() => {
               const settle = answers.start(a.taskId);

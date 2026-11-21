@@ -75,7 +75,7 @@ export function PhoneTopBar({ pageTitle, menuRef, menuExpanded, onMenu }: PhoneT
       {bar && top ? (
         <button
           type="button"
-          className="phone-topbar-btn phone-topbar-back"
+          className="btn btn-icon phone-topbar-btn phone-topbar-back"
           onClick={top.close}
           aria-label="Back"
         >
@@ -85,7 +85,7 @@ export function PhoneTopBar({ pageTitle, menuRef, menuExpanded, onMenu }: PhoneT
         <button
           ref={menuRef}
           type="button"
-          className="sidebar-toggle phone-topbar-btn"
+          className="btn btn-icon sidebar-toggle phone-topbar-btn"
           onClick={onMenu}
           aria-label="Menu"
           aria-controls="primary-sidebar"

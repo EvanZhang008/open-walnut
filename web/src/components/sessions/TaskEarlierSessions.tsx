@@ -68,7 +68,7 @@ function EarlierSessionBlock({ row, onOpen }: { row: TaskSessionRow; onOpen?: (s
           {row.started_at ? ` · ${when(row.started_at)}` : ''}
         </button>
         {onOpen && (
-          <button type="button" className="engine-switch-btn" onClick={() => { markOpenedOnPurpose(row.session_id); onOpen(row.session_id); }}>Open</button>
+          <button type="button" className="btn btn-sm" onClick={() => { markOpenedOnPurpose(row.session_id); onOpen(row.session_id); }}>Open</button>
         )}
       </div>
       {open && (

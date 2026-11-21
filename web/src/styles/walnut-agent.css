@@ -278,16 +278,8 @@
   margin: 8px 12px 0;
 }
 
-/* ── The ≡ button: the first thing on the panel header's TITLE row (the slot
-   itself, `.session-panel-header-leading`, is laid out in globals.css). ── */
-.ask-walnut-menu-btn {
-  color: var(--fg-muted);
-}
-.ask-walnut-menu-btn:hover,
-.ask-walnut-menu-btn.is-open {
-  color: var(--walnut-accent);
-}
-/* The pending / loading / empty bodies have no panel header, so the button gets
+/* ── The ≡ button (.btn-icon): the first thing on the panel header's TITLE row (the slot
+   itself, `.session-panel-header-leading`, is laid out in globals.css). The pending / loading / empty bodies have no panel header, so the button gets
    the same top-left spot by hand. */
 .ask-walnut-bare-header {
   position: absolute;
@@ -405,10 +397,6 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-.ask-walnut-drawer-close {
-  font-size: 16px;
-  line-height: 1;
 }
 /* Search: filters the list below as you type (the Claude sidebar's search box).
    Own chrome rather than the global input rule so it reads as part of the

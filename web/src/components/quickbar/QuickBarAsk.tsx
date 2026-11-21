@@ -85,7 +85,7 @@ export function QuickBarAsk({ turns, onTask }: { turns: readonly AskTurn[]; onTa
       </div>
       {last.done && (
         <div className="qb-ask-actions">
-          <button type="button" className="qb-btn" onClick={makeTask} disabled={making === 'making'} data-testid="qb-ask-task">
+          <button type="button" className="btn btn-sm" onClick={makeTask} disabled={making === 'making'} data-testid="qb-ask-task">
             {making === 'making' ? 'Making a task…' : 'Make it a task'}
           </button>
           {making !== 'idle' && making !== 'making' && <span className="qb-ask-failed" role="status">{making}</span>}

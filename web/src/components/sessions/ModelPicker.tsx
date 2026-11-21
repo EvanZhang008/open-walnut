@@ -1072,7 +1072,7 @@ export function ModelPicker({
                   {!sessionId && (
                     <button
                       type="button"
-                      className="btn btn-sm model-picker-btn model-picker-retry"
+                      className="btn btn-sm btn-primary model-picker-retry"
                       data-testid="acp-catalog-retry"
                       title="Probe the engine again (bypasses the cached failure)"
                       onClick={() => { acpRetryRef.current = true; setAcpRetryNonce((n) => n + 1); }}

@@ -248,7 +248,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
       <div className="session-browser-card session-browser-card--ended" data-testid="session-browser-ended" role="status">
         <span className="session-browser-dot session-browser-dot--off" aria-hidden />
         <span className="session-browser-ended-text">Browser: {endedLine(ended.why)} <span className="session-browser-muted">{agoLine(ended.at, Date.now())}</span></span>
-        <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Dismiss" title="Dismiss"
+        <button type="button" className="btn btn-icon btn-sm session-browser-btn--icon" aria-label="Dismiss" title="Dismiss"
           onClick={() => { setPrefs((p) => ({ ...p, dismissed: ended.at })); if (!state.replay) onClose(); }}>{CLOSE_GLYPH}</button>
       </div>
     ) : null;
@@ -288,7 +288,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const liveOffer = offer && !trouble ? (
     granting === 'opened'
       ? <span className="session-browser-live-wait" data-testid="session-browser-live-wait"> Click Allow on the Walnut page in Chrome, then Allow in Chrome's box.</span>
-      : <button type="button" className="session-browser-btn session-browser-btn--primary session-browser-live-btn" onClick={() => { void showLive(); }}
+      : <button type="button" className="btn btn-sm btn-primary session-browser-live-btn" onClick={() => { void showLive(); }}
           disabled={granting !== null} data-testid="session-browser-show-live">{granting === 'opening' ? 'Opening…' : 'Show it live'}</button>
   ) : null;
   const late = lateLine(noPicSince ?? (picture ? undefined : waitFrom), now);
@@ -302,7 +302,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
       <header className="session-browser-head">
         <span className={`session-browser-dot${live ? '' : ' session-browser-dot--idle'}`} aria-hidden />
         <div className="session-browser-title" data-testid="session-browser-title" title={title}>{title || 'Untitled page'}</div>
-        <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
+        <button type="button" className="btn btn-icon btn-sm session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-hide">{CLOSE_GLYPH}</button>
       </header>
       <div className="session-browser-names">
@@ -322,8 +322,8 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
         <div className={`session-browser-hand${driving ? ' is-driving' : ''}`} role="status" data-testid="session-browser-hand">
           <span className="session-browser-hand-text">{asks}</span>
           {driving
-            ? <button type="button" className="session-browser-btn session-browser-btn--primary" onClick={() => { void hand('back'); }} disabled={handing !== null}>{followed.signIn ? 'Done' : 'Hand back'}</button>
-            : <button type="button" className="session-browser-btn session-browser-btn--primary" onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}>Take over to sign in</button>}
+            ? <button type="button" className="btn btn-sm btn-primary" onClick={() => { void hand('back'); }} disabled={handing !== null}>{followed.signIn ? 'Done' : 'Hand back'}</button>
+            : <button type="button" className="btn btn-sm btn-primary" onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}>Take over to sign in</button>}
         </div>
       )}
       <div className="session-browser-shot" ref={setShotEl} data-testid="session-browser-shot">
@@ -338,20 +338,20 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
       {/* Stop on its own at the far left, so a click meant for Larger or Take over never ends the
           agent's use. All quiet: the ask row above holds the filled button when something is asked. */}
       <div className="session-browser-actions">
-        <button type="button" className="session-browser-btn session-browser-btn--stop" onClick={() => { void stop(); }} disabled={stopping}
+        <button type="button" className="btn btn-sm" onClick={() => { void stop(); }} disabled={stopping}
           title="The agent stops using this tab. The tab stays open, yours." data-testid="session-browser-stop">{stopping ? 'Stopping…' : 'Stop'}</button>
         <span className="session-browser-actions-gap" aria-hidden />
         {state.replay && (
-          <button type="button" className="session-browser-btn" onClick={() => setReplaying(true)}
+          <button type="button" className="btn btn-sm" onClick={() => setReplaying(true)}
             title="Play back the agent's steps in the browser" data-testid="session-browser-replay-open">Replay</button>
         )}
         <BrowserRevealButton taskId={taskId} tab={followed.tab} device={followed.device} />
-        <button type="button" className="session-browser-btn" onClick={large}
+        <button type="button" className="btn btn-sm" onClick={large}
           aria-pressed={prefs.large} data-testid="session-browser-size">{prefs.large ? 'Smaller' : 'Larger'}</button>
         {driving
-          ? <button type="button" className="session-browser-btn" onClick={() => { void hand('back'); }} disabled={handing !== null}
+          ? <button type="button" className="btn btn-sm" onClick={() => { void hand('back'); }} disabled={handing !== null}
               title="The agent may use this tab again" data-testid="session-browser-handback">{handing === 'back' ? 'Handing back…' : followed.signIn ? 'Done, hand back' : 'Hand back'}</button>
-          : <button type="button" className="session-browser-btn" onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}
+          : <button type="button" className="btn btn-sm" onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}
               title="Bring this tab up in your browser and use it yourself; the agent waits until you hand it back" data-testid="session-browser-takeover">{handing === 'take' ? 'Taking over…' : 'Take over'}</button>}
       </div>
     </section>

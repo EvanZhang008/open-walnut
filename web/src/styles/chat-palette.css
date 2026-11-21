@@ -132,7 +132,6 @@
 }
 
 /* The bubble's time and copy buttons: muted grey reads under 4.5:1 on the bubble's grey. */
-.session-msg-user .msg-copy-btn,
 .session-msg-user .msg-time {
   color: var(--fg-secondary);
 }

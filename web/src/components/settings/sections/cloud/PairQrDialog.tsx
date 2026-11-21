@@ -95,15 +95,15 @@ export function PairQrDialog({ name, phase, repair, reach, created, qrDataURL, e
 
         <div className="app-modal-actions">
           {phase === 'shown' ? (
-            <button ref={primaryRef} tabIndex={0} className="app-modal-btn primary" onClick={onClose} data-testid="devices-qr-done">Done</button>
+            <button ref={primaryRef} tabIndex={0} className="btn btn-primary" onClick={onClose} data-testid="devices-qr-done">Done</button>
           ) : (
             <>
-              <button tabIndex={0} className="app-modal-btn" onClick={onClose} disabled={working} data-testid="devices-show-qr-cancel">Cancel</button>
+              <button tabIndex={0} className="btn" onClick={onClose} disabled={working} data-testid="devices-show-qr-cancel">Cancel</button>
               {(repair || phase === 'failed') && (
                 <button
                   ref={primaryRef}
                   tabIndex={0}
-                  className="app-modal-btn primary"
+                  className="btn btn-primary"
                   onClick={onConfirm}
                   disabled={working}
                   data-testid="devices-show-qr-confirm"

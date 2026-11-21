@@ -153,23 +153,6 @@
 }
 .tp-rail-item:hover .tp-ri-count,
 .tp-rail-item:has(.tp-rail-kebab-wrap[data-menu-open]) .tp-ri-count { display: none; }
-.tp-rail-kebab-btn {
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: none;
-  color: var(--fg-muted);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.tp-rail-kebab-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
 
 /* New Project, under the rail's title and above the list, over a hairline */
 .tp-rail-newproj-wrap {
@@ -178,23 +161,6 @@
   margin-bottom: 6px;
   padding-bottom: 6px;
 }
-.tp-rail-newproj-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 10px;
-  border: none;
-  background: none;
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.tp-rail-newproj-btn:hover { color: var(--accent); background: var(--bg-hover); }
 .tp-rail-newproj-input {
   width: 100%;
   height: 32px;
@@ -284,20 +250,7 @@
 .tp-search::placeholder { color: var(--fg-muted); }
 .tp-search:focus { border-color: var(--accent); background: var(--bg); }
 
-.tp-newtask-btn {
-  height: 28px;
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  cursor: pointer;
-  flex: none;
-}
-.tp-newtask-btn:hover { background: var(--accent-hover); }
+.tp-newtask-btn { flex: none; }
 
 /* ───────── table ───────── */
 
@@ -464,19 +417,7 @@
   right: 2px;
   top: 50%;
   transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
 }
-.tp-cols-btn:hover, .tp-cols-btn.open { background: var(--bg-tertiary); color: var(--fg); }
 .tp-cols-popover {
   position: fixed;
   z-index: 9500;
@@ -572,39 +513,13 @@
 /* the shared kebab button ships opacity:0, revealed by home-panel row selectors
    that don't exist here — the .tp-row-acts display gate is our reveal. */
 .tp-row .task-kebab-btn { opacity: 1; }
-.tp-act-btn {
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-.tp-act-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
-.tp-act-btn.tp-act-del:hover { color: var(--tp-p0); }
 
 /* inline-editable cells (priority / project) — dashed affordance on hover */
 .tp-cell-edit-btn {
-  border: none;
-  background: none;
-  padding: 2px 6px;
   margin-left: -6px;
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: inherit;
-  color: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
   min-width: 0;
   max-width: 100%;
 }
-.tp-cell-edit-btn:hover { background: var(--bg-tertiary); }
 
 /* priority picker popover */
 .tp-pri-popover {

@@ -481,7 +481,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           )}
           {entry.type === 'dir' && (
             <button
-              className="mention-pick-btn"
+              className="btn btn-sm mention-pick-btn"
               onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); pick(row, { forceSelect: true }); }}
               title="Reference this folder (⌘⏎)"
             >

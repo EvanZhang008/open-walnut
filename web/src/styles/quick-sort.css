@@ -14,7 +14,6 @@
 .quick-sort-reply-input, .quick-sort-reply-input:focus, .quick-sort-reply-input:focus-visible { box-shadow: none; outline: none; border: 0; background: transparent; }
 .quick-sort-reply-error { color: var(--error); font-size: var(--font-size-sm); }
 .quick-sort-reply-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; }
-.quick-sort-btn.is-reply { color: var(--accent); }
 .quick-sort-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .quick-sort-chips button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border: 1px solid var(--border); border-radius: 99px; background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-sm); }
 .quick-sort-chips button b { font-variant-numeric: tabular-nums; }
@@ -51,17 +50,15 @@ button.quick-sort-card-title:hover { color: var(--accent); }
 .quick-sort-tiers { display: flex; flex-wrap: wrap; gap: 6px; }
 .quick-sort-tiers .quick-sort-btn { flex: 1 1 28%; }
 .quick-sort-moves { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.quick-sort-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 38px; padding: 5px 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-md); font-weight: 600; line-height: 1.2; cursor: pointer; overflow-wrap: anywhere; }
+/* The card's keys are family keys stacked as label over key hint (<small>), wrapping in a narrow grid cell. */
+.quick-sort-btn { flex-direction: column; gap: 0; white-space: normal; overflow-wrap: anywhere; }
 .quick-sort-btn small { font-size: var(--font-size-xs); font-weight: 400; color: var(--fg-muted); }
-.quick-sort-btn:hover { border-color: currentColor; }
-.quick-sort-btn.tier-focus { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
-.quick-sort-btn.tier-satellite { color: var(--tier-satellite); background: color-mix(in srgb, var(--tier-satellite) 8%, var(--bg)); }
-.quick-sort-btn.tier-wait { color: color-mix(in srgb, var(--tier-wait) 75%, var(--fg)); background: color-mix(in srgb, var(--tier-wait) 10%, var(--bg)); }
-.quick-sort-btn.tier-custom { color: var(--tier-custom); background: color-mix(in srgb, var(--tier-custom) 8%, var(--bg)); }
-.quick-sort-btn.tier-unpinned { color: var(--fg-muted); }
-.quick-sort-btn.is-snooze { background: var(--bg-secondary); }
-.quick-sort-btn.is-done { color: var(--success); background: color-mix(in srgb, var(--success) 9%, var(--bg)); }
-.quick-sort-btn.is-skip { color: var(--fg-muted); font-weight: 400; }
+/* Each tier keeps its colour (the same one it has across the console) on the key's hint line. */
+.quick-sort-btn.tier-focus small { color: var(--accent-text); }
+.quick-sort-btn.tier-satellite small { color: var(--tier-satellite); }
+.quick-sort-btn.tier-wait small { color: color-mix(in srgb, var(--tier-wait) 75%, var(--fg)); }
+.quick-sort-btn.tier-custom small { color: var(--tier-custom); }
+.quick-sort-btn.is-done small { color: var(--success); }
 .quick-sort-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; font-size: var(--font-size-md); }
 .quick-sort-confirm span { flex: 1 0 100%; }
 .quick-sort-confirm .quick-sort-btn { flex: 1; }

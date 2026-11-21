@@ -147,7 +147,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
           label="Keyboard shortcuts"
           help={`Press ? anywhere outside a text box, or ${isMacPlatform() ? '⌘' : 'Ctrl+'}/ anywhere, to see them.`}
           control={
-            <button type="button" className="settings-button settings-button-default" onClick={openShortcutsHelp}>
+            <button type="button" className="btn btn-sm" onClick={openShortcutsHelp}>
               Show shortcuts
             </button>
           }

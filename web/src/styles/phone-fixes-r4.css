@@ -176,16 +176,13 @@
   }
   .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn {
     flex: 1 1 0;
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1.2;
     min-width: 44px;
     width: auto;
     height: auto;
     min-height: 52px;
-    flex-direction: column;
-    gap: 2px;
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-sm);
-    line-height: 1.2;
-    color: var(--accent-text);
   }
   /* The name each button already carries for a screen reader, shown. */
   .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn[data-label]::after {
@@ -199,7 +196,6 @@
   .app-shell-navigation .mail-app .mail-invite-btn {
     min-height: 44px;
     height: auto;
-    font-size: 14px;
   }
 
   /* The sort line: no separator left at the start of a wrapped line. */

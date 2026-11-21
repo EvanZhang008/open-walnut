@@ -1,5 +1,5 @@
 /**
- * NewLauncherButton — primary "New task" action in the task-panel toolbar.
+ * NewLauncherButton: the "New task" action in the task-panel toolbar, the family's quiet key.
  *
  * A task may remain sessionless ("Save as todo") or start with a
  * session. Both paths begin in the same draft column, so the toolbar presents
@@ -20,7 +20,7 @@ interface NewLauncherButtonProps {
 export function NewLauncherButton({ onOpen }: NewLauncherButtonProps) {
   return (
     <button
-      className="new-launcher-btn"
+      className="new-launcher-btn btn btn-ghost btn-sm"
       onClick={onOpen}
       title="New task"
       aria-label="New task"

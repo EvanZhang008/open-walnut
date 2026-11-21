@@ -97,7 +97,7 @@ test('marks: Bold applies, Clear formatting removes it, Undo brings it back', as
   await selectBlock(editor, 'first line')
   await tool(page, 'Bold (⌘B)').click()
   await expect(editor.locator('p strong', { hasText: 'first line' })).toHaveCount(1)
-  await expect(tool(page, 'Bold (⌘B)')).toHaveClass(/active/)
+  await expect(tool(page, 'Bold (⌘B)')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(readNote, { timeout: 10_000 }).toContain('**first line**')
 
   // Past ProseMirror's 500ms history-grouping window, so Undo reverts ONLY the

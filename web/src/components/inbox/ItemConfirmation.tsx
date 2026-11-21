@@ -109,16 +109,16 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
       {work.task && <p>{projectDisplayName(work.task.project)} · {PHASE_TEXT[work.task.phase] ?? work.task.phase}</p>}
       {!retry && work.goal && <p>Confirmed work goal: {work.goal}</p>}
       {!retry && work.task?.description && <p>{work.task.description}</p>}
-      <button type="button" className="hib-row-btn" onClick={() => onNavigate(taskPath(work.taskId))}>Open existing task</button>
+      <button type="button" className="btn btn-sm hib-row-btn" onClick={() => onNavigate(taskPath(work.taskId))}>Open existing task</button>
     </div>}
     {target && <div><strong>Selected task</strong><p>{target.title}</p>
       <p>{projectDisplayName(target.project)} · {PHASE_TEXT[target.phase] ?? target.phase}</p>
-      <button type="button" className="hib-row-btn" onClick={onFind} disabled={submitting || submitted}>Choose another task</button></div>}
+      <button type="button" className="btn btn-sm hib-row-btn" onClick={onFind} disabled={submitting || submitted}>Choose another task</button></div>}
     {!again && !attach && !retry && !work && <>
       <label>Task title<MicInput data-draft-key={itemDraftKey(draftKey, `${field}title`)} value={title} readOnly={submitting || submitted} setText={(text) => change(setTitle, text)} micRef={titleMic} /></label>
       <label>Project</label><div className="hii-projects" role="group" aria-label="Project">
         {(response?.projects ?? [{ name: '' }]).map(p => <button type="button" key={p.name} aria-pressed={project === p.name}
-          className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{projectDisplayName(p.name)}</button>)}
+          className="btn btn-sm hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{projectDisplayName(p.name)}</button>)}
       </div>
     </>}
     {!again && <label htmlFor={goalId}>Work goal<AnswerBox boxRef={goalBox} micRef={goalMic} id={goalId}
@@ -134,11 +134,11 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
     {retry && plan?.launch && <p>Fresh launch: {['', 'local', '__local__'].includes(plan.launch.host) ? 'On this Mac' : 'On the configured execution host'}. Review the resolved settings in Operation details.</p>}
     {loading && <p>Preparing action…</p>}
     {restriction && <p className="hii-error">{restriction.message}</p>}
-    {error && <p className="hii-error">{error} <button type="button" className="hib-row-btn" onClick={() => setAttempt(n => n + 1)}>Try again</button></p>}
+    {error && <p className="hii-error">{error} <button type="button" className="btn btn-sm hib-row-btn" onClick={() => setAttempt(n => n + 1)}>Try again</button></p>}
     {plan && <ItemOperationDetails plan={plan} previous={previousPlan} />}
     <div className="hii-confirm-footer">
-      <button type="button" className="hib-row-btn" onClick={onClose} title={submitted ? 'Close this view. Submitted work continues.' : undefined}>{submitted ? 'Close' : 'Cancel'}</button>
-      <button type="button" className="hib-send-btn" disabled={blocked || !ready && !gate.micBusy && !gate.waiting}
+      <button type="button" className="btn btn-sm hib-row-btn" onClick={onClose} title={submitted ? 'Close this view. Submitted work continues.' : undefined}>{submitted ? 'Close' : 'Cancel'}</button>
+      <button type="button" className="btn btn-sm btn-primary" disabled={blocked || !ready && !gate.micBusy && !gate.waiting}
         onClick={gate.send} {...dictationWaitProps(gate)}>{submitting ? again ? 'Marking read…' : attach ? 'Attaching…' : 'Creating…'
           : submitted ? 'Submitted' : again ? 'Confirm mark read' : attach ? 'Confirm attachment' : 'Confirm and start'}</button>
     </div>

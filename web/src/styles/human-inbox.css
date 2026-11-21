@@ -131,34 +131,12 @@
   gap: 6px;
 }
 
-.hib-row-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  cursor: pointer;
-}
-
-.hib-row-btn:hover { background: var(--bg-hover); color: var(--fg); }
-
-/* The Unread filter chip in the Inbox toolbar: pressed = accent outline + tint,
-   so the narrowed list is never mistaken for an empty inbox. */
-.hib-filter-btn[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-.hib-filter-btn[aria-pressed="true"]:hover { color: var(--accent); }
 
 .hib-card-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
   text-align: left;
-  cursor: pointer;
 }
 .hib-subject-open { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .hib-card-expand:not(.is-expanded) { margin-top: -5px; }
@@ -298,21 +276,14 @@
   color: var(--warning);
 }
 
+/* A full-width key of the button family: its label, then its line of why under it. */
 .hib-action-btn {
-  display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 2px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--card-bg);
-  color: var(--fg);
-  cursor: pointer;
   text-align: left;
+  white-space: normal;
 }
-
-.hib-action-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-subtle); }
-.hib-action-btn:disabled { opacity: 0.6; cursor: default; }
 
 .hib-action-label { font-size: var(--font-size-md); font-weight: 600; }
 .hib-action-desc { font-size: var(--font-size-sm); color: var(--fg-secondary); }
@@ -525,18 +496,6 @@
   color: var(--fg-secondary);
 }
 
-.hib-send-btn {
-  padding: 6px 14px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.hib-send-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* The Inbox TAB's badge. The badge itself is the existing
    `.session-action-chip-count` (globals.css); only the "a decision is still

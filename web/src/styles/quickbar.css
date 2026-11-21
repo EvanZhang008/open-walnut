@@ -365,24 +365,6 @@
 .qb-receipt-line.qb-receipt-said { color: var(--fg-muted); }
 .qb-receipt-actions { display: flex; gap: 8px; margin-top: 10px; }
 
-.qb-btn {
-  height: 26px;
-  padding: 0 11px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.qb-btn:hover { background: var(--bg-hover); }
-.qb-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.qb-btn-primary:hover { background: var(--accent-hover); }
-.qb-btn-quiet { border-color: transparent; color: var(--fg-muted); }
-
 /* --- The Mac app's panel: the system glass is behind the page --- */
 html.qb-panel-doc,
 html.qb-panel-doc body,
@@ -432,21 +414,6 @@ html.qb-panel-doc #root {
 .qb-mode-x { font-size: 14px; line-height: 1; opacity: 0.8; }
 
 .qb-modes { display: inline-flex; gap: 6px; min-width: 0; overflow: hidden; }
-.qb-mode-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 4px 0 8px;
-  border-radius: 11px;
-  border: 1px solid var(--qb-line);
-  background: transparent;
-  color: var(--qb-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.qb-mode-pill:hover { color: var(--qb-fg); background: var(--qb-hover); }
 .qb-mode-pill .qb-key { margin-left: 5px; padding: 0 4px; font-size: var(--font-size-xs); }
 
 .qb-foot > span.qb-foot-trouble { display: flex; align-items: center; gap: 8px; }

@@ -240,7 +240,9 @@
 .settings-phone-bar-trailing,
 .settings-phone-bar-trailing .settings-pane-stickybar-actions { display: inline-flex; align-items: center; gap: 8px; }
 .settings-phone-bar-trailing .settings-pane-stickybar-actions:empty { display: none; }
-.phone-topbar .settings-phone-bar-trailing .settings-button { height: 34px; }
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .phone-topbar .settings-phone-bar-trailing .btn { min-height: 34px; }
+}
 /* The bar keeps 4 px to the edge for its 44 px icons; a text button wants 8. */
 .phone-topbar .settings-phone-bar-trailing { margin-right: 4px; }
 
@@ -256,7 +258,7 @@
     height: 56px;
   }
 
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane :is(.settings-button, .settings-input:not(textarea)) {
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane :is(.btn, .settings-input:not(textarea)) {
     min-height: 44px;
   }
 

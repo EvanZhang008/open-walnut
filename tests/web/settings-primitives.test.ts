@@ -240,7 +240,7 @@ describe('control markup', () => {
     )
     expect(html).toContain('aria-busy="true"')
     expect(html).toContain('disabled=""')
-    expect(html).toContain('<span class="settings-button-label">Refreshing...</span>')
+    expect(html).toContain('<span class="btn-label">Refreshing...</span>')
     // Both labels reserved on the stack, outside textContent.
     expect(html).toContain('data-r1="Refreshing..." data-r2="Refresh now"')
     expect(html.replace(/<[^>]+>/g, '')).toBe('Refreshing...')
@@ -248,7 +248,7 @@ describe('control markup', () => {
 
   it('inline confirm: starts as Remove with Confirm remove reserved, no native confirm', () => {
     const html = renderToStaticMarkup(h(InlineConfirmButton, { onConfirm: noop }))
-    expect(html).toContain('<span class="settings-button-label">Remove</span>')
+    expect(html).toContain('<span class="btn-label">Remove</span>')
     expect(html).toContain('data-r1="Confirm remove"')
     expect(html).toContain('data-armed="false"')
   })

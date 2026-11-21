@@ -105,10 +105,10 @@ export function DocCommentCard({ docPath, comment: c, current, outdated, queued,
             />
           )}
           <div className="doc-comment-buttons">
-            <button type="button" className="doc-comment-btn" data-testid="doc-comment-resolve" onClick={() => onResolve(!resolved)}>
+            <button type="button" className="btn btn-sm" data-testid="doc-comment-resolve" onClick={() => onResolve(!resolved)}>
               {resolved ? 'Reopen' : 'Resolve'}
             </button>
-            <button type="button" className="doc-comment-btn is-quiet" data-testid="doc-comment-delete" onClick={onDelete}>Delete</button>
+            <button type="button" className="btn btn-sm btn-ghost doc-comment-end" data-testid="doc-comment-delete" onClick={onDelete}>Delete</button>
           </div>
         </div>
       )}
@@ -154,7 +154,7 @@ export function DocCommentDraft({ docPath, passage, onSubmit, onCancel }: {
         onKeyDown={escapeOnly(onCancel)}
       />
       <div className="doc-comment-buttons">
-        <button type="button" className="doc-comment-btn" onClick={() => { draft.clear(); onCancel(); }}>Cancel</button>
+        <button type="button" className="btn btn-sm" onClick={() => { draft.clear(); onCancel(); }}>Cancel</button>
       </div>
     </div>
   );
@@ -182,7 +182,7 @@ export function DocCommentsHead({ comments, openCount, changed, sourceOnly, erro
   return (
     <>
       {comments.length > 0 && (
-        <button type="button" className="doc-comments-chip" data-testid="doc-comments-chip" {...HEADER_ITEM} aria-expanded={listOpen} onClick={onToggle}>
+        <button type="button" className="btn btn-sm doc-comments-chip" data-testid="doc-comments-chip" {...HEADER_ITEM} aria-expanded={listOpen} onClick={onToggle}>
           {openCount === 1 ? '1 comment' : `${openCount} comments`}
           {resolvedCount > 0 && <span className="doc-comments-chip-sub"> · {resolvedCount} resolved</span>}
           {changed.size > 0 && <span className="doc-comments-chip-sub is-outdated"> · {changed.size} changed</span>}
@@ -206,7 +206,7 @@ export function DocCommentsHead({ comments, openCount, changed, sourceOnly, erro
                   <span className="doc-comments-list-state">{state}</span>
                 </button>
                 {(c.status === 'resolved' || gone) && (
-                  <button type="button" className="doc-comment-btn" onClick={() => onResolve(c)}>
+                  <button type="button" className="btn btn-sm" onClick={() => onResolve(c)}>
                     {c.status === 'resolved' ? 'Reopen' : 'Resolve'}
                   </button>
                 )}

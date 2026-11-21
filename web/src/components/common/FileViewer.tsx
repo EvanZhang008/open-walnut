@@ -41,7 +41,7 @@ function SourceChoices({ picked, onPick }: { picked: string | null; onPick: (hos
           <button
             key={c.host}
             type="button"
-            className="file-viewer-btn"
+            className="btn btn-sm"
             data-testid={c.host === LOCAL ? 'file-source-local' : 'file-source-host'}
             {...(c.host === LOCAL ? {} : { 'data-host': c.host })}
             aria-pressed={picked === c.host}
@@ -142,7 +142,7 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
           </div>
           <div className="file-viewer-actions">
             <button
-              className="file-viewer-btn"
+              className="btn btn-sm"
               onClick={handleCopyPath}
               title="Copy file path"
             >
@@ -156,7 +156,7 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
         {showRemembered && (
           <div className="file-viewer-remembered" data-testid="file-viewer-remembered">
             <span>Opened on {hostDisplayLabel(picked || LOCAL)}, the machine you chose for this path before.</span>
-            <button type="button" className="file-viewer-btn" data-testid="file-viewer-choose-another" onClick={chooseAnother}>Choose another machine</button>
+            <button type="button" className="btn btn-sm" data-testid="file-viewer-choose-another" onClick={chooseAnother}>Choose another machine</button>
           </div>
         )}
         <div className="file-viewer-body file-viewer-body-explorer">
@@ -166,7 +166,7 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
             <div className="file-viewer-source-failure">
               <div className="sfe-notice" role={needsPick ? 'status' : 'alert'} data-testid="file-viewer-source-error">{failure}</div>
               {!needsPick && onRetry && (
-                <div><button type="button" className="file-viewer-btn" data-testid="file-viewer-source-retry" onClick={onRetry}>Try again</button></div>
+                <div><button type="button" className="btn btn-sm" data-testid="file-viewer-source-retry" onClick={onRetry}>Try again</button></div>
               )}
               <SourceChoices picked={null} onPick={choose} />
             </div>

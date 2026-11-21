@@ -118,7 +118,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
         {usage.error && (
           <div className="session-usage-error" role="alert">
             <span>{data ? 'The budget could not be refreshed. Showing the last check. ' : ''}{usage.error}</span>
-            <button type="button" className="app-modal-btn" disabled={usage.loading} onClick={() => void usage.refresh()}>{usage.loading ? 'Refreshing…' : 'Retry refresh'}</button>
+            <button type="button" className="btn" disabled={usage.loading} onClick={() => void usage.refresh()}>{usage.loading ? 'Refreshing…' : 'Retry refresh'}</button>
           </div>
         )}
         {data && (
@@ -133,7 +133,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
               <div className="session-usage-edit-row">
                 <input id={`${labelId}-limit`} data-draft-key={kept.key ?? undefined} className="app-modal-input" type="text" inputMode="decimal" autoComplete="off" placeholder="No limit" value={draft?.text ?? ''} disabled={!draft || usage.saving} aria-describedby={`${helpId}${saveError ? ` ${errorId}` : ''}`} aria-invalid={draft?.dirty && parsed?.valid === false ? true : undefined}
                   onChange={event => { const text = event.target.value; kept.setText(text); setDraft(current => current ? { ...current, text, dirty: true } : current); setSaved(false); if (!conflictPending) setSaveError(null); }} />
-                <button type="submit" className="app-modal-btn primary" disabled={!draft?.dirty || usage.saving || conflictPending}>{usage.saving ? 'Saving…' : 'Save limit'}</button>
+                <button type="submit" className="btn btn-primary" disabled={!draft?.dirty || usage.saving || conflictPending}>{usage.saving ? 'Saving…' : 'Save limit'}</button>
               </div>
               <p id={helpId} className="session-usage-hint">Counts every request the session made, priced like the cost in the model picker. Never resets. At the limit, or on a request with no price, the session is stopped and you get an inbox letter. Leave blank for no limit.</p>
               {draft?.dirty && parsed?.valid === false && <p className="session-usage-error-text">{parsed.error}</p>}
@@ -145,7 +145,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
               {pauseLabel && <p className="session-usage-paused" role="status">{pauseLabel}</p>}
               {data.budget.checkError && <p className="session-usage-error-text" role="alert">Usage could not be read: {data.budget.checkError} Messages wait until it can be; after a minute the session is paused.</p>}
               {data.budget.stopError && <p className="session-usage-error-text" role="alert">Stop could not be confirmed. The session may still be running. {data.budget.stopError}</p>}
-              {saveError && <div id={errorId} className="session-usage-error" role="alert"><span>{saveError}</span>{conflictPending && <button type="button" className="app-modal-btn" disabled={usage.loading} onClick={() => void refreshConflict()}>{usage.loading ? 'Refreshing…' : 'Refresh budget'}</button>}</div>}
+              {saveError && <div id={errorId} className="session-usage-error" role="alert"><span>{saveError}</span>{conflictPending && <button type="button" className="btn" disabled={usage.loading} onClick={() => void refreshConflict()}>{usage.loading ? 'Refreshing…' : 'Refresh budget'}</button>}</div>}
               {saved && <p className="session-usage-hint" role="status">Budget saved. No message was sent. Send your next message when ready.</p>}
             </form>
             <section className="session-usage-breakdown" aria-label="Cost by model">
@@ -155,7 +155,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
             {data.checkedAt && <p className="session-usage-hint">Last checked: {new Date(data.checkedAt).toLocaleString()}</p>}
           </>
         )}
-        <footer className="app-modal-actions"><button type="button" className="app-modal-btn" onClick={onClose}>Close</button></footer>
+        <footer className="app-modal-actions"><button type="button" className="btn" onClick={onClose}>Close</button></footer>
       </div>
     </div>, document.body,
   );

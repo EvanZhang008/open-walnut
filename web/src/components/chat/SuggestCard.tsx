@@ -186,13 +186,13 @@ export function SuggestCard({ card, onContentClick }: {
                 {action.tool && <pre className="sug-confirm-call">{callPreview(action)}</pre>}
                 <span className="sug-confirm-buttons">
                   <button
-                    className="sug-btn sug-btn-danger"
+                    className="btn btn-sm btn-danger sug-btn"
                     onClick={() => void fire(action, true)}
                   >
                     Confirm
                   </button>
                   <button
-                    className="sug-btn"
+                    className="btn btn-sm btn-ghost sug-btn"
                     onClick={() => setState(action.id, { phase: 'idle' })}
                   >
                     Cancel
@@ -218,7 +218,7 @@ export function SuggestCard({ card, onContentClick }: {
           return (
             <span key={action.id} className="sug-action">
               <button
-                className={`sug-btn sug-btn-${action.style}`}
+                className={`btn btn-sm sug-btn${action.style === 'default' ? '' : ` btn-${action.style}`}`}
                 disabled={disabled}
                 title={blockedReason ?? action.tool ?? undefined}
                 onClick={() => onClick(action)}

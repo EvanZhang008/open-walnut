@@ -47,7 +47,7 @@ export function QuickBarFoot({
     left = (
       <span className="qb-modes" aria-label="Other things the bar does">
         {MODES.map((m) => (
-          <button key={m.id} type="button" className={`qb-mode-pill qb-mode-${m.id}`} onClick={() => onMode(m.id)} title={`${m.action}: type "${m.keywords[0]}" then Tab`}>
+          <button key={m.id} type="button" className="btn btn-sm btn-ghost qb-mode-pill" data-mode={m.id} onClick={() => onMode(m.id)} title={`${m.action}: type "${m.keywords[0]}" then Tab`}>
             {m.chip}<kbd className="qb-key">{m.keywords[0]}</kbd>
           </button>
         ))}

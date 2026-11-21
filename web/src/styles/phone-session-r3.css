@@ -76,8 +76,6 @@
   html body .hib-row-btn {
     min-height: 44px;
     min-width: 44px;
-    padding: 0 12px;
-    font-size: var(--font-size-md);
   }
   html body :is(
     .hib-type, .hib-time, .hib-chip, .hib-answered-chip, .hib-taskrefs-label, .hib-thread-head,

@@ -52,7 +52,7 @@ export function DaemonUpdateFix({ host }: { host: string | null | undefined }) {
   return (
     <>
       {fixLine}
-      <button type="button" className="session-code-btn" data-testid="host-feature-update-daemon"
+      <button type="button" className="btn btn-sm" data-testid="host-feature-update-daemon"
         disabled={ask.state === 'asking' || ask.state === 'done'} onClick={update}>
         {ask.state === 'asking' ? 'Asking…' : ask.state === 'done' ? 'Update started' : 'Update the daemon'}
       </button>

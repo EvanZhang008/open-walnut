@@ -234,8 +234,8 @@ test('(N2-1)(N2-2)(N2-6)(N2-10) an Update flips in one frame, costs one reload, 
       if (!acts || !copyEl) return null
       const c = copyEl.getBoundingClientRect()
       const a = acts.getBoundingClientRect()
-      // A text button at the end hangs 6px into the padding on purpose (settings-controls.css), so its label lines up.
-      const hang = (k: Element) => (k.matches(':last-child') && (k.matches('.settings-button-text, .settings-button-danger') || k.querySelector(':scope > :is(.settings-button-text, .settings-button-danger):last-child')) ? 6 : 0)
+      // A link key at the end has no padding (buttons.css), so its label ends on the edge.
+      const hang = (_k: Element) => 0
       const kids = Array.from(acts.children).map((k) => { const r = k.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, right: r.right - hang(k) } })
       return {
         id: el.getAttribute('data-fact') ?? el.getAttribute('data-testid') ?? String(el.className),
@@ -311,7 +311,7 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
   await backToApps(page)
   // An enabled secondary button on the page: a source head's Copy install link (the Apps page
   // groups plugins by source, each installed source with its verbs on its head).
-  const enabled = page.getByTestId('plugin-source-native-plugin-repo').locator('button.settings-button-default:not([disabled])').first()
+  const enabled = page.getByTestId('plugin-source-native-plugin-repo').locator('button.btn[data-variant="default"]:not([disabled])').first()
   for (const theme of ['Light', 'Dark'] as const) {
     // Theme is picked in Settings; the sidebar's Apps entry lands back on the card grid.
     await pickTheme(page, theme)

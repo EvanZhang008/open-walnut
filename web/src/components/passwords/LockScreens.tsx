@@ -7,7 +7,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { copySecret, vaultApi, VaultApiError, type RecoveryKit, type VaultStatus } from '@/api/vault'
 import { passwordStrength, type StrengthLevel } from '../../../../src/core/vault/strength'
-import { KeyIcon, LockIcon, CopyIcon, CheckIcon } from './pw-icons'
+import { KeyIcon, LockIcon } from './pw-icons'
+import { CopyButton as SharedCopyButton } from '@/components/common/CopyButton'
 import { log } from '@/utils/log'
 import { unlockFootText } from './unlock-words'
 import { unlockRefusalText } from '../../../../src/core/vault/unlock-retry'
@@ -34,13 +35,9 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** The vault's Copy: the shared Copy button through the vault's own clipboard write. */
 export function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <button type="button" className="pw-btn pw-btn-small" onClick={() => { void copySecret(text).then(() => setCopied(true)) }}>
-      {copied ? <CheckIcon /> : <CopyIcon />} {copied ? 'Copied' : label}
-    </button>
-  )
+  return <SharedCopyButton text={text} label={label} icon write={copySecret} />
 }
 
 /**
@@ -80,13 +77,13 @@ export function RecoveryKitCard({ kit, confirmLabel, onConfirmed }: { kit: Recov
         <div className="pw-secret-key" data-testid="pw-recovery-code">{kit.recoveryCode}</div>
         <p className="pw-kit-note">If you forget your master password, it lets you set a new one.</p>
       </div>
-      <button type="button" className="pw-btn pw-btn-block" onClick={() => downloadRecoveryKit(kit)}>Download recovery kit</button>
+      <button type="button" className="btn btn-block pw-btn-block" onClick={() => downloadRecoveryKit(kit)}>Download recovery kit</button>
       <label className="pw-check">
         <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
         I saved my recovery kit somewhere safe, away from this computer.
       </label>
       {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
-      <button type="button" className="pw-btn pw-btn-primary pw-btn-block" disabled={!saved || busy} onClick={() => void confirm()}>{confirmLabel}</button>
+      <button type="button" className="btn btn-primary btn-block pw-btn-block" disabled={!saved || busy} onClick={() => void confirm()}>{confirmLabel}</button>
     </div>
   )
 }
@@ -163,7 +160,7 @@ export function SetupFlow({ onKit }: { onKit: (k: KitToShow) => void }) {
         <NewPasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} idPrefix="pw-setup" autoFocus />
         <HintInput id="pw-setup-hint" value={hint} onChange={setHint} password={pw} />
         {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
-        <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!ok || busy}>{busy ? 'Creating…' : 'Create vault'}</button>
+        <button type="submit" className="btn btn-primary btn-block pw-btn-block" disabled={!ok || busy}>{busy ? 'Creating…' : 'Create vault'}</button>
       </form>
     </div>
   )
@@ -238,9 +235,9 @@ export function UnlockScreen({ status, onUnlocked, onKit, sub, onCancel, onBusy 
           </>
         )}
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
-        <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? (checking ? 'Checking…' : 'Unlocking…') : 'Unlock'}</button>
-        {onCancel && <button type="button" className="pw-btn pw-btn-block pw-unlock-cancel" disabled={busy} onClick={onCancel}>Cancel</button>}
-        <button type="button" className="pw-link-btn" onClick={() => { setError(''); setMode('recover') }}>Forgot master password?</button>
+        <button type="submit" className="btn btn-primary btn-block pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? (checking ? 'Checking…' : 'Unlocking…') : 'Unlock'}</button>
+        {onCancel && <button type="button" className="btn btn-block pw-btn-block pw-unlock-cancel" disabled={busy} onClick={onCancel}>Cancel</button>}
+        <button type="button" className="btn btn-link pw-link-btn" onClick={() => { setError(''); setMode('recover') }}>Forgot master password?</button>
         <p className="pw-gate-foot">{unlockFootText(status)}</p>
       </form>
     </div>
@@ -285,7 +282,7 @@ function RecoverFlow({ status, onBack, onKit, onBusy }: { status: VaultStatus; o
           <div className="pw-gate-icon pw-gate-icon-lock"><LockIcon size={28} /></div>
           <h1>No recovery code yet</h1>
           <p className="pw-gate-sub">This vault was set up before recovery codes, so only the master password opens it. Once you are in, make a recovery kit in Settings, Passwords.</p>
-          <button type="button" className="pw-btn pw-btn-primary pw-btn-block" onClick={onBack}>Back to unlock</button>
+          <button type="button" className="btn btn-primary btn-block pw-btn-block" onClick={onBack}>Back to unlock</button>
         </div>
       </div>
     )
@@ -308,8 +305,8 @@ function RecoverFlow({ status, onBack, onKit, onBusy }: { status: VaultStatus; o
         <NewPasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} idPrefix="pw-recover" />
         <HintInput id="pw-recover-hint" value={hint} onChange={setHint} password={pw} />
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
-        <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!ok || busy || waitS > 0}>{busy ? 'Checking…' : 'Set new master password'}</button>
-        <button type="button" className="pw-link-btn" onClick={onBack}>Back to unlock</button>
+        <button type="submit" className="btn btn-primary btn-block pw-btn-block" disabled={!ok || busy || waitS > 0}>{busy ? 'Checking…' : 'Set new master password'}</button>
+        <button type="button" className="btn btn-link pw-link-btn" onClick={onBack}>Back to unlock</button>
       </form>
     </div>
   )

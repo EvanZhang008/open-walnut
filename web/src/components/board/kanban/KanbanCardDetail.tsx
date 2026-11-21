@@ -73,7 +73,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
   return (
     <div className={`kanban-card-detail${inline ? ' has-session' : ''}`} data-testid="kanban-card-detail" data-task-id={card.taskId} role="region" aria-label={card.title}>
       <div className="kanban-detail-bar">
-        <button ref={backRef} type="button" className="kanban-text-btn kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
+        <button ref={backRef} type="button" className="btn btn-link kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
         <span className="kanban-detail-lane">{laneName}</span>
       </div>
       <h3 className="kanban-detail-title">{card.title}</h3>

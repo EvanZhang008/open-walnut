@@ -575,7 +575,7 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
   return (
     <button
       ref={ref}
-      className={`bg-tasks-chip bg-tasks-chip--${state}${stacked ? ' bg-tasks-chip--stacked' : ''}`}
+      className={`btn btn-sm btn-block btn-ghost bg-tasks-chip bg-tasks-chip--${state}${stacked ? ' bg-tasks-chip--stacked' : ''}`}
       onClick={() => openBackgroundPanel(sessionId, agents[0]?.toolUseId ?? agents[0]?.agentId)}
       title={`${titles}\nOpen background tasks`}
     >

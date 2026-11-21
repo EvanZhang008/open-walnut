@@ -1,0 +1,201 @@
+/* The button family: every button in the console is `.btn` plus at most a variant and a size.
+   The standard (.claude/skills/walnut-ui-requirements/standard.md, "The button family") names each
+   role; tests/web/ui-standard-ratchet.test.ts fails on a new button system beside it.
+
+   2026-11-21, the user: "why the ui still not consistent ... why they are not even consistent come
+   on". The console had about 25 button systems (16 corner radii, 20 heights, 14 font sizes); this
+   one file replaces them. Linked just before globals.css (global-styles.ts), where `.btn` always was.
+
+   Look: the quiet grey key the user picked on the Needs you card ("I like P1 button"): a fill and
+   no border, so it reads the same on a white page, a grey panel, a dark sheet or frosted glass.
+   The fill is the text colour mixed into the page colour, never a fixed grey token, so it stays a
+   step away from the --bg-secondary panels it sits on. Corners from --radius-sm (8 px), never a pill. Two heights: 34 px
+   (default: forms, dialogs, cards) and 28 px (.btn-sm: rows, toolbars, settings). */
+
+/* How strong the key's fill is: a dark page is black, so it needs more of the text colour. */
+:root { --btn-strength: 8%; }
+:root[data-theme='dark'] { --btn-strength: 18%; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --btn-strength: 18%; }
+}
+.btn {
+  /* Declared on the key itself, so a surface that sets its own --fg (a dark sheet) tints it right. */
+  /* Solid, never see-through: a key that floats over a canvas or a document stays a key. */
+  --btn-fill: color-mix(in srgb, var(--fg) var(--btn-strength), var(--bg));
+  --btn-fill-hover: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 4%), var(--bg));
+  --btn-fill-press: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 8%), var(--bg));
+  /* Labels on a solid key read at 4.5:1 or more in both themes: the accent and the error red are
+     taken a little darker for a fill, and the red a little toward the text colour for a label. */
+  --btn-primary-fill: color-mix(in srgb, var(--accent) 86%, black);
+  --btn-primary-fill-hover: color-mix(in srgb, var(--accent) 74%, black);
+  --btn-danger-fill: color-mix(in srgb, var(--error) 84%, black);
+  --btn-danger-fill-hover: color-mix(in srgb, var(--error) 72%, black);
+  --btn-danger-text: color-mix(in srgb, var(--error) 80%, var(--fg));
+  box-sizing: border-box;
+  /* WebKit keeps its native push-button look under a custom background (Mac app). */
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--btn-fill);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  text-decoration: none;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.btn:hover:not(:disabled):not([aria-disabled='true']) { background: var(--btn-fill-hover); }
+.btn:active:not(:disabled):not([aria-disabled='true']) { background: var(--btn-fill-press); }
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Disabled reads the same for every kind: the fill of a plain key, half strength (as on macOS). */
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn[aria-busy='true'] { cursor: progress; }
+
+/* An on/off key (aria-pressed): on is the accent tint, as a picked chip. */
+.btn[aria-pressed='true'] {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+}
+
+/* ── Size ── */
+.btn-sm {
+  min-height: 28px;
+  padding: 2px 10px;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* ── Main action: at most one per view or card ── */
+.btn-primary {
+  background: var(--btn-primary-fill);
+  color: var(--on-accent);
+}
+.btn-primary:hover:not(:disabled):not([aria-disabled='true']),
+.btn-primary:active:not(:disabled):not([aria-disabled='true']) { background: var(--btn-primary-fill-hover); }
+
+/* ── Destructive: a red label on the plain key; with .btn-primary the solid red confirm ── */
+.btn-danger { color: var(--btn-danger-text); }
+.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+.btn-primary.btn-danger { background: var(--btn-danger-fill); color: var(--on-accent); }
+.btn-primary.btn-danger:hover:not(:disabled):not([aria-disabled='true']),
+.btn-primary.btn-danger:active:not(:disabled):not([aria-disabled='true']) { background: var(--btn-danger-fill-hover); }
+
+/* A disabled main action loses its colour: every disabled key reads the same. */
+.btn-primary:is(:disabled, [aria-disabled='true']):not([aria-busy='true']) {
+  background: var(--btn-fill);
+  color: var(--fg);
+}
+
+/* ── Quiet tool: no fill until hover (Snooze, Cancel beside a main action, a row's tools).
+   Its label is --fg-secondary, never --fg-muted: a quiet key still reads at a glance. ── */
+.btn-ghost {
+  background: transparent;
+  color: var(--fg-secondary);
+}
+.btn-ghost:hover:not(:disabled):not([aria-disabled='true']) {
+  background: var(--btn-fill);
+  color: var(--fg);
+}
+.btn-ghost:active:not(:disabled):not([aria-disabled='true']) { background: var(--btn-fill-hover); }
+.btn-ghost.btn-danger { color: var(--btn-danger-text); }
+.btn-ghost.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--btn-danger-text);
+}
+
+/* ── Icon only: the quiet tool, square. 28 px; .btn-sm makes it 24 px for dense rows ── */
+.btn-icon {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 14px;
+  line-height: 1;
+}
+.btn-icon.btn-sm { width: 24px; min-width: 24px; min-height: 24px; font-size: 12px; }
+.btn-icon svg { width: 16px; height: 16px; flex: none; }
+.btn-icon.btn-sm svg { width: 14px; height: 14px; }
+.btn-icon.btn-danger { color: var(--fg-secondary); }
+.btn-icon:hover:not(:disabled):not([aria-disabled='true']) { background: var(--btn-fill); color: var(--fg); }
+.btn-icon.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--btn-danger-text);
+}
+
+/* ── Link: an action inside text or at a row's end; no box ── */
+.btn-link {
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-text);
+  line-height: inherit;
+}
+.btn-link:hover:not(:disabled):not([aria-disabled='true']),
+.btn-link:active:not(:disabled):not([aria-disabled='true']) {
+  background: transparent;
+  text-decoration: underline;
+}
+.btn-link[aria-pressed='true'] { background: transparent; color: var(--accent-text); }
+.btn-link.btn-danger { color: var(--btn-danger-text); }
+.btn-link.btn-danger:hover:not(:disabled):not([aria-disabled='true']) { background: transparent; }
+
+/* ── Full width: a key that takes the whole line (Unlock, Continue), its label centred. A quiet
+   full-width key is a row in a menu or list: its label starts at the left. ── */
+.btn-block {
+  display: flex;
+  width: 100%;
+}
+.btn-block.btn-ghost {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+/* ── Compound trigger slots: "Cost $2077 ▾" is .btn > label, .btn-value, .btn-caret ── */
+.btn .btn-value {
+  color: var(--fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.btn .btn-caret {
+  color: var(--fg-muted);
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.12s;
+}
+.btn[aria-expanded='true'] .btn-caret { transform: rotate(180deg); }
+
+/* A label that must not change the key's width (Refresh / Refreshing...): the widest of the labels
+   it may show (data-r1, data-r2) sits hidden in the same grid cell (SettingsButton's `reserve`). */
+.btn-reserve { display: inline-grid; }
+.btn-reserve > *,
+.btn-reserve::before,
+.btn-reserve::after { grid-area: 1 / 1; text-align: center; }
+.btn-reserve::before { content: attr(data-r1); visibility: hidden; }
+.btn-reserve::after { content: attr(data-r2); visibility: hidden; }

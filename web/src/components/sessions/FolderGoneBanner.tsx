@@ -44,7 +44,7 @@ export function ContinueInNewFolderButton({ sessionId, history, onDone, classNam
   }, [sessionId, onDone]);
   return (
     <>
-      <button type="button" className={className ?? 'session-retry-btn'} onClick={run} disabled={state === 'busy'}
+      <button type="button" className={className ?? 'btn btn-sm btn-primary session-retry-btn'} onClick={run} disabled={state === 'busy'}
         title="Walnut does not recreate the old folder, except this task's own workspace, which it makes again where it was. Otherwise the session moves to this task's own folder, which survives reboots.">
         {state === 'busy' ? 'Moving…' : state === 'error' ? 'Failed, try again' : folderGoneButtonLabel(history)}
       </button>

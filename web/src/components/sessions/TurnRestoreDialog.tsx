@@ -109,10 +109,10 @@ export function TurnRestoreDialog({ sessionId, snapshot, label, turnRunning, onC
         )}
         {error && <div className="rewind-dialog-error">{error}</div>}
         <div className="app-modal-actions">
-          <button type="button" className="app-modal-btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>
           <button
             type="button"
-            className="app-modal-btn primary"
+            className="btn btn-primary"
             onClick={confirm}
             disabled={busy || !plan || count === 0 || turnRunning}
           >

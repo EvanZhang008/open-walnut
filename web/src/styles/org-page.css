@@ -203,19 +203,6 @@
 }
 .org-reorg-text { line-height: 1.35; }
 .org-reorg-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.org-reorg-btn {
-  appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  padding: 2px 8px;
-  cursor: pointer;
-}
-.org-reorg-btn:hover { color: var(--fg); }
-.org-reorg-btn.is-primary { color: var(--fg); }
 
 .org-empty-note { margin: 12px 8px; font-size: var(--font-size-md); color: var(--fg-muted); }
 
@@ -292,21 +279,8 @@
 .org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
 /* "Tasks" before the task pills: they count tasks, the threads pill before them threads for him. */
 .org-pills-label { align-self: center; margin-left: 4px; color: var(--fg-muted); font-size: var(--font-size-xs); }
-.org-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-}
-.org-pill i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-/* A count that opens its tab in the Task view. */
-.org-pill.is-button { border: 0; font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
-.org-pill.is-button:hover { background: color-mix(in srgb, var(--fg) 10%, var(--bg-secondary)); color: var(--fg); }
+/* Each count is a small family key that opens its tab in the Task view; its dot is the tab's colour. */
+.org-pills i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
 .org-muted { color: var(--fg-muted); }
 

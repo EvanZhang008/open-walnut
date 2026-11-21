@@ -18,16 +18,16 @@ export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: 
     return () => abort.abort();
   }, [letterId, itemId, task.id, attempt]);
   return <div className="hii-task-preview">
-    <button type="button" className="hib-row-btn" onClick={onBack}>Back to tasks</button>
+    <button type="button" className="btn btn-sm hib-row-btn" onClick={onBack}>Back to tasks</button>
     <h3>{task.title}</h3>
     <p>{projectDisplayName(task.project)} · {PHASE_TEXT[detail?.phase ?? task.phase] ?? task.phase}</p>
     <details><summary>Task ID</summary><code>{task.id}</code></details>
-    {error ? <p>Could not load task details <button type="button" className="hib-row-btn" onClick={() => setAttempt(n => n + 1)}>Try again</button></p>
+    {error ? <p>Could not load task details <button type="button" className="btn btn-sm hib-row-btn" onClick={() => setAttempt(n => n + 1)}>Try again</button></p>
       : !detail ? <p>Loading task details…</p> : <>
         <h4>Work goal and description</h4><div className="hii-task-description">{detail.description || 'No work goal recorded'}</div>
         <h4>Recent activity</h4>
         {detail.activity?.length ? detail.activity.map((a, index) => <p key={index}>{a.text}<small>{timeText(a.at)}</small></p>) : <p>Activity unavailable</p>}
       </>}
-    <button type="button" className="hib-row-btn" onClick={() => onNavigate(taskPath(task.id))}>Open task</button>
+    <button type="button" className="btn btn-sm hib-row-btn" onClick={() => onNavigate(taskPath(task.id))}>Open task</button>
   </div>;
 }

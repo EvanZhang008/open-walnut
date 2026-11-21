@@ -40,26 +40,10 @@
 }
 
 /* ── Shared bits ── */
-.kanban-text-btn {
-  border: 0; background: none; padding: 0 2px; font: inherit; font-size: var(--font-size-sm); color: var(--accent-text);
-  cursor: pointer; border-radius: var(--radius-xs); white-space: nowrap;
-}
-.kanban-text-btn:hover { text-decoration: underline; }
-.kanban-text-btn:focus-visible, .kanban-chip:focus-visible, .kanban-icon-btn:focus-visible, .kanban-lane-kebab:focus-visible,
+/* The board's keys are the button family (styles/buttons.css); its text actions are .btn-link. */
+.kanban-chip:focus-visible, .kanban-lane-kebab:focus-visible,
 .kanban-lane-strip-item:focus-visible, .kanban-menu-row:focus-visible, .kanban-kind-radio:focus-visible,
-.kanban-lane-toggle:focus-visible, .kanban-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.kanban-text-btn[aria-disabled="true"], .kanban-btn[aria-disabled="true"] { color: var(--fg-muted); cursor: default; text-decoration: none; }
-.kanban-icon-btn {
-  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
-  border: 0; border-radius: 6px; background: none; color: var(--fg-secondary); cursor: pointer;
-}
-.kanban-icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.kanban-btn {
-  font: inherit; font-size: var(--font-size-sm); padding: 3px 10px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg);
-}
-.kanban-btn.is-primary { background: var(--accent); border-color: var(--accent); color: var(--kc-on-accent); }
-.kanban-btn:hover { border-color: var(--border-strong); }
+.kanban-lane-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kanban-spinner {
   display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; vertical-align: -2px;
   border: 2px solid var(--border); border-top-color: var(--accent); animation: kanban-spin 0.8s linear infinite;
@@ -294,8 +278,7 @@
 .kanban-composer-input:focus { outline: none; border-color: var(--accent); }
 .kanban-composer-input[readonly] { opacity: 0.7; }
 .kanban-composer-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kanban-composer-send { flex: 0 0 auto; font-weight: 600; }
-.kanban-composer-send[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.kanban-composer-send { flex: 0 0 auto; }
 .kanban-card-start-bar { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
 .kanban-leader-row {
   display: flex; flex-direction: column; gap: 4px; margin: 8px 12px 0; padding: 6px 8px; border-radius: var(--radius-sm);

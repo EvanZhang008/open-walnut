@@ -78,7 +78,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
           priority / date) stay in the overflow menu. */}
       {doneCount < count && (
         <button
-          className="task-selection-action-btn"
+          className="btn btn-sm"
           title="Mark the selected tasks complete"
           onClick={onCompleteAll}
         >
@@ -88,7 +88,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       )}
       {doneCount > 0 && (
         <button
-          className="task-selection-action-btn"
+          className="btn btn-sm"
           title="Reopen the selected tasks"
           onClick={onReopenAll}
         >
@@ -98,7 +98,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       )}
 
       <button
-        className="task-selection-group-btn"
+        className="btn btn-sm btn-primary task-selection-group-btn"
         disabled={!canGroup}
         title={count < 2 ? 'Select at least 2 same-project tasks' : 'Put these tasks into a folder'}
         onClick={onGroup}
@@ -107,7 +107,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       </button>
 
       <button
-        className="task-selection-action-btn task-selection-action-danger"
+        className="btn btn-sm btn-danger"
         title="Delete the selected tasks"
         onClick={onDeleteAll}
       >
@@ -118,7 +118,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       {/* Overflow — a labelled button, not a bare caret, so it reads as "opens a menu". */}
       <button
         ref={caretRef}
-        className="task-selection-action-btn task-batch-more"
+        className="btn btn-sm"
         disabled={count < 1}
         title="More batch actions (pin tier, priority, date)"
         aria-haspopup="menu"
@@ -126,7 +126,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
         onClick={toggle}
       >
         More
-        <span className="task-batch-more-caret" aria-hidden="true">▾</span>
+        <span className="btn-caret" aria-hidden="true">▾</span>
       </button>
 
       {/* Portalled to <body>, as the row kebab's: no ancestor's clip or layer caps it, and a press

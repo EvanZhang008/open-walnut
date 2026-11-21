@@ -177,7 +177,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           control={
             <span className="settings-inline-pair" data-testid="backup-gdrive-disconnect-confirm">
               <SettingsButton onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
-              <SettingsButton variant="danger" className="backup-danger-button" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
+              <SettingsButton variant="danger-confirm" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
             </span>
           }
         />

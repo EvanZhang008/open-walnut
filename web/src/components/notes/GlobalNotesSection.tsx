@@ -89,7 +89,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           {saveError && <span className="global-notes-error" title={saveError}>Save failed</span>}
           {/* Open in a new browser tab (standalone, lightweight) */}
           <button
-            className="global-notes-expand-btn"
+            className="btn btn-icon btn-sm global-notes-expand-btn"
             onClick={e => { e.stopPropagation(); openPopout('global-notes', {}); }}
             aria-label="Open notes in a new tab"
             title="Open in new tab"
@@ -98,7 +98,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           </button>
           {/* In-app fullscreen overlay (stays in this tab) */}
           <button
-            className="global-notes-expand-btn"
+            className="btn btn-icon btn-sm global-notes-expand-btn"
             onClick={e => { e.stopPropagation(); openPopup(); }}
             aria-label="Expand notes to fullscreen"
             title="Fullscreen"
@@ -107,7 +107,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           </button>
           {onClose && (
             <button
-              className="global-notes-expand-btn global-notes-close-btn"
+              className="btn btn-icon btn-sm global-notes-expand-btn"
               onClick={e => { e.stopPropagation(); onClose(); }}
               aria-label={`Close ${title ?? 'notes'}`}
               title={`Close ${title ?? 'notes'}`}

@@ -49,14 +49,14 @@ export function BrowserRevealButton({ taskId, tab, device, step, testId = 'sessi
   };
   return (
     <>
-      <button type="button" className="session-browser-btn" onClick={() => { void reveal(); }} disabled={phase === 'opening'}
+      <button type="button" className="btn btn-sm" onClick={() => { void reveal(); }} disabled={phase === 'opening'}
         title={tab !== undefined ? 'Bring this tab to the front in Chrome' : 'Open this page again in Chrome and bring it to the front'}
         data-testid={testId}>{phase === 'opening' ? 'Opening…' : phase === 'done' ? 'Opened in Chrome' : 'Open in Chrome'}</button>
       {choices.length > 0 && (
         <span className="session-browser-reveal-choices" data-testid={`${testId}-choices`}>
           Which browser?
           {choices.map((d) => (
-            <button key={d} type="button" className="session-browser-btn" onClick={() => { void reveal(d); }}>{d}</button>
+            <button key={d} type="button" className="btn btn-sm" onClick={() => { void reveal(d); }}>{d}</button>
           ))}
         </span>
       )}

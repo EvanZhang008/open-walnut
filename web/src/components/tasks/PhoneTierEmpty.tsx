@@ -37,7 +37,7 @@ export function PhoneTierEmpty() {
       <p className="phone-tier-empty-line">Nothing here yet.{hint ? ` ${hint}` : ''}</p>
       <button
         type="button"
-        className="phone-tier-empty-btn"
+        className="btn phone-tier-empty-btn"
         onClick={() => window.dispatchEvent(new CustomEvent(PHONE_SHOW_SECTION_EVENT, { detail: { section: 'recent' } }))}
       >
         Show recent tasks

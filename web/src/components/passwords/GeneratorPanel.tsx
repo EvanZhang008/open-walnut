@@ -10,7 +10,8 @@ import {
 } from '../../../../src/core/vault/generator'
 import { usePageView } from '@/utils/view-memory'
 import { copySecret } from '@/api/vault'
-import { CopyIcon, DiceIcon, CheckIcon } from './pw-icons'
+import { DiceIcon } from './pw-icons'
+import { CopyButton } from '@/components/common/CopyButton'
 
 function isOptions(v: unknown): v is GeneratorOptions {
   const o = v as Partial<GeneratorOptions> | null
@@ -20,8 +21,7 @@ function isOptions(v: unknown): v is GeneratorOptions {
 export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }) {
   const [opts, setOpts] = usePageView<GeneratorOptions>('passwords', 'generator', DEFAULT_PASSWORD, isOptions)
   const [value, setValue] = useState('')
-  const [copied, setCopied] = useState(false)
-  const again = useCallback(() => { setValue(generate(opts)); setCopied(false) }, [opts])
+  const again = useCallback(() => { setValue(generate(opts)) }, [opts])
   useEffect(() => { again() }, [again])
 
   const random = opts.kind === 'random' ? opts : null
@@ -34,7 +34,7 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
     <div className="pw-gen" data-testid="pw-generator">
       <div className="pw-gen-out">
         <code className="pw-gen-value" data-testid="pw-gen-value">{value}</code>
-        <button type="button" className="pw-icon-btn" title="Generate another" aria-label="Generate another" onClick={again}><DiceIcon /></button>
+        <button type="button" className="btn btn-icon" title="Generate another" aria-label="Generate another" onClick={again}><DiceIcon /></button>
       </div>
       <div className="pw-gen-bits">{bits} bits · {bits >= 80 ? 'very strong' : bits >= 60 ? 'strong' : 'fair'}</div>
       <div className="pw-seg" role="tablist">
@@ -75,10 +75,8 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
         </>
       )}
       <div className="pw-gen-actions">
-        <button type="button" className="pw-btn" onClick={() => { void copySecret(value).then(() => setCopied(true)) }}>
-          {copied ? <CheckIcon /> : <CopyIcon />} {copied ? 'Copied' : 'Copy'}
-        </button>
-        {onUse && <button type="button" className="pw-btn pw-btn-primary" onClick={() => onUse(value)}>Use this password</button>}
+        <CopyButton key={value} text={value} icon write={copySecret} />
+        {onUse && <button type="button" className="btn btn-sm btn-primary" onClick={() => onUse(value)}>Use this password</button>}
       </div>
     </div>
   )

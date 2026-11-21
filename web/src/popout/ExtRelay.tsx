@@ -17,7 +17,7 @@ import { toParent } from './ext-frame';
 
 export function RelayPill({ kind, label, open, onToggle, pillRef }: { kind: RelayPillKind; label: string; open: boolean; onToggle: () => void; pillRef: RefObject<HTMLButtonElement | null> }) {
   return (
-    <button ref={pillRef} type="button" className={`ext-relay-pill is-${kind}${open ? ' is-open' : ''}`} data-testid="ext-relay-pill" data-kind={kind}
+    <button ref={pillRef} type="button" className={`btn btn-sm ext-relay-pill is-${kind}`} data-testid="ext-relay-pill" data-kind={kind}
       aria-haspopup="dialog" aria-expanded={open} title="Browser relay: what Walnut agents may do in this browser" onClick={onToggle}>
       <span className="ext-relay-dot" aria-hidden="true" />{label}
     </button>
@@ -46,7 +46,7 @@ export function RelayRow({ t, here, task, action, onAction }: { t: RelayTab; her
         <span className="ext-relay-row-name">{relayTabName(t, here)}</span>
         {what && <span className="ext-relay-row-what">{what}</span>}
       </span>
-      <button type="button" className={`ext-relay-row-btn${action === 'Stop' ? ' is-stop' : ''}`} data-testid={action === 'Stop' ? 'ext-relay-stop' : 'ext-relay-unshare'} onClick={onAction}>{action}</button>
+      <button type="button" className={`btn btn-sm ext-relay-row-btn${action === 'Stop' ? ' btn-danger' : ''}`} data-testid={action === 'Stop' ? 'ext-relay-stop' : 'ext-relay-unshare'} onClick={onAction}>{action}</button>
     </div>
   );
 }
@@ -105,7 +105,7 @@ export function RelayPanel({ relay, here, tasks, anchorRef, onClose, settings }:
           {now.length + earlier.length > 0 && (
             <div className="ext-relay-foot">
               <span>Stop all agents</span>
-              <button type="button" className="ext-relay-row-btn is-stop" data-testid="ext-relay-stop-all" onClick={() => toParent({ type: 'relay-stop-all' })}>Stop all</button>
+              <button type="button" className="btn btn-sm btn-danger ext-relay-row-btn" data-testid="ext-relay-stop-all" onClick={() => toParent({ type: 'relay-stop-all' })}>Stop all</button>
             </div>
           )}
         </>
@@ -128,7 +128,7 @@ export function RelayStrip({ task, who, onStop }: { task?: Task; who?: string; o
         <span className="ext-relay-strip-title">Walnut agent is using this tab</span>
         {what && <span className="ext-relay-strip-what">{what}</span>}
       </span>
-      <button type="button" className="ext-relay-row-btn is-stop" data-testid="ext-relay-strip-stop" onClick={onStop}>Stop</button>
+      <button type="button" className="btn btn-sm btn-danger ext-relay-row-btn" data-testid="ext-relay-strip-stop" onClick={onStop}>Stop</button>
     </div>
   );
 }

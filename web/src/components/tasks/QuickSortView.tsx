@@ -302,12 +302,12 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
               {tags.length > 0 && <div className="quick-sort-tags">{tags.map(t => <span key={t.kind} className={`quick-sort-tag is-${t.kind}${t.kind === 'idle' && item.ages.idle >= 7 ? ' is-old' : ''}`} data-sort-age={t.kind}>{t.text}</span>)}</div>}
               {item.line && <div className="quick-sort-card-line">{item.line}</div>}
               {replying === item.task.id ? <QuickSortReply task={item.task} onSent={() => taskReplied(item)} onClose={() => setReplying(null)} /> : <div className="quick-sort-actions"><div className="quick-sort-tiers">
-                {tierKeyed(tierChoices(item.tier)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn ${tierClass(id)}`} data-sort-tier={id} data-sort-key={key} onClick={() => taskTier(item, id)}>{label(id)}{key && <small>{key}</small>}</button>)}
+                {tierKeyed(tierChoices(item.tier)).map(({ id, key }) => <button key={id} type="button" className="btn quick-sort-btn" data-sort-tier={id} data-sort-key={key} onClick={() => taskTier(item, id)}>{label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
-                <button type="button" className="quick-sort-btn is-reply" data-sort-action="reply" onClick={() => { setCursor(i); setReplying(item.task.id); }}>Reply<small>R</small></button>
-                <button type="button" className="quick-sort-btn is-snooze" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'task', item }, e.currentTarget)}>Snooze<small>S</small></button>
-                <button type="button" className="quick-sort-btn is-done" data-sort-action="done" onClick={() => taskDone(item)}>Done<small>D</small></button>
-                <button type="button" className="quick-sort-btn is-skip" data-sort-action="skip" onClick={() => taskSkip(item)}>Skip<small>X</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="reply" onClick={() => { setCursor(i); setReplying(item.task.id); }}>Reply<small>R</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'task', item }, e.currentTarget)}>Snooze<small>S</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="done" onClick={() => taskDone(item)}>Done<small>D</small></button>
+                <button type="button" className="btn btn-ghost quick-sort-btn" data-sort-action="skip" onClick={() => taskSkip(item)}>Skip<small>X</small></button>
               </div></div>}
             </article>;
           })
@@ -324,14 +324,14 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
               <ul className="quick-sort-card-list">{project.roots.slice(0, 3).map(t => <li key={t.id}>{t.title}</li>)}{project.roots.length > 3 && <li className="more">and {project.roots.length - 3} more</li>}</ul>
               {ask ? <div className="quick-sort-confirm" role="alert">
                 <span>Move {project.tasks.filter(t => homeBoardTier(t, focus.customTiers) !== ask.tier).length} tasks of {project.label} to {label(ask.tier)}?</span>
-                <button type="button" className="quick-sort-btn" data-sort-confirm="yes" onClick={() => projectTier(project, ask.tier)}>Move</button>
-                <button type="button" className="quick-sort-btn is-skip" onClick={() => setConfirming(null)}>Cancel</button>
+                <button type="button" className="btn btn-primary quick-sort-btn" data-sort-confirm="yes" onClick={() => projectTier(project, ask.tier)}>Move</button>
+                <button type="button" className="btn btn-ghost quick-sort-btn" onClick={() => setConfirming(null)}>Cancel</button>
               </div> : <div className="quick-sort-actions"><div className="quick-sort-tiers">
-                {tierKeyed(tiers.map(t => t.id).filter(id => (project.tiers[id] ?? 0) < open)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn ${tierClass(id)}`} data-sort-tier={id} data-sort-key={key} onClick={() => projectTier(project, id)}>All {label(id)}{key && <small>{key}</small>}</button>)}
+                {tierKeyed(tiers.map(t => t.id).filter(id => (project.tiers[id] ?? 0) < open)).map(({ id, key }) => <button key={id} type="button" className="btn quick-sort-btn" data-sort-tier={id} data-sort-key={key} onClick={() => projectTier(project, id)}>All {label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
-                <button type="button" className="quick-sort-btn is-snooze" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'project', project }, e.currentTarget)}>Snooze all ▾<small>S</small></button>
-                <button type="button" className="quick-sort-btn" data-sort-action="tasks" onClick={() => sortProjectTasks(project)}>Sort its tasks ▸</button>
-                <button type="button" className="quick-sort-btn is-skip" data-sort-action="skip" onClick={() => projectSkip(project)}>Skip<small>X</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'project', project }, e.currentTarget)}>Snooze all ▾<small>S</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="tasks" onClick={() => sortProjectTasks(project)}>Sort its tasks ▸</button>
+                <button type="button" className="btn btn-ghost quick-sort-btn" data-sort-action="skip" onClick={() => projectSkip(project)}>Skip<small>X</small></button>
               </div></div>}
             </article>;
           })}

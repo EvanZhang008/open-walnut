@@ -332,24 +332,8 @@
   align-items: center;
   gap: 1px;
 }
-.notes-bubble-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-md);
-  line-height: 1;
-  cursor: pointer;
-}
-.notes-bubble-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.notes-bubble-btn.active { background: var(--accent-subtle); color: var(--accent); }
-.notes-bubble-btn code { font-family: var(--font-mono); font-size: var(--font-size-xs); }
+.notes-bubble-actions button code,
+.notes-format-toolbar button code { font-family: var(--font-mono, monospace); font-size: 11px; }
 .notes-bubble-sep {
   width: 1px;
   align-self: stretch;
@@ -368,25 +352,6 @@
   background: var(--bg);
   flex-shrink: 0;
 }
-.notes-format-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-md);
-  line-height: 1;
-  cursor: pointer;
-}
-.notes-format-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
-.notes-format-btn.active { background: var(--accent-subtle); color: var(--accent); }
-.notes-format-btn:disabled { opacity: 0.35; cursor: default; }
-.notes-format-btn code { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 .notes-format-sep {
   width: 1px;
   height: 18px;
@@ -394,26 +359,10 @@
   background: var(--border);
 }
 
-/* Block-type picker trigger: a text label + chevron, wide enough that the
-   label change (Normal text ↔ Heading 1) does not reflow its neighbours. */
-.notes-format-block-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  min-width: 118px;
-  padding: 0 8px 0 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  cursor: pointer;
-}
-.notes-format-block-btn:hover:not(:disabled) { background: var(--bg-hover); }
-.notes-format-block-btn:disabled { opacity: 0.35; cursor: default; }
+/* Block-type picker trigger: a quiet family key, wide enough that the label change
+   (Normal text <-> Heading 1) does not reflow its neighbours. */
+.notes-format-block-btn { min-width: 118px; }
 .notes-format-block-label { flex: 1; text-align: left; white-space: nowrap; }
-.notes-format-block-btn svg { color: var(--fg-muted); flex-shrink: 0; }
 
 /* Portalled menu — position/maxHeight come from useMenuPlacement; overflow-y
    is the hook's contract (a capped menu must scroll, never clip). */
@@ -759,25 +708,6 @@ mark.notes-search-mark {
 }
 .notes-reload-banner-text { flex: 1; min-width: 200px; }
 .notes-reload-banner-actions { display: flex; gap: 6px; }
-.notes-reload-banner-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.notes-reload-banner-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.notes-reload-banner-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.notes-reload-banner.conflict .notes-reload-banner-btn.primary {
-  background: var(--warning);
-  border-color: var(--warning);
-}
 
 /* ── Backlinks: ambiguous edge badge (§4.3 — shown, not hidden) ─────────── */
 .notes-backlink-ambiguous {
@@ -918,23 +848,6 @@ mark.notes-search-mark {
 .notes-tab-new:hover { background: var(--bg-hover); color: var(--fg); }
 
 /* ══ Note bookmarks (#5) ═══════════════════════════════════════════════════ */
-
-/* Title-bar bookmark toggle (in .notes-editor-meta). */
-.notes-bookmark-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.notes-bookmark-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.notes-bookmark-btn.active { color: var(--accent); }
 
 /* Bookmarks group at the top of the tree. */
 .notes-bookmarks-group {

@@ -63,13 +63,13 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
       <div className="pw-modal" role="dialog" aria-modal="true" aria-label="Import passwords" data-testid="pw-import">
         <div className="pw-modal-head">
           <h2>Import passwords</h2>
-          <button type="button" className="pw-icon-btn" aria-label="Close" onClick={onClose}><CloseIcon /></button>
+          <button type="button" className="btn btn-icon" aria-label="Close" onClick={onClose}><CloseIcon /></button>
         </div>
         {added !== null ? (
           <div className="pw-modal-body">
             <p className="pw-import-done">Imported {added} item{added === 1 ? '' : 's'}.</p>
             <p className="pw-hint">Delete the exported file now: it holds every password in plain text.</p>
-            <div className="pw-modal-actions"><button type="button" className="pw-btn pw-btn-primary" onClick={onClose}>Done</button></div>
+            <div className="pw-modal-actions"><button type="button" className="btn btn-sm btn-primary" onClick={onClose}>Done</button></div>
           </div>
         ) : (
           <div className="pw-modal-body">
@@ -105,8 +105,8 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
               </div>
             )}
             <div className="pw-modal-actions">
-              <button type="button" className="pw-btn" onClick={onClose}>Cancel</button>
-              <button type="button" className="pw-btn pw-btn-primary" disabled={!report || report.toAdd === 0 || busy} onClick={() => void go()}>
+              <button type="button" className="btn btn-sm" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn btn-sm btn-primary" disabled={!report || report.toAdd === 0 || busy} onClick={() => void go()}>
                 Import {report?.toAdd ? `${report.toAdd} item${report.toAdd === 1 ? '' : 's'}` : ''}
               </button>
             </div>

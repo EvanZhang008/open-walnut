@@ -145,27 +145,6 @@
   margin-top: 12px;
 }
 
-.approval-btn {
-  border-radius: var(--radius-sm);
-  padding: 6px 14px;
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  cursor: pointer;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-secondary);
-  color: var(--fg);
-}
-
-.approval-btn:disabled { opacity: 0.6; cursor: default; }
-
-.approval-btn-approve {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-
-.approval-btn-approve:hover:not(:disabled) { background: var(--accent-hover); }
-
 .approval-card-settled { padding: 10px 14px; }
 
 /* The card's title opens the request with its detail (the dialog). */
@@ -228,7 +207,6 @@
 .approval-command { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 .corner-stack .approval-command { display: none; }
 .corner-stack .approval-card .approval-actions { flex: none; margin-top: 0; gap: 6px; }
-.corner-stack .approval-card .approval-actions .approval-btn { padding: 4px 12px; font-size: var(--font-size-sm); }
 .corner-stack .approval-card .approval-detail { display: none; }
 .corner-stack .approval-card .approval-note,
 .corner-stack .approval-card .approval-error { flex: 1 0 100%; margin: 0; font-size: var(--font-size-sm); }
@@ -396,7 +374,6 @@
 .approval-line-who { flex: 0 1 auto; min-width: 7ch; font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .approval-line-meta .approval-clock { flex: none; }
 .approval-card-line .approval-actions { flex: none; margin-top: 4px; gap: 6px; }
-.approval-card-line .approval-actions .approval-btn { padding: 3px 10px; font-size: var(--font-size-sm); }
 .approval-card-line .approval-error { flex: 1 0 100%; margin: 4px 0 0; font-size: var(--font-size-sm); }
 .approval-line-open .approval-row-open { font-size: var(--font-size-md); font-weight: 600; }
 /* Ends the first line: the time and the buttons are the second. */

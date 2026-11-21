@@ -24,7 +24,7 @@ export function TaskStartButton({ task, isDone, onStartSession }: {
   if (!onStartSession || isDone || resolveTaskSessionId(task)) return null;
   return (
     <button
-      className="task-start-btn"
+      className="btn btn-icon btn-sm task-start-btn"
       // BOTH pointer handlers stop propagation: click alone still lets pointerdown
       // reach useSortable's activator, so launching a session also started dragging
       // the row (same trap the kebab's portal hit — see TaskKebabMenu). keydown too:

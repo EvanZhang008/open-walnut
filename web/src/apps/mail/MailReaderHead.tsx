@@ -343,7 +343,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
     <div className="mail-reader-actions">
       <button
         type="button"
-        className="mail-round-btn"
+        className="btn btn-icon mail-round-btn"
         data-testid="mail-reply"
         disabled={!canSend}
         title={sendTitle('Reply to the sender')}
@@ -355,7 +355,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       </button>
       <button
         type="button"
-        className="mail-round-btn"
+        className="btn btn-icon mail-round-btn"
         data-testid="mail-reply-all"
         disabled={!canSend}
         title={sendTitle('Reply to everyone')}
@@ -367,7 +367,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       </button>
       <button
         type="button"
-        className="mail-round-btn"
+        className="btn btn-icon mail-round-btn"
         data-testid="mail-forward"
         disabled={!canSend}
         title={sendTitle('Forward this message')}
@@ -388,7 +388,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       <MailContentActions open={open} />
       <button
         type="button"
-        className="mail-round-btn"
+        className="btn btn-icon mail-round-btn"
         data-testid="mail-mark-read"
         disabled={!canMark}
         title={canMark
@@ -443,7 +443,7 @@ function UnsubscribeLine({ open, message, accounts, providers }: Props) {
       {control && (
         <button
           type="button"
-          className={`mail-reader-unsub-btn${control.ai ? ' ai' : ''}`}
+          className="btn btn-sm"
           data-testid="mail-unsubscribe"
           data-unsub-state={control.status}
           {...(control.ai ? { 'data-ai': 'true' } : {})}

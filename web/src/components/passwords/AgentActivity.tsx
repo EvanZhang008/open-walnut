@@ -127,11 +127,11 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
                   <b>{it?.title ?? g.itemTitle ?? 'An item'}</b>
                   <span>{g.taskTitle ?? (g.asker.startsWith('host:') ? `a script on ${hostLabel(g.asker.slice(5))}` : g.asker.replace(/^task:/, 'task '))}{g.fields?.length ? ` · ${g.fields.join(', ')}` : ''}{g.use ? ` · ${g.use === 'reveal' ? 'shown to it' : g.use === 'env' ? 'in a command' : 'filled in a page'}` : ''} · {untilText(g.until)}{g.approvedBy ? ` · approved on ${g.approvedBy}` : ''}</span>
                 </span>
-                {g.id && <button type="button" className="pw-btn pw-btn-small" onClick={() => revoke(g.id)} data-testid="pw-grant-revoke">Revoke</button>}
+                {g.id && <button type="button" className="btn btn-sm" onClick={() => revoke(g.id)} data-testid="pw-grant-revoke">Revoke</button>}
               </div>
             )
           })}
-          <button type="button" className="pw-btn" onClick={endGrants} data-testid="pw-end-grants">End all grants</button>
+          <button type="button" className="btn btn-sm" onClick={endGrants} data-testid="pw-end-grants">End all grants</button>
         </div>
       )}
 

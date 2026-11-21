@@ -40,7 +40,7 @@ describe('terminal mode notices', () => {
     const out = html(createElement(TerminalPlainNotice, { plain: plain(), retrying: false, onRetry: () => {} }))
     expect(out).toContain('This shell will not survive a disconnect. Install a C compiler on devbox (e.g. <code>sudo yum install -y gcc</code>) and click Retry to enable persistence.')
     expect(out).toContain('>Retry</button>')
-    expect(out).toContain('>Copy</button>')
+    expect(out).toContain('<span class="btn-label">Copy</span>')
     expect(out).not.toContain('<details')
   })
 

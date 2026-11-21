@@ -79,24 +79,3 @@
   border-color: var(--accent);
   opacity: 1;
 }
-/* The pill's second action, when the selection can become a question in place. */
-.session-diff-ask-pill.has-two {
-  display: inline-flex;
-  padding: 0;
-}
-.session-diff-ask-pill.has-two > button {
-  all: unset;
-  display: inline-block;
-  padding: 5px 10px;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-}
-.session-diff-ask-pill.has-two > button:first-child { border-radius: 6px 0 0 6px; }
-.session-diff-ask-pill.has-two > button:last-child { border-radius: 0 6px 6px 0; }
-.session-diff-ask-pill.has-two > button + button {
-  border-left: 1px solid rgba(255, 255, 255, 0.25);
-}
-.session-diff-ask-pill.has-two > button:hover {
-  background: rgba(255, 255, 255, 0.12);
-}

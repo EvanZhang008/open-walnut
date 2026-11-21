@@ -1,15 +1,21 @@
 /**
- * The settings button: 28px, sentence case. Its width never changes with its
- * text: the longest labels it can show (children, busyLabel, reserve) are
- * stacked in the same grid cell as visibility:hidden pseudo-elements, so the
- * widest one reserves the space without a hardcoded pixel width.
+ * The settings button: the shared button family (`.btn .btn-sm`, styles/buttons.css), 28px,
+ * sentence case. It adds only behaviour: its width never changes with its text (the longest
+ * labels it can show, children, busyLabel and reserve, are stacked in the same grid cell as
+ * hidden pseudo-elements, `.btn-reserve`), busy, and holdFocus.
  */
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import { keepPress } from './press-keeps-target'
 import '@/styles/settings-controls.css'
 
+/**
+ * Each variant is a variant of the family: text is the link key, danger the quiet red key, and
+ * danger-confirm the solid red key that confirms a destructive step.
+ */
+const VARIANT_CLASS = { default: '', primary: ' btn-primary', text: ' btn-link', danger: ' btn-ghost btn-danger', 'danger-confirm': ' btn-primary btn-danger' } as const
+
 export interface SettingsButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'default' | 'primary' | 'text' | 'danger'
+  variant?: keyof typeof VARIANT_CLASS
   busy?: boolean
   /** Shown instead of children while busy, e.g. `Refreshing...`. */
   busyLabel?: string
@@ -56,7 +62,8 @@ export function SettingsButton({
       // WebKit only tabs to buttons with an explicit tabindex (N20); a caller's own wins.
       tabIndex={0}
       {...rest}
-      className={`settings-button settings-button-${variant}${className ? ` ${className}` : ''}`}
+      className={`btn btn-sm${VARIANT_CLASS[variant]}${className ? ` ${className}` : ''}`}
+      data-variant={variant}
       disabled={off && !holdFocus}
       aria-disabled={off && holdFocus ? true : rest['aria-disabled']}
       aria-busy={busy ? true : rest['aria-busy']}
@@ -64,8 +71,8 @@ export function SettingsButton({
       // A press keeps this button even if the row moves under it before the release (press-keeps-target.ts).
       onPointerDown={(e) => { onPointerDown?.(e); if (!e.defaultPrevented) keepPress(e.currentTarget, e) }}
     >
-      <span className="settings-button-stack" data-r1={r1 || undefined} data-r2={r2 || undefined}>
-        <span className="settings-button-label">{showing}</span>
+      <span className="btn-reserve" data-r1={r1 || undefined} data-r2={r2 || undefined}>
+        <span className="btn-label">{showing}</span>
       </span>
     </button>
   )

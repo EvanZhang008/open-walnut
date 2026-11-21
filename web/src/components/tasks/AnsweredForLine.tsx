@@ -44,7 +44,7 @@ export function WithdrawAnswerButton({ taskId, compact = false, onError }: { tas
       setBusy(false);
     }
   };
-  const cls = `tdp-start-queue-btn${compact ? ' answered-for-btn-compact' : ''}`;
+  const cls = `btn btn-sm${compact ? ' answered-for-btn-compact' : ''}`;
   if (!confirming) {
     return (
       <button type="button" className={cls} disabled={busy} onPointerDown={stop}
@@ -56,11 +56,11 @@ export function WithdrawAnswerButton({ taskId, compact = false, onError }: { tas
   }
   return (
     <span className="answered-for-confirm" onPointerDown={stop}>
-      <button type="button" className={`${cls} tdp-start-queue-now`} disabled={busy}
+      <button type="button" className={`${cls} btn-primary`} disabled={busy}
         onClick={(e) => { stop(e); void run(); }} data-testid="answered-for-withdraw-confirm">
         Back to Needs you
       </button>
-      <button type="button" className={cls} disabled={busy}
+      <button type="button" className={`${cls} btn-ghost`} disabled={busy}
         onClick={(e) => { stop(e); setConfirming(false); }} data-testid="answered-for-withdraw-cancel">
         Keep
       </button>

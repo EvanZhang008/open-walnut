@@ -177,7 +177,7 @@ test('a mode left open does not stop the next take: the key after a Notes search
   await openApp(page)
   await page.keyboard.press('Meta+k')
   await expect(bar(page)).toHaveAttribute('data-recording', 'false')
-  await page.locator('.qb-mode-pill.qb-mode-notes').click()
+  await page.locator('.qb-mode-pill[data-mode="notes"]').click()
   await expect(bar(page)).toHaveAttribute('data-mode', 'notes')
   await page.keyboard.press('Meta+k')
   await expect(bar(page)).toBeHidden()

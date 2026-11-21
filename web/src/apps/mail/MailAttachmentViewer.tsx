@@ -71,7 +71,7 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
         {savesThroughServer() ? (
           <button
             type="button"
-            className="mail-attachment-viewer-btn"
+            className="btn mail-attachment-viewer-btn"
             data-testid="mail-attachment-download"
             disabled={saver.state.kind === 'saving'}
             onClick={() => { void saver.save(attachment); }}
@@ -80,7 +80,7 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
           </button>
         ) : (
           <a
-            className="mail-attachment-viewer-btn"
+            className="btn mail-attachment-viewer-btn"
             data-testid="mail-attachment-download"
             href={mailAttachmentUrl(accountId, messageId, attachment.id, { download: true })}
             download={attachmentFileName(attachment)}
@@ -90,7 +90,7 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
         )}
         <button
           type="button"
-          className="mail-attachment-viewer-btn"
+          className="btn mail-attachment-viewer-btn"
           data-testid="mail-attachment-close"
           aria-label="Close"
           onClick={onClose}

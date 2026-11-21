@@ -61,7 +61,7 @@ export function OrgChartCeo({ main, line, onOpenChat, more }: CeoProps) {
       {open && (
         <div className="oc-detail" id="oc-detail-ceo" data-testid="org-chart-ceo-detail">
           <div className="oc-detail-actions">
-            <button type="button" className="oc-detail-btn" data-testid="org-chart-ceo-open" onClick={onOpenChat}>Open chat</button>
+            <button type="button" className="btn btn-sm" data-testid="org-chart-ceo-open" onClick={onOpenChat}>Open chat</button>
             {more}
           </div>
         </div>
@@ -137,7 +137,7 @@ export function OrgChartVp({ card: c, line, className, zone, draggable, onDragSt
         <div className="oc-detail" id={detailId} data-testid="org-chart-vp-detail">
           {c.projects.length === 0 && <p className="oc-detail-line is-muted" data-testid="org-chart-vp-empty">{c.line}</p>}
           <div className="oc-detail-actions">
-            <button type="button" className="oc-detail-btn" data-testid="org-chart-vp-open" onClick={onOpenChat}>Open chat</button>
+            <button type="button" className="btn btn-sm" data-testid="org-chart-vp-open" onClick={onOpenChat}>Open chat</button>
             {more}
           </div>
         </div>

@@ -155,7 +155,7 @@ test('create → rename → duplicate → delete, all inline in the tree', async
     const modal = page.locator('.app-modal')
     await expect(modal).toBeVisible()
     await expect(modal.locator('.app-modal-title')).toContainText(duplicated)
-    const dangerBtn = modal.locator('.app-modal-btn.primary.danger')
+    const dangerBtn = modal.locator('.btn.btn-primary.btn-danger')
     await expect(dangerBtn).toBeVisible()
     await page.screenshot({ path: `${SCREENSHOT_DIR}/4-delete-confirm.png` })
     await dangerBtn.click()

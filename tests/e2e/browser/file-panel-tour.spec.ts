@@ -274,7 +274,7 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
     await expect(modal.locator('.app-modal-title')).toContainText(duplicated)
     await beat(page, 900)
     await page.screenshot({ path: `${OUT_DIR}/tour-3-delete-confirm.png` })
-    await modal.locator('.app-modal-btn.primary.danger').click()
+    await modal.locator('.btn.btn-primary.btn-danger').click()
     await expect(rowByName(explorer, duplicated)).toHaveCount(0, { timeout: 10_000 })
     await beat(page, 1200)
   } finally {

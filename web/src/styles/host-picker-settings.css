@@ -70,19 +70,6 @@
   align-items: center;
   gap: 6px;
 }
-.sps-host-note .setup-step-btn { font-size: var(--font-size-xs); padding: 2px 10px; }
-.sps-host-note .setup-step-btn:disabled { opacity: 0.6; cursor: default; }
-.sps-host-note .setup-step-btn:disabled:hover { background: none; color: var(--accent); }
-.sps-host-note .setup-step-btn.sps-note-secondary,
-.sps-host-note .setup-step-btn.hpb-btn-secondary {
-  color: var(--fg-muted);
-  border-color: var(--border);
-}
-.sps-host-note .setup-step-btn.sps-note-secondary:hover,
-.sps-host-note .setup-step-btn.hpb-btn-secondary:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
 .sps-host-note-msg { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .sps-host-note-msg.sps-host-note-error { color: var(--error); }
 .sps-host-note.sps-host-note-off,

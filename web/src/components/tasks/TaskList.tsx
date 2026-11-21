@@ -224,7 +224,7 @@ export function TaskList({
           {/* Hidden when everything picked is already done — nothing left to complete. */}
           {selectionInfo.doneCount < selectionInfo.tasks.length && (
             <button
-              className="task-selection-action-btn"
+              className="btn btn-sm"
               title="Mark the selected tasks complete"
               onClick={handleCompleteSelected}
             >
@@ -232,7 +232,7 @@ export function TaskList({
             </button>
           )}
           <button
-            className="task-selection-group-btn"
+            className="btn btn-sm btn-primary task-selection-group-btn"
             disabled={!selectionInfo.canGroup}
             title={selectionInfo.canGroup ? 'Group these tasks together' : 'Select at least 2 tasks'}
             onClick={handleGroupSelected}
@@ -241,14 +241,14 @@ export function TaskList({
           </button>
           {(onBatchDelete || onDelete) && (
             <button
-              className="task-selection-action-btn task-selection-action-danger"
+              className="btn btn-sm btn-danger"
               title="Delete the selected tasks"
               onClick={handleDeleteSelected}
             >
               Delete
             </button>
           )}
-          <button className="task-selection-clear-btn" onClick={() => setSelectedIds(new Set())}>
+          <button className="btn btn-sm btn-ghost task-selection-clear-btn" onClick={() => setSelectedIds(new Set())}>
             Cancel
           </button>
         </div>

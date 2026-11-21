@@ -14,7 +14,6 @@
 .hib-inbox-pane { min-width: 0; }
 .hib-inbox-pane .hib-toolbar { flex-wrap: wrap; gap: 8px; }
 .hib-view-choices { display: inline-flex; gap: 2px; }
-.hib-view-choices .hib-row-btn { border-color: transparent; }
 .hib-view-choices [aria-pressed="true"] { background: var(--bg-secondary); color: var(--fg); border-color: var(--border); }
 .hib-inbox-split {
   flex: 1;

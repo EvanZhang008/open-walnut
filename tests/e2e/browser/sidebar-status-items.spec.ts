@@ -224,7 +224,7 @@ test('the popover opens beside the rail, and a button runs the op again and agai
   await expect(popover(page).locator('.status-item-popover-title')).toHaveText('Time to stand up')
   await expect(popover(page).locator('.status-item-popover-detail')).toHaveText('1h 02m at the keyboard. Walk for a couple of minutes.')
   await expect(popover(page).locator('.status-item-btn')).toHaveText(['Got it', 'Snooze 10 min'])
-  await expect(popover(page).locator('.status-item-btn.is-primary')).toHaveText('Got it')
+  await expect(popover(page).locator('.status-item-btn.btn-primary')).toHaveText('Got it')
   // A plugin with no panel of its own (status-item.panel) keeps exactly the buttons it published.
   await expect(popover(page).locator('.status-item-popover-panel')).toBeHidden()
   await expect(popover(page)).not.toHaveAttribute('data-panel', 'true')

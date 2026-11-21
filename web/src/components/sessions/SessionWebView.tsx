@@ -340,12 +340,12 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
         </form>
         <div className="session-code-actions">
           {requestedUrl && (
-            <button type="button" className="session-code-btn" onClick={handleReload} disabled={phase === 'resolving'} title="Reload the page">
+            <button type="button" className="btn btn-sm" onClick={handleReload} disabled={phase === 'resolving'} title="Reload the page">
               Reload
             </button>
           )}
           {tabUrl && (
-            <a className="session-code-btn" href={tabUrl} target="_blank" rel="noreferrer" data-native-link
+            <a className="btn btn-sm" href={tabUrl} target="_blank" rel="noreferrer" data-native-link
                title="Open this page in its own browser tab">
               Open in tab
             </a>
@@ -397,13 +397,13 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
             <>
               <p className="session-code-error-body" data-testid="session-web-not-web">:{notWeb.port} ({notWeb.title || serverLabel(notWeb)}) is running, but it does not serve a web page.</p>
               <p className="session-code-error-hint">See it, or stop it, in this session's server list.</p>
-              <button type="button" className="session-code-btn" onClick={() => { setShowAll(true); setPointOthers(true); }}>Show in Servers</button>
+              <button type="button" className="btn btn-sm" onClick={() => { setShowAll(true); setPointOthers(true); }}>Show in Servers</button>
             </>
           ) : (
             <>
               <p className="session-code-error-body">{waitsForServer && !goneRef.current ? `Nothing this session started is listening on :${activePort}.` : error.message}</p>
               {(waitsForServer ? WAITS_HINT : error.hint) && <p className="session-code-error-hint">{waitsForServer ? WAITS_HINT : error.hint}</p>}
-              <button type="button" className="session-code-btn" onClick={handleRetry}>Retry</button>
+              <button type="button" className="btn btn-sm" onClick={handleRetry}>Retry</button>
             </>
           )}
         </div>
@@ -424,7 +424,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
               </p>
             </>
           )}
-          <a className="session-code-btn" href={info.url} target="_blank" rel="noreferrer" data-native-link>Open in tab</a>
+          <a className="btn btn-sm" href={info.url} target="_blank" rel="noreferrer" data-native-link>Open in tab</a>
         </div>
       ) : phase === 'empty' && listed.length > 0 ? (
         <div className="session-web-empty session-web-empty-servers">

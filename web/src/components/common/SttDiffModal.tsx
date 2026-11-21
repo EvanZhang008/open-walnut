@@ -68,7 +68,7 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
             <div className="stt-diff-panel-head">
               <span className="stt-diff-chip stt-diff-chip-a">{rec.engine ?? 'primary'}</span>
               {primaryText && (
-                <button type="button" className="mic-history-btn" onClick={() => onInsert(primaryText)}>Insert</button>
+                <button type="button" className="btn btn-sm" onClick={() => onInsert(primaryText)}>Insert</button>
               )}
             </div>
             <div className="stt-diff-panel-text">{primaryText || (rec.error ? `Failed: ${rec.error}` : 'No transcription')}</div>
@@ -77,7 +77,7 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
             <div className="stt-diff-panel-head">
               <span className="stt-diff-chip stt-diff-chip-b">{rec.secondary?.engine ?? 'secondary'}</span>
               {secondaryText && (
-                <button type="button" className="mic-history-btn" onClick={() => onInsert(secondaryText)}>Insert</button>
+                <button type="button" className="btn btn-sm" onClick={() => onInsert(secondaryText)}>Insert</button>
               )}
             </div>
             <div className="stt-diff-panel-text">

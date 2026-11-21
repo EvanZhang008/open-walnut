@@ -80,7 +80,7 @@ export function KeyboardShortcutsSection() {
       title="Keyboard shortcuts"
       description={`The keys for ${PLACE[env]}. A browser keeps some keys for its own tabs and windows, so each place has its own.`}
       actions={changed ? (
-        <button type="button" className="settings-button settings-button-default" data-testid="shortcuts-reset-all" onClick={() => reset()}>
+        <button type="button" className="btn btn-sm" data-testid="shortcuts-reset-all" onClick={() => reset()}>
           Reset all
         </button>
       ) : undefined}
@@ -110,7 +110,7 @@ export function KeyboardShortcutsSection() {
                     {listening ? <span className="shortcuts-settings-listening" aria-live="polite">Press keys…</span> : <Keys row={row} />}
                     <button
                       type="button"
-                      className="settings-button settings-button-default"
+                      className="btn btn-sm"
                       data-testid={`shortcut-change-${id}`}
                       aria-label={`Change the key for ${row.label}`}
                       onClick={() => { setError(id, null); setRecording(listening ? null : id); }}
@@ -120,7 +120,7 @@ export function KeyboardShortcutsSection() {
                     {own && !listening && (
                       <button
                         type="button"
-                        className="settings-button settings-button-default"
+                        className="btn btn-sm"
                         data-testid={`shortcut-reset-${id}`}
                         aria-label={`Reset the key for ${row.label}`}
                         onClick={() => reset(id)}

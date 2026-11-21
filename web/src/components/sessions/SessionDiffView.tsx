@@ -541,11 +541,11 @@ function ExpandRow({ lines, split, funcOld, funcNew, onAll, onUp, onDown, onJump
       <div className="session-diff-expand-rail">
         {big && (
           <>
-            <button className="session-diff-expand-btn is-dir" onClick={onDown} disabled={!onDown} title={`Show ${UNFOLD_CHUNK} lines below`}>↓ {UNFOLD_CHUNK}</button>
-            <button className="session-diff-expand-btn is-dir" onClick={onUp} disabled={!onUp} title={`Show ${UNFOLD_CHUNK} lines above`}>↑ {UNFOLD_CHUNK}</button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onDown} disabled={!onDown} title={`Show ${UNFOLD_CHUNK} lines below`}>↓ {UNFOLD_CHUNK}</button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onUp} disabled={!onUp} title={`Show ${UNFOLD_CHUNK} lines above`}>↑ {UNFOLD_CHUNK}</button>
           </>
         )}
-        <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show all ${lines} hidden line${lines === 1 ? '' : 's'}`}>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onAll} title={`Show all ${lines} hidden line${lines === 1 ? '' : 's'}`}>
           ↕ {lines}
         </button>
       </div>

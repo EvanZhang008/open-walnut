@@ -402,7 +402,7 @@ export function PlanCard({ content, disclosureId, sessionId, sessionCwd, session
           <span className="session-plan-card-title">Plan</span>
         </button>
         <button
-          className="plan-card-expand-btn"
+          className="btn btn-icon btn-sm plan-card-expand-btn"
           onClick={handleExpandClick}
           title="Expand plan"
           aria-label="Expand plan to popup"
@@ -1639,7 +1639,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         {noActions || stepInFold ? null : phone ? ((!!bodyText?.trim() || !!msgId) && (
           <button
             type="button"
-            className="msg-more-btn"
+            className="btn btn-icon msg-more-btn"
             aria-label="Message actions"
             aria-haspopup="menu"
             title={timestamp ? new Date(timestamp).toLocaleString() : undefined}

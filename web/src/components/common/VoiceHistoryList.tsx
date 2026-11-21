@@ -152,13 +152,13 @@ export function VoiceHistoryList() {
               {flash?.id === rec.id && <span className="voice-panel-flash">{flash.note}</span>}
               <span className="voice-panel-hover-actions" onClick={(e) => e.stopPropagation()}>
                 {text && (
-                  <button type="button" className="voice-panel-icon-btn" title="Copy" onClick={() => handleCopy(rec)}>
+                  <button type="button" className="btn btn-icon btn-sm" title="Copy" onClick={() => handleCopy(rec)}>
                     <CopyIcon />
                   </button>
                 )}
                 <button
                   type="button"
-                  className="voice-panel-icon-btn"
+                  className="btn btn-icon btn-sm"
                   title="Re-transcribe from stored audio"
                   disabled={busyId === rec.id}
                   onClick={() => void handleRedo(rec)}

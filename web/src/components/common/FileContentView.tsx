@@ -2388,7 +2388,7 @@ export function FileContentView({
     <>
       <button
         type="button"
-        className="fv-html-tab fv-skip-btn"
+        className="btn btn-ghost btn-sm fv-skip-btn"
         onClick={() => skipBy(-3)}
         title="Back 3 seconds (←)"
         aria-label="Back 3 seconds"
@@ -2397,7 +2397,7 @@ export function FileContentView({
       </button>
       <button
         type="button"
-        className="fv-html-tab fv-skip-btn"
+        className="btn btn-ghost btn-sm fv-skip-btn"
         onClick={() => skipBy(10)}
         title="Forward 10 seconds (→)"
         aria-label="Forward 10 seconds"

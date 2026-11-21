@@ -271,7 +271,7 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
             <button
               key={`${action.op}:${action.label}`}
               type="button"
-              className={`status-item-btn${action.primary ? ' is-primary' : ''}`}
+              className={`btn btn-sm status-item-btn${action.primary ? ' btn-primary' : ''}`}
               disabled={busyOp !== null}
               aria-busy={busyOp === action.op || undefined}
               onClick={() => onRun(action)}

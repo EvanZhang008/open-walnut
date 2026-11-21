@@ -407,7 +407,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
       <div className="file-mention-popup">
         <div className="file-mention-toolbar">
           <button
-            className="fmp-btn"
+            className="btn btn-icon btn-sm"
             onMouseDown={(e) => { e.preventDefault(); goUp(); }}
             disabled={browseDir === '/'}
             title="Go to parent directory"
@@ -440,14 +440,14 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
             </span>
           )}
           <button
-            className="fmp-btn fmp-select-folder"
+            className="btn btn-sm btn-primary fmp-select-folder"
             onMouseDown={(e) => { e.preventDefault(); onSelect(browseDir); }}
             title="Select this folder (⌘⏎ also selects the highlighted item)"
           >
             Select folder
           </button>
           <button
-            className="fmp-btn fmp-close"
+            className="btn btn-icon btn-sm fmp-close"
             onMouseDown={(e) => { e.preventDefault(); onClose(); }}
             title="Close (Esc)"
           >

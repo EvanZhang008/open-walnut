@@ -79,7 +79,7 @@ export function KanbanCardStart({ card, leader, laneName }: KanbanCardStartProps
     <span className="kanban-card-start-bar" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
       <button
         type="button"
-        className="kanban-text-btn"
+        className="btn btn-link btn-sm kanban-text-btn"
         data-testid="kanban-card-start"
         aria-busy={busy === 'start' || undefined}
         aria-disabled={busy ? true : undefined}
@@ -88,7 +88,7 @@ export function KanbanCardStart({ card, leader, laneName }: KanbanCardStartProps
       >{busy === 'start' ? 'Starting...' : 'Start worker'}</button>
       <button
         type="button"
-        className="kanban-text-btn"
+        className="btn btn-link btn-sm kanban-text-btn"
         data-testid="kanban-card-tell-leader"
         aria-disabled={!leaderSid || !!busy || undefined}
         title={leaderSid ? 'Tell the leader about this card' : NO_LEADER_SESSION_TITLE}

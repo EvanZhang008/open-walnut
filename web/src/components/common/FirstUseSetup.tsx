@@ -27,7 +27,7 @@ export function FirstUseSetup({ health, loading }: { health: SystemHealth; loadi
                   <p>If you have not signed in, sign in once, then Check again.</p>
                   <ClaudeSignIn command="claude auth login" />
                 </>}
-                <button type="button" className="setup-step-btn" disabled={checking} onClick={() => {
+                <button type="button" className="btn" disabled={checking} onClick={() => {
                   setChecking(true); setError(null);
                   void checkLocalClaude(false).catch(e => setError(e instanceof Error ? e.message : String(e))).finally(() => setChecking(false));
                 }}>{checking ? 'Checking...' : 'Check again'}</button>

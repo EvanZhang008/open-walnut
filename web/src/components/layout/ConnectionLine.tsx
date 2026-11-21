@@ -28,7 +28,7 @@ export function ConnectionLine() {
       <span className="away-line-text">{text}</span>
       <button
         type="button"
-        className="connection-line-btn"
+        className="btn btn-sm connection-line-btn"
         disabled={state.syncing}
         onClick={() => { void runPhoneResync('retry'); }}
       >

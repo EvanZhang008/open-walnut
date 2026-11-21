@@ -469,7 +469,7 @@ export async function askThenCancel(page: Page, routes: PaneRoutes, button: Loca
   const ask = page.getByTestId(testId)
   await expect(ask).toContainText(question)
   await expect(ask.getByTestId(`${testId}-cancel`)).toBeFocused()
-  await expect(ask.getByTestId(`${testId}-remove`)).toHaveClass(/settings-button-danger/)
+  await expect(ask.getByTestId(`${testId}-remove`)).toHaveClass(/btn-danger/)
   // Past the old 3 s timer: it still asks.
   await page.waitForTimeout(3_300)
   await expect(ask).toBeVisible()

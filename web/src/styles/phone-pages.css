@@ -223,8 +223,6 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .phone-bell {
     position: relative;
-    color: var(--fg);
-    background: transparent;
   }
 
   .app-shell-navigation .phone-bell-count {
@@ -710,15 +708,6 @@
     transform: translateX(-50%);
     min-width: 96px;
     height: 44px;
-    padding: 0 16px;
-    border: 0;
-    border-radius: 22px;
-    background: var(--accent);
-    color: var(--on-accent);
-    font-size: var(--font-size-lg);
-    font-weight: 600;
-    box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
-    white-space: nowrap;
   }
 }
 

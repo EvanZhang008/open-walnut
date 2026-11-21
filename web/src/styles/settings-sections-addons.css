@@ -73,7 +73,6 @@
   outline-offset: 2px;
   border-radius: var(--radius-xs);
 }
-a.settings-button { text-decoration: none; }
 
 /* Pairing QR: rows of the caller's group, the code centered, at most 200px. */
 .settings-row.settings-addons-qr-row {

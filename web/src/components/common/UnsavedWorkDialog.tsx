@@ -85,7 +85,7 @@ export function UnsavedWorkDialog({ work, verb, onAnyway, onCancel }: {
         <ul className="unsaved-work-list">
           {g.rows.map((row, i) => <li key={i} className="unsaved-work-item">
             <span className="unsaved-work-what">{row.what}{row.where ? <> in <strong>{row.where}</strong></> : null}</span>
-            <button type="button" className="app-modal-btn unsaved-work-go" onClick={() => { onCancel(); row.reveal(); }}>Go there</button>
+            <button type="button" className="btn btn-sm unsaved-work-go" onClick={() => { onCancel(); row.reveal(); }}>Go there</button>
           </li>)}
         </ul>
       </div>)}

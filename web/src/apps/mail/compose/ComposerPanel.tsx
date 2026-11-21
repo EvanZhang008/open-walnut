@@ -159,7 +159,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
         <div className="mail-pane-head mail-composer-back-bar">
           <button
             type="button"
-            className="mail-icon-btn"
+            className="btn btn-icon mail-icon-btn"
             data-testid="mail-composer-back"
             aria-label="Back to the list"
             onClick={() => { void closeMailComposer(); }}
@@ -224,7 +224,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
             {others > 0 && (
               <button
                 type="button"
-                className="mail-compose-drafts-chip"
+                className="btn btn-sm mail-compose-drafts-chip"
                 data-testid="mail-compose-drafts-chip"
                 title={merged ? "Open every account's drafts" : 'Open the drafts waiting on this account'}
                 onClick={openDrafts}
@@ -245,7 +245,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
             {showing === 'edit' && (
               <button
                 type="button"
-                className="mail-round-btn danger"
+                className="btn btn-icon btn-danger mail-round-btn"
                 data-testid="mail-compose-discard"
                 disabled={composer.busy}
                 title="Discard this draft"
@@ -257,7 +257,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
             )}
             <button
               type="button"
-              className="mail-round-btn"
+              className="btn btn-icon mail-round-btn"
               data-testid="mail-composer-close"
               title="Close the composer, keeping the draft"
               aria-label="Close the composer"
@@ -443,7 +443,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
                 that cannot do what it appears to offer is worse than a control that says so. */}
             <button
               type="button"
-              className="mail-round-btn"
+              className="btn btn-icon mail-round-btn"
               data-testid="mail-compose-attachments"
               disabled
               title="Attachments are coming"
@@ -453,7 +453,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
             </button>
             <button
               type="button"
-              className="mail-compose-btn"
+              className="btn"
               data-testid="mail-compose-ask"
               disabled={!sendable}
               onClick={askGate.send}
@@ -463,7 +463,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
             </button>
             <button
               type="button"
-              className="mail-compose-btn primary"
+              className="btn btn-primary"
               data-testid="mail-compose-send"
               disabled={!sendable}
               onClick={sendGate.send}

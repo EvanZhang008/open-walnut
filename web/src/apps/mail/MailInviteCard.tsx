@@ -206,7 +206,7 @@ export function MailInviteCard({ accountId, messageId, kind }: Props) {
               <button
                 key={button.response}
                 type="button"
-                className={`mail-invite-btn${chosen ? ' chosen' : ''}`}
+                className="btn btn-sm mail-invite-btn"
                 data-testid={`mail-invite-${button.response}`}
                 data-response={button.response}
                 aria-pressed={chosen}

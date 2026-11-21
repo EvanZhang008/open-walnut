@@ -458,7 +458,7 @@ export function BoardKanban({
             {filter.emptyText && (
               <div className="kanban-filter-empty" data-testid="kanban-filter-empty">
                 <span>{filter.emptyText}</span>
-                <button type="button" className="kanban-text-btn" data-testid="kanban-show-all-cards" onClick={() => filter.setChip(null)}>Show all cards</button>
+                <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-show-all-cards" onClick={() => filter.setChip(null)}>Show all cards</button>
               </div>
             )}
             {vm.empty && <KanbanEmpty>{emptyExtra}</KanbanEmpty>}

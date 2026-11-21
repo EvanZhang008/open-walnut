@@ -165,7 +165,7 @@ function FileRow({ item, current, onOpen, onRename }: {
               <span className="drawing-workspace-file-title">{item.title}</span>
               {item.updatedAt && <span className="drawing-workspace-file-time">{timeAgo(item.updatedAt)}</span>}
             </button>
-            <button type="button" className="drawing-icon-button drawing-workspace-file-rename" aria-label={`Rename ${item.title}`} title="Rename"
+            <button type="button" className="btn btn-icon drawing-workspace-file-rename" aria-label={`Rename ${item.title}`} title="Rename"
               onClick={() => { setFailure(null); setRenaming(true); }}><Icon d={ICON.pencil} /></button>
           </>}
       {failure && <span className="drawing-name-error" role="alert">{failure}</span>}
@@ -715,13 +715,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       )}
       <section className="drawing-workspace-main" aria-label={title}>
         <header className="drawing-workspace-bar">
-          <button type="button" className="drawing-icon-button drawing-workspace-files-toggle" aria-expanded={filesShown} aria-label={filesShown ? 'Hide drawings list' : 'Show drawings list'} title={filesShown ? 'Hide drawings list' : 'Show drawings list'} onClick={() => setFilesShown((v) => !v)}><Icon d={ICON.list} /></button>
+          <button type="button" className="btn btn-icon drawing-workspace-files-toggle" aria-expanded={filesShown} aria-label={filesShown ? 'Hide drawings list' : 'Show drawings list'} title={filesShown ? 'Hide drawings list' : 'Show drawings list'} onClick={() => setFilesShown((v) => !v)}><Icon d={ICON.list} /></button>
           {titleEditing && currentPath
             ? <NameField value={title} label="Drawing name" className="drawing-workspace-title" onCommit={(name) => renameDrawing(currentPath, name)}
                 onDone={(failure) => { setTitleEditing(false); setNotice(failure); }} />
             : <h2 className="drawing-workspace-title" title={currentPath ?? undefined}>
                 {canRename
-                  ? <button type="button" className="drawing-name-button" aria-label={`Rename drawing: ${title}`} title="Click to rename" onClick={() => setTitleEditing(true)}>{title}</button>
+                  ? <button type="button" className="btn btn-ghost btn-sm drawing-name-button" aria-label={`Rename drawing: ${title}`} title="Click to rename" onClick={() => setTitleEditing(true)}><span>{title}</span></button>
                   : title}
               </h2>}
           {state && <span className="drawing-workspace-status" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
@@ -733,11 +733,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               title={assistantShown ? 'Hide the assistant' : 'Ask the assistant to change this drawing'}
               onClick={() => setAssistantShown(!assistantShown)}><Icon d={ICON.assistant} /><span>Assistant</span></button>
           )}
-          <button type="button" className="drawing-icon-button drawing-workspace-fullscreen" aria-pressed={fullScreen}
+          <button type="button" className="btn btn-icon drawing-workspace-fullscreen" aria-pressed={fullScreen}
             aria-label={fullScreen ? 'Exit full screen' : 'Full screen'} title={`${fullScreen ? 'Exit full screen' : 'Full screen'} (${/Mac/.test(globalThis.navigator?.platform ?? '') ? '\u2318\u21e7F' : 'Ctrl+Shift+F'})`}
             // The keys go back to the editor (its tool shortcuts), not to this button.
             onClick={() => { setFullScreen((v) => !v); requestAnimationFrame(() => canvas.current?.focus()); }}><Icon d={fullScreen ? ICON.exit : ICON.enter} /></button>
-          {onClose && <button type="button" className="drawing-icon-button drawing-workspace-close" onClick={close} aria-label="Close drawing" title="Close"><Icon d={ICON.close} /></button>}
+          {onClose && <button type="button" className="btn btn-icon drawing-workspace-close" onClick={close} aria-label="Close drawing" title="Close"><Icon d={ICON.close} /></button>}
         </header>
         {conflict && (
           <div className="drawing-workspace-conflict" role="alert">
@@ -813,7 +813,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 ? <><span>Making a diagram…</span><button type="button" className="drawing-quiet-button" onClick={cancelDiagram}>Cancel</button></>
                 : <><span>{diagram.message}</span>
                     <button type="button" className="drawing-quiet-button" onClick={diagram.retry}>Try again</button>
-                    <button type="button" className="drawing-icon-button" aria-label="Dismiss" onClick={() => setDiagram(null)}><Icon d={ICON.close} /></button></>}
+                    <button type="button" className="btn btn-icon" aria-label="Dismiss" onClick={() => setDiagram(null)}><Icon d={ICON.close} /></button></>}
             </div>
           )}
           {/* Last, so a plugin's overlay can make room for the notes above (CSS `~`); the editor's

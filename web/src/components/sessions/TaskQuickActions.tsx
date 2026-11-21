@@ -437,7 +437,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       {slot !== 'phase' && (
       <button
         ref={kebabBtnRef}
-        className="task-kebab-btn"
+        className="btn btn-icon btn-sm task-kebab-btn"
         onClick={handleKebabToggle}
         title="More actions"
         aria-label="More actions"

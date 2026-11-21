@@ -41,7 +41,7 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
     <div className="org-topics" role="group" aria-label="Topics" data-testid="org-topics" data-count={rows.length}>
       <div className="org-list-section org-topics-head" role="presentation" data-testid="org-topics-head">
         <span>Topics · {rows.length}</span>
-        <NewTopicButton testId="org-topic-new" className="topic-ghost-btn org-topics-new" iconOnly />
+        <NewTopicButton testId="org-topic-new" iconOnly />
       </div>
       {error && <p className="org-empty-note" data-testid="org-topics-error">{error}</p>}
       {rows.map((t) => {

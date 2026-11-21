@@ -118,13 +118,13 @@ export function ConfirmDialog({
           )}
           <div className="app-modal-actions">
             {cancelLabel && (
-              <button ref={cancelRef} className="app-modal-btn" onClick={() => { draft.clear(); onCancel(); }}>
+              <button ref={cancelRef} className="btn" onClick={() => { draft.clear(); onCancel(); }}>
                 {cancelLabel}
               </button>
             )}
             <button
               ref={confirmRef}
-              className={`app-modal-btn primary${danger ? ' danger' : ''}`}
+              className={`btn btn-primary${danger ? ' btn-danger' : ''}`}
               {...dictationWaitProps(sendGate)}
               onClick={sendGate.send}
             >

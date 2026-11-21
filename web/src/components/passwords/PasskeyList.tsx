@@ -54,7 +54,7 @@ export function PasskeyList({ item, onChanged }: { item: VaultItem; onChanged: (
             <div className="pw-hint">{saved(pk)}</div>
           </div>
           {!item.trashedAt && (
-            <button type="button" className="pw-btn pw-btn-danger-text" disabled={busy} data-testid="pw-passkey-delete"
+            <button type="button" className="btn btn-sm btn-ghost btn-danger" disabled={busy} data-testid="pw-passkey-delete"
               aria-label={`Delete the passkey for ${str(pk.rpId)}`} onClick={() => void remove(pk)}><TrashIcon size={14} /> Remove passkey</button>
           )}
         </div>

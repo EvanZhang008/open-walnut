@@ -69,7 +69,7 @@ export function OrgAlertSnooze({ alert, current, onStart }: {
       <button
         ref={btnRef}
         type="button"
-        className="btn btn-sm org-alert-snooze"
+        className="btn btn-sm btn-ghost org-alert-snooze"
         data-testid="org-alert-snooze"
         aria-haspopup="dialog"
         aria-expanded={open}

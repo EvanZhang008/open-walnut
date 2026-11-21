@@ -113,7 +113,7 @@ test('N15: every disabled push button looks the same, and one outside a dimmed g
     if (pane === 'advanced') await expandAll(page)
     await page.waitForTimeout(400)
     const found = await page.evaluate((root) => Array.from(document.querySelectorAll<HTMLButtonElement>(
-      `${root} .settings-button:disabled:not([aria-busy="true"]):not(.settings-button-text):not(.settings-button-danger)`))
+      `${root} .btn:disabled:not([aria-busy="true"]):not(.btn-link):not(.btn-danger)`))
       .filter((b) => b.getBoundingClientRect().height > 0)
       .map((b) => {
         const cs = getComputedStyle(b)

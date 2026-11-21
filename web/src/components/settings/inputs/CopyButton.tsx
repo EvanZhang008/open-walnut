@@ -1,54 +1,17 @@
-/** `Copy` -> `Copied` for 1.5s. Width reserved for the longer label. */
-import { useEffect, useRef, useState } from 'react'
-import { log } from '@/utils/log'
-import { SettingsButton } from './SettingsButton'
+/** Settings' Copy: the one shared Copy button (components/common/CopyButton.tsx), small. */
+import { CopyButton as SharedCopyButton } from '@/components/common/CopyButton'
 
-export const COPIED_MS = 1500
+export { COPIED_MS } from '@/components/common/CopyButton'
 
-async function writeClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-  // Fallback for hosts without the async clipboard (older WebKit shells).
-  const area = document.createElement('textarea')
-  area.value = text
-  area.setAttribute('readonly', '')
-  area.style.position = 'fixed'
-  area.style.opacity = '0'
-  document.body.appendChild(area)
-  area.select()
-  try {
-    document.execCommand('copy')
-  } finally {
-    area.remove()
-  }
-}
+const KIND = { text: 'link', default: 'default', primary: 'primary' } as const
 
 export function CopyButton({ text, variant = 'text', label = 'Copy', bordered = false, 'data-testid': testId }: {
   text: string
   variant?: 'text' | 'default' | 'primary'
   label?: string
-  /** A bordered button, to sit among other bordered buttons (the same as variant "default"). */
+  /** A key with a fill, to sit among other keys (the same as variant "default"). */
   bordered?: boolean
   'data-testid'?: string
 }) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
-  const onClick = () => {
-    writeClipboard(text).then(
-      () => {
-        setCopied(true)
-        clearTimeout(timer.current)
-        timer.current = setTimeout(() => setCopied(false), COPIED_MS)
-      },
-      (err: unknown) => log.warn('settings', 'copy failed', { message: String(err) }),
-    )
-  }
-  return (
-    <SettingsButton variant={bordered ? 'default' : variant} reserve={[label, 'Copied']} onClick={onClick} data-testid={testId}>
-      {copied ? 'Copied' : label}
-    </SettingsButton>
-  )
+  return <SharedCopyButton text={text} label={label} kind={KIND[bordered ? 'default' : variant]} data-testid={testId} />
 }

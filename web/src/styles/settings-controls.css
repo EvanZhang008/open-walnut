@@ -299,98 +299,7 @@
   cursor: default;
 }
 
-/* ── Buttons (SettingsButton): 28px, width never changes with the label ── */
-.settings-button {
-  box-sizing: border-box;
-  /* WebKit keeps its native push-button look under a custom background and
-     rings a primary button in dark blue (N14): no native appearance, ever. */
-  -webkit-appearance: none;
-  appearance: none;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--settings-group-bg, var(--card-bg));
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  line-height: 17px;
-  white-space: nowrap;
-  text-transform: none;
-  letter-spacing: 0;
-  cursor: pointer;
-}
-
-.settings-button:hover:not(:disabled):not([aria-disabled='true']) {
-  background: var(--bg-hover);
-}
-
-/* holdFocus: an aria-disabled button reads as a disabled one, and keeps the focus. */
-.settings-button:disabled,
-.settings-button[aria-disabled='true'] {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.settings-button[aria-busy='true'] {
-  opacity: 1;
-  cursor: progress;
-  color: var(--fg-muted);
-}
-
-.settings-button.settings-button-primary {
-  background: var(--accent);
-  border-color: transparent;
-  box-shadow: none;
-  color: var(--on-accent);
-}
-
-.settings-button.settings-button-primary:hover:not(:disabled):not([aria-disabled='true']) {
-  background: var(--accent-hover);
-}
-
-/* A disabled default button loses its fill, as on macOS: every disabled push
-   button reads the same, whatever its kind when live (N15). */
-.settings-button.settings-button-primary:is(:disabled, [aria-disabled='true']):not([aria-busy='true']) {
-  background: var(--settings-group-bg, var(--card-bg));
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-
-.settings-button.settings-button-text,
-.settings-button.settings-button-danger {
-  padding: 0 6px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--accent);
-}
-
-.settings-button.settings-button-danger {
-  color: var(--settings-error-text, var(--error));
-}
-
-.settings-button.settings-button-text:hover:not(:disabled):not([aria-disabled='true']),
-.settings-button.settings-button-danger:hover:not(:disabled):not([aria-disabled='true']) {
-  background: transparent;
-  text-decoration: underline;
-}
-
-/* A text button that ends a row sits optically on the content edge: its 6px
-   of padding hangs past it, so the glyphs end where switches end (N11). */
-.settings-row-actions > :is(.settings-button-text, .settings-button-danger):last-child,
-.settings-row-actions > :last-child > :is(.settings-button-text, .settings-button-danger):last-child {
-  margin-right: -6px;
-}
-
-.settings-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+/* ── Buttons: SettingsButton is the family's small key (styles/buttons.css), nothing of its own ── */
 
 /* Focus a press moved here (utils/focus-landed.ts: the new link's Copy, the row after a
    removed one) rings like keyboard focus: :focus-visible stays off after a mouse press. */
@@ -405,33 +314,9 @@
   outline-offset: -2px;
 }
 
-.settings-button-stack {
-  display: inline-grid;
-}
-
-.settings-button-stack > *,
-.settings-button-stack::before,
-.settings-button-stack::after {
-  grid-area: 1 / 1;
-  text-align: center;
-}
-
 /* A text button's label hugs the right edge of its reserved width, so it lines
    up with the other controls in the column (F26). */
-.settings-button.settings-button-text .settings-button-stack > *,
-.settings-button.settings-button-danger .settings-button-stack > * {
-  text-align: right;
-}
-
-.settings-button-stack::before {
-  content: attr(data-r1);
-  visibility: hidden;
-}
-
-.settings-button-stack::after {
-  content: attr(data-r2);
-  visibility: hidden;
-}
+.btn-link .btn-reserve > * { text-align: right; }
 
 /* ── Text inputs, numbers, selects ── */
 .settings-input {
@@ -549,13 +434,11 @@ textarea.settings-input {
   padding-right: 48px;
 }
 
-.settings-secret > .settings-button.secret-toggle {
+.settings-secret > .secret-toggle {
   position: absolute;
   top: 50%;
-  right: 2px;
-  height: 22px;
+  right: 8px;
   transform: translateY(-50%);
-  font-size: var(--font-size-sm);
 }
 
 .settings-secret-saved-text {

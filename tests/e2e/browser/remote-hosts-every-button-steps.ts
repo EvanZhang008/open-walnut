@@ -244,7 +244,7 @@ export async function checkJoinLink(ctx: StepCtx): Promise<void> {
   // The command box wraps (no scrollbar), and its Copy is the page's one Copy look.
   const cmd = page.getByTestId('host-network-command')
   expect(await cmd.evaluate((el) => [getComputedStyle(el).whiteSpace, el.scrollWidth <= el.clientWidth + 1])).toEqual(['pre-wrap', true])
-  await expect(page.getByTestId('host-network-copy')).toHaveClass(/settings-button-default/)
+  await expect(page.getByTestId('host-network-copy')).not.toHaveClass(/btn-link/)
   await ctx.sweep()
   await expectCopied(page, page.getByTestId('host-network-copy'), netCommand(n))
   await page.getByTestId('host-network-os-linux').click()

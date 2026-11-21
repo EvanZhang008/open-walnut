@@ -111,7 +111,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
         <BoxMic boxRef={ref} text={text} setText={(v) => { setText(v); if (error) setError(''); }} handleRef={mic} disabled={sending} />
         {sending ? <span className="kanban-spinner" data-testid="kanban-card-composer-sending" aria-label="Sending" /> : (
           <button
-            type="button" className="kanban-text-btn kanban-composer-send" data-testid="kanban-card-composer-send"
+            type="button" className="btn btn-link btn-sm kanban-text-btn kanban-composer-send" data-testid="kanban-card-composer-send"
             aria-disabled={(!text.trim() && pictures.images.length === 0 && !gate.micBusy && !gate.waiting) || undefined}
             onClick={gate.send} {...dictationWaitProps(gate, text.trim() || pictures.images.length || gate.micBusy ? 'Send (Enter)' : 'Type a message first')}
           >Send</button>
@@ -120,7 +120,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
       {error && (
         <div className="kanban-composer-error" data-testid="kanban-card-composer-error" role="alert">
           Couldn't send: {error}{' '}
-          <button type="button" className="kanban-text-btn" data-testid="kanban-card-composer-retry" onClick={gate.send}>Retry</button>
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-card-composer-retry" onClick={gate.send}>Retry</button>
         </div>
       )}
     </div>

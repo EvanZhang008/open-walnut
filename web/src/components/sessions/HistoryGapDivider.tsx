@@ -15,7 +15,7 @@ export function HistoryGapDivider({ state, onLoad }: { state?: GapFillState; onL
               : 'Some messages here are not loaded.'}
       </span>
       {state !== 'loading' && state !== 'unavailable' && (
-        <button type="button" className="session-gap-divider-btn" onClick={onLoad}>
+        <button type="button" className="btn btn-sm" onClick={onLoad}>
           {state === 'failed' ? 'Try again' : 'Load them'}
         </button>
       )}

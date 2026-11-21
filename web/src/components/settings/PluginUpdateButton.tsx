@@ -48,7 +48,7 @@ export function UpdateLabel({ label }: { label: string }) {
 export function UpdateSlot({ rowId }: { rowId: string }) {
   return (
     <span className="plugin-update-slot" aria-hidden="true" data-testid={`plugin-update-slot-${rowId}`}>
-      <span className="btn btn-secondary btn-sm plugin-update-button"><UpdateLabel label="Update" /></span>
+      <span className="btn btn-sm plugin-update-button"><UpdateLabel label="Update" /></span>
     </span>
   )
 }
@@ -86,7 +86,7 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
 
   if (mode.reason === null) {
     return (
-      <button type="button" className="btn btn-secondary btn-sm plugin-update-button" data-testid={testId} disabled aria-busy="true">
+      <button type="button" className="btn btn-sm plugin-update-button" data-testid={testId} disabled aria-busy="true">
         <UpdateLabel label={mode.label} />
       </button>
     )
@@ -109,7 +109,7 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
     >
       <button
         type="button"
-        className="btn btn-secondary btn-sm plugin-update-button"
+        className="btn btn-sm plugin-update-button"
         data-testid={testId}
         disabled
         title={hoverTitle}

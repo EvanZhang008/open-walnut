@@ -259,8 +259,8 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
         {isMain && <WalnutMemory onOpen={openMemory} held={dirty} />}
 
         <div className="app-modal-actions">
-          <button type="button" className="app-modal-btn" onClick={onClose} disabled={busy}>{dirty ? 'Cancel' : 'Close'}</button>
-          <button type="button" className="app-modal-btn primary" onClick={gate.send} disabled={(!dirty && !gate.micBusy && !gate.waiting) || busy || !fresh} data-testid="am-save" {...dictationWaitProps(gate)}>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>{dirty ? 'Cancel' : 'Close'}</button>
+          <button type="button" className="btn btn-primary" onClick={gate.send} disabled={(!dirty && !gate.micBusy && !gate.waiting) || busy || !fresh} data-testid="am-save" {...dictationWaitProps(gate)}>
             {busy ? 'Saving…' : 'Save'}
           </button>
         </div>

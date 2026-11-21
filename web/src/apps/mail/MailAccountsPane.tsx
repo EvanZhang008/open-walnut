@@ -434,7 +434,7 @@ export function MailAccountsPane({
         </button>
         <button
           type="button"
-          className="mail-icon-btn"
+          className="btn btn-icon mail-icon-btn"
           data-testid="mail-refresh"
           title="Check every account for new mail"
           aria-label="Refresh"
@@ -445,7 +445,7 @@ export function MailAccountsPane({
         </button>
         <button
           type="button"
-          className="mail-icon-btn"
+          className="btn btn-icon mail-icon-btn"
           data-testid="mail-pane-menu"
           title="More mail actions"
           aria-label="More mail actions"

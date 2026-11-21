@@ -257,10 +257,10 @@ test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on 
     els.map((b) => ({ ap: getComputedStyle(b).appearance, border: getComputedStyle(b).borderTopColor, bg: getComputedStyle(b).backgroundColor })))
   // The grid's own primary (Add, in the install form), then every plugin page's (Save, Open App, Install).
   await page.getByTestId('apps-add-from-link').click()
-  const primaries = await flat('#plugin-store .settings-button-primary')
+  const primaries = await flat('#plugin-store .btn-primary')
   for (const id of await installedCardIds(page)) {
     await openPluginDetail(page, id)
-    primaries.push(...await flat('[data-testid="plugin-detail"] .settings-button-primary'))
+    primaries.push(...await flat('[data-testid="plugin-detail"] .btn-primary'))
     await backToApps(page)
   }
   expect(primaries.length).toBeGreaterThan(1)

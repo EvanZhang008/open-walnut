@@ -25,7 +25,7 @@ export function PhoneNotificationBell({ count, open, onOpen }: { count: number; 
   return createPortal(
     <button
       type="button"
-      className="phone-topbar-btn phone-bell"
+      className="btn btn-icon phone-topbar-btn phone-bell"
       aria-label={bellAriaLabel(count)}
       aria-expanded={open}
       aria-haspopup="dialog"

@@ -147,23 +147,6 @@ html body .wn-context-menu.rh-add-menu {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.rh-details .hc .setup-copy-btn {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--settings-group-bg, var(--card-bg));
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-}
-.rh-details .hc .setup-copy-btn:hover { background: var(--bg-hover); }
-.rh-details .hc .setup-copy-btn.hc-copy-failed { color: var(--error); }
 /* One link look in Details: the page's text buttons (accent, no underline until hover). */
 .rh-details :is(.hc-other, .hft-details) {
   padding: 0;
@@ -177,11 +160,9 @@ html body .wn-context-menu.rh-add-menu {
   cursor: pointer;
 }
 .rh-details :is(.hc-other, .hft-details):hover { text-decoration: underline; color: var(--accent); }
-.rh-details .rh-readiness-actions .settings-button-text,
-.rh-details .rh-host-detail .settings-button-text { padding-left: 0; padding-right: 0; }
 /* The System line with Probe again on its right, then when it was probed and read. */
 .rh-details .hf-card-sys-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
-.rh-details .hf-card-sys-row > .settings-button { flex: none; margin-top: -5px; }
+.rh-details .hf-card-sys-row > .btn { flex: none; margin-top: -5px; }
 .rh-details .hf-card-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: -7px 0 0; font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); }
 .rh-details .hf-card-meta:empty { display: none; }
 .hf-probe-note[data-tone='bad'] { color: var(--error); }
@@ -236,16 +217,14 @@ html body .wn-context-menu.rh-add-menu {
   overflow-wrap: anywhere;
   user-select: all;
 }
-.rh-join-command .settings-button { height: 32px; }
 /* The wait wraps beside Done, which stays in the Copy column. */
 .rh-join-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; width: 100%; }
 .rh-join-foot > .rh-join-wait { flex: 1 1 auto; min-width: 0; }
-.rh-join-foot > .settings-button { flex: none; }
+.rh-join-foot > .btn { flex: none; }
 .settings-row.rh-join-making { outline: none; }
 .rh-join-making-label { display: inline-flex; align-items: center; gap: 8px; }
 .rh-join-error-text { color: var(--error); }
 .rh-join-error-why { color: var(--settings-help-fg, var(--fg-muted)); }
-a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-decoration: none; }
 .rh-join-wait { font-size: var(--font-size-md); line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); font-variant-numeric: tabular-nums; }
 .rh-join-more {
   appearance: none;
@@ -290,9 +269,9 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
   .rh-row-more { width: 44px; height: 44px; }
   .rh-details { padding-left: var(--settings-row-pad-x, 14px); }
   .rh-join-command code { min-height: 44px; padding-top: 12px; padding-bottom: 12px; }
-  .rh-join-command .settings-button { height: 44px; }
+  .rh-join-command .btn { min-height: 44px; }
   .rh-details .hc-chip { min-height: 44px; padding-top: 13px; padding-bottom: 13px; }
-  .rh-details .hc .setup-copy-btn { height: 44px; }
+  .rh-details .hc .setup-copy-btn { min-height: 44px; }
 }
 
 /* The Kind picker's button (HostProfileDisclosure.tsx): its chevron points down, at the words. */
@@ -304,12 +283,11 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* The phone layout's query (phone-media-query-ratchet), then a mouse inside it. */
   @media (pointer: fine) {
-    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-host-row .settings-button,
-    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .hf-dash .settings-button,
-    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-details-head .settings-button,
-    .app-shell-navigation .settings-layout[data-phone-settings] #remote-hosts .settings-pane-header .settings-button { min-height: 28px; }
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-host-row .btn,
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .hf-dash .btn,
+    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .rh-details-head .btn,
+    .app-shell-navigation .settings-layout[data-phone-settings] #remote-hosts .settings-pane-header .btn { min-height: 28px; }
     /* Refresh is a link in the Overview's head: no padding of a box around it. */
-    .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .hf-dash-head .settings-button { padding-left: 0; padding-right: 0; min-width: 0; }
     .rh-row-more { width: 28px; height: 28px; }
   }
 }
@@ -334,7 +312,7 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
   border-bottom: 1px solid var(--settings-hairline);
 }
 .rh-details-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-md); line-height: 18px; font-weight: 600; }
-.rh-details-head > .settings-button { flex: none; }
+.rh-details-head > .btn { flex: none; }
 .rh-details-part { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .rh-details-part + .rh-details-part { border-top: 1px solid var(--settings-hairline); padding-top: 10px; }
 .rh-details-part-toggle {

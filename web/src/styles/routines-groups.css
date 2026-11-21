@@ -391,27 +391,6 @@
   margin-top: 12px;
 }
 
-.routine-actions .routine-delete {
-  color: var(--error);
-}
-/* On a dark button the system red is too dim to read at a glance. */
-:root[data-theme='dark'] .routine-actions .routine-delete {
-  color: #ff7a72;
-  border-color: color-mix(in srgb, #ff7a72 45%, transparent);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .routine-actions .routine-delete {
-    color: #ff7a72;
-    border-color: color-mix(in srgb, #ff7a72 45%, transparent);
-  }
-}
-
-.routine-actions .routine-danger {
-  background: var(--error);
-  border-color: var(--error);
-  color: var(--on-accent);
-}
-
 .routine-confirm-text.cron-confirm-text {
   margin: 0;
   color: var(--fg);
@@ -468,9 +447,6 @@
   /* The four actions fit one line at a phone's width. */
   .app-shell-navigation .routines-view .routine-actions {
     gap: 6px;
-  }
-  .app-shell-navigation .routines-view .routine-actions .btn {
-    padding: 0 11px;
   }
   /* Each fold's line is already a 44px target: no margin on top of it. */
   .app-shell-navigation .routines-view .routine-fold {
@@ -792,7 +768,7 @@ button.routines-summary-failing:focus-visible {
 }
 
 /* Small red words on white need a deeper red to read (4.5:1). */
-:root:not([data-theme='dark']) :is(.routines-summary-failing, .routine-group-failing, .routine-row-flag:not(.routine-row-flag-missed), .routine-field-error, .routine-actions .routine-delete) {
+:root:not([data-theme='dark']) :is(.routines-summary-failing, .routine-group-failing, .routine-row-flag:not(.routine-row-flag-missed), .routine-field-error) {
   color: #d70015;
 }
 @media (prefers-color-scheme: dark) {

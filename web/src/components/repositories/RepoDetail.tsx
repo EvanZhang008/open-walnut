@@ -39,7 +39,7 @@ export function RepoDetail({ repo, onBack, onEdit, onDelete }: RepoDetailProps) 
       <div className="repo-detail-toolbar">
         <button className="btn btn-ghost" onClick={onBack}>&larr; Back</button>
         <div className="repo-detail-toolbar-right">
-          <button className="btn btn-secondary" onClick={onEdit}>Edit</button>
+          <button className="btn" onClick={onEdit}>Edit</button>
           <button className="btn btn-danger" onClick={onDelete}>Delete</button>
         </div>
       </div>

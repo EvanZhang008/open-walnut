@@ -475,7 +475,7 @@ export function DashboardPage() {
             value={search}
             setText={setSearch}
           />
-          <button type="button" className="tp-newtask-btn" onClick={() => setShowForm(true)}>＋ Task</button>
+          <button type="button" className="btn btn-sm btn-primary tp-newtask-btn" onClick={() => setShowForm(true)}>＋ Task</button>
         </div>
 
         {/* Same chips component as the home panel: one removable chip per value. */}

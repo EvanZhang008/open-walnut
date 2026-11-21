@@ -103,7 +103,7 @@ test('sentence auto-fills the form and Create persists the parsed fields', async
   const panel = page.locator('.qtc-confirm-panel')
   await expect(panel).toBeVisible()
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
-  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Tomorrow 2:00')
+  await expect(panel.locator('.qtc-field').nth(2)).toContainText('Tomorrow 2:00')
   // The pinned area shows the AI's tier as a pressed button — no click needed to read it,
   // and the ✦ on the PINNED label marks the tier as AI-suggested (same as the other fields).
   const pinnedField = panel.locator('.qtc-confirm-field', { hasText: 'Pinned' })
@@ -198,7 +198,7 @@ test('hand-edited fields survive a late parse; untouched fields still fill', asy
   await panel.locator('.qtc-confirm-title').fill(userTitle)
 
   // Parse lands: the due chip fills (✦-badged), the user's title is untouched.
-  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Tomorrow 2:00', { timeout: 5000 })
+  await expect(panel.locator('.qtc-field').nth(2)).toContainText('Tomorrow 2:00', { timeout: 5000 })
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(userTitle)
 
   await panel.locator('.qtc-confirm-primary').click()
@@ -221,12 +221,12 @@ test('editing the sentence reverts stale AI suggestions', async ({ page }) => {
   const panel = page.locator('.qtc-confirm-panel')
   await page.locator('.qtc-input').fill('book the dentist tomorrow 2am')
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue('Book dentist appointment')
-  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Tomorrow 2:00')
+  await expect(panel.locator('.qtc-field').nth(2)).toContainText('Tomorrow 2:00')
 
   // New sentence → the old parse's suggestions no longer apply.
   await page.locator('.qtc-input').fill('water the plants')
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue('water the plants')
-  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('+ Due')
+  await expect(panel.locator('.qtc-field').nth(2)).toContainText('+ Due')
 })
 
 test('a parsed project the AI just invented gets the "new" badge and is created', async ({ page, request }) => {
@@ -314,8 +314,8 @@ test('panel overrides pin, project, priority, and star before create', async ({ 
   // crediting the AI for a value the user just overrode.
   await expect(pinnedField.locator('.qtc-confirm-ai')).toHaveCount(0)
   // Chips: 0=start, 1=end, 2=due, 3=priority (Start leads; empty End/Due are ghosts).
-  await panel.locator('.qtc-chip').nth(3).click()
-  await expect(panel.locator('.qtc-chip').nth(3)).toContainText('Immediate')
+  await panel.locator('.qtc-field').nth(3).click()
+  await expect(panel.locator('.qtc-field').nth(3)).toContainText('Immediate')
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue(parsedProject)
   await panel.locator('.qtc-confirm-project').fill(selectedProject)
   await panel.locator('.qtc-confirm-primary').click()
@@ -374,7 +374,7 @@ test('due chip displays absolute wall-clock time', async ({ page }) => {
 
   await openComposer(page)
   await page.locator('.qtc-input').fill('absolute due check tomorrow 2am')
-  const dueChip = page.locator('.qtc-confirm-panel .qtc-chip').nth(2)
+  const dueChip = page.locator('.qtc-confirm-panel .qtc-field').nth(2)
   await expect(dueChip).toContainText('Tomorrow 2:00')
   await expect(dueChip).not.toContainText(/\b\d+h\b/)
 })

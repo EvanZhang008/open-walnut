@@ -23,14 +23,14 @@ export function UsageFilterChips({ chips, onClearAll }: Props) {
     <div className="usage-filter-chips">
       <span className="usage-filter-chips-label">Filtered by</span>
       {chips.map((c) => (
-        <button key={c.key} className="usage-chip" onClick={c.onRemove} title="Remove filter">
+        <button key={c.key} className="btn btn-sm usage-chip" onClick={c.onRemove} title="Remove filter">
           <span className="usage-chip-dim">{c.label}</span>
           <span className="usage-chip-val">{c.value}</span>
           <span className="usage-chip-x">×</span>
         </button>
       ))}
       {chips.length > 1 && onClearAll && (
-        <button className="usage-chip-clear-all" onClick={onClearAll}>Clear all</button>
+        <button className="btn btn-sm btn-link" onClick={onClearAll}>Clear all</button>
       )}
     </div>
   );

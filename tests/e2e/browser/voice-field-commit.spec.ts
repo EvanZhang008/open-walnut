@@ -121,7 +121,7 @@ test('the shared prompt waits for final words before creating a folder', async (
     await input.locator('xpath=..').locator('.mic-btn').first().click();
     await expect(input).toHaveValue(prefix + DRAFTED, { timeout: 20_000 });
     lane.held = true;
-    const create = modal.locator('.app-modal-btn.primary');
+    const create = modal.locator('.btn.btn-primary');
     await create.click();
     await expect(create).toHaveAttribute('data-dictation-wait', 'true');
     await shot(page, 'prompt-create-waiting');

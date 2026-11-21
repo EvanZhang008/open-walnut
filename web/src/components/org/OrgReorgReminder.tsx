@@ -30,9 +30,9 @@ export function OrgReorgReminder({ vps, onOpenChart }: { vps: number; onOpenChar
     <div className="org-reorg-note" role="note" data-testid="org-reorg-reminder">
       <span className="org-reorg-text">{reorgLine(vps)}</span>
       <span className="org-reorg-actions">
-        <button type="button" className="org-reorg-btn is-primary" data-testid="org-reorg-chart" onClick={onOpenChart}>Org chart</button>
-        <button type="button" className="org-reorg-btn" data-testid="org-reorg-close" onClick={close}>Close</button>
-        <button type="button" className="org-reorg-btn" data-testid="org-reorg-never" onClick={neverAgain}>Never remind me</button>
+        <button type="button" className="btn btn-sm" data-testid="org-reorg-chart" onClick={onOpenChart}>Org chart</button>
+        <button type="button" className="btn btn-sm btn-ghost" data-testid="org-reorg-close" onClick={close}>Close</button>
+        <button type="button" className="btn btn-sm btn-ghost" data-testid="org-reorg-never" onClick={neverAgain}>Never remind me</button>
       </span>
     </div>
   );

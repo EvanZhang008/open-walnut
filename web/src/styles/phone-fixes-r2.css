@@ -360,8 +360,7 @@
    exists only in the phone layout, so the query needs no width clause (and
    tests/web/phone-media-query-ratchet.test.ts keeps hover rules out of one). */
 @media (hover: none) {
-  .app-shell-navigation .phone-topbar :is(button, .task-kebab-btn):hover:not(:active),
-  .app-shell-navigation .phone-topbar .phone-bar-slot .task-kebab-btn:hover:not(:active) {
+  .app-shell-navigation .phone-topbar :is(button, .task-kebab-btn):hover:not(:active) {
     background: transparent;
     color: inherit;
   }

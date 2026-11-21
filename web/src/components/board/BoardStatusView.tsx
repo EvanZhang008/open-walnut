@@ -219,13 +219,13 @@ function TeamStopControl({ owner, ownerId, working }: { owner: Task | undefined;
       {confirming ? (
         <>
           Stop this task and every open task under it{working > 0 ? `, ${working} working now` : ''}?{' '}
-          <button type="button" className="bs-team-stop-btn is-danger" disabled={busy} onClick={() => run('team-stop')} data-testid="board-team-stop-confirm">Stop the team</button>{' '}
-          <button type="button" className="bs-team-stop-btn" onClick={() => setConfirming(false)} data-testid="board-team-stop-cancel">Cancel</button>
+          <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => run('team-stop')} data-testid="board-team-stop-confirm">Stop the team</button>{' '}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setConfirming(false)} data-testid="board-team-stop-cancel">Cancel</button>
         </>
       ) : (
         <button
           type="button"
-          className="bs-team-stop-btn"
+          className="btn btn-sm"
           disabled={busy}
           title="Stop this task and every open task under it: their sessions, triggers and wake clocks"
           onClick={() => setConfirming(true)}

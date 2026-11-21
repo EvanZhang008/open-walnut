@@ -173,7 +173,6 @@
   padding: 4px 8px 2px;
 }
 
-.trigger-picker-idea,
 .trigger-picker-chip {
   padding: 3px 9px;
   border: 1px solid var(--border);
@@ -184,7 +183,6 @@
   cursor: pointer;
 }
 
-.trigger-picker-idea:hover,
 .trigger-picker-chip:hover {
   background: var(--bg-hover);
 }

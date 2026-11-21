@@ -51,17 +51,6 @@ html body .session-panel.is-plain-chat .session-msg-bare:focus-within .session-m
 .session-panel.is-plain-chat .session-msg-assistant { position: relative; }
 html body .session-panel.is-plain-chat .msg-more-btn {
   position: absolute;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 14px;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
   opacity: 0;
   pointer-events: none;
 }

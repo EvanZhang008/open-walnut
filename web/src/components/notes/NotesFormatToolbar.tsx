@@ -194,7 +194,7 @@ function ToolbarButton({ title, active, disabled, onClick, children }: {
   return (
     <button
       type="button"
-      className={`notes-format-btn${active ? ' active' : ''}`}
+      className="btn btn-icon"
       title={title}
       aria-label={title}
       aria-pressed={active === undefined ? undefined : active}
@@ -252,7 +252,7 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
       <button
         ref={btnRef}
         type="button"
-        className="notes-format-block-btn"
+        className="btn btn-sm btn-ghost notes-format-block-btn"
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -261,7 +261,7 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
         onClick={() => setOpen((o) => !o)}
       >
         <span className="notes-format-block-label">{blockLabel(current)}</span>
-        {ICON_CHEVRON}
+        <span className="btn-caret">{ICON_CHEVRON}</span>
       </button>
       {open && createPortal(
         <div

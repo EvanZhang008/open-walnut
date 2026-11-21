@@ -99,29 +99,11 @@
   font-size: var(--font-size-xs);
 }
 
+/* The family's small icon key (.btn.btn-icon.btn-sm); the glyph is three dots, not a
+   font-dependent ellipsis, spaced so it reads as a key in both engines. */
 .composer-overflow-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  height: 20px;
-  padding: 0 5px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  /* The glyph is three dots, not a font-dependent ellipsis: it has to read as a
-     button at 11px in both engines. */
-  font-size: var(--font-size-md);
-  line-height: 1;
   letter-spacing: 1px;
-}
-
-.composer-overflow-btn:hover,
-.composer-overflow-btn.is-open {
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 /* Placed by useMenuPlacement (position: fixed + maxHeight), which requires the

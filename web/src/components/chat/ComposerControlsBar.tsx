@@ -398,7 +398,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
           <button
             ref={buttonRef}
             type="button"
-            className={`composer-overflow-btn${open ? ' is-open' : ''}`}
+            className="btn btn-icon btn-sm composer-overflow-btn"
             onClick={() => setOpen((o) => !o)}
             aria-haspopup="menu"
             aria-expanded={open}

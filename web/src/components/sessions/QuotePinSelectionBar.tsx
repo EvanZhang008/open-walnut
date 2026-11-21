@@ -823,7 +823,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
               key={m}
               type="button"
               role="menuitem"
-              className={`quote-pin-pill-btn quote-ask-mode${m === askMode ? ' is-current' : ''}`}
+              className={`btn btn-sm btn-block btn-ghost quote-pin-pill-btn quote-ask-mode${m === askMode ? ' is-current' : ''}`}
               data-testid={`quote-ask-${m}`}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => ask(m)}
@@ -883,7 +883,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       {canPin && (
         <button
           type="button"
-          className="quote-pin-pill-btn"
+          className="btn btn-sm btn-ghost quote-pin-pill-btn"
           onMouseDown={(e) => e.preventDefault()}
           onClick={pin}
           title="Pin this passage (adds it to the outline)"
@@ -897,7 +897,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
         <span className="quote-pin-ask-group" ref={askGroupRef}>
           <button
             type="button"
-            className="quote-pin-pill-btn"
+            className="btn btn-sm btn-ghost quote-pin-pill-btn"
             data-testid="quote-ask-btn"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => ask()}
@@ -910,7 +910,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
           <button
             ref={askCaretRef}
             type="button"
-            className="quote-pin-pill-btn quote-ask-mode-btn"
+            className="btn btn-icon btn-sm quote-pin-pill-btn quote-ask-mode-btn"
             data-testid="quote-ask-mode-btn"
             aria-haspopup="menu"
             aria-expanded={askPick}
@@ -929,7 +929,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       {canQuote && !!state.text.trim() && (
         <button
           type="button"
-          className="quote-pin-pill-btn"
+          className="btn btn-sm btn-ghost quote-pin-pill-btn"
           data-testid="quote-in-chat-btn"
           onMouseDown={(e) => e.preventDefault()}
           onClick={quoteInChat}
@@ -944,7 +944,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
         <button
           ref={commentBtnRef}
           type="button"
-          className="quote-pin-pill-btn"
+          className="btn btn-sm btn-ghost quote-pin-pill-btn"
           data-testid="quote-comment-btn"
           aria-haspopup="dialog"
           aria-expanded={commentOpen}
@@ -963,7 +963,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       )}
       <button
         type="button"
-        className="quote-pin-pill-btn"
+        className="btn btn-sm btn-ghost quote-pin-pill-btn"
         onMouseDown={(e) => e.preventDefault()}
         onClick={copy}
         title="Copy the selected text"

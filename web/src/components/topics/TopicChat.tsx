@@ -178,18 +178,18 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
   return (
     <div className={`topic-chat${shown ? ' shows-side' : ''}`} data-testid="topic-chat" data-topic-id={topic.id} data-closed={topic.closed ? 'true' : undefined}>
       <header className="topic-head">
-        {onBack && <button type="button" className="topic-ghost-btn is-icon" onClick={onBack} aria-label="Back to the list">{ICON_CHEVRON_LEFT}</button>}
+        {onBack && <button type="button" className="btn btn-icon" onClick={onBack} aria-label="Back to the list">{ICON_CHEVRON_LEFT}</button>}
         <span className="topic-head-mid">
           <span className="topic-head-title" data-testid="topic-title">{topic.title}</span>
           <span className="topic-head-sub" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
         </span>
-        <button ref={membersRef} type="button" className="topic-ghost-btn topic-head-members" data-testid="topic-toggle-side" aria-pressed={shown}
+        <button ref={membersRef} type="button" className="btn btn-sm btn-ghost topic-head-members" data-testid="topic-toggle-side" aria-pressed={shown}
           aria-label={`Members, ${liveCount}`} title={shown ? 'Hide members' : 'Show members'}
           onClick={() => (narrow ? setSheetOverlayOpen(!sheetOverlayOpen) : setSide(!side))}>
           <StackedAvatars members={topic.members} size={22} max={3} noMore noTitle testId="topic-head-stack" />
           <span className="topic-head-count">{liveCount}</span>
         </button>
-        {!topic.closed && <button type="button" className="topic-ghost-btn" data-testid="topic-close" onClick={() => void close()}>Close</button>}
+        {!topic.closed && <button type="button" className="btn btn-sm btn-ghost" data-testid="topic-close" onClick={() => void close()}>Close</button>}
       </header>
       {error && <p className="topic-error" data-testid="topic-error">{error}</p>}
       <div className="topic-main">

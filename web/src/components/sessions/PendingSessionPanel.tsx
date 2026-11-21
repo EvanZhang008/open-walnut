@@ -164,11 +164,11 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
           </div>
           <div className="pending-session-actions">
             {onRetry && (
-              <button className="pending-session-retry-btn" onClick={handleRetry}>
+              <button className="btn btn-primary" onClick={handleRetry}>
                 Retry
               </button>
             )}
-            <button className="pending-session-dismiss-btn" onClick={onClose}>
+            <button className="btn" onClick={onClose}>
               Dismiss
             </button>
           </div>

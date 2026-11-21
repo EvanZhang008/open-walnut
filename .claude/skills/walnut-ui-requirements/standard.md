@@ -52,10 +52,26 @@ Order in every card: the options or buttons first, then the answer box (34 px, c
 Home row, a phone) the box takes the whole line and the tools the line under it, at the right. A
 card with no buttons is the box and its tools. Lines in the answer row are 8 px apart.
 
-Outside cards (pages, settings, dialogs) a button is `.btn` with `.btn-sm` for small and
-`.btn-primary` for the page's one main action, from `globals.css`; never a new `*-btn` class with
-its own fill and corner. `.btn-ghost` and `.btn-icon` are used in 12 places but have no CSS yet:
-the first change that touches them gives them the tool look above.
+Outside cards (pages, settings, dialogs, rows, toolbars) every button is the family in
+`web/src/styles/buttons.css`, the one file that draws `.btn`: a key plus at most one variant and
+one size. Never a new `*-btn` class with its own fill, corner, height or font; a class of your own
+beside `btn` carries only layout (margin, flex, width).
+
+| Class | Use | Look |
+|---|---|---|
+| `.btn` | any action (Save draft, Edit, Retry) | the text colour at 6 % (13 % in dark) as fill, no border, corner `--radius-sm` (8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle`, `--accent-text`) |
+| `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this) | min-height 28 px, padding 2 px 10 px, 12 px |
+| `.btn-primary` | the one main action of a view | `--accent` fill, `--on-accent` text, hover `--accent-hover` |
+| `.btn-danger` | a destructive action | `--error` label on the plain key; with `.btn-primary` the solid red confirm (Yes, delete) |
+| `.btn-ghost` | a quiet tool: Cancel beside a main action, Snooze, a row's tools | no fill until hover, `--fg-muted`; with `.btn-danger` a red label |
+| `.btn-icon` | an icon alone | the quiet tool, square: 28 px (24 px with `.btn-sm`), its svg 16 px (14 px) |
+| `.btn-link` | an action inside text or at a row's end | `--accent-text`, no box, underline on hover |
+| `.btn-block` | a key that takes the whole line | full width, label centred; `.btn-block.btn-ghost` is a menu or list row, label at the left |
+
+Slots inside a key: `.btn-value` (a bold value) and `.btn-caret` (▾, turns over when
+`aria-expanded`) make a compound trigger such as "Cost $2,077 ▾"; `.btn-reserve` with `data-r1` and
+`data-r2` keeps a key's width when its label flips (Refresh / Refreshing...). Copy is always
+`components/common/CopyButton.tsx`. Pills are not buttons: no `999px` corner on a key.
 
 Source: the whole-card design the user picked on 2026-11-21 from ten drawn on his own data ("2 is
 good": the options as a list of rows), after "Ack button should be blue, or recommended option
@@ -111,13 +127,14 @@ colour for the dark theme; write `var(--fg)`.
 Counted on 2026-11-21 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
 `tests/web/ui-standard-baseline.json`):
 
-- 27 rules in 9 files restyle `.btn` outside the card family's home, for example
-  `styles/org-rail.css` (`.org-ask-tool`, which belongs to the tool role), `styles/globals.css`,
-  `styles/routines-groups.css`, `styles/inline-answer.css`.
-- 237 rules in 80 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
+- 3 rules restyle `.btn` outside the family's two homes (`styles/buttons.css`, and the card
+  family in `components/actions/ask-card.css`), for example `styles/answer-box.css` (the send
+  circle) and `styles/inline-answer.css`.
+- 228 rules in 79 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
   corner instead of a `.btn` variant.
-- 102 raw `#007aff` / `#0a84ff` in 26 files where `var(--accent)` belongs.
-- `.btn-sm` and `.btn-danger` are each declared twice with different values in `globals.css`.
+- 1609 `<button>` elements in 507 TSX files carry no `btn` class (choice controls with role tab,
+  radio, switch, checkbox or option aside). A new file starts at 0.
+- 99 raw `#007aff` / `#0a84ff` in 24 files where `var(--accent)` belongs.
 - Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):
   `rawColour`, `radiusNotToken`, `pillRadius` (96: the pill-shaped controls and labels),
   `fontSizeOffScale`, `shadowLiteral`, `zIndexLiteral`, `spacingOffGrid`. Their counts per file are

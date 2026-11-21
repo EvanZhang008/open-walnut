@@ -5,41 +5,9 @@
   gap: 6px;
   flex-wrap: wrap;
 }
-.content-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  line-height: 18px;
-  cursor: pointer;
-}
-.content-action-btn:hover:not(:disabled) {
-  background: var(--bg-secondary);
-  color: var(--fg);
-}
-.content-action-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.content-actions-compact .content-action-btn {
-  padding: 5px;
-  border-radius: 50%;
-}
-/* Sent: the CEO has it. The compact (icon) form says so by colour. */
-.content-action-btn[data-state='done'],
-.content-actions-compact [data-state='done'] {
-  color: var(--success);
-}
-.content-action-btn[data-state='open'],
-.content-actions-compact [data-state='open'] {
-  background: var(--bg-secondary);
-  color: var(--fg);
-}
+/* Sent: the CEO has it. The compact (icon) form says so by its icon's colour; the full form says
+   "Sent to CEO". The keys themselves are the button family. */
+.content-actions [data-state='done'] svg { color: var(--success, var(--fg)); }
 
 /* The Talk to CEO box (components/content/CeoComposer.tsx). */
 .ceo-composer {
@@ -105,11 +73,6 @@
   gap: 6px;
 }
 .ceo-composer-hint { margin-right: auto; color: var(--fg-muted); font-size: var(--font-size-xs); }
-.ceo-composer-send:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-}
 /* Who reads it: one quiet row of names, the picked one filled. */
 .ceo-composer-to {
   display: flex;

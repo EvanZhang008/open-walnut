@@ -143,11 +143,7 @@
 .nfc-local-claude .setup-command { overflow-wrap: normal; word-break: normal; }
 
 /* ── Buttons: width never changes with the label (Retry / Retrying...) ── */
-.hpb-btn { flex: none; white-space: nowrap; }
-.hpb-btn:disabled { opacity: 0.6; cursor: default; }
-.hpb-btn:disabled:hover { background: none; color: var(--accent); }
-.hpb-btn-secondary { color: var(--fg-muted); border-color: var(--border); }
-.hpb-btn-secondary:hover { background: var(--bg-tertiary); color: var(--fg); }
+.hpb-btn { flex: none; }
 /* .hpb-btn-stack (a label that never changes the button's width) lives in host-status.css. */
 
 /* ── Row bodies ── */
@@ -278,7 +274,5 @@
    is also failing the same dot speaks for both (N12). `.is-host-warn` only names it. */
 /* One copy control in the card (local section and host rows): the text Copy /
    Copied button, a 24px hit target. */
-.nfc-host-list .setup-copy-btn,
-.nfc-local-claude .setup-copy-btn { min-height: 24px; font-size: var(--font-size-xs); display: inline-flex; align-items: center; }
 /* A row held to its height through an attempt (HostProblemRows useHeightLock): no animation, nothing spills. */
 .hpb-row.hpb-locked { transition: none; overflow: hidden; }

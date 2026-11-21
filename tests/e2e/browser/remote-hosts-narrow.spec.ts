@@ -80,7 +80,7 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
     await expect(dash.getByTestId('hf-dash-card')).toHaveCount(2)
     await expect(dash.getByTestId('hf-dash-offline')).toHaveCount(2)
     // Its buttons as tall as the rows' with a mouse (a card's Set up, a Not connected row's Connect).
-    const dashButtons = await dash.locator('.settings-button').all()
+    const dashButtons = await dash.locator('.btn').all()
     expect(dashButtons.length).toBeGreaterThanOrEqual(3)
     for (const b of dashButtons) expect((await box(b)).height, `${await b.textContent()} as tall as on a wide window`).toBeLessThanOrEqual(30)
     // The header's Add host is no taller than the row buttons with a mouse.
@@ -99,7 +99,7 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
       expect(more.y + more.height).toBeLessThanOrEqual(r.y + r.height + 0.5)
       mores.add(Math.round(more.x))
       expect(more.height, `More of ${await row.getAttribute('data-row-key')} as tall as on a wide window`).toBeLessThanOrEqual(30)
-      const primary = row.locator('.rh-row-primary .settings-button')
+      const primary = row.locator('.rh-row-primary .btn')
       if (await primary.count()) {
         const p = await box(primary)
         expect(p.height, `action of ${await row.getAttribute('data-row-key')} as tall as on a wide window`).toBeLessThanOrEqual(30)

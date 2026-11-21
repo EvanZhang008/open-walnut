@@ -380,7 +380,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
       {/* The Inbox is never deleted: it is where every other project's tasks fall back to. */}
       {!isInbox && <div className="detail-section project-danger-section">
         <button
-          className="project-delete-btn"
+          className="btn btn-sm btn-danger"
           onClick={handleDelete}
           disabled={deleting}
         >

@@ -91,11 +91,11 @@ export function ApprovalButtons({ a, s }: { a: Approval; s: ApprovalsState }) {
   const working = s.busy[a.id];
   return (
     <div className="approval-actions">
-      <button type="button" className="approval-btn approval-btn-deny" disabled={!!working}
+      <button type="button" className="btn btn-sm approval-btn approval-btn-deny" disabled={!!working}
         onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'deny'); }}>
         {working === 'deny' ? 'Denying…' : 'Deny'}
       </button>
-      <button type="button" className="approval-btn approval-btn-approve" data-testid="approval-approve" disabled={!!working}
+      <button type="button" className="btn btn-sm btn-primary approval-btn approval-btn-approve" data-testid="approval-approve" disabled={!!working}
         onClick={(e) => { e.stopPropagation(); void decideApproval(a, 'approve'); }}>
         {working === 'approve' ? 'Approving…' : 'Approve'}
       </button>

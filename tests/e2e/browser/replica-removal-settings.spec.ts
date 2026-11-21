@@ -136,7 +136,7 @@ test.describe('Removals to confirm (copies that held off)', () => {
     await expect(ask).toContainText('Remove them from the copy on pw-rr-box?')
     await expect(ask).toContainText('They are gone there too; this Mac keeps its own.')
     await expect(ask.getByTestId(`replica-removal-ask-${ROW}-cancel`)).toBeFocused()
-    await expect(ask.getByTestId(`replica-removal-ask-${ROW}-remove`)).toHaveClass(/settings-button-danger/)
+    await expect(ask.getByTestId(`replica-removal-ask-${ROW}-remove`)).toHaveClass(/btn-danger/)
     await shot(page, 'asking')
     // Past the old 3 s timer it still asks; Escape is Cancel, and the focus goes back to the button.
     await page.waitForTimeout(3_300)

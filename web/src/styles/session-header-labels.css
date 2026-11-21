@@ -3,35 +3,9 @@
    (the wait, Cron, Trigger, Worker, Leader) stay on the row; their size and their letters
    in a narrow row are at the end of this file. */
 
-.session-header-labels-btn {
-  /* As quiet as the ⋮ beside it (.task-kebab-btn): no fill, no border, the same 22px
-     height and muted ink, the accent only on hover or while open (2026-11-02, the user
-     on a coloured hourglass pill and an orange Idle there: "it is so ugly"). */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  flex: none;
-  box-sizing: border-box;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 5px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-}
-.session-header-labels-btn:hover,
-.session-header-labels-btn.is-open {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-.session-header-labels-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The trigger is the family's quiet small key (.btn-ghost), as quiet as the ⋮ beside it
+   (2026-11-02, the user on a coloured hourglass pill and an orange Idle there: "it is so ugly"). */
+.session-header-labels-btn { flex: none; }
 .session-header-labels-count { font-variant-numeric: tabular-nums; }
 
 .session-header-labels-flyout[hidden] { display: none !important; }

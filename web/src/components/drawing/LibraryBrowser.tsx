@@ -95,7 +95,7 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
           <h2>Libraries</h2>
           <MicInput ref={search} fieldClassName="drawing-library-search-field" type="search" data-no-draft="search" className="drawing-library-search" placeholder="Search"
             aria-label="Search libraries" value={query} setText={setQuery} />
-          <button type="button" className="drawing-icon-button" aria-label="Close libraries" title="Close" onClick={onClose}>
+          <button type="button" className="btn btn-icon" aria-label="Close libraries" title="Close" onClick={onClose}>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
           </button>
         </header>

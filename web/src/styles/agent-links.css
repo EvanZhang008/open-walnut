@@ -36,8 +36,6 @@ a.letter-link:hover {
 .file-viewer-source-choices-hint { color: var(--fg-muted); }
 .file-viewer-source-choices-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .file-viewer-remembered { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); border-bottom: 1px solid var(--border); }
-.file-viewer-source-choices-row .file-viewer-btn { font-size: var(--font-size-sm); padding: 5px 12px; overflow-wrap: anywhere; }
-.file-viewer-source-choices-row .file-viewer-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--fg); }
 .file-viewer-panel .fv-html-toolbar { flex-wrap: wrap; }
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .file-viewer-panel .session-file-explorer-tree { min-width: 0; max-width: 28%; }

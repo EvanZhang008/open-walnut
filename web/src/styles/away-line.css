@@ -32,14 +32,4 @@
 /* The server itself is not answering (components/layout/ConnectionLine.tsx): the same band,
    with one button that asks again now. */
 .connection-line { align-items: center; }
-.connection-line-btn {
-  margin-left: auto;
-  padding: 2px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-}
-.connection-line-btn:disabled { opacity: 0.6; cursor: default; }
+.connection-line-btn { margin-left: auto; }

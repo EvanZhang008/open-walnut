@@ -411,7 +411,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   const backButton = props.onBack ? (
     <button
       type="button"
-      className="ask-object-icon-btn"
+      className="btn btn-icon btn-sm"
       data-testid="ask-object-back"
       aria-label="Back"
       title="Back"
@@ -570,7 +570,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           <h2 className="ask-object-title">{props.title}</h2>
           <button
             type="button"
-            className="ask-object-icon-btn"
+            className="btn btn-icon btn-sm"
             data-testid="ask-object-close"
             aria-label="Close"
             title="Close"

@@ -320,7 +320,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
           </div>
         )}
         {status.kind === 'still-open' && !overlay && (
-          <button type="button" className="kanban-text-btn" data-testid="kanban-card-complete-inline"
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-card-complete-inline"
             aria-disabled={ro || undefined} title={ro ? READ_ONLY_TITLE : 'Complete this task'}
             onClick={(e) => { e.stopPropagation(); if (!ro) void api.completeTask(vm.taskId); }}>Complete</button>
         )}
@@ -355,7 +355,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
             {vm.waiting.until && status.kind !== 'waiting-until' ? <span className="kanban-card-waiting-until"> · until {vm.waiting.until}</span> : null}
           </div>
         ) : vm.waiting.kind === 'add-who' ? (
-          <button type="button" className="kanban-text-btn kanban-card-add-who" data-testid="kanban-card-waiting"
+          <button type="button" className="btn btn-ghost btn-sm kanban-text-btn kanban-card-add-who" data-testid="kanban-card-waiting"
             aria-disabled={ro || undefined} title={ro ? READ_ONLY_TITLE : 'Say who or what this card waits on'}
             onClick={(e) => { e.stopPropagation(); if (!ro && !overlay) openEditor('waiting_on'); }}>Waiting on: add who</button>
         ) : (
@@ -370,10 +370,10 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
           <span className="kanban-card-suggested-text">{vm.suggestion.text}</span>
           {/* N6: the buttons move to a line of their own before the lane name is cut. */}
           <span className="kanban-card-suggested-actions">
-          <button type="button" className="kanban-text-btn" data-testid="kanban-card-suggest-accept" aria-disabled={ro || undefined}
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-card-suggest-accept" aria-disabled={ro || undefined}
             title={ro ? READ_ONLY_TITLE : `Move it to ${vm.suggestion.laneName}`}
             onClick={(e) => { e.stopPropagation(); if (!ro) void api.answerSuggestion(vm.taskId, 'accept'); }}>Accept</button>
-          <button type="button" className="kanban-text-btn" data-testid="kanban-card-suggest-dismiss" aria-disabled={ro || undefined}
+          <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-card-suggest-dismiss" aria-disabled={ro || undefined}
             title={ro ? READ_ONLY_TITLE : 'Keep it where it is'}
             onClick={(e) => { e.stopPropagation(); if (!ro) void api.answerSuggestion(vm.taskId, 'dismiss'); }}>Dismiss</button>
           </span>
@@ -403,19 +403,19 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
         </span>
         {!overlay && (
           <span className="kanban-card-actions" data-testid="kanban-card-actions" data-kanban-zone onPointerDown={(e) => e.stopPropagation()}>
-            <button type="button" className="kanban-icon-btn" data-testid="kanban-card-open" aria-label="Open session"
+            <button type="button" className="btn btn-icon btn-sm kanban-icon-btn" data-testid="kanban-card-open" aria-label="Open session"
               title={vm.hasSession ? 'Open session' : 'Open the task'}
               onClick={(e) => { e.stopPropagation(); ctx.markSeen(vm.taskId); ctx.openSession(vm.taskId, vm.sessionId); }}>{ICON_NEW_TAB}</button>
-            <button type="button" className="kanban-icon-btn" data-testid="kanban-card-message" aria-label="Message"
+            <button type="button" className="btn btn-icon btn-sm kanban-icon-btn" data-testid="kanban-card-message" aria-label="Message"
               aria-disabled={ro || !vm.hasSession || undefined}
               title={ro ? READ_ONLY_TITLE : vm.hasSession ? `Message ${cutAt(vm.title, 30)}` : 'No session yet. Use Start worker.'}
               onClick={(e) => { e.stopPropagation(); if (!ro && vm.hasSession) setComposer(true); }}>{ICON_CHAT}</button>
             {!vm.isComplete && (
-              <button type="button" className="kanban-icon-btn" data-testid="kanban-card-complete" aria-label="Complete"
+              <button type="button" className="btn btn-icon btn-sm kanban-icon-btn" data-testid="kanban-card-complete" aria-label="Complete"
                 aria-disabled={ro || undefined} title={ro ? READ_ONLY_TITLE : 'Complete'}
                 onClick={(e) => { e.stopPropagation(); if (!ro) void api.completeTask(vm.taskId); }}>{ICON_CHECK}</button>
             )}
-            <button type="button" ref={moreRef} className="kanban-icon-btn kanban-kebab" data-testid="kanban-card-more" aria-label="More"
+            <button type="button" ref={moreRef} className="btn btn-icon btn-sm kanban-icon-btn" data-testid="kanban-card-more" aria-label="More"
               aria-haspopup="menu" aria-expanded={!!menu} title="More"
               onClick={(e) => { e.stopPropagation(); setMenu((m) => (m ? null : { kind: 'button', from: 'kebab' })); }}>⋮</button>
           </span>

@@ -113,8 +113,8 @@ async function auditRows(page: Page, pane: string): Promise<RowAudit[]> {
         for (const c of Array.from(row.querySelectorAll<HTMLElement>('input, select, button, textarea'))) {
           const r = c.getBoundingClientRect()
           if (r.width === 0 || c.closest('.settings-row') !== row) continue
-          // N11: a text button is measured at its glyphs; its padding hangs past the edge.
-          const text = c.matches('.settings-button-text, .settings-button-danger')
+          // N11: a text button is measured at its glyphs (a link key has no padding now).
+          const text = c.matches('.btn-link')
           const right = text ? r.right - parseFloat(getComputedStyle(c).paddingRight) : r.right
           if (right > g.right - 13.4) out.push(`${name}: control ends ${(g.right - right).toFixed(1)}px from group edge`)
         }
@@ -277,7 +277,7 @@ test('F10 F11 F12: Usage rows are one line each, dash free, one scroller', async
   expect(audit).toEqual([])
   await expect(pane.locator('.settings-group-heading-trailing').filter({ hasText: /Showing|\d{4}-\d{2}-\d{2}/ })).toHaveCount(0)
   const refresh = pane.locator('.usage-refresh-btn').first()
-  expect(await refresh.evaluate((b) => b.classList.contains('settings-button-primary'))).toBe(false)
+  expect(await refresh.evaluate((b) => b.classList.contains('btn-primary'))).toBe(false)
   expect(await refresh.evaluate((b) => getComputedStyle(b).backgroundColor)).not.toBe('rgb(0, 122, 255)')
   expect(await nestedBoxes(page)).toEqual([])
 })

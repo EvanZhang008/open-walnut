@@ -52,7 +52,7 @@ export function ExposeGuide({ pluginIds, testId = 'expose-guide' }: { pluginIds:
       <SettingsNotice
         kind="info"
         action={(
-          <Link className="settings-button settings-button-primary" to={`/settings#${BROWSER_LINK_PANE}`} data-testid={`${testId}-open`}>
+          <Link className="btn btn-sm btn-primary" to={`/settings#${BROWSER_LINK_PANE}`} data-testid={`${testId}-open`}>
             {guide.on ? `Open ${guide.title} settings` : `Set up ${guide.title}`}
           </Link>
         )}

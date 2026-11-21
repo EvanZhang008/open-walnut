@@ -19,7 +19,7 @@ export function ContentActionButtons({ item, size = 'buttons', className, button
   item: ContentItem;
   size?: 'buttons' | 'compact';
   className?: string;
-  /** The host's own button style (the Mail reader's round buttons); default content-action-btn. */
+  /** The host's own button style (the Mail reader's round buttons); default a key of the button family. */
   buttonClassName?: string;
 }) {
   const [busy, setBusy] = useState<ContentActionId | null>(null);
@@ -31,7 +31,7 @@ export function ContentActionButtons({ item, size = 'buttons', className, button
         <button
           key={action.id}
           type="button"
-          className={buttonClassName ?? 'content-action-btn'}
+          className={buttonClassName ?? (size === 'compact' ? 'btn btn-icon' : 'btn btn-sm')}
           data-testid={`content-action-${action.id}`}
           data-label={action.label}
           data-state={action.id === 'talk_to_ceo' && writing ? 'open' : busy === action.id ? 'busy' : done === action.id ? 'done' : undefined}

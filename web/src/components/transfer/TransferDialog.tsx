@@ -111,7 +111,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
     body = (
       <div className="xfer-status xfer-status-error" role="alert">
         <span>{loadError}</span>
-        <button type="button" className="app-modal-btn" onClick={onRetryLoad}>Try again</button>
+        <button type="button" className="btn" onClick={onRetryLoad}>Try again</button>
       </div>
     );
   } else if (!options) {
@@ -242,10 +242,10 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
         <div className="app-modal-actions xfer-actions">
           {blocker && options?.source && !busy && <span className="xfer-hint" data-testid="xfer-hint">{blocker}</span>}
           {busy && <span className="xfer-hint">You can close this. Walnut opens the new task when it is ready.</span>}
-          <button type="button" className="app-modal-btn" onClick={() => { if (!busy) { messageDraft.clear(); pathDraft.clear(); } onClose(); }}>{busy ? 'Hide' : 'Cancel'}</button>
+          <button type="button" className="btn" onClick={() => { if (!busy) { messageDraft.clear(); pathDraft.clear(); } onClose(); }}>{busy ? 'Hide' : 'Cancel'}</button>
           <button
             type="button"
-            className="app-modal-btn primary"
+            className="btn btn-primary"
             disabled={busy || !!blocker || !form}
             onClick={gate.send}
             data-testid="xfer-submit"

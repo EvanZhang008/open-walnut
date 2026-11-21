@@ -73,7 +73,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
   if (!open) return null;
   return createPortal(<div className="hii-selector-overlay" onPointerDown={e => e.stopPropagation()}>
     <div className="hii-selector" role="dialog" aria-modal="true" aria-label="Choose a task" ref={root}>
-      <header><h2>Choose a task</h2><button type="button" className="hib-row-btn" onClick={onClose} aria-label="Close task selector">×</button></header>
+      <header><h2>Choose a task</h2><button type="button" className="btn btn-sm hib-row-btn" onClick={onClose} aria-label="Close task selector">×</button></header>
       <label htmlFor={searchId} className={preview ? 'hii-hidden' : ''}>Search tasks
         <MicInput id={searchId} aria-label="Search tasks" ref={input} data-draft-key={itemDraftKey(draftKey, 'query')} value={query} placeholder="Search by title, project, or full task ID" setText={setQuery} />
       </label>
@@ -81,7 +81,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
         onBack={() => setPreview(undefined)} onNavigate={onNavigate} /></div>
         : <div className="hii-selector-list" ref={list} onScroll={() => { if (page && !loading) { scroll.current = list.current?.scrollTop ?? 0; setScrollTop(scroll.current); } }}>
           {loading && <p>Loading tasks…</p>}
-          {error && <p>Could not load tasks <button type="button" className="hib-row-btn" onClick={() => setRetry(n => n + 1)}>Try again</button></p>}
+          {error && <p>Could not load tasks <button type="button" className="btn btn-sm hib-row-btn" onClick={() => setRetry(n => n + 1)}>Try again</button></p>}
           {!loading && !error && page?.tasks.length === 0 && <p>No matching tasks<br />Try another search</p>}
           {page?.tasks.map((task, index) => <div className="hii-candidate" key={task.id}>
             <button type="button" className="hii-candidate-pick" aria-pressed={selected?.id === task.id}
@@ -91,17 +91,17 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
                   list.current?.querySelectorAll<HTMLButtonElement>('.hii-candidate-pick')[next]?.focus();
                 }
               }}><span>{task.title}</span><small>{projectDisplayName(task.project)} · {PHASE_TEXT[task.phase] ?? task.phase}</small></button>
-            <button type="button" className="hib-row-btn" data-preview-task={task.id}
+            <button type="button" className="btn btn-sm hib-row-btn" data-preview-task={task.id}
               onClick={() => { previewOrigin.current = task.id; setPreview(task); }} aria-label={`Preview task ${task.title}`}>Preview task</button>
             <details><summary>Task ID</summary><code>{task.id}</code></details>
           </div>)}
           {page && page.tasks.length > 0 && <p>Showing {page.tasks.length} of {page.total}.{page.hasMore ? ' Refine your search.' : ''}</p>}
-          {page?.hasMore && <button type="button" className="hib-row-btn" disabled={moreLoading} onClick={() => void more()}>{moreLoading ? 'Loading more…' : 'Load more'}</button>}
+          {page?.hasMore && <button type="button" className="btn btn-sm hib-row-btn" disabled={moreLoading} onClick={() => void more()}>{moreLoading ? 'Loading more…' : 'Load more'}</button>}
         </div>}
       <footer><div>Selected task: {selected?.title ?? 'None'}
         {selected?.phase === 'COMPLETE' && <p>This task is completed. Open it to review or choose an open task.</p>}</div>
-        <button type="button" className="hib-row-btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="hib-send-btn" disabled={!selected || selected.phase === 'COMPLETE' || loading || error}
+        <button type="button" className="btn btn-sm hib-row-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-primary" disabled={!selected || selected.phase === 'COMPLETE' || loading || error}
           onClick={() => { if (selected) onChoose(selected); }}>Continue</button>
       </footer>
     </div>

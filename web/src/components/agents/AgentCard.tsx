@@ -46,7 +46,7 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
         <div className="agent-card-actions">
           <div className="agent-menu-wrapper">
             <button
-              className="btn btn-sm agent-menu-btn"
+              className="btn btn-sm btn-icon agent-menu-btn"
               onClick={() => { setMenuOpen(!menuOpen); setConfirmAction(null); }}
               title="Actions"
             >
@@ -78,7 +78,7 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
                   {confirmAction === 'delete' ? 'Delete this agent?' : 'Reset to builtin default?'}
                 </p>
                 <div className="agent-confirm-actions">
-                  <button className="btn btn-sm agent-confirm-cancel" onClick={() => { setConfirmAction(null); setMenuOpen(false); }}>
+                  <button className="btn btn-sm" onClick={() => { setConfirmAction(null); setMenuOpen(false); }}>
                     Cancel
                   </button>
                   <button

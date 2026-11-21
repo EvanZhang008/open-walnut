@@ -419,32 +419,32 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
         </span>
       </div>
       <div className="session-terminal-actions">
-        <button type="button" className="session-terminal-icon-btn" onClick={() => { void newTab(); }} disabled={!canNew} title={canNew ? 'New terminal' : 'Every terminal slot is in use (8)'} aria-label="New terminal" data-testid="terminal-new">
+        <button type="button" className="btn btn-icon" onClick={() => { void newTab(); }} disabled={!canNew} title={canNew ? 'New terminal' : 'Every terminal slot is in use (8)'} aria-label="New terminal" data-testid="terminal-new">
           {ICON_PLUS}
         </button>
         {!compact && (
           <>
-            <button type="button" className="session-terminal-icon-btn" onClick={() => { void split('row'); }} disabled={!canSplitNow || !roomRight} title={splitRightTitle} aria-label="Split right" data-testid="terminal-split-right">
+            <button type="button" className="btn btn-icon" onClick={() => { void split('row'); }} disabled={!canSplitNow || !roomRight} title={splitRightTitle} aria-label="Split right" data-testid="terminal-split-right">
               {ICON_SPLIT_RIGHT}
             </button>
-            <button type="button" className="session-terminal-icon-btn" onClick={() => { void split('col'); }} disabled={!canSplitNow || !roomDown} title={splitDownTitle} aria-label="Split down" data-testid="terminal-split-down">
+            <button type="button" className="btn btn-icon" onClick={() => { void split('col'); }} disabled={!canSplitNow || !roomDown} title={splitDownTitle} aria-label="Split down" data-testid="terminal-split-down">
               {ICON_SPLIT_DOWN}
             </button>
           </>
         )}
         {dock && !dock.docked && dock.onDock && (
-          <button type="button" className="session-terminal-btn session-terminal-dock-btn" onClick={dock.onDock} title={`Show with ${dock.viewLabel}: ${dock.viewLabel} above, the terminal below`} aria-label={`Show with ${dock.viewLabel}`} data-testid="terminal-dock">
+          <button type="button" className="btn btn-sm btn-ghost session-terminal-dock-btn" onClick={dock.onDock} title={`Show with ${dock.viewLabel}: ${dock.viewLabel} above, the terminal below`} aria-label={`Show with ${dock.viewLabel}`} data-testid="terminal-dock">
             {ICON_PANEL_BOTTOM}<span>{`With ${dock.viewLabel}`}</span>
           </button>
         )}
         {dock?.docked && dock.onMaximize && (
-          <button type="button" className="session-terminal-icon-btn" onClick={dock.onMaximize} title="Terminal only" aria-label="Terminal only" data-testid="terminal-maximize">
+          <button type="button" className="btn btn-icon" onClick={dock.onMaximize} title="Terminal only" aria-label="Terminal only" data-testid="terminal-maximize">
             {ICON_EXPAND}
           </button>
         )}
         {focused !== null && !focusedState.exited && (
           <button
-            className="session-terminal-btn session-terminal-btn-kill"
+            className="btn btn-sm btn-danger session-terminal-btn-kill"
             onClick={() => { void endTerminals([focused]); }}
             disabled={ending}
             title={`End ${terminalName(focused)}: stops its shell and anything running in it`}
@@ -454,7 +454,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           </button>
         )}
         {dock?.docked && dock.onUndock && (
-          <button type="button" className="session-terminal-icon-btn" onClick={dock.onUndock} title="Hide the terminal (it keeps running)" aria-label="Hide terminal" data-testid="terminal-undock">
+          <button type="button" className="btn btn-icon" onClick={dock.onUndock} title="Hide the terminal (it keeps running)" aria-label="Hide terminal" data-testid="terminal-undock">
             {ICON_CLOSE}
           </button>
         )}

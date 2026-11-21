@@ -236,7 +236,7 @@ function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snoozed: boo
     />
     {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
     <button
-      type="button" className="btn btn-sm org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
+      type="button" className="btn btn-sm btn-ghost org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
       aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
       title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
       onClick={() => void state.update(t.id, { pin: !pinned })}
