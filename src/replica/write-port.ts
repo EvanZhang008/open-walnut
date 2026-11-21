@@ -115,6 +115,8 @@ export interface WritePortDeps {
    * the journal's row as it is.
    */
   forReaders?(row: TaskRow): Promise<TaskRow>
+  /** The task of a session on this host as this replica shows it, or null: where the leader places that session's creates. */
+  callerTask?(sid: string): Promise<TaskRow | null>
   randomHex?(bytes: number): string
   now?(): number
   log?(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -256,6 +258,38 @@ export function createWritePort(deps: WritePortDeps): WritePort {
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => {})
 
+  /** A session's create the leader's rules refuse: another project the user did not name, or a parent too deep. */
+  async function callerRuleRefusal(actor: WriteActor, all: Record<string, unknown>): Promise<PortAnswer | null> {
+    if (actor.kind !== 'session' || !deps.callerTask) return null
+    const t = await deps.callerTask(actor.sid).catch(() => null)
+    if (!t) return null
+    if (typeof all.project === 'string') {
+      const elsewhere = elsewhereRefusal(actor.sid, t, all, await import('../core/sessions/caller-placement.js'))
+      if (elsewhere) return refusalAnswer('project_elsewhere', elsewhere)
+    }
+    // The new task is the caller's subtask (the caller rule): no deeper than the leader allows.
+    const { assertSubtaskDepth, SubtaskLimitError } = await import('../core/sessions/subtask-limits.js')
+    try {
+      await assertSubtaskDepth(t.id, typeof t.title === 'string' ? t.title : undefined)
+    } catch (err) {
+      if (err instanceof SubtaskLimitError) return refusalAnswer(err.code, err.message)
+    }
+    return null
+  }
+
+  function elsewhereRefusal(sid: string, t: TaskRow, all: Record<string, unknown>, cp: typeof import('../core/sessions/caller-placement.js')): string | null {
+    const { projectElsewhereRefusal } = cp
+    const leads = Array.isArray(t.org_leads) ? t.org_leads.filter((x): x is string => typeof x === 'string') : undefined
+    const caller = {
+      kind: 'worker' as const, session: { id: sid },
+      task: {
+        id: t.id, title: typeof t.title === 'string' ? t.title : t.id, project: typeof t.project === 'string' ? t.project : '',
+        ...(leads ? { orgLeads: leads } : {}), ...(typeof t.group_label === 'string' ? { group_label: t.group_label } : {}),
+      },
+    }
+    return projectElsewhereRefusal({ project: all.project as string, user_words: all.user_words }, caller as unknown as Parameters<typeof projectElsewhereRefusal>[1])
+  }
+
   /** The daemon's answer as the route's: the overlay learns a write it took at once. */
   function settle(r: ReplicaWriteResult, actor: WriteActor, record: Record<string, unknown>, ok: (reply: Record<string, unknown>) => PortAnswer, clientRequestId?: string): PortAnswer {
     if (r.kind === 'answered') return { answered: true }
@@ -335,6 +369,11 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       if (bad.length) {
         return needsLeaderAnswer('fields', `${bad.join(', ')} can only be set while your Mac answers; the task was not made.`, { fields: bad })
       }
+      // The leader's create rules for a session (create-rules.ts applyCreateRules, which the drain runs
+      // again): checked here, so a create the drain would refuse is never kept and answered "created"
+      // (2026-11-21 real host run: a create in another project was refused unheard at the drain).
+      const ruled = await callerRuleRefusal(actor, all)
+      if (ruled) return ruled
       const at = now()
       const id = mintTaskId(at, hex)
       const str = (v: unknown) => (typeof v === 'string' ? v : undefined)

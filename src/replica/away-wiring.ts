@@ -173,6 +173,11 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   }
   const port = createWritePort({
     task: shownTask,
+    callerTask: async (sid) => {
+      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const rec = await getSessionByClaudeId(sid).catch(() => null)
+      return rec?.taskId ? shownTask(rec.taskId) : null
+    },
     createdHere: (id) => overlay.createPending(id),
     board: shownBoard,
     noteWritten: (e) => {
