@@ -25,8 +25,17 @@ interface Slot { el: HTMLElement; id: string }
 
 const SKIP = 'code, pre, a, .topic-mention-slot';
 
+/** Puts the words back where earlier slots were, so a new scan finds every "@Name" again. */
+function clearSlots(root: HTMLElement): void {
+  const old = root.querySelectorAll<HTMLElement>('.topic-mention-slot');
+  if (!old.length) return;
+  for (const el of old) el.replaceWith(document.createTextNode(el.dataset.text ?? ''));
+  root.normalize();
+}
+
 /** Puts a slot in place of every "@Name" that names a member, in the drawn words under `root`. */
 function placeSlots(root: HTMLElement, members: readonly Member[]): Slot[] {
+  clearSlots(root);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const texts: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -58,7 +67,13 @@ function placeSlots(root: HTMLElement, members: readonly Member[]): Slot[] {
 /** The chips of one message's words (`root`), kept in place across redraws of the words. */
 export function useMentionSlots(root: RefObject<HTMLElement | null>, text: string, members: readonly Member[]): Slot[] {
   const [slots, setSlots] = useState<Slot[]>([]);
+  // A topic update (a new message) brings a new members array: scan again only when who can be
+  // named changed. Every scan starts from the words (placeSlots clears the slots it put in before).
+  const named = members.map((m) => `${m.id}\u0000${m.name}\u0000${m.status}`).join('\u0001');
+  const membersRef = useRef(members);
+  membersRef.current = members;
   useLayoutEffect(() => {
+    const members = membersRef.current;
     const el = root.current;
     if (!el || !text.includes('@')) { setSlots([]); return; }
     let ours = false;
@@ -75,7 +90,7 @@ export function useMentionSlots(root: RefObject<HTMLElement | null>, text: strin
     });
     watch.observe(el, { childList: true, subtree: true });
     return () => watch.disconnect();
-  }, [root, text, members]);
+  }, [root, text, named]);
   return slots;
 }
 

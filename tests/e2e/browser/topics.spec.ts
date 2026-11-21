@@ -194,6 +194,21 @@ test('on: a topic made from the Org page with two tasks and the VP; a message, a
     return !!alpha && t.messages.some((m) => m.text.endsWith('can you check the copy?') && m.mentions.includes(alpha.id))
   }).toBe(true)
 
+  // The "@Alpha" in that message is Alpha's chip, and it stays one when the next message arrives
+  // (2026-11-21: a new message took every chip away, leaving the words without the name).
+  const withChip = chat(page).locator('[data-testid="topic-message"][data-author="human"]', { hasText: 'can you check the copy?' })
+  await expect(withChip.getByTestId('topic-mention')).toHaveCount(1)
+  await expect(withChip.getByTestId('topic-mention')).toContainText(`Alpha ${STAMP}`)
+  await withChip.getByTestId('topic-mention').click()
+  await expect(page.getByTestId('topic-mention-card')).toContainText('Task')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('topic-mention-card')).toHaveCount(0)
+  await input.fill(`one more line ${STAMP}`)
+  await chat(page).getByTestId('topic-send').click()
+  await expect(chat(page).locator('[data-testid="topic-message"][data-author="human"]', { hasText: `one more line ${STAMP}` })).not.toHaveClass(/is-sending/, { timeout: 15_000 })
+  await expect(withChip.getByTestId('topic-mention')).toHaveCount(1)
+  await expect(withChip.getByTestId('topic-message-text')).toContainText(`Alpha ${STAMP}`)
+
   // A mouse click on a row picks it as Enter does: the list closes and stays closed, the box holds "@Name ".
   await input.fill('@Bet')
   await expect(menu).toBeVisible()
