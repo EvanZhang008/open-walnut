@@ -151,6 +151,33 @@ describe('session:send retryOf — retry after a failed delivery', () => {
     expect(combined).not.toContain(`${TEXT}\n\n${TEXT}`)
   })
 
+  it('a resend whose first answer was lost is the row already queued under its user line, never a second copy', async () => {
+    // 2026-11-21: the socket dropped with the send in flight. The server queued it; the bubble
+    // never learned the row's id, so it resends by its own client id with the same user line.
+    const UUID = '0b8c7f4e-1d2a-4c3b-9e8f-7a6b5c4d3e2f'
+    const first = await callSend({ sessionId: SID, message: TEXT, userUuid: UUID })
+    queued = []
+    sends = []
+    const again = await callSend({ sessionId: SID, message: TEXT, userUuid: UUID, retryOf: 'temp-1795294800000-ab12' })
+    expect(again.messageId).toBe(first.messageId)
+    const queue = await getQueue(SID)
+    expect(queue).toHaveLength(1)
+    expect(queued).toHaveLength(0)
+  })
+
+  it('a resend by itself never un-parks the row the server set aside; a person\'s Retry does', async () => {
+    const UUID = '1c9d8e7f-2a3b-4c5d-8e9f-0a1b2c3d4e5f'
+    const first = await callSend({ sessionId: SID, message: TEXT, userUuid: UUID })
+    await parkMessages(await markProcessing(SID), 'Working directory no longer exists: /gone')
+    const auto = await callSend({ sessionId: SID, message: TEXT, userUuid: UUID, retryOf: 'temp-1795294800000-cd34', autoResend: true })
+    expect(auto.messageId).toBe(first.messageId)
+    expect((await getQueue(SID)).map((m) => m.status)).toEqual(['parked'])
+    await callSend({ sessionId: SID, message: TEXT, userUuid: UUID, retryOf: 'temp-1795294800000-cd34' })
+    const queue = await getQueue(SID)
+    expect(queue).toHaveLength(1)
+    expect(queue[0].status).not.toBe('parked')
+  })
+
   it('falls back to a fresh enqueue when the original row is gone (retry never no-ops)', async () => {
     // The row was already drained (delivery actually succeeded, or the user
     // deleted it) — a retry must still put the text somewhere, or the message is

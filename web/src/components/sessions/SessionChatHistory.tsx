@@ -281,6 +281,11 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   draftOrigin?: DraftOrigin;
   /** Error message when status is 'failed' */
   failedError?: string;
+  /** Failed only because the connection was down: it goes out again by itself once the
+   *  connection is back (hooks/send-auto-retry.ts), so the bubble waits instead of reading red. */
+  waitsForConnection?: boolean;
+  /** How many times it was sent again by itself (at most AUTO_RETRY_MAX). */
+  autoTries?: number;
   /** Server PARKED this row (dead-letter): the failure is permanent, so nothing
    *  will retry it automatically again. Rendered as a 'failed' bubble with its
    *  own label + a Discard that actually deletes the durable row. */
@@ -5998,6 +6003,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       onRetry={() => onRetryFailed?.(m.queueId)}
       onDiscard={() => onDeleteQueued?.(m.queueId)}
     />
+  ) : m.waitsForConnection ? (
+    // Only the connection was down: it goes out by itself once it is back (hooks/send-auto-retry.ts).
+    <>
+      <div className="session-msg-waiting-badge" data-testid="send-waits-for-connection">
+        Not sent yet: no connection. It goes out by itself when the connection is back.
+      </div>
+      <div className="session-msg-queued-actions">
+        <button type="button" onClick={() => onRetryFailed?.(m.queueId)}>Send now</button>
+        <button type="button" onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>
+      </div>
+    </>
   ) : (
     <>
       <div className="session-msg-failed-badge">
@@ -6010,7 +6026,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div className="session-msg-queued-actions">
         {isFolderGoneReason(m.failedError)
           ? <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
-          : <button className="session-msg-retry-btn" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>}
+          : <button type="button" className="btn btn-sm btn-primary" data-testid="send-retry" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>}
         {m.parked
           ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
           : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}

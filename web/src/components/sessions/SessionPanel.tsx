@@ -598,7 +598,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     log.info('session-panel', 'restored session is gone: closing its panel', { sessionId });
     onRestoredGoneRef.current(sessionId);
   }, [missing, sessionId]);
-  const { optimisticMsgs, sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued, queueSync, settleShownInHistory } = useSessionSend(sessionId);
+  const { optimisticMsgs, composerError: sendError, redirectedTo, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued, queueSync, settleShownInHistory } = useSessionSend(sessionId, { autoResend: true });
   // Only the read's failure reaches the timeline, as a stable object: a read that changes nothing re-renders nothing.
   const queueSyncError = queueSync.error;
   const queueSyncProp = useMemo(() => (queueSyncError ? { error: queueSyncError } : undefined), [queueSyncError]);

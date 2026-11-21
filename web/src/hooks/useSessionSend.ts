@@ -19,7 +19,11 @@ import { adoptFailedDraft, bindDraftOrigin, forgetFailedDraft, settleRetriedDraf
 import { newUserUuid } from '@/utils/thread-tree';
 import type { RowWithSendUuids } from '@/utils/send-uuids';
 import { onKept, sendSessionMessage, type SendAck } from '@/api/session-send';
-import { applyLateKept, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
+import { applyLateKept, composerSendError, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
+import { dueForAutoRetry, sameWaitingSend, waitsForConnectionAfter } from './send-auto-retry';
+
+/** How long after the connection is back a waiting send goes out (the stores refetch first). */
+const AUTO_RETRY_DELAY_MS = 1_000;
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -53,6 +57,8 @@ export interface SessionSendOptions {
 interface UseSessionSendReturn {
   optimisticMsgs: OptimisticMessage[];
   sendError: string | null;
+  /** The line under a composer whose chat draws the bubbles: an error no bubble already shows. */
+  composerError: string | null;
   /** The session a send from this panel actually went to, when an engine switch had replaced this one: the panel follows it. */
   redirectedTo: string | null;
   /** Resolves true once the message is persisted server-side (RPC ok), false if the RPC rejected. */
@@ -60,7 +66,7 @@ interface UseSessionSendReturn {
   interruptSend: (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions) => Promise<boolean>;
   /** Bare turn-stop (no message). Resolves true when the server accepted the interrupt. */
   stopTurn: (sessionId: string) => Promise<boolean>;
-  retryFailed: (queueId: string, sessionId: string) => void;
+  retryFailed: (queueId: string, sessionId: string, auto?: boolean) => void;
   dismissFailed: (queueId: string) => void;
   handleMessagesDelivered: (count: number, messageIds?: string[]) => void;
   handleBatchCompleted: (count: number, messageIds?: string[]) => void;
@@ -308,14 +314,20 @@ function seededBubbles(sessionId: string | null): OptimisticMessage[] {
   return bubble ? [bubble] : [];
 }
 
-export function useSessionSend(activeSessionId: string | null): UseSessionSendReturn {
+export function useSessionSend(activeSessionId: string | null, options?: {
+  /** This surface draws the bubbles with their Send now and Dismiss (SessionChatHistory with retry
+   *  handlers): a send that failed for the connection waits for it and goes out by itself. Any other
+   *  surface keeps the old failed state, its own error line and its words. */
+  autoResend?: boolean;
+}): UseSessionSendReturn {
+  const autoResend = !!options?.autoResend && !!activeSessionId;
   // Seeded in the initializer, not the effect: the first frame of a freshly
   // promoted panel must already hold the message the pending column showed.
   const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>(() => seededBubbles(activeSessionId));
   // The red line, tied to the send it is about (send-acceptance.ts shownSendError).
   const [sendErrorState, setSendErrorState] = useState<SendErrorState | null>(null);
-  const setSendError = useCallback((text: string | null, userUuid?: string) => {
-    setSendErrorState(text === null ? null : { text, ...(userUuid ? { userUuid } : {}) });
+  const setSendError = useCallback((text: string | null, userUuid?: string, bubble?: boolean) => {
+    setSendErrorState(text === null ? null : { text, ...(userUuid ? { userUuid } : {}), ...(bubble ? { bubble: true } : {}) });
   }, []);
   const [redirectedTo, setRedirectedTo] = useState<string | null>(null);
   useEffect(() => { setRedirectedTo(null); }, [activeSessionId]);
@@ -416,6 +428,14 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
   const send = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {
     setSendError(null);
+    // The same words from the same box while that send waits to go out by itself (its words came
+    // back to the box when it failed): it is that send, now, never a second copy under a new uuid.
+    const waiting = !images?.length && !opts?.switchEngine ? sameWaitingSend(msgsRef.current, message, opts?.draftOrigin?.key) : undefined;
+    if (waiting) {
+      log.info('send', 'the same words wait to go out: sending that message now', { sessionId, queueId: waiting.queueId });
+      if (waiting.status === 'failed') retryRef.current(waiting.queueId, sessionId);
+      return true;
+    }
 
     // Oversized paste → spill to disk over HTTP, send a short file-path pointer
     // instead (same WS-frame-cap reasoning as image uploads — see paste-spill.ts).
@@ -496,17 +516,25 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       return true;
     } catch (e) {
       const err = e as Error;
-      log.error('send', 'RPC failed', { sessionId, error: err.message });
-      setSendError(err.message, opts?.userUuid);
+      // The connection was down: the bubble waits for it and goes out by itself (send-auto-retry.ts).
+      const waits = autoResend && waitsForConnectionAfter(err.message, { userUuid: opts?.userUuid });
+      log.error('send', 'RPC failed', { sessionId, error: err.message, ...(waits ? { waitsForConnection: true } : {}) });
+      if (!waits) setSendError(err.message, opts?.userUuid, true);
       setOptimisticMsgs((prev) => prev.map((m) =>
-        m.queueId === tempId ? { ...m, status: 'failed' as const, failedError: err.message } : m
+        m.queueId === tempId ? { ...m, status: 'failed' as const, failedError: err.message, ...(waits ? { waitsForConnection: true } : {}) } : m
       ));
       return false;
     }
-  }, [touch]);
+  }, [touch, autoResend]);
 
   const interruptSend = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {
     setSendError(null);
+    // The same words that wait to go out: that message goes now, never a second copy (as in send).
+    const waiting = !images?.length ? sameWaitingSend(msgsRef.current, message, opts?.draftOrigin?.key) : undefined;
+    if (waiting) {
+      if (waiting.status === 'failed') retryRef.current(waiting.queueId, sessionId);
+      return true;
+    }
 
     try {
       message = await spillOversizedText(message);
@@ -555,7 +583,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     } catch (e) {
       const err = e as Error;
       log.error('send', 'RPC failed (interrupt)', { sessionId, error: err.message });
-      setSendError(err.message, opts?.userUuid);
+      // An interrupt is not sent again by itself: by the time the connection is back the turn it stopped may be over.
+      setSendError(err.message, opts?.userUuid, true);
       setOptimisticMsgs((prev) => prev.map((m) =>
         m.queueId === tempId ? { ...m, status: 'failed' as const, failedError: err.message } : m
       ));
@@ -575,23 +604,25 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
    *  orphan the server row's identity and re-open the duplicate path. When the
    *  row is already gone server-side, the server falls back to a fresh enqueue
    *  and answers with a new messageId, which is adopted below. */
-  const retryFailed = useCallback((queueId: string, sessionId: string) => {
+  const retryFailed = useCallback((queueId: string, sessionId: string, auto = false) => {
     // A waiting row (the host did not take it in time) is sent now the same way:
     // the server re-drains that row; the bubble keeps its Queued state meanwhile.
     const waiting = msgsRef.current.find(m => m.queueId === queueId && (m.status === 'pending' || m.status === 'received'));
     // A bubble the queue lost track of (it left the queue and history never showed it) is sent again like a failed one.
     const failedMsg = waiting ?? msgsRef.current.find(m => m.queueId === queueId && (m.status === 'failed' || (m.status === 'delivered' && m.leftQueueAt !== undefined)));
     if (!failedMsg) return;
+    // A resend by itself counts its tries; the person's own Retry starts them again.
+    const autoTries = auto ? (failedMsg.autoTries ?? 0) + 1 : 0;
 
     setSendError(null);
-    log.info('send', waiting ? 'sending a waiting message now' : 'retrying', { sessionId, queueId });
+    log.info('send', waiting ? 'sending a waiting message now' : auto ? 'sending again now the connection is back' : 'retrying', { sessionId, queueId, ...(auto ? { autoTries } : {}) });
     // No queue read judges this row while its send is on its way (it may be gone and enqueued anew).
     hold([queueId]);
 
     // Clear `parked` too: the server un-parks the row on this explicit retry, so
     // a second failure must render as an ordinary "Send failed", not a stale park.
     if (!waiting) setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined, waitsFor: undefined, leftQueueAt: undefined, queueNotice: undefined } : m
+      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined, waitsFor: undefined, leftQueueAt: undefined, queueNotice: undefined, waitsForConnection: undefined, autoTries } : m
     ));
 
     // The pre-assigned user-line uuid rides the retry too: the thread anchor recorded
@@ -601,6 +632,8 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     buildImageRefsPayload(failedMsg.images)
       .then((imagePayload) => sendSessionMessage({
         sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
+        // A resend by itself never un-parks a row the server set aside (only a person's Retry does).
+        ...(auto ? { autoResend: true } : {}),
         ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
         ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
         ...(failedMsg.threadId ? { threadId: failedMsg.threadId } : {}),
@@ -621,13 +654,44 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       })
       .catch((e: Error) => {
         release([queueId]);
-        log.error('send', 'Retry failed', { sessionId, error: e.message });
-        setSendError(e.message, failedMsg.userUuid);
+        const waits = autoResend && waitsForConnectionAfter(e.message, failedMsg, autoTries);
+        log.error('send', 'Retry failed', { sessionId, error: e.message, autoTries, ...(waits ? { waitsForConnection: true } : {}) });
+        if (!waits) setSendError(e.message, failedMsg.userUuid, true);
         setOptimisticMsgs((prev) => prev.map((m) =>
-          m.queueId === queueId ? { ...m, status: 'failed' as const, failedError: e.message } : m
+          m.queueId === queueId ? { ...m, status: 'failed' as const, failedError: e.message, ...(waits ? { waitsForConnection: true } : {}) } : m
         ));
       });
-  }, [touch, hold, release]);
+  }, [touch, hold, release, autoResend]);
+
+  // A send that failed only because the connection was down goes out again by itself once it is
+  // back (send-auto-retry.ts): on the reconnect, or at once when it failed while connected. The
+  // server knows the same send by its user line, so a resend never adds a second copy.
+  const autoInFlight = useRef<Set<string>>(new Set());
+  const retryRef = useRef(retryFailed);
+  retryRef.current = retryFailed;
+  // Ids of the bubbles waiting now, so the listeners below are set again only when that changes.
+  const waitingKey = optimisticMsgs.filter((m) => m.waitsForConnection && m.status === 'failed').map((m) => m.queueId).join(',');
+  useEffect(() => {
+    for (const id of [...autoInFlight.current]) {
+      if (!msgsRef.current.some((m) => m.queueId === id && m.status === 'failed')) autoInFlight.current.delete(id);
+    }
+    const sid = activeSessionId;
+    if (!sid || !autoResend) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fire = () => {
+      for (const m of dueForAutoRetry(msgsRef.current, wsClient.state === 'connected', autoInFlight.current)) {
+        autoInFlight.current.add(m.queueId);
+        retryRef.current(m.queueId, sid, true);
+      }
+    };
+    // A beat after the socket opens: the stores refetch first, and a send the server kept shows as kept.
+    const soon = () => { if (timer) clearTimeout(timer); timer = setTimeout(fire, AUTO_RETRY_DELAY_MS); };
+    if (waitingKey) soon();
+    const onState = (state: string) => { if (state === 'connected') soon(); };
+    wsClient.onEvent('_ws:reconnected', soon);
+    wsClient.onConnectionChange(onState);
+    return () => { wsClient.offEvent('_ws:reconnected', soon); wsClient.offConnectionChange(onState); if (timer) clearTimeout(timer); };
+  }, [waitingKey, activeSessionId, autoResend]);
 
   /** Remove a failed message from the optimistic list. */
   const dismissFailed = useCallback((queueId: string) => {
@@ -678,7 +742,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   const handleBatchFailed = useCallback((messageIds: string[], error: string, info?: { parked?: boolean; waitsFor?: string }) => {
     log.warn('send', 'batch failed', { count: messageIds.length, error, ...(info?.waitsFor ? { waitsFor: info.waitsFor } : {}) });
     // A message waiting for the agent says so on its own bubble, with the fix: no second red line.
-    if (!info?.waitsFor) setSendError(error);
+    if (!info?.waitsFor) setSendError(error, undefined, true);
     touch(messageIds);
     // A refused launch prompt reads as the message that was not sent (parked-bubbles.ts).
     setOptimisticMsgs((prev) => markBubblesFailed(prev, messageIds, error, info));
@@ -795,6 +859,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   return {
     optimisticMsgs,
     sendError: shownSendError(sendErrorState, optimisticMsgs),
+    composerError: composerSendError(sendErrorState, optimisticMsgs),
     redirectedTo,
     send,
     interruptSend,

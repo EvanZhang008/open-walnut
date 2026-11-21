@@ -61,7 +61,8 @@ describe('one rule decides that a send was accepted', () => {
     // A send's own failure names its line; only sendless errors (an upload, a Stop, a batch) do not.
     const failures = [...hook.matchAll(/setSendError\(([a-z]+)\.message(, [^)]+)?\)/g)]
     expect(failures.length).toBeGreaterThanOrEqual(3)
-    for (const f of failures) expect(f[0], 'a send\'s failure names its user line').toMatch(/, (opts\?\.userUuid|failedMsg\.userUuid)\)/)
+    // ...and says its bubble shows it, so the composer does not repeat it (send-acceptance.ts composerSendError).
+    for (const f of failures) expect(f[0], 'a send\'s failure names its user line and its bubble').toMatch(/, (opts\?\.userUuid|failedMsg\.userUuid), true\)/)
   })
 })
 

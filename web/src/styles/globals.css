@@ -20221,7 +20221,8 @@ td.usage-share-col {
   padding-right: 4px;
 }
 
-.session-msg-queued-actions button {
+/* The quiet text keys; a real button (.btn, the failed send's Retry) keeps its own look. */
+.session-msg-queued-actions button:not(.btn) {
   font-size: 11px;
   color: var(--fg-muted);
   background: none;
@@ -20231,7 +20232,7 @@ td.usage-share-col {
   border-radius: 4px;
 }
 
-.session-msg-queued-actions button:hover {
+.session-msg-queued-actions button:not(.btn):hover {
   background: var(--bg-tertiary);
   color: var(--fg);
 }
@@ -20247,6 +20248,14 @@ td.usage-share-col {
   font-weight: 600;
   text-align: right;
 }
+/* A send waiting for the connection: not a failure, so muted, not red. */
+.session-msg-waiting-badge {
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding-right: 4px;
+  text-align: right;
+}
+.session-msg-queued-actions .btn { align-self: center; }
 .session-msg-retry-btn {
   color: var(--accent) !important;
   font-weight: 600;

@@ -402,11 +402,11 @@ test.describe('Question stack: asking and sending', () => {
     await expect(rows.nth(0).locator('.thread-status-dot-error')).toHaveCount(1)
     await expect(rows.nth(1).locator('.thread-status-dot-error')).toHaveCount(1)
     await expect(history).not.toContainText(PARKED_FOLLOW_UP)
-    await expect(history.locator('.session-msg-retry-btn')).toHaveCount(0)
+    await expect(history.locator('[data-testid="send-retry"]')).toHaveCount(0)
     await rows.nth(1).click()
     await expectStackDepth(panel, 1)
     await expect(history).toContainText(PARKED_FOLLOW_UP)
-    await expect(history.locator('.session-msg-failed .session-msg-retry-btn')).toHaveCount(1)
+    await expect(history.locator('.session-msg-failed [data-testid="send-retry"]')).toHaveCount(1)
     // N41: one Retry for the one undelivered message (the row's), and the strip
     // says what happened: it was never sent, no turn ended. No em dash either.
     const parkedStrip = panel.locator('[data-thread-strip="parked"]')

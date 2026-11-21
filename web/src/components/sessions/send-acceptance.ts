@@ -20,6 +20,8 @@ export interface AcceptableBubble {
   userUuid?: string;
   failedError?: string;
   parked?: boolean;
+  waitsForConnection?: boolean;
+  autoTries?: number;
   waitsFor?: string;
   serverUndelivered?: boolean;
   launch?: boolean;
@@ -44,7 +46,7 @@ export function acceptedBubble<T extends AcceptableBubble>(m: T, res: SendAck, d
     } as T;
   }
   const delivered = m.status === 'delivered' || deliveredEarly || res.alreadyDelivered === true;
-  const { failedError: _error, parked: _parked, waitsFor: _waits, ...rest } = m;
+  const { failedError: _error, parked: _parked, waitsFor: _waits, waitsForConnection: _conn, autoTries: _tries, ...rest } = m;
   return {
     ...rest, queueId: res.messageId, status: delivered ? 'delivered' : 'received',
     ...(res.dedupText ? { dedupText: res.dedupText } : {}),
@@ -80,7 +82,12 @@ export function applyLateKept<T extends AcceptableBubble>(
 }
 
 /** The panel's red line: the send it is about, by user line, when there is one. */
-export interface SendErrorState { text: string; userUuid?: string }
+export interface SendErrorState {
+  text: string;
+  userUuid?: string;
+  /** The failed send's bubble shows this error itself (its badge and its Retry). */
+  bubble?: boolean;
+}
 
 /**
  * The line shows while the send it is about still reads failed. A send the
@@ -91,4 +98,15 @@ export function shownSendError(err: SendErrorState | null, bubbles: readonly Acc
   if (!err) return null;
   if (!err.userUuid) return err.text;
   return bubbles.some((m) => m.userUuid === err.userUuid && m.status === 'failed') ? err.text : null;
+}
+
+/**
+ * The line under a composer whose chat draws the bubbles: only an error no bubble shows (a paste
+ * upload, a Stop). A failed send says so once, on its own bubble, with its Retry (2026-11-21, the
+ * user saw "Send failed: WebSocket not connected (timeout)" on the bubble and the same words again
+ * under the box).
+ */
+export function composerSendError(err: SendErrorState | null, bubbles: readonly AcceptableBubble[]): string | null {
+  if (err?.bubble && bubbles.some((m) => m.status === 'failed' && (err.userUuid ? m.userUuid === err.userUuid : m.failedError === err.text))) return null;
+  return shownSendError(err, bubbles);
 }

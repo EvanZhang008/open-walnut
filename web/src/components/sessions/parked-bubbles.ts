@@ -21,6 +21,8 @@ export interface ParkableBubble {
   serverUndelivered?: boolean;
   failedError?: string;
   waitsFor?: string;
+  waitsForConnection?: boolean;
+  autoTries?: number;
   heldReason?: string;
 }
 
@@ -31,7 +33,8 @@ export function markBubblesFailed<T extends ParkableBubble>(
   const idSet = new Set(ids);
   return prev.map((m) => {
     if (!idSet.has(m.queueId)) return m;
-    const { launch: _launch, ...rest } = m;
+    // The server answered: no longer a send waiting for the connection (hooks/send-auto-retry.ts).
+    const { launch: _launch, waitsForConnection: _conn, autoTries: _tries, ...rest } = m;
     return {
       ...rest, status: 'failed' as const, failedError: error, serverUndelivered: true,
       ...(info?.parked ? { parked: true } : {}),
