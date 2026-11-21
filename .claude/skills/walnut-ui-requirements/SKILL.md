@@ -1,6 +1,6 @@
 ---
 name: walnut-ui-requirements
-description: The requirements every change the user can see in Walnut must meet (cards, panels, lists, inbox, chat, states and tabs, styling, proof videos). MUST read before planning, building, testing or shipping any change to web/src/, the Mac app's web pages or the phone's views. Each rule is one line with a real incident.
+description: The requirements every change the user can see in Walnut must meet (cards, panels, lists, inbox, chat, states and tabs, styling, proof videos), the UI standard (one look per kind of control) and the Sol review prompt. MUST read before planning, building, testing or shipping any change to web/src/, the Mac app's web pages or the phone's views. Each rule is one line with a real incident.
 ---
 
 # Walnut UI requirements
@@ -10,6 +10,14 @@ one sentence; the example under it is a real incident from the user's own use. T
 detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../../web/src/AGENTS.md)
 (invariants, menus and overlays), the `walnut-web-frontend` skill (how the SPA works), and the root
 [AGENTS.md](../../../AGENTS.md) (test tiers, where browser runs go).
+
+## The standard and the review
+
+- [standard.md](./standard.md): one look per kind of control (the button family, inputs, cards,
+  status labels, tokens). Reuse it; never bring a second style. `tests/web/ui-standard-ratchet.test.ts`
+  fails on a new one.
+- [review-prompt.md](./review-prompt.md): before any design or UI result reaches the user, one
+  independent Sol subagent reviews it with this prompt and scores function, ux and ui out of 10.
 
 ## Keep what works
 
