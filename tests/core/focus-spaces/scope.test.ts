@@ -32,6 +32,8 @@ describe('taskInScope', () => {
     expect(taskInScope({ projects: ['acme infra'] }, 'upgrade', lookup)).toBe(true)
     expect(taskInScope({ projects: [''] }, 'inbox', lookup)).toBe(true)
     expect(taskInScope({ projects: [''] }, 'interview', lookup)).toBe(false)
+    // The Inbox is one project whichever way a row spells it.
+    expect(taskInScope({ projects: ['Inbox'] }, 'inbox', lookup)).toBe(true)
   })
 
   it('stops on a parent cycle and on an unknown task', () => {

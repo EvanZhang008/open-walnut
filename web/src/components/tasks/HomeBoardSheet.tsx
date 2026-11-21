@@ -21,6 +21,7 @@ import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/home-board.css';
 import { MicInput } from '@/components/common/BoxMic';
+import { useFocusView } from '@/focus-spaces/useFocusView';
 
 function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
   family: BoardFamily; mode: HomeBoardMode; onOpen: (task: Task) => void; snoozed: (task: Task) => boolean;
@@ -77,7 +78,10 @@ function BoardColumn({ column, mode, doneLimit, onMoreDone, ...props }: { column
 
 export function HomeBoardSheet() {
   const openTask = useOpenTask();
-  const { tasks, loading, error, refetch, ensureAllTasks, completedHidden, update, setPhase } = useTasksContext();
+  const { tasks: storeTasks, loading, error, refetch, ensureAllTasks, completedHidden, update, setPhase } = useTasksContext();
+  // A focus space shows only its tasks on the board (experiment focus_workspace; null = no focus).
+  const focusView = useFocusView();
+  const tasks = useMemo(() => (focusView ? focusView.filter(storeTasks) : storeTasks), [focusView, storeTasks]);
   const focus = useFocusBarContext();
   const fullscreen = useFullscreen({ keepAcrossRoutes: true, place: 'home-board|tasks' });
   const [mode, setMode] = usePageView<HomeBoardView>('home-board', 'group', 'pin', (v): v is HomeBoardView => v === 'pin' || v === 'status' || v === 'sort');

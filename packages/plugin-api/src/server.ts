@@ -521,6 +521,12 @@ export interface QuietInput {
    * every task, as before.
    */
   allowTasks?: string[]
+  /**
+   * With `allowTasks`: also show only those tasks in the person's windows (a focus space of
+   * them, ending with this hold), while focus spaces are on. Never takes the place of a focus
+   * space the person chose themselves.
+   */
+  showOnly?: boolean
 }
 
 /** Your plugin's ONE quiet hold (source `plugin:<pluginId>`). `set` replaces it. */

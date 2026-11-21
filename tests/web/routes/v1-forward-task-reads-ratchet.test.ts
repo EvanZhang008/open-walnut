@@ -17,6 +17,7 @@ const ROUTES_DIR = path.resolve(__dirname, '../../../src/web/routes')
 
 /** Who answers each read through the companion: 'copy' (its task copy) or 'mac'. */
 const EXPECTED: Record<string, { by: 'copy' | 'mac'; why: string }> = {
+  '/focus-spaces': { by: 'mac', why: 'the focus spaces file and the focus the person is in are the Mac\'s' },
   '/focus/tasks': { by: 'copy', why: 'the focus tiers are fields of the task records' },
   '/focus/tiers': { by: 'copy', why: 'the focus tiers are fields of the task records' },
   '/tasks': { by: 'copy', why: 'the task list is the task store' },

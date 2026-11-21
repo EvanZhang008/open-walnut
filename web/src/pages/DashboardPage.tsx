@@ -50,6 +50,7 @@ import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
 import { MicInput } from '@/components/common/BoxMic';
+import { useFocusView } from '@/focus-spaces/useFocusView';
 
 const LS_GROUPED = 'walnut-tasks-page-grouped';
 const LS_COLLAPSED = 'walnut-tasks-page-collapsed';
@@ -79,7 +80,12 @@ export function DashboardPage() {
   const { tasks: storeTasks, loading, error, create, update, completedHidden, ensureAllTasks } = useTasksContext();
   const { toggleComplete, deleteTask } = useUndoableTaskActions();
   // Main and project leads are the org's own nodes: hidden here as on the home board (the org chart shows them).
-  const tasks = useMemo(() => storeTasks.filter((t) => !isHiddenFromTaskLists(t)), [storeTasks]);
+  // A focus space shows only its tasks here too (experiment focus_workspace; null = no focus).
+  const focusView = useFocusView();
+  const tasks = useMemo(() => {
+    const listed = storeTasks.filter((t) => !isHiddenFromTaskLists(t));
+    return focusView ? focusView.filter(listed) : listed;
+  }, [storeTasks, focusView]);
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
   const { toggleFavoriteProject } = useFavorites();
@@ -202,13 +208,15 @@ export function DashboardPage() {
   const openCountByProject = useMemo(() => openCountsByProject(tasks), [tasks]);
 
   const railProjects = useMemo<RailProjectItem[]>(() => {
-    return railProjectNames(projectNames, tasks, projectOrder).map((name) => ({
+    // In a focus the rail lists only the projects the focus shows (its own and its tasks').
+    const focusProjects = focusView ? new Set([...(focusView.active.scope.projects ?? []), ...tasks.map((t) => t.project ?? '')].map((p) => p.toLowerCase())) : null;
+    return railProjectNames(focusProjects ? projectNames.filter((n) => focusProjects.has(n.toLowerCase())) : projectNames, tasks, projectOrder).map((name) => ({
       name,
       source: sourceByName.get(name.toLowerCase()),
       favorite: favoriteByName.has(name.toLowerCase()),
       openCount: openCountByProject.get(name.toLowerCase()) ?? 0,
     }));
-  }, [projectNames, tasks, projectOrder, sourceByName, favoriteByName, openCountByProject]);
+  }, [projectNames, tasks, projectOrder, sourceByName, favoriteByName, openCountByProject, focusView]);
 
   const allOpenCount = useMemo(
     () => tasks.filter((t) => t.status !== 'done').length,

@@ -210,6 +210,9 @@ export const EventNames = {
   // Quiet mode changed (src/core/quiet/quiet-state.ts). Web + plugins.
   QUIET_CHANGED: 'quiet:changed',
 
+  // The focus space the person is in changed (src/core/focus-spaces/active.ts). Web.
+  FOCUS_SPACE_CHANGED: 'focus-space:changed',
+
   // Voice input holds the music off (src/core/stt/media-hold.ts): a page playing
   // Walnut's own music (Rhythm) pauses it, and plays it again on active: false.
   STT_MEDIA_HOLD: 'stt:media-hold',

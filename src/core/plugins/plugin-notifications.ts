@@ -18,6 +18,7 @@
 import { bus, EventNames } from '../event-bus.js'
 import { clearQuiet, getQuiet, setQuiet, type QuietState } from '../quiet/quiet-state.js'
 import { experimentCache } from '../experimental-cache.js'
+import { log } from '../../logging/index.js'
 
 const focusSpacesOn = experimentCache('focus_workspace')
 import { toDisposable, type Disposable } from './disposable.js'
@@ -176,9 +177,14 @@ export function createPluginNotifications(options: {
       async get(): Promise<QuietState> {
         return getQuiet()
       },
-      async set(input: { until?: number; reason?: string; allowPermissions?: boolean; allowTasks?: string[] } = {}): Promise<void> {
+      async set(input: { until?: number; reason?: string; allowPermissions?: boolean; allowTasks?: string[]; showOnly?: boolean } = {}): Promise<void> {
         options.assertLive('notifications.quiet.set')
-        holdCleanup ??= options.own(toDisposable(async () => { await clearQuiet(source, { owner }) }))
+        holdCleanup ??= options.own(toDisposable(async () => {
+          await clearQuiet(source, { owner })
+          await leaveBlockFocus()
+        }))
+        const tasks = Array.isArray(input.allowTasks) ? input.allowTasks.filter((t) => typeof t === 'string' && t) : []
+        const scoped = tasks.length > 0 && await focusSpacesOn.on()
         await setQuiet({
           source,
           owner,
@@ -186,13 +192,43 @@ export function createPluginNotifications(options: {
           ...(input.reason !== undefined ? { reason: input.reason } : {}),
           ...(input.allowPermissions !== undefined ? { allowPermissions: input.allowPermissions } : {}),
           // A hold that lets its tasks through exists only while focus spaces are on.
-          ...(Array.isArray(input.allowTasks) && input.allowTasks.length && await focusSpacesOn.on()
-            ? { scope: { tasks: input.allowTasks } } : {}),
+          ...(scoped ? { scope: { tasks } } : {}),
         })
+        if (scoped && input.showOnly) await enterBlockFocus(tasks, input.until)
+        else await leaveBlockFocus()
       },
       async clear(): Promise<void> {
         await clearQuiet(source)
+        await leaveBlockFocus()
       },
     },
+  }
+}
+
+/**
+ * A focus block on tasks also shows only them (a focus space of its own, `by: 'block'`), and
+ * never takes the place of a focus the person chose: it enters only when there is none or the
+ * one there is a block's, and its end leaves only a block's.
+ */
+async function enterBlockFocus(tasks: string[], until: number | undefined): Promise<void> {
+  try {
+    const { enterFocus, getActiveFocus } = await import('../focus-spaces/active.js')
+    const now = await getActiveFocus()
+    if (now && now.by !== 'block') return
+    const { getTask } = await import('../task-manager.js')
+    const title = tasks.length === 1 ? (await getTask(tasks[0]).catch(() => null))?.title : undefined
+    const live = until !== undefined && until > Date.now() && until <= Date.now() + 24 * 3600_000
+    await enterFocus({ scope: { tasks }, name: title || 'Focus block', by: 'block', ...(live ? { until } : {}) })
+  } catch (err) {
+    log.notif.warn('focus block could not enter its focus space', { error: String(err) })
+  }
+}
+
+async function leaveBlockFocus(): Promise<void> {
+  try {
+    const { leaveFocus } = await import('../focus-spaces/active.js')
+    await leaveFocus({ onlyBy: 'block' })
+  } catch (err) {
+    log.notif.warn('focus block could not leave its focus space', { error: String(err) })
   }
 }

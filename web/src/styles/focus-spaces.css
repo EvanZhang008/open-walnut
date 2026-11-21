@@ -1,0 +1,103 @@
+/* Focus spaces (web/src/focus-spaces/): the rail entry, its popover, and the cover of a chat
+   column outside the focus. The popover frame is the status items' (.status-item-popover). */
+
+.sidebar-focus-link[data-active="true"] {
+  color: var(--accent);
+  background: var(--accent-subtle);
+  font-weight: 600;
+}
+.sidebar-focus-link.is-open { color: var(--fg); background: var(--accent-subtle); }
+.sidebar-focus-link .sidebar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.focus-popover { width: 320px; max-height: min(560px, calc(100vh - 32px)); }
+
+.focus-panel { display: flex; flex-direction: column; gap: 8px; }
+.focus-panel-head { display: flex; flex-direction: column; gap: 4px; }
+.focus-panel-title { font-size: 15px; font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
+.focus-panel-detail { font-size: 12px; line-height: 16px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.focus-panel-outside { font-size: 12px; line-height: 16px; color: var(--fg-secondary); margin-top: 4px; }
+.focus-panel-caption { font-size: 11px; font-weight: 600; color: var(--fg-muted); margin-top: 4px; }
+.focus-panel-empty { font-size: 12px; line-height: 16px; color: var(--fg-muted); }
+.focus-panel-error { font-size: 12px; line-height: 16px; color: var(--error); }
+.focus-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.focus-space-list { display: flex; flex-direction: column; gap: 4px; }
+.focus-space-row { display: flex; align-items: center; gap: 8px; }
+.focus-space-enter {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.focus-space-enter:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+.focus-space-enter:disabled { opacity: 0.55; cursor: default; }
+.focus-space-enter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.focus-space-name { font-size: 13px; font-weight: 500; line-height: 18px; overflow-wrap: anywhere; }
+.focus-space-scope { font-size: 12px; line-height: 16px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.focus-space-picked { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; overflow-wrap: anywhere; }
+
+.focus-length { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.focus-length .focus-panel-caption { margin: 0 4px 0 0; }
+
+.focus-form-field { display: flex; flex-direction: column; gap: 4px; }
+.focus-form-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+.focus-form-check { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 18px; cursor: pointer; }
+.focus-form-check span { overflow-wrap: anywhere; }
+.focus-form-delete { margin-left: auto; }
+
+/* A chat column whose task is outside the focus: covered, never closed or moved, so the
+   columns stand where they were when the person leaves. */
+.focus-column-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  /* Not glass: the page's glass is for portalled overlays only (overlay-glass.css). */
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  color: var(--fg-secondary);
+  font-size: 13px;
+  line-height: 18px;
+}
+.focus-column-cover-title { font-size: 13px; font-weight: 500; color: var(--fg); }
+.main-page-session-column:has(> .focus-column-cover) { position: relative; }
+
+/* Home's task list, while in a focus: one quiet line on top (FocusBanner.tsx). */
+.focus-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 18px;
+}
+.focus-banner svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--accent); }
+.focus-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.focus-banner-name { font-weight: 600; color: var(--accent); }
+.focus-banner-detail { color: var(--fg-muted); font-size: 12px; }

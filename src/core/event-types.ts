@@ -1614,6 +1614,7 @@ export interface EventPayloadMap {
 
   'notification:removed': NotificationRemovedEvent;
   'quiet:changed': QuietState;
+  'focus-space:changed': { active: import('./focus-spaces/active.js').ActiveFocus | null };
   'stt:media-hold': SttMediaHoldEvent;
   'time:banked': TimeBankedEvent;
   'time:outside': TimeOutsideEvent;

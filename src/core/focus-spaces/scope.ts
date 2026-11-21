@@ -13,7 +13,7 @@
  */
 
 export interface FocusScope {
-  /** Project names (case-insensitive). '' is the Inbox. */
+  /** Project names (case-insensitive). The Inbox is `Inbox` ('' in older data reads as it). */
   projects?: readonly string[]
   /** Task ids; their subtasks are inside too. */
   tasks?: readonly string[]
@@ -42,7 +42,7 @@ export function scopeIsEmpty(scope: FocusScope | null | undefined): boolean {
 export function taskInScope(scope: FocusScope, taskId: string | null | undefined, lookup: ScopeTaskLookup): boolean {
   if (!taskId) return false
   const tasks = new Set(scope.tasks ?? [])
-  const projects = new Set((scope.projects ?? []).map((p) => p.trim().toLowerCase()))
+  const projects = new Set((scope.projects ?? []).map(projectKey))
   if (tasks.has(taskId)) return true
   let id: string | null | undefined = taskId
   const seen = new Set<string>()
@@ -51,10 +51,15 @@ export function taskInScope(scope: FocusScope, taskId: string | null | undefined
     if (tasks.has(id)) return true
     const task = lookup(id)
     if (!task) return false
-    if (projects.size > 0 && projects.has((task.project ?? '').trim().toLowerCase())) return true
+    if (projects.size > 0 && projects.has(projectKey(task.project ?? ''))) return true
     id = task.parent_task_id
   }
   return false
+}
+
+/** One key per project: case-insensitive, and the Inbox's old '' is `inbox`. */
+function projectKey(name: string): string {
+  return name.trim().toLowerCase() || 'inbox'
 }
 
 /** A scope cleaned for storage: trimmed, de-duplicated, capped. */

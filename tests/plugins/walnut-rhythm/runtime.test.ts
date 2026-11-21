@@ -34,7 +34,8 @@ describe('a run the person starts', () => {
     const appendLog = vi.spyOn(h.fake.api.tasks, 'appendLog')
     const started = await actions.focusStart(runtime, { taskId: 'task-7' })
     expect(started.state.focus).toMatchObject({ phase: 'focus', taskId: 'task-7', title: 'Draft the plan', minutes: 25, runStartedAt: NINE, endsAt: NINE + 25 * MIN })
-    expect(h.calls).toContainEqual({ type: 'quiet.set', input: { reason: 'Focus block', until: NINE + 25 * MIN } })
+    // A block on a task lets that task through and shows only it while focus spaces are on.
+    expect(h.calls).toContainEqual({ type: 'quiet.set', input: { reason: 'Focus block', until: NINE + 25 * MIN, allowTasks: ['task-7'], showOnly: true } })
     await expect(actions.focusStart(runtime, {})).rejects.toThrow(/already running/)
 
     await h.tick(runtime, 25 * MIN + 1)

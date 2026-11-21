@@ -40,6 +40,7 @@ const KNOWN: Record<string, string> = {
   'web/src/components/common/HostProblemNotices.tsx': 'source: pushes a host problem as a toast (pushToast), draws nothing',
   'web/src/components/common/NoticeText.tsx': 'part: the words inside a card (Details, Copy command)',
   'web/src/components/common/SetupBanner.tsx': 'inline: a row of the page asking to finish setup, part of its layout',
+  'web/src/focus-spaces/FocusBanner.tsx': 'inline: the one line on top of Home\'s task list while in a focus, part of its layout',
   'web/src/components/common/UnpairedNotice.tsx': 'page: the full-screen sign-in page',
   'web/src/components/common/update-notice-dock.ts': 'model: where the update notice docks (the sidebar), no UI',
   'web/src/components/common/update-notice-snooze.ts': 'model: the update notice\'s snooze, no UI',

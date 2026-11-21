@@ -231,7 +231,7 @@ export class RhythmRuntime {
     if (sameHold(wanted, this.hold)) return
     const quiet = this.walnut.notifications.quiet
     try {
-      if (wanted) await quiet.set({ reason: wanted.reason, ...(wanted.until !== undefined ? { until: wanted.until } : {}), ...(wanted.allowTasks ? { allowTasks: wanted.allowTasks } : {}) })
+      if (wanted) await quiet.set({ reason: wanted.reason, ...(wanted.until !== undefined ? { until: wanted.until } : {}), ...(wanted.allowTasks ? { allowTasks: wanted.allowTasks, showOnly: true } : {}) })
       else await quiet.clear()
       this.hold = wanted
     } catch (error) {

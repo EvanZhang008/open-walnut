@@ -147,6 +147,9 @@ import { draftWorkspaceRequest, setDraftWorkspace } from '@/components/workspace
 import { useCleanupNotices } from '@/components/workspaces/useCleanupNotices';
 import { rememberWorkspaceLaunch, waitingStartColumnOf, workspaceLaunchInfo, workspacePendingColumnId, workspacePendingTaskId } from '@/components/workspaces/preparing-columns';
 import { isWorkspaceUsable, workspaceOf } from '@/components/workspaces/workspace-text';
+import { useFocusView } from '@/focus-spaces/useFocusView';
+import { FocusColumnCover } from '@/focus-spaces/FocusColumnCover';
+import { FocusBanner } from '@/focus-spaces/FocusBanner';
 
 // The session columns, the focused task and the detail choice are layout record fields
 // (utils/layout-record.ts): kept on disk, so a Mac app relaunch (which drops
@@ -446,6 +449,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, setFolderParent, moveFolderToProject } = useTasksContext();
   // A completed task's workspace cleanup says when its script runs and whether the workspace went.
   useCleanupNotices(tasks);
+  // A focus space shows only its tasks on Home (experiment focus_workspace; null = no focus).
+  const focusView = useFocusView();
+  const focusTasks = useMemo(() => (focusView ? focusView.filter(tasks) : tasks), [focusView, tasks]);
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -3765,8 +3771,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         className={`main-page-todo${todoShown ? '' : ' collapsed'}`}
         style={todoShown ? { width: todoPanel.width } : undefined}
       >
+        <FocusBanner />
         <TodoPanel
-          tasks={tasks}
+          tasks={focusTasks}
           loading={loading}
           onComplete={handleComplete}
           onSetPhase={handleSetPhase}
@@ -4011,6 +4018,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   alsoLast={idx > 0 && idx < 8 && idx === sessionColumns.length - 1 ? jumpBadgeLabel(9, keyEnv) : undefined}
                 />
               )}
+              {focusView && !isDraft && !isPending && (() => {
+                const colTask = taskIdOfSession(tasks, sid);
+                return colTask && !focusView.inScope(colTask)
+                  ? <FocusColumnCover active={focusView.active} title={tasks.find((t) => t.id === colTask)?.title} />
+                  : null;
+              })()}
               {isDraft ? (
                 // A `draft:` id resolves to NOTHING server-side, so it must never
                 // reach SessionPanel (which would fetch it and render "session not
