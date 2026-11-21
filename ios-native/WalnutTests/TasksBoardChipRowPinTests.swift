@@ -207,6 +207,17 @@ final class TasksBoardChipRowPinTests: XCTestCase {
         )
     }
 
+    /// A focus space's banner (experiment focus_workspace) rides above the chips as the offline
+    /// banner does: each adds its own height, and one section gap follows whichever are drawn.
+    func testTheFocusBannerMovesThePinPointByItsOwnHeight() {
+        let base = TasksChromeMetrics.chipRowContentTop(offline: false)
+        let focus = TasksChromeMetrics.chipRowContentTop(offline: false, focusBanner: true)
+        let both = TasksChromeMetrics.chipRowContentTop(offline: true, focusBanner: true)
+        let offline = TasksChromeMetrics.chipRowContentTop(offline: true)
+        XCTAssertEqual(focus - base, TasksChromeMetrics.focusBanner + TasksChromeMetrics.sectionGap, accuracy: 0.01)
+        XCTAssertEqual(both - offline, TasksChromeMetrics.focusBanner, accuracy: 0.01)
+    }
+
     /// The style half of "the same bar": one corner radius for both copies, and it rides
     /// the projection the flip tests compare, so a future divergence fails THERE rather
     /// than needing this case to be remembered.

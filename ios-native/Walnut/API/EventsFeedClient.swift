@@ -9,6 +9,9 @@ enum EventsFeedMutation: Equatable {
     case sessionUpsert(WalnutSession)
     /// `task-activity`: one task's live action changed (nil: its turn ended).
     case taskActivity(id: String, activity: WalnutLiveActivity?)
+    /// `focus-changed` (data `{}`): the person's focus space or the saved spaces changed; read
+    /// `GET /focus-spaces` again (FocusSpacesStore).
+    case focusChanged
 }
 
 /// Pure list-merge logic for the events feed — kept out of the store so the
@@ -326,32 +329,41 @@ final class EventsFeedClient: @unchecked Sendable {
     }
 
     private func handleFrame(event: String, data: String, generation gen: UInt64) {
-        let decoder = JSONDecoder()
-        let payload = Data(data.utf8)
-        let mutation: EventsFeedMutation?
-        switch event {
-        case "snapshot":
-            if let snap = try? decoder.decode(SnapshotFrame.self, from: payload) {
-                mutation = .snapshot(tasks: snap.tasks, sessions: snap.sessions)
+        let mutation = Self.mutation(event: event, data: data)
+        if event == "snapshot" {
+            if mutation != nil {
                 // The snapshot is the proof the feed is authoritative.
                 onStateChange(.live)
             } else {
-                mutation = nil
-                AppLog.error("events", "snapshot decode failed", ["bytes": String(payload.count)])
+                AppLog.error("events", "snapshot decode failed", ["bytes": String(data.utf8.count)])
             }
-        case "task-upsert":
-            mutation = (try? decoder.decode(WalnutTask.self, from: payload)).map { .taskUpsert($0) }
-        case "task-delete":
-            mutation = (try? decoder.decode(DeleteFrame.self, from: payload)).map { .taskDelete(id: $0.id) }
-        case "session-upsert":
-            mutation = (try? decoder.decode(WalnutSession.self, from: payload)).map { .sessionUpsert($0) }
-        case "task-activity":
-            mutation = (try? decoder.decode(ActivityFrame.self, from: payload)).map { .taskActivity(id: $0.taskId, activity: $0.activity) }
-        default:
-            mutation = nil
         }
         guard let mutation else { return }
         enqueue(mutation, generation: gen)
+    }
+
+    /// One frame as the mutation it stands for; nil for a frame that does not decode or an
+    /// event this app does not know (dropped). Pure, so the mapping is tested without a socket.
+    static func mutation(event: String, data: String) -> EventsFeedMutation? {
+        let decoder = JSONDecoder()
+        let payload = Data(data.utf8)
+        switch event {
+        case "snapshot":
+            return (try? decoder.decode(SnapshotFrame.self, from: payload)).map { .snapshot(tasks: $0.tasks, sessions: $0.sessions) }
+        case "task-upsert":
+            return (try? decoder.decode(WalnutTask.self, from: payload)).map { .taskUpsert($0) }
+        case "task-delete":
+            return (try? decoder.decode(DeleteFrame.self, from: payload)).map { .taskDelete(id: $0.id) }
+        case "session-upsert":
+            return (try? decoder.decode(WalnutSession.self, from: payload)).map { .sessionUpsert($0) }
+        case "task-activity":
+            return (try? decoder.decode(ActivityFrame.self, from: payload)).map { .taskActivity(id: $0.taskId, activity: $0.activity) }
+        case "focus-changed":
+            // No payload worth reading: the frame only says "read again".
+            return .focusChanged
+        default:
+            return nil
+        }
     }
 
     /// Buffer a mutation and schedule one flush at most `flushInterval` out.

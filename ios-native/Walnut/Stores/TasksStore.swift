@@ -38,8 +38,75 @@ final class TasksStore {
         didSet {
             tasksGen &+= 1
             scheduleTaskMentionSync()
+            // Only in a focus space: with none (and always with the experiment off) a write
+            // costs what it always did.
+            if focusSpaceScope != nil { recomputeFocusSpaceInside() }
         }
     }
+
+    // MARK: - The focus space (FocusSpacesStore writes the scope)
+    //
+    // `tasks` stays WHOLE in a focus: the feed reducer, the pending overlay, the disk cache,
+    // TaskMentionResolver and every lookup by id need every row. The scope narrows only the
+    // derived slices (`focusedTasks` and the smart-list slices built on it) and the board's input.
+
+    /// The scope of the focus space the person is in; nil = none, and always nil with the
+    /// experiment off. Written only by `FocusSpacesStore`, and only when it changes.
+    var focusSpaceScope: FocusSpaceScope? = nil {
+        didSet {
+            focusGen &+= 1
+            recomputeFocusSpaceInside()
+        }
+    }
+    /// The held tasks inside the focus (empty with none). Written only when the set changes, so
+    /// a reader (the Inbox badge) re-renders when membership moves, not on every feed batch.
+    private(set) var focusSpaceInsideIds: Set<String> = []
+    /// Bumped with `focusSpaceScope`: the slice memo and the board memo key on it.
+    @ObservationIgnored private var focusGen: UInt64 = 0
+    @ObservationIgnored private var focusedCache: (gen: UInt64, rows: [WalnutTask], outside: Int)?
+
+    private func recomputeFocusSpaceInside() {
+        let next = focusSpaceScope.map { FocusSpaceScope.insideIds(of: tasks, scope: $0) } ?? []
+        if next != focusSpaceInsideIds { focusSpaceInsideIds = next }
+    }
+
+    /// Whether a task id is inside the focus; true with no focus. An id the store does not hold
+    /// is inside only when the scope names it.
+    func isInFocusSpace(_ id: String) -> Bool {
+        guard let scope = focusSpaceScope else { return true }
+        return focusSpaceInsideIds.contains(id) || scope.tasks.contains(id)
+    }
+
+    /// The tasks the lists show: every held task, or in a focus only those inside it.
+    var focusedTasks: [WalnutTask] { focusSlice.rows }
+
+    /// Open tasks outside the focus ("12 waiting outside"); 0 with no focus. Open as the open
+    /// slice counts it, and not an org node (Main and the leads are hidden from task lists).
+    var focusSpaceOutsideCount: Int { focusSlice.outside }
+
+    private var focusSlice: (rows: [WalnutTask], outside: Int) {
+        let all = tasks // observed reads FIRST (dependency tracking on hits)
+        guard focusSpaceScope != nil else { return (all, 0) }
+        let inside = focusSpaceInsideIds
+        let gen = tasksGen &+ focusGen
+        if let hit = focusedCache, hit.gen == gen { return (hit.rows, hit.outside) }
+        var rows: [WalnutTask] = []
+        var outside = 0
+        for task in all {
+            if inside.contains(task.id) {
+                rows.append(task)
+            } else if Self.isOpen(task), task.orgRole == nil {
+                outside += 1
+            }
+        }
+        focusedCache = (gen, rows, outside)
+        return (rows, outside)
+    }
+
+    nonisolated private static func isOpen(_ task: WalnutTask) -> Bool {
+        task.statusKind == .todo || task.statusKind == .inProgress
+    }
+
     /// Feed the task-mention table chat text renders titles from
     /// (`TaskMentionResolver`, see TasksStoreMentions.swift). Off in a hosted
     /// unit-test process, where every test builds its own store with fixture
@@ -399,6 +466,9 @@ final class TasksStore {
     /// (the reducer reports `changed`) so idle upsert echoes never invalidate
     /// SwiftUI. A snapshot replaces both lists wholesale (pending overlay
     /// preserved); upserts/deletes edit in place, arrival order kept.
+    /// The feed's `focus-changed` frame: FocusSpacesStore reads the focus again (`attach`).
+    @ObservationIgnored var onFocusSpacesChanged: (() -> Void)?
+
     private func applyFeedMutations(_ batch: [EventsFeedMutation]) {
         guard isActive else { return }
         MainWork.track("tasks.feed", count: batch.count) {
@@ -412,6 +482,7 @@ final class TasksStore {
         var tasksChanged = false
         var sessionsChanged = false
         var activityChanged = false
+        var focusChanged = false
         for mutation in batch {
             switch mutation {
             case .snapshot(let snapTasks, let snapSessions):
@@ -454,8 +525,12 @@ final class TasksStore {
                 let result = EventsFeedReducer.setActivity(nextTasks, id: id, activity)
                 nextTasks = result.rows
                 activityChanged = activityChanged || result.changed
+            case .focusChanged:
+                focusChanged = true
             }
         }
+        // One read of the focus spaces per batch, however many frames said so.
+        if focusChanged { onFocusSpacesChanged?() }
         // The shown clock: the board footer says "Synced <relative>" against it.
         let now = AppClock.now()
         if tasksChanged {
@@ -1239,7 +1314,7 @@ final class TasksStore {
     /// grouping emits, so a hierarchy that lands after the first board render has to
     /// invalidate the memo or the board would stay flat until something else changed.
     var boardInputsGen: UInt64 {
-        tasksGen &+ sessionsGen &+ tiersGen &+ foldersGen &+ orderingGen &+ detailsGen
+        tasksGen &+ sessionsGen &+ tiersGen &+ foldersGen &+ orderingGen &+ detailsGen &+ focusGen
     }
     @ObservationIgnored private var taskSliceCache:
         (gen: UInt64, day: Date, byFilter: [TaskFilter: [WalnutTask]]) = (0, .distantPast, [:])
@@ -1281,12 +1356,14 @@ final class TasksStore {
 
     // MARK: - Derived slices (smart lists)
 
+    // Each slice is over `focusedTasks`: the whole list, or in a focus space only what is inside.
+
     var openTasks: [WalnutTask] {
-        tasks.filter { $0.statusKind == .todo || $0.statusKind == .inProgress }
+        focusedTasks.filter { Self.isOpen($0) }
     }
 
     var inProgressTasks: [WalnutTask] {
-        tasks.filter { $0.statusKind == .inProgress }
+        focusedTasks.filter { $0.statusKind == .inProgress }
     }
 
     var todayTasks: [WalnutTask] {
@@ -1294,7 +1371,7 @@ final class TasksStore {
     }
 
     var doneTasks: [WalnutTask] {
-        tasks.filter { $0.statusKind == .done }
+        focusedTasks.filter { $0.statusKind == .done }
     }
 
     /// Open tasks that CARRY A DATE — exactly what the calendar surfaces can
@@ -1317,9 +1394,12 @@ final class TasksStore {
         // NOTE: .calendar deliberately falls through to the memoized path — the
         // card's count needs the real dated slice (see the switch below).
         _ = tasks.count // observed read FIRST (dependency tracking on hits)
+        _ = focusSpaceScope // a focus change re-renders a reader that took a hit
         let day = AppClock.startOfToday()
-        if taskSliceCache.gen != tasksGen || taskSliceCache.day != day {
-            taskSliceCache = (tasksGen, day, [:])
+        // The focus space narrows every slice, so its generation keys them too.
+        let gen = tasksGen &+ focusGen
+        if taskSliceCache.gen != gen || taskSliceCache.day != day {
+            taskSliceCache = (gen, day, [:])
         }
         if let hit = taskSliceCache.byFilter[filter] { return hit }
         let rows: [WalnutTask]
@@ -1350,6 +1430,12 @@ final class TasksStore {
         // per pinned task, so this is O(1); before the split lands, fall back to
         // the projection's own pin flag rather than showing 0.
         case .sessions:
+            // In a focus space, only the pinned tasks inside it.
+            if focusSpaceScope != nil {
+                return taskTiers.isEmpty
+                    ? focusedTasks.filter { $0.pinned == true }.count
+                    : taskTiers.keys.reduce(0) { $0 + (isInFocusSpace($1) ? 1 : 0) }
+            }
             return taskTiers.isEmpty ? tasks.filter { $0.pinned == true }.count : taskTiers.count
         // The calendar renders its own grid, so its flat slice is empty by
         // design — count what it actually PLACES instead of that empty slice.
@@ -1574,6 +1660,7 @@ extension TasksStore {
         inFlightEdits = [:]
         tasks = []
         sessions = []
+        focusSpaceScope = nil
         syncedAt = nil
         sessionsSyncedAt = nil
         sessionIdsByTask = [:]

@@ -79,6 +79,17 @@ enum InboxListing {
         letters.reduce(0) { $0 + (!$1.isArchived && !$1.isRead ? 1 : 0) }
     }
 
+    /// The tab badge in a focus space: only unread letters about a task inside it (`inFocus`
+    /// answers by task id). A letter about no task counts as outside: it waits.
+    static func unreadCount(_ letters: [Letter], inFocus: (String) -> Bool) -> Int {
+        letters.reduce(0) { count, letter in
+            guard !letter.isArchived, !letter.isRead,
+                  let taskId = letter.sender?.taskId, !taskId.isEmpty, inFocus(taskId)
+            else { return count }
+            return count + 1
+        }
+    }
+
     /// The Action needed chip's count: decisions nobody has looked at yet.
     static func unseenDecisionCount(_ letters: [Letter]) -> Int {
         letters.reduce(0) { $0 + ($1.isUnseenDecision ? 1 : 0) }

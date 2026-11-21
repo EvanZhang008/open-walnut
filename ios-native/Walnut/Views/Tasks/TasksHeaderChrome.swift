@@ -54,6 +54,10 @@ enum TasksChromeMetrics {
 
     static let offlineBanner: CGFloat = 44
 
+    /// The focus space's one-line banner (`FocusSpaceBanner`), drawn at exactly this height so
+    /// the chip row's pin point can count it.
+    static let focusBanner: CGFloat = 44
+
     /// What one chrome section boundary is ASKED to be (`listSectionSpacing(2)`) — and NOT
     /// what the platform resolves it to.
     ///
@@ -77,10 +81,13 @@ enum TasksChromeMetrics {
     // MARK: - The board's pinned chip row
 
     /// Content y of the top of the chip row: everything above it, in the order the List
-    /// draws it. Only the offline banner rides above the chips now.
-    static func chipRowContentTop(offline: Bool) -> CGFloat {
+    /// draws it. Only the offline banner and the focus space's banner ride above the chips. Both
+    /// are bare rows of one leading section, so one section gap follows whichever are drawn.
+    static func chipRowContentTop(offline: Bool, focusBanner focus: Bool = false) -> CGFloat {
         var total = listHeaderPadding
-        if offline { total += offlineBanner + sectionGap }
+        if offline { total += offlineBanner }
+        if focus { total += focusBanner }
+        if offline || focus { total += sectionGap }
         return total
     }
 
@@ -110,8 +117,8 @@ enum TasksChromeMetrics {
     /// `TasksBoardChipRowPinTests.testThePinFiresExactlyWhereTheTwoCardsCoincide` feeds
     /// both real containers through `BoardBandRailGeometry.layout` and compares the two
     /// cards as SCREEN RECTS at this offset.
-    static func chipsPinThreshold(offline: Bool) -> CGFloat {
-        chipRowContentTop(offline: offline) - pinnedChipsTopInset
+    static func chipsPinThreshold(offline: Bool, focusBanner: Bool = false) -> CGFloat {
+        chipRowContentTop(offline: offline, focusBanner: focusBanner) - pinnedChipsTopInset
     }
 
     /// Dead band under the pin point.
@@ -124,15 +131,15 @@ enum TasksChromeMetrics {
     /// and each flip is a publish.
     static let chipsPinBand: CGFloat = 4
 
-    static func chipsUnpinThreshold(offline: Bool) -> CGFloat {
-        max(0, chipsPinThreshold(offline: offline) - chipsPinBand)
+    static func chipsUnpinThreshold(offline: Bool, focusBanner: Bool = false) -> CGFloat {
+        max(0, chipsPinThreshold(offline: offline, focusBanner: focusBanner) - chipsPinBand)
     }
 
     /// Pinned now? Sticky: once pinned it holds until the list is `chipsPinBand` back
     /// above the pin point.
-    static func areChipsPinned(scrolled: CGFloat, wasPinned: Bool, offline: Bool) -> Bool {
-        if wasPinned { return scrolled > chipsUnpinThreshold(offline: offline) }
-        return scrolled > chipsPinThreshold(offline: offline)
+    static func areChipsPinned(scrolled: CGFloat, wasPinned: Bool, offline: Bool, focusBanner: Bool = false) -> Bool {
+        if wasPinned { return scrolled > chipsUnpinThreshold(offline: offline, focusBanner: focusBanner) }
+        return scrolled > chipsPinThreshold(offline: offline, focusBanner: focusBanner)
     }
 
     // MARK: - What "scrolled" is, and why the search drawer must not fake it

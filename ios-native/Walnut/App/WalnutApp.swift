@@ -91,6 +91,9 @@ struct WalnutApp: App {
         // launch path that must report syncDiskLoads=0.
         let filePreview = FilePreviewDock()
         LocalDataReset.register(tasks: tasks, chat: chat, notes: notes, inbox: inbox, filePreview: filePreview)
+        // The person's focus space narrows the task lists and the Inbox badge (experiment
+        // `focus_workspace`; off, it reads nothing and narrows nothing).
+        FocusSpacesStore.shared.attach(tasks: tasks)
         _filePreview = State(initialValue: filePreview)
     }
 
@@ -314,6 +317,13 @@ struct MainTabView: View {
     @State private var orgLink = OrgNodeLink.shared
     @State private var workCardLink = WorkCardLinkBox.shared
 
+    /// The Inbox badge: the unread letters, or in a focus space only those about a task inside
+    /// it (a letter about no task waits outside). The Inbox list itself stays whole.
+    private var inboxBadge: Int {
+        guard tasks.focusSpaceScope != nil else { return inbox.unreadCount }
+        return InboxListing.unreadCount(inbox.letters, inFocus: { tasks.isInFocusSpace($0) })
+    }
+
     var body: some View {
         TabView(selection: $selection) {
             // freezeScreen: names the visible surface for freeze reports, and
@@ -339,7 +349,7 @@ struct MainTabView: View {
                 .environment(\.composerCovered, selection != .inbox)
                 .freezeScreen("inbox")
                 .tabItem { Label("Inbox", systemImage: "envelope") }
-                .badge(inbox.unreadCount)
+                .badge(inboxBadge)
                 .tag(Tab.inbox)
             NotesView()
                 .environment(\.composerCovered, selection != .notes)
@@ -381,6 +391,9 @@ struct MainTabView: View {
             // A thread tap from a cold launch: it becomes the open request it stands for, once
             // the app is active (a prewarm launch does no network: LaunchGate).
             LaunchGate.shared.whenActive { threadLink.deliverPending() }
+            // The focus space, read once the app is in front (a return reads it again:
+            // FocusSpacesStore.resumeForForeground). With the experiment off it asks nothing.
+            LaunchGate.shared.whenActive { await FocusSpacesStore.shared.refresh() }
             if quickAction.pending != nil {
                 selection = .chat
             } else if letterLink.pending != nil {

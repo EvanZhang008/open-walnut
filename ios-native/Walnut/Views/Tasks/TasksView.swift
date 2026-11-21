@@ -22,6 +22,8 @@ struct TasksView: View {
     /// The drawer this board is in, for its tap suppression (a close drag that starts and
     /// ends on a row must not also open that row).
     @Environment(\.leadingDrawer) private var drawer
+    /// The person's focus space: the toolbar's Focus menu and the banner over the board.
+    private var focusSpaces: FocusSpacesStore { FocusSpacesStore.shared }
 
     /// Opens a task's session (or its attached draft) on the tab's page.
     let router: TaskSessionRouter
@@ -238,6 +240,13 @@ struct TasksView: View {
                     .accessibilityLabel("Recently opened")
                     .accessibilityIdentifier("tasks.recents")
                 }
+                // The focus space (experiment `focus_workspace`): enter a saved space, leave
+                // or switch. Absent while the server has the experiment off.
+                if focusSpaces.isAvailable {
+                    ToolbarItem(placement: .topBarLeading) {
+                        FocusSpaceMenu()
+                    }
+                }
                 // The calendar opens as a page of its own over the session: its day and
                 // week pagers swipe sideways edge to edge, which inside the drawer would
                 // fight the drawer's close swipe.
@@ -410,6 +419,15 @@ struct TasksView: View {
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
+                // In a focus space: its name, its end and what waits outside, with Leave. A bare
+                // row like the offline banner, counted by the chip row's pin point.
+                if let focus = focusSpaces.active {
+                    FocusSpaceBanner(focus: focus)
+                        .frame(height: TasksChromeMetrics.focusBanner)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
 
                 // ROW 1: the tier chips, and the only row here that pins.
                 //
@@ -552,7 +570,8 @@ struct TasksView: View {
                 let pinned = TasksChromeMetrics.areChipsPinned(
                     scrolled: scrolled,
                     wasPinned: chipsPinLatch.isPinned,
-                    offline: !connection.online
+                    offline: !connection.online,
+                    focusBanner: focusSpaces.active != nil
                 )
                 chipsPinTracker.request(pinned, current: chipsPinLatch.isPinned) { value in
                     chipsPinLatch.isPinned = value
@@ -849,7 +868,9 @@ struct TasksView: View {
     /// and the board would stop updating. This is the same order `TasksStore`'s slice
     /// getters use, for the same reason.
     private var boardAssembly: BoardAssembly {
-        let rows = tasks.tasks
+        // In a focus space only the tasks inside it; the whole list otherwise. Its generation is
+        // part of `boardInputsGen`, so entering or leaving rebuilds the bands.
+        let rows = tasks.focusedTasks
         let sessions = tasks.sessions
         let tierOf = tasks.taskTiers
         let tierOrder = tasks.taskTierOrder

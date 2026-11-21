@@ -70,7 +70,8 @@ struct CalendarTabView: View {
         // Bind derived collections ONCE per body pass (TasksView discipline):
         // one bucketing walk feeds every view. The filter narrows the LIST
         // first, so the two bucketing walks run over the smaller set.
-        let visibleTasks = filter.apply(toTasks: tasks.tasks)
+        // In a focus space, only the tasks inside it (`focusedTasks` is the whole list otherwise).
+        let visibleTasks = filter.apply(toTasks: tasks.focusedTasks)
         let taskBuckets = CalendarLogic.bucketTasks(visibleTasks, calendar: calendar)
         let spanBuckets = CalendarTimeline.bucketTaskSpans(visibleTasks, calendar: calendar)
         VStack(spacing: 0) {
