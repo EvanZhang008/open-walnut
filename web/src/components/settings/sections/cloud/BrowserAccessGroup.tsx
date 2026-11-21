@@ -416,7 +416,7 @@ export function BrowserAccessGroup({ heading }: { heading?: string } = {}) {
             />
           ))}
           <SettingsRow
-            label={provider?.title ?? 'Tunnel'}
+            label="Tunnel"
             htmlFor="browser-access-enabled"
             help={
               // Connected: the tab's own Now line says so and where it runs; read out here, not shown twice.
