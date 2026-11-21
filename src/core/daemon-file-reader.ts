@@ -8,6 +8,7 @@
 import path from 'node:path'
 import { log } from '../logging/index.js'
 import { link, linkTarget } from './hosts/link.js'
+import { ReadProgress, creditCurrentRead, currentReadProgress, runWithReadProgress } from './hosts/read-progress.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
 import { byteCeilingError, isByteCeilingError } from './byte-ceiling.js'
@@ -91,8 +92,8 @@ export class DaemonFileReader implements SessionFileReader {
     return DaemonFileReader.DEFAULT_MAX_READ_BYTES
   }
 
-  /** Reads moving a file's bytes now, by what they read (shareRead). */
-  private static readsInFlight = new Map<string, Promise<unknown>>()
+  /** Reads moving a file's bytes now, by what they read (shareRead), each with the bytes that reached it so far. */
+  private static readsInFlight = new Map<string, { read: Promise<unknown>; bytes: () => number }>()
 
   /**
    * One transfer for every reader of the same bytes of the same file as it stands.
@@ -106,6 +107,12 @@ export class DaemonFileReader implements SessionFileReader {
    * (incarnation, size, mtime) and the same range joins the one in flight. The stat
    * is the caller's, taken before it asked, so a joiner gets the bytes a read of its
    * own would have got; a file that changed since is another key and a read of its own.
+   *
+   * A joiner's read is judged by the bytes reaching it (hosts/read-progress.ts), and the
+   * shared transfer's commands were sent inside the reader that started it. So the transfer
+   * counts in a progress of its own, and every joiner is credited with it: a history
+   * request that joined the sweep's transfer saw no byte of it and was cut as a silent
+   * host after 20 s while the bytes it waited for kept arriving (CI, 2026-11-20).
    */
   private shareRead<T>(what: string, remotePath: string, at: FileIdentity, run: () => Promise<T>): Promise<T> {
     const key = [this.host, at.epoch ?? remotePath, at.size, at.mtimeMs, what].join('\u0000')
@@ -115,11 +122,22 @@ export class DaemonFileReader implements SessionFileReader {
       log.session.info('DaemonFileReader: joined a read in flight', {
         host: this.host, path: remotePath, what, fileSize: at.size,
       })
-      return running as Promise<T>
+      creditCurrentRead(running.bytes)
+      return running.read as Promise<T>
     }
-    const read = run()
-    inFlight.set(key, read)
-    void read.finally(() => { if (inFlight.get(key) === read) inFlight.delete(key) }).catch(() => { /* the caller sees it */ })
+    // Inside the starter's read (its parent), so the starter still counts every command.
+    const progress = new ReadProgress(currentReadProgress())
+    let settled: number | null = null
+    const bytes = (): number => settled ?? Math.max(0, progress.bytes())
+    const read = runWithReadProgress(progress, run)
+    const entry = { read, bytes }
+    inFlight.set(key, entry)
+    void read.finally(() => {
+      // Frozen at settle, as a command's own count is; the closed progress takes no more commands.
+      settled = bytes()
+      progress.close()
+      if (inFlight.get(key) === entry) inFlight.delete(key)
+    }).catch(() => { /* the caller sees it */ })
     return read
   }
 
