@@ -11,6 +11,8 @@
  *
  *   cloud      phones and Macs with a record on the companion, and this Mac's own link
  *   tailscale  phones with a record on this Mac (Tailscale reaches this Mac's own pairing)
+ *   wifi       phones with a record on this Mac (on the same Wi-Fi they reach it directly), and
+ *              browsers signed in with a code, so one signed in here is signed out here too
  *   browser    browsers and the Walnut extension, signed in with a code from that tab
  *   all        phones, browsers, the extension and other Macs, each row tagged with the ways it uses
  *   advanced   what is no phone and no browser (simulators; Settings > Advanced), with this Mac's own link
@@ -18,7 +20,7 @@
 import type { DeviceEntry } from './devices-reply';
 import type { PairTargetKind } from './usePairDevice';
 
-export type DeviceScope = 'all' | 'cloud' | 'tailscale' | 'browser' | 'advanced';
+export type DeviceScope = 'all' | 'cloud' | 'tailscale' | 'browser' | 'wifi' | 'advanced';
 
 /** One row per device name, with the boxes that hold a record of it. */
 export type DeviceRow = DeviceEntry & { kinds: PairTargetKind[] };
@@ -51,6 +53,9 @@ export function mergeDeviceRows(devices: readonly DeviceEntry[], cloudDevices: r
 
 const roleOf = (r: DeviceRow) => r.role ?? 'phone';
 
+/** A browser signed in with a code (the server names it `browser-` and six hex), not the Walnut extension. */
+export const SIGNED_IN_BROWSER = /^browser-[0-9a-f]{6}$/;
+
 /** The rows a tab lists. Simulators show only in Settings > Advanced. */
 export function rowsForScope(rows: readonly DeviceRow[], scope: DeviceScope): DeviceRow[] {
   switch (scope) {
@@ -58,12 +63,13 @@ export function rowsForScope(rows: readonly DeviceRow[], scope: DeviceScope): De
     case 'advanced': return rows.filter((r) => !['phone', 'browser', 'mac'].includes(roleOf(r)));
     case 'cloud': return rows.filter((r) => r.kinds.includes('cloud') && (roleOf(r) === 'phone' || roleOf(r) === 'mac'));
     case 'tailscale': return rows.filter((r) => r.kinds.includes('lan') && roleOf(r) === 'phone');
+    case 'wifi': return rows.filter((r) => (r.kinds.includes('lan') && roleOf(r) === 'phone') || (roleOf(r) === 'browser' && SIGNED_IN_BROWSER.test(r.name)));
     case 'browser': return rows.filter((r) => roleOf(r) === 'browser');
   }
 }
 
 /** A way a device uses, named as its tab is (a browser's way is its own group, so it has none). */
-export type WayTag = 'Cloud companion' | 'Wi-Fi';
+export type WayTag = 'Cloud companion' | 'Same Wi-Fi';
 
 /**
  * The ways a row reaches Walnut, by the tab names: a record on the companion is the
@@ -77,7 +83,7 @@ export type WayTag = 'Cloud companion' | 'Wi-Fi';
  */
 export function wayTags(row: DeviceRow, opts: { scope: DeviceScope; replica?: boolean }): WayTag[] {
   if (roleOf(row) === 'browser') return [];
-  const own: WayTag | null = opts.scope === 'cloud' ? 'Cloud companion' : null;
+  const own: WayTag | null = opts.scope === 'cloud' ? 'Cloud companion' : opts.scope === 'wifi' ? 'Same Wi-Fi' : null;
   return waysOf(row, opts).filter((t) => t !== own);
 }
 
@@ -85,17 +91,16 @@ function waysOf(row: DeviceRow, opts: { replica?: boolean }): WayTag[] {
   if (opts.replica) return ['Cloud companion'];
   const tags: WayTag[] = [];
   if (row.kinds.includes('cloud')) tags.push('Cloud companion');
-  if (row.kinds.includes('lan')) tags.push('Wi-Fi');
+  if (row.kinds.includes('lan')) tags.push('Same Wi-Fi');
   return tags;
 }
 
 /**
  * The address a tab's pairing QR carries: its own way's (pairing lives in each way's tab,
- * 2026-11-18). All devices pairs too where no way tab reaches every phone:
- *   - on this Mac without a companion, on this Wi-Fi: a QR carries one address, and a phone without
- *     Tailscale cannot reach a tailnet one, so a Tailscale address alone is no reason to drop it;
- *   - on the companion's own console, through its own address (it has no other tab that pairs);
- *   - never for a browser signed in with a code: the server refuses it every code.
+ * 2026-11-18; Wi-Fi got its own tab 2026-11-21, the user: "Put it in closest so people know").
+ * All devices pairs only on the companion's own console, through its own address (it has no
+ * other tab that pairs), and never for a browser signed in with a code: the server refuses it
+ * every code.
  */
 export function pairTargetForScope(
   scope: DeviceScope,
@@ -105,10 +110,8 @@ export function pairTargetForScope(
   if (opts.deviceCaller) return null;
   if (scope === 'cloud') return 'cloud';
   if (scope === 'tailscale') return 'tailnet';
-  if (scope === 'all') {
-    if (opts.replica) return offered.includes('cloud') ? 'cloud' : null;
-    return offered.includes('cloud') ? null : 'lan';
-  }
+  if (scope === 'wifi') return opts.replica ? null : 'lan';
+  if (scope === 'all' && opts.replica) return offered.includes('cloud') ? 'cloud' : null;
   return null;
 }
 

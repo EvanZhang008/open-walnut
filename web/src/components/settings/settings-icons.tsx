@@ -16,7 +16,7 @@ export type SettingsGlyphName =
   | 'hand-raised' | 'heart-pulse' | 'tray' | 'magnifier' | 'archive-box'
   | 'phone' | 'server-stack' | 'sliders' | 'bar-chart' | 'target' | 'display'
   | 'ladybug' | 'layers' | 'cloud' | 'key' | 'arrow-up-right' | 'circle-x'
-  | 'filter' | 'network' | 'globe' | 'keyboard'
+  | 'filter' | 'network' | 'globe' | 'keyboard' | 'wifi'
 
 export const SETTINGS_ICONS: Readonly<Record<SettingsGlyphName, ReactNode>> = {
   'two-person': (
@@ -179,6 +179,12 @@ export const SETTINGS_ICONS: Readonly<Record<SettingsGlyphName, ReactNode>> = {
       <circle cx="5.5" cy="18" r="2.2" />
       <circle cx="18.5" cy="18" r="2.2" />
       <path d="M11 7.5l-4.4 8.5M13 7.5l4.4 8.5M7.7 18h8.6" />
+    </>
+  ),
+  wifi: (
+    <>
+      <path d="M3 9.5c5-4.7 13-4.7 18 0M6 13c3.4-3.1 8.6-3.1 12 0M9 16.4c1.7-1.5 4.3-1.5 6 0" />
+      <circle cx="12" cy="19.2" r="1.2" />
     </>
   ),
   globe: (

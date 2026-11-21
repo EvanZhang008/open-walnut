@@ -1,4 +1,4 @@
-/* Settings > Phones & Cloud > Open from a browser (BrowserAccessGroup). */
+/* Settings > Phones & Cloud > Browser from anywhere (BrowserAccessGroup). */
 
 .browser-access-state {
   display: inline-flex;
@@ -29,19 +29,6 @@
 
 
 
-/* Open on your phone: the link's QR code beside its text. */
-.browser-access-phone {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.browser-access-phone-text {
-  display: block;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
 .browser-access-qr {
   flex: 0 0 auto;
   border-radius: 8px;
@@ -53,7 +40,7 @@
 }
 
 .browser-access-link {
-  display: block;
+  display: inline;
   min-width: 0;
   margin-bottom: 4px;
   font-size: 12px;
@@ -67,6 +54,8 @@
   letter-spacing: 0.08em;
   color: var(--fg);
   user-select: all;
+  /* A code split at its hyphen is typed half. */
+  white-space: nowrap;
 }
 
 /* The code in words, on its own line under the link's note. */
@@ -78,3 +67,13 @@
 .browser-access-reveal {
   font-size: inherit;
 }
+
+/* A sign-in code's two ways in (cloud/SignInWays.tsx): On a computer, then On a phone. */
+.sign-in-ways { display: flex; flex-direction: column; gap: 10px; }
+.sign-in-way { display: flex; flex-direction: column; gap: 4px; }
+.sign-in-way-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.sign-in-way-body { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--fg); }
+.sign-in-way[data-way="phone"] .sign-in-way-body { flex-wrap: nowrap; }
+/* Smaller than the link was, beside its sentence: a phone camera reads it at this size. */
+.sign-in-way-qr { width: 128px; height: 128px; }
+.sign-in-way-text { color: var(--fg); }

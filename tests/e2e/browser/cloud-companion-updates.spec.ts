@@ -12,7 +12,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
-import { openWay } from './devices-ways-helpers'
+import { openCloudManage, openWay } from './devices-ways-helpers'
 import { dropFakes } from './route-teardown'
 
 test.setTimeout(120_000)
@@ -66,6 +66,8 @@ async function openCloud(page: Page) {
   const section = await openWay(page, 'cloud')
   await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
   await expect(nav).toHaveAttribute('aria-current', 'page')
+  // Sync and updates are upkeep, folded under the phones.
+  await openCloudManage(page)
   await expect(section).toContainText('Cloud sync', { timeout: 30_000 })
   await expect(section).not.toHaveAttribute('data-crashed', 'true')
   return section

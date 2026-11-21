@@ -292,13 +292,15 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     keywords: ['backup', 'restore', 'r2', 'cloudflare', 'google drive', 'drive', 's3', 'bucket', 'recovery key', 'encryption', 'aws'],
     render: ({ config, saveSection }) => <BackupSection config={config} onSave={saveSection} />,
   },
-  // Machines: Phones & Cloud is one entry with four tabs (settings-way-panes.ts): the
-  // three ways to reach Walnut, and Devices. The entry opens the tab in use. SSH hosts
+  // Machines: Phones & Cloud is one entry with five tabs (settings-way-panes.ts): the
+  // four ways to reach Walnut, and All devices. The entry opens the tab in use. SSH hosts
   // for remote sessions are their own entry.
   {
     owner: 'walnut', id: 'devices', label: 'Phones & Cloud', title: 'Phones & Cloud', group: 'configure',
     icon: 'phone', tint: '#5856D6',
-    description: 'How your phone and browsers reach Walnut: the cloud companion, Tailscale, or a tunnel.',
+    // Which tab for which job, in the words of the job (2026-11-21 placement review: a first-time
+    // user should not need the network names to pick a tab).
+    description: 'How the Walnut app and your browsers reach this Walnut, one tab per way, each saying what it is for.',
     keywords: ['phone', 'iphone'],
     render: () => <PhonesCloudLanding />,
   },
@@ -308,7 +310,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     icon: 'cloud', tint: '#5856D6',
     description: 'A small server of yours in the cloud that your phone talks to, even while this Mac sleeps.',
     keywords: ['cloud', 'companion', 'bridge', 'relay', 'updates',
-      { word: 'pair phone qr code', rowLabel: 'Pair a phone this way', anchor: 'way-pair-cloud' },
+      { word: 'pair phone qr code', rowLabel: 'Pair the Walnut app', anchor: 'way-pair-cloud' },
       { word: 'away sleep take over backup leader', rowLabel: 'Cloud companion takes over', anchor: 'devices-backup-leader' },
       { word: 'keeps copies', rowLabel: 'What the cloud companion keeps', anchor: 'companion-keep' }],
     render: ({ config, saveSection }) => <CloudSection config={config} onSave={saveSection} />,
@@ -319,7 +321,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     icon: 'network', tint: '#5856D6',
     description: 'A private network between this Mac and your phone, so the phone talks to this Mac directly.',
     keywords: ['tailscale', 'tailnet', 'vpn', 'from anywhere',
-      { word: 'pair phone qr code', rowLabel: 'Pair a phone this way', anchor: 'way-pair-tailscale' }],
+      { word: 'pair phone qr code', rowLabel: 'Pair the Walnut app', anchor: 'way-pair-tailscale' }],
     render: () => <DevicesWaySection way="tailscale" />,
   },
   {
@@ -331,11 +333,20 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <DevicesWaySection way="browser" />,
   },
   {
+    owner: 'walnut', id: 'devices-wifi', label: 'Same Wi-Fi', title: 'Same Wi-Fi', group: 'configure', tabOf: 'devices',
+    requires: 'primary',
+    icon: 'wifi', tint: '#5856D6',
+    description: "This Mac's own address on your home network: a phone or browser on the same Wi-Fi opens Walnut straight from this Mac.",
+    keywords: ['wifi', 'wi-fi', 'home network', 'local network', 'lan',
+      { word: 'pair phone qr code', rowLabel: 'Pair the Walnut app', anchor: 'way-pair-wifi' },
+      { word: 'browser sign-in code', rowLabel: 'Sign in a browser', anchor: 'devices-wifi-browser' }],
+    render: () => <DevicesWaySection way="wifi" />,
+  },
+  {
     owner: 'walnut', id: 'devices-phones', label: 'All devices', title: 'All devices', group: 'configure', tabOf: 'devices',
     icon: 'phone', tint: '#34AADC',
     description: 'Every phone with the Walnut app, signed-in browser, the Walnut extension and other Macs.',
-    keywords: ['phone', 'iphone', 'paired phones', 'walnut app', 'signed-in browsers', 'extension', 'devices',
-      { word: 'wifi wi-fi', rowLabel: 'Pair a phone on this Wi-Fi', anchor: 'way-pair-all' }],
+    keywords: ['phone', 'iphone', 'paired phones', 'walnut app', 'signed-in browsers', 'extension', 'devices'],
     render: () => <DevicesSection />,
   },
   {

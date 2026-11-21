@@ -138,7 +138,7 @@ test.describe('on an iPhone', () => {
     await expect(notice.locator('.unpaired-notice-tagline')).toHaveText('Your tasks, AI sessions and notes, from the computer Walnut runs on.')
     await expect(notice.locator('.unpaired-notice-steps li')).toHaveText([
       `1${STEP1}`,
-      '2On this phone, open the link shown under Open on your phone.',
+      '2On this phone, scan the QR code shown under On a phone, or open the sign-in link.',
     ])
     await expect(notice.locator('h2')).toHaveText('Sign-in code')
     await expect(notice.locator('.unpaired-notice-hint')).toHaveText("Can't open the link? Paste it here.")
@@ -403,7 +403,7 @@ test.describe('on an iPhone', () => {
       return !!(code.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING)
     })
     expect(order).toBe(true)
-    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.')
+    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Paste the sign-in link (Copy sign-in link copies it) into the field above. Opening the link opens Safari, not this app.')
     // N2-20: "above" is true: the field sits before the steps on screen.
     const fieldY = (await page.getByTestId('unpaired-code-input').boundingBox())!.y
     const stepsY = (await notice.locator('.unpaired-notice-steps').boundingBox())!.y
@@ -438,7 +438,7 @@ test.describe('on a computer browser', () => {
     const icon = (await notice.locator('.unpaired-notice-icon').boundingBox())!
     expect(Math.abs(icon.y - 96)).toBeLessThanOrEqual(1)
     await expect(notice.locator('h1')).toHaveText('Sign in to Walnut')
-    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Open the link shown under Open on your phone in this browser, or paste it below.')
+    await expect(notice.locator('.unpaired-notice-steps li').nth(1)).toHaveText('2Open the sign-in link in this browser, or paste it below.')
     await expect(notice.locator('h2')).toHaveText('Sign-in code')
     await expect(notice.locator('.unpaired-notice-hint')).toHaveCount(0)
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)

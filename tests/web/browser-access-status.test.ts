@@ -1,5 +1,5 @@
 /**
- * The "Open from a browser" group's words per tunnel state
+ * The "Browser from anywhere" group's words per tunnel state
  * (web/src/components/settings/sections/cloud/browser-access-status.ts) and its
  * poll interval.
  */

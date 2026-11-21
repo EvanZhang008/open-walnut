@@ -22,13 +22,26 @@ import '@/styles/notice-card.css';
 
 export const PANE_TITLE = 'Phones & Cloud';
 
+/**
+ * What each tab is for, in the words of the job, under its name (2026-11-21 placement review:
+ * a first-time user should pick a tab without knowing the network names).
+ */
+export const TAB_HINT: Record<PhonesCloudTab, string> = {
+  [WAY_PANES.cloud]: 'Walnut app anywhere (best)',
+  [WAY_PANES.tailscale]: 'Walnut app · Mac must be awake',
+  [WAY_PANES.browser]: 'Browser anywhere',
+  [WAY_PANES.wifi]: 'App or browser on this network',
+  [DEVICES_TAB]: 'Remove, sign out',
+};
+
 interface TabView {
   id: PhonesCloudTab;
   label: string;
   dot?: WayDot;
+  /** The way's state word for a screen reader (the dot shows it). */
+  state?: string;
   tag: string;
   what: string;
-  useWhen: string;
   status?: string;
 }
 
@@ -78,9 +91,11 @@ export function usePhonesCloudView(): PhonesCloudView {
     id: WAY_PANES[w.id],
     label: w.title,
     dot: w.dot,
-    tag: w.inUse ? 'In use' : w.tag,
+    state: w.tag,
+    // Five tabs fit the pane only without a plain On/Off word: the dot says that, a word
+    // stays for the way in use and one that needs a look (Not answering, Needs you...).
+    tag: w.inUse ? 'In use' : w.dot === 'warn' ? w.tag : '',
     what: w.what,
-    useWhen: w.useWhen,
     status: w.status,
   });
   const devicesTab: TabView = {
@@ -88,7 +103,6 @@ export function usePhonesCloudView(): PhonesCloudView {
     label: 'All devices',
     tag: listState === 'ready' ? String(names.size) : '',
     what: DEVICES_INTRO.what,
-    useWhen: DEVICES_INTRO.useWhen,
   };
   // A replica's own console has no Tailscale or tunnel to set up (those panes need the Mac);
   // it shows its own public address only when it has one (the companion's public door).
@@ -150,9 +164,13 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
           data-testid={`pc-tab-${t.id}`}
         >
           {t.dot && <span className="devices-way-dot" data-dot={t.dot} aria-hidden="true" />}
-          {t.label
-            ? <span className="pc-tab-label">{t.label}</span>
-            : <span className="pc-tab-label pc-tab-label-pending" role="img" aria-label="Loading" data-testid="pc-tab-label-pending" />}
+          {t.state && !t.tag && <span className="settings-visually-hidden">{`${t.state}: `}</span>}
+          <span className="pc-tab-text">
+            {t.label
+              ? <span className="pc-tab-label">{t.label}</span>
+              : <span className="pc-tab-label pc-tab-label-pending" role="img" aria-label="Loading" data-testid="pc-tab-label-pending" />}
+            <span className="pc-tab-hint">{TAB_HINT[t.id]}</span>
+          </span>
           {t.tag && <span className="devices-way-tag" data-dot={t.tag === 'In use' ? 'on' : t.dot}>{t.tag}</span>}
         </a>
       ))}
@@ -191,7 +209,6 @@ export function PhonesCloudTabHead({ tab, view }: { tab: PhonesCloudTab; view: P
       {t && (
         <div className="pc-intro" data-testid={`pc-intro-${tab}`}>
           <p className="pc-intro-what">{t.what}</p>
-          <p className="pc-intro-when"><span className="pc-intro-key">Use it when</span>{t.useWhen}</p>
           {t.status && (
             <p className="pc-intro-now">
               <span className="pc-intro-key">Now</span>

@@ -26,7 +26,7 @@
 
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { consumeBrowserCode, mintBrowserCode } from '../../core/browser-pairing.js'
+import { consumeBrowserCodeId, mintBrowserCode, revokeBrowserCode } from '../../core/browser-pairing.js'
 import { createDeviceAs, listDeviceRecords, listDevices, setDeviceInfo } from '../../core/device-auth.js'
 import { browserKindFromUserAgent, numberedDeviceName } from '../../core/browser-kind.js'
 import { LOCAL_ACTOR } from '../../core/device-actor.js'
@@ -91,7 +91,7 @@ browserCodeRouter.post('/browser-code', async (req: Request, res: Response, next
     return
   }
   try {
-    const { code, expiresAt } = mintBrowserCode()
+    const { code, expiresAt, id } = mintBrowserCode()
     const status = getExposeRuntime()?.status()
     // A tunnel a host carries is that host's address, which hostAddresses lists.
     const url = status?.state === 'connected' && !status.runsOn ? status.url : undefined
@@ -106,6 +106,8 @@ browserCodeRouter.post('/browser-code', async (req: Request, res: Response, next
     res.json({
       code,
       expiresAt,
+      // Names this code in the sign-in event (`codeId`) and in a revoke.
+      id,
       // `url`/`link`: this computer's tunnel as before, else the first host's.
       ...(addresses[0] ? { url: addresses[0].url, link: addresses[0].link } : {}),
       addresses,
@@ -113,6 +115,19 @@ browserCodeRouter.post('/browser-code', async (req: Request, res: Response, next
   } catch (err) {
     next(err)
   }
+})
+
+// A page that showed a code and made a new one takes the old one back, so a code someone may
+// have seen stops working at once (and leaves its place among the few live codes).
+// Taking a code back only narrows who can sign in, so any caller may (an agent too: no door only a
+// person has, tests/core/agent-parity-ratchet.test.ts); the id is random and names no code.
+browserCodeRouter.post('/browser-code/revoke', (req: Request, res: Response) => {
+  const id = (req.body as { id?: unknown } | undefined)?.id
+  if (typeof id !== 'string' || !/^[0-9a-f]{16}$/.test(id)) {
+    res.status(400).json({ error: 'A code id is 16 hex characters.' })
+    return
+  }
+  res.json({ revoked: revokeBrowserCode(id) })
 })
 
 async function freshBrowserName(prefix: 'browser' | 'extension'): Promise<string> {
@@ -140,7 +155,8 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
       return
     }
     const code = (req.body as { code?: unknown } | undefined)?.code
-    if (typeof code !== 'string' || code.length > 32 || !consumeBrowserCode(code)) {
+    const codeId = typeof code === 'string' && code.length <= 32 ? consumeBrowserCodeId(code) : null
+    if (codeId === null) {
       recordAuthFailure(codeKey)
       log.web.warn('browser sign-in: wrong or expired code', { ip })
       res.status(400).json({ error: { code: 'invalid_code', message: 'That code is wrong, already used or expired. Make a new one in Walnut on your computer.' } })
@@ -160,7 +176,8 @@ browserPairV1Router.post('/browser-pair', async (req: Request, res: Response, ne
     clearAuthFailures(ip)
     log.web.info('browser signed in', { device: name })
     // Its link is used up: Settings shows the next one (BrowserAccessGroup's phone link).
-    bus.emit(BROWSER_SIGNED_IN_EVENT, { name }, ['web-ui'], { source: 'browser-pair' })
+    // `codeId` names the code it used, so only the page showing that code treats it as used.
+    bus.emit(BROWSER_SIGNED_IN_EVENT, { name, codeId }, ['web-ui'], { source: 'browser-pair' })
     // A browser's token lasts hours and its page renews it; one that could not start renewing keeps a token that never expires.
     const signIn = extension ? null : await beginBrowserSignIn(name, device.token).catch((err: unknown) => {
       log.web.warn('browser sign-in: renewing could not start; this browser keeps a token that never expires', { name, error: err instanceof Error ? err.message : String(err) })

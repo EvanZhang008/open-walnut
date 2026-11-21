@@ -15,7 +15,7 @@
  *      right one signs the browser in and the board loads
  *   3. a `#pair=` link signs a fresh browser in on open and leaves the address bar
  *   4. the same link again: the notice shows why, with the code filled in
- *   5. a signed-in browser is listed under Signed-in browsers; removing it shows
+ *   5. a signed-in browser is listed under Browsers signed in to this Walnut; removing it shows
  *      "This browser was signed out" over the console; a removed phone sees
  *      "This phone was signed out"
  *   6. turning it off ends the tunnel
@@ -130,7 +130,7 @@ test.describe('Open from a browser', () => {
     await context.close()
   })
 
-  test('turn it on: the phone link shows by itself', async ({ page, baseURL }) => {
+  test('turn it on: the sign-in link shows by itself', async ({ page, baseURL }) => {
     await useServerTunnel(page.request, baseURL)
     const group = await openDevices(page)
     const state = page.getByTestId('browser-access-state')
@@ -145,16 +145,18 @@ test.describe('Open from a browser', () => {
     // that link beside it. The text hides the code; the href and the QR carry it.
     const row = page.getByTestId('browser-access-code')
     const shown = page.getByTestId('browser-access-link')
-    await expect(shown).toHaveAttribute('href', /^http:\/\/127\.0\.0\.1:\d+\/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
-    link = (await shown.getAttribute('href'))!
+    // The link shows with its code hidden; its QR (and Copy) carries it whole.
+    const qr = page.getByTestId('browser-access-qr')
+    await expect(qr).toHaveAttribute('data-for', /^http:\/\/127\.0\.0\.1:\d+\/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
+    link = (await qr.getAttribute('data-for'))!
     tunnelUrl = link.split('/#pair=')[0]!
-    await expect(shown).toHaveText(`${tunnelUrl}/#pair=••••-••••`)
-    await expect(row).not.toContainText(link.split('#pair=')[1]!)
+    // The tunnel's host to open and the code to type there, beside the QR of the whole link.
+    await expect(shown).toHaveText(new URL(tunnelUrl).host)
+    await expect(page.getByTestId('browser-access-code-value')).toHaveText(link.split('#pair=')[1]!)
     await expect(row.getByTestId('browser-access-link')).toHaveCount(1)
     await expect(row.locator('img')).toHaveCount(1)
     await expectQrEncodes(row.getByTestId('browser-access-qr'), link)
     await expect(page.getByTestId('browser-access-copy-link')).toBeVisible()
-    await expect(page.getByTestId('browser-access-code-value')).toHaveCount(0)
     await shot(page, '2-connected-code', group)
   })
 
@@ -237,9 +239,14 @@ test.describe('Open from a browser', () => {
     expect(link).toContain('#pair=')
     // Settings open on this computer while the phone uses the link: it shows its own link now.
     await openDevices(page)
-    const shown = page.getByTestId('browser-access-link')
-    await expect(shown).toHaveAttribute('href', /#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
-    const before = (await shown.getAttribute('href'))!
+    // The link on screen, whole as its QR carries it (the text hides the code).
+    const shown = page.getByTestId('browser-access-qr')
+    await expect(shown).toHaveAttribute('data-for', /#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/, { timeout: 30_000 })
+    const before = (await shown.getAttribute('data-for'))!
+    // The phone opens the link this page shows: only the page showing a code treats its
+    // sign-in as its own (another code's sign-in leaves the shown link alone). Later tests
+    // reuse it as the used-up link.
+    link = before
     const phone = await tunnelPage(browser)
     await phone.goto(link)
     // A right code reloads the page with the new token, so a read can land mid-reload
@@ -251,14 +258,14 @@ test.describe('Open from a browser', () => {
     await expect(phone.getByTestId('unpaired-notice')).toBeHidden()
     // The server says a browser signed in (browser:signed-in): a fresh link replaces the shown
     // one by itself, with no reload or click.
-    await expect.poll(() => shown.getAttribute('href'), { timeout: 15_000 }).not.toBe(before)
-    const after = (await shown.getAttribute('href'))!
+    await expect.poll(() => shown.getAttribute('data-for'), { timeout: 15_000 }).not.toBe(before)
+    const after = (await shown.getAttribute('data-for'))!
     expect(after.startsWith(`${tunnelUrl}/#pair=`)).toBe(true)
     expect(after).toMatch(/#pair=[2-9A-Z]{4}-[2-9A-Z]{4}$/)
     // And the computer says the sign-in worked, so the swapped link is no surprise.
-    await expect(page.getByTestId('browser-access-signed-in-note')).toContainText('A browser just signed in with the link; it now shows under Signed-in browsers at the end of this page.')
+    await expect(page.getByTestId('browser-access-signed-in-note')).toContainText('A browser just signed in with the link; it now shows under Browsers signed in to this Walnut at the end of this page.')
     // And it does: the tunnel's tab lists its signed-in browsers under its own settings.
-    await expect(page.locator('#devices-browser').getByTestId('devices-browsers-group')).toContainText('Signed-in browsers')
+    await expect(page.locator('#devices-browser').getByTestId('devices-browsers-group')).toContainText('Browsers signed in to this Walnut')
     await phone.context().close()
   })
 
@@ -411,7 +418,7 @@ test.describe('Open from a browser', () => {
     await phone.context().close()
   })
 
-  test('a signed-in browser is listed under Signed-in browsers; removing it signs that browser out', async ({ page, browser }) => {
+  test('a signed-in browser is listed under Browsers signed in to this Walnut; removing it signs that browser out', async ({ page, browser }) => {
     const phone = await tunnelPage(browser)
     await phone.goto(tunnelUrl)
     await expect(phone.getByTestId('unpaired-notice')).toBeVisible({ timeout: 30_000 })
@@ -422,7 +429,7 @@ test.describe('Open from a browser', () => {
     // The tunnel's tab lists it under its own settings, and All devices lists it too.
     await expect(page.locator('#devices-browser').getByTestId('devices-browsers-group').locator(`[data-device-name="${mine.name}"]`)).toBeVisible({ timeout: 30_000 })
     const devices = await backToDevices(page)
-    await expect(devices.getByTestId('devices-browsers-group')).toContainText('Signed-in browsers')
+    await expect(devices.getByTestId('devices-browsers-group')).toContainText('Browsers signed in to this Walnut')
     const row = devices.locator(`[data-device-name="${mine.name}"]`)
     await expect(row).toBeVisible()
     // Named by what it is (N2-21), never by its id; the meta says when it signed in.
@@ -551,8 +558,10 @@ test.describe('Open from a browser', () => {
     expect(mine.info?.deviceName).toMatch(/^iPhone Home Screen( \d+)?$/)
     await openDevices(page)
     const row = (await backToDevices(page)).locator(`[data-device-name="${mine.name}"]`)
-    // " 2" only when an earlier run on the same fixture signed one in too.
-    await expect(row.locator('.devices-name')).toHaveText(/^iPhone Home Screen( \d+)?$/)
+    // " 2" only when an earlier run on the same fixture signed one in too. Its tag says a
+    // browser's sign-in works on every address.
+    await expect(row.locator('.devices-name')).toHaveText(/^iPhone Home Screen( \d+)?All addresses$/)
+    await expect(row.locator('.settings-tag')).toHaveText('All addresses')
     await shot(page, '8b-home-screen-listed', row)
     await context.close()
   })
@@ -562,7 +571,7 @@ test.describe('Open from a browser', () => {
     await page.getByTestId('browser-access-enabled').click()
     await expect(page.getByTestId('browser-access-state')).toContainText('Runs Custom command while Walnut runs', { timeout: 30_000 })
     await expect(page.getByTestId('browser-access-link')).toHaveCount(0)
-    await expect(page.getByTestId('browser-access-code')).toContainText('The link shows here once the tunnel is connected.')
+    await expect(page.getByTestId('browser-access-code')).toContainText('Turn the tunnel on above; once it connects, a sign-in link and its QR code for any browser show here.')
     await expect.poll(async () => {
       try { await fetch(`${tunnelUrl}/api/v1/instance`, { signal: AbortSignal.timeout(2_000) }); return 'open' } catch { return 'closed' }
     }, { timeout: 15_000 }).toBe('closed')

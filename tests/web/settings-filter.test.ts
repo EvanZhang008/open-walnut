@@ -97,11 +97,14 @@ describe('Find a setting matcher', () => {
     expect(primaryHit(filterEntries(ENTRIES, 'port'))?.key).toBe('advanced')
     expect(hit('port', 'advanced')?.hint).toBe('Port') // N17: the row's real label
     expect(keys('slack')).toContain('triage')
-    expect(keys('wifi')).toContain('devices-phones')
+    // Wi-Fi is its own way's tab (2026-11-21): its pairing and its browser sign-in live there.
+    expect(keys('wifi')).toContain('devices-wifi')
+    expect(hit('qr', 'devices-wifi')?.hint).toBe('Pair the Walnut app')
+    expect(hit('sign-in code', 'devices-wifi')?.hint).toBe('Sign in a browser')
     expect(hit('theme', 'general')?.hint).toBe('Appearance')
     // Pairing lives on each way's tab (2026-11-18): "qr" finds the Cloud companion's and Tailscale's.
-    expect(hit('qr', 'cloud')?.hint).toBe('Pair a phone this way')
-    expect(hit('qr', 'devices-tailscale')?.hint).toBe('Pair a phone this way')
+    expect(hit('qr', 'cloud')?.hint).toBe('Pair the Walnut app')
+    expect(hit('qr', 'devices-tailscale')?.hint).toBe('Pair the Walnut app')
   })
 
   it('keeps nav order inside one rank level', () => {

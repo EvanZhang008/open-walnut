@@ -1,5 +1,5 @@
 /**
- * "Open from a browser": this server's tunnel and the codes that sign a browser
+ * "Browser from anywhere": this server's tunnel and the codes that sign a browser
  * in (docs/plan/walnut-servers-everywhere.md, "Exposure"). Settings, Phones &
  * Cloud, on a primary.
  *
@@ -8,8 +8,8 @@
  *                      for an option the provider fills itself, `hidden`)
  *   Runs on            an always-on host the provider names, or this computer
  *                      (src/core/expose/placement.ts); shown only when there is a host to pick
- *   Open from anywhere the switch, with one sentence of state and Retry when it waits
- *   Open on your phone ONE link, made by itself once connected: opened on the phone, Walnut opens
+ *   <tunnel name>      the switch, with one sentence of state and Retry when it waits
+ *   Sign in a browser  ONE link, made by itself once connected: opened on the phone, Walnut opens
  *                      there signed in (its one-time code rides in the link). No second address
  *                      (2026-11-03, the user asked for one link that just opens). Beside it, the
  *                      QR code of that same link, for the phone's camera (2026-11-04, the user:
@@ -30,16 +30,15 @@ import { apiGet, apiPost, apiPut } from '@/api/client';
 import { answerFoundHost } from '@/api/hosts';
 import { log } from '@/utils/log';
 import { SettingsEmpty, SettingsGroup, SettingsNotice, SettingsRow } from '../../SettingsSection';
-import { BROWSER_SIGNED_IN_EVENT } from './devices-list';
+import { BROWSER_SIGNED_IN_EVENT, usedCode } from './devices-list';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { ToggleSwitch } from '../../inputs/ToggleSwitch';
 import { SegmentedControl } from '../../inputs/SegmentedControl';
-import { CopyButton } from '../../inputs/CopyButton';
-import { copyTextRobust } from '@/utils/clipboard';
 import { saveErrorMessage } from '../../settings-pane-context';
 import { describeExpose, exposePollMs, type ExposeResponse, type ExposeStatus, optionFits } from './browser-access-status';
 import { isDeviceCaller } from './device-caller';
-import { PHONE_LINK_QR_SHOWN, phoneLinkQr } from './phone-link-qr';
+import { phoneLinkQr } from './phone-link-qr';
+import { SignInWays } from './SignInWays';
 import '@/styles/browser-access.css';
 
 const PATH = '/api/expose';
@@ -56,6 +55,8 @@ interface SignInAddress {
 interface BrowserCode {
   code: string;
   expiresAt: number;
+  /** Names it in the sign-in event (an older server sends none). */
+  id?: string;
   addresses: SignInAddress[];
   /** Where the phone connects, the link's address first. A host's always-on server comes
    *  first: while this Mac sleeps, a phone signed in there still opens the copy that host
@@ -80,8 +81,8 @@ export function maskedLink(link: string): string {
   return link.replace(/#pair=[^&]*$/, '#pair=••••-••••');
 }
 
-/** `heading`: the group's heading ("Open from a browser" on the tunnel's tab). */
-export function BrowserAccessGroup({ heading = 'Open from a browser' }: { heading?: string } = {}) {
+/** `heading`: the group's heading ("Browser from anywhere" on the tunnel's tab). */
+export function BrowserAccessGroup({ heading = 'Browser from anywhere' }: { heading?: string } = {}) {
   // A browser signed in with a code is refused every code (403
   // person_at_this_machine): say where codes come from, no button.
   const [deviceCaller] = useState(isDeviceCaller);
@@ -115,7 +116,6 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
   const [codeError, setCodeError] = useState<string | null>(null);
   // The code shown in words, for a phone with no camera or shared clipboard: on a click
   // only, so a screenshot of Settings shows no code by itself; a new code hides it again.
-  const [revealedFor, setRevealedFor] = useState<string | null>(null);
   const readSeq = useRef(0);
   // Option fields the person is typing in: a poll must not overwrite them.
   const editing = useRef(new Set<string>());
@@ -214,12 +214,12 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
   const makeCode = async (url: string) => {
     setCodeError(null);
     try {
-      const res = await apiPost<{ code: string; expiresAt: number; link?: string; url?: string; addresses?: SignInAddress[] }>('/api/devices/browser-code');
+      const res = await apiPost<{ code: string; expiresAt: number; id?: string; link?: string; url?: string; addresses?: SignInAddress[] }>('/api/devices/browser-code');
       // An older server answers with one link and no list.
       const addresses = res.addresses ?? (res.link && res.url ? [{ where: 'this-computer', label: 'This computer', url: res.url, link: res.link, alwaysOn: false }] : []);
       // The one the phone should use: an always-on host's first (it answers while this computer sleeps).
       const ordered = [...addresses.filter((a) => a.alwaysOn), ...addresses.filter((a) => !a.alwaysOn)];
-      setCode({ code: res.code, expiresAt: res.expiresAt, addresses: ordered, url });
+      setCode({ code: res.code, expiresAt: res.expiresAt, id: res.id, addresses: ordered, url });
     } catch (err) {
       setCodeError(saveErrorMessage(err));
       // Refused (not the person at this computer): asking again would only be refused again.
@@ -267,6 +267,8 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
   // Its link is used up: a new one for the next phone, and a line saying the sign-in worked.
   const [signedIn, setSignedIn] = useState<{ who: 'browser' | 'extension'; at: number } | null>(null);
   useEvent(BROWSER_SIGNED_IN_EVENT, (data) => {
+    // Another code's sign-in (the Wi-Fi row's, the extension's) leaves this link alone.
+    if (!usedCode(data, code)) return;
     setCode(null);
     const name = (data as { name?: unknown } | null)?.name;
     setSignedIn({ who: typeof name === 'string' && name.startsWith('extension-') ? 'extension' : 'browser', at: Date.now() });
@@ -320,6 +322,42 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
     }
     void write({ options: { ...settings.options, [key]: value } }, key);
   };
+
+  // Where the tunnel runs: after the switch and the sign-in link, which a first visit comes for.
+  const runsOnRow = providers.length > 0 && allPlaces.length > 0 && (
+            <SettingsRow
+              label="Runs on"
+              help={placedHost
+                ? `${placedHost.label} stays on, so the address answers while this computer sleeps.`
+                : toConnect.length > 0
+                  ? `${toConnect[0].label} stays on, but Walnut found it in ~/.ssh/config and does not connect to it until you say so.`
+                  : 'The address answers while this computer is awake.'}
+              data-testid="browser-access-runs-on"
+              control={
+                <span className="settings-addons-inline">
+                  {places.length > 1 && (
+                    <SegmentedControl
+                      aria-label="Runs on"
+                      value={placedOn}
+                      disabled={busy}
+                      onChange={(v) => { if (v !== placedOn) void write({ run_on: v }); }}
+                      options={places.map((p) => ({ value: p.id, label: p.label, testId: `browser-access-runs-on-${p.id}` }))}
+                    />
+                  )}
+                  {toConnect.map((p) => (
+                    <SettingsButton
+                      key={p.id}
+                      disabled={connecting !== null}
+                      onClick={() => void connectFound(p.id)}
+                      data-testid={`browser-access-connect-${p.id}`}
+                    >
+                      {connecting === p.id ? 'Connecting...' : `Connect ${p.label} first`}
+                    </SettingsButton>
+                  ))}
+                </span>
+              }
+            />
+          );
 
   return (
     <SettingsGroup heading={heading} data-testid="browser-access">
@@ -377,45 +415,12 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
               }
             />
           ))}
-          {allPlaces.length > 0 && (
-            <SettingsRow
-              label="Runs on"
-              help={placedHost
-                ? `${placedHost.label} stays on, so the address answers while this computer sleeps.`
-                : toConnect.length > 0
-                  ? `${toConnect[0].label} stays on, but Walnut found it in ~/.ssh/config and does not connect to it until you say so.`
-                  : 'The address answers while this computer is awake.'}
-              data-testid="browser-access-runs-on"
-              control={
-                <span className="settings-addons-inline">
-                  {places.length > 1 && (
-                    <SegmentedControl
-                      aria-label="Runs on"
-                      value={placedOn}
-                      disabled={busy}
-                      onChange={(v) => { if (v !== placedOn) void write({ run_on: v }); }}
-                      options={places.map((p) => ({ value: p.id, label: p.label, testId: `browser-access-runs-on-${p.id}` }))}
-                    />
-                  )}
-                  {toConnect.map((p) => (
-                    <SettingsButton
-                      key={p.id}
-                      disabled={connecting !== null}
-                      onClick={() => void connectFound(p.id)}
-                      data-testid={`browser-access-connect-${p.id}`}
-                    >
-                      {connecting === p.id ? 'Connecting...' : `Connect ${p.label} first`}
-                    </SettingsButton>
-                  ))}
-                </span>
-              }
-            />
-          )}
           <SettingsRow
-            label="Open from anywhere"
+            label={provider?.title ?? 'Tunnel'}
             htmlFor="browser-access-enabled"
             help={
-              <span className="browser-access-state" data-state={status.enabled ? status.state : 'off'} data-testid="browser-access-state">
+              // Connected: the tab's own Now line says so and where it runs; read out here, not shown twice.
+              <span className={`browser-access-state${status.enabled && status.state === 'connected' ? ' settings-visually-hidden' : ''}`} data-state={status.enabled ? status.state : 'off'} data-testid="browser-access-state">
                 <span className="browser-access-dot" data-dot={line.dot} aria-hidden="true" />
                 <span>{line.text}</span>
               </span>
@@ -428,7 +433,7 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
                 )}
                 <ToggleSwitch
                   id="browser-access-enabled"
-                  aria-label="Open from anywhere"
+                  aria-label={provider?.title ?? 'Tunnel'}
                   checked={settings.enabled}
                   busy={busy}
                   data-testid="browser-access-enabled"
@@ -443,15 +448,15 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
         <div data-testid="browser-access-signed-in-note">
           <SettingsNotice kind="success" role="status">
             {signedIn.who === 'extension'
-              ? 'The Walnut extension just signed in with the code. The link below is a new one, for the next phone.'
-              : 'A browser just signed in with the link; it now shows under Signed-in browsers at the end of this page. The link below is a new one, for the next phone.'}
+              ? 'The Walnut extension just signed in with the code. The link below is a new one, for the next device.'
+              : 'A browser just signed in with the link; it now shows under Browsers signed in to this Walnut at the end of this page. The link below is a new one, for the next device.'}
           </SettingsNotice>
         </div>
       )}
       {deviceCaller ? (
         <SettingsRow
-          label="Open on your phone"
-          help={<span data-testid="browser-access-codes-elsewhere">The phone link shows on the computer Walnut runs on.</span>}
+          label="Sign in a browser"
+          help={<span data-testid="browser-access-codes-elsewhere">The sign-in link shows on the computer Walnut runs on.</span>}
         />
       ) : (() => {
         const address = code?.addresses[0];
@@ -459,60 +464,35 @@ export function BrowserAccessGroup({ heading = 'Open from a browser' }: { headin
         const qrData = address ? drawnQr.get(address.link) : undefined;
         return (
           <SettingsRow
-            label="Open on your phone"
+            label="Sign in a browser"
             data-testid="browser-access-code"
             help={!linkReady
-              ? 'The link shows here once the tunnel is connected.'
+              ? 'Turn the tunnel on above; once it connects, a sign-in link and its QR code for any browser show here.'
               : !code
                 ? (codeError ? undefined : 'Making the link...')
                 : !address
                   ? <>No address reaches this computer from outside yet. Meanwhile, type <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span> into Walnut on the other device; it works until {until}.</>
                   : (
-                    <span className="browser-access-phone">
-                      {qrData && (
-                        <img
-                          className="browser-access-qr"
-                          src={qrData}
-                          alt="QR code that opens Walnut on the phone, signed in"
-                          width={PHONE_LINK_QR_SHOWN}
-                          height={PHONE_LINK_QR_SHOWN}
-                          data-for={address.link}
-                          data-testid="browser-access-qr"
-                        />
+                    <SignInWays
+                      computer={(
+                        <>
+                          {'On the other device, open '}
+                          <span className="settings-addons-mono" data-testid="browser-access-link">{address.url.replace(/^https?:\/\//, '').replace(/\/+$/, '')}</span>
+                          {' and type '}
+                          <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span>
+                          {', or open the sign-in link, which has the code in it. Not on this computer: opening it here uses it up.'}
+                        </>
                       )}
-                      <span className="browser-access-phone-text">
-                        <a
-                          className="settings-addons-link settings-addons-mono browser-access-link"
-                          href={address.link}
-                          title="Click to copy. Open it on the phone, not here: opening it here signs this browser in and uses the link up."
-                          onClick={(e) => { e.preventDefault(); void copyTextRobust(address.link); }}
-                          onAuxClick={(e) => e.preventDefault()}
-                          data-testid="browser-access-link"
-                        >{maskedLink(address.link)}</a>
-                        <span className="browser-access-link-note">{`Scan the QR code with the phone's camera, or copy the link to the phone and open it there, not on this computer. It works once, for one phone, until ${until}.`}</span>
-                        <span className="browser-access-link-note" data-testid="browser-access-typed">
-                          {revealedFor === code.code ? (
-                            <>
-                              {'Type '}
-                              <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-revealed-code">{code.code}</span>
-                              {' on the phone\'s sign-in screen. '}
-                              <button type="button" className="settings-addons-link browser-access-reveal" onClick={() => setRevealedFor(null)} data-testid="browser-access-hide-code">Hide</button>
-                            </>
-                          ) : (
-                            <>
-                              {'No camera? '}
-                              <button type="button" className="settings-addons-link browser-access-reveal" onClick={() => setRevealedFor(code.code)} data-testid="browser-access-reveal-code">Show the code to type</button>
-                            </>
-                          )}
-                        </span>
-                      </span>
-                    </span>
+                      copy={{ text: address.link, testId: 'browser-access-copy-link' }}
+                      qr={qrData ? { src: qrData, alt: 'QR code that opens Walnut on another device, signed in', link: address.link, testId: 'browser-access-qr' } : undefined}
+                      note={`It works once, for one device, until ${until}.`}
+                    />
                   )}
             error={codeError ?? undefined}
-            control={address && linkReady ? <CopyButton text={address.link} data-testid="browser-access-copy-link" /> : undefined}
           />
         );
       })()}
+      {runsOnRow}
     </SettingsGroup>
   );
 }

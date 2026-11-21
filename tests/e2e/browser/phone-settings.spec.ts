@@ -3,7 +3,7 @@
  * C39, C51, C74, C75) on an iPhone 15.
  *
  *   the computer's own browser (the fixture trusts it): list, pane, back,
- *     rows stacked, the Open on your phone row still offered
+ *     rows stacked, the Sign in a browser row still offered
  *   a phone through a tunnel (the fake tunnel of sign-in-state.ts, a loopback
  *     proxy Walnut does not trust): no code buttons, its own row marked, no
  *     Remove on other rows, Sign out this phone. The server has one tunnel, so
@@ -138,8 +138,8 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     await openSettings(page)
     for (const [testId, name] of [['settings-nav-general', 'General'], ['settings-nav-devices', 'Phones & Cloud']] as const) {
       await openPane(page, testId, name)
-      // Phones & Cloud: measure its All devices tab (the phone list, and the Wi-Fi pairing a Wi-Fi only fixture shows).
-      if (testId === 'settings-nav-devices') { await landedTab(page); await backToDevices(page) }
+      // Phones & Cloud: measure its Same Wi-Fi tab (the pairing, the browser sign-in code and the phone list).
+      if (testId === 'settings-nav-devices') { await landedTab(page); await openWay(page, 'wifi') }
       await page.waitForTimeout(1_500)
       const stacked = await page.locator('.settings-pane .settings-row').evaluateAll((els) => els
         .filter((el) => el.querySelector(':scope > .settings-row-copy') && el.querySelector(':scope > .settings-row-actions'))
@@ -282,19 +282,20 @@ test.describe('a phone signed in through a tunnel', () => {
     await openWay(phone, 'browser')
     await expect(phone.getByTestId('browser-access-code')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-link')).toHaveCount(0)
-    await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The phone link shows on the computer Walnut runs on.')
+    await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The sign-in link shows on the computer Walnut runs on.')
     // The All devices tab holds the list of devices.
     await backToDevices(phone)
     await expect(devices).not.toContainText('No phone has the Walnut app signed in yet.')
     const group = devices.getByTestId('devices-browsers-group')
-    await expect(group).toContainText('Signed-in browsers')
+    await expect(group).toContainText('Browsers signed in to this Walnut')
     const rows = group.locator('[data-device-name]')
     expect(await rows.count()).toBeGreaterThanOrEqual(2)
     await expect(rows.first()).toHaveAttribute('data-device-name', name)
     const tag = rows.first().getByTestId('devices-own-tag')
     await expect(tag).toHaveText('This phone')
     // N2-21: the row is named by what it is (an iPhone UA here), never by its id.
-    await expect(rows.first().locator('.devices-name')).toContainText(/^iPhone Safari( \d+)?This phone$/)
+    await expect(rows.first().locator('.devices-name')).toContainText(/^iPhone Safari( \d+)?This phoneAll addresses$/)
+    await expect(rows.first().locator('.settings-tag')).toHaveText('All addresses')
     await expect(rows.first().locator('.devices-name')).not.toContainText(name)
     expect(await tag.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBe(12)
     await expect(group.getByTestId('devices-remove')).toHaveCount(0)

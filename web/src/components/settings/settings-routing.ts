@@ -146,7 +146,7 @@ export function resolvePane(hash: string, opts: { silent?: boolean } = {}): Reso
   if (retired) return { paneId: retired, targetId: null, known: true }
   const row = ROW_TARGETS[id]
   if (row) return { paneId: row.paneId, targetId: row.elementId, known: true, row: true }
-  const way = /^devices-way-(?:panel-)?(cloud|tailscale|browser)$/.exec(id)?.[1] as keyof typeof WAY_PANES | undefined
+  const way = /^devices-way-(?:panel-)?(cloud|tailscale|browser|wifi)$/.exec(id)?.[1] as keyof typeof WAY_PANES | undefined
   if (way) return { paneId: WAY_PANES[way], targetId: null, known: true }
   const wayPane = wayPaneForRow(id)
   if (wayPane) return { paneId: wayPane, targetId: id, known: true, row: true }
