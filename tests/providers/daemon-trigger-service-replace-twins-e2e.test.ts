@@ -20,113 +20,19 @@ import { describe, it, expect, afterAll, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { WebSocket } from 'ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
-import { testBun } from '../helpers/bun-runtime.js'
 import { walnutScopeDir } from '../helpers/walnut-scope-dir.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { TRIGGER_BUN as BUN, TriggerDaemon, buildSourceTwin, killTriggerDaemons, type Twin } from '../helpers/trigger-daemon.js'
 
-const ROOT = path.resolve(__dirname, '../..')
-const BUN = process.env.BUN_PATH && fs.existsSync(process.env.BUN_PATH) ? process.env.BUN_PATH : testBun() ?? null
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-trig-replace-')))
 afterAll(() => { if (base.includes('walnut-trig-replace-')) fs.rmSync(base, { recursive: true, force: true }) })
 
 const BIN = path.join(base, 'bin')
-if (BUN) {
-  fs.mkdirSync(BIN, { recursive: true })
-  fs.writeFileSync(path.join(BIN, 'daemon.cjs'), getDaemonSource(), { mode: 0o755 })
-  const sidecars: Array<[string, string]> = [
-    ['trigger-check-core', 'trigger-check-sidecar'],
-    ...['task-dir-core', 'host-exec-core', 'daemon-cron-runtime', 'daemon-instance-lock'].map((n) => [n, n] as [string, string]),
-  ]
-  for (const [out, src] of sidecars) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(BIN, `${out}.cjs`),
-      path.join(ROOT, `src/providers/${src}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error(`sidecar ${src} build failed: ${built.stderr}`)
-  }
-}
+if (BUN) buildSourceTwin(BIN)
+afterEach(killTriggerDaemons)
 
-type Twin = 'standalone' | 'source'
-const children: ChildProcess[] = []
-afterEach(() => {
-  for (const child of children.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null && typeof child.pid === 'number' && child.pid > 1) {
-      try { process.kill(-child.pid, 'SIGKILL') } catch { /* gone */ }
-    }
-  }
-})
-
-async function waitFor<T>(pick: () => T | undefined, ms: number, what: string): Promise<T> {
-  const start = Date.now()
-  while (Date.now() - start < ms) {
-    const hit = pick()
-    if (hit !== undefined) return hit
-    await sleep(150)
-  }
-  throw new Error(`timed out waiting for ${what}`)
-}
-
-class Daemon {
-  events: Array<Record<string, unknown>> = []
-  private nextId = 1
-  private waiters = new Map<number, (reply: Record<string, unknown>) => void>()
-  private constructor(readonly child: ChildProcess, private ws: WebSocket) {
-    ws.on('message', (data: Buffer | string) => {
-      const msg = JSON.parse(typeof data === 'string' ? data : data.toString()) as Record<string, unknown>
-      if (typeof msg.ev === 'string') { this.events.push(msg); return }
-      const waiter = typeof msg.id === 'number' ? this.waiters.get(msg.id) : undefined
-      if (waiter) { this.waiters.delete(msg.id as number); waiter(msg) }
-    })
-  }
-
-  static async start(twin: Twin, env: Record<string, string>, runDir: string, cwd: string): Promise<Daemon> {
-    const [cmd, args] = twin === 'standalone'
-      ? [BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--service']]
-      : [SOURCE_TWIN.file, [path.join(BIN, 'daemon.cjs'), '--service']]
-    const child = spawn(cmd, args, { cwd, env, detached: true, stdio: 'ignore' })
-    children.push(child)
-    const portFile = path.join(runDir, 'daemon.port')
-    const pidFile = path.join(runDir, 'daemon.pid')
-    await waitFor(() => {
-      try { return Number(fs.readFileSync(pidFile, 'utf8').trim()) === child.pid && fs.existsSync(portFile) ? true : undefined } catch { return undefined }
-    }, 60_000, `the ${twin} daemon to serve`)
-    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10)
-    const ws = new WebSocket(`ws://localhost:${port}`)
-    await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej) })
-    return new Daemon(child, ws)
-  }
-
-  rpc(frame: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const id = this.nextId++
-    return new Promise((resolve) => {
-      this.waiters.set(id, resolve)
-      this.ws.send(JSON.stringify({ id, ...frame }))
-    })
-  }
-
-  fires(id: string) { return [...new Map(this.events.filter((e) => e.ev === 'trigger.fired' && e.id === id).map((e) => [`${e.epoch}:${e.seq}`, e])).values()] }
-  checks(id: string) { return this.events.filter((e) => e.ev === 'trigger.checked' && e.id === id) }
-
-  /** Run now and wait for its outcome (the clock's own first run may be in flight). */
-  async runOnce(id: string, home: string): Promise<void> {
-    for (;;) {
-      const before = this.checks(id).length + this.fires(id).length
-      const reply = await this.rpc({ cmd: 'triggers.run', triggerId: id, home })
-      await waitFor(() => (this.checks(id).length + this.fires(id).length > before ? true : undefined), 20_000, `the ${id} check`)
-      if (reply.started === true) return
-    }
-  }
-
-  async stop(): Promise<void> {
-    try { this.ws.close() } catch { /* already gone */ }
-    const pid = this.child.pid!
-    process.kill(-pid, 'SIGTERM')
-    await waitFor(() => (this.child.exitCode !== null || this.child.signalCode !== null ? true : undefined), 30_000, 'the daemon to exit')
-  }
-}
+const startService = (twin: Twin, env: Record<string, string>, runDir: string, cwd: string) =>
+  TriggerDaemon.start(twin, { mode: '--service', env, runDir, cwd, bin: BIN })
 
 const itemIds = (fire: Record<string, unknown>) => (fire.items as Array<{ id: string }>).map((i) => i.id)
 
@@ -171,7 +77,7 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     ]
     fs.writeFileSync(FEED, JSON.stringify(standing))
     const ID = 'build-watch'
-    const configure = (d: Daemon) => d.rpc({
+    const configure = (d: TriggerDaemon) => d.rpc({
       cmd: 'triggers.configure', home: WALNUT,
       config: { version: 1, triggers: [{ id: ID, name: ID, everyMs: 3_600_000, check: { run: `${JSON.stringify(process.execPath)} ${JSON.stringify(CHECK)}` } }] },
     })
@@ -179,7 +85,7 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     const readState = () => JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { epoch: string; seq: number; seen: Record<string, number>; state: { startedAt: number } }
 
     // The old binary reports both standing items once.
-    const a = await Daemon.start(first, env, RUN_DIR, HOME)
+    const a = await startService(first, env, RUN_DIR, HOME)
     expect(await configure(a)).toMatchObject({ ok: true })
     await a.runOnce(ID, WALNUT)
     const [told] = a.fires(ID)
@@ -196,7 +102,7 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     // The replace: the old binary stops, the runtime dir goes with it, the other twin starts.
     await a.stop()
     fs.rmSync(RUN_DIR, { recursive: true, force: true })
-    const b = await Daemon.start(second, env, RUN_DIR, HOME)
+    const b = await startService(second, env, RUN_DIR, HOME)
     expect(await configure(b)).toMatchObject({ ok: true, count: 1 })
 
     // The same standing items: quiet, and their stamps follow this run.

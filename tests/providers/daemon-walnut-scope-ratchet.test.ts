@@ -90,6 +90,7 @@ const FILES: Record<string, string> = {
   // The host's own (this daemon process and machine).
   DAEMON_DIR: 'host: this daemon\'s runtime dir',
   DAEMON_STATE_DIR: 'host: a service daemon\'s state dir',
+  DETACHED_RUNS_DIR: 'host: the list of work that outlives this daemon, for a rollback\'s stop script (detached-registry.ts)',
   PROD_DAEMON_DIR: 'host: the production daemon dir',
   FALLBACK_DAEMON_DIR: 'host: the daemon dir when /tmp/open-walnut is another user\'s',
   IS_PROD_DAEMON_DIR: 'host: a flag, not a path',

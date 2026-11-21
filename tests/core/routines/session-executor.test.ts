@@ -26,13 +26,13 @@ type Sessions = Awaited<ReturnType<SessionDelivery['sessionsForTask']>>;
 
 function fakeDelivery(over: Partial<SessionDelivery> = {}) {
   const calls = {
-    sent: [] as Array<{ sessionId: string; message: string; taskId: string }>,
+    sent: [] as Array<{ sessionId: string; message: string; taskId: string; messageId?: string }>,
     started: [] as Array<{ message: string; taskId: string; cwd: string; host?: string; title?: string }>,
     notified: [] as Array<{ title: string; body?: string; dedupKey: string; taskId?: string }>,
   };
   const delivery: SessionDelivery = {
     sessionsForTask: async () => [] as Sessions,
-    sendToSession: async (sessionId, message, taskId) => { calls.sent.push({ sessionId, message, taskId }); },
+    sendToSession: async (sessionId, message, taskId, opts) => { calls.sent.push({ sessionId, message, taskId, ...(opts?.messageId ? { messageId: opts.messageId } : {}) }); opts?.onStored?.(); },
     getTask: async () => null,
     startSession: async (params) => { calls.started.push(params); },
     notify: async (input) => { calls.notified.push(input); },
@@ -119,6 +119,22 @@ describe('session executor: delivery', () => {
     // The envelope reaches the session unchanged — it was already built.
     expect(calls.sent[0].message).toBe(FIRE);
     expect(calls.started).toEqual([]);
+  });
+
+  // The same fires get the same id on every try (trigger-check-core.ts fireMessageId): a fire
+  // delivered before a restart lost its mark is kept once by the session's queue.
+  it('sends under the id the run was given, into a live session and into a stopped one alike', async () => {
+    for (const status of ['idle', 'stopped']) {
+      const { delivery, calls } = fakeDelivery({
+        sessionsForTask: async () => [{ claudeSessionId: 'sid-abcdef12', process_status: status }] as Sessions,
+        getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'IN_PROGRESS' }),
+      });
+      const exec = createSessionExecutor({ delivery, launchVisibleWaitMs: 0 });
+      expect((await exec.run(job(), REF, FIRE, { messageId: 'qm-trigger-f0123456789abcdef0123' })).status).toBe('ok');
+      // A run with no id (a scheduled run, an older caller) leaves it to the queue to mint one.
+      expect((await exec.run(job(), REF, FIRE)).status).toBe('ok');
+      expect(calls.sent.map((s) => s.messageId), status).toEqual(['qm-trigger-f0123456789abcdef0123', undefined]);
+    }
   });
 
   it('ignores an archived session, even a running one', async () => {

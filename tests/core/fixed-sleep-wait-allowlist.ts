@@ -672,4 +672,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a cut while the whole host link went down must not teach a pace" },
   { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: a bulk forward ending on a ServerAlive timeout must not teach a pace" },
   { file: "tests/providers/upload-pace.test.ts", sleep: "await new Promise((r) => setTimeout(r, 400))", reason: "negative: once both cuts of one outage are rolled back the pace must stay unpaced" },
+  { file: "tests/providers/host-exec-detach.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: a stop of a run adopted with no start to check sends no signal, so its group still runs" },
+  { file: "tests/providers/oneshot-mcp-restart.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500)) // the calls reached the daemon and the server", reason: "lets the calls reach the daemon before its SIGKILL; the asserts (every call settles, the slots free) hold whether each got there or not" },
+  { file: "tests/providers/trigger-restart-once.test.ts", sleep: "await sleep(1_000)", reason: "negative: the resent fire must not reach the session a second time" },
 ]

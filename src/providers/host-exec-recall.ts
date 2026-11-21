@@ -14,6 +14,12 @@
  * (`daemonPid`) still runs, whose run it is to answer. It is never counted as running (`running()`,
  * exec-runs-hold.ts), so it never holds an update.
  *
+ * A run started detached (detached-run.ts: a start line with `detach`) is not ended by its daemon's
+ * going: it runs on, writing its own log and exit file. `orphans()` names such a run once the daemon
+ * that follows it (`daemonPid`, or the last `adopted` line's) is gone, so the next daemon adopts it
+ * (host-exec-core.ts) instead of reading it as ended. `stopping` lines say why it was signalled, an
+ * `ended-by-update` line with `reason: 'rollback'` that a rollback stopped it.
+ *
  * Bundled into host-exec-core (the binary daemon and the host-exec-core.cjs sidecar).
  */
 import fs from 'node:fs'
@@ -41,6 +47,8 @@ export interface RecallDeps {
   /** This daemon's pid, and whether another pid still runs: a run whose daemon still lives is that daemon's to answer. */
   selfPid: number
   alive: (pid: number) => boolean
+  /** A detached run that ended and is forgotten now: its exit file can go (the daemon that wrote it may be gone). */
+  forgetEnded?: (job: Job) => void
 }
 
 type Line = Record<string, unknown>
@@ -57,7 +65,7 @@ function mtime(file: string): number | null {
 }
 
 /** Where the run kept its log: the start line says so since this file; an older line, as host-exec-core.ts named it. */
-function logOf(start: Line, jobId: string, task: string | null, d: RecallDeps): { logFile: string; taskDir: string | null } {
+function logOf(start: Line, jobId: string, task: string | null, d: Pick<RecallDeps, 'stateDir' | 'taskDirRoot'>): { logFile: string; taskDir: string | null } {
   const named = str(start.logFile)
   const guess = d.taskDirRoot && task && TASK_ID_RE.test(task) ? path.join(d.taskDirRoot, task) : null
   const taskDir = 'taskDir' in start ? str(start.taskDir) : guess && fs.existsSync(guess) ? guess : null
@@ -67,7 +75,8 @@ function logOf(start: Line, jobId: string, task: string | null, d: RecallDeps): 
   return { logFile: path.join(d.stateDir, 'host-exec', `${jobId}.log`), taskDir }
 }
 
-function jobOf(jobId: string, start: Line, end: Line | null, blocked: PromptBlock | null, byUpdate: boolean, d: RecallDeps): Job | null {
+/** The run a start line (and its end line, if any) tells, as a job; exported for a detached run's adoption (host-exec-core.ts). */
+export function jobFromAudit(jobId: string, start: Line, end: Line | null, blocked: PromptBlock | null, byUpdate: boolean, d: Pick<RecallDeps, 'stateDir' | 'taskDirRoot' | 'defaultTimeoutMs'>, byRollback = false): Job | null {
   const startedAt = num(start.startedAt) ?? time(start.at)
   if (startedAt === null) return null
   // Its shell never started (spawn_failed: an end line with only the error): there is no run to read.
@@ -99,10 +108,30 @@ function jobOf(jobId: string, start: Line, end: Line | null, blocked: PromptBloc
     tail: [], tailBytes: 0, tailMax: 0, waiters: [], timer: null, waits: 0,
     ...(daemonEnded ? { daemonEnded: true as const } : {}),
     ...(start.resumable === true ? { resumable: true as const } : {}),
+    ...(start.detach === true && typeof start.exitFile === 'string' ? { detached: { exitFile: start.exitFile } } : {}),
+    ...(byRollback || end?.endedBy === 'rollback' ? { endedBy: 'rollback' as const } : end?.endedBy === 'let-go' ? { endedBy: 'let-go' as const } : {}),
   }
 }
 
-interface Run { start: Line; end: Line | null; blocked: PromptBlock | null; byUpdate: boolean; job?: Job | null }
+interface Run {
+  start: Line
+  end: Line | null
+  blocked: PromptBlock | null
+  byUpdate: boolean
+  job?: Job | null
+  /** A detached run's wrapper (its `spawned` line), and the daemon that follows it now (`adopted`). */
+  pid?: number
+  owner?: number
+  /** What ps named as the wrapper's start (its `listed` line, UTC): adoption signals only that process. */
+  lstart?: string
+  /** Why it was last signalled (`stopping`): timeout, asked, blocked, daemon. */
+  stopping?: string
+  /** A rollback stopped it (`ended-by-update` with `reason: 'rollback'`). */
+  byRollback?: boolean
+}
+
+/** A detached run no live daemon follows: what its adoption needs. */
+export interface Orphan { jobId: string; start: Line; pid: number; lstart: string | null; stopping: string | null; blocked: PromptBlock | null }
 
 export function createRecall(d: RecallDeps) {
   // The runs the audit names, by id (a later start of the same id replaces an earlier one), kept
@@ -122,7 +151,11 @@ export function createRecall(d: RecallDeps) {
     const run = runs.get(id)
     if (!run || run.end) return
     if (line.event === 'end') { run.end = line; run.job = undefined }
-    else if (line.event === 'ended-by-update') run.byUpdate = true
+    else if (line.event === 'ended-by-update') { run.byUpdate = true; if (line.reason === 'rollback') run.byRollback = true }
+    else if (line.event === 'spawned') { const pid = num(line.pid); if (pid !== null && pid > 1) run.pid = pid }
+    else if (line.event === 'adopted') { const pid = num(line.daemonPid); if (pid !== null) run.owner = pid }
+    else if (line.event === 'listed') { const s = str(line.lstart); if (s) run.lstart = s }
+    else if (line.event === 'stopping' && typeof line.why === 'string') run.stopping = line.why
     else if (line.event === 'blocked' && (line.reason === 'password_prompt' || line.reason === 'permission_prompt')) {
       run.blocked = { reason: line.reason, service: str(line.service) ?? '' }
     }
@@ -150,20 +183,37 @@ export function createRecall(d: RecallDeps) {
     const t = d.now()
     for (const [id, r] of runs) {
       const at = num(r.start.startedAt) ?? time(r.start.at) ?? 0
-      if (t - at > (num(r.start.timeoutMs) ?? d.defaultTimeoutMs) + d.keepMs + 60_000) runs.delete(id)
+      if (t - at > (num(r.start.timeoutMs) ?? d.defaultTimeoutMs) + d.keepMs + 60_000) {
+        runs.delete(id)
+        if (r.end && r.start.detach === true && d.forgetEnded) {
+          const j = jobFromAudit(id, r.start, r.end, r.blocked, r.byUpdate, d, r.byRollback)
+          if (j) d.forgetEnded(j)
+        }
+      }
     }
   }
   /** The run as a job: one that ended is built once; one with no end line again, as its log grows. */
   function jobFor(id: string, r: Run): Job | null {
     if (r.job !== undefined) return r.job
     // Still running under another daemon here (two at once, or one not yet gone in a swap): not ours to call ended.
-    const owner = num(r.start.daemonPid)
-    if (!r.end && owner !== null && owner !== d.selfPid && d.alive(owner)) return null
-    const j = jobOf(id, r.start, r.end, r.blocked, r.byUpdate, d)
+    const owner = r.owner ?? num(r.start.daemonPid)
+    const ownerHere = owner !== null && owner !== d.selfPid && d.alive(owner)
+    // A detached run whose wrapper is still there (followed by the other daemon, or not adopted yet):
+    // it runs, never "the daemon stopped first", or its caller would run it again.
+    if (!r.end && !r.byUpdate && r.start.detach === true && (ownerHere || (r.pid !== undefined && d.alive(r.pid)))) return runningOf(id, r)
+    if (!r.end && ownerHere) return null
+    const j = jobFromAudit(id, r.start, r.end, r.blocked, r.byUpdate, d, r.byRollback)
     if (r.end) r.job = j
     return j
   }
-  const kept = (j: Job | null): j is Job => j !== null && j.endedAt !== null && d.now() - j.endedAt <= d.keepMs
+  /** A detached run still going that this daemon does not follow (yet): read from its log, no pid to signal. */
+  function runningOf(id: string, r: Run): Job | null {
+    const j = jobFromAudit(id, r.start, null, r.blocked, false, d)
+    if (!j) return null
+    const { daemonEnded: _gone, ...rest } = j
+    return { ...rest, endedAt: null, shellExitedAt: null, exitCode: null, signal: null, notFollowed: true }
+  }
+  const kept = (j: Job | null): j is Job => j !== null && (j.endedAt === null ? j.notFollowed === true : d.now() - j.endedAt <= d.keepMs)
   return {
     /** The run `jobId` as the audit tells it, while a finished job is kept; else undefined. */
     get(jobId: string): Job | undefined {
@@ -173,6 +223,22 @@ export function createRecall(d: RecallDeps) {
       return kept(j) ? j : undefined
     },
     /** Every such run but the ones `skip` names (the daemon's own), for a list. */
+    /**
+     * Detached runs with no end line that no live daemon follows (its owner is gone, or is this
+     * process: a daemon made again in it), but the ones `skip` names. A run a rollback or a forced
+     * update stopped is not one: it is ending, or ended.
+     */
+    orphans(skip: (jobId: string) => boolean): Orphan[] {
+      take()
+      const out: Orphan[] = []
+      for (const [id, r] of runs) {
+        if (r.end || r.byUpdate || r.start.detach !== true || r.pid === undefined || skip(id)) continue
+        const owner = r.owner ?? num(r.start.daemonPid)
+        if (owner !== null && owner !== d.selfPid && d.alive(owner)) continue
+        out.push({ jobId: id, start: r.start, pid: r.pid, lstart: r.lstart ?? null, stopping: r.stopping ?? null, blocked: r.blocked })
+      }
+      return out
+    },
     list(skip: (jobId: string) => boolean): Job[] {
       take()
       const out: Job[] = []

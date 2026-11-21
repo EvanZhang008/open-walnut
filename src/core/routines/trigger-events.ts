@@ -350,7 +350,9 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
       }
     }
     const { runExecutor } = await import('./registry.js');
-    return await runExecutor(job, job.executor, message);
+    // The same fires get the same id on every try: delivered before a restart lost the mark, the session keeps one.
+    const { fireMessageId } = await import('../../providers/trigger-check-core.js');
+    return await runExecutor(job, job.executor, message, { messageId: fireMessageId(job.id, head.epoch, fresh.map((e) => e.seq)) });
   }, { fromHost: await clockOwnerAlias(host, head) });
   // A clock run left for the daemon's replay is never acked (clock-fire.ts `held`).
   const held = new Set(applied.heldSeqs ?? []);

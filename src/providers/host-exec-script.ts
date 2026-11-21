@@ -4,6 +4,9 @@
  * bash) but bounded in memory with its stdout and stderr apart: no job, no log file, no audit
  * line, so a plugin that polls neither fills the disk nor pushes a task's jobs out of host_exec's.
  *
+ * With `detach` and a `scriptId` (the server's, 'host-script-detach-v1'), the run outlives this
+ * daemon instead (host-script-detached.ts): the same id asked again answers that run's result.
+ *
  * Bundled into host-exec-core (the binary daemon and the host-exec-core.cjs sidecar).
  */
 import { randomBytes } from 'node:crypto'
@@ -11,6 +14,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { permissionMessage, permissionRisk } from './host-exec-guards.js'
 import { bad, resolveCwd, shellPlan, shellQuote, type ExecError } from './host-exec-line.js'
 import { checkScriptInput, runBoundedScript, SCRIPT_REMOTE_MAX_OUTPUT, type ScriptResult } from './host-script-core.js'
+import { SCRIPT_ID_RE, type DetachedScripts } from './host-script-detached.js'
 
 export interface ScriptRunnerDeps {
   spawn: (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
@@ -22,6 +26,8 @@ export interface ScriptRunnerDeps {
   env: NodeJS.ProcessEnv
   /** The macOS guards apply. */
   mac: boolean
+  /** Runs asked for with `detach` (host-script-detached.ts); without it every run has pipes. */
+  detached?: DetachedScripts
 }
 
 export function createScriptRunner(deps: ScriptRunnerDeps) {
@@ -42,20 +48,32 @@ export function createScriptRunner(deps: ScriptRunnerDeps) {
     const login = deps.shell || '/bin/sh'
     // The script comes on fd 3, so the profile, which has no stdin, never reads it; the script reads it as its stdin, as with ssh.
     const plan = shellPlan(login, deps.bash(), `printf '%s\\n' ${mark}; exec sh -s --${input.args.map((a) => ` ${shellQuote(a)}`).join('')} <&3 3<&-`)
+    const maxOutputBytes = Math.min(input.maxOutputBytes, SCRIPT_REMOTE_MAX_OUTPUT)
+    if (deps.detached && req.detach === true && typeof req.scriptId === 'string' && SCRIPT_ID_RE.test(req.scriptId)) {
+      void deps.detached.prune()
+      return deps.detached.start({
+        scriptId: req.scriptId, script: input.script, command: login, argv: plan.args, env: { ...deps.env, ...plan.env }, cwd,
+        mark, timeoutMs: input.timeoutMs, maxOutputBytes,
+      })
+    }
     let stopIt: (() => void) | null = null
     const run = runBoundedScript({
       spawn: deps.spawn, command: login, argv: plan.args, env: { ...deps.env, ...plan.env }, cwd,
       killGroup: deps.killGroup, stdoutAfter: mark, scriptOnFd3: true, onStop: (s) => { stopIt = s },
-    }, { ...input, maxOutputBytes: Math.min(input.maxOutputBytes, SCRIPT_REMOTE_MAX_OUTPUT) })
+    }, { ...input, maxOutputBytes })
     const stopper = () => stopIt?.()
     running.add(stopper)
     try { return await run } finally { running.delete(stopper) }
   }
   return {
     script,
-    /** Scripts running now. */
+    /** Scripts running now with pipes: a handover waits for them (a detached one outlives the daemon). */
     count: () => running.size,
-    /** Stop every running script (its answer says timedOut); returns how many. */
+    /** Detached scripts running now. */
+    detachedCount: () => deps.detached?.running() ?? 0,
+    /** Stop every running script with pipes (its answer says timedOut); returns how many. */
     stopAll: (): number => { const all = [...running]; for (const s of all) s(); return all.length },
+    /** A rollback: the detached ones are stopped (their answer says why). */
+    endForRollback: (): number => deps.detached?.endForRollback() ?? 0,
   }
 }

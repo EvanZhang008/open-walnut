@@ -350,7 +350,8 @@ export interface OfflineHostDeps {
   /** The session's stream size now (the byte offset result lines carry as `v`). */
   streamOffset: (sid: string) => number | undefined
   /** Write one user message into the session's FIFO, with a turn-opening marker (send-markers-v1). */
-  deliver: (sid: string, text: string, messageId: string) => Promise<DeliverResult>
+  /** `resend`: the same message may have gone before (a trigger fire): the daemon writes nothing when its line record says it did. */
+  deliver: (sid: string, text: string, messageId: string, o?: { resend?: boolean }) => Promise<DeliverResult>
   /**
    * Start a stopped session of this Walnut again (`--resume`, its last spawn's
    * command) with `text` as its first message. Refuses what this host cannot
@@ -1154,9 +1155,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return missing.length ? `${text}\n\n${missing.join('\n\n')}` : text
   }
 
-  async function deliverWithTaskRouting(home: string, sid: string, text: string, messageId: string): Promise<DeliverResult> {
+  async function deliverWithTaskRouting(home: string, sid: string, text: string, messageId: string, o?: { resend?: boolean }): Promise<DeliverResult> {
     const routed = withTaskRouting(home, sid, withReplyTail(home, sid, text))
-    const delivered = await deps.deliver(sid, routed.text, messageId)
+    const delivered = o?.resend ? await deps.deliver(sid, routed.text, messageId, o) : await deps.deliver(sid, routed.text, messageId)
     // A notice the daemon left out (the server's path gave it) is the server's to record.
     if (delivered.ok && routed.due && !delivered.noticeLeftOut) markRouted(sid, messageId, routed.due)
     return delivered
@@ -2919,7 +2920,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (live.length > 0) {
       const sid = (task?.session_id && live.find((s) => s.sid === task.session_id)?.sid) || live[0].sid
       try {
-        const delivered = await deliverWithTaskRouting(home, sid, text, messageId)
+        // A fire's id is the same on every try (trigger-check-core.ts fireMessageId): one that went
+        // before a restart lost its mark is not written again.
+        const delivered = await deliverWithTaskRouting(home, sid, text, messageId, { resend: true })
         return delivered.ok ? { ok: true, sid } : { ok: false, reason: delivered.reason }
       } catch (err) {
         return { ok: false, reason: (err as Error).message }

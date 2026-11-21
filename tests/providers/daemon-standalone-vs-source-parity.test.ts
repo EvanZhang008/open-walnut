@@ -331,9 +331,9 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(await run('sid', `${notice}\n\nServer again`)).toEqual({ ok: true })
     expect(await run('sid', `${notice}\n\nHost`, undefined, undefined, { fromHost: true })).toEqual({ ok: true, noticeLeftOut: true })
     expect(fifo.mock.calls.map((c) => JSON.parse(c[2].toString()).message.content)).toEqual([`${notice}\n\nServer`, `${notice}\n\nServer again`, 'Host'])
-    // The host's own deliveries say they are the host's.
-    expect(templateSrc).toContain("[{ message: text, messageId: messageId }], { fromHost: true })")
-    expect(readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))).toContain('[{ message: text, messageId }], { fromHost: true })')
+    // The host's own deliveries say they are the host's, and a resend (a trigger fire again) dedupes by its line record.
+    expect(templateSrc).toContain("[{ message: text, messageId: messageId }], { fromHost: true, dedupe: !!(o && o.resend === true) })")
+    expect(readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))).toContain('[{ message: text, messageId }], { fromHost: true, dedupe: o.resend === true })')
   })
 
   it('both send paths put ordered markers behind the FIFO newline barrier', () => {

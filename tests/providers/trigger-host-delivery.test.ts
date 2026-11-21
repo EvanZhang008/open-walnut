@@ -176,7 +176,7 @@ describe('offline host: which session on this host takes the fire', () => {
   function setup(overrides: Partial<HostSlice> = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trigger-host-'))
     dirs.push(dir)
-    const delivered: Array<{ sid: string; text: string; messageId: string }> = []
+    const delivered: Array<{ sid: string; text: string; messageId: string; o?: { resend?: boolean } }> = []
     const live = new Set([LIVE])
     const fail = { reason: null as string | null }
     const host = createOfflineHost({
@@ -184,9 +184,9 @@ describe('offline host: which session on this host takes the fire', () => {
       keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
       kit: createEnvelopeKit(), log: () => {},
       isLive: (sid) => live.has(sid), turnActive: () => false, streamOffset: () => undefined,
-      deliver: async (sid, text, messageId) => {
+      deliver: async (sid, text, messageId, o) => {
         if (fail.reason) return { ok: false, reason: fail.reason }
-        delivered.push({ sid, text, messageId })
+        delivered.push({ sid, text, messageId, ...(o ? { o } : {}) })
         return { ok: true }
       },
     })
@@ -205,7 +205,15 @@ describe('offline host: which session on this host takes the fire', () => {
   it('writes into the live session of the task, skipping a stopped one', async () => {
     const h = setup()
     expect(await h.host.deliverTrigger(HOME, TASK, 'ENVELOPE', 'qm-trigger-1')).toEqual({ ok: true, sid: LIVE })
-    expect(h.delivered).toEqual([{ sid: LIVE, text: 'ENVELOPE', messageId: 'qm-trigger-1' }])
+    // As a resend: the same fire may have gone in before a restart lost its mark, so the daemon's
+    // line record decides (send-dedupe-v1). tests/providers/trigger-restart-once.test.ts runs it on the twins.
+    expect(h.delivered).toEqual([{ sid: LIVE, text: 'ENVELOPE', messageId: 'qm-trigger-1', o: { resend: true } }])
+  })
+
+  it('a second try of the same fire carries the same id and is a resend again', async () => {
+    const h = setup()
+    for (let i = 0; i < 2; i++) expect(await h.host.deliverTrigger(HOME, TASK, `ENVELOPE ${i}`, 'qm-trigger-f0123')).toEqual({ ok: true, sid: LIVE })
+    expect(h.delivered.map((d) => [d.messageId, d.o])).toEqual([['qm-trigger-f0123', { resend: true }], ['qm-trigger-f0123', { resend: true }]])
   })
 
   it('leaves the fire to the server when the task runs on an ACP engine, even with an older CLI of it live here (2026-11-10)', async () => {

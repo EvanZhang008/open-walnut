@@ -40,6 +40,7 @@ import { ambientAnswerBy } from '../../lib/answer-by.js'
 import { JOB_ID_RE, shellQuote } from '../../providers/host-exec-core.js'
 import type { RunShape } from './host-exec-legacy.js'
 import { redact } from './host-exec-redact.js'
+import { HOST_EXEC_DETACH_CAPABILITY, workSurvives } from './work-survives.js'
 import { soundGuardOn, soundRisk } from '../../providers/sound-guard.js'
 import { INPUT_PREFIX, refusalAdvice } from '../../providers/sound-rules.js'
 
@@ -410,6 +411,14 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
     ...(reply.running !== true && reply.killed === true ? { stoppedByCall: true } : {}),
     // The daemon that ran it stopped first (an update or a crash): no exit was kept (host-exec-recall.ts).
     ...(reply.running !== true && reply.daemonEnded === true ? { daemonEnded: true } : {}),
+    // Who ended it that way: a rollback to a version that cannot follow a run that outlives its daemon (detached-registry.ts).
+    ...(reply.running !== true && reply.endedBy === 'rollback' ? { endedBy: 'rollback' } : {}),
+    // Its deadline passed while the host could not check its pid: no longer followed, never signalled, it may still run there.
+    ...(reply.running !== true && reply.endedBy === 'let-go' ? { endedBy: 'let-go', note: 'Walnut on the host could not confirm this process is still the run, so it stopped following it at its deadline without signalling it; it may still run: check for it there and stop it by hand.' } : {}),
+    // Still running, but a stop from Walnut cannot reach it now (the host could not yet confirm the process is the run).
+    ...(reply.running === true && reply.unsignalled === true ? { unsignalled: true, note: 'Walnut on the host could not confirm this process is still the run, so it will not signal it: host_exec_stop cannot end it now; stop it by hand there if needed.' } : {}),
+    // It runs so it outlives the host's daemon: a restart there neither ends nor loses it (work-survives.ts).
+    ...(reply.detached === true ? { detached: true } : {}),
     // The host took exec.run `resumable`: an update there does not wait for it (an older daemon never says so).
     ...(reply.resumable === true ? { resumable: true } : {}),
     ...(reply.running === true && typeof reply.deadlineInMs === 'number' ? { deadlineInMs: reply.deadlineInMs } : {}),
@@ -504,6 +513,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
   // keep: the snapshot this task's last keep call there saved, and with no cwd its directory, the run's cwd (host-exec-keep.ts).
   let kept: import('./host-exec-keep.js').Kept | null = null
   let keptDir: string | null = null
+  let detach = false
   try {
     // Each wait (the slot, the dial) is followed by a look at the grant and the host's stop,
     // before the time check, so a revoke answers as a revoke.
@@ -513,6 +523,8 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     await assertStillGranted(caller.taskId, host, grantId, pinned !== null)
     if (budgetLeft(caller, t0) < START_MIN_LEFT_MS) throw await tooLate()
     await waits.assertWaitSupported(conn, host, waitFor)
+    // The run outlives the host's daemon (work-survives.ts): a restart there neither ends nor loses it.
+    detach = conn.hasCapability(GROUP_CAPABILITY) && await workSurvives(conn, HOST_EXEC_DETACH_CAPABILITY)
     if (keep) {
       // One read of the task's keep.current there, within the dial's time; a lost answer ends the call (nothing ran).
       const c = conn
@@ -552,6 +564,7 @@ export async function execOnHost(params: ExecParams, callerSid: string | undefin
     ...(waitFor && conn.hasCapability(waits.WAIT_CAPABILITY) ? { until: waitFor } : {}),
     // What its shell leaves in its process group is stopped when it exits (the help says so).
     ...(conn.hasCapability(GROUP_CAPABILITY) ? { endGroup: true } : {}),
+    ...(detach ? { detach: true } : {}),
   }, Math.min(REPLY_MARGIN_MS, budgetLeft(caller, t0)))
   // The host may have started it: the job keeps its slot until its deadline, and the
   // answer names it, so the session reads it instead of running the command again.

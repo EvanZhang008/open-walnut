@@ -186,6 +186,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'The Brief is gone from Main, every VP and every lead: their Threads, grouped by state (Needs you, To read, Working, Waiting, Done), take its place, and their agents are no longer asked to write one. A choice a Board asks you waits on you as a thread of the leader that keeps that Board, its options as buttons: answer it there or on the Board, either one answers both. A Board card\'s status comes from its task\'s threads. Briefs already written are kept.',
     default: false,
   },
+  {
+    id: 'work_survives_restart',
+    name: 'Work on a host survives a restart',
+    description: 'A command an agent runs on a host (host_exec), a plugin\'s script there and an agent such as Codex keep running when Walnut\'s service on that host restarts or updates, and the next service picks each one up where it was: its whole output, its exit code, the turn it was in. Off: they run as before, and an update there waits for them or ends them.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

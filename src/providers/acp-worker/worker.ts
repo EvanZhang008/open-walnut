@@ -20,6 +20,8 @@ import crypto from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Writable, Readable } from 'node:stream'
 import readline from 'node:readline'
+import fs from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -1277,8 +1279,14 @@ export function runWorkerMain(): void {
     (report) => writeLine({ ev: 'provider_error', ...report }),
   )
 
-  const rl = readline.createInterface({ input: process.stdin, terminal: false })
-  rl.on('line', (line) => {
+  // `--fifo <path>` (acp-survive.ts): requests come on that named pipe, which this worker holds
+  // open for reading and writing, so a daemon that goes never ends it (no end of file); answers go
+  // to stdout, a file the next daemon reads on. Without it, stdin as before: its end is the daemon's.
+  const fifoArg = process.argv.indexOf('--fifo')
+  const fifoPath = fifoArg >= 0 ? process.argv[fifoArg + 1] : null
+  let lastRequestAt = Date.now()
+  const onLine = (line: string) => {
+    lastRequestAt = Date.now()
     if (!line.trim()) return
     let req: WorkerRequest
     try { req = JSON.parse(line) as WorkerRequest } catch {
@@ -1288,7 +1296,58 @@ export function runWorkerMain(): void {
     void worker.handle(req).then(writeLine).then(() => {
       if (req.op === 'shutdown') process.exit(0)
     })
-  })
+  }
+  if (fifoPath) {
+    readFifoLines(fifoPath, onLine)
+    // No daemon has written for a day and a turn could have run: no one will ever ask again.
+    const orphan = setInterval(() => {
+      if (Date.now() - lastRequestAt > SURVIVE_ORPHAN_MS) void worker.handle({ id: -1, op: 'shutdown' }).finally(() => process.exit(0))
+    }, 60_000)
+    orphan.unref()
+    return
+  }
+  const rl = readline.createInterface({ input: process.stdin, terminal: false })
+  rl.on('line', onLine)
   // Daemon death closes our stdin → exit; our death closes adapter stdin → chain teardown.
   rl.on('close', () => { void worker.handle({ id: -1, op: 'shutdown' }).finally(() => process.exit(0)) })
 }
+
+/**
+ * Lines from the named pipe, read without blocking: a read that finds nothing (EAGAIN) looks again
+ * shortly (5 ms after a read that got bytes, up to 50 ms while idle). Neither Bun's stream nor its
+ * socket reads a FIFO opened non-blocking, and a blocking read would hold a thread and the exit.
+ */
+function readFifoLines(fifoPath: string, onLine: (line: string) => void): void {
+  // A daemon that restarts in the few ms before this open chmods the pipe to 0200 first: the open
+  // fails (EACCES), the worker exits, and the next daemon closes its turn as a crash (known, narrow).
+  const fd = fs.openSync(fifoPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK)
+  // Held now: the pipe becomes write-only, as every session's stdin pipe is, so nothing else can read
+  // a request (the daemon writes, this worker reads through the fd it holds).
+  try { fs.fchmodSync(fd, 0o200) } catch { /* the daemon's startup does it too */ }
+  const buf = Buffer.alloc(64 * 1024)
+  // A character cut between two reads is joined, never read as two bad bytes.
+  const decoder = new StringDecoder('utf8')
+  let carry = ''
+  let idle = 5
+  const tick = () => {
+    let got = false
+    for (;;) {
+      let n = 0
+      try { n = fs.readSync(fd, buf, 0, buf.length, null) } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EAGAIN') break
+        throw err
+      }
+      if (n <= 0) break
+      got = true
+      const lines = (carry + decoder.write(buf.subarray(0, n))).split('\n')
+      carry = lines.pop() ?? ''
+      for (const line of lines) onLine(line)
+    }
+    idle = got ? 5 : Math.min(idle * 2, 50)
+    setTimeout(tick, idle)
+  }
+  tick()
+}
+
+/** A surviving worker no daemon wrote to for this long ends itself (the daemon's own idle limit with a turn open is 24 h). */
+const SURVIVE_ORPHAN_MS = 25 * 60 * 60 * 1000

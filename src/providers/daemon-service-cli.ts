@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { WebSocket } from '#ws'
+import { ADOPTED_WORK_CAPABILITIES } from './detached-registry.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
 import { DAEMON_SERVICE_LABEL, daemonInstallRoot, readDaemonServiceExecutable } from './daemon-service-config.js'
@@ -245,7 +246,9 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
     }
     requested = true
     // `force` (an update only): the daemon goes over its own requests and runs instead of refusing as busy.
-    const result = await rpc({ cmd: updating ? 'service.update' : 'service.handover', instanceId, stateDir, ...(updating && force ? { force: true } : {}) }, replyMs)
+    // `adopts`: the detached work this (newer) program follows after the swap; a daemon asked by an
+    // older one, which names none, ends its detached work first (a rollback, detached-registry.ts).
+    const result = await rpc({ cmd: updating ? 'service.update' : 'service.handover', instanceId, stateDir, adopts: [...ADOPTED_WORK_CAPABILITIES], ...(updating && force ? { force: true } : {}) }, replyMs)
     if (result.ok !== true && !(updating && result.updateStarted === true)) {
       refused = true
       throw new Error(String(result.error ?? 'Daemon refused service handover'))

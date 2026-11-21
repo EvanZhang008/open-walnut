@@ -5,6 +5,7 @@ import path from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handoverBusy, requestDaemonServiceHandover, requestDaemonServiceUpdate, requestRunningDaemonHandover } from '../../src/providers/daemon-service-cli.js'
+import { ADOPTED_WORK_CAPABILITIES } from '../../src/providers/detached-registry.js'
 import { DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError } from '../../src/providers/daemon-service-manager.js'
 
 let runtime: string
@@ -80,7 +81,8 @@ describe('managed daemon update transport', () => {
       return { ok: true, prepared: true, instanceId: 'old-instance' }
     })
     expect(await update()).toBe(true)
-    expect(frames[1]).toEqual({ id: 2, cmd: 'service.update', stateDir: state, instanceId: 'old-instance' })
+    // `adopts`: the work this successor follows; the daemon it replaces ends any other kind (a rollback).
+    expect(frames[1]).toEqual({ id: 2, cmd: 'service.update', stateDir: state, instanceId: 'old-instance', adopts: [...ADOPTED_WORK_CAPABILITIES] })
   })
 
   it.each([false, true])('acknowledges receipt before waiting for the daemon to exit (update failure: %s)', async (failed) => {
@@ -247,7 +249,7 @@ describe('daemon service handover CLI transport', () => {
     await requestDaemonServiceHandover(runtime, state)
     expect(frames).toEqual([
       { id: 1, cmd: 'hello' },
-      { id: 2, cmd: 'service.handover', instanceId: 'old-instance', stateDir: state },
+      { id: 2, cmd: 'service.handover', instanceId: 'old-instance', stateDir: state, adopts: [...ADOPTED_WORK_CAPABILITIES] },
     ])
     expect(kill.mock.calls.every(([, signal]) => signal === 0)).toBe(true)
   })

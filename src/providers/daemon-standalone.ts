@@ -159,6 +159,7 @@ import { Worker as ThreadWorker } from 'node:worker_threads'
 import { createHistoryReady, createReadyWorkerExecutor, readyRequestFromWire, readyWorkerEntries, type ReadyWorkerLike } from './history-ready-core.js'
 import { describeExternalSessions, scanExternalSessions } from './external-session-scan-core.js'
 import {
+  fireMessageId, hostBatch, markHostBatch,
   ackFire,
   applyCheckError,
   applyCheckOutcome,
@@ -2586,7 +2587,11 @@ const ACP_ARTIFACT_DIR = (() => {
   const dir = path.join(root, 'dist', 'daemon-binaries')
   return fs.existsSync(path.join(dir, ACP_HOST_FILES[ACP_HOST_WORKER] ?? ACP_HOST_WORKER)) ? dir : undefined
 })()
+// The work that outlives this daemon, listed for a launcher's rollback stop (detached-registry.ts:
+// `<state dir>/detached/stop-detached.sh <that dir>`). Twin of daemon-source.ts.
+const DETACHED_RUNS_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'detached')
 const acp = createAcpDaemon<ServerWebSocket<WsData>>({
+  registryDir: DETACHED_RUNS_DIR,
   maySpawn: () => !demoQuiesce.fenced,
   strictStop: () => demoQuiesce.isDemo,
   streamsDir: STREAMS_DIR,
@@ -3169,7 +3174,8 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     hostExec.scripts?.() ? `${hostExec.scripts()} plugin script(s)` : '',
   ].filter(Boolean)
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith })
-  if (!force && (acp.workers.size || relaying)) {
+  // A surviving ACP worker (acp-survive-v1) outlives this daemon: only one on pipes holds the swap.
+  if (!force && (acp.holdingWorkers() || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
@@ -3200,6 +3206,17 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   } finally { clearTimeout(timer) }
   // Drained, the swap goes ahead: each run it ends says why in its own log (the resumable ones: stopDaemon).
   if (force && (hostExec.running() || hostExec.scripts?.())) hostExec.endForUpdate?.('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.')
+  // What runs detached is adopted by the next daemon, unless the one asking for this daemon's place
+  // cannot (an older version: a rollback, its request names no `adopts`): it ends, saying why, once
+  // this daemon is surely going (never on a prepare that fails and leaves it serving).
+  const adopts = new Set(Array.isArray(cmd.adopts) ? cmd.adopts.filter((c): c is string => typeof c === 'string') : [])
+  // Never throws: the reply and the shutdown after it always follow.
+  const endUnadopted = async () => {
+    try {
+      if (!adopts.has('host-exec-detach-v1')) hostExec.endForRollback()
+      if (!adopts.has('acp-survive-v1')) await acp.endForRollback()
+    } catch (err) { logMsg('warn', 'rollback stop of detached work failed', { error: String(err) }) }
+  }
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID }
   if (updating) serviceUpdateRequested = true
   try {
@@ -3212,17 +3229,20 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   } catch (error) {
     if (updating) {
       handoverPrepared = true
+      await endUnadopted()
       try { sendError(ws, id, String(error), { updateStarted: true, instanceId: DAEMON_INSTANCE_ID }) }
       finally { await waitForHandoverReceipt(ws); requestDaemonShutdown() }
       return
     }
     if ((error as NodeJS.ErrnoException).code === 'handover-published') {
       handoverPrepared = true
+      await endUnadopted()
       requestDaemonShutdown()
     } else { pause.resume(); clearRestartMark() }
     throw error
   }
   handoverPrepared = true
+  await endUnadopted()
   try { sendOk(ws, id, { prepared: true, instanceId: DAEMON_INSTANCE_ID }) }
   finally { await waitForHandoverReceipt(ws); requestDaemonShutdown() }
 }
@@ -4263,12 +4283,13 @@ function offlineSweepTick(): void {
 }
 
 // A host delivery is a send outside the command drain: a Demo admits it (quiesce waits for it) and refuses it once fenced, also after it queued at the gate.
-function deliverFromOfflineHost(sid: string, text: string, messageId: string): Promise<{ ok: true; noticeLeftOut?: true } | { ok: false; reason: string }> {
+function deliverFromOfflineHost(sid: string, text: string, messageId: string, o: { resend?: boolean } = {}): Promise<{ ok: true; noticeLeftOut?: true } | { ok: false; reason: string }> {
   if (demoQuiesce.fenced) return Promise.resolve({ ok: false as const, reason: 'demo_stopping' })
   const work = () => sessionStartGate.run(sid, async () => {
     if (demoQuiesce.fenced) return { ok: false as const, reason: 'demo_stopping' }
     cancelTurnRetry(sid, 'superseded-by-send')
-    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }], { fromHost: true })
+    // A resend (a trigger fire again) writes nothing when the line record says it went (send-dedupe-v1).
+    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }], { fromHost: true, dedupe: o.resend === true })
     if ('ok' in r && r.ok) return r.noticeLeftOut ? { ok: true as const, noticeLeftOut: true as const } : { ok: true as const }
     return { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
   })
@@ -4317,7 +4338,7 @@ const offlineHost = createOfflineHostCore({
   turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
   pendingPrompt: (sid) => sessions.get(sid)?.pendingCtrl?.toolName ?? null,
   // The same gate and turn-retry reset a server send goes through (cmdSend).
-  deliver: (sid, text, messageId) => deliverFromOfflineHost(sid, text, messageId),
+  deliver: (sid, text, messageId, o) => deliverFromOfflineHost(sid, text, messageId, o),
   // A stopped session started again for a trigger fire (trigger-host-resume-v1).
   resume: (home, sid, text, messageId, taskId) => resumeForTrigger(home, sid, text, messageId, taskId),
   streamOffset: (sid) => {
@@ -8435,12 +8456,17 @@ function deliverUnclaimedFires(now: number): void {
     const due = entry.state.pendingFires.filter((f) => fireDueOnHost(f, now, entry.armedAtMs, grace, HOST_DELIVERY_RETRY_MS))
     if (due.length === 0) continue
     if (!spec) { startUnclaimedRun(entry, due[0], now); continue }
-    const seqs = due.map((f) => f.seq)
     const epoch = entry.state.epoch
-    const messageId = `qm-trigger-${crypto.randomBytes(6).toString('hex')}`
+    // The same batch goes by the same id on every try, saved before the write (trigger-check-core.ts
+    // hostBatch): a delivery a restart cut before its mark is written again under that id, and the
+    // session's line record keeps one.
+    const batch = hostBatch(due, id, epoch)
+    const { seqs, messageId } = batch
+    markHostBatch(entry.state, seqs, messageId)
+    persistTriggerState(home, id, entry.state)
     const text = entry.def.clock
-      ? buildScheduledMessage(entry.def.name, spec.prompt, { dueAtMs: Math.min(...due.map((f) => f.clock?.slotMs ?? f.atMs)), deliveredAtMs: now })
-      : buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now })
+      ? buildScheduledMessage(entry.def.name, spec.prompt, { dueAtMs: Math.min(...batch.fires.map((f) => f.clock?.slotMs ?? f.atMs)), deliveredAtMs: now })
+      : buildTriggerMessage({ name: entry.def.name }, batch.fires, spec.prompt, { deliveredAtMs: now })
     hostDeliveriesInFlight.set(key, new Set(seqs))
     void offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then((r) => {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
@@ -12790,6 +12816,8 @@ const hostExec = createHostExec({
   home: HOME_DIR,
   taskDirRoot: TASK_DIR_ROOT,
   stateDir: HOST_EXEC_DIR,
+  // Detached runs are listed with the surviving ACP workers (detached-registry.ts): one dir for a rollback's stop.
+  registryDir: DETACHED_RUNS_DIR,
   env: hostExecEnv(),
   // wait_for's matcher: this program again (the stable copy once the shim made one), as --wait-matcher.
   matcher: () => ({ command: walnutCliArgv[0]!, args: [...walnutCliArgv.slice(1), '--wait-matcher'] }),

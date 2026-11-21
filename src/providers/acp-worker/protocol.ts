@@ -539,6 +539,8 @@ export type JournalMetaEvent =
       type: 'turn-interrupted'
       reason:
         | 'daemon-restart'
+        /** A rollback to a version that cannot adopt the worker ended it (detached-registry.ts); an older reader shows it as a crash. */
+        | 'rollback'
         | 'worker-crash'
         | 'shutdown'
         | 'user-cancelled'

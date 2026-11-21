@@ -175,6 +175,9 @@ export async function hostMcpResult(params: { host: string; call_id: string; wai
   const conn = await dial(host, budgetLeft(caller, t0) - 3_000, CAP, WHAT)
   const wait = holdFor(caller, typeof params.wait_ms === 'number' && params.wait_ms > 0 ? Math.min(params.wait_ms, 60_000) : 0, t0)
   const reply = await ask(conn, host, 'mcp.result', { callId: params.call_id, taskId: caller.taskId, wait }, wait + Math.min(REPLY_MARGIN_MS, Math.max(1_000, budgetLeft(caller, t0) - wait)))
+  // The host does not know the call (its daemon restarted, or the answer expired): it runs
+  // nowhere, so its slot is free again, as the busy refusal promises after a read.
+  if (reply.code === 'unknown_call' && inFlight.get(params.call_id)?.taskId === caller.taskId) inFlight.delete(params.call_id)
   return answerOf(caller, host, reply, t0)
 }
 

@@ -21,6 +21,11 @@
  * 3 h (the overdue bound) behind production. The daemon ends such a run with a note in its log
  * when it hands over. An older daemon ignores the field and lists no `resumable`, so its runs
  * still hold; hello `execHolding` and the daemon's own refusal count the same runs.
+ *
+ * A detached run (exec.run `detach`, 'host-exec-detach-v1', detached-run.ts) holds no update
+ * either: it outlives the daemon and the next one adopts it. Nor does a plugin script with
+ * `detach` or an ACP worker started with `survive` (acp-upgrade-hold.ts reads only the turns of
+ * workers on pipes, acp-daemon.ts busySids).
  */
 import { upgradeHoldClock } from './acp-upgrade-hold.js'
 import { log } from '../logging/index.js'
@@ -45,7 +50,7 @@ export function daemonBusyRefusal(error: unknown): boolean {
   return /must finish first|has active operations; retry after they finish|Service preparation timed out/.test(text)
 }
 
-type ListedJob = { running?: unknown; resumable?: unknown } | null
+type ListedJob = { running?: unknown; resumable?: unknown; detached?: unknown } | null
 
 function countJobs(reply: unknown, counts: (j: ListedJob) => boolean): number {
   const jobs = (reply as { jobs?: unknown } | null)?.jobs
@@ -57,9 +62,13 @@ export function runningJobs(reply: unknown): number {
   return countJobs(reply, (j) => j?.running === true)
 }
 
-/** How many of those hold a daemon update: all but the resumable ones. */
+/**
+ * How many of those hold a daemon update: all but the resumable ones and the detached ones (a run
+ * that outlives the daemon, 'host-exec-detach-v1': the next daemon follows it). Only a run on the
+ * daemon's own pipes (the old way, and every run of an older daemon) still holds.
+ */
 export function holdingJobs(reply: unknown): number {
-  return countJobs(reply, (j) => j?.running === true && j.resumable !== true)
+  return countJobs(reply, (j) => j?.running === true && j.resumable !== true && j.detached !== true)
 }
 
 /**

@@ -704,6 +704,19 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // job, log file or audit line is kept (host-script-core.ts). Same reach as exec.*: not bridge-
   // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs `version` 5).
   'host-script-v1',
+  // 'host-exec-detach-v1': `exec.run {detach: true, endGroup: true}` runs the line so it outlives
+  // this daemon (detached-run.ts): its output goes straight to its log, a `/bin/sh` wrapper that
+  // ends with it writes its exit status, and the next daemon here adopts it (host-exec-core.ts
+  // adopt: its deadline, a stop, a wait_for and its end line work on). Such a run holds no daemon
+  // update (`holding`, hello `execHolding`); it is listed for a rollback's stop (detached-registry.ts).
+  // Asked for by the server only with the experiment `work_survives_restart` on; an older daemon
+  // ignores the field and runs with pipes. Sidecar-gated in the source twin (host-exec-core.cjs `version` 7).
+  'host-exec-detach-v1',
+  // 'host-script-detach-v1': `exec.script {scriptId: 'hs-...', detach: true}` runs the plugin
+  // script so it outlives this daemon (host-script-detached.ts); the same scriptId asked again
+  // (its answer was lost in a restart) answers that run's result, kept 10 minutes, never a second
+  // run. Such a script holds no update. Sidecar-gated in the source twin (with host-exec-detach-v1).
+  'host-script-detach-v1',
   // 'net-v1' — the host network (net-core.ts): the daemon runs walnut-net (iroh) while
   // the server configured it: `net.configure {relays, relayRoots, members, enabled}`
   // writes its config (members with `accept: true` may open streams to this daemon;
@@ -816,6 +829,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // is refused on a daemon without it, which would leave one running after its server died.
   // The source twin says it only with an ACP sidecar that has the bounds (acp.lightBounds).
   'acp-light-bounds-v1',
+  // 'acp-survive-v1': acpStart takes `survive: true` and starts the worker so it outlives this
+  // daemon (acp-survive.ts: requests over a named pipe, answers into a file, request ids that never
+  // repeat); the next daemon adopts it by pid and start time, its turn goes on, and it holds no
+  // update. Optional: a server only asks for it on a daemon that says it, and a worker started
+  // without it runs on pipes as before. Sidecar-gated in the source twin (acp.endForRollback).
+  'acp-survive-v1',
   // 'acp-host-v1' is NOT listed here: only the source twin says it, once the ACP files
   // a source deploy puts beside daemon.cjs are there (daemonCapabilities() in
   // daemon-source.ts). acpStart then takes `hostAdapter` instead of the primary's paths,

@@ -228,6 +228,12 @@ export interface PendingFire {
   host?: HostDelivery;
   /** The last host delivery attempt that did not land (no live session, a failed write). */
   hostTriedAt?: number;
+  /**
+   * The message id of the host delivery that carried it, saved before the write (hostBatch): a daemon
+   * that died after the write and before its mark sends exactly that batch again, by that id, so the
+   * session's line record knows it (never a second copy under another id).
+   */
+  hostBatch?: string;
   /** What the daemon repaired in the run that made this fire (TriggerCheckOutput.warnings). */
   warnings?: string[];
   /**
@@ -396,6 +402,18 @@ export interface CheckProcessResult {
 }
 
 // ── State ──
+
+/**
+ * The message id of a delivery of fires (`seqs` of one trigger's `epoch`): the same every time the
+ * same fires are delivered, by the host or the server, before a restart or after it. Each receiver
+ * keeps a message once by its id (the session queue, the daemon's line record with `dedupe`, an
+ * ACP worker's command id), so a fire delivered just before a restart that lost its mark (after the
+ * delivery, before the ack) is not delivered a second time.
+ */
+export function fireMessageId(triggerId: string, epoch: string | undefined, seqs: readonly number[]): string {
+  const key = `${triggerId}\u0000${epoch ?? ''}\u0000${[...seqs].sort((a, b) => a - b).join(',')}`;
+  return `qm-trigger-f${createHash('sha256').update(key).digest('hex').slice(0, 20)}`;
+}
 
 export function newEpoch(): string {
   return randomBytes(6).toString('hex');
@@ -968,6 +986,22 @@ export function fireDueOnHost(
   if (nowMs - Math.max(fire.atMs, armedAtMs) < graceMs) return false;
   if (fire.hostTriedAt !== undefined && nowMs - fire.hostTriedAt < retryMs) return false;
   return true;
+}
+
+/**
+ * The batch of due fires a host delivery sends now, and its message id: a batch tried before (its
+ * fires carry `hostBatch`) goes again as it was, by the same id; else every due fire, by a new
+ * fireMessageId. Call markHostBatch and persist the state before the write.
+ */
+export function hostBatch(due: readonly PendingFire[], triggerId: string, epoch: string | undefined): { fires: PendingFire[]; seqs: number[]; messageId: string } {
+  const tried = due.find((f) => typeof f.hostBatch === 'string')?.hostBatch;
+  const fires = tried ? due.filter((f) => f.hostBatch === tried) : [...due];
+  const seqs = fires.map((f) => f.seq);
+  return { fires, seqs, messageId: tried ?? fireMessageId(triggerId, epoch, seqs) };
+}
+
+export function markHostBatch(state: TriggerHostState, seqs: readonly number[], messageId: string): void {
+  for (const fire of state.pendingFires) if (seqs.includes(fire.seq)) fire.hostBatch = messageId;
 }
 
 /** Record a host delivery on every fire it carried. */

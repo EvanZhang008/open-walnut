@@ -65,6 +65,7 @@ SOURCES=(
   src/lib/tool-answer-fit.ts
   src/lib/op-call-id.ts
   src/providers/acp-daemon.ts
+  src/providers/acp-survive.ts
   src/providers/acp-thread-restore.ts
   src/providers/acp-host-artifacts.ts
   src/lib/cli-private-tmp.ts
@@ -138,6 +139,9 @@ SOURCES=(
   src/providers/host-script-core.ts
   src/providers/host-exec-script.ts
   src/providers/host-exec-recall.ts
+  src/providers/detached-run.ts
+  src/providers/detached-registry.ts
+  src/providers/host-script-detached.ts
   src/providers/host-exec-run-id.ts
   src/providers/net-core.ts
   src/providers/net-binary.ts

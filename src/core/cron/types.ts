@@ -175,6 +175,12 @@ export type ExecutorRunResult = {
  */
 export interface ExecutorRunContext {
   runForMs?: number;
+  /**
+   * The message's id, the same on every try of the same trigger fires (trigger-check-core.ts fireMessageId).
+   * The fires' own guard is trigger-apply.ts (id, epoch, seq); this id covers a try cut after the send: the
+   * queue keeps one row of it while queued, and a resend keeps the line's uuid (session-queue-lines.ts).
+   */
+  messageId?: string;
   parts?: { lead: string; initOutput: string; instructions: string };
   /** The scheduled slot this run stands for (absent for Run now): keys the run's one message (routine-run-ids.ts). */
   slotMs?: number;

@@ -255,7 +255,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'triggers-delta-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'host-exec-detach-v1', 'host-script-detach-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'triggers-delta-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-survive-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4878,7 +4878,8 @@ async function cmdServiceHandover(ws, id, cmd) {
     hostExec && typeof hostExec.scripts === 'function' && hostExec.scripts() ? hostExec.scripts() + ' plugin script(s)' : '',
   ].filter(Boolean);
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith: busyWith });
-  if (!force && ((acp && acp.workers.size) || relaying)) {
+  // A surviving ACP worker (acp-survive-v1) outlives this daemon: only one on pipes holds the swap.
+  if (!force && ((acp && (typeof acp.holdingWorkers === 'function' ? acp.holdingWorkers() : acp.workers.size)) || relaying)) {
     return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
@@ -4909,6 +4910,17 @@ async function cmdServiceHandover(ws, id, cmd) {
   } finally { clearTimeout(timer); }
   // Drained, the swap goes ahead: each run it ends says why in its own log (an older sidecar has no endForUpdate; the resumable ones: stopDaemon).
   if (force && hostExec && (hostExec.running() || (typeof hostExec.scripts === 'function' && hostExec.scripts())) && typeof hostExec.endForUpdate === 'function') hostExec.endForUpdate('the daemon on this host is being replaced by an update that had waited hours for its work to end, and this run was stopped with it. Run it again if it is still needed.');
+  // What runs detached is adopted by the next daemon, unless the one asking for this daemon's place
+  // cannot (an older version: a rollback, its request names no adopts): it ends, saying why, once this
+  // daemon is surely going, never on a prepare that fails and leaves it serving (twin of daemon-standalone.ts).
+  const adopts = new Set(Array.isArray(cmd.adopts) ? cmd.adopts.filter(function (c) { return typeof c === 'string'; }) : []);
+  // Never throws: the reply and the shutdown after it always follow.
+  const endUnadopted = async function () {
+    try {
+      if (!adopts.has('host-exec-detach-v1') && hostExec && typeof hostExec.endForRollback === 'function') hostExec.endForRollback();
+      if (!adopts.has('acp-survive-v1') && acp && typeof acp.endForRollback === 'function') await acp.endForRollback();
+    } catch (err) { logMsg('warn', 'rollback stop of detached work failed', { error: String(err) }); }
+  };
   const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID };
   if (updating) serviceUpdateRequested = true;
   try {
@@ -4921,17 +4933,20 @@ async function cmdServiceHandover(ws, id, cmd) {
   } catch (error) {
     if (updating) {
       handoverPrepared = true;
+      await endUnadopted();
       try { sendError(ws, id, String(error), { updateStarted: true, instanceId: DAEMON_INSTANCE_ID }); }
       finally { await waitForHandoverReceipt(ws); requestDaemonShutdown(); }
       return;
     }
     if (error.code === 'handover-published') {
       handoverPrepared = true;
+      await endUnadopted();
       requestDaemonShutdown();
     } else { pause.resume(); clearRestartMark(); }
     throw error;
   }
   handoverPrepared = true;
+  await endUnadopted();
   try { sendOk(ws, id, { prepared: true, instanceId: DAEMON_INSTANCE_ID }); }
   finally { await waitForHandoverReceipt(ws); requestDaemonShutdown(); }
 }
@@ -5665,13 +5680,14 @@ function offlineSweepTick() {
 }
 
 // A host delivery is a send outside the command drain: a Demo admits it (quiesce waits for it) and refuses it once fenced, also after it queued at the gate.
-function deliverFromOfflineHost(sid, text, messageId) {
+function deliverFromOfflineHost(sid, text, messageId, o) {
   if (demoQuiesce.fenced) return Promise.resolve({ ok: false, reason: 'demo_stopping' });
   var work = function () {
     return sessionStartGate.run(sid, async function () {
       if (demoQuiesce.fenced) return { ok: false, reason: 'demo_stopping' };
       cancelTurnRetry(sid, 'superseded-by-send');
-      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }], { fromHost: true });
+      // A resend (a trigger fire again) writes nothing when the line record says it went (send-dedupe-v1).
+      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }], { fromHost: true, dedupe: !!(o && o.resend === true) });
       if (!r || r.ok !== true) return { ok: false, reason: String((r && (r.reason || r.error)) || 'send failed') };
       return r.noticeLeftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
     });
@@ -5727,7 +5743,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
   pendingPrompt: function (sid) { var s = sessions.get(sid); return (s && s.pendingCtrl && s.pendingCtrl.toolName) || null; },
   // The same gate and turn-retry reset a server send goes through (cmdSend).
-  deliver: function (sid, text, messageId) { return deliverFromOfflineHost(sid, text, messageId); },
+  deliver: function (sid, text, messageId, o) { return deliverFromOfflineHost(sid, text, messageId, o); },
   // A stopped session started again for a trigger fire (trigger-host-resume-v1).
   resume: function (home, sid, text, messageId, taskId) { return resumeForTrigger(home, sid, text, messageId, taskId); },
   streamOffset: function (sid) {
@@ -9931,14 +9947,21 @@ function deliverUnclaimedFires(now) {
     });
     if (due.length === 0) continue;
     if (!spec) { startUnclaimedRun(entry, due[0], now); continue; }
-    const seqs = due.map(function (f) { return f.seq; });
     const epoch = entry.state.epoch;
-    const messageId = 'qm-trigger-' + crypto.randomBytes(6).toString('hex');
+    // The same batch goes by the same id on every try, saved before the write (trigger-check-core.ts
+    // hostBatch): a delivery a restart cut before its mark is written again under that id, and the
+    // session's line record keeps one. An older sidecar: every due fire, a random id, as before.
+    const batch = typeof triggerCheckCore.hostBatch === 'function'
+      ? triggerCheckCore.hostBatch(due, id, epoch)
+      : { fires: due, seqs: due.map(function (f) { return f.seq; }), messageId: 'qm-trigger-' + crypto.randomBytes(6).toString('hex') };
+    const seqs = batch.seqs;
+    const messageId = batch.messageId;
+    if (typeof triggerCheckCore.markHostBatch === 'function') { triggerCheckCore.markHostBatch(entry.state, seqs, messageId); persistTriggerState(home, id, entry.state); }
     const text = entry.def.clock
       ? triggerCheckCore.buildScheduledMessage(entry.def.name, spec.prompt, {
-        dueAtMs: Math.min.apply(null, due.map(function (f) { return f.clock ? f.clock.slotMs : f.atMs; })), deliveredAtMs: now,
+        dueAtMs: Math.min.apply(null, batch.fires.map(function (f) { return f.clock ? f.clock.slotMs : f.atMs; })), deliveredAtMs: now,
       })
-      : triggerCheckCore.buildTriggerMessage({ name: entry.def.name }, due, spec.prompt, { deliveredAtMs: now });
+      : triggerCheckCore.buildTriggerMessage({ name: entry.def.name }, batch.fires, spec.prompt, { deliveredAtMs: now });
     hostDeliveriesInFlight.set(key, new Set(seqs));
     offlineHost.deliverTrigger(spec.home, spec.taskId, text, messageId).then(function (r) {
       // Recorded on whatever holds this trigger's state NOW: a configure may have
@@ -14558,6 +14581,9 @@ function secretsSessionEnv() {
 }
 // Commands for tasks on other hosts sidecar (host-exec-core.cjs): 'host-exec-v1' is
 // advertised only when it loads. Mirrors daemon-standalone.ts.
+// The work that outlives this daemon, listed for a launcher's rollback stop (detached-registry.ts:
+// <state dir>/detached/stop-detached.sh <that dir>). Twin of daemon-standalone.ts.
+const DETACHED_RUNS_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'detached');
 let hostExec = null;
 try {
   const hostExecCore = require(path.join(__dirname, 'host-exec-core.cjs'));
@@ -14584,6 +14610,8 @@ try {
     home: HOME_DIR,
     taskDirRoot: TASK_DIR_ROOT,
     stateDir: HOST_EXEC_DIR,
+    // Detached runs are listed with the surviving ACP workers (detached-registry.ts): one dir for a rollback's stop.
+    registryDir: DETACHED_RUNS_DIR,
     env: hostExecEnv,
     // wait_for's matcher (host-exec-matcher.ts): this runtime, running the sidecar's matcher.
     matcher: {
@@ -14784,6 +14812,7 @@ try {
     strictStop: function () { return demoQuiesce.isDemo; },
     streamsDir: STREAMS_DIR,
     daemonDir: DAEMON_DIR,
+    registryDir: DETACHED_RUNS_DIR,
     sendEvent: sendEvent,
     isWsOpen: function (ws) { return ws.readyState === 1; },
     log: logMsg,
@@ -14823,6 +14852,7 @@ function daemonCapabilities() {
   }
   if (acp && typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1');
   if (acp && acp.lightBounds === true) caps.push('acp-light-bounds-v1');
+  if (acp && typeof acp.endForRollback === 'function') caps.push('acp-survive-v1');
   if (acp && typeof acp.hostEngines === 'function' && fs.existsSync(path.join(__dirname, 'acp-worker.mjs'))) caps.push('acp-host-v1');
   if (changesCore) caps.push('changes-v1');
   if (usageCore) caps.push('usage-scan-v1');
@@ -14848,6 +14878,7 @@ function daemonCapabilities() {
   if (hostExec && hostExec.version >= 3) caps.push('host-exec-wait-v1');
   if (hostExec && hostExec.version >= 4) caps.push('host-exec-group-v1');
   if (hostExec && hostExec.version >= 5 && typeof hostExec.script === 'function') caps.push('host-script-v1');
+  if (hostExec && hostExec.version >= 7 && typeof hostExec.endForRollback === 'function') { caps.push('host-exec-detach-v1'); caps.push('host-script-detach-v1'); }
   if (netSupervisor) caps.push('net-v1');
   if (netSupervisor && typeof netSupervisor.join === 'function') caps.push('net-join-v1');
   if (hostMcp) caps.push('host-mcp-v1');

@@ -45,9 +45,13 @@ import { createMatcher, type MatcherStart } from './host-exec-matcher.js'
 import { stuckFileLooks } from './host-exec-probe.js'
 import { watchShellEnd } from './host-exec-group.js'
 import { jobView, untilEndedByDaemon, type Job, type JobView, type RunReply, type RunRequest } from './host-exec-job.js'
-import { createRecall } from './host-exec-recall.js'
+import { createRecall, jobFromAudit, type Orphan } from './host-exec-recall.js'
+import { registryFile } from './detached-registry.js'
 import type { ScriptResult } from './host-script-core.js'
 import { createScriptRunner } from './host-exec-script.js'
+import { createDetachedScripts } from './host-script-detached.js'
+import { detachedChild, exitFileOf, removeExitFile, wrapperArgv } from './detached-run.js'
+import { ROLLBACK_NOTE, installStopScript, processStart as psStart, registerRun, unregisterRun } from './detached-registry.js'
 
 export type { JobView, RunReply, RunRequest } from './host-exec-job.js'
 
@@ -60,6 +64,8 @@ export const DEFAULT_TIMEOUT_MS = 2 * 60_000
 export const OUTPUT_MAX_BYTES = 256 * 1024
 const KILL_GRACE_MS = 3_000
 const KEEP_FINISHED_MS = 60 * 60_000
+/** How long a read or stop of a detached run waits for its adoption (ps answers in 5 s at most) before it answers what the audit says. */
+const ADOPT_WAIT_MS = 15_000
 const MAX_JOBS = 200
 /** At most this many reads of one job wait on a wait_for at once. */
 export const WAITS_PER_JOB = 4
@@ -103,15 +109,23 @@ export interface HostExecDeps {
   matcher?: MatcherStart | (() => MatcherStart)
   /** Whether a pid runs (default: signal 0); asked of the daemon that wrote a run's start line (host-exec-recall.ts). */
   pidAlive?: (pid: number) => boolean
+  /**
+   * Where this host's daemon lists the work it ran detached, for a rollback's stop
+   * (detached-registry.ts); default `<stateDir>/detached`. The twins give the one their other kinds use.
+   */
+  registryDir?: string
+  /** What ps names as a pid's start (default detached-registry.ts processStart): a run is adopted only while its wrapper holds its pid. */
+  processStart?: (pid: number) => Promise<string | null>
 }
 
 /**
  * Bumped when exec.* changes what a server may rely on: 2 = bash after the login shell,
  * WALNUT_TASK_DIR; 3 = exec.read `until` (host-exec-wait.ts, 'host-exec-wait-v1'); 4 = exec.run
  * `endGroup` (host-exec-group.ts, 'host-exec-group-v1'); 5 = exec.script (host-script-core.ts,
- * 'host-script-v1'); 6 = exec.run `resumable` (`holding`: such a run never holds a daemon update).
+ * 'host-script-v1'); 6 = exec.run `resumable` (`holding`: such a run never holds a daemon update); 7 = exec.run `detach`
+ * (detached-run.ts, 'host-exec-detach-v1': the run outlives this daemon and the next one follows it).
  */
-export const HOST_EXEC_VERSION = 6
+export const HOST_EXEC_VERSION = 7
 
 export function createHostExec(deps: HostExecDeps) {
   const now = deps.now ?? Date.now
@@ -129,8 +143,13 @@ export function createHostExec(deps: HostExecDeps) {
     return bash
   }
   const mac = (deps.platform ?? process.platform) === 'darwin'
-  // Plugin scripts (exec.script): no job, no log (host-exec-script.ts).
-  const scripts = createScriptRunner({ spawn: deps.spawn, killGroup: deps.killGroup, shell: deps.shell, bash: bashPath, home: deps.home, env: deps.env, mac })
+  const registryDir = deps.registryDir ?? path.join(deps.stateDir, 'detached')
+  const processStart = deps.processStart ?? psStart
+  const pidAlive = deps.pidAlive ?? ((pid: number) => { if (pid <= 1) return false; try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' } })
+  // Plugin scripts (exec.script): no job, no log (host-exec-script.ts); a detached one keeps its files (host-script-detached.ts).
+  const detachedScripts = createDetachedScripts({ spawn: deps.spawn, killGroup: deps.killGroup, root: path.join(deps.stateDir, 'host-script'), registryDir, processStart, pidAlive, now })
+  void detachedScripts.adoptAll().then(() => detachedScripts.prune()).catch(() => {})
+  const scripts = createScriptRunner({ spawn: deps.spawn, killGroup: deps.killGroup, shell: deps.shell, bash: bashPath, home: deps.home, env: deps.env, mac, detached: detachedScripts })
   // One watcher for every job here: one `ps` and at most one log read per look, whatever the number of jobs.
   const probe = deps.promptProbe === undefined ? (mac ? macPromptProbe(now) : null) : deps.promptProbe
   const watcher = probe ? createPromptWatcher(probe, { everyMs: deps.promptCheckMs ?? IDLE_WINDOW_MS, now }) : null
@@ -144,6 +163,7 @@ export function createHostExec(deps: HostExecDeps) {
   })))()
 
   const auditFile = path.join(deps.stateDir, 'host-exec-audit.jsonl')
+  let stopScriptPut = false
   function audit(line: Record<string, unknown>): void {
     try {
       fs.mkdirSync(deps.stateDir, { recursive: true, mode: 0o700 })
@@ -155,18 +175,131 @@ export function createHostExec(deps: HostExecDeps) {
   const recall = createRecall({
     auditFile, stateDir: deps.stateDir, taskDirRoot: deps.taskDirRoot, keepMs: KEEP_FINISHED_MS, defaultTimeoutMs: BACKGROUND_MAX_MS, now,
     selfPid: process.pid,
-    alive: deps.pidAlive ?? ((pid) => { if (pid <= 1) return false; try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' } }),
+    alive: pidAlive,
+    // An exit file a daemon that restarted within the hour after the end never removed (prune does it otherwise).
+    forgetEnded: (j) => { if (j.detached && !jobs.has(j.id)) void removeExitFile(j.detached.exitFile) },
   })
-  /** A job this daemon runs or ran, else one an earlier daemon here ran. */
-  const jobOf = (id: string): Job | undefined => jobs.get(id) ?? recall.get(id)
+  /** A job this daemon runs or ran, else one an earlier daemon here ran (a detached one it still runs is followed from here: adopt). */
+  const jobOf = (id: string): Job | undefined => { adoptOrphans(); return jobs.get(id) ?? recall.get(id) }
+
+  // Detached runs an earlier daemon here started, followed from here once it is gone: their
+  // deadline, a stop, a wait_for and their end line work as if this daemon had started them.
+  const adopting = new Map<string, Promise<void>>()
+  const deferred = new Set<string>()
+  /**
+   * Starts the adoption of every orphan not yet followed. One whose adoption ps left for later
+   * (`deferred`) is asked again only from the timer (`retry`), never on a caller's path: a slow ps
+   * must not slow every read on the host (2026-11-21 review R2-1).
+   */
+  function adoptOrphans(retry = false): void {
+    let found: Orphan[] = []
+    try { found = recall.orphans((id) => jobs.has(id) || adopting.has(id) || starting.has(id) || (!retry && deferred.has(id))) } catch { /* the audit is unreadable: none */ }
+    for (const o of found) {
+      // In the map before it runs (an adoption that never awaits settles inside the call), and it
+      // never rejects: the daemon holds every session on the host.
+      const p: Promise<void> = Promise.resolve().then(() => adopt(o)).catch((err) => {
+        audit({ event: 'adopt-failed', jobId: o.jobId, error: (err as Error)?.message ?? String(err) })
+      }).finally(() => { if (adopting.get(o.jobId) === p) adopting.delete(o.jobId) })
+      adopting.set(o.jobId, p)
+    }
+  }
+  /** Adopts what is left, then waits for the adoption of `jobId` alone, at most until `by` (an epoch ms). */
+  async function adoptedFirst(jobId: unknown, by?: number): Promise<void> {
+    adoptOrphans()
+    const p = typeof jobId === 'string' ? adopting.get(jobId) : undefined
+    if (!p) return
+    const left = by === undefined ? ADOPT_WAIT_MS : Math.min(ADOPT_WAIT_MS, by - now())
+    if (left <= 0) return
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, left)
+      t.unref?.()
+      void p.then(() => { clearTimeout(t); resolve() })
+    })
+  }
+
+  async function listedStart(jobId: string): Promise<string | null> {
+    try {
+      const text = await fs.promises.readFile(registryFile(registryDir, 'host-exec', jobId), 'utf8')
+      const m = /^lstart=(.*)$/m.exec(text)
+      return m && m[1] ? m[1] : null
+    } catch { return null }
+  }
+
+  async function adopt(o: Orphan): Promise<void> {
+    // Reads and stops of it wait for this (as for a run still starting), never answering it ended.
+    let settle = () => {}
+    const held = new Promise<void>((resolve) => { settle = resolve })
+    starting.set(o.jobId, held)
+    try {
+      const base = jobFromAudit(o.jobId, o.start, null, o.blocked, false, { stateDir: deps.stateDir, taskDirRoot: deps.taskDirRoot, defaultTimeoutMs: BACKGROUND_MAX_MS })
+      if (!base?.detached) return
+      const exitFile = base.detached.exitFile
+      // Its wrapper still holds its pid when the process there started when the listed one did (the
+      // audit's `listed` line, else the registry). ps with no answer is unknown: left for the next
+      // look, never taken as killed (the run reads running meanwhile, host-exec-recall.ts).
+      const listed = o.lstart ?? await listedStart(o.jobId)
+      let wrapperHere = pidAlive(o.pid)
+      let verified = false
+      if (wrapperHere && listed) {
+        const nowStart = await processStart(o.pid)
+        if (nowStart === null) {
+          if (pidAlive(o.pid)) {
+            // Said once in the audit (the reason it is not followed yet), then asked again every look.
+            if (!deferred.has(o.jobId)) { deferred.add(o.jobId); audit({ event: 'adopt-deferred', jobId: o.jobId, pid: o.pid, why: 'ps gave no start' }) }
+            return
+          }
+          wrapperHere = false
+        } else {
+          deferred.delete(o.jobId)
+          verified = nowStart === listed
+          wrapperHere = verified
+        }
+      }
+      // No start was ever recorded (its daemon died right after the spawn): followed, never signalled,
+      // since that pid may be another program's by now; past its deadline it is let go.
+      const deadline = base.startedAt + base.timeoutMs + 60_000
+      const job: Job = {
+        ...base, pid: verified ? o.pid : null, endedAt: null, shellExitedAt: null, exitCode: null, signal: null,
+        bytes: logSize(base.logFile), tailMax: OUTPUT_MAX_BYTES,
+        timedOut: o.stopping === 'timeout', killed: o.stopping === 'asked', ...(o.stopping ? { signalled: true as const } : {}),
+      }
+      delete job.daemonEnded
+      // Followed but never signalled: its reads say a stop cannot reach it.
+      if (wrapperHere && !verified) job.unverified = true
+      jobs.set(o.jobId, job)
+      deferred.delete(o.jobId)
+      audit({ event: 'adopted', jobId: o.jobId, daemonPid: process.pid, ...(job.unverified ? { unverified: true } : {}) })
+      const str = (v: unknown) => (typeof v === 'string' ? v : null)
+      const wrapperAlive = () => {
+        if (!wrapperHere || !pidAlive(o.pid)) return false
+        if (verified || now() < deadline) return true
+        // Past its deadline an unverified run is let go: nothing signalled it, and it may still run.
+        job.endedBy = 'let-go'
+        return false
+      }
+      const child = detachedChild({ exitFile, wrapperAlive, killedBy: () => (job.endedBy === 'let-go' ? null : 'SIGKILL'), signalled: () => job.signalled === true })
+      void follow(job, child, { task: str(o.start.task), host: str(o.start.host) }, true, String(o.start.command ?? ''), null, o.start.allowPrompts === true)
+      // A stop the last daemon began goes on (its SIGKILL may never have gone out).
+      if (verified && (o.stopping === 'timeout' || o.stopping === 'asked' || o.stopping === 'blocked')) stop(job, o.stopping)
+    } finally {
+      if (starting.get(o.jobId) === held) starting.delete(o.jobId)
+      settle()
+    }
+  }
+  adoptOrphans(true)
+  // A handover overlaps two daemons for a moment: what the other still followed is taken once it is
+  // gone; and what ps left for later is asked again here.
+  const adoptTimer = setInterval(() => { adoptOrphans(true) }, 2_000)
+  adoptTimer.unref?.()
 
   function prune(): void {
     const t = now()
-    for (const [id, j] of jobs) if (j.endedAt !== null && t - j.endedAt > KEEP_FINISHED_MS) jobs.delete(id)
+    const drop = (id: string, j: Job) => { jobs.delete(id); if (j.detached) void removeExitFile(j.detached.exitFile) }
+    for (const [id, j] of jobs) if (j.endedAt !== null && t - j.endedAt > KEEP_FINISHED_MS) drop(id, j)
     if (jobs.size <= MAX_JOBS) return
     for (const [id, j] of jobs) {
       if (jobs.size <= MAX_JOBS) break
-      if (j.endedAt !== null) jobs.delete(id)
+      if (j.endedAt !== null) drop(id, j)
     }
   }
 
@@ -186,6 +319,9 @@ export function createHostExec(deps: HostExecDeps) {
     if (why === 'timeout') j.timedOut = true
     else if (why === 'asked') j.killed = true
     else if (why === 'daemon') j.endedByDaemon = true
+    j.signalled = true
+    // A daemon that follows the run after this one knows why it was signalled (host-exec-recall.ts).
+    if (j.detached) audit({ event: 'stopping', jobId: j.id, why })
     const pid = j.pid
     // The fallback below dies with a daemon that exits first: one that must end now gets SIGKILL.
     if (atOnce) { try { deps.killGroup(pid, 'SIGKILL') } catch { /* gone */ } return }
@@ -251,11 +387,15 @@ export function createHostExec(deps: HostExecDeps) {
       before = b.before
     }
     const dir = taskDir ? path.join(taskDir, 'host-exec') : path.join(deps.stateDir, 'host-exec')
+    // Detached (detached-run.ts): the run's output goes straight to its log, which outlives this daemon.
+    const detach = req.detach === true && req.endGroup === true
     let fd: number
     let logFile: string
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
       ;({ fd, logFile } = openRunLog(dir, id))
+      // Appended to, so a note this daemon (or the next) writes at its end is never written over.
+      if (detach) { fs.closeSync(fd); fd = fs.openSync(logFile, 'a', 0o600) }
     } catch (err) {
       return bad(`could not open a log in ${dir}: ${(err as Error).message}`, 'spawn_failed')
     }
@@ -267,6 +407,7 @@ export function createHostExec(deps: HostExecDeps) {
       cwd, logFile, taskId: typeof req.taskId === 'string' ? req.taskId : null, bytes: 0, tail: [], tailBytes: 0, tailMax, waiters: [], timer: null,
       shell: plan.shell, loginShell: plan.loginShell, taskDir, command: line.slice(0, 200), blocked: null, leftBehind: false, outputCut: false,
       before, unwatch: null, stopLeft: null, timeoutMs, waits: 0, ...(req.resumable === true ? { resumable: true as const } : {}),
+      ...(detach ? { detached: { exitFile: exitFileOf(logFile) } } : {}),
     }
     const caller = req.caller ?? {}
     const who = { task: typeof caller.task === 'string' ? caller.task.slice(0, 128) : null, host: typeof caller.host === 'string' ? caller.host.slice(0, 200) : null }
@@ -274,15 +415,19 @@ export function createHostExec(deps: HostExecDeps) {
     audit({
       event: 'start', jobId: id, ...who, taskId: job.taskId, startedAt: job.startedAt, daemonPid: process.pid, cwd, command: line.slice(0, 2000), background, timeoutMs,
       shell: plan.shell, loginShell: plan.loginShell, taskDir, logFile, ...(job.resumable ? { resumable: true } : {}),
+      ...(job.detached ? { detach: true, exitFile: job.detached.exitFile, ...(allowPrompts ? { allowPrompts: true } : {}) } : {}),
     })
 
     let child: ChildProcess
     try {
       // The env never carries the daemon's own WALNUT_* (the twins strip them); these two are the run's.
-      child = deps.spawn(login, plan.args, {
-        cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...deps.env, ...plan.env, WALNUT_HOST_EXEC_JOB: id, ...(taskDir ? { WALNUT_TASK_DIR: taskDir } : {}) },
-      })
+      const env = { ...deps.env, ...plan.env, WALNUT_HOST_EXEC_JOB: id, ...(taskDir ? { WALNUT_TASK_DIR: taskDir } : {}) }
+      if (job.detached) {
+        const w = wrapperArgv(login, plan.args, job.detached.exitFile)
+        child = deps.spawn(w.cmd, w.args, { cwd, detached: true, stdio: ['ignore', fd, fd], env })
+      } else {
+        child = deps.spawn(login, plan.args, { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env })
+      }
     } catch (err) {
       try { fs.closeSync(fd) } catch { /* closed */ }
       audit({ event: 'end', jobId: id, ...who, error: (err as Error).message })
@@ -292,22 +437,65 @@ export function createHostExec(deps: HostExecDeps) {
     jobs.set(id, job)
     o.recorded()
 
-    const onData = (chunk: Buffer) => {
-      job.bytes += chunk.length
-      try { fs.writeSync(fd, chunk) } catch { /* a full disk loses the log, not the run */ }
-      job.tail.push(chunk)
-      job.tailBytes += chunk.length
-      // Keep a little over the cap so the cut can fall on a whole character.
-      while (job.tail.length > 1 && job.tailBytes - job.tail[0].length >= job.tailMax) job.tailBytes -= job.tail.shift()!.length
+    let finished: Promise<void>
+    if (job.detached) {
+      // The wrapper holds the log once it started (Bun hands the fd over then); this daemon only reads it.
+      const closeLog = () => { try { fs.closeSync(fd) } catch { /* closed */ } }
+      child.once('spawn', closeLog)
+      child.once('error', closeLog)
+      if (job.pid !== null) {
+        audit({ event: 'spawned', jobId: id, pid: job.pid, daemonPid: process.pid })
+        void listDetached(job)
+      }
+      finished = follow(job, detachedChild({ exitFile: job.detached.exitFile, wrapper: child, signalled: () => job.signalled === true }), who, true, line, null, allowPrompts)
+    } else {
+      const onData = (chunk: Buffer) => {
+        job.bytes += chunk.length
+        try { fs.writeSync(fd, chunk) } catch { /* a full disk loses the log, not the run */ }
+        job.tail.push(chunk)
+        job.tailBytes += chunk.length
+        // Keep a little over the cap so the cut can fall on a whole character.
+        while (job.tail.length > 1 && job.tailBytes - job.tail[0].length >= job.tailMax) job.tailBytes -= job.tail.shift()!.length
+      }
+      child.stdout?.on('data', onData)
+      child.stderr?.on('data', onData)
+      finished = follow(job, child, who, req.endGroup === true, line, fd, allowPrompts)
     }
-    child.stdout?.on('data', onData)
-    child.stderr?.on('data', onData)
 
+    if (!background) await finished
+    return { ...view(job), ...(await replyTail(job)) }
+  }
+
+  /** The output a run's answer carries: the last bytes kept in memory, or (a detached run) read from its log. */
+  async function replyTail(job: Job): Promise<{ output: string; truncated: boolean }> {
+    if (!job.detached) return tailLines(job.tail, job.tailMax, job.bytes, job.endedAt === null)
+    // A detached run's output is only in its log: its tail, read off the event loop.
+    let size = 0
+    let buf = Buffer.alloc(0)
+    try {
+      const fh = await fs.promises.open(job.logFile, 'r')
+      try {
+        size = (await fh.stat()).size
+        const len = Math.min(size, job.tailMax + 4)
+        buf = Buffer.alloc(len)
+        await fh.read(buf, 0, len, size - len)
+      } finally { await fh.close() }
+    } catch { return { output: '', truncated: size > 0 } }
+    return tailLines([buf], job.tailMax, size, job.endedAt === null)
+  }
+
+  /**
+   * Follow a run to its end, whichever daemon started it: its shell's exit (the ChildProcess, or a
+   * detached run's stand-in), its deadline, a dialog it sits at; the end line in the audit. `fd` is
+   * the log this daemon writes for it (a run with pipes), null when the run writes it itself.
+   */
+  function follow(job: Job, child: ChildProcess, who: { task: string | null; host: string | null }, endGroup: boolean, line: string, fd: number | null, allowPrompts: boolean): Promise<void> {
+    const id = job.id
     // The shell's exit ends the job, a moment later at most: what it left running in its group is
     // stopped (a terminal closing does the same), and the answer names it (host-exec-group.ts).
     const finished = new Promise<void>((resolve) => {
       const watch = watchShellEnd(child, {
-        pgid: job.pid, line, endGroup: req.endGroup === true, killGroup: deps.killGroup, spawn: deps.spawn,
+        pgid: job.pid, line, endGroup, killGroup: deps.killGroup, spawn: deps.spawn,
         // Its deadline is the shell's: one that exited by itself is never "stopped at its deadline".
         onExit: () => { job.shellExitedAt = now(); if (job.timer) { clearTimeout(job.timer); job.timer = null } },
         onEnd: ({ code, signal, error, leftBehind, leftCommands, outputCut }) => {
@@ -319,8 +507,12 @@ export function createHostExec(deps: HostExecDeps) {
           job.leftBehind = leftBehind
           job.outputCut = outputCut
           if (leftCommands) job.leftCommands = leftCommands
-          try { fs.closeSync(fd) } catch { /* closed */ }
-          audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ...(job.blocked ? { blocked: job.blocked.reason } : {}), ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(leftBehind ? { leftBehind: leftCommands ?? true } : {}), ...(outputCut ? { outputCut } : {}), ...(error ? { error } : {}) })
+          if (fd !== null) { try { fs.closeSync(fd) } catch { /* closed */ } }
+          if (job.detached) job.bytes = logSize(job.logFile)
+          audit({ event: 'end', jobId: id, ...who, exitCode: code, signal, timedOut: job.timedOut, killed: job.killed, ...(job.blocked ? { blocked: job.blocked.reason } : {}), ms: job.endedAt - job.startedAt, bytes: job.bytes, ...(leftBehind ? { leftBehind: leftCommands ?? true } : {}), ...(outputCut ? { outputCut } : {}), ...(error ? { error } : {}), ...(job.endedBy ? { endedBy: job.endedBy } : {}) })
+          // Its end is in the audit now: its registry entry has done its work. The exit file stays while the
+          // job is kept (another daemon following it too reads the same status, never "killed"); prune removes it.
+          if (job.detached) void unregisterRun(registryDir, 'host-exec', id)
           for (const w of job.waiters.splice(0)) w()
           resolve()
         },
@@ -328,7 +520,8 @@ export function createHostExec(deps: HostExecDeps) {
       job.stopLeft = () => watch.stopLeft()
     })
     if (job.endedAt === null && job.shellExitedAt === null) {
-      job.timer = setTimeout(() => stop(job, 'timeout'), timeoutMs)
+      // A run adopted after a restart keeps the deadline it started with.
+      job.timer = setTimeout(() => stop(job, 'timeout'), Math.max(0, job.startedAt + job.timeoutMs - now()))
       job.timer.unref?.()
     }
     // A run that sits at a dialog nobody here asked for is stopped, and says so.
@@ -340,9 +533,24 @@ export function createHostExec(deps: HostExecDeps) {
         stop(job, 'blocked')
       })
     }
+    return finished
+  }
 
-    if (!background) await finished
-    return { ...view(job), ...tailLines(job.tail, job.tailMax, job.bytes, job.endedAt === null) }
+  /** Lists a detached run for a launcher's rollback stop (detached-registry.ts), once ps named its start. */
+  async function listDetached(job: Job): Promise<void> {
+    if (job.pid === null) return
+    if (!stopScriptPut) { stopScriptPut = true; void installStopScript(registryDir) }
+    const lstart = await processStart(job.pid)
+    if (!lstart || job.endedAt !== null) return
+    // The start a later daemon checks before it adopts or signals this pid (host-exec-recall.ts `listed`).
+    audit({ event: 'listed', jobId: job.id, pid: job.pid, lstart })
+    await registerRun(registryDir, {
+      kind: 'host-exec', id: job.id, pid: job.pid, pgid: job.pid, lstart,
+      noteFile: job.logFile, note: `[walnut] ${ROLLBACK_NOTE}`,
+      lineFile: auditFile, line: JSON.stringify({ at: new Date(now()).toISOString(), event: 'ended-by-update', jobId: job.id, taskId: job.taskId, reason: 'rollback' }),
+    })
+    // It may have ended while the entry was written: the end removes it, but only once.
+    if (job.endedAt !== null) await unregisterRun(registryDir, 'host-exec', job.id)
   }
 
   function logSize(file: string): number {
@@ -368,6 +576,8 @@ export function createHostExec(deps: HostExecDeps) {
    */
   async function read(req: { jobId?: unknown; taskId?: unknown; offset?: unknown; maxBytes?: unknown; wait?: unknown; until?: unknown; scanFrom?: unknown; by?: unknown }): Promise<(JobView & { output: string; offset: number; nextOffset: number; waitedFor?: WaitedFor }) | ExecError> {
     // A run of this id still starting (a same-id call refused job_exists reads it next): it, once recorded.
+    // A detached run an earlier daemon left is adopted first, so it never reads as ended meanwhile.
+    await adoptedFirst(req.jobId, typeof req.by === 'number' && Number.isFinite(req.by) ? req.by : undefined)
     await started(req.jobId)
     const j = own(req.jobId, req.taskId)
     if (!j) return bad(`no job ${String(req.jobId)} on this host (finished jobs are kept for an hour; the log file stays)`, 'unknown_job')
@@ -412,6 +622,7 @@ export function createHostExec(deps: HostExecDeps) {
   }
 
   async function stopJob(req: { jobId?: unknown; taskId?: unknown }): Promise<JobView | ExecError> {
+    await adoptedFirst(req.jobId)
     await started(req.jobId)
     const j = own(req.jobId, req.taskId)
     if (!j) return bad(`no job ${String(req.jobId)} on this host`, 'unknown_job')
@@ -422,6 +633,7 @@ export function createHostExec(deps: HostExecDeps) {
   /** Every job here, or one task's (`taskId`), newest first. */
   function list(req: { taskId?: unknown } = {}): JobView[] {
     prune()
+    adoptOrphans()
     const task = typeof req.taskId === 'string' && req.taskId ? req.taskId : null
     const earlier = recall.list((id) => jobs.has(id))
     return [...jobs.values(), ...earlier].filter((j) => task === null || j.taskId === task).sort((a, b) => b.startedAt - a.startedAt).map(view)
@@ -438,7 +650,8 @@ export function createHostExec(deps: HostExecDeps) {
     let n = 0
     for (const j of jobs.values()) {
       // Ended, asked to stop, or noted already (a forced update, then the stop): one line per run.
-      if (j.endedAt !== null || j.killed || j.noted || (only === 'resumable' && !j.resumable)) continue
+      // A detached run outlives this daemon and the next one follows it (endForRollback ends it).
+      if (j.endedAt !== null || j.killed || j.noted || j.detached || (only === 'resumable' && !j.resumable)) continue
       j.noted = true
       try { fs.appendFileSync(j.logFile, `\n[walnut] ${note}\n`) } catch { /* the log is gone */ }
       audit({ event: 'ended-by-update', jobId: j.id, taskId: j.taskId })
@@ -450,6 +663,24 @@ export function createHostExec(deps: HostExecDeps) {
     return n
   }
 
+  /**
+   * The next daemon here is a version that cannot follow detached runs (a rollback: the update
+   * asking for this daemon's place did not say it adopts them): each one's log and the audit say so,
+   * and it is stopped. Returns how many it stopped (detached plugin scripts too).
+   */
+  function endForRollback(): number {
+    let n = 0
+    for (const j of jobs.values()) {
+      if (j.endedAt !== null || !j.detached || j.endedBy === 'rollback') continue
+      j.endedBy = 'rollback'
+      try { fs.appendFileSync(j.logFile, `\n[walnut] ${ROLLBACK_NOTE}\n`) } catch { /* the log is gone */ }
+      audit({ event: 'ended-by-update', jobId: j.id, taskId: j.taskId, reason: 'rollback' })
+      stop(j, 'daemon')
+      n++
+    }
+    return n + (scripts.endForRollback?.() ?? 0)
+  }
+
   /** Running jobs (the server's per-host cap reads the host's own count after a restart). */
   function running(): number {
     let n = 0
@@ -457,10 +688,17 @@ export function createHostExec(deps: HostExecDeps) {
     return n
   }
 
-  /** Running jobs a daemon update waits for: all but the resumable ones (plugin scripts are `scripts`). */
+  /** Running jobs a daemon update waits for: all but the resumable and the detached ones (plugin scripts are `scripts`). */
   function holding(): number {
     let n = 0
-    for (const j of jobs.values()) if (j.endedAt === null && !j.resumable) n++
+    for (const j of jobs.values()) if (j.endedAt === null && !j.resumable && !j.detached) n++
+    return n
+  }
+
+  /** Running detached jobs: a handover to a daemon that cannot adopt them ends them (endForRollback). */
+  function detachedRunning(): number {
+    let n = 0
+    for (const j of jobs.values()) if (j.endedAt === null && j.detached) n++
     return n
   }
 
@@ -480,6 +718,8 @@ export function createHostExec(deps: HostExecDeps) {
     script: (req: Record<string, unknown>) => thrown<ScriptResult>(scripts.script(req)),
     /** Plugin scripts running now (exec.script): a handover waits for them as for jobs. */
     scripts: scripts.count,
+    /** Detached plugin scripts running now (they hold no handover). */
+    detachedScripts: scripts.detachedCount,
     read: (req: Parameters<typeof read>[0]) => thrown(read(req)),
     kill: (req: { jobId?: unknown; taskId?: unknown }) => thrown<JobView>(stopJob(req)),
     list: async (req: { taskId?: unknown } = {}) => ({ jobs: list(req) }),
@@ -491,12 +731,16 @@ export function createHostExec(deps: HostExecDeps) {
     active: (): Array<{ taskId: string | null; cwd: string }> =>
       [...jobs.values()].filter((j) => j.endedAt === null).map((j) => ({ taskId: j.taskId ?? null, cwd: j.cwd })),
     endForUpdate,
+    endForRollback,
+    detachedRunning,
+    /** Where detached runs are listed for a rollback's stop (detached-registry.ts). */
+    registryDir,
     /** The runs endForUpdate stopped have ended (their reads answered), or `ms` passed: the twins' stopDaemon drains it. */
     untilEnded: (ms: number) => untilEndedByDaemon(jobs.values(), ms),
     /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them (daemon-source.ts). */
     stuck: (minAgeMs?: number) => stuckFileLooks(Date.now(), minAgeMs) > 0,
     /** End the matcher process (the daemon's shutdown, tests). */
-    close: () => { scripts.stopAll(); matcher?.close() },
+    close: () => { clearInterval(adoptTimer); scripts.stopAll(); matcher?.close() },
   }
 }
 

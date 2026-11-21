@@ -154,6 +154,7 @@ const CALLERS: Record<string, { kind: 'resend' | 'unique' | 'event' | 'forward';
   'src/core/human-inbox/letter-ops.ts': { kind: 'resend', why: "an inbox item's action, run once by the item ledger" },
   'src/core/org/lead-waits.ts': { kind: 'resend', why: 'one id per set of waits (task and phase time), told once' },
   'src/core/sessions/reply-outbox.ts': { kind: 'resend', why: 'an owed reply replayed after a restart' },
+  'src/core/routines/executors/session.ts': { kind: 'resend', why: "a trigger fire's id (fireMessageId: trigger, epoch, the batch's seqs), the same on a resend after a lost ack" },
   'src/core/sessions/background-work-wake.ts': { kind: 'resend', why: 'one id per journal record version, re-read after a restart' },
   'src/core/sessions/lane-turn.ts': { kind: 'resend', why: "the chat client's own message id, kept on its retry" },
   'src/core/sessions/engine-switch-resume.ts': { kind: 'resend', why: 'one id per engine switch' },

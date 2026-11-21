@@ -112,6 +112,8 @@ import { parseUsageLimitReset, usageLimitSentence } from './usage-limit-text.js'
 import { safeguardStopOfAcpStopReason } from '../core/sessions/safeguard-stop.js'
 import type { UsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 import type { OutlivingSource } from '../core/sessions/outliving-work.js'
+import { ACP_SURVIVE_CAPABILITY, workSurvives } from '../core/hosts/work-survives.js'
+import { askOnce, untilAdopted, WorkerAdoptingError } from './acp-ask-once.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -784,6 +786,8 @@ export class AcpSession {
   private _controlCut = false
   private _mode: SessionMode
   private _active = false
+  /** This worker outlives the host's daemon ('acp-survive-v1'): a command whose link went is asked again by its id. */
+  private _survive = false
   private _turnActive = false
   /** Commands the last turn left running (direct Codex, `background-work`): the session is on the job. */
   private _backgroundWork: BackgroundTerminal[] = []
@@ -951,6 +955,11 @@ export class AcpSession {
     if (this.cfg.directWsUrl) return this.adoptConn(await getDirectDaemonConnection('__local__', this.cfg.directWsUrl))
     // The daemon's address now, never one read before it started again (local-daemon-dial.ts).
     return this.adoptConn(await getLocalDaemonConnection())
+  }
+
+  /** A command to the worker, asked again by its id when its link went and the worker survives (acp-ask-once.ts). */
+  private ask(conn: DaemonConnection, cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
+    return askOnce({ conn, reconnect: () => this.ensureConn(), survive: this._survive, cmd, params, timeoutMs }) as Promise<Awaited<ReturnType<DaemonConnection['send']>>>
   }
 
   private adoptConn(conn: DaemonConnection): DaemonConnection {
@@ -1827,7 +1836,9 @@ export class AcpSession {
         sessionId: boundaryFrom, runtimeId: this.runtimeId, engine: this.engineId,
       })
     }
-    const startResp = await conn.send('acpStart', {
+    const survive = await workSurvives(conn, ACP_SURVIVE_CAPABILITY)
+    // A worker that outlived the last daemon and is still being checked there is waited for (untilAdopted).
+    const startResp = await untilAdopted(() => conn.send('acpStart', {
       sid: this.runtimeId,
       cwd: this.cfg.cwd,
       ...artifacts,
@@ -1839,7 +1850,10 @@ export class AcpSession {
       // The daemon makes the task's durable working directory and sets
       // WALNUT_TASK_DIR from it (task-dir-core.ts); an older daemon ignores it.
       ...(this.taskId ? { taskId: this.taskId, home: WALNUT_HOME } : {}),
-    }, ACP_COLD_RESUME_TIMEOUT_MS)
+      // The worker outlives the host's daemon (work-survives.ts); an older daemon is never asked.
+      ...(survive ? { survive: true } : {}),
+    }, ACP_COLD_RESUME_TIMEOUT_MS))
+    if (startResp.ok) this._survive = survive
     stage('startMs')
     try {
       if (!startResp.ok) {
@@ -1863,6 +1877,8 @@ export class AcpSession {
           throw new BudgetPausedError()
         } else if ((startResp as { errorKind?: string }).errorKind === 'budget_checking') {
           throw new BudgetCheckingError()
+        } else if ((startResp as { errorKind?: string }).errorKind === 'worker_adopting') {
+          throw new WorkerAdoptingError(String(startResp.error))
         } else {
           throw new Error('acpStart failed: ' + startResp.error)
         }
@@ -1884,7 +1900,8 @@ export class AcpSession {
         // transcript says so from the journal (acp-journal-projector.ts).
       }
     } catch (error) {
-      await this.discardUnpublishedWorker()
+      // Still being adopted there: the worker is the earlier daemon's, never this start's to stop.
+      if (!(error instanceof WorkerAdoptingError)) await this.discardUnpublishedWorker()
       throw error
     }
     if (!this._providerSessionId) {
@@ -2164,7 +2181,7 @@ export class AcpSession {
     const prefix = owed ? await this.sessionContextPrefix() : ''
     const cut = this._controlCut || (await getSessionByClaudeId(this.trackingId()).catch(() => undefined))?.acpControlCut === true
     const lead = [prefix, cut ? renderHintBlock(CONTROL_CUT_HINT_KIND, CONTROL_CUT_NOTE) : ''].filter(Boolean).join('\n\n')
-    const sendResp = await conn.send('acpSend', {
+    const sendResp = await this.ask(conn, 'acpSend', {
       sid: this.runtimeId,
       commandId,
       walnutMessageId,
@@ -2175,6 +2192,7 @@ export class AcpSession {
       const kind = (sendResp as { errorKind?: string }).errorKind
       if (kind === 'budget_paused') throw new BudgetPausedError()
       if (kind === 'budget_checking') throw new BudgetCheckingError()
+      if (kind === 'worker_adopting') throw new WorkerAdoptingError(String(sendResp.error))
       if (kind === 'no_worker') {
         // Worker died between start and send (or idle-reaped): one lazy-resume retry.
         this._active = false
@@ -2233,7 +2251,7 @@ export class AcpSession {
     if (this.steerRefusedThisTurn) return false
     const conn = await this.ensureConn()
     const commandId = `acp-steer:${walnutMessageId}`
-    const resp = await conn.send('acpSteer', {
+    const resp = await this.ask(conn, 'acpSteer', {
       sid: this.runtimeId,
       commandId,
       walnutMessageId,
@@ -2494,7 +2512,7 @@ export class AcpSession {
     if (!configId) return false
     await this.establish()
     const conn = await this.ensureConn()
-    const resp = await conn.send('acpSetConfigOption', {
+    const resp = await this.ask(conn, 'acpSetConfigOption', {
       sid: this.runtimeId,
       commandId: `acp-config-${crypto.randomBytes(8).toString('hex')}`,
       configId,
@@ -2598,7 +2616,7 @@ export class AcpSession {
     } else {
       optionId = permissionOptionFor(options, false) // null: no reject option → cancelled outcome
     }
-    const resp = await conn.send('acpRespond', {
+    const resp = await this.ask(conn, 'acpRespond', {
       sid: this.runtimeId,
       commandId: `qp-${crypto.randomBytes(6).toString('hex')}`,
       providerRequestId: requestId,
@@ -2658,7 +2676,7 @@ export class AcpSession {
       return
     }
     const conn = await this.ensureConn()
-    const resp = await conn.send('acpCancel', {
+    const resp = await this.ask(conn, 'acpCancel', {
       sid: this.runtimeId,
       commandId: `qx-${crypto.randomBytes(6).toString('hex')}`,
       ...(options.hard ? { hard: true } : {}),
@@ -2934,6 +2952,7 @@ export class AcpSession {
     } else if (record.event.stopReason === 'cancelled'
       || record.event.stopReason === 'worker-crash'
       || record.event.stopReason === 'daemon-restart'
+      || record.event.stopReason === 'rollback'
       || record.event.stopReason === 'shutdown') {
       this.settleSelfReport(
         pending.commandId,

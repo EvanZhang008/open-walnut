@@ -856,6 +856,8 @@ function interruptionMessage(reason: string): string {
       return 'Prompt delivery is uncertain after a worker crash. Check the provider thread before retrying to avoid duplicate work.'
     case 'daemon-restart':
       return 'Turn interrupted: the session host restarted. Send a message to continue.'
+    case 'rollback':
+      return 'Turn interrupted: Walnut on the session host was put back to an older version, which cannot continue this turn. Send a message to continue.'
     case 'shutdown':
       return 'Turn interrupted: the session was shut down.'
     case 'user-cancelled':

@@ -43,6 +43,7 @@ const TWIN_HELPERS: Record<string, RegExp> = {
   'tests/helpers/live-daemon.ts': /\bspawnLiveDaemon\(/,
   'tests/helpers/replica-cluster.ts': /\bstart(?:ReplicaCluster|HostDaemon)\(/,
   'tests/helpers/startup-failure-twins.ts': /\bstartupFailureTwinsSuite\(/,
+  'tests/helpers/trigger-daemon.ts': /\bTriggerDaemon\.start\(/,
 }
 /** Twin suites node-side leaves out, each for a reason. */
 const TWIN_ELSEWHERE: Record<string, string> = {

@@ -63,6 +63,13 @@ describe('execRunsReason, execRunsHold', () => {
     expect(holdingJobs(null)).toBe(0)
   })
 
+  it('a detached run (host-exec-detach-v1: it outlives the daemon, the next one adopts it) never holds; a run on pipes still does', async () => {
+    const hold = (jobs: unknown[]) => execRunsHold({ connected: true, hasCapability: () => true, send: async () => ({ ok: true, jobs }) }, 'h')
+    expect(await hold([{ running: true, detached: true }, { running: true, detached: true }])).toBeNull()
+    expect(await hold([{ running: true, detached: true }, { running: true }])).toBe('1 host_exec run on the host would end with the daemon')
+    expect(holdingJobs({ jobs: [{ running: true, detached: true }, { running: true, detached: false }] })).toBe(1)
+  })
+
   it('the wait has an end: a host that kept runs going for EXEC_UPGRADE_HOLD_MAX_MS is updated anyway, and its clock starts over once none runs', () => {
     const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     const t0 = 1_800_000_000_000

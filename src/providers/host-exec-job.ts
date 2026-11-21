@@ -35,6 +35,12 @@ export interface RunRequest {
    * and its answer has no `resumable`, so there the run holds an update as every run does.
    */
   resumable?: unknown
+  /**
+   * Run it so it outlives this daemon (detached-run.ts, 'host-exec-detach-v1'): its output goes
+   * straight to its log, a wrapper writes its exit status, and the next daemon here follows it to its
+   * end. Taken only with `endGroup`; an older daemon ignores it and runs the line as always.
+   */
+  detach?: unknown
 }
 
 export interface JobView {
@@ -84,6 +90,16 @@ export interface JobView {
    * for it, ends it with a note in its log, and the caller runs it again (exec-runs-hold.ts).
    */
   resumable?: true
+  /** It runs detached (RunRequest `detach`): a daemon update neither waits for it nor ends it; the next daemon follows it. */
+  detached?: true
+  /**
+   * Why the daemon ended it: `rollback`, Walnut here was put back to a version that cannot follow it
+   * (detached-registry.ts); `let-go`, a run adopted with no start time to check passed its deadline and
+   * is no longer followed (nothing signalled it; it may still run).
+   */
+  endedBy?: 'rollback' | 'let-go'
+  /** Running, but a stop from this daemon cannot reach it (not followed yet, or its pid unchecked): stop it by hand. */
+  unsignalled?: true
 }
 
 export interface RunReply extends JobView {
@@ -137,6 +153,16 @@ export interface Job {
   noted?: true
   /** Stopped because this daemon is going (endForUpdate): it reads `daemonEnded`, never as a host_exec_stop. */
   endedByDaemon?: true
+  /** Runs detached (RunRequest `detach`): where its wrapper writes the exit status. */
+  detached?: { exitFile: string }
+  /** It was signalled (a stop, its deadline, a dialog, the daemon going): a status of 128+N reads as signal N (detached-run.ts exitOf). */
+  signalled?: true
+  /** Ended for a rollback (endForRollback), or let go past its deadline unsignalled (an unverified adoption). */
+  endedBy?: 'rollback' | 'let-go'
+  /** Adopted with no start time to check its pid against: followed, never signalled (a stop cannot reach it). */
+  unverified?: true
+  /** A detached run still going that this daemon does not follow yet (another daemon does, or its adoption is pending): read only. */
+  notFollowed?: true
 }
 
 export function jobView(j: Job, now: number): JobView {
@@ -150,6 +176,10 @@ export function jobView(j: Job, now: number): JobView {
     ...(running && j.shellExitedAt === null ? { deadlineInMs: Math.max(0, j.startedAt + j.timeoutMs - now) } : {}),
     ...(j.daemonEnded || (!running && j.endedByDaemon) ? { daemonEnded: true as const } : {}),
     ...(j.resumable ? { resumable: true as const } : {}),
+    ...(j.detached ? { detached: true as const } : {}),
+    ...(j.endedBy ? { endedBy: j.endedBy } : {}),
+    // Running, but no stop from here reaches it: not followed yet, or its pid could not be checked.
+    ...(running && (j.notFollowed || j.unverified) ? { unsignalled: true as const } : {}),
   }
 }
 

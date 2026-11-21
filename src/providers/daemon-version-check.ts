@@ -79,6 +79,7 @@ export const DAEMON_SOURCE_FILES = [
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',
+  'src/providers/acp-survive.ts',
   'src/providers/acp-thread-restore.ts',
   'src/providers/acp-host-artifacts.ts',
   'src/lib/cli-private-tmp.ts',
@@ -185,6 +186,10 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/host-exec-script.ts',
   // A job an earlier daemon here ran, read back from the audit.
   'src/providers/host-exec-recall.ts',
+  // Work that outlives the daemon (a run, a script): its wrapper, its listing for a launcher, and the runner of detached scripts.
+  'src/providers/detached-run.ts',
+  'src/providers/detached-registry.ts',
+  'src/providers/host-script-detached.ts',
   // The id of a host_exec run, chosen by the CLI and the MCP server bundled into the binary.
   'src/providers/host-exec-run-id.ts',
   // The host network (net.*): bundled into the binary AND shipped as net-core.cjs,

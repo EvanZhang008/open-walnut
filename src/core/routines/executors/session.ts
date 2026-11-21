@@ -335,7 +335,8 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       // message has one id per slot, so a run of that slot again collapses onto the row while it
       // is still queued.
       const onStored = () => { void ctx?.markSent?.({ sessionId: target.claudeSessionId, summary }); };
-      const messageId = ctx?.slotMs !== undefined ? routineRunIdsOf(job.id, ctx.slotMs).messageId : undefined;
+      // A trigger fire names its own id (the same on every try); a scheduled run is keyed by its slot.
+      const messageId = ctx?.messageId ?? (ctx?.slotMs !== undefined ? routineRunIdsOf(job.id, ctx.slotMs).messageId : undefined);
       await delivery.sendToSession(target.claudeSessionId, envelope, taskId, { ...(messageId ? { messageId } : {}), onStored });
       return {
         status: 'ok',

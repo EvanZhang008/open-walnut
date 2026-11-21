@@ -25,13 +25,16 @@ function fixture(strict: boolean) {
   })
   const entry: any = {
     sid: 'fixture', state: 'running', stopping: false, aborting: false,
-    proc: { pid: 4242, exitCode: null, stdin: { write: (line: string) => {
+    // The worker's pid, whether it exited, and how a request reaches it (pipes or a surviving FIFO).
+    pid: 4242, exited: () => false,
+    send: (line: string, done: (err?: Error) => void) => {
       const frame = JSON.parse(line)
       const pending = entry.pendingRpc.get(frame.id)
       clearTimeout(pending.timer)
       entry.pendingRpc.delete(frame.id)
       pending.resolve({ id: frame.id, ok: true, result: {} })
-    } } },
+      done()
+    },
     journalPath: path.join(dir, 'journal'), pushOffset: 0, subscribers: new Set(),
     pendingRpc: new Map(), nextRpcId: 0, lastActivity: 0,
     terminalVersion: 0, activeCommandId: null, activeControlCommandId: null,
@@ -55,7 +58,7 @@ describe('ACP ordinary and Demo stop policy', () => {
   it('never signals a replaced ordinary worker from an old stop timer', async () => {
     const { daemon, entry } = fixture(false)
     await daemon.acpStop('fixture')
-    daemon.workers.set('fixture', { ...entry, proc: { ...entry.proc, pid: 4243 } })
+    daemon.workers.set('fixture', { ...entry, pid: 4243 })
     await vi.advanceTimersByTimeAsync(6000)
     expect(process.kill).not.toHaveBeenCalled()
     expect(daemon.hasWorker('fixture')).toBe(true)

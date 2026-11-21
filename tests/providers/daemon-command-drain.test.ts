@@ -366,7 +366,7 @@ describe.each([
         },
         process: { platform: 'linux', pid: 4242 }, os: { userInfo: () => ({ uid: 501 }) },
         readStartTime: () => 'start', readRegistry: () => ({}), handoverHooks: () => null,
-        acp: { workers: new Map() }, sttRelayPending: new Map(), launchRelayPending: new Map(),
+        acp: { workers: new Map(), holdingWorkers: () => 0 }, sttRelayPending: new Map(), launchRelayPending: new Map(),
         controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(), gatewayWaiting: new Set(),
         // No host_exec run here; a running one refuses the handover (daemon-service-handover-busy-twins-e2e.test.ts).
         hostExec: { running: () => 0, holding: () => 0 },

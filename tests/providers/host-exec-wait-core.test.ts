@@ -64,9 +64,9 @@ describe('exec.read and exec.run until on the host core', () => {
     await core.kill({ jobId: bg.jobId })
   })
 
-  it('is version 3 or later (4: exec.run endGroup, 5: exec.script, 6: exec.run resumable), answers a match with waitedFor, refuses a bad until, and goes on from scanFrom', async () => {
-    expect(HOST_EXEC_VERSION).toBe(6)
-    expect(core.version).toBe(6)
+  it('is version 3 or later (4: exec.run endGroup, 5: exec.script, 6: exec.run resumable, 7: exec.run detach), answers a match with waitedFor, refuses a bad until, and goes on from scanFrom', async () => {
+    expect(HOST_EXEC_VERSION).toBe(7)
+    expect(core.version).toBe(7)
     const bg = await core.run({ jobId: 'hx-wait-core-0001', taskId: 't-1', command: 'sleep 0.5; echo "ready on 1"; sleep 20', background: true })
     expect(bg.running).toBe(true)
     const t0 = Date.now()

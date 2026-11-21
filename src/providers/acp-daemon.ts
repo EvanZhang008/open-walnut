@@ -13,11 +13,16 @@
  *   - a pid file used ONLY as a belt-and-suspenders kill sweep at startup
  *     (the journal, not the pid registry, drives repair)
  *
+ * A worker started with `survive` ('acp-survive-v1', acp-survive.ts) talks to the daemon over a
+ * named pipe and a file instead of its stdio, so it (its adapter, the provider's turn, the tools
+ * it runs) outlives the daemon; the next daemon adopts it by its pid and start time (startupRepair)
+ * and reads its answers on. Such a worker holds no update (acp-busy.json, holdingWorkers) and is
+ * listed for a rollback's stop (detached-registry.ts); a worker on stdio dies with its daemon and
+ * is repaired and swept at the next start, as before.
+ *
  * Dependency-injected (like daemon-core.ts) so the bun-compiled standalone
- * daemon wires in its Bun-specific ws/send helpers. daemon-source.ts (the
- * SSH-deployed fallback template) does NOT embed this module — it answers
- * acp* commands with a structured "not supported on this host" error until
- * the remote deploy phase lands.
+ * daemon wires in its Bun-specific ws/send helpers; daemon-source.ts loads it as
+ * the acp-daemon-core.cjs sidecar.
  */
 
 import fs from 'node:fs'
@@ -30,6 +35,8 @@ import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
 import { probeCodexModels } from './codex-model-probe.js'
 import { findThreadToRestore } from './acp-thread-restore.js'
 import { createHostEngineProbe, resolveHostAcpArtifacts, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
+import { firstRpcId, openSurviveChannel, prepareSurviveFiles, readSavedPos, removeSurviveFiles, survivePaths, type SurviveChannel } from './acp-survive.js'
+import { ROLLBACK_NOTE, installStopScript, processStart as psStart, registerRun, registryFile, unregisterRun } from './detached-registry.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
 // A turn parked on a permission request produces ZERO journal/RPC traffic, so
@@ -48,7 +55,16 @@ const KILL_GRACE_MS = 750
 
 interface AcpWorkerEntry<W> {
   sid: string
-  proc: ChildProcess
+  /** The worker as this daemon spawned it; absent for one adopted after a restart (survive). */
+  proc?: ChildProcess
+  /** Its pid (the process group it leads). */
+  pid?: number
+  /** It has exited (its exit was seen, or an adopted one is gone). */
+  exited: () => boolean
+  /** Write one request line to it (its stdin, or its pipe). */
+  send: (line: string, done: (err?: Error) => void) => void
+  /** Survives this daemon (acp-survive.ts): its channel. */
+  survive?: SurviveChannel
   /** Where it was started (absent on a worker adopted from an older daemon): task directory cleanup keeps the folder it works in. */
   cwd?: string
   /** Its task's directory (WALNUT_TASK_DIR), kept whole while it runs even when it works in a shared checkout. */
@@ -80,13 +96,15 @@ interface AcpWorkerEntry<W> {
   orphanGraceMs?: number
   /** Since when no socket has subscribed to it (only kept with orphanGraceMs). */
   orphanedSince?: number
+  /** Its start as the rollback stop compares it (detached-registry.ts processStart). */
+  registryStart?: string
 }
 
 /** What `ps` says about one pid now; 'unknown' when it could not be asked. */
 export type AcpProcessInfo = { state: 'gone' } | { state: 'alive'; start: string; command: string } | { state: 'unknown' }
 
 /** A pid file row: a pid alone (older daemons), or the pid with what identifies its worker. */
-type PidRow = number | { pid: number; cmd?: string; adapter?: string; start?: string; boot?: number; stopping?: boolean }
+type PidRow = number | { pid: number; cmd?: string; adapter?: string; start?: string; boot?: number; stopping?: boolean; survive?: boolean; cwd?: string; taskDir?: string; deadlineAt?: number; orphanGraceMs?: number }
 
 /** When this host booted, in minutes (uptime moves a little; two minutes apart is the same boot). */
 function bootMinute(): number { return Math.round((Date.now() / 1000 - os.uptime()) / 60) }
@@ -123,6 +141,10 @@ export interface AcpDaemonDeps<W> {
   /** Read right before a worker spawns; false refuses it (a Demo's demo.quiesce fence). Absent = always. */
   maySpawn?: () => boolean
   strictStop?: () => boolean
+  /** Where surviving workers are listed for a rollback's stop (detached-registry.ts); default `<daemonDir>/detached`. */
+  registryDir?: string
+  /** What ps names as a pid's start, as the rollback stop compares it (tests stub it). */
+  registryStart?: (pid: number) => Promise<string | null>
 }
 
 function psField(pid: number, field: string): Promise<string | null | undefined> {
@@ -160,6 +182,10 @@ async function psProcessInfo(pid: number): Promise<AcpProcessInfo> {
   return command === null ? { state: 'gone' } : { state: 'alive', start, command }
 }
 
+/** ps with no answer when a surviving worker is adopted is asked again this many times, this far apart. */
+const ADOPT_PS_TRIES = 5
+const ADOPT_PS_RETRY_MS = 1_000
+
 export interface AcpStartParams {
   sid: string
   cwd: string
@@ -188,6 +214,12 @@ export interface AcpStartParams {
    */
   deadlineAt?: number
   orphanGraceMs?: number
+  /**
+   * The worker outlives this daemon ('acp-survive-v1', acp-survive.ts): requests over a named pipe,
+   * answers in a file, adopted by the next daemon. Asked for by the server only with the
+   * experiment `work_survives_restart` on; an older daemon ignores it (the worker uses its stdio).
+   */
+  survive?: boolean
 }
 
 export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
@@ -202,8 +234,17 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   const exitedGroups = new Map<string, { pid: number; cmd: string; adapter: string; boot: number; start?: string }>()
   const pidFile = path.join(daemonDir, 'acp-workers.json')
   const processInfo = deps.processInfo ?? psProcessInfo
+  // Every request id of this daemon life is at least this (acp-survive.ts firstRpcId): a lower one is an earlier life's.
+  const lifeFirstRpcId = firstRpcId()
   const groupCommands = deps.groupCommands ?? psGroupCommands
   const boot = deps.bootMinute ?? bootMinute
+  const registryDir = deps.registryDir ?? path.join(daemonDir, 'detached')
+  const registryStart = deps.registryStart ?? psStart
+  // Workers still being adopted at startup: a start, an op or a subscribe for one waits for it.
+  const adopting = new Map<string, Promise<void>>()
+  let stopScriptPut = false
+  // Rows of surviving workers not settled yet (being adopted, or ps could not say): kept in the pid file.
+  const keptRows = new Map<string, Exclude<PidRow, number>>()
   ensureOwnerOnlyAcpStorage()
 
   function journalPathFor(sid: string): string {
@@ -229,8 +270,15 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   function persistPids(): void {
     const out: Record<string, PidRow> = {}
     for (const [sid, w] of workers) {
-      if (w.state === 'running' && w.proc.pid) out[sid] = { pid: w.proc.pid, cmd: w.cmd, adapter: w.adapter, boot: boot(), ...(w.start ? { start: w.start } : {}) }
+      if (w.state === 'running' && w.pid) {
+        out[sid] = {
+          pid: w.pid, cmd: w.cmd, adapter: w.adapter, boot: boot(), ...(w.start ? { start: w.start } : {}),
+          // What the next daemon needs to adopt it.
+          ...(w.survive ? { survive: true, ...(w.cwd ? { cwd: w.cwd } : {}), ...(w.taskDir ? { taskDir: w.taskDir } : {}), ...(w.deadlineAt ? { deadlineAt: w.deadlineAt } : {}), ...(w.orphanGraceMs ? { orphanGraceMs: w.orphanGraceMs } : {}) } : {}),
+        }
+      }
     }
+    for (const [sid, row] of keptRows) if (!out[sid]) out[sid] = row
     // A running worker of the same runtime wins the row; its stopped group stays in memory.
     for (const [sid, g] of exitedGroups) if (!out[sid]) out[sid] = { pid: g.pid, cmd: g.cmd, adapter: g.adapter, boot: g.boot, ...(g.start ? { start: g.start } : {}), stopping: true }
     try {
@@ -256,7 +304,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       }, timeoutMs)
       entry.pendingRpc.set(id, { resolve, timer })
       try {
-        entry.proc.stdin!.write(JSON.stringify({ id, op, params }) + '\n', (err) => {
+        entry.send(JSON.stringify({ id, op, params }) + '\n', (err) => {
           // The bytes never reached the worker (EPIPE: it stopped reading). Only this
           // request fails now; the others may still be answered, or the reap fails them.
           if (!err) return
@@ -314,18 +362,22 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (record.event.type === 'prompt-dispatched' || record.event.type === 'turn-started') {
       entry.activeCommandId = record.event.commandId ?? null
       writeBusyFile()
+      if (entry.survive) void listSurvivor(entry)
     } else if (record.event.type === 'turn-ended' || record.event.type === 'turn-interrupted') {
       entry.terminalVersion++
       entry.activeCommandId = null
       writeBusyFile()
+      if (entry.survive) void listSurvivor(entry)
       try { deps.onTurnEnd?.(entry.sid) } catch { /* A budget check never breaks the journal. */ }
     } else if (record.event.type === 'control-prompt-accepted') {
       entry.activeControlCommandId = record.event.commandId ?? null
       writeBusyFile()
+      if (entry.survive) void listSurvivor(entry)
     } else if (record.event.type === 'control-ended') {
       entry.terminalVersion++
       entry.activeControlCommandId = null
       writeBusyFile()
+      if (entry.survive) void listSurvivor(entry)
     }
   }
 
@@ -338,8 +390,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    * busy, so this can never wedge upgrades.
    */
   function writeBusyFile(): void {
+    // A surviving worker's turn outlives the daemon: it holds no update.
     const busySids = [...workers.values()]
-      .filter((e) => e.state === 'running' && (e.activeCommandId !== null || e.activeControlCommandId !== null))
+      .filter((e) => e.state === 'running' && !e.survive && (e.activeCommandId !== null || e.activeControlCommandId !== null))
       .map((e) => e.sid)
     try {
       fs.writeFileSync(
@@ -390,11 +443,16 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     for (const ws of entry.subscribers) {
       if (isWsOpen(ws)) { try { sendEvent(ws, 'acp_state', { sid, state: 'dead', reason }) } catch {} }
     }
-    if (entry.proc.pid && entry.proc.exitCode === null) {
-      signalProcessGroup(entry.proc.pid, 'SIGKILL')
+    if (entry.pid && !entry.exited()) {
+      signalProcessGroup(entry.pid, 'SIGKILL')
     }
-    if (deps.strictStop?.() && entry.stopping && entry.proc.pid && isProcessGroupAlive(entry.proc.pid)) {
-      exitedGroups.set(sid, { pid: entry.proc.pid, cmd: entry.cmd, adapter: entry.adapter, boot: boot(), ...(entry.start ? { start: entry.start } : {}) })
+    if (deps.strictStop?.() && entry.stopping && entry.pid && isProcessGroupAlive(entry.pid)) {
+      exitedGroups.set(sid, { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter, boot: boot(), ...(entry.start ? { start: entry.start } : {}) })
+    }
+    if (entry.survive) {
+      entry.survive.close()
+      void removeSurviveFiles(survivePaths(streamsDir, sid))
+      void unregisterRun(registryDir, 'acp', sid)
     }
     workers.delete(sid)
     persistPids()
@@ -402,9 +460,113 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     log('info', 'acp: worker reaped', { sid, reason })
   }
 
+  /** One line from a worker (its stdout, or a surviving worker's out file): a journal notice, a report, or an answer. */
+  function onWorkerLine(entry: AcpWorkerEntry<W>, line: string): void {
+    const sid = entry.sid
+    if (!line.trim()) return
+    let msg: { id?: number; ev?: string; offset?: number; bytes?: number; op?: string; kind?: string; detail?: string }
+    try { msg = JSON.parse(line) } catch { return }
+    if (msg.ev === 'journal' && typeof msg.offset === 'number') {
+      pushJournal(entry, msg.offset)
+      return
+    }
+    if (msg.ev === 'provider_error' && typeof msg.detail === 'string') {
+      // The provider's own words (redacted by the worker): the one place they
+      // are kept, so a failure the chat shows only as a category can be explained.
+      log('warn', 'acp: provider error', { sid, op: msg.op, kind: msg.kind, detail: msg.detail })
+      return
+    }
+    if (msg.ev === 'adapter_stderr' && typeof msg.bytes === 'number') {
+      log('debug', 'acp worker stderr', { sid, bytes: msg.bytes })
+      return
+    }
+    if (typeof msg.id === 'number') {
+      const pending = entry.pendingRpc.get(msg.id)
+      if (pending) {
+        entry.pendingRpc.delete(msg.id)
+        clearTimeout(pending.timer)
+        entry.lastActivity = Date.now()
+        pending.resolve(msg as WorkerRpcResponse)
+      } else if (entry.survive && msg.id > 0 && msg.id < entry.nextRpcId) {
+        // An answer to a request nobody waits for: an earlier daemon's (its caller was told its link
+        // was lost, the result unknown), or this life's that came after its wait ended. What it did is
+        // in the journal.
+        log('info', msg.id < lifeFirstRpcId ? 'acp: answer to a request of an earlier daemon life' : 'acp: answer to a request whose wait had ended', { sid, id: msg.id, ok: (msg as { ok?: unknown }).ok === true })
+      }
+    }
+  }
+
+  /** The registry entry a rollback's stop reads (detached-registry.ts): the open turn is closed as a rollback. */
+  async function listSurvivor(entry: AcpWorkerEntry<W>): Promise<void> {
+    if (!entry.pid || entry.state !== 'running') return
+    if (!stopScriptPut) { stopScriptPut = true; void installStopScript(registryDir) }
+    entry.registryStart ??= await registryStart(entry.pid) ?? undefined
+    if (!entry.registryStart || entry.state !== 'running') return
+    const open = entry.activeCommandId ?? entry.activeControlCommandId
+    const event = entry.activeControlCommandId
+      ? { type: 'control-ended', commandId: entry.activeControlCommandId, stopReason: 'rollback' }
+      : { type: 'turn-interrupted', reason: 'rollback', ...(open ? { commandId: open } : {}) }
+    await registerRun(registryDir, {
+      kind: 'acp', id: entry.sid, pid: entry.pid, pgid: entry.pid, lstart: entry.registryStart,
+      // With no turn open, a rollback leaves nothing in the journal: the next start reloads the thread.
+      ...(open ? { lineFile: entry.journalPath, line: JSON.stringify({ kind: 'meta', ts: Date.now(), event }) } : {}),
+      noteFile: survivePaths(streamsDir, entry.sid).err, note: `walnut: ${ROLLBACK_NOTE}`,
+    })
+    if (entry.state !== 'running') await unregisterRun(registryDir, 'acp', entry.sid)
+  }
+
+  /** Workers on stdio: they end with this daemon, so a swap waits for their turns (a surviving one does not). */
+  function holdingWorkers(): number {
+    let n = 0
+    for (const e of workers.values()) if (e.state === 'running' && !e.survive) n++
+    return n
+  }
+
+  /**
+   * The next daemon here cannot adopt surviving workers (a rollback): each is ended now, its open
+   * turn closed as interrupted by the rollback (the projector says so), its permissions cancelled.
+   */
+  async function endForRollback(): Promise<number> {
+    const going = [...workers.values()].filter((e) => e.state === 'running' && e.survive)
+    // All at once (each stop waits its grace), so several workers never hold the handover's reply.
+    await Promise.all(going.map(async (entry) => {
+      try {
+        entry.stopping = true
+        entry.aborting = true
+        if (entry.pid) await terminateProcessGroup(entry.pid)
+        try { await entry.survive?.drain() } catch { /* read what it wrote */ }
+        try { pushJournal(entry, fs.statSync(entry.journalPath).size) } catch {}
+        repairJournalTail(entry.journalPath, 'rollback')
+      } finally { reapWorker(entry.sid, 'rollback') }
+    }))
+    return going.length
+  }
+
+  /**
+   * A start, op or subscribe for a worker still being adopted waits for it. One whose adoption was
+   * left open (ps gave no answer) is tried again now; while it stays open the caller is refused
+   * (`worker_adopting`), never given a second worker on the same session.
+   */
+  async function adopted(sid: string): Promise<boolean> {
+    const a = adopting.get(sid)
+    if (a) await a
+    const row = keptRows.get(sid)
+    if (!row || workers.has(sid)) return true
+    // One look on a caller's path (the caller asks again while it stays open: acp-ask-once.ts untilAdopted).
+    if (!adopting.has(sid)) adopting.set(sid, adoptOne(sid, row, 1))
+    await adopting.get(sid)
+    return !keptRows.has(sid) || workers.has(sid)
+  }
+  const adoptingRefusal = (sid: string) => ({ ok: false as const, errorKind: 'worker_adopting', error: `the ACP worker for ${sid} outlived its daemon and could not be checked yet; try again shortly` })
+
+  async function listedStart(sid: string): Promise<string | null> {
+    try { return /^lstart=(.*)$/m.exec(await fs.promises.readFile(registryFile(registryDir, 'acp', sid), 'utf8'))?.[1] ?? null } catch { return null }
+  }
+
   async function acpStart(ws: W, params: AcpStartParams): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string; errorKind?: string }> {
     const { sid, cwd, providerSessionId, mcpServers } = params
     let { workerCmd, adapterCmd, env } = params
+    if (!(await adopted(sid))) return adoptingRefusal(sid)
     const existing = workers.get(sid)
     if (existing && existing.state === 'running') {
       existing.subscribers.add(ws)
@@ -439,15 +601,38 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const startedAt = Date.now()
     let proc: ChildProcess
     if (deps.maySpawn && !deps.maySpawn()) return { ok: false, error: 'acpStart: Demo is stopping; no new worker starts', errorKind: 'demo_stopping' }
+    const survive = params.survive === true
+    const paths = survivePaths(streamsDir, sid)
+    // This daemon's end of a surviving worker's pipe, opened before the worker started (acp-survive.ts).
+    let survivePipeFd: number | null = null
     try {
-      proc = spawn(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath], {
-        cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: mergeAcpSpawnEnv(process.env, env),
-        // Worker becomes PGID leader; adapter, provider, and tool descendants
-        // inherit the group so an explicit abort can terminate all of them.
-        detached: true,
-      })
+      // A surviving worker reads its pipe and writes its files (acp-survive.ts), never this daemon's pipes.
+      const files = survive ? await prepareSurviveFiles(paths) : null
+      survivePipeFd = files ? files.inFd : null
+      // The files took an await: a Demo that began stopping meanwhile starts no worker.
+      if (files && deps.maySpawn && !deps.maySpawn()) {
+        void files.close()
+        try { fs.closeSync(files.inFd) } catch { /* closed */ }
+        void removeSurviveFiles(paths)
+        return { ok: false, error: 'acpStart: Demo is stopping; no new worker starts', errorKind: 'demo_stopping' }
+      }
+      try {
+        proc = spawn(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath, ...(files ? ['--fifo', paths.fifo] : [])], {
+          cwd,
+          stdio: files ? ['ignore', files.outFd, files.errFd] : ['pipe', 'pipe', 'pipe'],
+          env: mergeAcpSpawnEnv(process.env, env),
+          // Worker becomes PGID leader; adapter, provider, and tool descendants
+          // inherit the group so an explicit abort can terminate all of them.
+          detached: true,
+        })
+      } catch (e) {
+        await files?.close()
+        if (files) { try { fs.closeSync(files.inFd) } catch { /* closed */ } }
+        throw e
+      }
+      // Closed once the child holds its own copies (Bun hands the fds over when it starts it).
+      if (files) proc.once('spawn', () => { void files.close() })
+      if (files) proc.once('error', () => { void files.close() })
       // A request still in the stdin pipe when the worker goes (an interrupt tears
       // its group down) fails with EPIPE as an 'error' EVENT, which a try around
       // write() never sees. Unheard, it is an uncaughtException that ends the whole
@@ -467,16 +652,20 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
         proc.once('error', reject)
       })
     } catch (e) {
+      if (survive) void removeSurviveFiles(paths)
       return { ok: false, error: 'acpStart: worker spawn failed: ' + (e as Error).message, errorKind: 'adapter_spawn_failed' }
     }
 
     let pushOffset = 0
     try { pushOffset = fs.statSync(journalPath).size } catch {}
     const entry: AcpWorkerEntry<W> = {
-      sid, proc, cwd, taskDir: env?.WALNUT_TASK_DIR || undefined, journalPath, pushOffset,
+      sid, proc, pid: proc.pid, exited: () => proc.exitCode !== null || proc.signalCode !== null,
+      send: (line, done) => { proc.stdin!.write(line, (err) => done(err ?? undefined)) },
+      cwd, taskDir: env?.WALNUT_TASK_DIR || undefined, journalPath, pushOffset,
       subscribers: new Set([ws]),
       pendingRpc: new Map(),
-      nextRpcId: 1,
+      // A surviving worker's ids never repeat across daemon lives (acp-survive.ts firstRpcId).
+      nextRpcId: survive ? firstRpcId() : 1,
       lastActivity: Date.now(),
       state: 'running',
       stopping: false,
@@ -489,6 +678,17 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       ...(typeof params.deadlineAt === 'number' && params.deadlineAt > 0 ? { deadlineAt: params.deadlineAt } : {}),
       ...(typeof params.orphanGraceMs === 'number' && params.orphanGraceMs > 0 ? { orphanGraceMs: params.orphanGraceMs } : {}),
     }
+    if (survive) {
+      try {
+        entry.survive = openSurviveChannel(paths, { from: 0, adopted: false, ...(survivePipeFd !== null ? { fd: survivePipeFd } : {}), onLine: (line) => onWorkerLine(entry, line), log })
+      } catch (e) {
+        try { if (proc.pid) process.kill(-proc.pid, 'SIGKILL') } catch { /* gone */ }
+        void removeSurviveFiles(paths)
+        return { ok: false, error: 'acpStart: worker pipe failed: ' + (e as Error).message, errorKind: 'adapter_spawn_failed' }
+      }
+      const channel = entry.survive
+      entry.send = (line, done) => channel.write(line, done)
+    }
     workers.set(sid, entry)
     persistPids()
     // Its start time lets the next daemon tell this worker from a process that got its pid later.
@@ -496,43 +696,21 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (pid) void processInfo(pid).then((info) => {
       if (info.state === 'alive' && workers.get(sid) === entry && entry.state === 'running') { entry.start = info.start; persistPids() }
     }).catch(() => {})
+    if (pid && survive) void listSurvivor(entry)
 
-    const rl = readline.createInterface({ input: proc.stdout!, terminal: false })
-    rl.on('line', (line) => {
-      if (!line.trim()) return
-      let msg: { id?: number; ev?: string; offset?: number; bytes?: number; op?: string; kind?: string; detail?: string }
-      try { msg = JSON.parse(line) } catch { return }
-      if (msg.ev === 'journal' && typeof msg.offset === 'number') {
-        pushJournal(entry, msg.offset)
-        return
-      }
-      if (msg.ev === 'provider_error' && typeof msg.detail === 'string') {
-        // The provider's own words (redacted by the worker): the one place they
-        // are kept, so a failure the chat shows only as a category can be explained.
-        log('warn', 'acp: provider error', { sid, op: msg.op, kind: msg.kind, detail: msg.detail })
-        return
-      }
-      if (msg.ev === 'adapter_stderr' && typeof msg.bytes === 'number') {
-        log('debug', 'acp worker stderr', { sid, bytes: msg.bytes })
-        return
-      }
-      if (typeof msg.id === 'number') {
-        const pending = entry.pendingRpc.get(msg.id)
-        if (pending) {
-          entry.pendingRpc.delete(msg.id)
-          clearTimeout(pending.timer)
-          entry.lastActivity = Date.now()
-          pending.resolve(msg as WorkerRpcResponse)
-        }
-      }
-    })
-    proc.stderr!.on('data', (chunk: Buffer) => {
-      log('debug', 'acp worker stderr', { sid, bytes: chunk.length })
-    })
+    if (!survive) {
+      const rl = readline.createInterface({ input: proc.stdout!, terminal: false })
+      rl.on('line', (line) => onWorkerLine(entry, line))
+      proc.stderr!.on('data', (chunk: Buffer) => {
+        log('debug', 'acp worker stderr', { sid, bytes: chunk.length })
+      })
+    }
     proc.on('exit', (code) => {
       log('info', 'acp: worker exited', { sid, code })
       if (entry.aborting) return
-      reapWorker(sid, entry.stopping ? 'stopped' : 'worker-exit')
+      // A surviving worker's last answers are in its file: read them before it is reaped.
+      if (entry.survive) void entry.survive.drain().finally(() => reapWorker(sid, entry.stopping ? 'stopped' : 'worker-exit'))
+      else reapWorker(sid, entry.stopping ? 'stopped' : 'worker-exit')
     })
 
     // Replay any pre-existing journal history the subscriber asked for.
@@ -597,6 +775,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
   /** Generic op forwarding for send/cancel/respond/state/newSession-after-load-failure. */
   async function acpOp(sid: string, op: string, params?: Record<string, unknown>): Promise<WorkerRpcResponse> {
+    if (!(await adopted(sid))) return { id: -1, ok: false, error: { kind: 'worker_adopting', message: adoptingRefusal(sid).error } }
     if (op === 'cancel') return acpAbortTurn(sid, params)
     const entry = workers.get(sid)
     if (!entry || entry.state !== 'running') {
@@ -670,8 +849,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
     entry.aborting = true
     entry.stopping = true
-    const pid = entry.proc.pid
-    const terminated = pid ? await terminateProcessGroup(pid) : entry.proc.exitCode !== null
+    const pid = entry.pid
+    const terminated = pid ? await terminateProcessGroup(pid) : entry.exited()
     // The provider can append its terminal record while handling SIGTERM,
     // after the advisory-cancel wait but before process-group exit.
     try { pushJournal(entry, fs.statSync(entry.journalPath).size) } catch {}
@@ -728,12 +907,12 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       await rpc(entry, 'shutdown')
       setTimeout(() => {
         if (workers.get(sid) !== entry || entry.state !== 'running') return
-        if (entry.proc.pid && entry.proc.exitCode === null) signalProcessGroup(entry.proc.pid, 'SIGKILL')
+        if (entry.pid && !entry.exited()) signalProcessGroup(entry.pid, 'SIGKILL')
         reapWorker(sid, 'stopped')
       }, 6000)
       return
     }
-    const pid = entry.proc.pid
+    const pid = entry.pid
     await rpc(entry, 'shutdown', undefined, 6000)
     if (pid && !await waitFor(() => !isProcessGroupAlive(pid), 6000)) {
       throw new Error('ACP worker shutdown is still pending; its process group has not exited')
@@ -778,7 +957,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
   /** Read only: every worker this daemon holds (demo.quiesce answers with them, so a reset stops each). */
   function listWorkers(): Array<{ sid: string; state: 'running' | 'dead'; pid: number | null; stopping: boolean }> {
-    const out = [...workers.values()].map((e) => ({ sid: e.sid, state: e.state, pid: e.proc.pid ?? null, stopping: e.stopping }))
+    const out = [...workers.values()].map((e) => ({ sid: e.sid, state: e.state, pid: e.pid ?? null, stopping: e.stopping }))
     for (const [sid, group] of [...exitedGroups]) {
       if (exitedGroupAlive(sid)) out.push({ sid, state: 'dead', pid: group.pid, stopping: true })
     }
@@ -827,35 +1006,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    * permission-auto-cancelled. The full file is streamed in bounded chunks:
    * a long-running turn's opening lifecycle fact can be far from the tail.
    */
-  function repairJournalTail(journalPath: string, reason: 'daemon-restart' | 'worker-crash'): void {
+  function repairJournalTail(journalPath: string, reason: 'daemon-restart' | 'worker-crash' | 'rollback'): void {
     repairJournalMode(journalPath)
-    let activeCommandId: string | null = null
-    let controlCommandId: string | null = null
-    const openPermissions = new Set<string>()
-    forEachCompleteJournalLine(journalPath, (line) => {
-      let rec: {
-        kind?: string
-        event?: { type?: string; providerRequestId?: string; commandId?: string }
-      }
-      try { rec = JSON.parse(line) } catch { return }
-      if (rec.kind !== 'meta' || !rec.event) return
-      const ev = rec.event
-      switch (ev.type) {
-        case 'prompt-dispatched':
-        case 'turn-started':
-          activeCommandId = ev.commandId ?? activeCommandId
-          break
-        case 'turn-ended':
-        case 'turn-interrupted':
-          activeCommandId = null
-          break
-        case 'control-prompt-accepted': controlCommandId = ev.commandId ?? null; break
-        case 'control-ended': controlCommandId = null; break
-        case 'permission-requested': if (ev.providerRequestId) openPermissions.add(ev.providerRequestId); break
-        case 'permission-answered': case 'permission-auto-cancelled':
-          if (ev.providerRequestId) openPermissions.delete(ev.providerRequestId); break
-      }
-    })
+    const { activeCommandId, controlCommandId, openPermissions } = journalOpenState(journalPath)
     if (!activeCommandId && !controlCommandId && openPermissions.size === 0) return
 
     const appends: string[] = []
@@ -891,6 +1044,38 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     } catch {}
   }
 
+  /** What a journal leaves open: a turn, a control prompt, permissions not answered. */
+  function journalOpenState(journalPath: string): { activeCommandId: string | null; controlCommandId: string | null; openPermissions: Set<string> } {
+    let activeCommandId: string | null = null
+    let controlCommandId: string | null = null
+    const openPermissions = new Set<string>()
+    forEachCompleteJournalLine(journalPath, (line) => {
+      let rec: {
+        kind?: string
+        event?: { type?: string; providerRequestId?: string; commandId?: string }
+      }
+      try { rec = JSON.parse(line) } catch { return }
+      if (rec.kind !== 'meta' || !rec.event) return
+      const ev = rec.event
+      switch (ev.type) {
+        case 'prompt-dispatched':
+        case 'turn-started':
+          activeCommandId = ev.commandId ?? activeCommandId
+          break
+        case 'turn-ended':
+        case 'turn-interrupted':
+          activeCommandId = null
+          break
+        case 'control-prompt-accepted': controlCommandId = ev.commandId ?? null; break
+        case 'control-ended': controlCommandId = null; break
+        case 'permission-requested': if (ev.providerRequestId) openPermissions.add(ev.providerRequestId); break
+        case 'permission-answered': case 'permission-auto-cancelled':
+          if (ev.providerRequestId) openPermissions.delete(ev.providerRequestId); break
+      }
+    })
+    return { activeCommandId, controlCommandId, openPermissions }
+  }
+
   function forEachCompleteJournalLine(
     journalPath: string,
     visit: (line: string) => void,
@@ -923,10 +1108,115 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   }
 
   /**
-   * Daemon startup: workers from a previous daemon life are dead by definition
-   * (in-process model). Repair every ACP journal's tail, and sweep any straggler
-   * left in the pid file (belt-and-suspenders). The returned promise is the
-   * sweep; it never rejects.
+   * A surviving worker an earlier daemon here started: adopted when the process at its pid still
+   * is that worker (its start time) and its pipe is there; else its journal is closed as a crash.
+   */
+  /** One adoption, settled: its row leaves the kept rows unless it stays open. */
+  function adoptOne(sid: string, row: Exclude<PidRow, number>, psTries = ADOPT_PS_TRIES): Promise<void> {
+    return adoptSurvivor(sid, row, psTries).catch((err) => { log('warn', 'acp: adoption failed', { sid, error: String(err) }) }).then((keep) => {
+      if (keep !== 'keep' && keptRows.get(sid) === row) keptRows.delete(sid)
+      adopting.delete(sid)
+      persistPids()
+    })
+  }
+
+  async function adoptSurvivor(sid: string, row: Exclude<PidRow, number>, psTries: number): Promise<'keep' | void> {
+    const journalPath = journalPathFor(sid)
+    const paths = survivePaths(streamsDir, sid)
+    let info = await processInfo(row.pid)
+    for (let i = 1; i < psTries && info.state === 'unknown'; i++) {
+      await new Promise((r) => setTimeout(r, ADOPT_PS_RETRY_MS))
+      info = await processInfo(row.pid)
+    }
+    if (info.state === 'unknown') {
+      // ps gave no answer: neither adopted nor signalled; its row stays, and the next start or op for
+      // this session asks again (adopted) and is refused meanwhile, never given a second worker.
+      log('warn', 'acp: surviving worker left alone, ps gave no answer', { sid, pid: row.pid })
+      return 'keep'
+    }
+    // Its start as the pid file says, else as the launcher's list says (the daemon died before it read it).
+    let same = info.state === 'alive' && !!row.start && info.start === row.start
+    if (info.state === 'alive' && !row.start) {
+      const listed = await listedStart(sid)
+      const now = listed ? await registryStart(row.pid) : null
+      same = !!listed && now === listed
+      // No start in either record (the daemon died a few ms after the spawn): a process on this boot
+      // that runs the worker's script is ours, but cannot be checked well enough to adopt; it is
+      // stopped before its turn is closed, as sweepStraggler does, so the next start is the only one.
+      const sameBoot = typeof row.boot === 'number' && Math.abs(boot() - row.boot) <= 2
+      if (!listed && sameBoot && info.command.includes(row.cmd || 'acp-worker')) {
+        log('warn', 'acp: surviving worker has no start time recorded; stopping it', { sid, pid: row.pid })
+        await terminateProcessGroup(row.pid)
+      }
+    }
+    if (same && !fs.existsSync(paths.fifo)) {
+      // Ours, but its pipe is gone: it cannot be followed, so it is stopped before its turn is closed.
+      log('warn', 'acp: surviving worker has no pipe; stopping it', { sid, pid: row.pid })
+      await terminateProcessGroup(row.pid)
+      same = false
+    }
+    if (!same) {
+      repairJournalTail(journalPath, 'worker-crash')
+      void removeSurviveFiles(paths)
+      void unregisterRun(registryDir, 'acp', sid)
+      log('info', 'acp: surviving worker gone while no daemon ran', { sid, pid: row.pid })
+      return
+    }
+    const pid = row.pid
+    const gone = () => { try { process.kill(pid, 0); return false } catch (err) { return (err as NodeJS.ErrnoException).code === 'ESRCH' } }
+    let pushOffset = 0
+    try { pushOffset = fs.statSync(journalPath).size } catch {}
+    const open = journalOpenState(journalPath)
+    const entry: AcpWorkerEntry<W> = {
+      sid, pid, exited: gone, send: () => {},
+      ...(row.cwd ? { cwd: row.cwd } : {}), ...(row.taskDir ? { taskDir: row.taskDir } : {}),
+      journalPath, pushOffset,
+      subscribers: new Set(),
+      pendingRpc: new Map(),
+      nextRpcId: firstRpcId(),
+      lastActivity: Date.now(),
+      state: 'running', stopping: false, aborting: false, terminalVersion: 0,
+      activeCommandId: open.activeCommandId, activeControlCommandId: open.controlCommandId,
+      cmd: row.cmd || 'acp-worker', adapter: row.adapter || '', start: row.start,
+      ...(row.deadlineAt ? { deadlineAt: row.deadlineAt } : {}),
+      ...(row.orphanGraceMs ? { orphanGraceMs: row.orphanGraceMs, orphanedSince: Date.now() } : {}),
+    }
+    let channel: SurviveChannel
+    try {
+      channel = openSurviveChannel(paths, { from: await readSavedPos(paths), adopted: true, onLine: (line) => onWorkerLine(entry, line), log })
+    } catch (err) {
+      log('warn', 'acp: surviving worker pipe could not be opened; stopping it', { sid, pid, error: String(err) })
+      await terminateProcessGroup(pid)
+      repairJournalTail(journalPath, 'worker-crash')
+      void removeSurviveFiles(paths)
+      void unregisterRun(registryDir, 'acp', sid)
+      return
+    }
+    entry.survive = channel
+    entry.send = (line, done) => channel.write(line, done)
+    workers.set(sid, entry)
+    persistPids()
+    void listSurvivor(entry)
+    // No exit event comes for a process this daemon did not start: its pid is looked at.
+    const watch = setInterval(() => {
+      if (workers.get(sid) !== entry || entry.state !== 'running') { clearInterval(watch); return }
+      if (!gone()) return
+      clearInterval(watch)
+      log('info', 'acp: adopted worker exited', { sid })
+      if (entry.aborting) return
+      void channel.drain().finally(() => reapWorker(sid, entry.stopping ? 'stopped' : 'worker-exit'))
+    }, 500)
+    watch.unref?.()
+    log('info', 'acp: surviving worker adopted', { sid, pid, turnOpen: !!(open.activeCommandId || open.controlCommandId) })
+  }
+
+  /**
+   * Daemon startup: workers on stdio from a previous daemon life are dead by
+   * definition. Repair every such ACP journal's tail, and sweep any straggler
+   * left in the pid file (belt-and-suspenders). A surviving worker
+   * (acp-survive.ts) is adopted instead (adoptSurvivor) before anything touches
+   * its journal. The returned promise is the sweep and the adoptions; it never
+   * rejects.
    */
   function startupRepair(): Promise<void> {
     ensureOwnerOnlyAcpStorage()
@@ -942,14 +1232,22 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       }
       return false
     })
+    // Surviving workers are adopted, never swept; their rows stay in the file until each is settled.
+    const survivors = rows.filter((r): r is [string, Exclude<PidRow, number>] => typeof r[1] !== 'number' && r[1]?.survive === true && Number.isInteger(r[1].pid) && r[1].pid > 1)
+    rows = rows.filter((r) => !survivors.includes(r as [string, Exclude<PidRow, number>]))
+    for (const [sid, row] of survivors) keptRows.set(sid, row)
     persistPids()
 
-    // Journal repair for every ACP session on this host.
+    // Journal repair for every ACP session on this host (but the surviving workers').
+    const surviving = new Set(survivors.map(([sid]) => sid))
     let files: string[] = []
     try { files = fs.readdirSync(streamsDir).filter((f) => f.endsWith('.acp.jsonl')) } catch {}
-    for (const f of files) repairJournalTail(path.join(streamsDir, f), 'daemon-restart')
+    for (const f of files) if (!surviving.has(f.slice(0, -'.acp.jsonl'.length))) repairJournalTail(path.join(streamsDir, f), 'daemon-restart')
 
+    // Held from now: a start or op for one of them waits for its adoption.
+    for (const [sid, row] of survivors) adopting.set(sid, adoptOne(sid, row))
     return (async () => {
+      await Promise.all([...adopting.values()])
       for (const [sid, row] of rows) {
         try { await sweepStraggler(sid, row) } catch {}
       }
@@ -1089,6 +1387,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     hasWorker,
     listWorkers,
     startupRepair,
+    holdingWorkers,
+    endForRollback,
     workers,
   }
 }

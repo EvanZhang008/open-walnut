@@ -742,7 +742,8 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
   it.each(twinTexts)('%s: the offline host is wired to these two and the gate rechecks the fence before the send', (_n, text) => {
     const src = text
     expect(src).toMatch(/offlineSweepTimer = setInterval\(offlineSweepTick, 60_?000\)/)
-    expect(src).toMatch(/deliver: (\(sid, text, messageId\) => |function \(sid, text, messageId\) \{ return )deliverFromOfflineHost\(sid, text, messageId\)/)
+    // `o`: a resend's options (a trigger fire again: dedupe by the line record, offline-host-core.ts).
+    expect(src).toMatch(/deliver: (\(sid, text, messageId, o\) => |function \(sid, text, messageId, o\) \{ return )deliverFromOfflineHost\(sid, text, messageId, o\)/)
     const body = extract(src, ['deliverFromOfflineHost'])
     const gate = body.indexOf('sessionStartGate.run(')
     const recheck = body.indexOf('if (demoQuiesce.fenced)', gate)
