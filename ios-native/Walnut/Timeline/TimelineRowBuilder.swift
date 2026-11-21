@@ -398,10 +398,14 @@ final class TimelineRowBuilder {
             ))
         }
         // Files still on this phone: one card each, with the upload's progress.
-        for file in message.localFiles ?? [] {
+        let localFiles = message.localFiles ?? []
+        // A recorded video's stills are part of its card.
+        for file in localFiles where !file.isStill {
             let chip = TimelineFileChip.local(file, held: message.uploadHeld?[file.id],
                                               pending: message.pending == true, failed: message.failed == true,
-                                              failedHere: message.uploadFailedID == file.id)
+                                              failedHere: message.uploadFailedID == file.id,
+                                              stillFailed: ComposerFile.isStill(message.uploadFailedID, of: file.id, in: localFiles),
+                                              caption: ComposerFile.clipCaption(for: file, in: localFiles))
             rows.append(TimelineRow(
                 id: nextID(), revision: 0, content: .fileAttachment(chip),
                 height: chip.height(rowWidth: width)
@@ -418,7 +422,7 @@ final class TimelineRowBuilder {
             case .message(let description):
                 rows.append(peerMessageRow(id: nextID(), description: description, width: width))
             case .text(let rawText):
-                let sent = MessageRow.attachmentSendParts(rawText)
+                let sent = AttachmentHeaders.split(rawText)
                 if let sent {
                     // A file that is a picture shows as one, like the photos above it,
                     // unless it never reached the host: then its card says why.
@@ -434,7 +438,8 @@ final class TimelineRowBuilder {
                         ))
                     }
                     for path in sent.filePaths where !MarkdownParser.isImagePath(path) || sent.copyFailures[path] != nil {
-                        let chip = TimelineFileChip.sent(path: path, copyFailure: sent.copyFailures[path])
+                        let chip = TimelineFileChip.sent(path: path, copyFailure: sent.copyFailures[path],
+                                                         caption: sent.clipCaption(forPath: path))
                         rows.append(TimelineRow(
                             id: nextID(), revision: 0,
                             content: .fileAttachment(chip),

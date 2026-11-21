@@ -51,7 +51,7 @@ const QuestionBubble = memo(function QuestionBubble({ message, h }: { message: S
       <div className="session-msg session-msg-user">
         <div className="session-msg-content">
           {attached && (
-            <MessageAttachments images={parts.images} files={parts.files} host={h.sessionHost} {...(h.onFileOpen ? { onFileOpen: h.onFileOpen } : {})} />
+            <MessageAttachments images={parts.images} files={parts.files} clips={parts.clips} host={h.sessionHost} {...(h.onFileOpen ? { onFileOpen: h.onFileOpen } : {})} />
           )}
           {parts.body && <StableMarkdownBody text={parts.body} cwd={h.sessionCwd} host={host} inlineImages={images} />}
         </div>

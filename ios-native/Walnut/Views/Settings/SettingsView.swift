@@ -440,7 +440,7 @@ struct SettingsView: View {
         // Best-effort, independently: chat stats failing must not hide config.
         if let info = try? await WalnutAPI().serverConfig() {
             serverInfo = info
-            WalnutAdditionsSetting.shared.adopt(info)
+            ServerClientSettings.shared.adopt(info)
         }
         if let stats = try? await WalnutAPI().chatStats() {
             chatStats = stats

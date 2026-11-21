@@ -55,7 +55,7 @@
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Walnut shows your calendar events alongside tasks in the calendar view. Events are read-only and never leave your device.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.</string>
+	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos and record videos you attach to chats and notes.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Walnut uses Face ID to unlock your passwords, and to sign the approvals you give, so only you can say yes to a step a script or an agent waits on.</string>
 	<key>NSHealthShareUsageDescription</key>
@@ -69,7 +69,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Walnut uses your location only for Places, after you turn it on. The places you visit go only to your own Walnut server, on your Mac or on a cloud machine you run, and from there to the AI provider that server uses. Apple Maps names each place.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Walnut uses the microphone for voice input. Your recording goes only to your own Walnut server, on your Mac or on a cloud machine you run, which turns it into text itself or with a speech service you set up on it.</string>
+	<string>Walnut uses the microphone for voice input and for the sound of videos you record in chat. Your recording goes only to your own Walnut server, on your Mac or on a cloud machine you run, which turns it into text itself or with a speech service you set up on it.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

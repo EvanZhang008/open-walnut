@@ -108,21 +108,27 @@ final class NewSessionUploads {
     /// pictures above them. `failed`: the last attempt ended, so each card says
     /// how far it got and offers Retry and Remove.
     func chips(failed: Bool) -> [TimelineFileChip] {
-        items.filter { !$0.isPhoto }.map {
+        // A recorded video's stills are drawn as part of its card.
+        items.filter { !$0.isPhoto && !$0.file.isStill }.map {
             TimelineFileChip.local($0.file, held: held[$0.id], pending: !failed, failed: failed,
-                                   failedHere: $0.id == failedID)
+                                   failedHere: $0.id == failedID,
+                                   stillFailed: ComposerFile.isStill(failedID, of: $0.id, in: files),
+                                   caption: ComposerFile.clipCaption(for: $0.file, in: files))
         }
     }
 
-    /// Drop one file (its card's Remove): its copy on the phone goes.
+    /// Drop one file (its card's Remove), and a recorded video's stills with it:
+    /// its copy on the phone goes.
     func remove(_ id: String) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
-        items.removeAll { $0.id == id }
-        held[id] = nil
-        if failedID == id { failedID = nil }
-        FileSendFlights.forget(id)
-        ComposerFileStore.remove(item.file)
-        if item.isPhoto { Self.photoCopies = Self.photoCopies.filter { $0.value.id != id } }
+        for gone in ComposerFile.idsWithStills(of: id, in: files).union([id]) {
+            guard let item = items.first(where: { $0.id == gone }) else { continue }
+            items.removeAll { $0.id == gone }
+            held[gone] = nil
+            if failedID == gone { failedID = nil }
+            FileSendFlights.forget(gone)
+            ComposerFileStore.remove(item.file)
+            if item.isPhoto { Self.photoCopies = Self.photoCopies.filter { $0.value.id != gone } }
+        }
     }
 
     /// The page was left mid-launch: the upload running now stops (what the host

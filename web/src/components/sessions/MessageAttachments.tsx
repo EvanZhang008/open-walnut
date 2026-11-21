@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { FileCard, fileKindOf } from '@/components/common/FileCard';
 import { formatBytes } from '@/api/file-upload';
+import { clipHeaderName, type VideoClipRead } from '@open-walnut/attachment-headers';
 import { fetchPathSizes } from '@/api/files';
 import '@/styles/attachments.css';
 
@@ -78,9 +79,17 @@ function imageSrc(p: string, host?: string): string {
   return `/api/local-image?path=${encodeURIComponent(p)}${hostParam}`;
 }
 
-export function MessageAttachments({ images, files, host, onFileOpen }: {
+/** A recorded video's line on its sent card: what the AI got with it besides the file. */
+function clipLine(clip: VideoClipRead): string {
+  const n = clip.stills.length;
+  return `${n === 1 ? '1 still' : `${n} stills`}${clip.narration ? ' · what was said' : ''}`;
+}
+
+export function MessageAttachments({ images, files, clips = [], host, onFileOpen }: {
   images: string[];
   files: string[];
+  /** Recorded videos' stills and words (the person sees what the AI was given). */
+  clips?: VideoClipRead[];
   /** The session's host, where a remote session's paths live. */
   host?: string;
   onFileOpen?: (path: string) => void;
@@ -109,15 +118,37 @@ export function MessageAttachments({ images, files, host, onFileOpen }: {
         const name = baseName(p);
         const kind = KIND_LABEL[fileKindOf(name)];
         const size = sizes[p];
-        return (
+        const clip = clips.length ? clips.find((c) => c.name === clipHeaderName(name)) : undefined;
+        const detail = note ? `${kind} · ${note[0].toUpperCase()}${note.slice(1)}` : typeof size === 'number' ? `${formatBytes(size)} · ${kind}` : kind;
+        const card = (
           <FileCard
             key={`f-${p}`}
             name={name}
-            detail={note ? `${kind} · ${note[0].toUpperCase()}${note.slice(1)}` : typeof size === 'number' ? `${formatBytes(size)} · ${kind}` : kind}
+            detail={clip ? `${detail} · ${clipLine(clip)}` : detail}
             failed={!!note}
             title={p}
             {...(onFileOpen ? { onOpen: () => onFileOpen(p) } : {})}
           />
+        );
+        if (!clip) return card;
+        return (
+          <div key={`c-${p}`} className="message-attachment-clip" data-testid="message-clip">
+            {card}
+            {clip.stills.length > 0 && (
+              <div className="message-attachment-stills" aria-label={`Stills of ${name}`}>
+                {clip.stills.map((s) => {
+                  const src = imageSrc(s, host);
+                  return <img key={s} className="message-attachment-still" src={src} data-lightbox-src={src} alt={baseName(s)} title={baseName(s)} loading="lazy" />;
+                })}
+              </div>
+            )}
+            {clip.narration && (
+              <details className="message-attachment-said">
+                <summary>What was said</summary>
+                <p>{clip.narration}</p>
+              </details>
+            )}
+          </div>
         );
       })}
     </div>

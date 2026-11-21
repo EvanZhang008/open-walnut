@@ -135,6 +135,9 @@ struct RootView: View {
                 // Permission card harness: a Claude prompt's remembering options,
                 // an ACP adapter's own options and the plain pair, side by side.
                 NavigationStack { PermissionOptionsHarnessView() }
+            } else if CameraHarness.isOn {
+                // The composer's camera with the fake source (`CameraCaptureUITests`).
+                CameraHarnessView()
             } else if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("calendar-harness") }) {
                 // Calendar E2E harness (Maestro): boots straight into the
                 // Tasks-tab calendar against the configured server — lets the
@@ -207,7 +210,7 @@ struct RootView: View {
                 // draws its pills already decided instead of the raw tags for a moment.
                 Task { await TagDisplayStore.shared.refreshIfStale() }
                 // Whether the session chat always shows what Walnut added to a message.
-                Task { await WalnutAdditionsSetting.shared.refreshIfStale() }
+                Task { await ServerClientSettings.shared.refreshIfStale() }
                 // "The app is on screen" — only read by the server in
                 // `when-inactive` mode, where it's what keeps a letter quiet
                 // while the user is already looking at Walnut.

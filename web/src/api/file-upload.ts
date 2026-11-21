@@ -16,7 +16,7 @@
  * src/core/sessions/session-uploads.ts (pinned by a contract test).
  */
 
-import { FILES_ATTACHED_LINE, attachmentHeaderBlock, splitAttachmentHeaders } from '@open-walnut/attachment-headers';
+import { FILES_ATTACHED_LINE, attachmentHeaderBlock, splitAttachmentHeaders, type VideoClipRead } from '@open-walnut/attachment-headers';
 import { getDeviceToken } from './device-token';
 import { TEST_RUN_HEADER, testRunLabel } from './test-run';
 import { CONNECTION_DROPPED, SIGN_IN_REFUSED, UploadAttemptError, transientStatus, withUploadRetry } from './upload-retry';
@@ -72,6 +72,8 @@ export function withFilePaths(text: string, paths: string[]): string {
 export interface AttachmentParts {
   images: string[];
   files: string[];
+  /** Each recorded video's stills and words, by the video's name. */
+  clips: VideoClipRead[];
   body: string;
 }
 
@@ -83,7 +85,7 @@ export interface AttachmentParts {
 export function attachmentParts(text: string): AttachmentParts | null {
   const split = splitAttachmentHeaders(text);
   if (split.images.length === 0 && split.files.length === 0) return null;
-  return { images: split.images, files: split.files, body: split.text };
+  return { images: split.images, files: split.files, clips: split.clips, body: split.text };
 }
 
 /** A friendly size: "812 B", "4.2 KB", "3 MB", "4 GB". */

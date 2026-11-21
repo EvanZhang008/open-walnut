@@ -2344,13 +2344,24 @@ extension AppDelegate: WKScriptMessageHandler {
     }
 }
 
+/// What Walnut's own page may capture: the mic (voice input), the camera and both (the chat's camera).
+let grantedCapture: Set<WKMediaCaptureType> = [.microphone, .camera, .cameraAndMicrophone]
+
+/// Granted without a prompt: a kind in grantedCapture, and the camera only to Walnut's own page,
+/// never to a frame inside it (a preview or a plugin's page).
+func captureGranted(_ type: WKMediaCaptureType, frame: WKFrameInfo) -> Bool {
+    grantedCapture.contains(type) && (type == .microphone || frame.isMainFrame)
+}
+
 extension AppDelegate: WKUIDelegate {
-    // Voice input: our own localhost UI is the only origin — grant the mic
-    // without the per-site prompt (macOS still shows its one-time system prompt).
+    // Voice input and the chat's camera: our own localhost UI is the only origin.
+    // Grant the mic and the camera without the per-site prompt (macOS still shows
+    // its one-time system prompt). The page asks for the camera only after the
+    // person picks Camera in the chat box's + menu.
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        decisionHandler(linkPolicy.isLoopback(origin.host) && origin.port == (serverPort ?? 3456) && type == .microphone ? .grant : .deny)
+        decisionHandler(linkPolicy.isLoopback(origin.host) && origin.port == (serverPort ?? 3456) && captureGranted(type, frame: frame) ? .grant : .deny)
     }
 
     // A page's <input type="file"> (attach files or images to a message): on macOS

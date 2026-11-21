@@ -14,6 +14,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { walnutLetterLanguage } from '../human-inbox/walnut-letters/languages.js';
 import { stripReferenceCards } from '../sessions/reference-cards.js';
+import { splitAttachmentHeaders } from '../../lib/attachment-headers.js';
 import {
   fileMessage, FOLLOW_UP_REOPENS_MS, isOpen, lastUserAt, movedAway, SAME_CONVERSATION_MS, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
@@ -37,7 +38,6 @@ export interface UserWords {
   letter?: string;
 }
 
-const ATTACHMENT_HEADER_RE = /^\[(?:Images|Files) attached[^\]\n]*\]\n((?:- [^\n]+\n?)*)\n?/;
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|heic)$/i;
 const LETTER_BY_USER_RE = /^\[Letter reply\] Your user answered a letter you sent them/;
 
@@ -46,17 +46,10 @@ export function userWordsOf(message: string, opts: { inChat: boolean }): UserWor
   const raw = message.replace(/\r\n/g, '\n');
   if (!raw.trim() || raw.startsWith('/')) return null;
   // Pictures lead the line under their header, a letter answer's too (letter-ops.ts).
-  let text = raw;
-  const images: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    const m = ATTACHMENT_HEADER_RE.exec(text);
-    if (!m) break;
-    for (const line of m[1].split('\n')) {
-      const p = line.replace(/^- /, '').trim();
-      if (p && IMAGE_EXT_RE.test(p)) images.push(p);
-    }
-    text = text.slice(m[0].length);
-  }
+  // One parser for every header (lib/attachment-headers.ts): a recorded video's stills and words come off too.
+  const split = splitAttachmentHeaders(raw);
+  let text = split.text;
+  const images = [...split.images, ...split.files].filter((p) => IMAGE_EXT_RE.test(p));
   if (LETTER_BY_USER_RE.test(text)) return letterWords(text, images);
   // A message from another task or Walnut, sent under a person's source.
   if (/^\s*<walnut-message[\s>]/.test(text) || text.startsWith('[Letter reply]')) return null;

@@ -48,6 +48,7 @@ describe('attachmentParts', () => {
     expect(attachmentParts(stored)).toEqual({
       images: ['/tmp/open-walnut/images/1-abc.png'],
       files: ['/h/uploads/up-1/crash.log', '/h/uploads/up-2/core dump.zip'],
+      clips: [],
       body: 'why does this crash?',
     })
     // The same words the server's title reader keeps.
@@ -55,7 +56,7 @@ describe('attachmentParts', () => {
   })
 
   it('a message of files only has empty words', () => {
-    expect(attachmentParts(webWithFilePaths('', ['/x/a.pdf']))).toEqual({ images: [], files: ['/x/a.pdf'], body: '' })
+    expect(attachmentParts(webWithFilePaths('', ['/x/a.pdf']))).toEqual({ images: [], files: ['/x/a.pdf'], clips: [], body: '' })
   })
 
   it('an ordinary message, or a header mid-text, is left alone', () => {

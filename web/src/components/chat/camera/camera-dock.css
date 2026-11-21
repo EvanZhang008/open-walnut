@@ -1,0 +1,149 @@
+/* The chat camera: one box of one size for every state, right above the chat box. */
+.camera-dock {
+  /* Its own line in the composer's wrapping row: above the box, the full width. */
+  flex: 0 0 100%;
+  width: 100%;
+  margin: 0 0 4px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #111;
+  color: #fff;
+  position: relative;
+  outline: 3px solid transparent;
+  outline-offset: -3px;
+  transition: outline-color 0.15s;
+}
+.camera-dock.is-recording { outline-color: #ff3b30; }
+.camera-dock-view {
+  position: relative;
+  height: clamp(200px, 36vh, 360px);
+  background: #1c1c1e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.camera-dock-media { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+
+.camera-dock-top {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  z-index: 2;
+}
+.camera-dock-spacer { flex: 1; }
+.camera-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: 500 12px/1.4 var(--font-sans, -apple-system, system-ui, sans-serif);
+}
+.camera-pill.is-button { cursor: pointer; }
+.camera-pill.is-button:disabled { cursor: default; }
+.camera-pill.is-off { color: #bbb; }
+.camera-pill.is-rec { background: #ff3b30; font-variant-numeric: tabular-nums; }
+.camera-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759; display: inline-block; }
+.camera-rec-dot { width: 7px; height: 7px; border-radius: 50%; background: #fff; display: inline-block; animation: camera-blink 1s steps(2, start) infinite; }
+@keyframes camera-blink { to { visibility: hidden; } }
+.camera-round {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.camera-round:hover { background: rgba(0, 0, 0, 0.78); }
+.camera-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; animation: camera-flash 0.28s ease-out; }
+@keyframes camera-flash { from { opacity: 0.7; } to { opacity: 0; } }
+.camera-progress { position: absolute; left: 0; bottom: 0; height: 3px; background: #ff3b30; transition: width 0.25s linear; }
+.camera-dock-bar {
+  height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: #111;
+}
+.camera-dock-side { min-width: 92px; display: flex; justify-content: flex-end; }
+.camera-dock-hint { color: #8e8e93; font-size: 12px; }
+.camera-seg { display: inline-flex; background: #2c2c2e; border-radius: 999px; padding: 2px; min-width: 92px; }
+.camera-seg button {
+  border: none;
+  background: none;
+  color: #aeaeb2;
+  border-radius: 999px;
+  padding: 3px 11px;
+  font: 500 12px/1.4 var(--font-sans, -apple-system, system-ui, sans-serif);
+  cursor: pointer;
+}
+.camera-seg button.is-on { background: #fff; color: #111; }
+.camera-seg button:disabled { cursor: default; }
+.camera-shutter {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  background: #fff;
+  box-shadow: inset 0 0 0 2px #111;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+}
+.camera-shutter.is-video { background: #ff3b30; }
+.camera-shutter.is-stop { background: #111; display: inline-flex; align-items: center; justify-content: center; }
+.camera-shutter.is-stop::after { content: ''; width: 14px; height: 14px; border-radius: 3px; background: #ff3b30; }
+.camera-shutter:disabled { opacity: 0.4; cursor: default; }
+.camera-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 5px 13px;
+  background: #2c2c2e;
+  color: #fff;
+  font: 500 13px/1.4 var(--font-sans, -apple-system, system-ui, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.camera-btn:hover:not(:disabled) { background: #3a3a3c; }
+.camera-btn.is-primary { background: var(--accent, #007aff); }
+.camera-btn.is-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent, #007aff); }
+.camera-btn.is-quiet { background: none; color: #aeaeb2; }
+.camera-btn:disabled { opacity: 0.55; cursor: default; }
+.camera-dock-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 28px;
+  text-align: center;
+  font-size: 13px;
+  color: #d1d1d6;
+  max-width: 460px;
+}
+.camera-dock-refused b { color: #fff; font-size: 14px; }
+.camera-dock-refused svg { color: #8e8e93; }
+.camera-dock-refused .camera-dock-slash { stroke: #ff453a; }
+.camera-dock-row { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; justify-content: center; }
+/* A refusal fills the whole box: the bar has nothing to offer then. */
+.camera-dock-refused ~ * { display: none; }
+.camera-dock:has(.camera-dock-refused) .camera-dock-view { height: calc(clamp(200px, 36vh, 360px) + 54px); }
+/* A phone: the camera takes the screen above the chat box. */
+@media (max-width: 640px) {
+  .camera-dock { margin: 0 0 6px; border-radius: 12px; }
+  .camera-dock-view { height: max(240px, calc(100dvh - 300px)); }
+  .camera-dock:has(.camera-dock-refused) .camera-dock-view { height: calc(max(240px, calc(100dvh - 300px)) + 54px); }
+  .camera-shutter { width: 52px; height: 52px; border-width: 4px; }
+  .camera-dock-bar { height: 70px; }
+}

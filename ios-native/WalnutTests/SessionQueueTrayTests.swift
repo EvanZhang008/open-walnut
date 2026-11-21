@@ -368,7 +368,7 @@ final class SessionQueueTrayTests: XCTestCase {
         XCTAssertEqual(PeerMessagePresentation.ownWords(Self.notice + Self.trigger + "hi"), "hi")
         XCTAssertEqual(PeerMessagePresentation.ownWords("<system-reminder>\nWalnut (hint): x\n</system-reminder>\n\nhi"), "hi")
         let photo = Self.imageHeader + "\n- \(Self.imagePath)\n\nhi"
-        XCTAssertNotNil(MessageRow.attachmentSendParts(PeerMessagePresentation.ownWords(Self.notice + photo)))
+        XCTAssertNotNil(AttachmentHeaders.split(PeerMessagePresentation.ownWords(Self.notice + photo)))
     }
 
     // MARK: - Through the store

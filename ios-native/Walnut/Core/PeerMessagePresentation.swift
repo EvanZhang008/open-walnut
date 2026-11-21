@@ -37,7 +37,7 @@ enum PeerMessagePresentation {
     /// The words of a message without what Walnut put around them: every
     /// `<walnut-message>` / `<cross-session-message>` envelope, and any leading
     /// `<system-reminder>` block (a message hint), taken off. The attachment headers
-    /// ("[Images attached …]", "[Files attached …]") stay, so `MessageRow.attachmentSendParts`
+    /// ("[Images attached …]", "[Files attached …]") stay, so `AttachmentHeaders.split`
     /// can read them: they must START the text, and a notice in front of them hid a
     /// photo send from the bubble match (2026-11-06, one message drawn twice).
     /// Text with none of these comes back unchanged.

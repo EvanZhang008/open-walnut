@@ -1584,7 +1584,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
               <InjectedBannerRow banner={framingBanner} disclosureId={disclosureIds.added(`${message.walnutMessageId ?? message.msgId ?? message.timestamp}-framing`)} />
             )}
             {attachmentSplit && (
-              <MessageAttachments images={attachmentSplit.images} files={attachmentSplit.files} host={sessionHost} {...(onFileOpen ? { onFileOpen } : {})} />
+              <MessageAttachments images={attachmentSplit.images} files={attachmentSplit.files} clips={attachmentSplit.clips} host={sessionHost} {...(onFileOpen ? { onFileOpen } : {})} />
             )}
             {shownUserText && <StableMarkdownBody text={showHintTagsAsTyped(shownUserText)} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} />}
           </>

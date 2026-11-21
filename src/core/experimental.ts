@@ -61,6 +61,12 @@ export const EXPERIMENTAL_FEATURES = [
   default: false,
 },
   {
+    id: 'camera_capture',
+    name: 'Camera in chat',
+    description: 'A Camera item in the chat box\'s + menu: take a photo or record a video up to a minute (and take photos while it records), look at it, then retake it or send it. A video goes to the AI as a few stills and what was said in it, with the video file beside them. The camera is on only while its panel is open.',
+    default: false,
+  },
+  {
     id: 'drawing_narration',
     name: 'Record a walkthrough of a drawing',
     description: 'A Record button in the Drawing app: talk while you draw, and Walnut keeps each sentence with the time you said it and the shapes you drew, selected or pointed at then, so the drawing\'s assistant knows which part you meant (for example which table you called the core table).',

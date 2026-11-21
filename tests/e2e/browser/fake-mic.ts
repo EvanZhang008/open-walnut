@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
+import { writeWhiteboardY4m } from './fake-camera'
 
 const SAMPLE_RATE = 48_000
 const TONE_HZ = 440
@@ -131,4 +132,16 @@ export async function useSyntheticMic(page: Page, opts: SyntheticMicOptions = {}
     Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true });
     (window as unknown as { __syntheticMic?: boolean }).__syntheticMic = true
   }, opts)
+}
+
+/**
+ * A fake camera and microphone together (the chat camera's specs, Chromium only): the camera
+ * plays a drawn whiteboard (fake-camera.ts), the microphone the steady tone. Fake UI answers
+ * every permission prompt yes; a spec that needs a refusal patches getUserMedia in the page.
+ */
+export function fakeCameraArgs(): string[] {
+  return [
+    ...FAKE_MIC_ARGS,
+    `--use-file-for-fake-video-capture=${writeWhiteboardY4m()}`,
+  ]
 }

@@ -13,7 +13,7 @@
  * The phone writes that text itself, so every send path (the primary's queue,
  * the companion's relay and its held sends) carries it as plain words.
  */
-import { FILES_ATTACHED_LINE, attachmentHeaderBlock } from '../../lib/attachment-headers.js'
+import { FILES_ATTACHED_LINE, attachmentHeaderBlock, splitAttachmentHeaders } from '../../lib/attachment-headers.js'
 
 /** One chunk: the bridge and tunnel frame budget every chunked lane here uses. */
 export const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024
@@ -43,16 +43,7 @@ export function withFilePaths(text: string, paths: string[]): string {
   return `${attachmentHeaderBlock('files', paths)}${text}`
 }
 
-/** "[Images attached …]" and "[Files attached …]" headers with their path lists, in any order. */
-const ATTACHMENT_HEADER_RE = /^\[(?:Images|Files) attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/
-
 /** The words of a message without its attachment headers (titles read the words, not the paths). */
 export function withoutAttachmentHeaders(text: string): string {
-  let out = text
-  for (let i = 0; i < 4; i++) {
-    const next = out.replace(ATTACHMENT_HEADER_RE, '')
-    if (next === out) break
-    out = next
-  }
-  return out
+  return splitAttachmentHeaders(text).text
 }

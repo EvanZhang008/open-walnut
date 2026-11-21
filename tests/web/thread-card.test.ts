@@ -108,13 +108,13 @@ describe('questionPartsOf (what a question was sent with)', () => {
       `${banner}\n\n${img}> the flush order\n\nWhat is this?`,
       `${banner}\n\n> the flush order\n\n${img}What is this?`,
     ]) {
-      expect(questionPartsOf(text)).toEqual({ body: 'What is this?', images: ['/var/folders/x/T/daemon/images/a.png'], files: [] })
+      expect(questionPartsOf(text)).toEqual({ body: 'What is this?', images: ['/var/folders/x/T/daemon/images/a.png'], files: [], clips: [] })
       expect(questionBodyOf(text)).toBe('What is this?')
     }
   })
   it('a picture and a file sent together, and a picture with no words', () => {
-    expect(questionPartsOf(`${img}${files}Look.`)).toEqual({ body: 'Look.', images: ['/var/folders/x/T/daemon/images/a.png'], files: ['/repo/notes.txt'] })
-    expect(questionPartsOf(`${banner}\n\n${img}`.trim())).toEqual({ body: '', images: ['/var/folders/x/T/daemon/images/a.png'], files: [] })
+    expect(questionPartsOf(`${img}${files}Look.`)).toEqual({ body: 'Look.', images: ['/var/folders/x/T/daemon/images/a.png'], files: ['/repo/notes.txt'], clips: [] })
+    expect(questionPartsOf(`${banner}\n\n${img}`.trim())).toEqual({ body: '', images: ['/var/folders/x/T/daemon/images/a.png'], files: [], clips: [] })
   })
   it('no header text is left anywhere a question is shown', () => {
     const body = questionBodyOf(`${banner}\n\n${img}Why?`)

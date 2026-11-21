@@ -25,9 +25,58 @@ struct ComposerFile: Identifiable, Equatable, Hashable, Sendable {
     let kind: Kind
     /// The app's copy (`ComposerFileStore`).
     let localURL: URL
+    /// A video the composer's camera recorded, or one of its stills (`ClipRole`).
+    /// nil for every other file.
+    var clip: ClipRole? = nil
 
     enum Kind: String, Sendable {
         case video, image, pdf, audio, other
+    }
+
+    /// What a file the camera made is to its message: the recorded video (how long,
+    /// what was said in it), or a still taken from one. A video's stills ride the
+    /// same upload as any file, but the message names them under the video's own
+    /// stills block, never in the files block, and the composer draws them as part
+    /// of the video's card (they do not count toward `maxFiles`).
+    enum ClipRole: Hashable, Sendable, Codable {
+        /// `narration`: what was said, one line; nil with `narrationNote` saying why
+        /// there is none ("no narration: speech to text is not set up").
+        case video(durationMs: Int, narration: String?, narrationNote: String?)
+        /// A still of the video whose upload id is `videoID`.
+        case still(videoID: String)
+    }
+
+    var isStill: Bool { if case .still = clip { return true } else { return false } }
+
+    /// The files of `files` a person counts: a recorded video's stills are its own.
+    static func countedFiles(_ files: [ComposerFile]) -> Int { files.filter { !$0.isStill }.count }
+
+    /// The ids `id` stands for: the file, and its stills when it is a recorded video.
+    static func idsWithStills(of id: String, in files: [ComposerFile]) -> Set<String> {
+        var ids: Set<String> = [id]
+        for file in files { if case .still(let video) = file.clip, video == id { ids.insert(file.id) } }
+        return ids
+    }
+
+    /// Whether `failedID` is one of the stills of the recorded video `id` (whose
+    /// card speaks for them).
+    static func isStill(_ failedID: String?, of id: String, in files: [ComposerFile]) -> Bool {
+        guard let failedID, failedID != id else { return false }
+        return idsWithStills(of: id, in: files).contains(failedID)
+    }
+
+    /// `files` without `id` and its stills.
+    static func removing(_ id: String, from files: [ComposerFile]) -> [ComposerFile] {
+        let gone = idsWithStills(of: id, in: files)
+        return files.filter { !gone.contains($0.id) }
+    }
+
+    /// The small line under a recorded video's card ("8 stills · narration"), nil for any other file.
+    static func clipCaption(for file: ComposerFile, in files: [ComposerFile]) -> String? {
+        guard case .video(_, let narration, let note) = file.clip else { return nil }
+        let stills = files.filter { if case .still(let video) = $0.clip { return video == file.id } else { return false } }.count
+        let said = !(narration ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return AttachmentHeaders.clipCaption(stills: stills, narration: said, narrationNote: note)
     }
 
     /// One file per message at most this large, the server's cap.
@@ -95,29 +144,54 @@ struct ComposerFile: Identifiable, Equatable, Hashable, Sendable {
     // MARK: - The message text
 
     /// The header line of a message with attached files: byte for byte the
-    /// server's `FILES_ATTACHED_LINE` (session-uploads.ts).
-    static let headerLine = "[Files attached \u{2014} open them from these paths]"
-
-    /// What the session receives: the saved paths under the header, then the
-    /// person's words (the server's `withFilePaths`).
-    static func messageText(_ text: String, paths: [String]) -> String {
-        guard !paths.isEmpty else { return text }
-        let list = paths.map { "- \($0)" }.joined(separator: "\n")
-        return "\(headerLine)\n\(list)\n\n\(text)"
-    }
+    /// server's `FILES_ATTACHED_LINE` (attachment-headers.ts).
+    static let headerLine = AttachmentHeaders.filesLine
 
     /// The header pictures go under: byte for byte the server's own for a
     /// session's photos (session-send-v1.ts), so the server carries them to the
     /// session's host the way it carries those (its picture lane), and the
     /// timeline draws them as pictures.
-    static let imagesHeaderLine = "[Images attached \u{2014} use the Read tool to view them]"
+    static let imagesHeaderLine = AttachmentHeaders.imagesLine
 
-    /// `messageText`, with pictures first under their own header.
-    static func messageText(_ text: String, imagePaths: [String], paths: [String]) -> String {
-        let rest = messageText(text, paths: paths)
-        guard !imagePaths.isEmpty else { return rest }
-        let list = imagePaths.map { "- \($0)" }.joined(separator: "\n")
-        return "\(imagesHeaderLine)\n\(list)\n\n\(rest)"
+    /// What the session receives: the pictures' paths under their header, the
+    /// files' under theirs, each recorded video's stills and narration after them
+    /// (`AttachmentHeaders.videoClipBlocks`), then the person's words (the
+    /// server's `withFilePaths`). The one builder every send path uses.
+    static func messageText(_ text: String, imagePaths: [String] = [], paths: [String],
+                            clips: [AttachmentHeaders.VideoClip] = []) -> String {
+        AttachmentHeaders.block(.images, paths: imagePaths)
+            + AttachmentHeaders.block(.files, paths: paths)
+            + clips.map(AttachmentHeaders.videoClipBlocks).joined()
+            + text
+    }
+
+    /// The same for `files` uploaded to `paths` (one path per file, in order): a
+    /// recorded video's stills leave the files block for the video's own block.
+    static func messageText(_ text: String, imagePaths: [String] = [], files: [ComposerFile], paths: [String]) -> String {
+        let wire = wirePaths(files: files, paths: paths)
+        return messageText(text, imagePaths: imagePaths, paths: wire.paths, clips: wire.clips)
+    }
+
+    /// The files block's paths and each recorded video's blocks, from files and
+    /// their uploaded paths. With no path per file (never, by the callers), every
+    /// path stays in the files block, as before stills existed.
+    static func wirePaths(files: [ComposerFile], paths: [String]) -> (paths: [String], clips: [AttachmentHeaders.VideoClip]) {
+        guard files.count == paths.count, files.contains(where: { $0.clip != nil }) else { return (paths, []) }
+        let pairs = Array(zip(files, paths))
+        var shown: [String] = []
+        var clips: [AttachmentHeaders.VideoClip] = []
+        for (file, path) in pairs {
+            switch file.clip {
+            case .still: continue
+            case .video(let durationMs, let narration, _):
+                shown.append(path)
+                let stills = pairs.filter { if case .still(let video) = $0.0.clip { return video == file.id } else { return false } }.map { $0.1 }
+                clips.append(AttachmentHeaders.VideoClip(name: file.name, durationMs: durationMs, stills: stills, narration: narration))
+            case nil:
+                shown.append(path)
+            }
+        }
+        return (shown, clips)
     }
 
     /// What the server puts after a listed path whose file it could not copy to

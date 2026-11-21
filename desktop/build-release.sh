@@ -136,7 +136,12 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
     <!-- Without this key WKWebView hides navigator.mediaDevices entirely,
          which silently removes the web console's voice-input mic button. -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>Walnut uses the microphone for voice input (speech-to-text).</string>
+    <string>Walnut uses the microphone for voice input (speech-to-text) and for the sound of videos you record in chat.</string>
+    <!-- The chat's Camera (+ menu): without this key WKWebView answers the
+         page's getUserMedia for video with an error, and macOS ends an app
+         that touches the camera without it. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Walnut uses the camera for photos and videos you send in chat. It is on only while the camera panel is open.</string>
     <!-- The calendar view shells out to the walnut-calendar EventKit helper, but
          TCC attributes that request to the RESPONSIBLE process — this app bundle
          — not to the helper binary. Without these keys tccd refuses the request

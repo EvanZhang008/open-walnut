@@ -46,7 +46,7 @@ final class SessionFileUploadTests: XCTestCase {
         XCTAssertEqual(text, "[Files attached \u{2014} open them from these paths]\n"
             + "- /home/u/tasks/t1/uploads/up-1/clip.mov\n- /home/u/tasks/t1/uploads/up-2/My Report.pdf\n\n"
             + "what happens at 0:12?")
-        let parts = MessageRow.attachmentSendParts(text)
+        let parts = AttachmentHeaders.split(text)
         XCTAssertEqual(parts?.filePaths, ["/home/u/tasks/t1/uploads/up-1/clip.mov", "/home/u/tasks/t1/uploads/up-2/My Report.pdf"])
         XCTAssertEqual(parts?.imagePaths, [])
         XCTAssertEqual(parts?.text, "what happens at 0:12?")
@@ -57,15 +57,15 @@ final class SessionFileUploadTests: XCTestCase {
         // The server puts the photo header in front of the phone's files header.
         let text = "[Images attached \u{2014} use the Read tool to view them]\n- /tmp/open-walnut/images/1-a.jpg\n\n"
             + ComposerFile.messageText("both", paths: ["/h/up-1/clip.mov"])
-        let parts = MessageRow.attachmentSendParts(text)
+        let parts = AttachmentHeaders.split(text)
         XCTAssertEqual(parts?.imagePaths, ["/tmp/open-walnut/images/1-a.jpg"])
         XCTAssertEqual(parts?.filePaths, ["/h/up-1/clip.mov"])
         XCTAssertEqual(parts?.text, "both")
         // Files only, no words.
-        XCTAssertEqual(MessageRow.attachmentSendParts(ComposerFile.messageText("", paths: ["/h/a.pdf"]))?.text, "")
+        XCTAssertEqual(AttachmentHeaders.split(ComposerFile.messageText("", paths: ["/h/a.pdf"]))?.text, "")
         // Not the format: nothing parsed.
-        XCTAssertNil(MessageRow.attachmentSendParts("[Files attached \u{2014} x]\nnot a path\n\nhi"))
-        XCTAssertNil(MessageRow.attachmentSendParts("just words"))
+        XCTAssertNil(AttachmentHeaders.split("[Files attached \u{2014} x]\nnot a path\n\nhi"))
+        XCTAssertNil(AttachmentHeaders.split("just words"))
     }
 
     func testTimelineDrawsSentFilesAsCardsAndPicturesAsImages() {

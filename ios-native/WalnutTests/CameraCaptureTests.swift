@@ -1,0 +1,359 @@
+import XCTest
+import AVFoundation
+import UIKit
+@testable import Walnut
+
+/// The composer's own camera (`camera_capture`): which stills of a recording go
+/// to the AI (the same rule as the web's `pickStills`), what each file is named,
+/// the recording's clock, and the whole flow driven through the fake camera.
+///
+/// Nothing here opens a camera or a microphone: the flow tests use
+/// `FakeCameraSource`. What only a device shows is listed in `LiveCameraSource`.
+@MainActor
+final class CameraCaptureTests: XCTestCase {
+
+    // MARK: - Which stills
+
+    /// Scores are percents of changed cells: the first sample, then the seven
+    /// biggest changes at or over 0.5 %, in time order.
+    func testTheFirstSampleAndTheSevenBiggestChangesAreKeptInTimeOrder() {
+        let scores: [Double] = [0, 0.2, 3, 0.9, 0.5, 30, 0.1, 1.5, 2, 4, 0.6, 12]
+        XCTAssertEqual(VideoStills.select(scores: scores), [0, 2, 3, 5, 7, 8, 9, 11])
+    }
+
+    func testASampleUnderTheThresholdIsNeverKept() {
+        XCTAssertEqual(VideoStills.select(scores: [0, 0.49, 0.1, 0.3]), [0], "a board that never changed sends one still")
+        XCTAssertEqual(VideoStills.select(scores: [40]), [0])
+        XCTAssertEqual(VideoStills.select(scores: []), [])
+        XCTAssertEqual(VideoStills.select(scores: [0, 0.5, 0.49]), [0, 1], "exactly the threshold is kept")
+    }
+
+    func testEqualScoresKeepTheEarlierSample() {
+        XCTAssertEqual(VideoStills.select(scores: [0, 9, 9, 9, 9], maxStills: 3), [0, 1, 2])
+    }
+
+    /// The score is the percent of cells whose grey moved MORE than 16: a small new
+    /// line on a whiteboard counts in full, a camera's noise not at all.
+    func testTheScoreIsThePercentOfCellsThatChangedFromThePreviousSample() {
+        XCTAssertEqual(VideoStills.score([0, 0, 0, 0], [255, 0, 0, 0]), 25)
+        XCTAssertEqual(VideoStills.score([100, 100], [116, 84]), 0, "a move of exactly 16 is noise")
+        XCTAssertEqual(VideoStills.score([100, 100], [117, 100]), 50)
+        XCTAssertEqual(VideoStills.score([10, 20, 30], [10, 20, 30]), 0)
+        XCTAssertEqual(VideoStills.score([], [1]), 0)
+        XCTAssertEqual(VideoStills.scores([[0, 0], [100, 0], [100, 50]]), [0, 50, 50])
+        // A box drawn over 1 % of a 64 x 36 board is kept; the old mean difference
+        // (about 2 of 255 here) was under its threshold of 6 and dropped it.
+        let cells = VideoStills.signatureWidth * VideoStills.signatureHeight
+        XCTAssertEqual(cells, 2304)
+        let before = [UInt8](repeating: 240, count: cells)
+        var after = before
+        for i in 0..<23 { after[i] = 40 }
+        XCTAssertEqual(VideoStills.score(before, after), 23.0 / 2304 * 100, accuracy: 1e-9)
+        XCTAssertEqual(VideoStills.select(scores: VideoStills.scores([before, after])), [0, 1])
+        // The web's greySignature: Rec. 601 weights, rounded.
+        XCTAssertEqual(VideoStills.grey(rgba: [255, 255, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0]), [255, 76, 29])
+    }
+
+    func testSamplesAreTakenEveryTwoSecondsFromTheStart() {
+        XCTAssertEqual(VideoStills.sampleTimes(durationMs: 5_000), [0, 2_000, 4_000])
+        XCTAssertEqual(VideoStills.sampleTimes(durationMs: 4_000), [0, 2_000, 4_000])
+        XCTAssertEqual(VideoStills.sampleTimes(durationMs: 0), [0])
+        XCTAssertEqual(VideoStills.sampleTimes(durationMs: 60_000).count, 31)
+    }
+
+    // MARK: - Names and the clock
+
+    func testAStillIsNamedAfterItsVideoAndItsTime() {
+        XCTAssertEqual(VideoStills.stillName(video: "camera-1416.mp4", atMs: 6_000), "camera-1416-still-0m06s.jpg")
+        XCTAssertEqual(VideoStills.stillName(video: "camera-1416.mov", atMs: 0), "camera-1416-still-0m00s.jpg")
+        XCTAssertEqual(VideoStills.stillName(video: "camera-141605.mov", atMs: 65_000), "camera-141605-still-1m05s.jpg")
+    }
+
+    func testAVideoIsNamedForTheTimeItWasTakenAndNeverTwice() throws {
+        var parts = DateComponents()
+        parts.year = 2026; parts.month = 11; parts.day = 20; parts.hour = 14; parts.minute = 16; parts.second = 5
+        let date = try XCTUnwrap(Calendar.current.date(from: parts))
+        XCTAssertEqual(CameraClipMaker.videoName(at: date, ext: "mov", taken: []), "camera-141605.mov")
+        XCTAssertEqual(CameraClipMaker.videoName(at: date, ext: "mov", taken: ["camera-141605.mov"]), "camera-141605-2.mov")
+        XCTAssertEqual(CameraClipMaker.videoName(at: date, ext: "mov", taken: ["camera-141605.mov", "camera-141605-2.mov"]),
+                       "camera-141605-3.mov")
+    }
+
+    func testTheTimerCountsDownFromFiftySecondsAndStopsAtSixty() {
+        XCTAssertEqual(CameraCaptureModel.timerLabel(elapsed: 23.2), "0:23")
+        XCTAssertEqual(CameraCaptureModel.timerLabel(elapsed: 49.4), "0:49")
+        XCTAssertEqual(CameraCaptureModel.timerLabel(elapsed: 52.2), "0:52 \u{00B7} 8s left")
+        XCTAssertEqual(CameraCaptureModel.timerLabel(elapsed: 60), "1:00 \u{00B7} 0s left")
+        XCTAssertFalse(CameraCaptureModel.reachedLimit(59.9))
+        XCTAssertTrue(CameraCaptureModel.reachedLimit(60))
+    }
+
+    func testANarrationFailureSaysWhyInTheCardsWords() {
+        let unset = APIError.server(status: 503, code: "stt_unavailable", message: "x", serverHash: nil, serverContent: nil)
+        XCTAssertEqual(CameraClipMaker.narrationNote(for: unset), "no narration: speech to text is not set up")
+        XCTAssertEqual(CameraClipMaker.narrationNote(for: CameraClipMaker.TimeoutError()), "no narration: speech to text took too long")
+        XCTAssertEqual(CameraClipMaker.narrationNote(for: URLError(.notConnectedToInternet)), "no narration: speech to text failed")
+    }
+
+    // MARK: - From a real file
+
+    /// A generated whiteboard video (the fake camera's) through the real stills
+    /// pipeline: AVAssetImageGenerator, the signatures, the pick, the JPEGs.
+    func testAGeneratedVideoGivesStillsThatChangeWithTheBoard() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("stills-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("clip.mov")
+        try await FakeWhiteboard.writeVideo(to: url, seconds: 8, startStage: 1, mirrored: false)
+        let out = try await VideoStills.extract(from: url, videoName: "camera-141605.mov")
+        XCTAssertEqual(Double(out.durationMs), 8_000, accuracy: 400)
+        XCTAssertGreaterThanOrEqual(out.stills.count, 2, "the board gains boxes, so more than the first sample is kept")
+        XCTAssertLessThanOrEqual(out.stills.count, VideoStills.maxStills)
+        XCTAssertEqual(out.stills.first?.name, "camera-141605-still-0m00s.jpg")
+        XCTAssertEqual(out.stills.map(\.atMs), out.stills.map(\.atMs).sorted())
+        let image = try XCTUnwrap(UIImage(data: try XCTUnwrap(out.stills.first?.jpeg)))
+        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height) * image.scale, CGFloat(VideoStills.longEdge))
+        // The fake has no sound track: no narration, and it says so.
+        let narration = await CameraClipMaker.narrate(url) { _ in XCTFail("nothing to transcribe"); return "" }
+        XCTAssertEqual(narration, .none(note: "no sound recorded"))
+    }
+
+    // MARK: - The flow, on the fake camera
+
+    private func model(_ log: Log, allowsVideo: Bool = true, source: CameraSource? = nil,
+                       now: @escaping () -> Date = Date.init) -> CameraCaptureModel {
+        var actions = CameraCaptureModel.Actions()
+        actions.addPhoto = { _ in
+            guard log.takesPhotos else { return false }
+            log.photos += 1
+            return true
+        }
+        actions.addClip = { clip in log.clips.append(clip); return true }
+        actions.send = { log.sent += 1 }
+        actions.close = { log.closed += 1 }
+        actions.transcribe = { _ in "" }
+        return CameraCaptureModel(source: source ?? FakeCameraSource(), allowsVideo: allowsVideo, actions: actions, now: now)
+    }
+
+    final class Log {
+        var photos = 0
+        var clips: [CameraClipMaker.Clip] = []
+        var sent = 0
+        var closed = 0
+        /// Whether the composer takes a photo (false: its merge refused it).
+        var takesPhotos = true
+    }
+
+    func testAPhotoIsLookedAtThenAddedAndTheCameraStaysOpen() async {
+        let log = Log()
+        let camera = model(log)
+        await camera.appear()
+        XCTAssertEqual(camera.stage, .live)
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .preview)
+        XCTAssertEqual(log.photos, 0, "nothing is attached before the look")
+        await camera.addAnother()
+        XCTAssertEqual(log.photos, 1)
+        XCTAssertEqual(camera.stage, .live)
+        await camera.shutter()
+        await camera.retake()
+        XCTAssertEqual(log.photos, 1, "a retake drops it")
+        await camera.shutter()
+        await camera.send()
+        XCTAssertEqual(log.photos, 2)
+        XCTAssertEqual(log.sent, 1)
+    }
+
+    func testAVideoTakesPhotosWhileItRecordsAndIsSentWithItsStills() async throws {
+        let log = Log()
+        let camera = model(log)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .recording)
+        await camera.photoWhileRecording()
+        XCTAssertEqual(log.photos, 1, "a photo during the video goes straight in as a photo")
+        XCTAssertEqual(camera.stage, .recording, "and the video keeps recording")
+        try await Task.sleep(for: .seconds(3))
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .preview)
+        XCTAssertTrue(log.clips.isEmpty, "never sent or attached by itself")
+        await camera.send()
+        let clip = try XCTUnwrap(log.clips.first)
+        XCTAssertEqual(log.sent, 1)
+        XCTAssertTrue(clip.video.name.hasPrefix("camera-") && clip.video.name.hasSuffix(".mov"))
+        XCTAssertFalse(clip.stills.isEmpty)
+        XCTAssertTrue(clip.stills.allSatisfy { $0.clip == .still(videoID: clip.video.id) })
+        guard case .video(let ms, nil, let note?) = clip.video.clip else { return XCTFail("not a clip: \(String(describing: clip.video.clip))") }
+        XCTAssertGreaterThan(ms, 2_000)
+        XCTAssertEqual(note, "no sound recorded")
+        clip.files.forEach(ComposerFileStore.remove)
+    }
+
+    func testClosingDropsWhatWasNotAdded() async throws {
+        let log = Log()
+        let camera = model(log)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1.2))
+        await camera.shutter()
+        guard case .video(let clip, _, _) = camera.taken else { return XCTFail("no clip") }
+        camera.close()
+        XCTAssertEqual(log.closed, 1)
+        XCTAssertTrue(log.clips.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clip.video.localURL.path), "its copy goes")
+    }
+
+    func testAPhotoOverTheCeilingIsRefusedWithASentence() async {
+        let log = Log()
+        let camera = model(log)
+        camera.actions.photoRoom = { 0 }
+        await camera.appear()
+        await camera.shutter()
+        await camera.addAnother()
+        XCTAssertEqual(log.photos, 0)
+        XCTAssertEqual(camera.stage, .preview, "still there to retake or close")
+        XCTAssertEqual(camera.notice, "This message already has \(ComposerBar.maxImages) photos.")
+    }
+
+    func testARefusedPhotoWhileRecordingIsNotCountedAsAdded() async {
+        let log = Log()
+        log.takesPhotos = false
+        let camera = model(log)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        await camera.photoWhileRecording()
+        XCTAssertEqual(camera.photosWhileRecording, 0, "a photo the composer refused is not one more added")
+        XCTAssertEqual(camera.notice, "The photo was not added.")
+        await camera.shutter()
+        if case .video(let clip, _, _) = camera.taken { clip.files.forEach(ComposerFileStore.remove) }
+    }
+
+    /// The one-minute stop runs outside the clock it cancels, so the clip is made
+    /// whole: its stills, its preview frame and its narration.
+    func testTheMinuteLimitStopsIntoAWholePreview() async throws {
+        let log = Log()
+        var clock = Date()
+        let camera = model(log, now: { clock })
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .recording)
+        try await Task.sleep(for: .seconds(1))
+        clock += CameraCaptureModel.maxSeconds + 1
+        for _ in 0..<100 where camera.stage != .preview { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertEqual(camera.stage, .preview, "stopped by itself, into its preview")
+        guard case .video(let clip, let narration, let still) = camera.taken else { return XCTFail("no clip") }
+        XCTAssertFalse(clip.stills.isEmpty)
+        XCTAssertNotNil(still, "the first still is the preview's frame")
+        XCTAssertEqual(narration, .none(note: "no sound recorded"))
+        XCTAssertTrue(log.clips.isEmpty, "never sent by itself")
+        camera.close()
+    }
+
+    /// Leaving the app stops the camera first; the recording ends into its
+    /// preview, and Retake starts the camera again before the picture is live.
+    func testAfterTheAppWasAwayRetakeStartsTheCameraAgain() async throws {
+        let log = Log()
+        let source = CountingSource()
+        let camera = model(log, source: source)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1))
+        await camera.sceneLeft()
+        XCTAssertEqual(source.stops, 1)
+        XCTAssertEqual(camera.stage, .preview)
+        await camera.sceneReturned()
+        XCTAssertEqual(source.starts, 1, "a preview needs no camera")
+        await camera.retake()
+        XCTAssertEqual(source.starts, 2, "started again before the picture is live")
+        XCTAssertEqual(camera.stage, .live)
+    }
+
+    /// A call takes the camera while it records: the recording ends into its
+    /// preview, never left running on a stopped camera.
+    func testAnInterruptionWhileRecordingEndsIntoThePreview() async throws {
+        let log = Log()
+        let source = CountingSource()
+        let camera = model(log, source: source)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1))
+        source.onInterruption?(.began("The microphone is in use by a call or another app."))
+        for _ in 0..<100 where camera.stage != .preview { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertEqual(camera.stage, .preview)
+        XCTAssertEqual(camera.notice, "The microphone is in use by a call or another app.")
+        camera.close()
+    }
+
+    func testClosingWhileTheClipIsMadeDropsIt() async throws {
+        let log = Log()
+        let source = CountingSource()
+        source.stopDelay = .milliseconds(500)
+        let camera = model(log, source: source)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1))
+        let made = Task { await camera.shutter() }
+        for _ in 0..<100 where camera.stage == .recording { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(camera.stage, .finishing)
+        camera.close()
+        await made.value
+        XCTAssertNil(camera.taken, "a clip made after the close is dropped with its copies")
+        XCTAssertTrue(log.clips.isEmpty)
+        XCTAssertTrue(source.stopCancelled, "closing cancels the clip's making, so its sound goes to no speech to text")
+    }
+
+    /// Stop is never held up by a photo still being taken during the recording.
+    func testStopEndsTheRecordingWhileAPhotoIsBeingTaken() async throws {
+        let log = Log()
+        let source = CountingSource()
+        let camera = model(log, source: source)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        source.photoDelay = .milliseconds(800)
+        let photo = Task { await camera.photoWhileRecording() }
+        for _ in 0..<100 where !camera.busy { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(camera.busy, "the photo is being taken")
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .preview, "the tap on Stop ended the recording")
+        await photo.value
+        XCTAssertEqual(log.photos, 1, "the photo still lands")
+        camera.close()
+    }
+
+    /// The fake camera, counting its starts and stops.
+    @MainActor
+    final class CountingSource: CameraSource {
+        private let fake = FakeCameraSource()
+        var starts = 0
+        var stops = 0
+        /// How long a stop takes to hand over its file, and a photo to come.
+        var stopDelay: Duration = .zero
+        var photoDelay: Duration = .zero
+        /// The stop's wait was cancelled (the clip was dropped while it was made).
+        var stopCancelled = false
+        var onInterruption: ((CameraInterruption) -> Void)?
+        var previewView: UIView { fake.previewView }
+        var canFlip: Bool { fake.canFlip }
+        var position: AVCaptureDevice.Position { fake.position }
+        func start() async throws { starts += 1; try await fake.start() }
+        func stop() { stops += 1; fake.stop() }
+        func flip() async throws { try await fake.flip() }
+        func takePhoto() async throws -> UIImage {
+            try await Task.sleep(for: photoDelay)
+            return try await fake.takePhoto()
+        }
+        func startRecording(to url: URL, sound: Bool) async throws -> Bool { try await fake.startRecording(to: url, sound: sound) }
+        func stopRecording() async throws -> URL {
+            do { try await Task.sleep(for: stopDelay) } catch { stopCancelled = true; throw error }
+            return try await fake.stopRecording()
+        }
+    }
+}

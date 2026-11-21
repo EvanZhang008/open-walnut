@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { DICTATION_AUDIO_CONSTRAINTS } from '../../web/src/utils/mic-constraints.js';
+import { cameraVideoConstraints } from '../../web/src/components/chat/camera/camera-model.js';
 
 const ROOT = join(__dirname, '../../web/src');
 
@@ -42,6 +43,12 @@ describe('mic constraints', () => {
       for (const m of text.matchAll(/getUserMedia\s*(?:\?\.)?\(([^)]*)\)/g)) calls.push({ file: relative(ROOT, p), call: m[1] });
     }
     expect(calls.length).toBeGreaterThan(0);
-    for (const c of calls) expect(c.call, c.file).toMatch(/^\s*\{\s*audio:\s*DICTATION_AUDIO_CONSTRAINTS\s*,?\s*\}\s*$/);
+    // The chat camera's picture is the one other call, and it opens no mic (its sound is asked for as dictation is).
+    for (const c of calls) expect(c.call, c.file).toMatch(/^\s*(?:\{\s*audio:\s*DICTATION_AUDIO_CONSTRAINTS\s*,?\s*\}|cameraVideoConstraints\(\w+)\s*$/);
+  });
+
+  it('the chat camera\'s picture asks for no sound', () => {
+    expect(cameraVideoConstraints('user').audio).toBe(false);
+    expect(cameraVideoConstraints('environment').audio).toBe(false);
   });
 });

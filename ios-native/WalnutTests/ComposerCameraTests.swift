@@ -323,7 +323,9 @@ final class ComposerCameraTests: XCTestCase {
             "case Self.cameraItemID:",
             "case Self.hostRowItemID:",
             "Self.attachmentSourceLabel(acceptsFiles ? \"Photos & Videos\" : \"Photos\", attached: selectedImages.count)",
-            "Self.attachmentSourceLabel(\"Take Photo\", attached: selectedImages.count)",
+            // "Take Photo" unless the `camera_capture` experiment is on (then "Camera").
+            "Self.attachmentSourceLabel(cameraCaptureOn ? \"Camera\" : \"Take Photo\", attached: selectedImages.count)",
+            "cameraAvailable: cameraCaptureOn ? CameraSources.isAvailable : CameraPicker.isAvailable",
             "icon: Symbol.camera",
             "action: openCamera",
             "noticeRow(cameraNotice, icon: Symbol.cameraDeniedNotice)",

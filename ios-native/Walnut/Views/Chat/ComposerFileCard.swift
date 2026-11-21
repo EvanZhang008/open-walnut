@@ -7,12 +7,15 @@ struct ComposerFileCard: View {
     /// Files still being copied in (`file` is nil then).
     var importingCount = 0
     var onRemove: () -> Void = {}
+    /// A recorded video's "8 stills · narration", after its size.
+    var caption: String? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The icon's tile grows with the text at the accessibility sizes (gate r7).
     private var iconSide: CGFloat { dynamicTypeSize.isAccessibilitySize ? 52 : 34 }
 
-    init(file: ComposerFile, onRemove: @escaping () -> Void) {
+    init(file: ComposerFile, caption: String? = nil, onRemove: @escaping () -> Void) {
         self.file = file
+        self.caption = caption
         self.onRemove = onRemove
     }
 
@@ -53,7 +56,7 @@ struct ComposerFileCard: View {
                         .truncationMode(.middle)
                         .fixedSize(horizontal: false, vertical: dynamicTypeSize.isAccessibilitySize)
                     if let file {
-                        Text(ComposerFile.sizeLabel(file.size))
+                        Text([ComposerFile.sizeLabel(file.size), caption].compactMap { $0 }.joined(separator: " \u{00B7} "))
                             .font(.caption2)
                             .foregroundStyle(Theme.secondaryOnCard)
                             .monospacedDigit()

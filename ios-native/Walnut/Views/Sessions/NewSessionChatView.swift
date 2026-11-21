@@ -884,7 +884,7 @@ struct NewSessionChatView: View {
             uploading = true
             do {
                 let sent = try await uploads.upload()
-                wireText = ComposerFile.messageText(pending.text, imagePaths: sent.imagePaths, paths: sent.filePaths)
+                wireText = ComposerFile.messageText(pending.text, imagePaths: sent.imagePaths, files: uploads.files, paths: sent.filePaths)
             } catch {
                 uploading = false
                 if uploads.abandoned { return leaveLaunch(fromComposer: fromComposer) }

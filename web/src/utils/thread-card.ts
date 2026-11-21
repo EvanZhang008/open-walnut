@@ -11,7 +11,7 @@ import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
 import { ROOT_THREAD_KEY, fileOfParent, isTurnHead } from '@/utils/thread-tree';
 import { splitComposedFraming } from '@open-walnut/composed-framing';
-import { splitAttachmentHeaders } from '@open-walnut/attachment-headers';
+import { splitAttachmentHeaders, type VideoClipRead } from '@open-walnut/attachment-headers';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 
@@ -96,11 +96,13 @@ export interface QuestionParts {
   body: string;
   images: string[];
   files: string[];
+  clips: VideoClipRead[];
 }
 
 export function questionPartsOf(text: string): QuestionParts {
   const images: string[] = [];
   const files: string[] = [];
+  const clips: VideoClipRead[] = [];
   let rest = text.replace(/\r\n/g, '\n').trim();
   // Headers and composed lines in either order: the composed lines come off
   // once, and once more after each header found (a person's own quote after
@@ -111,6 +113,7 @@ export function questionPartsOf(text: string): QuestionParts {
     if (split.images.length + split.files.length > 0) {
       images.push(...split.images);
       files.push(...split.files);
+      clips.push(...split.clips);
       rest = split.text.trim();
       peeled = false;
     } else if (!peeled) {
@@ -119,7 +122,7 @@ export function questionPartsOf(text: string): QuestionParts {
     } else break;
   }
   const had = images.length + files.length > 0;
-  return { body: rest || (had ? '' : text.trim()), images, files };
+  return { body: rest || (had ? '' : text.trim()), images, files, clips };
 }
 
 /** The text with the lines a send composed in front of the words taken off

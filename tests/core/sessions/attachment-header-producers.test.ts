@@ -20,7 +20,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-attachmen
 
 import { IMAGES_DIR } from '../../../src/constants.js'
 import {
-  FILES_ATTACHED_LINE, IMAGES_ATTACHED_LINE, attachmentHeaderBlock, imageContextBlock, splitAttachmentHeaders,
+  FILES_ATTACHED_LINE, IMAGES_ATTACHED_LINE, VIDEO_NARRATION_PREFIX, VIDEO_STILLS_PREFIX, attachmentHeaderBlock, imageContextBlock, splitAttachmentHeaders,
 } from '../../../src/lib/attachment-headers.js'
 import { buildSessionImageContext } from '../../../src/web/routes/images.js'
 import { withImagePaths } from '../../../src/core/sessions/cloud-images.js'
@@ -67,15 +67,18 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   '../web/src/utils/thread-card.ts': 'reads', // questionPartsOf: a question card's bubble shows the pictures, not the header
   '../web/src/components/sessions/optimistic-dedup.ts': 'reads', // a comment on dedup
   '../web/src/api/file-upload.ts': 'calls', // the web's withFilePaths: attachmentHeaderBlock('files', …)
-  '../web/src/api/paste-spill.ts': 'calls', // keeps the files header in front of a spilled paste: withFilePaths
-  '../web/src/components/chat/ChatInput.tsx': 'calls', // the composer's send: withFilePaths
+  '../web/src/components/chat/ChatInput.tsx': 'reads', // a comment: the send names files under the header
+  '../web/src/components/common/composer-clip.ts': 'calls', // the composer's send: attachmentHeaderBlock('files', …) and videoClipBlocks
   '../web/src/components/common/composer-attachments.ts': 'reads', // a comment
   '../web/src/components/sessions/DraftSessionPanel.tsx': 'reads', // a comment
   '../web/src/components/sessions/MessageAttachments.tsx': 'reads', // a comment: the cards drawn from the headers
   '../web/src/components/sessions/SessionMessage.tsx': 'reads', // a comment: the bubble splits the headers off
 }
 
-const NAMES = /IMAGES_ATTACHED_LINE|FILES_ATTACHED_LINE|(?:Images|Files) attached|The user attached|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(|withImagePaths\(|withFilePaths\(/
+// `Images\|Files` and `Video \(stills`: a hand-written parser's regex names the header that way
+// (2026-11-20: three parsers of their own knew only pictures and files, so a recorded video's
+// stills were not copied to a session's host and its words showed as the person's).
+const NAMES = /IMAGES_ATTACHED_LINE|FILES_ATTACHED_LINE|(?:Images|Files) attached|Images\|Files|Video (?:stills|narration)|Video \(stills|The user attached|attachmentHeaderBlock\(|imageContextBlock\(|buildSessionImageContext\(|withImagePaths\(|withFilePaths\(|videoClipBlocks\(/
 
 function srcFiles(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -124,9 +127,13 @@ describe('every file that writes or names an attachment header is listed', () =>
   })
 
   it('the phone writes the files header byte for byte the same', () => {
-    const swift = readFileSync(path.join(REPO, 'ios-native/Walnut/Core/ComposerFile.swift'), 'utf8')
-    const line = /static let headerLine = "([^"]+)"/.exec(swift)?.[1]?.replace('\\u{2014}', '\u2014')
+    const swift = readFileSync(path.join(REPO, 'ios-native/Walnut/Core/AttachmentHeaders.swift'), 'utf8')
+    const line = /static let filesLine = "([^"]+)"/.exec(swift)?.[1]?.replace('\\u{2014}', '\u2014')
     expect(line).toBe(FILES_ATTACHED_LINE)
+    // A recorded video's two blocks start the same on the phone (attachment-headers.ts videoClipBlocks).
+    const unescape = (v?: string) => v?.replace('\\u{2014}', '\u2014')
+    expect(unescape(/static let videoStillsPrefix = "([^"]+)"/.exec(swift)?.[1])).toBe(VIDEO_STILLS_PREFIX)
+    expect(unescape(/static let videoNarrationPrefix = "([^"]+)"/.exec(swift)?.[1])).toBe(VIDEO_NARRATION_PREFIX)
   })
 })
 

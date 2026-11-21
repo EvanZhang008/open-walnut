@@ -467,7 +467,7 @@ struct SessionQueuedMessage: Codable, Identifiable, Equatable {
         var imagePaths = (images ?? []).map(\.path).filter { !$0.isEmpty }
         var filePaths = (files ?? []).map(\.path).filter { !$0.isEmpty }
         let ownWords = PeerMessagePresentation.ownWords(message)
-        let parts = MessageRow.attachmentSendParts(ownWords)
+        let parts = AttachmentHeaders.split(ownWords)
         if let typed = words.map({ PeerMessagePresentation.ownWords($0) }) {
             // A current server: the words as typed; the pictures from its fields, else
             // from the headers still in `message`.
@@ -665,6 +665,18 @@ struct ServerConfigInfo: Codable {
         let hosts: [String: HostInfo]?
         /// Additive 2026-10-29; a `var` so the memberwise shape stays as it was.
         var ui: UI? = nil
+        /// The experiments switched on or off by choice (additive 2026-11-20).
+        var experimental: [String: Bool]? = nil
+    }
+
+    /// What the app keeps of this read (`ServerClientSettings`).
+    struct ClientSettings: Equatable, Sendable {
+        var showWalnutAdditions = false
+        var experimental: [String: Bool] = [:]
+    }
+
+    var clientSettings: ClientSettings {
+        ClientSettings(showWalnutAdditions: showWalnutAdditions, experimental: config.experimental ?? [:])
     }
 
     /// The server's `ui.show_walnut_additions`; false when it does not say (an

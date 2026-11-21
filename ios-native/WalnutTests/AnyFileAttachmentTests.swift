@@ -1004,7 +1004,7 @@ final class AnyFileAttachmentTests: XCTestCase {
         XCTAssertEqual(sent.filePaths, ["/host/uploads/\(file.id)/spec.pdf"])
         let text = ComposerFile.messageText("what is this?", imagePaths: sent.imagePaths, paths: sent.filePaths)
         XCTAssertTrue(text.hasPrefix(ComposerFile.imagesHeaderLine), "the picture lane's own header")
-        let parts = try XCTUnwrap(MessageRow.attachmentSendParts(text))
+        let parts = try XCTUnwrap(AttachmentHeaders.split(text))
         XCTAssertEqual(parts.imagePaths, sent.imagePaths, "drawn as a picture")
         XCTAssertEqual(parts.filePaths, sent.filePaths)
         XCTAssertEqual(parts.text, "what is this?")
@@ -1088,7 +1088,7 @@ final class AnyFileAttachmentTests: XCTestCase {
     func testACopyFailureNoteIsTakenOffThePathAndKept() throws {
         let text = ComposerFile.headerLine + "\n- /mac/uploads/up-1/server (1).log (could not be copied to this host: "
             + "the host is offline)\n- /mac/uploads/up-2/spec.pdf\n\nread these"
-        let parts = try XCTUnwrap(MessageRow.attachmentSendParts(text))
+        let parts = try XCTUnwrap(AttachmentHeaders.split(text))
         XCTAssertEqual(parts.filePaths, ["/mac/uploads/up-1/server (1).log", "/mac/uploads/up-2/spec.pdf"])
         XCTAssertEqual(parts.copyFailures, ["/mac/uploads/up-1/server (1).log": "the host is offline"])
         XCTAssertEqual(parts.text, "read these")

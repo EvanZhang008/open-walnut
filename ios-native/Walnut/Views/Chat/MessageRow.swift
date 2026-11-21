@@ -99,46 +99,12 @@ struct MessageRow: View {
         }
     }
 
-    /// Server-augmented image send, as it comes back in the TRANSCRIPT. Two
-    /// wire formats (keep in sync with their emitters):
-    ///  - "[Images attached — use the Read tool to view them]\n- /path.png\n\n<text>"
-    ///    (src/web/routes/session-chat.ts + session-stream-v1.ts)
-    ///  - "The user attached N images. Read these files for visual context:\n/path.png\n\n<text>"
-    ///    (src/web/routes/images.ts buildSessionImageContext — older sends)
-    /// Rendered raw these were machine-y text bubbles and NO image ever
-    /// mounted — the whole reason historical image sends looked blank on the
-    /// phone. Parse the path list into remote image views (they ride
-    /// /api/v1/media with the session scope) + the human's own text.
-    /// Non-image sends (nil here) render unchanged.
-    private var imageSendParts: (paths: [String], text: String)? {
-        Self.imageSendParts(message.text)
-    }
-
-    /// Pure parse of the two wire formats above. `internal` (not private) so
-    /// WalnutTests can exercise the real logic instead of a copied replica.
+    /// The pictures a sent message carries and the words after its blocks
+    /// (`AttachmentHeaders.split`, which reads both picture forms the server
+    /// writes), nil when it carries none.
     nonisolated static func imageSendParts(_ text: String) -> (paths: [String], text: String)? {
-        let dashed = text.hasPrefix("[Images attached")
-        let bare = text.hasPrefix("The user attached")
-            && text.contains("for visual context:")
-        guard dashed || bare else { return nil }
-        let lines = text.components(separatedBy: "\n")
-        var paths: [String] = []
-        var bodyStart = lines.count
-        for (i, line) in lines.enumerated() where i > 0 {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let candidate = trimmed.hasPrefix("- ") ? String(trimmed.dropFirst(2)) : trimmed
-            if candidate.hasPrefix("/"), MarkdownParser.isImagePath(candidate) {
-                paths.append(candidate)
-                continue
-            }
-            if trimmed.isEmpty { bodyStart = i + 1; break }
-            // Unexpected line inside the header — not the known format; bail.
-            return nil
-        }
-        guard !paths.isEmpty else { return nil }
-        let body = lines[min(bodyStart, lines.count)...].joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (paths, body)
+        guard let parts = AttachmentHeaders.split(text), !parts.imagePaths.isEmpty else { return nil }
+        return (parts.imagePaths, parts.text)
     }
 
     /// Render cap for a user bubble (audit MAIN-10): the optimistic bubble
@@ -157,14 +123,16 @@ struct MessageRow: View {
     /// crushed CJK legibility in dark mode.
     private var userBubble: some View {
         let failed = message.failed == true
-        let imageSend = imageSendParts
-        let displayText = Self.clipBubbleText(imageSend?.text ?? message.text)
+        // Every header Walnut writes (pictures, files, a recorded video's stills
+        // and narration) comes off the words; the pictures are drawn as pictures.
+        let sent = AttachmentHeaders.split(message.text)
+        let displayText = Self.clipBubbleText(sent?.text ?? message.text)
         return VStack(alignment: .trailing, spacing: 4) {
             if let images = message.localImages, !images.isEmpty {
                 attachedImages(images, dimmed: message.pending == true)
             }
-            if let imageSend {
-                remoteImages(imageSend.paths)
+            if let sent, !sent.imagePaths.isEmpty {
+                remoteImages(sent.imagePaths)
             }
             if !displayText.isEmpty {
                 HStack {

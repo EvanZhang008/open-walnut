@@ -132,8 +132,11 @@ struct TimelineFileChip: Hashable, Sendable {
 
     /// An attachment still on this phone (pending, uploading, or not sent).
     /// `failedHere`: this file's upload is the one that ended the last attempt.
+    /// `stillFailed`: a recorded video whose still's upload ended it (its stills
+    /// have no card of their own, so the video's says so and offers Retry).
+    /// `caption`: a recorded video's "8 stills · narration", shown once it is not uploading.
     static func local(_ file: ComposerFile, held: Int64?, pending: Bool, failed: Bool,
-                      failedHere: Bool = false) -> TimelineFileChip {
+                      failedHere: Bool = false, stillFailed: Bool = false, caption: String? = nil) -> TimelineFileChip {
         let size = ComposerFile.sizeLabel(file.size)
         let fraction = file.size > 0 ? Double(held ?? 0) / Double(file.size) : (held != nil ? 1 : 0)
         let uploading = pending && !failed
@@ -143,9 +146,11 @@ struct TimelineFileChip: Hashable, Sendable {
             detail = "Uploading \(Int(fraction * 100))% · \(size)"
         } else if uploading, held == nil {
             detail = "Waiting to upload · \(size)"
+        } else if failed, stillFailed {
+            detail = "A still did not upload · \(size)"
         } else if onHost {
             // On the host; the message naming it has not gone yet.
-            detail = "Uploaded · \(size)"
+            detail = "Uploaded · \(size)" + (caption.map { " · \($0)" } ?? "")
         } else if failed, failedHere, let held, held > 0 {
             detail = "Upload failed at \(Int(fraction * 100))% · \(size)"
         } else if failed, failedHere {
@@ -155,22 +160,24 @@ struct TimelineFileChip: Hashable, Sendable {
         } else if failed {
             detail = "Not uploaded · \(size)"
         } else {
-            detail = "\(kindLabel(file.kind, name: file.name)) · \(size)"
+            detail = "\(kindLabel(file.kind, name: file.name)) · \(size)" + (caption.map { " · \($0)" } ?? "")
         }
         return TimelineFileChip(
             name: file.name, detail: detail, symbol: file.symbol,
             progress: uploading ? min(1, max(0, fraction)) : nil, path: nil,
-            fileID: file.id, offersActions: failed && !onHost,
-            uploadFailed: failed && failedHere && !onHost
+            fileID: file.id, offersActions: failed && (!onHost || stillFailed),
+            uploadFailed: failed && ((failedHere && !onHost) || stillFailed)
         )
     }
 
     /// A file the transcript names by its path on the host. `copyFailure`: the
-    /// server could not copy it there, and why.
-    static func sent(path: String, copyFailure: String? = nil) -> TimelineFileChip {
+    /// server could not copy it there, and why. `caption`: a recorded video's
+    /// "8 stills · narration" (its blocks are not drawn as text).
+    static func sent(path: String, copyFailure: String? = nil, caption: String? = nil) -> TimelineFileChip {
         let name = (path as NSString).lastPathComponent
         let kind = ComposerFile.kind(for: nil, name: name)
-        let detail = copyFailure.map { "Not copied to the host: \($0)" } ?? kindLabel(kind, name: name)
+        let detail = copyFailure.map { "Not copied to the host: \($0)" }
+            ?? kindLabel(kind, name: name) + (caption.map { " · \($0)" } ?? "")
         return TimelineFileChip(name: name, detail: detail,
                                 symbol: copyFailure != nil ? failedSymbol : ComposerFile.symbol(for: kind),
                                 progress: nil, path: path, copyFailure: copyFailure)
@@ -300,67 +307,5 @@ struct TimelineFileChipView: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(failed ? Theme.danger.opacity(0.5) : Color(.separator).opacity(0.4)))
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-}
-
-// MARK: - The sent text
-
-extension MessageRow {
-    /// A sent message's attachment headers, read back: the server's
-    /// "[Images attached …]" and the phone's "[Files attached …]"
-    /// (`ComposerFile.headerLine`), in either order, each with its `- /path`
-    /// lines, then the person's words. nil when the text carries neither.
-    /// `copyFailures`: why each file path the server noted could not be copied
-    /// to the session's host (`ComposerFile.copyFailedNote`), the path itself
-    /// without the note.
-    nonisolated static func attachmentSendParts(_ text: String)
-        -> (imagePaths: [String], filePaths: [String], text: String, copyFailures: [String: String])? {
-        var rest = text
-        var images: [String] = []
-        var files: [String] = []
-        var failures: [String: String] = [:]
-        for _ in 0..<2 {
-            if images.isEmpty, let parts = imageSendParts(rest) {
-                images = parts.paths
-                rest = parts.text
-            } else if files.isEmpty, let parts = fileSendParts(rest) {
-                files = parts.paths
-                failures = parts.copyFailures
-                rest = parts.text
-            } else {
-                break
-            }
-        }
-        guard !images.isEmpty || !files.isEmpty else { return nil }
-        return (images, files, rest, failures)
-    }
-
-    /// The "[Files attached …]" header alone. Each path comes without the note
-    /// the server adds to one it could not copy to the host; the notes are in
-    /// `copyFailures`, by path.
-    nonisolated static func fileSendParts(_ text: String) -> (paths: [String], text: String, copyFailures: [String: String])? {
-        guard text.hasPrefix("[Files attached") else { return nil }
-        let lines = text.components(separatedBy: "\n")
-        guard lines.first?.hasSuffix("]") == true else { return nil }
-        var paths: [String] = []
-        var failures: [String: String] = [:]
-        var bodyStart = lines.count
-        for (i, line) in lines.enumerated() where i > 0 {
-            if line.hasPrefix("- /") {
-                let sent = ComposerFile.sentLine(String(line.dropFirst(2)))
-                paths.append(sent.path)
-                if let why = sent.copyFailure { failures[sent.path] = why }
-                continue
-            }
-            if line.trimmingCharacters(in: .whitespaces).isEmpty { bodyStart = i + 1; break }
-            // The transcript's clip ("…") can end inside a path's line marker: the
-            // paths before it are the send, the rest was cut.
-            if i == lines.count - 1, line.hasSuffix("\u{2026}"), line.count <= 4 { break }
-            return nil
-        }
-        guard !paths.isEmpty else { return nil }
-        let body = lines[min(bodyStart, lines.count)...].joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (paths, body, failures)
     }
 }

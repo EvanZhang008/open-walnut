@@ -21,6 +21,9 @@ enum PendingFileSends {
         let size: Int64
         let sha256: String
         let kind: String
+        /// A camera video's or still's role (`ComposerFile.ClipRole`); absent in
+        /// older records and for every other file.
+        var clip: ComposerFile.ClipRole? = nil
     }
 
     struct Entry: Codable, Equatable {
@@ -245,14 +248,41 @@ enum PendingFileSends {
     }
 
     static func ref(_ file: ComposerFile) -> FileRef {
-        FileRef(id: file.id, name: file.name, size: file.size, sha256: file.sha256, kind: file.kind.rawValue)
+        FileRef(id: file.id, name: file.name, size: file.size, sha256: file.sha256, kind: file.kind.rawValue, clip: file.clip)
     }
 
     /// The app's copy of a kept file, and whether it is still there whole.
     static func file(_ ref: FileRef) -> (file: ComposerFile, present: Bool) {
         let url = ComposerFileStore.root.appendingPathComponent(ref.id, isDirectory: true).appendingPathComponent(ref.name)
         let file = ComposerFile(id: ref.id, name: ref.name, size: ref.size, sha256: ref.sha256,
-                                kind: ComposerFile.Kind(rawValue: ref.kind) ?? .other, localURL: url)
+                                kind: ComposerFile.Kind(rawValue: ref.kind) ?? .other, localURL: url, clip: ref.clip)
         return (file, (try? ComposerFileStore.fileSize(url)) == ref.size)
+    }
+}
+
+extension ChatMessage {
+    /// What taking one file off a failed send leaves (`removeFailedFile`).
+    enum FileRemoval {
+        /// Nothing at all would be left: the send is discarded.
+        case discard
+        /// `gone` came off (a recorded video with its stills); `rest` stays.
+        case removed(gone: [ComposerFile], rest: [ComposerFile])
+    }
+
+    /// Take one file, a recorded video with its stills, off this failed send (its
+    /// card's Remove), with its upload marks. nil when the send has not failed or
+    /// holds no such file. The store drops the copies, updates its kept record and
+    /// sends the rest again (`ChatStore.removeFile`, `SessionConversationStore.removeFile`).
+    mutating func removeFailedFile(_ fileID: String) -> FileRemoval? {
+        guard failed == true, let files = localFiles, files.contains(where: { $0.id == fileID }) else { return nil }
+        let goneIDs = ComposerFile.idsWithStills(of: fileID, in: files)
+        let rest = files.filter { !goneIDs.contains($0.id) }
+        if rest.isEmpty, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (localImages ?? []).isEmpty {
+            return .discard
+        }
+        for id in goneIDs { uploadHeld?[id] = nil }
+        localFiles = rest.isEmpty ? nil : rest
+        if let failedID = uploadFailedID, goneIDs.contains(failedID) { uploadFailedID = nil }
+        return .removed(gone: files.filter { goneIDs.contains($0.id) }, rest: rest)
     }
 }

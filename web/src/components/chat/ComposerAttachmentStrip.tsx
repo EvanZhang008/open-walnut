@@ -7,6 +7,7 @@
 import { FileCard } from '@/components/common/FileCard';
 import { type ComposerAttachment, type ComposerAttachments } from '@/components/common/composer-attachments';
 import { formatBytes } from '@/api/file-upload';
+import { clipDetail } from '@/components/common/composer-clip';
 import { isConnectionReason } from '@/api/upload-retry';
 import '@/styles/attachments.css';
 
@@ -24,6 +25,8 @@ function fileDetail(a: ComposerAttachment): string {
   const limit = a.limit ? `${a.limit} · ` : '';
   if (a.status === 'preparing') return `${limit}Waiting · ${size}`;
   if (a.status === 'uploading') return `${limit}${percent(a)}% of ${size}`;
+  // A video from the chat's camera says what goes with it to the AI.
+  if (a.clip) return `${clipDetail(a.clip)} · ${size}`;
   return `${limit}${a.converted ? `${size} · Converted to JPEG` : size}`;
 }
 

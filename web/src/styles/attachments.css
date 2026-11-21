@@ -217,6 +217,21 @@ button.file-card-open:focus-visible { outline: 2px solid var(--accent); outline-
 .message-attachment-images { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
 .message-attachments .file-card { width: 260px; }
 .message-attachment-image-item { display: block; }
+/* A recorded video: its card, the stills the AI read, and what was said in it. */
+.message-attachment-clip { display: flex; flex-direction: column; gap: 4px; max-width: 260px; }
+.message-attachment-stills { display: flex; flex-wrap: wrap; gap: 4px; }
+.message-attachment-still {
+  width: 56px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  cursor: zoom-in;
+}
+.message-attachment-said { font-size: 12px; color: var(--fg-muted); }
+.message-attachment-said summary { cursor: pointer; }
+.message-attachment-said p { margin: 4px 0 0; color: var(--fg); white-space: pre-wrap; }
 .message-attachment-image {
   display: block;
   max-width: 220px;

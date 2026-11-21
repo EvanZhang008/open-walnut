@@ -1846,7 +1846,7 @@ final class ChatStore {
         let images = (bubble.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
         fileSendsHandingOver.insert(bubbleID)
         let outcome = await handOverFileSend(
-            ComposerFile.messageText(bubble.text, paths: paths), images: images,
+            ComposerFile.messageText(bubble.text, files: files, paths: paths), images: images,
             messageId: bubble.clientMessageId, bubbleID: bubbleID, createdAt: bubble.createdAt, at: idx
         )
         fileSendsHandingOver.remove(bubbleID)
@@ -2122,19 +2122,16 @@ final class ChatStore {
     func removeFile(_ fileID: String, from message: ChatMessage) async {
         guard message.failed == true,
               let idx = messages.firstIndex(where: { $0.id == message.id }),
-              let files = messages[idx].localFiles,
-              let file = files.first(where: { $0.id == fileID }) else { return }
-        let rest = files.filter { $0.id != fileID }
-        if rest.isEmpty, messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           (messages[idx].localImages ?? []).isEmpty {
+              let removal = messages[idx].removeFailedFile(fileID) else { return }
+        // A recorded video goes with its stills.
+        guard case .removed(let gone, let rest) = removal else {
             discardFailed(messages[idx])
             return
         }
-        forgetUpload(file)
-        messages[idx].localFiles = rest.isEmpty ? nil : rest
-        messages[idx].uploadHeld?[fileID] = nil
-        fileSendHeld[message.id]?[fileID] = nil
-        if messages[idx].uploadFailedID == fileID { messages[idx].uploadFailedID = nil }
+        for file in gone {
+            forgetUpload(file)
+            fileSendHeld[message.id]?[file.id] = nil
+        }
         if let key = fileSendKeys[message.id] {
             if rest.isEmpty {
                 // Words or photos only: an ordinary failed message now.

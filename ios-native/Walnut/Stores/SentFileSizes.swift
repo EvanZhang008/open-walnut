@@ -84,7 +84,7 @@ final class SentFileSizes {
     static func sentFilePaths(in messages: [ChatMessage]) -> [String] {
         var out: [String] = []
         for message in messages where message.isUser && message.text.hasPrefix("[") {
-            guard let parts = MessageRow.attachmentSendParts(message.text) else { continue }
+            guard let parts = AttachmentHeaders.split(message.text) else { continue }
             for path in parts.filePaths where !MarkdownParser.isImagePath(path)
                 && parts.copyFailures[path] == nil && !out.contains(path) {
                 out.append(path)

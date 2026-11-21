@@ -10,6 +10,7 @@ import type { SlashCommandItem } from '@/api/slash-commands';
 import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
 import { DrawingPad } from './DrawingPad';
+import { ComposerCamera, CameraMenuRow, useComposerCamera } from './camera/ComposerCamera';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
@@ -40,9 +41,10 @@ import { keepCommandFirst } from './leading-command';
 import { placePrefill, type PrefillMode } from './prefill-place';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 import { IMAGE_ACCEPT, MAX_IMAGES, pastedImageFiles } from '@/components/common/image-attachments';
-import { keptAttachmentsKey, parseSavedAttachments, savedAttachments, sentFilePaths, sentImages, useComposerAttachments, type ComposerAttachment } from '@/components/common/composer-attachments';
+import { keptAttachmentsKey, parseSavedAttachments, savedAttachments, sentImages, useComposerAttachments, type ComposerAttachment } from '@/components/common/composer-attachments';
 import { ComposerAttachmentStrip } from './ComposerAttachmentStrip';
-import { MAX_FILES, withFilePaths, type UploadTarget } from '@/api/file-upload';
+import { MAX_FILES, type UploadTarget } from '@/api/file-upload';
+import { withAttachmentText } from '@/components/common/composer-clip';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
@@ -1032,10 +1034,11 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     // run an updater twice, and a read started there attached every picture twice.
     // A picked file is an edit of the draft: a failed send's words no longer own it.
     if (Array.from(files).length) draftSaveMark(draftKeyRef.current);
-    void attachments.add(files).then((notice) => {
+    return attachments.add(files).then((notice) => {
       clearTimeout(attachNoticeTimer.current);
       setAttachNotice(notice);
       if (notice) attachNoticeTimer.current = setTimeout(() => setAttachNotice(null), 8000);
+      return notice;
     });
   }, [attachments.add]);
 
@@ -1141,7 +1144,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
   ) => {
     const imgs = sentImages(sent);
     // The files go as words: the header naming where each one was saved.
-    const message = withFilePaths(text, sentFilePaths(sent));
+    const message = withAttachmentText(text, sent);
     recallRef.current = null;
     setRecallShown(null);
     // Recall offers it once the send is accepted (a refused one comes back to the box).
@@ -1887,6 +1890,27 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     fileInputRef.current?.click();
   };
 
+  // The chat's camera (experiment camera_capture): a panel above the box, or the
+  // phone's own camera where this page cannot open one (plain http).
+  const handleSendRef = useRef<() => void>(() => {});
+  const camera = useComposerCamera({
+    light: !!light,
+    resetKey: `${draftKey ?? ''}\u0000${sessionMentionSelfId ?? ''}`,
+    acceptsFiles,
+    attachments,
+    processFiles,
+    setNotice: (notice) => {
+      clearTimeout(attachNoticeTimer.current);
+      setAttachNotice(notice);
+      if (notice) attachNoticeTimer.current = setTimeout(() => setAttachNotice(null), 8000);
+    },
+    send: () => requestAnimationFrame(() => handleSendRef.current()),
+    pickFile: () => fileInputRef.current?.click(),
+    micBusy: () => !!micControlRef.current?.busy?.(),
+    closeMenu: () => setPlusOpen(false),
+    focusBox: () => textareaRef.current?.focus(),
+  });
+
   // setRangeText updates the caret before the input event detects the inserted shortcut.
   const insertShortcut = (trigger: string, opts?: { skills?: boolean }) => {
     setPlusOpen(false);
@@ -1964,6 +1988,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
   useEffect(() => { setSendWhenReady(false); splitSendRef.current = false; }, [draftKey]);
   // A plain send is never a split one (a split send waiting on its words is cancelled by it).
   const handleSend = () => { splitSendRef.current = false; sendGate.send(); };
+  handleSendRef.current = handleSend;
   const handleInterruptSend = () => { splitSendRef.current = false; interruptGate.send(); };
 
   const handleStop = () => {
@@ -2114,6 +2139,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       {/* Composer card (D6): ONE bordered card holding everything —
           text row on top; controls row below: [+] · slot (Bypass/btw/Note) ·
           spacer · mic · send. Mic stays next to send. */}
+      <ComposerCamera camera={camera} />
       <div className="chat-input-row">
         <div className="chat-input-box" data-mic-bubble-anchor="" data-light={light ? 'true' : undefined}>
           {noteSlot}
@@ -2198,6 +2224,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                 </svg>
                 <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
               </button>
+              <CameraMenuRow camera={camera} disabled={atAttachLimit || !!disabled} />
               <button className="chat-plus-menu-item" type="button" role="menuitem" disabled={atAttachLimit} onClick={() => { setPlusOpen(false); setDrawingOpen(true); }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="m16 3 5 5-12 12H4v-5L16 3Z" /><path d="m14 5 5 5" />
@@ -2380,7 +2407,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
           onDraft={(text) => writeDictation(text, true)}
           onRefine={refineDictation}
           controlRef={micControlRef}
-          disabled={disabled}
+          disabled={disabled || camera.micHeld}
           // A light box (one of many: an ask card's) is the Voice panel's Insert target only once
           // it is focused; the page's own composer stays the target on mount.
           {...(light ? { insertBox: () => textareaRef.current } : {})}

@@ -337,24 +337,30 @@ final class WalnutAddedTests: XCTestCase {
         let suite = "walnut-added-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        var answer: Result<Bool, Error> = .success(true)
+        var answer: Result<ServerConfigInfo.ClientSettings, Error> =
+            .success(.init(showWalnutAdditions: true, experimental: ["camera_capture": true]))
         var server = "http://a.example"
-        let setting = WalnutAdditionsSetting(defaults: defaults, fetch: { try answer.get() },
-                                             currentServer: { server })
+        let setting = ServerClientSettings(defaults: defaults, fetch: { try answer.get() },
+                                           currentServer: { server })
         XCTAssertFalse(setting.showAll, "off until the server says otherwise")
+        XCTAssertFalse(setting.isOn("camera_capture"), "an experiment is off until the server says otherwise")
         await setting.refresh()
         XCTAssertTrue(setting.showAll)
+        XCTAssertTrue(setting.isOn("camera_capture"))
+        XCTAssertFalse(setting.isOn("drawing_narration"), "an id the server does not name is off")
         // A failed read keeps what it had.
         answer = .failure(URLError(.notConnectedToInternet))
         await setting.refresh()
         XCTAssertTrue(setting.showAll)
         // A relaunch draws it as chosen before the read answers.
-        let relaunched = WalnutAdditionsSetting(defaults: defaults, fetch: { throw URLError(.timedOut) },
-                                                currentServer: { server })
+        let relaunched = ServerClientSettings(defaults: defaults, fetch: { throw URLError(.timedOut) },
+                                              currentServer: { server })
         XCTAssertTrue(relaunched.showAll)
+        XCTAssertTrue(relaunched.isOn("camera_capture"), "a relaunch keeps the experiments too")
         // Paired with another server: its choice is not this one's.
         server = "http://b.example"
         await relaunched.refreshIfStale()
         XCTAssertFalse(relaunched.showAll)
+        XCTAssertFalse(relaunched.isOn("camera_capture"))
     }
 }

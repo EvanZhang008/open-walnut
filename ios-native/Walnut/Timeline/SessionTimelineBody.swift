@@ -141,7 +141,7 @@ struct SessionTimelineBody: View {
                 afterLiveMessageIDs: store.afterLiveMessageIDs,
                 // The server's "always show what Walnut added"; off, each bubble's
                 // long-press item shows it for that message (TimelineTurnFold).
-                showWalnutAdditions: WalnutAdditionsSetting.shared.showAll,
+                showWalnutAdditions: ServerClientSettings.shared.showAll,
                 showMessageAbout: showMessageAbout,
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
@@ -242,7 +242,7 @@ struct SessionTimelineBody: View {
                 .presentationDragIndicator(.visible)
         }
         .letterReaderSheet($openedLetter)
-        .task { await WalnutAdditionsSetting.shared.refreshIfStale() }
+        .task { await ServerClientSettings.shared.refreshIfStale() }
         // The sizes of the files the messages name, for their cards, from the
         // session's host.
         .task(id: sentFilePaths) { await SentFileSizes.shared.request(sentFilePaths, host: previewHost) }

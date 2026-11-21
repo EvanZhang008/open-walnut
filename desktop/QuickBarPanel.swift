@@ -317,12 +317,12 @@ final class QuickBarPanel: NSObject {
 }
 
 extension QuickBarPanel: WKUIDelegate {
-    /// The microphone, for Walnut's own page only, as the main window grants it.
+    /// The microphone and the camera, for Walnut's own page only, as the main window grants them.
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                  initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         let local = origin.host == "localhost" || origin.host == "127.0.0.1"
-        decisionHandler(local && origin.port == (loadedPort ?? 3456) && type == .microphone ? .grant : .deny)
+        decisionHandler(local && origin.port == (loadedPort ?? 3456) && captureGranted(type, frame: frame) ? .grant : .deny)
     }
 
     /// The bar's attach button: pictures from a file. The chooser takes the keyboard, so the bar

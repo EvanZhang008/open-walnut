@@ -96,6 +96,10 @@ const SAID_WHEN_HIT: Record<string, string> = {
     'the 11th file, refused, said in the notice of that attach',
   'components/common/composer-attachments.ts|if (file.size > MAX_FILE_BYTES) { left.push(`${original.name} is over ${formatBytes(MAX_FILE_BYTES)}`); continue; }':
     'a file over the size, refused, said in the notice of that attach',
+  'components/common/composer-attachments.ts|if (files >= MAX_FILES) return `Only ${MAX_FILES} files fit in one message`;':
+    'a camera video past the file count, refused, said in the notice of that attach',
+  'components/common/composer-attachments.ts|if (video.size > MAX_FILE_BYTES) return `${video.name} is over ${formatBytes(MAX_FILE_BYTES)}`;':
+    'a camera video over the size, refused, said in the notice of that attach',
   'components/common/composer-attachments.ts|if (picture) return `Over ${MAX_IMAGES} pictures, sent as a file`;':
     'pictureLimitHit: on the card of the picture past the count',
   'components/common/composer-attachments.ts|if (isPictureFile(file) && file.size > MAX_IMAGE_BYTES) return `Over ${formatBytes(MAX_IMAGE_BYTES)}, sent as a file`;':

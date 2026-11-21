@@ -16,6 +16,8 @@
  * when it resolves (symlinks followed) inside Walnut's own upload folders:
  * `<state>/uploads`, `<state>/tasks/<task>/uploads` and the pastes folder. The
  * header is what the person meant to send; the folders are what may be sent.
+ * A video from the chat's camera adds its stills under `[Video stills …]`
+ * (shipped as files) and its words under `[Video narration …]` (words, not paths).
  * Paths under `[Images attached …]` take the picture lane (fs.write) instead,
  * whatever folder they are in, so they are never listed here.
  *
@@ -34,6 +36,7 @@ import { UPLOAD_CHUNK_BYTES, UPLOAD_ID_RE, isUploadName } from '../core/sessions
 import { MAX_UPLOAD_FRAME_BYTES } from './ssh-upload-budget.js'
 import { localTaskDirRoot } from '../core/sessions/task-dir-place.js'
 import { isTaskDirId } from '../lib/task-dir.js'
+import { readAttachmentBlocks, type HeaderBlockKind } from '../lib/attachment-headers.js'
 
 /** The daemon capability that takes `upload.part` (daemon-capabilities.ts). */
 export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'
@@ -57,45 +60,16 @@ const MAX_RESUMES = 8
  */
 export const SHIP_FAILED_NOTE = ' (could not be copied to this host: '
 
-/** A header line that opens a block of `- <path>` lines at the top of a message. */
-const HEADER_RE = /^\[(Images|Files|Large text) attached[^\]]*\]$/
+export type AttachmentKind = HeaderBlockKind
 
-/** How many header blocks the top of a message may hold (pictures, files, a paste). */
-const MAX_BLOCKS = 4
-
-export type AttachmentKind = 'images' | 'files' | 'paste'
-
-interface HeaderBlocks {
-  blocks: Array<{ kind: AttachmentKind; paths: string[] }>
-  /** The first line after the last block's path list. */
-  end: number
-}
-
-function headerBlocks(lines: string[]): HeaderBlocks {
-  const blocks: HeaderBlocks['blocks'] = []
-  let i = 0
-  let end = 0
-  while (blocks.length < MAX_BLOCKS && i < lines.length) {
-    const m = HEADER_RE.exec(lines[i].replace(/\r$/, ''))
-    if (!m) break
-    i++
-    const paths: string[] = []
-    while (i < lines.length && lines[i].startsWith('- ')) paths.push(lines[i++].slice(2).replace(/\r$/, ''))
-    blocks.push({ kind: m[1] === 'Images' ? 'images' : m[1] === 'Files' ? 'files' : 'paste', paths })
-    end = i
-    if (i < lines.length && lines[i].replace(/\r$/, '') === '') i++
-  }
-  return { blocks, end }
-}
-
-/** The header blocks at the top of `text`, in order, each with its listed paths. */
+/** The header blocks at the top of `text`, in order, each with its listed paths (lib/attachment-headers.ts, the one reader). */
 export function attachmentBlocks(text: string): Array<{ kind: AttachmentKind; paths: string[] }> {
-  return headerBlocks(text.split('\n')).blocks
+  return readAttachmentBlocks(text.split('\n'), { paste: true }).blocks.map(({ kind, paths }) => ({ kind, paths }))
 }
 
 /** Every path listed under a files or paste header: these take the chunked lane, never the picture one. */
 export function attachedFilePaths(text: string): Set<string> {
-  return new Set(attachmentBlocks(text).filter((b) => b.kind !== 'images').flatMap((b) => b.paths))
+  return new Set(attachmentBlocks(text).filter((b) => b.kind !== 'images' && b.kind !== 'narration').flatMap((b) => b.paths))
 }
 
 /** Where Walnut keeps the files it may ship (see the top of this file). */
@@ -281,13 +255,16 @@ function noteReason(reason: string): string {
 export function rewriteShipped(text: string, shipped: Map<string, string>, failed: Map<string, string> = new Map()): string {
   if (shipped.size === 0 && failed.size === 0) return text
   const lines = text.split('\n')
-  const { end } = headerBlocks(lines)
-  for (let i = 0; i < end; i++) {
+  // A video's words are never a path, even when they start with "/".
+  const pathLines = readAttachmentBlocks(lines, { paste: true }).blocks
+    .filter((b) => b.kind !== 'narration')
+    .flatMap((b) => b.paths.map((_, k) => b.first + k))
+  for (const i of pathLines) {
     const raw = lines[i]
     const cr = raw.endsWith('\r') ? '\r' : ''
     const line = cr ? raw.slice(0, -1) : raw
     if (!line.startsWith('- /')) continue
-    const local = line.slice(2)
+    const local = line.slice(2).trim()
     const remote = shipped.get(local)
     const reason = failed.get(local)
     if (remote) lines[i] = `- ${remote}${cr}`

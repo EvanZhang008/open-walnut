@@ -22,6 +22,7 @@ import {
 import { heicToJpeg, isHeicFile } from '@/utils/heic-to-jpeg';
 import { KEPT_ATTACHMENTS_PREFIX } from '@/utils/kept-attachments-key';
 import { IMAGE_TYPES, MAX_IMAGES, readImageFile } from './image-attachments';
+import { type ClipInfo, clipStillsUploaded, uploadClipStills } from './composer-clip';
 
 /** A picture the images folder takes (its upload route refuses more: 10M base64 characters). */
 export const MAX_IMAGE_BYTES = 7 * 1024 * 1024;
@@ -60,6 +61,8 @@ export interface ComposerAttachment {
   orphan?: boolean;
   /** A limit this attachment hit, said on it alone (a picture past the picture limits goes as a file). */
   limit?: string;
+  /** A video recorded with the chat's camera: its stills and words go with it (composer-clip.ts). */
+  clip?: ClipInfo;
 }
 
 /** What a kept attachment that was still uploading says when the box shows it again. */
@@ -71,12 +74,18 @@ interface Held {
   abort?: AbortController;
   uploadId: string;
   target?: UploadTarget;
+  /** A recorded video's stills, uploaded after the video to the same host. */
+  stills?: File[];
+  /** A recorded video already up (its path, and the host it went to) and its stills already up, by index: a retry sends only what is missing. */
+  clipUp?: { sessionId?: string; path?: string; stills: string[] };
 }
 
 export interface ComposerAttachments {
   items: ComposerAttachment[];
   /** Read, convert and start uploading; answers a sentence about anything it left out, or null. */
   add: (files: FileList | readonly File[]) => Promise<string | null>;
+  /** A video from the chat's camera, with its stills and words (one file in the limits). */
+  addClip: (video: File, stills: readonly File[], clip: Omit<ClipInfo, 'stills'>) => Promise<string | null>;
   retry: (id: string) => void;
   remove: (id: string) => void;
   /** Forget them all (a sent message); uploads in flight stop. */
@@ -201,8 +210,31 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
     const to = targetRef.current;
     if (!to) { fail(new Error('This box cannot take files')); return; }
     h.target = to;
-    uploadFile(h.file, to, { uploadId: h.uploadId, name: item.name, signal: abort.signal, onProgress, onWaiting })
-      .then((path) => done({ path }), fail);
+    if (!item.clip || !h.stills?.length) {
+      uploadFile(h.file, to, { uploadId: h.uploadId, name: item.name, signal: abort.signal, onProgress, onWaiting })
+        .then((path) => done({ path }), fail);
+      return;
+    }
+    // A recorded video, then its stills: the card's progress counts both, and a
+    // retry sends only what did not get up (a still that failed, not the video again).
+    const stills = h.stills;
+    // By the session it goes to: a box hands a new target object on every render.
+    if (!h.clipUp || h.clipUp.sessionId !== to.sessionId) h.clipUp = { sessionId: to.sessionId, stills: [] };
+    const up = h.clipUp;
+    const scale = item.size / (item.size + stills.reduce((n, f) => n + f.size, 0));
+    const video = up.path
+      ? Promise.resolve(up.path)
+      : uploadFile(h.file, to, { uploadId: h.uploadId, name: item.name, signal: abort.signal, onProgress: (sent) => onProgress(Math.round(sent * scale)), onWaiting });
+    video
+      .then(async (path) => {
+        up.path = path;
+        const sent = await uploadClipStills(stills, to, {
+          signal: abort.signal, onWaiting, have: up.stills,
+          onBytes: (bytes) => onProgress(Math.round((h.file.size + bytes) * scale)),
+        });
+        return done({ path, clip: { ...item.clip!, stills: sent } });
+      })
+      .catch(fail);
   }, [patch, pump]);
   runRef.current = run;
 
@@ -283,6 +315,28 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
     return turn;
   }, [addNow]);
 
+  const addClip = useCallback((video: File, stills: readonly File[], clip: Omit<ClipInfo, 'stills'>): Promise<string | null> => {
+    const gen = generation.current;
+    const turn = adding.current.then((): string | null => {
+      if (gen !== generation.current) return null;
+      if (!targetRef.current) return 'This box takes pictures only: send the video from a session';
+      const files = [...held.current.values()].filter((h) => h.kind === 'file').length;
+      if (files >= MAX_FILES) return `Only ${MAX_FILES} files fit in one message`;
+      if (video.size > MAX_FILE_BYTES) return `${video.name} is over ${formatBytes(MAX_FILE_BYTES)}`;
+      const item: ComposerAttachment = {
+        id: nextId(), kind: 'file', name: safeUploadName(video.name || 'camera.webm'), size: video.size,
+        mediaType: video.type || 'video/webm', status: 'preparing', sent: 0,
+        clip: { ...clip, stills: stills.map((s) => ({ name: safeUploadName(s.name) })) },
+      };
+      held.current.set(item.id, { kind: 'file', file: video, uploadId: newUploadId(), stills: [...stills] });
+      setItems((curr) => [...curr, item]);
+      start(item);
+      return null;
+    });
+    adding.current = turn.catch(() => undefined);
+    return turn;
+  }, [start]);
+
   const retry = useCallback((id: string) => {
     const item = itemsRef.current.find((a) => a.id === id);
     const h = held.current.get(id);
@@ -342,12 +396,12 @@ export function useComposerAttachments(target: UploadTarget | null): ComposerAtt
   }, []);
 
   return useMemo(() => ({
-    items, add, retry, remove, clear, restore, fillImage,
+    items, add, addClip, retry, remove, clear, restore, fillImage,
     pending: items.filter((a) => a.status === 'preparing' || a.status === 'uploading').length + reading,
     failed: items.filter((a) => a.status === 'failed').length,
     imageCount: items.filter((a) => a.kind === 'image').length,
     fileCount: items.filter((a) => a.kind === 'file').length,
-  }), [items, add, retry, remove, clear, restore, fillImage, reading]);
+  }), [items, add, addClip, retry, remove, clear, restore, fillImage, reading]);
 }
 
 /** The pictures of a send, each named by its upload. */
@@ -367,7 +421,7 @@ export function sentFilePaths(items: readonly ComposerAttachment[]): string[] {
  */
 export function savedAttachments(items: readonly ComposerAttachment[]): ComposerAttachment[] {
   return items.flatMap((a): ComposerAttachment[] => {
-    const up = a.status === 'done' && (a.kind === 'file' ? !!a.path : !!a.image?.url);
+    const up = a.status === 'done' && (a.kind === 'file' ? !!a.path && clipStillsUploaded(a.clip) : !!a.image?.url);
     if (up) return [a.image ? { ...a, image: { ...a.image, data: '' } } : { ...a }];
     // Not up yet: kept by name only, so a reload says it is missing instead of
     // sending the words without it.

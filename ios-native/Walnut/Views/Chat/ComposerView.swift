@@ -235,6 +235,9 @@ struct ComposerBar: View {
     /// neither dismissal ever raises the other.
     @State private var showPhotoPicker = false
     @State private var showCamera = false
+    /// The composer's own camera (`camera_capture` experiment) for the cover
+    /// `showCamera` raises; nil: the system picker (`CameraPicker`), as before.
+    @State private var cameraModel: CameraCaptureModel?
     /// The `+` popover. A popover rather than a `Menu` because a context menu over the
     /// keyboard dropped the tapped row's action outright (see `plusButton`).
     @State private var showAttachmentMenu = false
@@ -726,15 +729,21 @@ struct ComposerBar: View {
         // gesture that dismisses it mid-shot). Both exits lower the flag and
         // NOTHING else touches the draft: a cancel returns to exactly the text and
         // attachments the user left, which is this composer's standing rule.
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker(
-                onCapture: { image in
-                    showCamera = false
-                    Task { await attachCaptured(image) }
-                },
-                onCancel: { showCamera = false }
-            )
-            .ignoresSafeArea()
+        .fullScreenCover(isPresented: $showCamera, onDismiss: { cameraModel = nil }) {
+            Group {
+                if let cameraModel {
+                    CameraCaptureView(model: cameraModel)
+                } else {
+                    CameraPicker(
+                        onCapture: { image in
+                            showCamera = false
+                            Task { await attachCaptured(image) }
+                        },
+                        onCancel: { showCamera = false }
+                    )
+                    .ignoresSafeArea()
+                }
+            }
             // A photo being taken (or taken and not yet used) is nowhere else: a push waits
             // until he uses or cancels it (2026-11-08 review, round 3).
             .holdsNavigation()
@@ -926,7 +935,9 @@ struct ComposerBar: View {
     /// No room for another attachment. Both sources are disabled at the ceiling
     /// rather than accepting an image the merge would then drop.
     private var atImageCeiling: Bool { selectedImages.count >= Self.maxImages }
-    private var atFileCeiling: Bool { selectedFiles.count + importingFiles >= ComposerFile.maxFiles }
+    private var atFileCeiling: Bool { ComposerFile.countedFiles(selectedFiles) + importingFiles >= ComposerFile.maxFiles }
+    /// The `camera_capture` experiment: `+` → Camera opens the composer's own camera.
+    private var cameraCaptureOn: Bool { ServerClientSettings.shared.isOn(CameraCaptureModel.experimentID) }
 
     /// The `+` menu's items, as their accessibility identifiers, in order.
     ///
@@ -993,7 +1004,7 @@ struct ComposerBar: View {
     ///
     /// Width is only half the fix. No width fits "Take Photo (5/5)" on one line at the
     /// largest accessibility size, so the row's visible text also wraps without a line
-    /// limit (see `attachmentSourceRow`).
+    /// limit (see `plusMenuRow`).
     static func attachmentMenuWidth(
         isAccessibilitySize: Bool, availableWidth: CGFloat
     ) -> CGFloat {
@@ -1225,10 +1236,12 @@ struct ComposerBar: View {
                         .accessibilityIdentifier("chat.imageRemove")
                     }
                 }
-                ForEach(selectedFiles) { file in
-                    ComposerFileCard(file: file) {
-                        drafts.setFiles(selectedFiles.filter { $0.id != file.id }, key: draftKey)
-                        ComposerFileStore.remove(file)
+                // A recorded video's stills are part of its card, and go with it.
+                ForEach(selectedFiles.filter { !$0.isStill }) { file in
+                    ComposerFileCard(file: file, caption: ComposerFile.clipCaption(for: file, in: selectedFiles)) {
+                        let kept = ComposerFile.removing(file.id, from: selectedFiles)
+                        for gone in selectedFiles where !kept.contains(gone) { ComposerFileStore.remove(gone) }
+                        drafts.setFiles(kept, key: draftKey)
                         // Room was made: what the last pick skipped no longer stands.
                         fileNotice = nil
                     }
@@ -1362,6 +1375,8 @@ struct ComposerBar: View {
     private var plusButton: some View {
         Button {
             showAttachmentMenu = true
+            // An experiment switched in Settings shows in this menu without a relaunch.
+            Task { await ServerClientSettings.shared.refreshIfStale() }
         } label: {
             Image(systemName: Symbol.plus)
                 .font(.system(size: 17, weight: .semibold))
@@ -1387,7 +1402,7 @@ struct ComposerBar: View {
     /// rule this view draws.
     private var attachmentMenu: some View {
         let items = Self.plusMenuItems(
-            cameraAvailable: CameraPicker.isAvailable,
+            cameraAvailable: cameraCaptureOn ? CameraSources.isAvailable : CameraPicker.isAvailable,
             hasHostProvenance: hostProvenance != nil,
             actionIDs: plusActions.map(\.id),
             acceptsFiles: acceptsFiles
@@ -1435,7 +1450,7 @@ struct ComposerBar: View {
             )
         case Self.filesItemID:
             plusMenuRow(
-                title: selectedFiles.isEmpty ? "Files" : "Files (\(selectedFiles.count)/\(ComposerFile.maxFiles))",
+                title: selectedFiles.isEmpty ? "Files" : "Files (\(ComposerFile.countedFiles(selectedFiles))/\(ComposerFile.maxFiles))",
                 icon: Symbol.files, identifier: item, enabled: !atFileCeiling,
                 action: openFileImporter
             )
@@ -1443,9 +1458,12 @@ struct ComposerBar: View {
             // Disabled at the five-image ceiling for the same reason the library item
             // is, and NAMED the same way: a greyed row with no number is a control
             // that refuses without saying why.
-            attachmentSourceRow(
-                title: Self.attachmentSourceLabel("Take Photo", attached: selectedImages.count),
-                icon: Symbol.camera, identifier: item, action: openCamera
+            // The composer's own camera also records, so it is open while a video still fits.
+            plusMenuRow(
+                title: Self.attachmentSourceLabel(cameraCaptureOn ? "Camera" : "Take Photo", attached: selectedImages.count),
+                icon: Symbol.camera, identifier: item,
+                enabled: !atImageCeiling || (cameraCaptureOn && acceptsFiles && !atFileCeiling),
+                action: openCamera
             )
         case Self.hostRowItemID:
             if let hostProvenance {
@@ -1461,14 +1479,6 @@ struct ComposerBar: View {
                 )
             }
         }
-    }
-
-    /// One tappable source row, sized and spaced like the system menu row it replaces
-    /// (a 44pt target: caption-height label plus 12pt above and below).
-    private func attachmentSourceRow(
-        title: String, icon: String, identifier: String, action: @escaping () -> Void
-    ) -> some View {
-        plusMenuRow(title: title, icon: icon, identifier: identifier, enabled: !atImageCeiling, action: action)
     }
 
     /// A `+` menu row: an image source, or one of the owner's actions.
@@ -1794,7 +1804,7 @@ struct ComposerBar: View {
         guard !text.isEmpty || !images.isEmpty || !files.isEmpty, importingFiles == 0 else { return }
         // A refused send's files come back on top of what was attached since
         // (`deliver`), so the draft can hold more than a message carries.
-        if let over = Self.overFileLimitNotice(files.count) {
+        if let over = Self.overFileLimitNotice(ComposerFile.countedFiles(files)) {
             fileNotice = over
             return
         }
@@ -1939,7 +1949,7 @@ struct ComposerBar: View {
     /// Copy each pick into the app's store (off the main actor), in order, up to
     /// the per-message ceiling, and name what was skipped.
     private func importFiles(_ sources: [FileSource]) async {
-        let room = max(0, ComposerFile.maxFiles - selectedFiles.count - importingFiles)
+        let room = max(0, ComposerFile.maxFiles - ComposerFile.countedFiles(selectedFiles) - importingFiles)
         let taking = Array(sources.prefix(room))
         var problems: [String] = []
         if sources.count > taking.count {
@@ -1982,12 +1992,16 @@ struct ComposerBar: View {
     /// Raise the camera, or explain why not. The permission question is asked
     /// HERE, once, from the pure rule; the picker owns the system prompt.
     private func openCamera() {
-        switch Self.cameraTapOutcome(
+        // The composer's own camera asks for access itself and explains a refusal
+        // on its own page (with Settings and another way to attach).
+        let custom = cameraCaptureOn
+        switch custom ? .present : Self.cameraTapOutcome(
             available: CameraPicker.isAvailable,
             authorization: AVCaptureDevice.authorizationStatus(for: .video)
         ) {
         case .present:
             cameraNotice = nil
+            cameraModel = custom ? CameraCaptureModel.forComposer(cameraHost) : nil
             // Put the keyboard away first: UIKit gives focus back to the field
             // that had it when the cover goes, and the keyboard came up again
             // over the tab bar after a cancel (gate r4, F12).
@@ -2001,6 +2015,21 @@ struct ComposerBar: View {
         case .notice(let text):
             cameraNotice = text
         }
+    }
+
+    /// This composer as its camera sees it (`CameraCaptureModel.forComposer`).
+    private var cameraHost: ComposerCameraHost {
+        ComposerCameraHost(
+            photoCount: { selectedImages.count },
+            files: { selectedFiles },
+            importing: { importingFiles },
+            setFiles: { drafts.setFiles($0, key: draftKey) },
+            addPhoto: { await attachCaptured($0) },
+            dismiss: { showCamera = false },
+            send: { send() },
+            pickFile: { if acceptsFiles { openFileImporter() } else { openPhotoPicker() } },
+            acceptsFiles: acceptsFiles
+        )
     }
 
     /// Decode + downscale + JPEG-encode picked items off the main actor, then
@@ -2073,7 +2102,9 @@ struct ComposerBar: View {
     /// Off the main actor for the encode (the note editor's capture path does the
     /// same): a full-resolution phone photo is a ~12MP raster and a JPEG encode of
     /// it on the main thread is a visible hitch right after the shutter.
-    private func attachCaptured(_ image: UIImage) async {
+    /// A captured photo into the selection; false when the merge refused it.
+    @discardableResult
+    private func attachCaptured(_ image: UIImage) async -> Bool {
         merge([await Self.prepareCapture(image)])
     }
 
@@ -2090,12 +2121,16 @@ struct ComposerBar: View {
     /// FULL (`loadUntilFull` stops there); `attach` counts the ones it has to refuse
     /// itself, and the notice names the sum. Both are the ceiling refusing a pick, so
     /// both belong in the same sentence.
-    private func merge(_ loaded: [SelectedImage.LoadResult], notLoaded: Int = 0) {
+    /// Answers whether the selection gained any of them.
+    @discardableResult
+    private func merge(_ loaded: [SelectedImage.LoadResult], notLoaded: Int = 0) -> Bool {
+        let before = selectedImages.count
         let outcome = Self.attach(loaded, to: selectedImages, notLoaded: notLoaded)
         drafts.setImages(outcome.images, key: draftKey)
         // Only ever SET: an empty result must not silently wipe a notice the user
         // has not read yet (they dismiss it themselves).
         if let notice = outcome.notice { imageNotice = notice }
+        return outcome.images.count > before
     }
 
     /// THE attachment rule, for every source: merge into `current` under the

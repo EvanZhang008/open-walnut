@@ -1,11 +1,16 @@
 import Foundation
 import Observation
 
-/// The paired server's `ui.show_walnut_additions` (`GET /api/v1/config`): whether the
-/// session chat shows what Walnut added to a person's message (its notes in front,
+/// What the paired server's `GET /api/v1/config` says about how this app draws:
+///
+/// - `ui.show_walnut_additions` (`showAll`): whether the session chat shows what Walnut added to a person's message (its notes in front,
 /// the context blocks it put first; no message hints since 2026-11-01) on every message. Off, the
 /// chat hides them and each bubble's long-press item shows them for that message
 /// (`TimelineTurnFold.Additions`), as the web chat does.
+/// - `experimental` (`isOn`): the experiments switched on or off by choice in
+///   Settings (src/core/experimental.ts). The phone shows what an experiment
+///   changes only when it is on, as the web does; an id the server does not name
+///   is off, each experiment's default.
 ///
 /// One copy per app, read straight from `shared` (Observation tracks it), like
 /// `TagDisplayStore`: read when a session chat appears and on every return to the
@@ -16,21 +21,25 @@ import Observation
 /// (first launch, an older server) it is off, the server's own default.
 @MainActor
 @Observable
-final class WalnutAdditionsSetting {
-    static let shared = WalnutAdditionsSetting()
+final class ServerClientSettings {
+    static let shared = ServerClientSettings()
 
+    /// The same key as when this held one setting: a stored record without the
+    /// experiments still reads.
     static let defaultsKey = "walnut.showWalnutAdditions.v1"
     /// A setting the person flips rarely; one read per five minutes is plenty.
     static let maxAge: TimeInterval = 300
 
     private(set) var showAll = false
+    /// The experiments chosen on or off on the server (`experimental`).
+    private(set) var experimental: [String: Bool] = [:]
     /// When the server last answered, for this server. nil = never in this process.
     private(set) var lastRead: Date?
 
     @ObservationIgnored private let storedDefaults: UserDefaults
     /// The app's own follow the demo scope (`AppPrefs`).
     private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
-    @ObservationIgnored private let fetch: () async throws -> Bool
+    @ObservationIgnored private let fetch: () async throws -> ServerConfigInfo.ClientSettings
     @ObservationIgnored private let currentServer: () -> String
     @ObservationIgnored private let now: () -> Date
     /// The server `showAll` belongs to.
@@ -40,11 +49,15 @@ final class WalnutAdditionsSetting {
     private struct Stored: Codable {
         let server: String
         let showAll: Bool
+        var experimental: [String: Bool]? = nil
     }
+
+    /// Whether the experiment `id` is on (an id from src/core/experimental.ts).
+    func isOn(_ id: String) -> Bool { experimental[id] == true }
 
     init(
         defaults: UserDefaults = .standard,
-        fetch: @escaping () async throws -> Bool = { try await WalnutAPI().serverConfig().showWalnutAdditions },
+        fetch: @escaping () async throws -> ServerConfigInfo.ClientSettings = { try await WalnutAPI().serverConfig().clientSettings },
         currentServer: @escaping () -> String = { AppConfig.serverURL?.absoluteString ?? "" },
         now: @escaping () -> Date = Date.init
     ) {
@@ -56,7 +69,7 @@ final class WalnutAdditionsSetting {
     }
 
     /// Read again when the last answer is older than `maxAge`, or came from another server.
-    func refreshIfStale(maxAge: TimeInterval = WalnutAdditionsSetting.maxAge) async {
+    func refreshIfStale(maxAge: TimeInterval = ServerClientSettings.maxAge) async {
         if server != currentServer() { adoptStored() }
         if let lastRead, now().timeIntervalSince(lastRead) < maxAge { return }
         await refresh()
@@ -74,7 +87,7 @@ final class WalnutAdditionsSetting {
                 guard self.currentServer() == asked else { return }
                 self.adopt(value, server: asked)
             } catch {
-                AppLog.warn("chat", "walnut additions setting read failed", ["error": String(describing: error)])
+                AppLog.warn("chat", "server client settings read failed", ["error": String(describing: error)])
             }
         }
         inflight = task
@@ -84,14 +97,16 @@ final class WalnutAdditionsSetting {
 
     /// A config read made elsewhere (Settings) answers this too.
     func adopt(_ info: ServerConfigInfo) {
-        adopt(info.showWalnutAdditions, server: currentServer())
+        adopt(info.clientSettings, server: currentServer())
     }
 
-    private func adopt(_ value: Bool, server: String) {
+    private func adopt(_ value: ServerConfigInfo.ClientSettings, server: String) {
         self.server = server
-        if showAll != value { showAll = value }
+        if showAll != value.showWalnutAdditions { showAll = value.showWalnutAdditions }
+        if experimental != value.experimental { experimental = value.experimental }
         lastRead = now()
-        if let data = try? JSONEncoder().encode(Stored(server: server, showAll: value)) {
+        if let data = try? JSONEncoder().encode(Stored(server: server, showAll: value.showWalnutAdditions,
+                                                       experimental: value.experimental)) {
             defaults.set(data, forKey: Self.defaultsKey)
         }
     }
@@ -104,8 +119,10 @@ final class WalnutAdditionsSetting {
            let stored = try? JSONDecoder().decode(Stored.self, from: data),
            stored.server == current {
             showAll = stored.showAll
+            experimental = stored.experimental ?? [:]
         } else {
             showAll = false
+            experimental = [:]
         }
     }
 }

@@ -81,10 +81,9 @@ describe('the iOS fold failure count has one rule', () => {
     expect(fold).toMatch(/let failures: TimelineFoldFailures\n/)
     // Every timeline place that fills one in counts with the shared rule, or says there are none
     // (a declaration names the type; a value is passed on, is none, or is counted here and now).
-    // Other `failures:` names (a send queue's retries outside the timeline, an attachment
-    // upload's per-file errors in it) are not fold counts.
+    // Other `failures:` names (a send queue's retries, an attachment upload's per-file errors in
+    // Core/AttachmentHeaders.swift) live outside the timeline and are not fold counts.
     const fills = hits(/\bfailures:[ \t]*[^,)\n]+/, 'Timeline/')
-      .filter((h) => !/^Timeline\/TimelineFileAttachment\.swift:\d+: failures: \[String: String\]/.test(h))
       .filter((h) => !/failures:\s*(TimelineFoldFailures\b(?![.(])|TimelineFoldFailures\.count\(|failures\b|fold\.failures\b|\.none\b)/.test(h))
     expect(fills).toEqual([])
     expect(hits(/failures:\s*TimelineFoldFailures\.count\(/).length).toBeGreaterThanOrEqual(3)

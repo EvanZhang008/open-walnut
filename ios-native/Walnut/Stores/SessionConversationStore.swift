@@ -916,7 +916,7 @@ final class SessionConversationStore {
     /// person's words): the attachment headers must start the text to be read at all.
     static func rowShows(_ bubble: ChatMessage, row: ChatMessage) -> Bool {
         let rowText = PeerMessagePresentation.ownWords(row.text, received: true)
-        let parts = MessageRow.attachmentSendParts(rowText)
+        let parts = AttachmentHeaders.split(rowText)
         let hasImages = bubble.localImages?.isEmpty == false
         let hasFiles = bubble.localFiles?.isEmpty == false
         guard hasImages || hasFiles else {
@@ -924,7 +924,7 @@ final class SessionConversationStore {
             // (`NewSessionChatView`): its row is the one naming the same files and
             // words. By name, not path: the server may have moved the files to the
             // session's host and named them there.
-            if let mine = MessageRow.attachmentSendParts(bubble.text) {
+            if let mine = AttachmentHeaders.split(bubble.text) {
                 guard let parts else { return false }
                 let names = { (paths: [String]) in paths.map { ($0 as NSString).lastPathComponent } }
                 // The transcript's clip can end inside the path list: the names it
@@ -951,10 +951,12 @@ final class SessionConversationStore {
                 // The transcript's clip can end inside a long path list: the
                 // header and the paths it kept are this send, the words are cut
                 // (and the last path may be cut too).
-                if rowText.hasSuffix("…") && parts.text.isEmpty && parts.filePaths.count <= files.count {
-                    return parts.filePaths.dropLast().allSatisfy(named) && parts.filePaths.contains(where: named)
+                // A recorded video's stills are named in its own block, after the files.
+                let sentPaths = parts.filePaths + parts.stills
+                if rowText.hasSuffix("…") && parts.text.isEmpty && sentPaths.count <= files.count {
+                    return sentPaths.dropLast().allSatisfy(named) && sentPaths.contains(where: named)
                 }
-                if parts.filePaths.count != files.count || !parts.filePaths.allSatisfy(named) { return false }
+                if sentPaths.count != files.count || !sentPaths.allSatisfy(named) { return false }
             }
             return sameWords(parts.text, words)
         }
@@ -1813,7 +1815,7 @@ final class SessionConversationStore {
                 throw error
             }
         }
-        return ComposerFile.messageText(text, paths: paths)
+        return ComposerFile.messageText(text, files: files, paths: paths)
     }
 
     /// One file's path on the host: known already, joined while an upload of it
@@ -1906,19 +1908,13 @@ final class SessionConversationStore {
     func removeFile(_ fileID: String, from message: ChatMessage) async {
         guard message.failed == true,
               let idx = pendingUser.firstIndex(where: { $0.id == message.id }),
-              let files = pendingUser[idx].localFiles,
-              let file = files.first(where: { $0.id == fileID }) else { return }
-        let rest = files.filter { $0.id != fileID }
-        let bubble = pendingUser[idx]
-        if rest.isEmpty, bubble.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           (bubble.localImages ?? []).isEmpty {
-            discardFailed(bubble)
+              let removal = pendingUser[idx].removeFailedFile(fileID) else { return }
+        // A recorded video goes with its stills.
+        guard case .removed(let gone, let rest) = removal else {
+            discardFailed(pendingUser[idx])
             return
         }
-        forgetUpload(file)
-        pendingUser[idx].localFiles = rest.isEmpty ? nil : rest
-        pendingUser[idx].uploadHeld?[fileID] = nil
-        if pendingUser[idx].uploadFailedID == fileID { pendingUser[idx].uploadFailedID = nil }
+        gone.forEach(forgetUpload)
         if rest.isEmpty {
             PendingFileSends.remove(session: sessionId, bubble: message.id)
         } else {

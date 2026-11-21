@@ -11,7 +11,7 @@
  * named on a `- <path>` line there first (src/providers/outbound-uploads.ts).
  */
 
-import { attachmentParts, withFilePaths } from './file-upload';
+import { attachmentParts } from './file-upload';
 import { apiPost } from './client';
 import { SEND_TIME_UPLOAD_BUDGET_MS, withUploadRetry } from './upload-retry';
 
@@ -44,9 +44,8 @@ export async function spillOversizedText(text: string): Promise<string> {
     { text: body },
     { timeoutMs: 60_000 },
   ), { budgetMs: SEND_TIME_UPLOAD_BUDGET_MS });
-  return withFilePaths(
-    `[Large text attached — ${res.chars.toLocaleString()} chars, spilled to a file. `
-    + `Use the Read tool to view it]\n- ${res.path}`,
-    files,
-  );
+  // Every header block stays as it was (a recorded video's stills and words too), the paste after them.
+  const head = files.length > 0 && parts ? text.slice(0, text.length - parts.body.length) : '';
+  return `${head}[Large text attached — ${res.chars.toLocaleString()} chars, spilled to a file. `
+    + `Use the Read tool to view it]\n- ${res.path}`;
 }
