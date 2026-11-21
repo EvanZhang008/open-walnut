@@ -18,10 +18,16 @@ outlined pin. Both used the same `.btn` class, but each card restyled it in its 
    user) or `NoticeCard` (notices); a status is `NoticeStatus` (dot and word) or `.badge`.
 2. **Never restyle a shared control inside a scope.** `.my-card .btn { background: ... }` is a
    second style. Need a new look? Add a variant to the shared component, for every view.
-3. **Only tokens.** Colours, radii, font sizes and spacing come from `web/src/styles/globals.css`
-   `:root` (and `styles/overlay-glass.css` for glass). No raw hex colour, no pixel radius or font
-   size that is not a token.
-4. **4 px grid.** Padding, gaps and sizes are multiples of 4 px (2 px only inside a control).
+3. **Only tokens.** Colours, radii, font sizes, shadows and layers come from `web/src/styles/globals.css`
+   `:root` (and `styles/overlay-glass.css` for glass, `styles/overlay-family.css` for overlays). No
+   raw colour, no pixel radius, font size, blurred shadow or z-index number that is not a token, and
+   no `var(--x)` of a property nothing defines (`tests/web/css-undefined-vars-ratchet.test.ts`).
+4. **2 px grid.** Padding, margins and gaps are even pixel values: 2, 4, 6, 8, 10, 12, 16, 20, 24,
+   32. Between blocks (page and card padding, gaps between cards and sections) use multiples of 4;
+   2, 6 and 10 are for inside a control or a dense row. Odd values never (1 px only to offset a
+   border). Why not 4 px only: on 2026-11-21 the code used 6 px 1,565 times and 10 px 913 times,
+   more than 12, 14 and 16 px together, and half of all spacing broke a 4 px rule, so that rule
+   guided nothing; the odd values (5, 3, 7, 9 px) are the real drift, and the ratchet counts them.
 5. **Calm and modern.** Soft corners, the shared frosted glass for cards and notices, no solid
    highlight blocks, at most one main action per card, the rest quiet.
 6. **Match the neighbours.** Before you add a view, open the views beside it; the same kind of
@@ -86,16 +92,19 @@ it), and the strip and To read specs run it on theirs.
 
 | Kind | Tokens |
 |---|---|
-| Fill | `--bg`, `--bg-secondary`, `--bg-tertiary`, `--bg-elevated`, `--bg-hover` |
-| Text | `--fg`, `--fg-secondary`, `--fg-muted` |
+| Fill | `--bg`, `--bg-secondary`, `--bg-tertiary`, `--bg-elevated`, `--bg-hover`, `--card-bg` |
+| Text | `--fg`, `--fg-secondary`, `--fg-muted`; on a solid accent, success or error fill `--on-accent` |
 | Accent | `--accent`, `--accent-hover`, `--accent-subtle`, `--accent-text` |
 | Lines | `--border`, `--border-strong` |
-| State | `--success`, `--warning`, `--error` |
-| Corners | `--radius-sm` 8 px (controls), `--radius-md` 12 px (inputs), `--radius-lg` 16 px (cards) |
-| Depth | `--card-shadow`, `--card-shadow-hover`; glass: `--glass-frost-*`, `--glass-legible-*` |
+| State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle` |
+| Corners | `--radius-xs` 4 px (badges, kbd, checks), `--radius-sm` 8 px (controls), `--radius-md` 12 px (inputs, cards), `--radius-lg` 16 px (large cards) |
+| Type | `--font-size-xs` 11 px (labels, badges), `--font-size-sm` 12 px (secondary text), `--font-size-md` 13 px (body, controls), `--font-size-lg` 15 px (card titles), `--font-size-xl` 17 px (section and dialog headings), `--font-size-2xl` 20 px (page titles); families `--font-sans`, `--font-mono` |
+| Depth | on a surface: `--shadow-sm` (a raised chip), `--shadow-md` (a hovered card), `--card-shadow`, `--card-shadow-hover`; floating: the overlay family's `--overlay-shadow`, `--dialog-shadow`; glass: `--glass-frost-*`, `--glass-legible-*` |
+| Layers | the overlay family's `--z-*` (`styles/overlay-family.css`) and its scrim `--overlay-scrim` |
 
-Font sizes: 13 px body and controls, 12 px secondary text, 11 px labels and badges, 15 px card
-titles. There is no font-size or spacing token yet; until there is, use only these values.
+Nothing sits between two sizes of the scale: a 12.5 px or 14 px label is a decision for the
+scale, not for one view. A token written with a fallback (`var(--fg, #1d1d1f)`) is a second
+colour for the dark theme; write `var(--fg)`.
 
 ## What exists today that breaks this (the ratchet counts them)
 
@@ -109,6 +118,10 @@ Counted on 2026-11-21 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
   corner instead of a `.btn` variant.
 - 102 raw `#007aff` / `#0a84ff` in 26 files where `var(--accent)` belongs.
 - `.btn-sm` and `.btn-danger` are each declared twice with different values in `globals.css`.
+- Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):
+  `rawColour`, `radiusNotToken`, `pillRadius` (96: the pill-shaped controls and labels),
+  `fontSizeOffScale`, `shadowLiteral`, `zIndexLiteral`, `spacingOffGrid`. Their counts per file are
+  in the same baseline; a new file starts at 0.
 
 A change that touches one of these moves it onto the family; the ratchet then asks for its count to
 be lowered (`UI_STANDARD_RECORD=1` on that test).

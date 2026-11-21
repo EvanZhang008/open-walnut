@@ -54,9 +54,22 @@
   /* The UI's text stack (body and every control that sets a font). */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'SFMono-Regular', 'Menlo', 'Cascadia Code', 'Fira Code', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  /* Corners: 4 small marks (badges, kbd, checks), 8 controls, 12 inputs and cards, 16 large cards. */
+  --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* Type scale (standard.md, Tokens). Nothing in the UI sits between these. */
+  --font-size-xs: 11px;  /* labels, badges, counts */
+  --font-size-sm: 12px;  /* secondary text, meta lines */
+  --font-size-md: 13px;  /* body text and controls */
+  --font-size-lg: 15px;  /* card titles */
+  --font-size-xl: 17px;  /* section and dialog headings */
+  --font-size-2xl: 20px; /* page titles */
+  /* Elevation of things that sit ON a surface (a raised chip, a hovered row). Menus,
+     popovers and dialogs use the overlay family's --overlay-shadow / --dialog-shadow. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.12);
   --heartbeat: #FF6B6B;
   --overlay-bg: rgba(0, 0, 0, 0.3);
   --bg-hover: rgba(0, 0, 0, 0.04);
@@ -138,6 +151,8 @@
   --card-bg: #1C1C1E;
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
   --heartbeat: #FF8787;
   --overlay-bg: rgba(0, 0, 0, 0.5);
   --bg-hover: rgba(255, 255, 255, 0.06);
@@ -174,6 +189,8 @@
     --card-bg: #1C1C1E;
     --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
     --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.25);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
     --heartbeat: #FF8787;
     --overlay-bg: rgba(0, 0, 0, 0.5);
     --bg-hover: rgba(255, 255, 255, 0.06);

@@ -9,6 +9,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { walk, scanCss, type Decl } from './css-scan';
+import { tokenBreaks, TOKEN_KINDS, type TokenKind } from './ui-token-scan';
+
+export { TOKEN_KINDS };
 
 export const WEB_SRC = path.join(__dirname, '../../web/src');
 
@@ -61,11 +64,11 @@ export function isOwnControl(selector: string): boolean {
   return cls.some((c) => /(-btn|-button|-pill|-chip)$/.test(c));
 }
 
-export interface Counts { restyledBtn: Record<string, number>; ownControl: Record<string, number>; rawAccent: Record<string, number> }
+export type Counts = { restyledBtn: Record<string, number>; ownControl: Record<string, number>; rawAccent: Record<string, number> } & Record<TokenKind, Record<string, number>>;
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out: Counts = { restyledBtn: {}, ownControl: {}, rawAccent: {} };
+  const out = { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])) } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
@@ -74,6 +77,7 @@ export function countAll(): Counts {
     for (const d of scanCss(rel, fs.readFileSync(file, 'utf8'))) {
       const key = d.selectors.join(', ');
       rules.set(key, [...(rules.get(key) ?? []), d]);
+      for (const kind of tokenBreaks(d)) bump(out[kind], rel);
     }
     for (const [, decls] of rules) {
       const sels = decls[0].selectors;
