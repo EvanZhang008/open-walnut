@@ -1,11 +1,11 @@
 /**
- * The first thread above a chat is the first of the same list the Threads view draws (experiment
- * top_thread; web/src/components/org/top-thread-model.ts, src/core/org/thread-view.ts listedForHim;
+ * The first thread above a chat is the first of the ones that wait on him (experiment top_thread;
+ * web/src/components/org/top-thread-model.ts, src/core/org/thread-groups.ts threadsForHim;
  * 2026-11-20, the user: "Only one type, is just called thread ... right now thread has 16, but top
  * only has 1, not right ... top only show one but will show how many left ... top can be hide").
  *
  *  - its N is the header's and the Threads tab's count (threadCounts.shown), with threads of tasks
- *    below, snoozed, pinned, quiet and closed ones in the mix;
+ *    below (one whose reply is on its way included), snoozed, pinned, quiet and closed ones in the mix;
  *  - its order: the pinned first, then the ones that need him, then the ones to read, each newest
  *    change first; the Threads view orders the same way under the flag, and as before without it;
  *  - a thread that leaves the list gives its place to the next one;
@@ -15,7 +15,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
-import { listedForHim, orderedForHim, threadCounts } from '../../src/core/org/thread-view.js'
+import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
+import { threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
 import { TOP_HIDDEN_VIEW, actionsNotThreads, hiddenLine, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
@@ -69,11 +70,16 @@ describe('the top steps through the Threads view\'s own list', () => {
     expect(list.some((t) => t.closed || t.snoozed)).toBe(false)
   })
 
-  it('a thread below whose reply is on its way stays listed, and counted, until it arrives', () => {
+  // 2026-11-21, the user, on a VP whose row read "1 thread" while its Threads showed no such card:
+  // "It show 1 but there isn't any". His reply on it makes it the task's move (Working), not his.
+  it('a thread below whose reply is on its way is listed in Working, never counted nor on top', () => {
     const all = realNode()
+    const before = threadCounts(all, NOW).shown
     const below = all[all.length - 1]!
     below.messages[0] = { ...below.messages[0]!, delivery: { state: 'pending', at: at(119) } }
-    expect(topThreads(all, NOW).map((t) => t.id)).toContain(below.id)
+    expect(listedForHim(all, NOW).map((t) => t.id)).toContain(below.id)
+    expect(topThreads(all, NOW).map((t) => t.id)).not.toContain(below.id)
+    expect(threadCounts(all, NOW).shown).toBe(before)
     expect(topThreads(all, NOW).length).toBe(threadCounts(all, NOW).shown)
   })
 

@@ -46,8 +46,8 @@ import { isLineThreadId, lineThreads } from '../../core/org/line-threads.js'
 import { threadsForEveryTask } from '../../core/org/keeps-threads.js'
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
-import { cardView, sharedAnswers, shownToHim, threadCounts } from '../../core/org/thread-view.js'
-import { threadStateOf } from '../../core/org/thread-groups.js'
+import { cardView, sharedAnswers, shownToHim } from '../../core/org/thread-view.js'
+import { threadCounts, threadStateOf, threadsForHim } from '../../core/org/thread-groups.js'
 import { followerName, isFollower } from '../../core/server-role.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -179,8 +179,6 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   const file = await readThreads(task.id)
   // `awaits` on each thread he acknowledged (core/org/thread-ack.ts): what holds it, for its card.
   const all = await withKnownAwaits(await withTaskAsks(task.id, sortedThreads(file.threads)))
-  // `shown`: his view shows it, judged over ALL the node's threads (an answer shared with a closed
-  // thread counts), the rule `user_status.threads` counts by, so a client's list and its count agree.
   const shared = sharedAnswers(all)
   const now = Date.now()
   const open = flag(req.query.open)
@@ -193,17 +191,23 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   // reacted to yet) stays whole, and `GET .../threads/:thread` gives one thread whole.
   const answerMax = positive(req.query.answer_max)
   const below = closedOnly || !(await threadsPopUpOn()) ? [] : await poppedThreadsFor(task.id, { answerable: true })
+  // Judged over ALL the node's threads and the ones below (an answer shared with a closed thread
+  // counts). `shown`: his list holds it (thread-view.ts listedForHim). `counted`: it waits on him
+  // (thread-groups.ts threadsForHim), the rule `user_status.threads` and `shown_count` count by, so
+  // a client's count of its list (the phone's Threads tab) is the badge's. Both additive.
+  const forHim = new Set<unknown>(threadsForHim([...all, ...below], now))
   const out = [
     ...threads.map((t) => ({
       ...markShared(answerMax === undefined ? t : clipAnswers(t, shared, answerMax), shared),
       shown: shownToHim(t, shared, now),
+      counted: forHim.has(t),
     })),
     // `lines=1`: a task's own lines, each a thread of its own (org/line-threads.ts), after the
     // stored ones and outside `limit`. Only a client that renders them asks (an older one would
     // offer a stored thread's buttons on them); counted where they already are (its status and
     // Action needed), never in shown_count.
     // threads_pop_up: what waits on him below this node, the owner's own records, outside `limit`.
-    ...below.map((t) => ({ ...t, shown: true })),
+    ...below.map((t) => ({ ...t, shown: true, counted: forHim.has(t) })),
     ...(closedOnly || !flag(req.query.lines) ? [] : ownLineThreads(task, all)).map((t) => ({ ...t, shown: true })),
   ]
   // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
@@ -273,13 +277,13 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
     const there = await elsewhereThread(task.id, id)
     if (there) {
       const one = await poppedOne(there)
-      res.json({ task_id: task.id, thread: { ...one, shown: shownToHim(one, sharedAnswers([one]), Date.now()) } })
+      res.json({ task_id: task.id, thread: { ...one, shown: shownToHim(one, sharedAnswers([one]), Date.now()), counted: threadsForHim([one]).includes(one) } })
       return
     }
     if (!thread) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
   }
   const shared = sharedAnswers(all)
-  res.json({ task_id: task.id, thread: { ...markShared(thread, shared), shown: shownToHim(thread, shared, Date.now()) } })
+  res.json({ task_id: task.id, thread: { ...markShared(thread, shared), shown: shownToHim(thread, shared, Date.now()), counted: threadsForHim(all).includes(thread) } })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {

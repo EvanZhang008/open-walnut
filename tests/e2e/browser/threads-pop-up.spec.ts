@@ -316,3 +316,68 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
     await request.put('/api/config', { data: { experimental: { brief_off: false } } })
   }
 })
+
+// 2026-11-21, the user, after answering a task's card in the top of his VP's chat ("2 / 4"): "i send
+// it, but the thread don't go away ... I have to manually click next", and on the VP's row, a red
+// "1 thread" with no such card in its Threads ("It show 1 but there isn't any"). His reply makes the
+// card the task's move at once: it leaves the top (the next card takes its place, no click), the top's
+// N, the header and the row's badge drop by one, and the Threads view keeps it in Working with his words.
+test('on, top of the chat: his reply on a card below leaves the top and every count at once, the next card in its place', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const WORDS = `Put each code in the tab it belongs to ${STAMP}`
+  const why = { user_kind: 'user_own', user_kind_why: 'It is his own settings page.' }
+  const open = async (title: string) => (await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
+    title: `${title} ${STAMP}`, text: `${title}? ${STAMP}`, state: 'needs', from: 'node', ...why,
+  }, ids.ownerSid)).thread.id
+  const first = await open('Where does the Wi-Fi sign-in button go')
+  const second = await open('Which tab holds the companion QR code')
+  await flag(request, true)
+  const was = (await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }).config?.experimental ?? {}
+  const put = await request.put('/api/config', { data: { experimental: { brief_off: true, top_thread: true } } })
+  expect(put.ok(), await put.text()).toBe(true)
+  try {
+    // The task is busy in a long turn, so his reply is still on its way while every count is read.
+    const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:30000' } })
+    expect(busy.ok(), await busy.text()).toBe(true)
+    await isolateUiPrefs(page)
+    await loadHome(page)
+    await openLead(page)
+    const top = page.getByTestId('org-chat').getByTestId('top-thread')
+    const pill = page.getByTestId('org-pill-threads')
+    const badge = page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"] [data-testid="org-channel-badge"]`)
+    await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${second}"]`)).toBeVisible({ timeout: 20_000 })
+    // Step the top to the newer of the two (newest first): the one he answers.
+    const pos = top.getByTestId('top-thread-pos')
+    await expect(pos).toHaveText(/^\d+ \/ \d+$/, { timeout: 20_000 })
+    const n = Number((await pos.textContent())!.split('/')[1])
+    expect(n).toBeGreaterThanOrEqual(2)
+    for (let i = 0; i < n && (await top.getAttribute('data-thread-id')) !== second; i++) await top.getByTestId('top-thread-next').click()
+    await expect(top).toHaveAttribute('data-thread-id', second)
+    const at = Number((await pos.textContent())!.split('/')[0])
+    await expect(pill).toHaveAttribute('data-threads', String(n))
+    await expect(badge).toHaveAttribute('data-threads', String(n), { timeout: 20_000 })
+    await shot(page, '7-top-before')
+    const inTop = top.locator(`[data-testid="org-thread"][data-thread-id="${second}"]`)
+    await inTop.getByTestId('org-thread-popped-input').click()
+    await page.keyboard.type(WORDS, { delay: 10 })
+    await inTop.getByTestId('org-thread-popped-send').click()
+    // By itself: the next card is on show at the same place, one fewer; the header and the row drop with it.
+    await expect(top).not.toHaveAttribute('data-thread-id', second, { timeout: 5_000 })
+    await expect(pos).toHaveText(`${Math.min(at, n - 1)} / ${n - 1}`)
+    await expect(pill).toHaveAttribute('data-threads', String(n - 1))
+    await expect(badge).toHaveAttribute('data-threads', String(n - 1), { timeout: 20_000 })
+    // His reply is still on its way, and the Threads view keeps the card in Working with his words.
+    const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
+    expect(file.threads.find((t) => t.id === second)?.messages.find((m) => m.text === WORDS)?.delivery?.state).not.toBe('delivered')
+    const working = page.locator('[data-testid="org-thread-group"][data-group="working"]')
+    await expect(working).toBeVisible()
+    await expect(working.locator(`[data-thread-id="${second}"]`).getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
+    await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${second}"]`)).toHaveCount(0)
+    await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${first}"]`)).toBeVisible()
+    await shot(page, '8-top-after')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await request.put('/api/config', { data: { experimental: { brief_off: was.brief_off === true, top_thread: was.top_thread === true } } })
+  }
+})

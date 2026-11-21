@@ -149,6 +149,8 @@ enum OrgThreadModel {
         if t.closed != nil { return t }
         if ["answered", "needs", "pending"].contains(t.state) { t.state = "working" }
         t.shown = pinnedNow(t)
+        // The node's move now: listed when pinned, never counted (server thread-groups.ts threadsForHim).
+        t.counted = false
         return t
     }
 

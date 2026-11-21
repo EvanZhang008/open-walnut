@@ -3,8 +3,12 @@
  * take the Brief's place, and a Board card's status reads its task's threads the same way. One rule
  * for the server (GET /api/v1/thread-states), the web (@open-walnut/thread-groups) and the phone's
  * port (ios-native OrgThreadModel). Pure.
+ *
+ * The counts of a node's Threads come from the same groups (threadsForHim, threadCounts): every
+ * number, badge and red line counts only the threads drawn in Needs you or Done (the result waits
+ * on the card for him).
  */
-import { listedForHim, orderedForHim, snoozedNow, type ViewThread } from './thread-view.js';
+import { listedForHim, orderedForHim, pinnedFirst, pinnedNow, snoozedNow, type ThreadCounts, type ViewThread } from './thread-view.js';
 import { USER_STATE_LABELS } from '../user-status.js';
 import { inAcknowledged, isKnown, placedSinceAck } from './thread-known.js';
 
@@ -56,8 +60,8 @@ export function threadGroupOf(t: GroupedThread, listed: boolean, now: number = D
   if (archivedNow(t, now)) return 'archived';
   if (t.closed) return 'done';
   // A thread of a task below is listed while it waits on him or while his reply is on its way
-  // there: only the first is his to answer; the second is the task's move (2026-11-20, the user:
-  // a card he had replied on stayed in Needs you).
+  // there (thread-view.ts aboveForHim): only the first is his to answer; the second is the task's
+  // move (2026-11-20, the user: a card he had replied on stayed in Needs you).
   if (t.owner && !listed) return 'waiting';
   if (snoozedNow(t, now)) return 'waiting';
   // Its decision is asked in a task: he answers it there, so it waits here (thread-task-ask.ts).
@@ -95,4 +99,46 @@ export function threadStateOf<T extends GroupedThread & { id: string; updatedAt:
     if (t) return { state: g === 'known' ? 'waiting' : g, id: t.id, title: t.title };
   }
   return null;
+}
+
+/** The groups that wait on him: a decision (Needs you) or a result he has not read (`read`, drawn as Done). Open by default on his Threads. */
+export const FOR_HIM_GROUPS: readonly ThreadGroup[] = ['needs', 'read'];
+
+type Counted = ViewThread & { id: string; state: string; updatedAt: string };
+
+/**
+ * The threads that wait on him now, in the order given: the ones his Threads draw in Needs you or
+ * Done, the result waiting on the card (threadGroupOf). The one rule behind every count of a node's
+ * Threads: the Org row's badge and red line, the node's header, the Threads tab, the top of the
+ * chat, `user_status.threads` and the phone's list (2026-11-21, the user, on a VP row that read "1"
+ * while its Threads held only Working, Waiting and closed ones: "It show 1 but there isn't any").
+ * A thread his view lists for another
+ * reason (pinned, overdue on the node, a task's thread below while his reply travels to it) is in
+ * his list but never counted: nothing lights up for a card that is not his to answer or read. Pure.
+ */
+export function threadsForHim<T extends Counted>(threads: readonly T[], now: number = Date.now()): T[] {
+  const listed = new Set(listedForHim(threads, now));
+  return threads.filter((t) => FOR_HIM_GROUPS.includes(threadGroupOf(t, listed.has(t), now)));
+}
+
+/**
+ * The counts of one node's Threads (threadsForHim). Pure; the web's header and the server's status
+ * read the same. A thread of a task below (`owner`, thread-popup.ts) counts in `shown` and `below`
+ * while it waits on him there, never in `needs`: only its owner reads Needs you for it. The title is
+ * the node's own unless it has none.
+ */
+export function threadCounts<T extends Counted & { title: string }>(threads: readonly T[], now: number = Date.now()): ThreadCounts {
+  const lit = threadsForHim(threads, now);
+  const shown = lit.filter((t) => !t.owner);
+  const below = lit.filter((t) => !!t.owner);
+  // A thread holding the task's own ask is that task's Needs you, counted there (thread-report-ask.ts).
+  const needs = shown.filter((t) => t.state === 'needs' && !t.heldAsk);
+  const pinned = pinnedFirst(shown.filter(pinnedNow));
+  const newest = (list: readonly T[]) => list.reduce<T | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
+  const top = newest(needs) ?? pinned[0] ?? newest(shown) ?? newest(below);
+  return {
+    shown: lit.length, needs: needs.length, ...(pinned.length ? { pinned: pinned.length } : {}),
+    ...(top ? { title: top.title, id: top.id, ...(pinnedNow(top) ? { titlePinned: true } : {}) } : {}),
+    ...(below.length ? { below: below.length } : {}),
+  };
 }

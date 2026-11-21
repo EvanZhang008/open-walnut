@@ -229,7 +229,7 @@ import { workspaceOf } from '@/components/workspaces/workspace-text';
 import { ShortcutHint } from '@/keyboard/ShortcutHint';
 import { setTaskThreads, takeThreadsViewAsk, threadsKeptBy, threadsOffered, useThreadsViewAskTick } from './session-threads-model';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
-import { threadCounts } from '@open-walnut/thread-view';
+import { threadCounts } from '@open-walnut/thread-groups';
 import '@/styles/session-threads.css';
 
 /**

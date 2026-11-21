@@ -3,15 +3,17 @@
  * apart from the component so the strip and the tests read it without React. Pure.
  */
 import type { ActionItem } from '@open-walnut/user-status';
-import { listedForHim, orderedForHim, threadCountLabel } from '@open-walnut/thread-view';
+import { orderedForHim, threadCountLabel } from '@open-walnut/thread-view';
+import { threadsForHim } from '@open-walnut/thread-groups';
 import type { OrgThread } from '@/api/org-threads';
 
 /** Where the top's Hide is kept (utils/view-memory.ts): one choice for every chat, kept over a reload and across devices. */
 export const TOP_HIDDEN_VIEW = { page: 'session', name: 'topThread.hidden' } as const;
 
-/** The threads the top steps through, in its order: the Threads view's list, the ones that need him first. Pure. */
+/** The threads the top steps through, in its order: the ones that wait on him (threadsForHim, the
+ *  header's count), the ones that need him first. Pure. */
 export function topThreads(threads: readonly OrgThread[] | null, now: number): OrgThread[] {
-  return threads ? orderedForHim(listedForHim(threads, now), { needsFirst: true }) : [];
+  return threads ? orderedForHim(threadsForHim(threads, now), { needsFirst: true }) : [];
 }
 
 /**

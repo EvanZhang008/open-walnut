@@ -350,7 +350,8 @@ struct OrgNodePage: View {
 
     private func label(_ t: OrgNodeTab) -> String {
         guard t == .threads else { return t.label }
-        let read = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.count }
+        // The listed ones that wait on him (`counted`), the number the node's badge shows.
+        let read = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.filter { $0.counted ?? true }.count }
         // A read that brought none of the threads the counts name shows those counts, as its page says.
         // "Threads 0" too, as the bar under the chat reads (the owner: "even if no thread, show 0"),
         // but no number while the page could read none and holds none (`tabCount`).

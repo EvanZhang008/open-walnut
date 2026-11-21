@@ -3,11 +3,14 @@
  * one type, is just called thread ... top only show one but will show how many left, but thread
  * will show all ... also top can be hide, and when hide people can also have a button show it").
  *
- * Not a card of its own kind: the same list the Threads view draws (thread-view.ts listedForHim, in
- * its needs-first order), one thread at a time, through the same card (OrgThreads ThreadItem) with
- * its own reply box. "1 / N" and the arrows step through all of them; N is the count the header and
- * the Threads tab show. A thread that leaves the list (his reply makes it working) gives its place
- * to the next one. Hidden, it is one line that counts them, with Show; that choice is kept
+ * Not a card of its own kind: the threads that wait on him (thread-groups.ts threadsForHim, in the
+ * Threads view's needs-first order), one thread at a time, through the same card (OrgThreads
+ * ThreadItem) with its own reply box. "1 / N" and the arrows step through all of them; N is the
+ * count the header and the Threads tab show. A thread that leaves the list gives its place to the
+ * next one by itself: his reply makes it the node's or the task's move at once, a card of a task
+ * below included while his reply is still on its way there (2026-11-21, the user: "i send it, but
+ * the thread don't go away ... I have to manually click next"); the Threads view keeps it in Working
+ * with his words. Hidden, it is one line that counts them, with Show; that choice is kept
  * (usePageView), for every chat alike.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';

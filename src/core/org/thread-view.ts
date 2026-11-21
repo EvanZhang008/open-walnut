@@ -535,9 +535,10 @@ export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<
 /** What a node's Threads hold for him, the one count every surface shows (2026-11-03, the user, on
  *  a VP's header that read "1 To read · 18 Working" while a thread waited on him: "this here should
  *  show need action ... also show thread and number"; on the Org list: "thread is better than need
- *  u ... thread should be the first one in the list"). */
+ *  u ... thread should be the first one in the list"). Made by thread-groups.ts threadCounts, from
+ *  the threads his Threads draw in Needs you or Done, a result waiting for him (threadsForHim). */
 export interface ThreadCounts {
-  /** Threads his view lists (listedForHim): the Threads tab's count and the top of the chat's N. */
+  /** Threads that wait on him (threadsForHim): the badge, the header's and the Threads tab's count, the top of the chat's N. */
   shown: number;
   /** Of those, the ones waiting on him (state needs). */
   needs: number;
@@ -552,48 +553,37 @@ export interface ThreadCounts {
   below?: number;
 }
 
-/**
- * The counts of one node's Threads. Pure; the web's header and the server's status read the same.
- * A thread of a task below (`owner`, thread-popup.ts) counts in `shown` and `below` while it is
- * listed above it (listedAbove), never in `needs`: only its owner reads Needs you for it. The title is the node's own
- * unless it has none.
- */
-export function threadCounts<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<M> & { id: string; title: string; state: string; updatedAt: string }>, now: number = Date.now()): ThreadCounts {
-  // The list his Threads view draws, so the count and the list never disagree (listedForHim).
-  const listed = listedForHim(threads, now);
-  const shown = listed.filter((t) => !t.owner);
-  const below = listed.filter((t) => !!t.owner);
-  // A thread holding the task's own ask is that task's Needs you, counted there (thread-report-ask.ts).
-  const needs = shown.filter((t) => t.state === 'needs' && !t.heldAsk);
-  const pinned = pinnedFirst(shown.filter(pinnedNow));
-  const newest = (list: readonly (typeof threads)[number][]) => list.reduce<(typeof threads)[number] | undefined>((a, t) => (!a || t.updatedAt > a.updatedAt ? t : a), undefined);
-  const top = newest(needs) ?? pinned[0] ?? newest(shown) ?? newest(below);
-  return {
-    shown: listed.length, needs: needs.length, ...(pinned.length ? { pinned: pinned.length } : {}),
-    ...(top ? { title: top.title, id: top.id, ...(pinnedNow(top) ? { titlePinned: true } : {}) } : {}),
-    ...(below.length ? { below: below.length } : {}),
-  };
-}
-
 /** His reply on it has not reached the task that owns it yet (threads-model.ts deliveryOpen). */
-function replyOnItsWay(t: ViewThread): boolean {
+export function replyOnItsWay(t: ViewThread): boolean {
   return t.messages.some((m) => m.delivery?.state === 'pending' || m.delivery?.state === 'claimed');
 }
 
-/** A thread of a task below is listed above it while it waits on him, or while his reply on it is on its way (thread-popup.ts). */
+/**
+ * A thread of a task below is listed above it for one of two reasons, never mixed up (2026-11-21,
+ * the user, after replying on such a card in the top of his VP's chat: "i send it, but the thread
+ * don't go away"):
+ *   his      it waits on him there (needs): counted, in Needs you, on the top of the chat;
+ *   on its way  his reply on it has not reached the task yet: the task's move, drawn in Working with
+ *            his words (so the reply he sent does not vanish), never counted, never on the top.
+ * Counts and the top read only `his`, through thread-groups.ts threadsForHim.
+ */
+export function aboveForHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
+  // Its owner's own ask (thread-report-ask.ts) reaches the leaders through that task's status: never a second card above.
+  return !t.closed && !t.heldAsk && t.state === 'needs' && shownToHim(t, shared, now);
+}
+
+/** A thread of a task below is listed above it (thread-popup.ts): his, or his reply on it on its way (aboveForHim). */
 export function listedAbove<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
   if (t.closed) return false;
-  // Its owner's own ask (thread-report-ask.ts) reaches the leaders through that task's status: never a second card above.
-  if (t.heldAsk) return replyOnItsWay(t);
-  return (t.state === 'needs' && shownToHim(t, shared, now)) || replyOnItsWay(t);
+  return aboveForHim(t, shared, now) || replyOnItsWay(t);
 }
 
 /**
  * The threads his Threads view lists, in the order given: his own that have something for him
  * (shownToHim, an answer shared with another of them judged over all of them, the closed ones
- * included), and the threads of tasks below that are listed above them (listedAbove). The
- * header's count, the Threads tab's and the top of the chat's "1 / N" are all this list's length
- * (2026-11-20, the user: "thread has 16, but top only has 1, not right"). Pure.
+ * included), and the threads of tasks below that are listed above them (listedAbove). Every count
+ * is the part of this list that waits on him (thread-groups.ts threadsForHim): a pinned or overdue
+ * thread, or one below whose reply is on its way, is listed and never counted. Pure.
  */
 export function listedForHim<T extends ViewThread & { id: string; state: string }>(threads: readonly T[], now: number = Date.now()): T[] {
   const shared = sharedAnswers(threads.filter((t) => !t.owner));

@@ -9,7 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { emptyThreads, fileMessage, mergeThreads, normalizeThreads, setAnswers, sortedThreads, ThreadError, updateThread, type ThreadsFile, type ThreadWriter } from '../../../src/core/org/threads-model.js'
-import { newsAt, pinnedFirst, pinnedNow, shownToHim, snoozedNow, threadCounts } from '../../../src/core/org/thread-view.js'
+import { listedForHim, newsAt, pinnedFirst, pinnedNow, shownToHim, snoozedNow } from '../../../src/core/org/thread-view.js'
+import { threadCounts } from '../../../src/core/org/thread-groups.js'
 
 const T0 = Date.UTC(2026, 10, 3, 18, 0)
 const at = (min: number) => new Date(T0 + min * 60_000).toISOString()
@@ -72,13 +73,19 @@ describe('a pinned thread', () => {
     expect(newsAt(pin(p, b, false, 'human', at(32)).threads, undefined, ms(33))).toBe(byId(f, a).updatedAt)
   })
 
-  it('counts in the Threads count, names the title when nothing waits on him, and needs still lead', () => {
+  // A pin is a place in his list, not something for him: a pinned thread in the node's hands is
+  // listed first and never counted (2026-11-21, the user: "It show 1 but there isn't any"; the
+  // grouped Threads draw it in Working, folded). Pinned and waiting on him, it counts and marks the line.
+  it('a pinned thread is listed first, counted only when it waits on him, and needs still lead', () => {
     const { f, a, b } = three()
     expect(threadCounts(f.threads, ms(10))).toEqual({ shown: 1, needs: 0, title: 'Routing', id: a })
     const p = pin(f, b, true)
-    expect(threadCounts(p.threads, ms(10))).toEqual({ shown: 2, needs: 0, pinned: 1, title: 'Watch list', id: b, titlePinned: true })
+    expect(listedForHim(p.threads, ms(10)).map((t) => t.id)).toContain(b)
+    expect(threadCounts(p.threads, ms(10))).toEqual({ shown: 1, needs: 0, title: 'Routing', id: a })
+    const both = pin(p, a, true, 'human', at(9))
+    expect(threadCounts(both.threads, ms(10))).toEqual({ shown: 1, needs: 0, pinned: 1, title: 'Routing', id: a, titlePinned: true })
     const needs = updateThread(p, a, { state: 'needs', user_kind: 'user_own', user_kind_why: 'He asked to pick the design himself.' }, NODE, at(12)).file
-    expect(threadCounts(needs.threads, ms(12))).toEqual({ shown: 2, needs: 1, pinned: 1, title: 'Routing', id: a })
+    expect(threadCounts(needs.threads, ms(12))).toEqual({ shown: 1, needs: 1, title: 'Routing', id: a })
   })
 
   it('takes a snooze off, and a snooze of his takes his pin off; a pinned thread is never in Snoozed', () => {

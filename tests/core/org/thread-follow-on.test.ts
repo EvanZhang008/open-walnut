@@ -21,7 +21,7 @@ import {
   emptyThreads, fileMessage, setAnswers, updateThread, ThreadError, type OrgThread, type ThreadState, type ThreadsFile,
 } from '../../../src/core/org/threads-model.js'
 import { answeredBeforeHim, answeredBeforeHimReason } from '../../../src/core/org/thread-summary-stop.js'
-import { threadCounts } from '../../../src/core/org/thread-view.js'
+import { threadCounts } from '../../../src/core/org/thread-groups.js'
 
 const T0 = Date.UTC(2026, 10, 20, 7, 59, 12)
 const at = (s: number) => new Date(T0 + s * 1000).toISOString()

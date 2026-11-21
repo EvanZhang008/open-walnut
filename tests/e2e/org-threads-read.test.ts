@@ -34,7 +34,7 @@ vi.mock('../../src/core/server-role.js', async (importOriginal) => {
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
-import { threadCounts } from '../../src/core/org/thread-view.js'
+import { threadCounts } from '../../src/core/org/thread-groups.js'
 import { clipAnswerText } from '../../src/web/routes/org-threads-v1.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
 
@@ -90,7 +90,7 @@ async function read(query = ''): Promise<Response> {
   return fetch(`${base}/api/v1/tasks/${leadId}/threads${query}`)
 }
 
-type Reply = { threads: Array<OrgThread & { shown: boolean; messages: Array<{ answer?: { text: string; clipped?: true } }> }>; closed_count: number; shown_count: number }
+type Reply = { threads: Array<OrgThread & { shown: boolean; counted: boolean; messages: Array<{ answer?: { text: string; clipped?: true } }> }>; closed_count: number; shown_count: number }
 
 beforeAll(async () => {
   leadId = (await ensureProjectLead('Orchard')).id
@@ -104,17 +104,20 @@ beforeAll(async () => {
 afterAll(async () => { await stopServer() })
 
 describe('reading Threads as the phone does', () => {
-  it('says per thread whether his view shows it, by the count the node status uses', async () => {
+  it('says per thread whether his view lists it and whether it counts, by the count the node status uses', async () => {
     const all = (await (await read()).json()) as Reply
     const expected = threadCounts(fixture()).shown
-    // needs, the unread answer and pinned; a known answer never returns on its answered state.
-    expect(expected).toBe(3)
+    // needs and the unread answer count; a known answer never returns on its answered state. The
+    // pinned one in the node's hands is listed, never counted (thread-groups.ts threadsForHim).
+    expect(expected).toBe(2)
     expect(all.shown_count).toBe(expected)
-    expect(all.threads.filter((t) => t.shown).length).toBe(expected)
+    expect(all.threads.filter((t) => t.counted).length).toBe(expected)
+    expect(all.threads.filter((t) => t.shown).map((t) => t.id).sort()).toEqual(['th-a00001', 'th-a00003', 'th-a00004'])
+    expect(all.threads.find((t) => t.id === 'th-a00004')).toMatchObject({ shown: true, counted: false })
     // The open part alone carries the same judgement: a list built from it agrees with the header.
     const open = (await (await read('?open=1')).json()) as Reply
     expect(open.threads.every((t) => !t.closed)).toBe(true)
-    expect(open.threads.filter((t) => t.shown).length).toBe(expected)
+    expect(open.threads.filter((t) => t.counted).length).toBe(expected)
     expect(open.shown_count).toBe(expected)
     expect(open.threads.find((t) => t.id === 'th-a00005')?.shown).toBe(false)
     expect(open.threads.find((t) => t.id === 'th-a00006')?.shown).toBe(false)
@@ -132,8 +135,9 @@ describe('reading Threads as the phone does', () => {
     const onCard = cut.threads.find((t) => t.id === 'th-a00003')!.messages[0].answer!
     expect(onCard.clipped).toBeUndefined()
     expect(onCard.text).toBe(LONG_UNSEEN)
-    // Cutting never changes what his view shows.
-    expect(cut.threads.filter((t) => t.shown).length).toBe(threadCounts(fixture()).shown)
+    // Cutting never changes what his view shows or counts.
+    expect(cut.threads.filter((t) => t.counted).length).toBe(threadCounts(fixture()).shown)
+    expect(cut.threads.filter((t) => t.shown).length).toBe(3)
   })
 
   it('marks an answer shared with another thread, whatever part of the list a read asks for', async () => {

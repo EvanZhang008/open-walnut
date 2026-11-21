@@ -181,7 +181,7 @@ export interface StatusFacts {
   signIn?: SignInState;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
   undelivered?: Map<string, { reason: string; at: string }>;
-  /** Main, a lead or a task with Threads on -> what its Threads hold for the user (org/thread-view.ts threadCounts). */
+  /** Main, a lead or a task with Threads on -> what its Threads hold for the user (org/thread-groups.ts threadCounts). */
   threads?: Map<string, ThreadCounts>;
 }
 
@@ -278,7 +278,7 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
   const nodes = tasks.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
   const { readThreads } = await import('./org/threads-store.js');
-  const { threadCounts } = await import('./org/thread-view.js');
+  const { threadCounts } = await import('./org/thread-groups.js');
   const { poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
   let below: ReturnType<typeof poppedIndex> | undefined;
@@ -311,7 +311,7 @@ async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, Thre
       all ??= await (await import('./task-manager.js')).listTasks();
       const own = await joinedAsks(t.id, threads, all, now);
       if (!threadsPopUpNow()) return threadCounts(own, now);
-      // What waits on him below counts here too, never as this task's Needs you (thread-view.ts threadCounts).
+      // What waits on him below counts here too, never as this task's Needs you (thread-groups.ts threadCounts).
       const listed = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
       const owners = threadOwners.get(t.id) ?? new Set<string>();
       for (const p of listed) owners.add(p.owner.task_id);

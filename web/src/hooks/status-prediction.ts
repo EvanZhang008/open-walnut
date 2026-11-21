@@ -17,7 +17,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { HANDED_BACK_ASK, fallbackUserState, snoozedUntil, startDateMs, type UserStatus } from '@open-walnut/user-status';
-import { threadCounts } from '@open-walnut/thread-view';
+import { threadCounts } from '@open-walnut/thread-groups';
 
 /** How long a prediction waits for the server's answer by default. A caller whose change takes
  *  longer to reach the derive (an answer delivered to a session) passes its own `keepMs`. */

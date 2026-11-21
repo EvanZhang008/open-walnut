@@ -89,6 +89,11 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// the one `user_status.threads` counts by, so this list and the header's count agree. Absent
     /// from an older server: the phone judges it itself (`OrgThreadModel.shownToHim`).
     var shown: Bool? = nil
+    /// It waits on him (additive, 2026-11-21: Needs you, or Done with a result unread; server core/org/thread-groups.ts
+    /// threadsForHim), the rule `shown_count` and `user_status.threads` count by. A listed thread that
+    /// is not counted (pinned or overdue in the node's hands, one below his reply travels to) is no
+    /// number. Absent from an older server: every listed one counts, as that server counts them.
+    var counted: Bool? = nil
     /// Who wrote the summary (`reply`): "human", or a session with its `reply_sid` and `reply_host`.
     /// Absent from an older record or server: the summary's writer is not known.
     var reply_by: String? = nil

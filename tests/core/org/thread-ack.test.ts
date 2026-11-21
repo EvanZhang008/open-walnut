@@ -9,7 +9,8 @@ import { describe, it, expect } from 'vitest'
 import { emptyThreads, fileMessage, normalizeThreads, setAnswers, ThreadError, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import { ackDoneLine, ackKnown, ackLine, ackPlace, ackWaitsOf, checkPlace, nodePlaced, type AckTask } from '../../../src/core/org/thread-ack.js'
 import { ACK_DECIDING_LINE, ackCardLine, backFromKnown, inAcknowledged, isKnown, KNOWN_CLOSE_MS, knownStep } from '../../../src/core/org/thread-known.js'
-import { hasThreadNews, shownToHim, threadCounts } from '../../../src/core/org/thread-view.js'
+import { hasThreadNews, shownToHim } from '../../../src/core/org/thread-view.js'
+import { threadCounts } from '../../../src/core/org/thread-groups.js'
 import { THREADS_PENDING_RULE } from '../../../src/core/org/thread-rules.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 1, 6, min)).toISOString()

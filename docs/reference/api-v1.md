@@ -1731,9 +1731,12 @@ a newer node never changes an older one's. A chosen one is stored on the task as
   `open=1` keeps the open ones, `closed=1` the closed ones; `limit` keeps the first N.
   `answer_max` cuts each answer the user already reacted to to N characters (`clipped: true` on
   that answer); an answer his card shows (not reacted to yet) stays whole. Each thread carries
-  `shown` (additive, 2026-11-06): his view shows it, judged over ALL the node's threads, and
-  `shown_count` is that count (`user_status.threads.shown` counts the same), so a client that
-  reads part of the list still draws the number its header shows. A client reads the open ones
+  `shown` (additive, 2026-11-06): his view lists it, judged over ALL the node's threads, and
+  `counted` (additive, 2026-11-21): it waits on him (Needs you, or Done: a result he has not read;
+  `src/core/org/thread-groups.ts` threadsForHim). `shown_count` counts the `counted` ones
+  (`user_status.threads.shown` counts the same), so a client that reads part of the list still
+  draws the number its header shows. A listed thread that is not counted (pinned or overdue in the
+  node's hands, a task's thread below while his reply travels to it) never lights a count up. A client reads the open ones
   and a page of the closed ones with `answer_max`: the whole list (over 1 MB for a busy VP) is
   past what the companion carries back from the Mac (256 KB).
   A thread the user acknowledged (experiment `ack_means_known`) is open, `state: "pending"`, with

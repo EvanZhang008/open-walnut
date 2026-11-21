@@ -14,7 +14,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
-import { threadCounts, threadLine } from '../../src/core/org/thread-view.js'
+import { threadLine } from '../../src/core/org/thread-view.js'
+import { threadCounts } from '../../src/core/org/thread-groups.js'
 import { deriveUserStatus } from '../../src/core/user-status.js'
 import { buildChannels, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
 import { seenOf } from '../../src/core/sessions/status-push.js'
@@ -103,13 +104,7 @@ describe('threads come first', () => {
     expect(pills.indexOf('org-pill-threads')).toBeLessThan(pills.indexOf('headerPills('))
   })
 
-  it('every web count of threads goes through threadCounts (one predicate, one number)', () => {
-    const root = path.join(__dirname, '../../web/src')
-    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(d, e.name)] : [])
-    // A count is a filter on shownToHim's verdict; only the Threads view itself lists with it.
-    const counting = walk(root).filter((f) => /filter\(\([^)]*\) => shownToHim\(/.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(root, f))
-    expect(counting.filter((f) => !f.endsWith('OrgThreads.tsx'))).toEqual([])
-  })
+  // Every count of threads goes through threadCounts: tests/core/org/thread-count-one-rule.test.ts.
 
   it('every ask and non-prose Markdown block stays whole, including newly supported block kinds', () => {
     const css = fs.readFileSync(path.join(__dirname, '../../web/src/styles/org-threads.css'), 'utf8')
