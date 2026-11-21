@@ -316,13 +316,15 @@ projectsV1Router.get('/ordering', async (_req: Request, res: Response, next: Nex
       const { readTaskProjection } = await import('../../core/task-projection.js')
       const pushed = (await readTaskProjection().catch(() => null))?.project_order
       if (Array.isArray(pushed)) {
-        res.json({ projects: pushed })
+        const { v1ProjectName } = await import('../../core/inbox-project.js')
+        res.json({ projects: pushed.map((p: string) => v1ProjectName(p)) })
         return
       }
     }
     // The web route's read: a test run's own copy, else config.yaml (routes/ordering.ts).
     const { readOrdering } = await import('./ordering.js')
-    res.json({ projects: (await readOrdering()).projects })
+    const { v1ProjectName } = await import('../../core/inbox-project.js')
+    res.json({ projects: (await readOrdering()).projects.map(v1ProjectName) })
   } catch (err) {
     next(err)
   }

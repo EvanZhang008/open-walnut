@@ -97,24 +97,56 @@ describe('migrateInboxProject', () => {
     expect(later.recordPath).toBeDefined();
   });
 
-  it('a row whose payload names a project (an older replica copy) keeps that project', async () => {
+  it('a NULL row whose payload names a project keeps it, as rowToTask read it; an empty one is the Inbox', async () => {
     oldRow('p-0001', null, { payload: JSON.stringify({ project: 'Ask Walnut' }) });
     oldRow('p-0002', '', { payload: JSON.stringify({ project: '  ' }) });
-    await migrateInboxProject(getDb()!, dir());
+    // The column said '' (the Inbox), so the payload never counted: it stays in the Inbox.
+    oldRow('p-0003', '', { payload: JSON.stringify({ project: 'Foo' }) });
+    const result = await migrateInboxProject(getDb()!, dir());
     expect(rowOf('p-0001').project).toBe('Ask Walnut');
     expect(rowOf('p-0002').project).toBe('Inbox');
+    expect(rowOf('p-0003').project).toBe('Inbox');
+    expect(result.taskIds.sort()).toEqual(['p-0002', 'p-0003']);
   });
 
-  it('frees the name: an old tombstone is cleared and a service claim on a project named Inbox turns local', async () => {
-    getDb()!.prepare(`INSERT INTO task_projects (name, source, order_index) VALUES ('inbox', 'ms-todo', 3)`).run();
+  it('frees the name: an old tombstone is cleared, and a local project named inbox is the Inbox under one spelling', async () => {
+    getDb()!.prepare(`INSERT INTO task_projects (name, source, order_index, metadata) VALUES ('inbox', 'local', 3, '{"default_cwd":"/work"}')`).run();
     getDb()!.prepare(`INSERT INTO task_project_tombstones (name, source, deleted_at) VALUES ('Inbox', 'local', ?)`).run(OLD_AT);
     oldRow('a-0001', '');
+    oldRow('b-0002', 'inbox');
     const result = await migrateInboxProject(getDb()!, dir());
     expect(result.created).toBe(false);
-    expect(getDb()!.prepare(`SELECT name, source FROM task_projects`).all()).toEqual([{ name: 'inbox', source: 'local' }]);
+    expect(result.renamed).toMatchObject({ from: 'inbox', to: 'Inbox', source: 'local', taskIds: ['b-0002'] });
+    expect(getDb()!.prepare(`SELECT name, source, metadata FROM task_projects`).all()).toEqual([{ name: 'Inbox', source: 'local', metadata: '{"default_cwd":"/work"}' }]);
     expect(getDb()!.prepare(`SELECT COUNT(*) AS n FROM task_project_tombstones`).get()).toEqual({ n: 0 });
-    // Filed under the row's own spelling: one project, never two casings.
-    expect(rowOf('a-0001').project).toBe('inbox');
+    expect([rowOf('a-0001').project, rowOf('b-0002').project]).toEqual(['Inbox', 'Inbox']);
+    // Done: a second run changes nothing.
+    expect(await migrateInboxProject(getDb()!, dir())).toEqual({ created: false, taskIds: [], folderIds: [] });
+  });
+
+  it('a project a sync service claimed under the name keeps its service and its tasks, renamed', async () => {
+    getDb()!.prepare(`INSERT INTO task_projects (name, source, order_index) VALUES ('Inbox', 'ms-todo', 3)`).run();
+    oldRow('s-0001', 'Inbox', { source: 'ms-todo' });
+    oldRow('a-0001', '');
+    const result = await migrateInboxProject(getDb()!, dir(), new Date('2026-11-21T00:00:00Z'));
+    expect(result.created).toBe(true);
+    expect(result.renamed).toMatchObject({ from: 'Inbox', to: 'Inbox (ms-todo)', source: 'ms-todo', taskIds: ['s-0001'] });
+    const rows = getDb()!.prepare(`SELECT name, source FROM task_projects ORDER BY name`).all();
+    expect(rows).toEqual([{ name: 'Inbox', source: 'local' }, { name: 'Inbox (ms-todo)', source: 'ms-todo' }]);
+    expect(rowOf('s-0001')).toMatchObject({ project: 'Inbox (ms-todo)', source: 'ms-todo' });
+    expect(rowOf('a-0001').project).toBe('Inbox');
+    const record = JSON.parse(await fs.readFile(result.recordPath!, 'utf8'));
+    expect(record).toMatchObject({ renamed: { from: 'Inbox', to: 'Inbox (ms-todo)', source: 'ms-todo' }, renamedTaskIds: ['s-0001'] });
+  });
+
+  it('a copy cut off half way is not kept as the copy', async () => {
+    oldRow('a-0001', '');
+    const failing = { prepare: getDb()!.prepare.bind(getDb()!), transaction: getDb()!.transaction.bind(getDb()!), backup: async () => { throw new Error('disk full'); } };
+    const result = await migrateInboxProject(failing as never, dir());
+    expect(result.backupPath).toBeUndefined();
+    expect(result.taskIds).toEqual(['a-0001']);
+    const files = await fs.readdir(dir());
+    expect(files.filter((f) => f.startsWith('tasks.before-inbox-project'))).toEqual([]);
   });
 });
 

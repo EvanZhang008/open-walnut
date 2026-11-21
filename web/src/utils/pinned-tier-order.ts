@@ -18,7 +18,7 @@
  * reorders what stays on screen.
  */
 
-import { projectGroupKey } from './project-display';
+import { projectGroupKey, projectIdentity } from './project-display';
 
 /** The three fields the order reads. `group_id` is the row's folder. */
 export interface PinnedTierRow {
@@ -127,11 +127,12 @@ export function clusterTierByProject<T extends PinnedTierRow>(ids: string[], tas
   // order after them, Inbox ('') stays wherever occurrence put it relative to
   // other unlisted keys. Stable sort → ties keep occurrence order.
   if (projectOrder && projectOrder.length > 0) {
-    const rank = new Map(projectOrder.map((name, idx) => [name.toLowerCase(), idx]));
+    // projectIdentity: the Inbox is one slot whether the order or the row says '' or `Inbox`.
+    const rank = new Map(projectOrder.map((name, idx) => [projectIdentity(name), idx]));
     const occurrence = new Map(keyOrder.map((k, idx) => [k, idx]));
     keyOrder.sort((a, b) => {
-      const ra = rank.get(a.toLowerCase());
-      const rb = rank.get(b.toLowerCase());
+      const ra = rank.get(projectIdentity(a));
+      const rb = rank.get(projectIdentity(b));
       if (ra !== undefined && rb !== undefined) return ra - rb;
       if (ra !== undefined) return -1;
       if (rb !== undefined) return 1;

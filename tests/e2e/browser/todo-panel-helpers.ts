@@ -353,7 +353,9 @@ export async function presetPanelView(
         xhr.open('GET', '/api/tasks?fields=list', false)
         xhr.send()
         const tasks = (JSON.parse(xhr.responseText) as { tasks?: Array<{ project?: string }> }).tasks ?? []
-        localStorage.setItem('walnut-todo-list-opened', JSON.stringify([...new Set(tasks.map((t) => t.project || ''))]))
+        // The list keys the Inbox's group '' (projectGroupKey), which /api names `Inbox`.
+        const groupKey = (p?: string) => (!p || p.trim().toLowerCase() === 'inbox' ? '' : p)
+        localStorage.setItem('walnut-todo-list-opened', JSON.stringify([...new Set(tasks.map((t) => groupKey(t.project)))]))
       }
     } catch { /* ignore */ }
   }, [section, project])

@@ -1,5 +1,6 @@
 import { apiGet, apiPut } from './client';
 import type { TierSeparator } from '@/components/tasks/tier-separators';
+import { projectGroupKey } from '@/utils/project-display';
 
 /** Project display order — flat, since Project is the single grouping layer.
  *  `separators` are the hand-placed divider lines inside the pinned tiers. */
@@ -8,8 +9,27 @@ export interface Ordering {
   separators?: TierSeparator[];
 }
 
+/** A separator's anchors under the board's own keys ('' for the Inbox, projectGroupKey). */
+function separatorOnBoardKeys(sep: TierSeparator): TierSeparator {
+  if (sep.mode !== 'project') return sep;
+  return {
+    ...sep,
+    ...(sep.afterProject !== undefined ? { afterProject: projectGroupKey(sep.afterProject) } : {}),
+    ...(sep.beforeProject !== undefined ? { beforeProject: projectGroupKey(sep.beforeProject) } : {}),
+    ...(sep.project !== undefined ? { project: projectGroupKey(sep.project) } : {}),
+  };
+}
+
+/** The order as the board reads it: the server names the Inbox's slot `Inbox` (every task has a
+ *  project), the board keys its group '' (projectGroupKey), so both are read under the board's key
+ *  here, once, and a line next to the Inbox stays where it was drawn. */
 export async function fetchOrdering(): Promise<Ordering> {
-  return apiGet<Ordering>('/api/ordering');
+  const data = await apiGet<Ordering>('/api/ordering');
+  return {
+    ...data,
+    projects: (data.projects ?? []).map(projectGroupKey),
+    ...(data.separators ? { separators: data.separators.map(separatorOnBoardKeys) } : {}),
+  };
 }
 
 export async function saveProjectOrder(order: string[]): Promise<void> {

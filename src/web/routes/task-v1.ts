@@ -193,7 +193,9 @@ taskV1Router.get('/tasks/:id', async (req: Request, res: Response, next: NextFun
       }
       detail.links = links.map((l) => (l.file && exists[l.target] === false ? { ...l, gone: true } : l))
     }
-    res.json({ task: detail })
+    // The phone's contract: an Inbox task says '' here, as in the list (v1ProjectName).
+    const { v1ProjectName } = await import('../../core/inbox-project.js')
+    res.json({ task: { ...detail, project: v1ProjectName(detail.project as string | undefined) } })
   } catch (err) {
     next(err)
   }

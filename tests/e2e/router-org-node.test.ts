@@ -49,12 +49,12 @@ async function snapshot(id: string) {
 }
 
 describe('an independent router beside the VPs', () => {
-  it('has zero VP links, no leader, no project and never becomes a VP or board task', async () => {
+  it('has zero VP links, no leader, the Inbox for project, and never becomes a VP or board task', async () => {
     const response = await create('personal', []);
     expect(response.status).toBe(201);
     const { task } = await response.json();
     const stored = await getTask(task.id);
-    expect(stored).toMatchObject({ org_role: 'router', router_area_id: 'personal', router_links: [], router_paused: true, project: '' });
+    expect(stored).toMatchObject({ org_role: 'router', router_area_id: 'personal', router_links: [], router_paused: true, project: 'Inbox' });
     expect(stored.parent_task_id).toBeFalsy();
     expect(isHiddenFromTaskLists(stored)).toBe(true);
     expect(buildOrgTree([stored]).projects).toEqual([]);

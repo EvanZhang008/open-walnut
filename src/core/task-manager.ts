@@ -1775,6 +1775,10 @@ export async function renameProject(
   // Shape validation on the TARGET only: an existing project with a bad legacy
   // name must stay renamable (that's how you fix it).
   const to = assertValidProjectName(newProject);
+  // A rename onto the Inbox would merge the project's settings and its service's claim into it
+  // (every unfiled task would start there and sync there). Deleting a project is the way to
+  // put its tasks in the Inbox.
+  if (isInboxProject(to)) throw new InvalidProjectNameError('A project cannot be renamed to the Inbox. Delete it instead: its tasks move to the Inbox.', to);
 
   const {
     count, merged, renameSource, renamedTasks, renamedTaskIds, canonical, oldAlias, pinMovedIds,

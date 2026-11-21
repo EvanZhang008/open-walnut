@@ -299,7 +299,7 @@ describe('Fix 4: project field E2E', () => {
     expect(body.task.project).toBe('Work idea');
   });
 
-  it('creating a task without a project lands in Inbox (empty project)', async () => {
+  it('creating a task without a project lands in the Inbox project', async () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -307,7 +307,7 @@ describe('Fix 4: project field E2E', () => {
     });
     const body = await res.json() as { task: { project: string } };
 
-    expect(body.task.project).toBe('');
+    expect(body.task.project).toBe('Inbox');
   });
 
   it('WS event for a created task carries the project', async () => {

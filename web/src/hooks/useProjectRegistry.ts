@@ -595,7 +595,8 @@ export function useProjectEntry(project: string): { name: string; row: ProjectRe
   const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return useMemo(() => {
     const name = resolveProjectName(project);
-    return { name, row: name ? rowOf(snap, name) : null };
+    // '' is the Inbox, which has a row (and settings) of its own now.
+    return { name, row: rowOf(snap, name) };
   }, [snap, project]);
 }
 

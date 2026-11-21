@@ -39,8 +39,32 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const INSERT_RE = /INSERT\s+(?:OR\s+\w+\s+)?INTO\s+tasks\b(?!_)/g;
-const UPDATE_RE = /UPDATE\s+tasks\s+SET\b/g;
+const INSERT_RE = /(?:INSERT|REPLACE)\s+(?:OR\s+\w+\s+)?INTO\s+["`]?tasks\b(?!_)/gi;
+const UPDATE_RE = /UPDATE\s+(?:OR\s+\w+\s+)?["`]?tasks\b(?!_)["`]?\s+SET\b/gi;
+
+/** Statements that set tasks.project in SQL, in `text`. */
+function projectSets(text: string): number {
+  let n = 0;
+  UPDATE_RE.lastIndex = 0;
+  for (let m = UPDATE_RE.exec(text); m; m = UPDATE_RE.exec(text)) {
+    const set = text.slice(m.index, m.index + 600).split(/\bWHERE\b/)[0]!;
+    if (/\bproject\s*=/.test(set)) n++;
+  }
+  return n;
+}
+
+/**
+ * The store's own statements that set tasks.project, each checked by hand. task-db.ts: the
+ * one-time category migration, which runs before the Inbox migration on the same open (that
+ * one files whatever it left empty). inbox-migration.ts: its own moves (and the undo text in
+ * its record). A new one fails here: bind projectOrInbox(...) and add it with why.
+ */
+const PROJECT_SETS_IN_STORE: Record<string, number> = {
+  'src/core/task-manager.ts': 0,
+  'src/core/task-db.ts': 1,
+  'src/core/task-db-migration.ts': 0,
+  'src/core/inbox-migration.ts': 4,
+};
 
 /** The task store's own files: the only ones allowed to write task rows in SQL. */
 const STORE_FILES = new Set([
@@ -60,13 +84,26 @@ describe('layer 1: only the task store writes task rows, through taskToFullRow',
       INSERT_RE.lastIndex = 0;
       if (INSERT_RE.test(text)) offenders.push(`${rel}: inserts task rows`);
       // An UPDATE of other columns (a hook stamping a note) is fine; one that sets the project is not.
-      UPDATE_RE.lastIndex = 0;
-      for (let m = UPDATE_RE.exec(text); m; m = UPDATE_RE.exec(text)) {
-        const set = text.slice(m.index, m.index + 600).split(/\bWHERE\b/)[0]!;
-        if (/\bproject\s*=/.test(set)) offenders.push(`${rel}: sets tasks.project`);
-      }
+      if (projectSets(text) > 0) offenders.push(`${rel}: sets tasks.project`);
     }
     expect(offenders, 'write tasks through task-manager.ts (addTask, updateTask, ...), whose rows go through taskToFullRow and so always have a project').toEqual([]);
+  });
+
+  it('the store\'s own statements that set tasks.project are the known ones', () => {
+    const now = Object.fromEntries([...STORE_FILES].map((rel) => [rel, projectSets(fs.readFileSync(path.join(ROOT, rel), 'utf8'))]));
+    expect(now, 'a new SQL write of tasks.project: bind projectOrInbox(...) so it can never be empty, then list it in PROJECT_SETS_IN_STORE').toEqual(PROJECT_SETS_IN_STORE);
+  });
+
+  it('the patterns see every spelling of a task-row write', () => {
+    for (const sql of ['INSERT INTO tasks (id)', 'INSERT OR REPLACE INTO tasks (id)', 'REPLACE INTO tasks (id)', 'insert into "tasks" (id)']) {
+      INSERT_RE.lastIndex = 0;
+      expect(INSERT_RE.test(sql), sql).toBe(true);
+    }
+    INSERT_RE.lastIndex = 0;
+    expect(INSERT_RE.test('INSERT INTO tasks_fts (id)')).toBe(false);
+    expect(projectSets("UPDATE tasks SET project = ? WHERE id = ?")).toBe(1);
+    expect(projectSets('UPDATE OR IGNORE "tasks" SET note = ?, project = ? WHERE id = ?')).toBe(1);
+    expect(projectSets("UPDATE tasks SET note = ? WHERE project = ''")).toBe(0);
   });
 
   it("every INSERT into tasks in task-manager.ts binds a row built by taskToFullRow", () => {

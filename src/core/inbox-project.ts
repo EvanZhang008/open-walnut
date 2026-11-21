@@ -29,6 +29,15 @@ export function sameProject(a: string | null | undefined, b: string | null | und
   return projectOrInbox(a).toLowerCase() === projectOrInbox(b).toLowerCase();
 }
 
+/**
+ * The project as the frozen /api/v1 says it (docs/reference/api-v1.md): `""` for the Inbox, as
+ * before it was a project, so an installed phone app that shows one fixed Inbox entry and
+ * filters on `""` keeps working. Writes and filters there take both.
+ */
+export function v1ProjectName(project: string | null | undefined): string {
+  return isInboxProject(project) ? '' : (project ?? '').trim();
+}
+
 /** The project a write files `project` into: the Inbox (its own spelling) for a missing, empty
  *  or differently cased one, else the name trimmed. */
 export function projectOrInbox(project: string | null | undefined): string {

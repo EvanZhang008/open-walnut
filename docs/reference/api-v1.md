@@ -4105,9 +4105,11 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   `projects`, so a client that shows one fixed Inbox entry never shows two;
   the slot gained `name`, `metadata` (its settings) and `start_source`
   (additive). `GET|PUT /api/v1/projects/Inbox/metadata` read and write its
-  settings; `DELETE` and rename of the Inbox answer `400`. Every task's
-  `project` is a name, never empty: an Inbox task says `"Inbox"`. Writes and
-  filters still take `""` as the Inbox.
+  settings; `DELETE` and rename of the Inbox answer `400`. On this API an Inbox
+  task's `project` still says `""` (task lists, the events feed, task detail,
+  folders and `GET /api/v1/ordering`), so an installed app keeps its one fixed
+  Inbox entry and its saved `""` filters; writes and filters take `""` or
+  `"Inbox"` alike (`v1ProjectName`, src/core/inbox-project.ts).
 - `POST /api/v1/projects` body `{ "name", "source"? }` → idempotent create:
   `201 { name, source, created: true }` for a new row, `200 { …, created:
   false }` with the EXISTING row's source when the name is taken (a second

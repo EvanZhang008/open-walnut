@@ -111,7 +111,7 @@ test('the row kebab moves a task to another project', async ({ page }) => {
   await expect.poll(() => fetchTaskProject(task.id)).toBe('Ideas')
 })
 
-test('the kebab can move a task to Inbox (empty project)', async ({ page }) => {
+test('the kebab can move a task to the Inbox', async ({ page }) => {
   const task = await seedTask('Send me to inbox', 'Marina')
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -122,7 +122,8 @@ test('the kebab can move a task to Inbox (empty project)', async ({ page }) => {
   await taskRow.locator('.task-kebab-btn').click()
 
   await pickProject(page, 'Inbox')
-  await expect.poll(() => fetchTaskProject(task.id)).toBe('')
+  // The Inbox is a project now, and /api names it `Inbox`.
+  await expect.poll(() => fetchTaskProject(task.id)).toBe('Inbox')
 })
 
 test('picking a project from the right-click menu does not drag the row', async ({ page }) => {

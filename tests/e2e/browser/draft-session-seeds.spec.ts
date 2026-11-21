@@ -397,7 +397,7 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   // …and the task itself: the user's Inbox, and the tier the chip showed.
   const detail = (await (await page.request.get(`/api/tasks/${taskId}`)).json()) as
     { task?: { project?: string } }
-  expect(detail.task?.project ?? '').toBe('')
+  expect(detail.task?.project).toBe('Inbox')
   await expectTaskInTier(page, taskId, 'satellite')
 })
 

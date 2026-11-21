@@ -856,7 +856,8 @@ test('plain task creation needs no folder and retains the explicit AI launch pat
   expect(task.title).toBe(title);
   const detail = (await (await page.request.get(`/api/tasks/${task.id}`)).json()).task;
   expect(detail.description).toContain('Keep the description.');
-  expect(detail.project).toBe('');
+  // Every task has a project: one made with none is in the Inbox.
+  expect(detail.project).toBe('Inbox');
   expect(detail.session_id).toBeFalsy();
   await navigation(page).getByRole('button', { name: 'New task', exact: true }).click();
   await expect(page.locator('.main-page-session-column .draft-session-panel').first().locator('.draft-composer-bar')).toContainText(HOME_FOLDER);

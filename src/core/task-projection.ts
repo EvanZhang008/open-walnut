@@ -36,6 +36,7 @@ import {
   writeProjectionCache,
 } from './projection-cache.js'
 import type { Task } from './types.js'
+import { v1ProjectName } from './inbox-project.js'
 import { isPartial } from './peers/structured-reply.js'
 
 /** LEGACY git-synced path — dual-written while `sync.legacy_projection_files`
@@ -210,7 +211,8 @@ export function projectTask(t: Task): ProjectedTask {
     status: t.status,
     phase: t.phase,
     priority: t.priority,
-    project: t.project || '',
+    // The phone's contract: the Inbox's tasks say '' here (v1ProjectName).
+    project: v1ProjectName(t.project),
     ...(t.parent_task_id ? { parent_task_id: t.parent_task_id } : {}),
     ...(t.due_date ? { due_date: t.due_date } : {}),
     ...(t.start_date ? { start_date: t.start_date } : {}),
@@ -411,7 +413,7 @@ async function withBoardOrderInputs(projection: TaskProjection): Promise<TaskPro
   const shipped = new Set(projection.tasks.map((t) => t.id))
   return {
     ...projection,
-    ...(config ? { project_order: config.ordering?.projects ?? [] } : {}),
+    ...(config ? { project_order: (config.ordering?.projects ?? []).map(v1ProjectName) } : {}),
     ...(groups
       ? {
         groups: groups.map((g) => ({
@@ -419,7 +421,7 @@ async function withBoardOrderInputs(projection: TaskProjection): Promise<TaskPro
           label: g.label,
           hidden: g.hidden,
           member_ids: g.member_ids.filter((id) => shipped.has(id)),
-          project: g.project,
+          project: v1ProjectName(g.project),
           ...(g.parent_id ? { parent_id: g.parent_id } : {}),
         })),
       }

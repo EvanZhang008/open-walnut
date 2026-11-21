@@ -779,7 +779,7 @@ describe('folder REST API (/api/tasks/folders)', () => {
   });
 
   /** '' = Inbox is a real destination (and never gets a registry row). */
-  it("PATCH /folders/:gid moves a folder to Inbox ('')", async () => {
+  it("PATCH /folders/:gid moves a folder to the Inbox when sent ''", async () => {
     const f = (await (await createFolder({ label: 'To Inbox', project: 'e2e-grp-alpha' })).json()) as FolderResult;
     const task = await createTask('Inbox-bound member');
     await addToFolder(f.group_id, [task.id]);
@@ -787,12 +787,13 @@ describe('folder REST API (/api/tasks/folders)', () => {
     const res = await patchFolder(f.group_id, { project: '' });
     expect(res.status).toBe(200);
     const body = (await res.json()) as FolderMoveResult;
-    expect(body.project).toBe('');
+    // '' from a client still means the Inbox, which is a real project named Inbox now.
+    expect(body.project).toBe('Inbox');
     expect(body.moved_task_ids).toEqual([task.id]);
 
-    expect((await listGroups()).find((g) => g.group_id === f.group_id)!.project).toBe('');
+    expect((await listGroups()).find((g) => g.group_id === f.group_id)!.project).toBe('Inbox');
     const moved = await getTask(task.id);
-    expect(moved.project).toBe('');
+    expect(moved.project).toBe('Inbox');
     expect(moved.group_id).toBe(f.group_id);
   });
 
@@ -882,7 +883,7 @@ describe('folder REST API (/api/tasks/folders)', () => {
     });
     expect(created.status).toBe(201);
     const probe = (await created.json()) as { task: { id: string; project?: string } };
-    expect(probe.task.project ?? '').toBe('');
+    expect(probe.task.project).toBe('Inbox');
     // ...and the folder listing is still clean (no record acquired the payload).
     expect((await listGroups()).every((g) => g.project !== 'polluted')).toBe(true);
   });

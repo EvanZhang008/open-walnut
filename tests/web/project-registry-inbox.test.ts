@@ -68,9 +68,10 @@ describe('the Inbox in the project registry', () => {
     expect(snap.isKnownProject('inbox')).toBe(true)
     expect(snap.sourceByName.get('inbox')).toBe('local')
 
+    // '' is the Inbox too (a draft with no project): its row, as for its launch defaults below.
     for (const name of ['Inbox', 'inbox', '']) {
       const entry = useProjectEntry(name)
-      expect(entry.row?.defaultCwd, name).toBe(name ? '/work/inbox' : undefined)
+      expect(entry.row?.defaultCwd, name).toBe('/work/inbox')
     }
     // No project ('') launches with the Inbox's defaults, as the server's launchProjectName does.
     expect(useProjectLaunchDefaults('')).toEqual({ engine: 'codex', mode: 'plan', project: 'Inbox' })
@@ -101,7 +102,7 @@ describe('the Inbox in the project registry', () => {
     await load({ projects: [row('Marina')], inbox: { counts, name: 'Inbox' } })
     const settle = patchProjectLocal('Inbox', { defaultCwd: '/work/inbox' })
     expect(useProjectRegistry().inbox.defaultCwd).toBe('/work/inbox')
-    expect(useProjectEntry('').row).toBeNull()
+    expect(useProjectEntry('').row?.defaultCwd).toBe('/work/inbox')
     expect(useProjectEntry('Inbox').row?.defaultCwd).toBe('/work/inbox')
     expect(useProjectRegistry().projectNames).toEqual(['Marina'])
     settle(false)

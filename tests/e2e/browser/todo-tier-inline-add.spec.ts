@@ -181,8 +181,8 @@ test.describe('tier inline add', () => {
     await expect.poll(readCreated).toBeTruthy()
     const created = await readCreated()
     expect(created!.source).toBe('local')
-    // '' = Inbox, never the literal string 'Inbox' (that would be a real project).
-    expect(created!.project).toBe('')
+    // No project typed: the Inbox, a real project named Inbox (src/core/inbox-project.ts).
+    expect(created!.project).toBe('Inbox')
 
     // And no "Action failed" toast fired.
     await expect(page.locator('.notification-toast', { hasText: 'Action failed' })).toHaveCount(0)

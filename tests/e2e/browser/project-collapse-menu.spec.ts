@@ -836,8 +836,9 @@ test('right-click a project header opens the project menu; Inbox gets the short 
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
 
-  // Inbox is the ABSENCE of a project: no registry row, so no rename / favorite /
-  // details / delete. It still folds and still takes new tasks and folders.
+  // The Inbox is a project that is never renamed, merged or deleted, so no rename /
+  // favorite / delete. It still folds, takes new tasks and folders, and opens its
+  // details (its settings are its own).
   const inbox = listHeader(page, 'Inbox')
   await expect(inbox).toBeVisible()
   const inboxMenu = await openProjectMenu(page, inbox, 'Collapse project')
@@ -845,7 +846,7 @@ test('right-click a project header opens the project menu; Inbox gets the short 
   await expect(inboxMenu.getByRole('menuitem', { name: 'New folder', exact: true })).toBeVisible()
   await expect(inboxMenu.getByRole('menuitem', { name: 'Rename project', exact: true })).toHaveCount(0)
   await expect(inboxMenu.getByRole('menuitem', { name: 'Delete project', exact: true })).toHaveCount(0)
-  await expect(inboxMenu.getByRole('menuitem', { name: 'View project details', exact: true })).toHaveCount(0)
+  await expect(inboxMenu.getByRole('menuitem', { name: 'View project details', exact: true })).toBeVisible()
   await expect(inboxMenu.getByRole('menuitem', { name: 'New task with session', exact: true })).toHaveCount(0)
   await page.screenshot({ path: '/tmp/project-collapse/inbox-context-menu.png' })
   await page.keyboard.press('Escape')
@@ -965,8 +966,9 @@ test('Delete driven from the project context menu: the confirm names the count, 
   for (const t of [t1, t2]) await showMoreUntil(projectBucket(page, 'Inbox'), listRow(page, 'Inbox', t.id))
   await expect(listRow(page, 'Inbox', t1.id)).toBeVisible({ timeout: 15_000 })
   await expect(listRow(page, 'Inbox', t2.id)).toBeVisible()
-  expect(await taskProjectViaApi(t1.id)).toBe('')
-  expect(await taskProjectViaApi(t2.id)).toBe('')
+  // The Inbox is a project now, and /api names it `Inbox`.
+  expect(await taskProjectViaApi(t1.id)).toBe('Inbox')
+  expect(await taskProjectViaApi(t2.id)).toBe('Inbox')
   await page.screenshot({ path: '/tmp/project-collapse/project-deleted-from-menu.png' })
 })
 

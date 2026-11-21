@@ -79,10 +79,31 @@ interface StoredSeparator {
   project?: string
 }
 
+/** The board's key for a folder anchor: the server stores the Inbox as `Inbox` (every task has
+ *  a project), the tier's labels key it '' (projectGroupKey), so anchors are compared as the
+ *  board keys them. */
+const boardKey = (p: string | undefined) => (p !== undefined && p.trim().toLowerCase() === 'inbox' ? '' : p)
+
 async function readSeparators(page: Page): Promise<StoredSeparator[]> {
   const res = await page.request.get('/api/ordering')
   expect(res.ok(), await res.text()).toBe(true)
-  return ((await res.json()) as { separators?: StoredSeparator[] }).separators ?? []
+  const stored = ((await res.json()) as { separators?: StoredSeparator[] }).separators ?? []
+  return stored.map((s) => ({
+    ...s,
+    ...(s.afterProject !== undefined ? { afterProject: boardKey(s.afterProject) } : {}),
+    ...(s.beforeProject !== undefined ? { beforeProject: boardKey(s.beforeProject) } : {}),
+    ...(s.project !== undefined ? { project: boardKey(s.project) } : {}),
+  }))
+}
+
+/** The stored list once the UI's own save of a new line has landed: the line draws
+ *  optimistically, before its PUT is answered, so a read right after it can race it. */
+async function readSeparatorsSaved(page: Page, count = 1): Promise<StoredSeparator[]> {
+  await expect.poll(async () => (await readSeparators(page)).length, {
+    timeout: 15_000,
+    message: 'the line is stored, not component state',
+  }).toBe(count)
+  return readSeparators(page)
 }
 
 async function clearSeparators(page: Page): Promise<void> {
@@ -195,8 +216,7 @@ test('"Add separator" drops a line into the tier and it survives a reload', asyn
   await chooseFromPlus(page, page.getByTestId('tier-view-bar'), 'Add separator')
 
   await expect(separators(page)).toHaveCount(1, { timeout: 15_000 })
-  const stored = await readSeparators(page)
-  expect(stored, 'the line is stored, not component state').toHaveLength(1)
+  const stored = await readSeparatorsSaved(page)
   expect(stored[0].tier).toBe(TIER)
   expect(stored[0].mode).toBe('custom')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-separator-added.png` })
@@ -314,7 +334,7 @@ test('in "By project" the line goes BETWEEN folders, never inside one', async ({
   await chooseFromPlus(page, label, 'Add separator')
 
   await expect(separators(page)).toHaveCount(1, { timeout: 15_000 })
-  const stored = await readSeparators(page)
+  const stored = await readSeparatorsSaved(page)
   expect(stored[0].mode).toBe('project')
   // A folder is one unit here, so the line is positioned by FOLDER, and card
   // anchors must not exist at all — a card anchor is what used to let a line land
@@ -357,7 +377,7 @@ test('dragging in "By project" snaps to a folder boundary, even mid-folder', asy
   await chooseFromPlus(page, page.getByTestId('tier-view-bar'), 'Add separator')
   const line = separators(page).first()
   await expect(line).toBeVisible({ timeout: 15_000 })
-  const start = (await readSeparators(page))[0].beforeProject
+  const start = (await readSeparatorsSaved(page))[0].beforeProject
   expect(start, 'a tier-level "+" takes the first boundary').toBe(folders[1])
 
   // Drop on the BOTTOM half of the LAST card of the second folder. Mid-folder is

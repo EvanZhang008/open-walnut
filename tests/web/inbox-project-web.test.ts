@@ -98,6 +98,8 @@ describe('one Inbox group on every board', () => {
     const ids = rows.map((t) => t.id)
     // The Inbox's place in the hand-arranged order is stored as '' (ordering.projects).
     expect(clusterTierByProject(ids, rows, ['', 'Garden'])).toEqual(['i1', 'i2', 'i0', 'g1'])
+    // The server names that slot `Inbox` now; the cluster ranks it the same.
+    expect(clusterTierByProject(ids, rows, ['Garden', 'Inbox'])).toEqual(['g1', 'i1', 'i2', 'i0'])
   })
 
   it('the home filter lists the Inbox once, first', () => {

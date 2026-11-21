@@ -139,7 +139,8 @@ test('typing straight into the form needs no sentence and no AI call', async ({ 
 
   const created = await waitForNewTask(request, title, existingIds)
   expect(created.priority).toBe('none')
-  expect(created.project).toBe('')
+  // No project picked: the Inbox, which /api names `Inbox` (every task has a project).
+  expect(created.project).toBe('Inbox')
   expect(parseCalls).toBe(0) // empty sentence → the parse never fires
 })
 
@@ -277,8 +278,8 @@ test('plain note keeps Inbox defaults (no project, nothing pinned)', async ({ pa
   await panel.locator('.qtc-confirm-title').press('Enter')
 
   const created = await waitForNewTask(request, rawTitle, existingIds)
-  // '' = Inbox. Never the literal string "Inbox" — that would be a real project.
-  expect(created.project).toBe('')
+  // No project parsed: the Inbox, which /api names `Inbox` (every task has a project).
+  expect(created.project).toBe('Inbox')
 })
 
 test('panel overrides pin, project, priority, and star before create', async ({ page, request }) => {
