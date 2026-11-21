@@ -5,12 +5,14 @@
  * a click on Done still listed the Needs you cards).
  *
  * A lead with a thread in every group: Needs you (its Board's choice), Done (a result on its card),
- * Working, Waiting / Snoozed (one pending, one snoozed) and Closed; Archived holds none (a thread
- * is archived a day after it closed: tests/core/org/thread-groups.test.ts).
- *  1. The chips are All and the six groups, each with its count; All counts every group but Archived.
+ * Working, Waiting / Snoozed (one pending, one snoozed), Acknowledged (he acknowledged it, the AI
+ * has not placed it yet: experiment ack_means_known) and Closed; Archived holds none (a thread is
+ * archived a day after it closed: tests/core/org/thread-groups.test.ts).
+ *  1. The chips are All and the seven groups, each with its count; All counts every group but Archived.
  *  2. Each chip shows only its group's cards, every one of them, and nothing else; Closed shows only
  *     the closed one, reading Closed; an empty group says so.
  *  3. The pick is kept: the page loaded again opens on the chip he left.
+ *  4. With ack_means_known off and nothing in Acknowledged, there is no Acknowledged chip.
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -23,7 +25,7 @@ const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Orchard ${STAMP}`
 const made: string[] = []
-const ids = { lead: '', leadSid: '', worker: '', needs: '', read: '', working: '', waiting: '', snoozed: '', closed: '' }
+const ids = { lead: '', leadSid: '', worker: '', needs: '', read: '', working: '', waiting: '', snoozed: '', known: '', closed: '' }
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 
 test.describe.configure({ mode: 'serial' })
@@ -102,6 +104,11 @@ test.beforeAll(async ({ request }) => {
   await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${ids.snoozed}`, { snooze: new Date(Date.now() + 2 * 86_400_000).toISOString() })
   ids.closed = await nodeThread(request, `The ladder is fixed ${STAMP}`)
   await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${ids.closed}`, { close: 'acked' })
+  // His Acknowledge with ack_means_known on: Acknowledged while the AI decides.
+  const ackOn = await request.put('/api/config', { data: { experimental: { ack_means_known: true } } })
+  expect(ackOn.ok(), await ackOn.text()).toBe(true)
+  ids.known = await nodeThread(request, `Pick the apples ${STAMP}`)
+  await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${ids.known}`, { close: 'acked' })
   await send(request, 'put', `/api/v1/tasks/${ids.lead}/board`, {
     html: `<html><body><h1>Orchard</h1><walnut-choice id="net-when" title="Net the cherries now or in May? ${STAMP}" options="now:Now,may:In May" recommended="may" task="${ids.worker}"></walnut-choice></body></html>`,
   })
@@ -112,30 +119,30 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  await request.put('/api/config', { data: { experimental: { brief_off: false } } })
+  await request.put('/api/config', { data: { experimental: { brief_off: false, ack_means_known: false } } })
   for (const id of made) await removeTask(request, id)
 })
 
-test('each chip shows only its own group, every card of it, and the pick is kept', async ({ page }) => {
+test('each chip shows only its own group, every card of it, and the pick is kept', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await isolateUiPrefs(page)
   await loadHome(page)
   await openLead(page)
   const want: Record<string, string[]> = {
-    needs: [ids.needs], read: [ids.read], working: [ids.working], waiting: [ids.waiting, ids.snoozed].sort(), done: [ids.closed], archived: [],
+    needs: [ids.needs], read: [ids.read], working: [ids.working], waiting: [ids.waiting, ids.snoozed].sort(), known: [ids.known], done: [ids.closed], archived: [],
   }
-  await expect.poll(async () => (await shownCards(page)).all.length, { timeout: 20_000 }).toBe(6)
+  await expect.poll(async () => (await shownCards(page)).all.length, { timeout: 20_000 }).toBe(7)
 
-  // 1. All and the six groups, in his words, each counted; All counts every group but Archived.
-  await expect(page.getByTestId('org-threads-chip')).toHaveText(['All 6', 'Needs you 1', 'Done 1', 'Working 1', 'Waiting / Snoozed 2', 'Closed 1', 'Archived 0'])
+  // 1. All and the seven groups, in his words, each counted; All counts every group but Archived.
+  await expect(page.getByTestId('org-threads-chip')).toHaveText(['All 7', 'Needs you 1', 'Done 1', 'Working 1', 'Waiting / Snoozed 2', 'Acknowledged 1', 'Closed 1', 'Archived 0'])
   const all = await shownCards(page)
   expect(Object.fromEntries(Object.entries(all.byGroup).map(([g, xs]) => [g, [...xs].sort()]))).toEqual(
     Object.fromEntries(Object.entries(want).filter(([, xs]) => xs.length)))
   await shot(page, '0-all')
 
   // 2. Each chip: only its group's cards, all of them, under its own head; the empty one says so.
-  for (const g of ['needs', 'read', 'working', 'waiting', 'done', 'archived', 'all']) {
+  for (const g of ['needs', 'read', 'working', 'waiting', 'known', 'done', 'archived', 'all']) {
     await chip(page, g).click()
     await expect(chip(page, g)).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', g)
@@ -150,6 +157,10 @@ test('each chip shows only its own group, every card of it, and the pick is kept
       await shot(page, '1-closed')
     }
     if (g === 'read') await expect(page.locator(`[data-thread-id="${ids.read}"]`).getByTestId('org-thread-state')).toHaveText('Done')
+    if (g === 'known') {
+      await expect(page.locator(`[data-thread-id="${ids.known}"]`).getByTestId('org-thread-state')).toHaveText('Acknowledged')
+      await expect(page.locator(`[data-thread-id="${ids.known}"]`).getByTestId('org-thread-ack-line')).toHaveText('AI is deciding where this goes.')
+    }
   }
 
   // 3. The pick is kept: Closed, then the page loaded again opens on Closed.
@@ -159,5 +170,13 @@ test('each chip shows only its own group, every card of it, and the pick is kept
   await expect(chip(page, 'done')).toHaveAttribute('aria-pressed', 'true')
   expect((await shownCards(page)).all).toEqual([ids.closed])
   await chip(page, 'all').click()
+
+  // 4. ack_means_known off with nothing left in Acknowledged: no Acknowledged chip (today's chips).
+  await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${ids.known}`, { place: 'waiting', place_why: 'waits on the apples to ripen' }, ids.leadSid)
+  const off = await request.put('/api/config', { data: { experimental: { ack_means_known: false } } })
+  expect(off.ok(), await off.text()).toBe(true)
+  await loadHome(page)
+  await openLead(page)
+  await expect(page.getByTestId('org-threads-chip')).toHaveText(['All 7', 'Needs you 1', 'Done 1', 'Working 1', 'Waiting / Snoozed 3', 'Closed 1', 'Archived 0'])
   expect(pageErrors).toEqual([])
 })

@@ -1,13 +1,14 @@
 /**
- * What holds a card he acknowledged while work on it was not over (experiment ack_means_known,
- * core/org/thread-ack-outcome.ts), in place of its summary; the card is drawn under Working or
- * Waiting / Snoozed (its `ackGroup`). Each task still working on its subject, or waiting (on what,
- * until when), with its status dot and what it is to finish; his reply on its way; a decision letter.
- * Nothing holding it any more: it closes in a few minutes unless the node has something new.
+ * What holds a card he acknowledged once it was placed in Working or Waiting (experiment
+ * ack_means_known, core/org/thread-known.ts), in place of its summary, under the line saying where
+ * it went and why. Each task still working on its subject, or waiting (on what, until when), with
+ * its status dot and what it is to finish; his reply on its way; a decision letter. One Walnut
+ * placed with nothing holding it any more closes in a few minutes unless the node has something new.
  */
 import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { OrgThread } from '@/api/org-threads';
+import { placedSinceAck } from '@open-walnut/thread-groups';
 import { AgentText } from '@/components/common/AgentText';
 import { TaskChip } from './ThreadTaskChips';
 
@@ -22,10 +23,12 @@ export function KnownBlock({ t, tasks, name }: { t: OrgThread; tasks: readonly T
   const w = t.awaits;
   // An older server sends no `awaits`: the thread's own task list says what it went to.
   const waits: NonNullable<OrgThread['awaits']>['tasks'] = w ? w.tasks : (t.tasks ?? []).map((id) => ({ id, title: byId.get(id)?.title ?? id }));
-  const ended = t.ackGroup === 'closed' || (!!w && !w.tasks.length && !w.replies && !w.letter);
-  const working = t.ackGroup === 'working';
+  const placed = placedSinceAck(t);
+  // Only one Walnut placed settles by itself; one the node placed is the node's to move.
+  const ended = placed?.by === 'walnut' && !!w && !w.tasks.length && !w.replies && !w.letter;
+  const working = placed?.to === 'working';
   return (
-    <div className="org-thread-known" data-testid="org-thread-known" data-ended={ended ? 'true' : undefined} data-ack-group={t.ackGroup}>
+    <div className="org-thread-known" data-testid="org-thread-known" data-ended={ended ? 'true' : undefined} data-placed={placed?.to}>
       {ended && <p className="org-thread-known-lead">{`Its work is over; it closes in a few minutes unless ${name} has something new for you.`}</p>}
       {!ended && waits.map((x) => (
         <div key={x.id} className="org-thread-known-wait" data-testid="org-thread-known-wait" data-task-id={x.id}>

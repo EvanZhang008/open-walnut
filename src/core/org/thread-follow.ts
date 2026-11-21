@@ -275,6 +275,8 @@ function watchSet(nodes: ReadonlyArray<{ threads: readonly OrgThread[] }>, p: Or
 
 /** When the next Known thread is due to settle (thread-ack.ts settleKnown): the follow loop wakes then. */
 let knownDueAt: number | undefined;
+/** How long the follow loop waits before trying a due Known step again that is already past. */
+const KNOWN_RETRY_MS = 30_000;
 
 /**
  * One pass of the state rule over every lead's open threads. Returns how many moved. `now`: the
@@ -434,7 +436,9 @@ export function startThreadFollow(opts: { debounceMs?: number; firstMs?: number 
   const knownAt = (): void => {
     if (knownTimer) { clearTimeout(knownTimer); knownTimer = null; }
     if (stopped || knownDueAt === undefined) return;
-    knownTimer = setTimeout(() => { knownTimer = null; void pass(); }, Math.min(Math.max(knownDueAt - Date.now(), 0) + 1_000, SCAN_MS));
+    // Never a tight loop: a due time already past (a write the pass could not make) waits KNOWN_RETRY_MS.
+    const wait = knownDueAt - Date.now();
+    knownTimer = setTimeout(() => { knownTimer = null; void pass(); }, Math.min(wait > 0 ? wait + 1_000 : KNOWN_RETRY_MS, SCAN_MS));
     knownTimer.unref?.();
   };
   const schedule = (): void => {

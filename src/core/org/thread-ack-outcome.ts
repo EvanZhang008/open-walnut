@@ -1,9 +1,10 @@
 /**
- * Where a thread goes at his Acknowledge (experiment ack_means_known), and where one he
- * acknowledged before stands now: ONE rule, used by the ack (threads-store.ts patchThread), by the
- * read (thread-ack.ts withAwaits: the card's group and what it waits on) and by the follow pass
- * that settles it (thread-ack.ts settleKnown). 2026-11-20, the user: "if I ack and ai should
- * determine if it should go to closed or wait or wip", "If U know why not close".
+ * Where Walnut's rule says a thread he acknowledged goes (experiment ack_means_known): ONE rule,
+ * read by the node at his Acknowledge as Walnut's own reading (thread-ack.ts ackLine), by the
+ * fallback that places it when the node has not decided in KNOWN_CLOSE_MS (thread-ack.ts
+ * settleKnown), by the read (thread-ack.ts withAwaits: what it waits on) and by the follow pass
+ * that settles one Walnut placed. 2026-11-20, the user: "if I ack and ai should determine if it
+ * should go to closed or wait or wip", "If U know why not close".
  *
  *   working  a task the thread lists is still working on this thread's subject
  *   waiting  it waits on someone or something or a time: a task it lists on its subject is
@@ -23,7 +24,7 @@ import { deliveryOpen, type OrgThread } from './threads-model.js';
 import { liveLetter } from './letter-thread-model.js';
 import { deliverableLine } from '../task-deliverable.js';
 import { storedUserState, type UserStatus } from '../user-status.js';
-import type { AckWaits } from './thread-known.js';
+import type { AckPlace, AckWaits } from './thread-known.js';
 
 /** What a task the thread lists says, as the store holds it. */
 export interface AckTask {
@@ -35,7 +36,7 @@ export interface AckTask {
   user_status?: (Partial<Pick<UserStatus, 'toRead' | 'snoozed'>> & { state?: UserStatus['state']; waitingOn?: string; until?: string }) | null;
 }
 
-export type AckOutcome = 'working' | 'waiting' | 'closed';
+export type AckOutcome = AckPlace;
 
 /** Generic words that name no subject: a status, a surface, a filler. */
 const STOP = new Set([
@@ -100,7 +101,10 @@ export function taskStands(task: AckTask): 'working' | 'waiting' | null {
  * it lists (by id) as the store holds them; one missing from the map is gone or unknown and holds
  * nothing. Pure.
  */
-export function ackOutcome(t: OrgThread, tasks: ReadonlyMap<string, AckTask>): { outcome: AckOutcome; waits: AckWaits | null } {
+/** Walnut's reading of a thread: where it goes and what holds it there. */
+export interface AckReading { outcome: AckOutcome; waits: AckWaits | null }
+
+export function ackOutcome(t: OrgThread, tasks: ReadonlyMap<string, AckTask>): AckReading {
   const held: Array<AckWaits['tasks'][number] & { stands: 'working' | 'waiting' }> = [];
   for (const id of t.tasks ?? []) {
     const task = tasks.get(id);
@@ -119,4 +123,21 @@ export function ackOutcome(t: OrgThread, tasks: ReadonlyMap<string, AckTask>): {
   if (!working && !held.length && !replies && !letter) return { outcome: 'closed', waits: null };
   const list = held.filter((x) => (working ? x.stands === 'working' : true)).map(({ stands: _s, ...x }) => x);
   return { outcome: working ? 'working' : 'waiting', waits: { tasks: list, replies, letter } };
+}
+
+const q = (s: string): string => `\u201c${s}\u201d`;
+
+/**
+ * The rule's reason in a few words, for the card's line when Walnut places it ("waits on \u201cX\u201d",
+ * "\u201cX\u201d is still at work", "nothing on it was still open"). The card's wait list says the
+ * rest (on what, until when). Pure.
+ */
+export function ackWhy(r: AckReading): string {
+  const w = r.waits;
+  if (r.outcome === 'closed' || !w) return 'nothing on it was still open';
+  const first = w.tasks[0];
+  const more = w.tasks.length > 1 ? ` and ${w.tasks.length - 1} more` : '';
+  if (first) return r.outcome === 'working' ? `${q(first.title)}${more} still at work on it` : `waits on ${q(first.title)}${more}`;
+  if (w.replies) return 'your reply has not reached it yet';
+  return 'its letter waits on your decision';
 }

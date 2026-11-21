@@ -6,33 +6,33 @@
  */
 import { listedForHim, orderedForHim, snoozedNow, type ViewThread } from './thread-view.js';
 import { USER_STATE_LABELS } from '../user-status.js';
-import { isKnown } from './thread-known.js';
+import { inAcknowledged, isKnown, placedSinceAck } from './thread-known.js';
 
 // The web reads a thread he acknowledged at work (isKnown) through this module (@open-walnut/thread-groups), the one it groups by.
-export { backFromKnown, isKnown, type AckWaits } from './thread-known.js';
+export { ACK_DECIDING_LINE, ackCardLine, backFromKnown, inAcknowledged, isKnown, placedSinceAck, type AckPlaced, type AckWaits } from './thread-known.js';
 
 /**
  * The group a thread is drawn in, in his own words (2026-11-20, the user: "No Need you, Done,
  * waiting / snoozed, Acknowlegde, closed, archived", then of Acknowledge: "if I ack and ai should
- * determine if it should go to closed or wait or wip"). Every thread is in exactly one:
+ * determine if it should go to closed or wait or wip", "keep Acknowledged, simpler"). Every thread
+ * is in exactly one:
  *   needs     Needs you: a question or a decision for him, a thread of a task below included (one
  *             listed above only because his reply is on its way there reads by its state)
  *   read      Done: the agent finished and the result waits on the card for him (listed for him)
- *   working   Working: the node's move (new, working), or work on it still runs since his Acknowledge
+ *   working   Working: the node's move (new, working), or placed in Working from Acknowledged
  *   waiting   Waiting / Snoozed: on someone or something or a time (pending, asked in a task, a
- *             result he already read, or held since his Acknowledge), or he snoozed it
+ *             result he already read, or placed in Waiting from Acknowledged), or he snoozed it
+ *   known     Acknowledged: he acknowledged it and the node's AI is deciding where it goes, at most
+ *             KNOWN_CLOSE_MS before Walnut's rule places it (thread-known.ts)
  *   done      Closed: really over (acknowledged, dropped, moved on)
  *   archived  Archived: closed ARCHIVE_AFTER_MS ago or more, shown only on its own chip
- * Acknowledge is an action, not a group: the card goes where thread-ack-outcome.ts ackOutcome says
- * (closed, working or waiting), and one acknowledged before is drawn where the read projects it
- * (`ackGroup`, thread-ack.ts withAwaits; until its follow pass closes it, waiting). The ids are the
- * wire's (GET /api/v1/thread-states, kept view choices), so older clients read them;
+ * The ids are the wire's (GET /api/v1/thread-states, kept view choices), so older clients read them;
  * THREAD_GROUP_LABELS are the words he reads. `listed`: his view lists it now (listedForHim). Pure.
  */
-export type ThreadGroup = 'needs' | 'read' | 'working' | 'waiting' | 'done' | 'archived';
-export const THREAD_GROUPS: readonly ThreadGroup[] = ['needs', 'read', 'working', 'waiting', 'done', 'archived'];
+export type ThreadGroup = 'needs' | 'read' | 'working' | 'waiting' | 'known' | 'done' | 'archived';
+export const THREAD_GROUPS: readonly ThreadGroup[] = ['needs', 'read', 'working', 'waiting', 'known', 'done', 'archived'];
 export const THREAD_GROUP_LABELS: Record<ThreadGroup, string> = {
-  needs: USER_STATE_LABELS.needs, read: 'Done', working: USER_STATE_LABELS.working, waiting: 'Waiting / Snoozed', done: 'Closed', archived: 'Archived',
+  needs: USER_STATE_LABELS.needs, read: 'Done', working: USER_STATE_LABELS.working, waiting: 'Waiting / Snoozed', known: 'Acknowledged', done: 'Closed', archived: 'Archived',
 };
 /** The groups All shows: Archived only when its own chip is picked. */
 export const ALL_SHOWS: readonly ThreadGroup[] = THREAD_GROUPS.filter((g) => g !== 'archived');
@@ -49,8 +49,8 @@ export function archivedNow(t: { closed?: { at?: string } }, now: number): boole
   return Number.isFinite(at) && now - at >= ARCHIVE_AFTER_MS;
 }
 
-/** A thread as the groups read it: `ackGroup` is the read's projection on one he acknowledged at work. */
-export type GroupedThread = ViewThread & { state: string; closed?: { at?: string }; ackGroup?: string };
+/** A thread as the groups read it. */
+export type GroupedThread = ViewThread & { state: string; closed?: { at?: string } };
 
 export function threadGroupOf(t: GroupedThread, listed: boolean, now: number = Date.now()): ThreadGroup {
   if (archivedNow(t, now)) return 'archived';
@@ -64,7 +64,8 @@ export function threadGroupOf(t: GroupedThread, listed: boolean, now: number = D
   if (t.askedIn && !t.askedIn.answered) return 'waiting';
   if (t.state === 'needs') return 'needs';
   if (t.state === 'answered') return listed ? 'read' : 'waiting';
-  if (isKnown(t)) return t.ackGroup === 'working' ? 'working' : 'waiting';
+  if (inAcknowledged(t)) return 'known';
+  if (isKnown(t)) return placedSinceAck(t)?.to === 'working' ? 'working' : 'waiting';
   if (t.state === 'pending') return 'waiting';
   return 'working';
 }
@@ -72,7 +73,7 @@ export function threadGroupOf(t: GroupedThread, listed: boolean, now: number = D
 /** Every thread in its group, each group in his Threads' order (pinned first, newest change first). Pure. */
 export function groupThreads<T extends GroupedThread & { id: string; updatedAt: string }>(threads: readonly T[], now: number = Date.now()): Record<ThreadGroup, T[]> {
   const listed = new Set(listedForHim(threads, now));
-  const out: Record<ThreadGroup, T[]> = { needs: [], read: [], working: [], waiting: [], done: [], archived: [] };
+  const out: Record<ThreadGroup, T[]> = { needs: [], read: [], working: [], waiting: [], known: [], done: [], archived: [] };
   for (const t of orderedForHim(threads)) out[threadGroupOf(t, listed.has(t), now)].push(t);
   return out;
 }
@@ -82,15 +83,16 @@ export interface TaskThreadState { state: 'needs' | 'read' | 'working' | 'waitin
 
 /**
  * The state a task's own open threads give it, the first group that holds one (needs > read >
- * working > waiting), with that group's newest thread; null with none open. A pointer a moved
+ * working > waiting, Acknowledged read as waiting: nothing there is his), with that group's newest
+ * thread; null with none open. A pointer a moved
  * thread left behind is the other node's, never this one's. Pure.
  */
 export function threadStateOf<T extends GroupedThread & { id: string; updatedAt: string; title: string; movedTo?: unknown }>(threads: readonly T[], now: number = Date.now()): TaskThreadState | null {
   const groups = groupThreads(threads.filter((t) => !t.movedTo && !t.owner), now);
   // Only open threads say where the task stands: a closed one is history, never its status now.
-  for (const g of ['needs', 'read', 'working', 'waiting'] as const) {
+  for (const g of ['needs', 'read', 'working', 'waiting', 'known'] as const) {
     const t = groups[g][0];
-    if (t) return { state: g, id: t.id, title: t.title };
+    if (t) return { state: g === 'known' ? 'waiting' : g, id: t.id, title: t.title };
   }
   return null;
 }

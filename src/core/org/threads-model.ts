@@ -58,7 +58,7 @@ import { oneCardNow } from './one-card.js';
 import { storedOptions } from '../ask-options.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
-import { pinnedFirst, hasThreadNews, threadReactionAt } from './thread-view.js';
+import { ACK_PLACES, pinnedFirst, hasThreadNews, threadReactionAt, type AckPlaced } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
@@ -329,6 +329,8 @@ export interface OrgThread {
   ackedAt?: string;
   /** When nothing was open any more on that acknowledged thread (the node was told then): once per ack; Walnut settles it KNOWN_CLOSE_MS later. */
   ackDone?: string;
+  /** Where it went from Acknowledged (the node's `place`, or Walnut's rule after KNOWN_CLOSE_MS), with why (thread-known.ts). */
+  ackPlaced?: AckPlaced;
   /** The task's own ask (its report's FOR_USER_ASK) lives on this thread: it reads needs while the task asks it (thread-report-ask.ts). */
   reportAsk?: ThreadReportAsk;
   /** In needs: the choices he picks from with one click, 2 to ASK_OPTIONS_MAX (thread-options.ts); gone when it leaves needs. */
@@ -505,6 +507,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
   for (const k of ['ackedAt', 'ackDone'] as const) if (next[k] !== undefined && !(isStr(next[k]) && Number.isFinite(Date.parse(next[k]!)))) delete next[k];
+  if (next.ackPlaced !== undefined && !validAckPlaced(next.ackPlaced)) delete next.ackPlaced;
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
   if (letter) next.letter = letter; else delete next.letter;
   const choice = next.choice !== undefined ? normalizeThreadChoice(next.choice) : undefined;
@@ -512,6 +515,12 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.reportAsk && !(typeof next.reportAsk === 'object' && isStr(next.reportAsk.id) && next.reportAsk.id && isStr(next.reportAsk.at))) delete next.reportAsk;
   if (next.options !== undefined) { const o = next.state === 'needs' && !next.closed ? storedOptions(next.options) : undefined; if (o) next.options = o; else delete next.options; }
   return next;
+}
+
+function validAckPlaced(p: unknown): p is AckPlaced {
+  const x = p as Partial<AckPlaced> | undefined;
+  return !!x && typeof x === 'object' && (ACK_PLACES as readonly string[]).includes(x.to as string) && (x.by === 'node' || x.by === 'walnut')
+    && isStr(x.at) && Number.isFinite(Date.parse(x.at)) && (x.why === undefined || isStr(x.why));
 }
 
 function validMove(m: unknown): m is ThreadMove {
@@ -790,6 +799,9 @@ export interface ThreadPatch {
   user_words?: string;
   /** The task that already asks the user this thread's decision ("" clears it): stored as `askOwner` by threads-store.ts, never by updateThread. */
   ask_owner?: string;
+  /** From the node, on a thread he acknowledged: where it goes (working, waiting or closed) and why, one line his card shows (thread-ack.ts ackPlace). Stored as `ackPlaced` by threads-store.ts, never by updateThread. */
+  place?: string;
+  place_why?: string;
   /** With state needs: the choices he picks from (thread-options.ts); [] clears them. */
   options?: unknown;
 }

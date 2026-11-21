@@ -1,15 +1,18 @@
 /**
- * His Acknowledge sends a card where its work stands (experiment ack_means_known,
- * src/core/org/thread-ack-outcome.ts, src/core/org/thread-ack.ts, web/src/components/org/ThreadKnown.tsx;
- * 2026-11-20, the user: "if I ack and ai should determine if it should go to closed or wait or wip").
+ * His Acknowledge sends a card to Acknowledged while the AI decides where it goes (experiment
+ * ack_means_known, src/core/org/thread-known.ts, src/core/org/thread-ack.ts,
+ * web/src/components/org/OrgThreads.tsx; 2026-11-20, the user: "if I ack and ai should determine if
+ * it should go to closed or wait or wip", "keep Acknowledged, simpler").
  *
  * With the Brief off (his Threads in their groups, experiment brief_off):
- *  1. The chips are All and the six groups, each counted; a click on Working shows only Working.
- *  2. Acknowledge on a lead's thread whose task still works on its subject: the card goes to
- *     Working at once, reading Working and what is still in work (the task chip, what it is to
- *     finish); no Acknowledge or Close on it any more, and no group of its own.
- *  3. Acknowledge on a result card whose task works on another subject: it closes (Closed).
- * With the Brief on (the list as before): the held thread is in the quiet "in progress" list.
+ *  1. The chips are All and the seven groups, each counted; a click on Working shows only Working.
+ *  2. Acknowledge on a lead's thread whose task still works: the card goes to Acknowledged at once,
+ *     reading Acknowledged and "AI is deciding where this goes."; no Acknowledge on it any more.
+ *  3. The lead's AI places it (thread_update place, place_why): the card moves to Waiting / Snoozed,
+ *     saying "Moved to Waiting: <why>" over what it waits on (the task chip, what it is to finish).
+ *  4. Acknowledge on a result card: Acknowledged too; the AI closes it, and the Closed card says why.
+ *  (Walnut placing it itself after 10 minutes runs on a fake clock: tests/e2e/thread-ack-means-known.test.ts.)
+ * With the Brief on (the list as before): the placed thread is in the quiet "in progress" list.
  * The fixture is shared: this file makes its own project and tasks, and puts the flags back.
  */
 import fs from 'node:fs'
@@ -31,7 +34,7 @@ test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 
 const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
 
-interface Thread { id: string; state: string; ackedAt?: string; ackGroup?: string; closed?: { how: string; by: string } }
+interface Thread { id: string; state: string; ackedAt?: string; ackPlaced?: { to: string; by: string; why?: string }; closed?: { how: string; by: string } }
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown, sid?: string): Promise<T> {
   const res = await request.post(url, { data, ...(sid ? { headers: { 'x-walnut-caller-sid': sid } } : {}) })
@@ -119,16 +122,23 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('Acknowledge: a thread still at work on its subject goes to Working; a result closes', async ({ page, request }) => {
+/** The lead's own thread_update on `id`: what its AI decides. */
+async function leadPlaces(request: APIRequestContext, id: string, place: 'closed' | 'waiting' | 'working', why: string): Promise<void> {
+  const res = await request.patch(`/api/v1/tasks/${ids.lead}/threads/${id}`, { data: { place, place_why: why }, headers: { 'x-walnut-caller-sid': ids.leadSid } })
+  expect(res.ok(), await res.text()).toBe(true)
+}
+
+test('Acknowledge: the card waits in Acknowledged while the AI decides, then shows where it went and why', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await openLead(page)
   await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
   await expect(card(page, 'read', ids.result)).toBeVisible({ timeout: 20_000 })
 
-  // 1. All and the six groups; a click on Working shows only Working.
-  await expect(page.getByTestId('org-threads-chip')).toHaveText([/^All \d+$/, /^Needs you \d+$/, /^Done \d+$/, /^Working \d+$/, /^Waiting \/ Snoozed \d+$/, /^Closed \d+$/, /^Archived \d+$/])
+  // 1. All and the seven groups; a click on Working shows only Working.
+  await expect(page.getByTestId('org-threads-chip')).toHaveText([/^All \d+$/, /^Needs you \d+$/, /^Done \d+$/, /^Working \d+$/, /^Waiting \/ Snoozed \d+$/, /^Acknowledged \d+$/, /^Closed \d+$/, /^Archived \d+$/])
   await expect(chip(page, 'read')).toContainText('Done 1')
+  await expect(chip(page, 'known')).toContainText('Acknowledged 0')
   await chip(page, 'working').click()
   await expect(chip(page, 'working')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('section[data-testid="org-thread-group"]')).toHaveCount(1)
@@ -136,46 +146,56 @@ test('Acknowledge: a thread still at work on its subject goes to Working; a resu
   await expect(page.locator(`[data-testid="org-thread"][data-thread-id="${ids.result}"]`)).toHaveCount(0)
   await shot(page, '1-working')
 
-  // 2. Its task is still open on its subject: Acknowledge sends it where that task stands, Working
-  // (the task works) or Waiting / Snoozed (a task nobody started waits), saying what holds it.
+  // 2. Acknowledge: at once in Acknowledged, the AI deciding.
   await card(page, 'working', ids.work).getByTestId('org-thread-ack').click()
-  await expect.poll(async () => (await threadOf(request, ids.work))?.ackGroup ?? '', { timeout: 15_000 }).toMatch(/^(working|waiting)$/)
-  const where = (await threadOf(request, ids.work))!.ackGroup as 'working' | 'waiting'
   await chip(page, 'all').click()
-  const held = card(page, where, ids.work)
-  await expect(held.getByTestId('org-thread-known')).toBeVisible({ timeout: 15_000 })
-  await expect(held).toHaveAttribute('data-acked-at-work', 'true')
-  await expect(held.getByTestId('org-thread-state')).toHaveText(where === 'working' ? 'Working' : 'Waiting / Snoozed')
-  await expect(held.getByTestId('org-thread-time')).toContainText('You acknowledged')
-  const wait = held.getByTestId('org-thread-known-wait')
-  await expect(wait).toHaveAttribute('data-task-id', ids.running)
-  await expect(wait).toContainText(`${where === 'working' ? 'Still in work: ' : 'Waiting on '}Fix the oven timer ${STAMP}`)
-  await expect(held.getByTestId('org-thread-known-what')).toHaveText('Swap the timer board and check it counts down to the second.')
-  await expect(held).not.toContainText('You know it')
+  const deciding = card(page, 'known', ids.work)
+  await expect(deciding).toBeVisible({ timeout: 15_000 })
+  await expect(chip(page, 'known')).toContainText('Acknowledged 1')
+  await expect(deciding.getByTestId('org-thread-state')).toHaveText('Acknowledged')
+  await expect(deciding.getByTestId('org-thread-ack-line')).toHaveText('AI is deciding where this goes.')
+  await expect(deciding.getByTestId('org-thread-time')).toContainText('You acknowledged')
+  await expect(deciding.getByTestId('org-thread-known')).toHaveCount(0)
   // Acknowledged already: no second button.
-  await expect(held.getByTestId('org-thread-ack')).toHaveCount(0)
-  await expect(held.getByTestId('org-thread-close-known')).toHaveCount(0)
+  await expect(deciding.getByTestId('org-thread-ack')).toHaveCount(0)
   const kept = await threadOf(request, ids.work)
   expect(kept?.state).toBe('pending')
   expect(kept?.closed).toBeUndefined()
   expect(kept?.ackedAt).toBeTruthy()
-  await shot(page, '2-held-working')
+  expect(kept?.ackPlaced).toBeUndefined()
+  await shot(page, '2-acknowledged')
 
-  // 3. The result is on the card and its task works on another subject: Acknowledge closes it.
+  // 3. The lead's AI decides: Waiting, with what it waits on.
+  await leadPlaces(request, ids.work, 'waiting', 'waits on the new timer board, due Friday')
+  const placed = card(page, 'waiting', ids.work)
+  await expect(placed).toBeVisible({ timeout: 15_000 })
+  await expect(card(page, 'known', ids.work)).toHaveCount(0)
+  await expect(placed.getByTestId('org-thread-state')).toHaveText('Waiting / Snoozed')
+  await expect(placed.getByTestId('org-thread-ack-line')).toHaveText('Moved to Waiting: waits on the new timer board, due Friday')
+  const wait = placed.getByTestId('org-thread-known-wait')
+  await expect(wait).toHaveAttribute('data-task-id', ids.running)
+  await expect(wait).toContainText(`Waiting on Fix the oven timer ${STAMP}`)
+  await expect(placed.getByTestId('org-thread-known-what')).toHaveText('Swap the timer board and check it counts down to the second.')
+  await expect(placed.getByTestId('org-thread-ack')).toHaveCount(0)
+  await shot(page, '3-placed-waiting')
+
+  // 4. The result card: Acknowledged too; the AI closes it, and the Closed card says why.
   await chip(page, 'read').click()
   await card(page, 'read', ids.result).getByTestId('org-thread-ack').click()
-  await expect(page.locator(`[data-testid="org-thread"][data-thread-id="${ids.result}"]`)).toHaveCount(0, { timeout: 15_000 })
-  await expect.poll(async () => (await threadOf(request, ids.result))?.closed).toMatchObject({ how: 'acked', by: 'human' })
-  expect((await threadOf(request, ids.result))?.ackedAt).toBeUndefined()
+  await chip(page, 'known').click()
+  await expect(card(page, 'known', ids.result).getByTestId('org-thread-ack-line')).toHaveText('AI is deciding where this goes.', { timeout: 15_000 })
+  await leadPlaces(request, ids.result, 'closed', 'the test results are in and he read them')
+  await expect.poll(async () => (await threadOf(request, ids.result))?.closed).toMatchObject({ how: 'acked', by: `task:${ids.lead}` })
   await chip(page, 'done').click()
-  await expect(card(page, 'done', ids.result).getByTestId('org-thread-state')).toHaveText('Closed')
-  await expect(card(page, 'done', ids.result).getByTestId('org-thread-closed')).toContainText('Closed')
-  await shot(page, '3-result-closed')
+  const shut = card(page, 'done', ids.result)
+  await expect(shut.getByTestId('org-thread-state')).toHaveText('Closed', { timeout: 15_000 })
+  await expect(shut.getByTestId('org-thread-ack-line')).toHaveText('Moved to Closed: the test results are in and he read them')
+  await shot(page, '4-result-closed')
   await chip(page, 'all').click()
   expect(pageErrors).toEqual([])
 })
 
-test('with the Brief on, the held thread is in the quiet in-progress list, saying what is in work', async ({ page, request }) => {
+test('with the Brief on, the placed thread is in the quiet in-progress list, saying what it waits on', async ({ page, request }) => {
   await flags(request, { brief_off: false })
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))

@@ -99,13 +99,14 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// The server's one-card switch (threads_one_card) is on: its choices are buttons, it has no
     /// Acknowledge while it waits on him, and open and answered it reads Done. Absent: off.
     var one_card: Bool? = nil
-    /// He acknowledged it while work on it was not over: held while it stays pending (additive,
+    /// He acknowledged it: in Acknowledged while it stays pending and nobody placed it (additive,
     /// experiment ack_means_known; server core/org/thread-known.ts). `ackDone`: when nothing held it.
     var ackedAt: String? = nil
     var ackDone: String? = nil
-    /// Where such a thread stands now (server core/org/thread-ack-outcome.ts): "working", "waiting",
-    /// or "closed" (over; the server closes it shortly). Absent: an older server, read as waiting.
-    var ackGroup: String? = nil
+    /// Where it went from Acknowledged: `to` "working", "waiting" or "closed", `by` "node" (the AI)
+    /// or "walnut" (the rule, after 10 minutes), and why. Absent: not placed yet, or an older server.
+    struct AckPlaced: Codable, Equatable { let to: String; let by: String; let at: String; var why: String? = nil }
+    var ackPlaced: AckPlaced? = nil
     var awaits: Awaits? = nil
 }
 

@@ -1,14 +1,15 @@
 /**
  * The groups of a node's Threads in the user's own words (src/core/org/thread-groups.ts; 2026-11-20,
  * the user: "No Need you, Done, waiting / snoozed, Acknowlegde, closed, archived", then of
- * Acknowledge: "if I ack and ai should determine if it should go to closed or wait or wip").
+ * Acknowledge: "if I ack and ai should determine if it should go to closed or wait or wip", "keep
+ * Acknowledged, simpler").
  *
- *  - The groups are exactly Needs you, Done, Working, Waiting / Snoozed, Closed, Archived, plus All,
- *    which shows every group but Archived.
+ *  - The groups are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed,
+ *    Archived, plus All, which shows every group but Archived.
  *  - Every thread shape the model can hold (each state, closed or not and how long ago, snoozed,
- *    asked in a task, held since his Acknowledge with each projected outcome, listed or not) is in
- *    exactly one group, and the old groups map without a loss: To read to Done, Known to Working or
- *    Waiting / Snoozed, Done to Closed (or Archived once a day old). A thread of a task below
+ *    asked in a task, acknowledged and not placed yet or placed in each place, listed or not) is in
+ *    exactly one group, and the old groups map without a loss: To read to Done, Known to
+ *    Acknowledged, Working or Waiting / Snoozed, Done to Closed (or Archived once a day old). A thread of a task below
  *    (`owner`) is left out of the mapping check: its line is another change's (thread-groups.ts).
  */
 import { describe, expect, it } from 'vitest'
@@ -21,7 +22,7 @@ const NOW = Date.parse('2026-11-20T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
 
 /** The groups as they were before 2026-11-20 (needs, read, known, working, waiting, done), owner line aside. */
-function oldGroupOf(t: OrgThread & { ackGroup?: string }, listed: boolean): string {
+function oldGroupOf(t: OrgThread, listed: boolean): string {
   if (t.closed) return 'done'
   if (snoozedNow(t, NOW)) return 'waiting'
   if (t.askedIn && !t.askedIn.answered) return 'waiting'
@@ -34,12 +35,12 @@ function oldGroupOf(t: OrgThread & { ackGroup?: string }, listed: boolean): stri
 
 /** Where each old group may land now. */
 const OLD_TO_NEW: Record<string, readonly ThreadGroup[]> = {
-  needs: ['needs'], read: ['read'], known: ['working', 'waiting'], working: ['working'], waiting: ['waiting'], done: ['done', 'archived'],
+  needs: ['needs'], read: ['read'], known: ['known', 'working', 'waiting'], working: ['working'], waiting: ['waiting'], done: ['done', 'archived'],
 }
 
-/** Every shape: state x closed (none, now, a day ago) x snoozed x asked in a task x acked (none, each outcome) x listed. */
-function shapes(): Array<{ t: OrgThread & { ackGroup?: string }; listed: boolean; name: string }> {
-  const out: Array<{ t: OrgThread & { ackGroup?: string }; listed: boolean; name: string }> = []
+/** Every shape: state x closed (none, now, a day ago) x snoozed x asked in a task x acked (no, not placed, placed in each place) x listed. */
+function shapes(): Array<{ t: OrgThread; listed: boolean; name: string }> {
+  const out: Array<{ t: OrgThread; listed: boolean; name: string }> = []
   let n = 0
   for (const state of THREAD_STATES) {
     for (const closed of [undefined, ago(60_000), ago(ARCHIVE_AFTER_MS)]) {
@@ -53,8 +54,8 @@ function shapes(): Array<{ t: OrgThread & { ackGroup?: string }; listed: boolean
                 ...(closed ? { closed: { how: 'acked' as const, at: closed, by: 'human' } } : {}),
                 ...(snoozed ? { snoozed: { until: new Date(NOW + 3_600_000).toISOString(), at: ago(60_000) } } : {}),
                 ...(asked !== undefined ? { askedIn: { task: 't-1', title: 'Trays', ask: 'Which size?', via: 'owner' as const, ...(asked ? { answered: true } : {}) } } : {}),
-                ...(ack ? { ackedAt: ago(1_000_000), ...(ack !== 'none' ? { ackGroup: ack } : {}) } : {}),
-              } as OrgThread & { ackGroup?: string }
+                ...(ack ? { ackedAt: ago(1_000_000), ...(ack !== 'none' ? { ackPlaced: { to: ack as 'working', by: 'node' as const, at: ago(900_000) } } : {}) } : {}),
+              } as OrgThread
               out.push({ t, listed, name: `${state} closed=${!!closed} snoozed=${snoozed} asked=${asked} ack=${ack} listed=${listed}` })
             }
           }
@@ -66,11 +67,11 @@ function shapes(): Array<{ t: OrgThread & { ackGroup?: string }; listed: boolean
 }
 
 describe('the groups of his Threads', () => {
-  it('are exactly Needs you, Done, Working, Waiting / Snoozed, Closed and Archived, in that order', () => {
-    expect(THREAD_GROUPS).toEqual(['needs', 'read', 'working', 'waiting', 'done', 'archived'])
-    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Closed', 'Archived'])
+  it('are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed and Archived, in that order', () => {
+    expect(THREAD_GROUPS).toEqual(['needs', 'read', 'working', 'waiting', 'known', 'done', 'archived'])
+    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Acknowledged', 'Closed', 'Archived'])
     // All shows every group but Archived, which shows only on its own chip.
-    expect(ALL_SHOWS).toEqual(['needs', 'read', 'working', 'waiting', 'done'])
+    expect(ALL_SHOWS).toEqual(['needs', 'read', 'working', 'waiting', 'known', 'done'])
   })
 
   it('every thread shape is in exactly one group, and the old groups map without a loss', () => {
@@ -88,13 +89,15 @@ describe('the groups of his Threads', () => {
     expect(new Set(Object.values(groups).flat().map((t) => t.id)).size).toBe(ts.length)
   })
 
-  it('a thread held since his Acknowledge is where its work stands, never a group of its own', () => {
-    const held = (ackGroup?: string) => ({ id: 'th-bbbbbbbbbbbb', title: 'Trays', state: 'pending', createdAt: ago(9e6), updatedAt: ago(1e6), messages: [], ackedAt: ago(1e6), ...(ackGroup ? { ackGroup } : {}) }) as OrgThread
+  it('a thread he acknowledged is in Acknowledged until placed, then where it was placed', () => {
+    const held = (to?: 'working' | 'waiting', at = ago(5e5)) => ({ id: 'th-bbbbbbbbbbbb', title: 'Trays', state: 'pending', createdAt: ago(9e6), updatedAt: ago(1e6), messages: [], ackedAt: ago(1e6), ...(to ? { ackPlaced: { to, by: 'node', at } } : {}) }) as OrgThread
+    expect(threadGroupOf(held(), false, NOW)).toBe('known')
     expect(threadGroupOf(held('working'), false, NOW)).toBe('working')
     expect(threadGroupOf(held('waiting'), false, NOW)).toBe('waiting')
-    // Its work is over: until the follow pass closes it, it waits; an older server sends no projection.
-    expect(threadGroupOf(held('closed'), false, NOW)).toBe('waiting')
-    expect(threadGroupOf(held(), false, NOW)).toBe('waiting')
+    // A placement from before this Acknowledge does not count: it is deciding again.
+    expect(threadGroupOf(held('waiting', ago(2e6)), false, NOW)).toBe('known')
+    // A task's Board chip reads one in Acknowledged as waiting: nothing there is his.
+    expect(threadStateOf([held()], NOW)?.state).toBe('waiting')
   })
 
   it('a closed thread is Closed for a day, then Archived', () => {

@@ -93,6 +93,7 @@ final class OrgThreadFocusTests: XCTestCase {
             try thread("th-000003", state: "answered",
                        extra: #","snoozed":{"until":"2026-11-06T09:00:00Z","at":"2026-11-04T11:00:00Z"}"#),
             try thread("th-000004", extra: #","closed":{"how":"acked","at":"2026-11-04T11:00:00Z","by":"human"}"#),
+            try thread("th-000005", state: "pending", extra: #","shown":false,"ackedAt":"2026-11-04T11:00:00Z""#),
         ]
         let sections = OrgThreadModel.sections(threads, now: Self.now)
         let read = OrgThreadRevealModel.Read(startedAt: t0, failed: false)
@@ -103,6 +104,7 @@ final class OrgThreadFocusTests: XCTestCase {
         XCTAssertEqual(outcome("th-000002"), .show(.working))
         XCTAssertEqual(outcome("th-000003"), .show(.waiting))
         XCTAssertEqual(outcome("th-000004"), .show(.closed))
+        XCTAssertEqual(outcome("th-000005"), .show(.known), "one in Acknowledged opens its own fold")
         XCTAssertEqual(outcome("th-999999"), .probe, "a thread the list does not hold is read by its id first")
         XCTAssertEqual(OrgThreadRevealModel.outcome(
             .init(threadId: "th-999999", at: t0), threads: threads, sections: sections, lastRead: read,

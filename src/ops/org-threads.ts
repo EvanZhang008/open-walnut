@@ -9,6 +9,7 @@ import type { OpCall } from './core.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_OPTIONS_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
+import { ACK_PLACES, PLACE_WHY_MAX } from '../core/org/thread-view.js'
 import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM } from '../core/org/user-kind.js'
 
 const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
@@ -38,7 +39,7 @@ const OPTIONS_WHY = `With state needs: the choices he picks from, 2 to ${ASK_OPT
 
 const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main, a lead or a task with Threads on; default: your own task')
 
-interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string } }
+interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
 
 /** Every thread op that hands a thread to the user (same-ask.ts). */
 const SAME_ASK_REASON_PARAM = 'With needs: only after a 409 same_ask (a task in your team already asks him this; leave the ask to it and keep the thread working or pending), '
@@ -90,6 +91,8 @@ defineOp({
     close: z.enum(['acked', 'dropped']).optional().describe('Close it: acked (he reacted to it as finished), dropped (he said it is no longer wanted). Refused before he reacted, unless user_words quotes him asking for it'),
     user_words: z.string().max(500).optional().describe('With close: his own words asking you to close it, or saying it is done or no longer wanted, quoted exactly from his latest message in this thread (what he typed in your chat is filed in a thread: merge it into this one first). Counts only when that message came after everything said in the thread'),
     reopen: z.boolean().optional().describe('Open a closed thread again'),
+    place: z.enum(ACK_PLACES).optional().describe('On a thread he acknowledged (his card reads "AI is deciding where this goes"): where it goes now. Alone with place_why, no state or close'),
+    place_why: z.string().max(PLACE_WHY_MAX).optional().describe('With place: one short line his card shows (what it waits on and until when, what still runs, or why it is over)'),
     snooze: z.string().max(40).optional().describe('Put it aside until this time: an ISO datetime, a date (that day\'s local midnight) or a duration from now ("4h", "3d"); at most a year; "" takes the snooze off'),
     pin: z.boolean().optional().describe('true pins it to the top of his view whatever its state (until he unpins or acknowledges it); false unpins it. You cannot unpin one he pinned'),
     merge_into: z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe('Put this thread under that open thread (same subject)'),
@@ -102,7 +105,7 @@ defineOp({
     return withOutcome(
       body,
       body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages).`
-        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.pinned && !body.thread.closed ? `, pinned${body.thread.pinned.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}.`,
+        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.pinned && !body.thread.closed ? `, pinned${body.thread.pinned.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}${body.thread.ackPlaced && !body.thread.closed ? `, placed in ${body.thread.ackPlaced.to}` : ''}.`,
       'No further action is required.',
     )
   },

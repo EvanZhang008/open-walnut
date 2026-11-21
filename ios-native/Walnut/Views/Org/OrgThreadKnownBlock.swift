@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// What holds a card he acknowledged while work on it was not over (experiment ack_means_known;
-/// server `src/core/org/thread-ack-outcome.ts`, web `web/src/components/org/ThreadKnown.tsx`), in
-/// place of its summary; the card is drawn under Working or Waiting / Snoozed (its `ackGroup`). Each
-/// task still working on its subject, or waiting (on what, until when); his reply on its way; a
-/// decision letter. The card's task chips under it carry each task's live state.
+/// What holds a card he acknowledged once it was placed in Working or Waiting (experiment
+/// ack_means_known; server `src/core/org/thread-known.ts`, web `web/src/components/org/ThreadKnown.tsx`),
+/// in place of its summary, under the line saying where it went and why. Each task still working on
+/// its subject, or waiting (on what, until when); his reply on its way; a decision letter. The
+/// card's task chips under it carry each task's live state.
 struct OrgThreadKnownBlock: View {
     let thread: OrgThread
     let name: String
@@ -17,14 +17,16 @@ struct OrgThreadKnownBlock: View {
         }
     }
 
+    private var placed: OrgThread.AckPlaced? { OrgThreadModel.placedSinceAck(thread) }
+
+    /// Only one Walnut placed settles by itself; one the AI placed is the node's to move.
     private var ended: Bool {
-        if thread.ackGroup == "closed" { return true }
-        guard let w = thread.awaits else { return false }
+        guard placed?.by == "walnut", let w = thread.awaits else { return false }
         return (w.tasks ?? []).isEmpty && w.replies != true && w.letter != true
     }
 
     private func line(_ x: OrgThread.Awaits.Waiting) -> String {
-        if thread.ackGroup == "working" { return "Still in work: \u{201C}\(x.title)\u{201D}" }
+        if placed?.to == "working" { return "Still in work: \u{201C}\(x.title)\u{201D}" }
         var out = "Waiting on \u{201C}\(x.title)\u{201D}"
         if let on = x.waitingOn { out += ": \(on)" }
         if let until = x.until.flatMap(WalnutTask.parseISO) {

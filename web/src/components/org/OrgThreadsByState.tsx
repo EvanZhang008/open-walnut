@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import type { OrgThread } from '@/api/org-threads';
 import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
 import { ThreadsFilterBar, type ThreadFilter } from './ThreadsFilterBar';
+import { useExperimental } from '@/hooks/useExperimental';
 
 export const isThreadFilter = (v: unknown): v is ThreadFilter =>
   v === 'all' || (THREAD_GROUPS as readonly unknown[]).includes(v);
@@ -22,6 +23,9 @@ export function OrgThreadsByState({ groups, filter, onFilter, card, name }: {
   card: (t: OrgThread) => ReactNode;
   name: string;
 }) {
+  // Acknowledged holds cards only while ack_means_known is on: off, its chip shows only for one left from before.
+  const ackOn = useExperimental('ack_means_known');
+  const chips = THREAD_GROUPS.filter((g) => g !== 'known' || ackOn || groups.known.length > 0 || filter === 'known');
   if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) {
     return (
       <p className="org-threads-empty" data-testid="org-threads-empty">
@@ -32,7 +36,7 @@ export function OrgThreadsByState({ groups, filter, onFilter, card, name }: {
   const shown = filter === 'all' ? ALL_SHOWS : [filter];
   return (
     <div className="org-thread-groups" data-testid="org-thread-groups" data-filter={filter}>
-      <ThreadsFilterBar counts={THREAD_GROUPS.map((g) => ({ group: g, n: groups[g].length }))} all={ALL_SHOWS.reduce((n, g) => n + groups[g].length, 0)} at={filter} onPick={onFilter} />
+      <ThreadsFilterBar counts={chips.map((g) => ({ group: g, n: groups[g].length }))} all={ALL_SHOWS.reduce((n, g) => n + groups[g].length, 0)} at={filter} onPick={onFilter} />
       {filter === 'all' && !ALL_SHOWS.some((g) => groups[g].length > 0) && (
         <p className="org-threads-empty" data-testid="org-threads-empty">Nothing open. What you closed before is under Archived.</p>
       )}

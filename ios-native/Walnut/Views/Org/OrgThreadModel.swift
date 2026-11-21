@@ -27,8 +27,10 @@ enum OrgThreadModel {
         var snoozed: [OrgThread] = []
         /// Working: open, the node's move (new, working), or work on it still runs since his Acknowledge.
         var working: [OrgThread] = []
-        /// Waiting / Snoozed, not snoozed: on someone or something or a time (pending, a result he read, held since his Acknowledge).
+        /// Waiting / Snoozed, not snoozed: on someone or something or a time (pending, a result he read, placed in Waiting after his Acknowledge).
         var waiting: [OrgThread] = []
+        /// Acknowledged: he acknowledged it and the AI is deciding where it goes (at most 10 minutes).
+        var known: [OrgThread] = []
         /// Closed less than a day ago (`archiveAfter`).
         var closed: [OrgThread] = []
         /// Closed a day ago or more: put away until he opens them.
@@ -39,7 +41,7 @@ enum OrgThreadModel {
         /// a read that could not bring the threads its counts name (`unreadable`).
         func showsJumps(unreadable: Bool) -> Bool {
             if open.isEmpty && unreadable { return false }
-            return !open.isEmpty || !working.isEmpty || !waiting.isEmpty || !snoozed.isEmpty || !closed.isEmpty || !archived.isEmpty
+            return !open.isEmpty || !working.isEmpty || !waiting.isEmpty || !snoozed.isEmpty || !known.isEmpty || !closed.isEmpty || !archived.isEmpty
         }
     }
 
@@ -225,7 +227,8 @@ enum OrgThreadModel {
             .sorted { ($0.snoozed?.until ?? "") < ($1.snoozed?.until ?? "") }
         let rest = threads.filter { $0.closed == nil && !snoozedNow($0, now: now) && !inView($0, shared: shared, now: now) }
         s.working = rest.filter { group($0, inView: false, now: now) == .working }
-        s.waiting = rest.filter { group($0, inView: false, now: now) != .working }
+        s.known = rest.filter { group($0, inView: false, now: now) == .known }
+        s.waiting = rest.filter { let g = group($0, inView: false, now: now); return g != .working && g != .known }
         // Newest close first, and a closed row's time is its close (`shownAt`), so the list reads in order.
         let closed = threads.filter { $0.closed != nil }.sorted { shownAt($0) > shownAt($1) }
         s.closed = closed.filter { !archivedNow($0, now: now) }
@@ -237,10 +240,10 @@ enum OrgThreadModel {
 
     /// The groups a thread is drawn in, in the user's own words (server `src/core/org/thread-groups.ts`
     /// THREAD_GROUP_LABELS; 2026-11-20, the user: "No Need you, Done, waiting / snoozed, Acknowlegde,
-    /// closed, archived"; Acknowledge is an action that sends a card to one of them, not a group).
-    /// The raw values are the server's group ids.
+    /// closed, archived"; his Acknowledge sends a card to Acknowledged while the AI decides where it
+    /// goes). The raw values are the server's group ids.
     enum Group: String, CaseIterable {
-        case needs, read, working, waiting, done, archived
+        case needs, read, working, waiting, known, done, archived
 
         var label: String {
             switch self {
@@ -248,6 +251,7 @@ enum OrgThreadModel {
             case .read: return "Done"
             case .working: return "Working"
             case .waiting: return "Waiting / Snoozed"
+            case .known: return "Acknowledged"
             case .done: return "Closed"
             case .archived: return "Archived"
             }
@@ -269,8 +273,11 @@ enum OrgThreadModel {
         if snoozedNow(t, now: now) { return .waiting }
         if t.state == "needs" { return .needs }
         if t.state == "answered" { return inView ? .read : .waiting }
-        // Held since his Acknowledge: where the server says its work stands.
-        if isKnown(t) { return t.ackGroup == "working" ? .working : .waiting }
+        // He acknowledged it: Acknowledged until the AI (or after 10 minutes the rule) places it.
+        if isKnown(t) {
+            guard let placed = placedSinceAck(t) else { return .known }
+            return placed.to == "working" ? .working : .waiting
+        }
         if t.state == "pending" { return .waiting }
         return .working
     }
@@ -287,6 +294,7 @@ enum OrgThreadModel {
         }
         if s.working.contains(where: { $0.id == id }) { return "Moved to \(Group.working.label)" }
         if s.waiting.contains(where: { $0.id == id }) { return "Moved to \(Group.waiting.label)" }
+        if s.known.contains(where: { $0.id == id }) { return "Moved to \(Group.known.label)" }
         if s.closed.contains(where: { $0.id == id }) { return "Closed. It is under \(Group.done.label)" }
         if s.archived.contains(where: { $0.id == id }) { return "Closed. It is under \(Group.archived.label)" }
         return nil
@@ -305,6 +313,24 @@ enum OrgThreadModel {
     static func isKnown(_ t: OrgThread) -> Bool {
         guard t.closed == nil, t.state == "pending", let acked = t.ackedAt else { return false }
         return !t.messages.contains { $0.at > acked }
+    }
+
+    /// Its placement since his last Acknowledge (server thread-known.ts placedSinceAck).
+    static func placedSinceAck(_ t: OrgThread) -> OrgThread.AckPlaced? {
+        guard let acked = t.ackedAt, let p = t.ackPlaced, p.at >= acked else { return nil }
+        return p
+    }
+
+    /// The card's one line about his Acknowledge (server thread-known.ts ackCardLine): the AI is
+    /// deciding; or where it went and why; nil on any other card.
+    static func ackCardLine(_ t: OrgThread) -> String? {
+        if isKnown(t) && placedSinceAck(t) == nil { return "AI is deciding where this goes." }
+        guard let p = placedSinceAck(t), let acked = t.ackedAt else { return nil }
+        let shows = p.to == "closed" ? t.closed != nil && !t.messages.contains { $0.at > acked } : isKnown(t)
+        guard shows else { return nil }
+        let place = ["working": "Working", "waiting": "Waiting", "closed": "Closed"][p.to] ?? p.to.capitalized
+        let why = p.why.map { ": \($0)" } ?? "."
+        return "Moved to \(place)\(p.by == "walnut" ? " by Walnut" : "")\(why)"
     }
 
     /// An answered one, one he acknowledged at work and a closed one read their group's word, so a

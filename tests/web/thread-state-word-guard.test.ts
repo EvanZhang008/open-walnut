@@ -1,19 +1,22 @@
 /**
  * Guard: the words a Thread shows (the Org page's and a task's Threads, the phone app's) are the
- * user's own groups and nothing else: Needs you, Done, Working, Waiting / Snoozed, Closed, Archived
- * (src/core/org/thread-groups.ts THREAD_GROUP_LABELS). Its state value stays `answered` inside
- * Walnut; he never reads "Answered", "To read", "Known" or "Acknowledged" as a state, and "Done"
- * only names a result waiting on its card, never a thread he closed.
+ * user's own groups and nothing else: Needs you, Done, Working, Waiting / Snoozed, Acknowledged,
+ * Closed, Archived (src/core/org/thread-groups.ts THREAD_GROUP_LABELS). Its state value stays
+ * `answered` inside Walnut; he never reads "Answered", "To read" or "Known" as a state,
+ * "Acknowledged" only names the group a card waits in while the AI decides where it goes, and
+ * "Done" only names a result waiting on its card, never a thread he closed.
  *
  * 2026-11-20, the user, on chips that read All / Needs you / To read / Waiting / Done: "why there
  * is to read, why ... known", "why the done here means close", then "No Need you, Done, waiting /
  * snoozed, Acknowlegde, closed, archived", and of Acknowledge: "if I ack and ai should determine if
- * it should go to closed or wait or wip" (an action, no group of its own).
+ * it should go to closed or wait or wip", "keep Acknowledged, simpler" (the group a card passes
+ * through while the AI decides).
  *
  * The class: every web and iOS source file that renders an org thread (it names the thread type
  * or its API), found from the source, so a new card, list or header joins by itself. A string
- * literal with one of the retired words in any of them fails, and so does any "Done" literal but
- * the Done group's own label (and the phone sheet's standard dismiss button); comments, the
+ * literal with one of the retired words in any of them fails (an "Acknowledged" but the
+ * Acknowledged group's own label on the phone too), and so does any "Done" literal but the Done
+ * group's own label (and the phone sheet's standard dismiss button); comments, the
  * `answered` and `known` values (lowercase) and the Acknowledge button are free.
  */
 import { describe, expect, it } from 'vitest';
@@ -44,6 +47,8 @@ function literals(src: string): string[] {
 
 /** The words a thread never shows as a state any more. */
 const RETIRED = /\b(Answered|To read|Known|Acknowledged)\b/;
+/** An "Acknowledged" a thread file may hold: the Acknowledged group's own label on the phone. */
+const ACK_ALLOWED = [/case \.known: return "Acknowledged"/g];
 /** A "Done" a thread file may hold: the Done group's own label on the phone, the phone sheet's dismiss. */
 const DONE_ALLOWED = [/case \.read: return "Done"/g, /Button\("Done"\) \{ dismiss\(\) \}/g];
 
@@ -51,8 +56,9 @@ const DONE_ALLOWED = [/case \.read: return "Done"/g, /Button\("Done"\) \{ dismis
 const quoted = (code: string, word: RegExp): string[] => [...code.matchAll(new RegExp(`['"\`](?:${word.source})\\b`, 'g'))].map((m) => m[0]);
 
 function retiredLiterals(src: string): string[] {
-  const code = stripComments(src);
-  const whole = literals(src).filter((l) => RETIRED.test(l));
+  let code = stripComments(src);
+  for (const ok of ACK_ALLOWED) code = code.replace(ok, '');
+  const whole = literals(code).filter((l) => RETIRED.test(l));
   const inner = quoted(code, /Answered|To read|Known|Acknowledged/).filter((q) => !whole.some((l) => l.startsWith(q)));
   return [...whole, ...inner];
 }
@@ -80,11 +86,11 @@ describe('Threads show only his own group words', () => {
     ]) expect(rel).toContain(f);
   });
 
-  it('the groups are exactly Needs you, Done, Working, Waiting / Snoozed, Closed and Archived', () => {
-    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Closed', 'Archived']);
+  it('the groups are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed and Archived', () => {
+    expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Acknowledged', 'Closed', 'Archived']);
   });
 
-  it('no file that renders a thread has Answered, To read, Known or Acknowledged in a string', () => {
+  it('no file that renders a thread has Answered, To read or Known in a string, nor Acknowledged but its group label', () => {
     const hits = [...webFiles, ...iosFiles].flatMap((f) => retiredLiterals(readFileSync(f, 'utf8')).map((l) => `${relative(ROOT, f)}: ${l}`));
     expect(hits, 'a thread reads its group word (THREAD_GROUP_LABELS)').toEqual([]);
   });
@@ -108,5 +114,8 @@ describe('Threads show only his own group words', () => {
     expect(doneLiterals(`case .read: return "Done"\nButton("Done") { dismiss() }`)).toEqual([]);
     // Inside a Swift interpolation too.
     expect(retiredLiterals(`Text("\\(c.how == "acked" ? "Acknowledged" : "Dropped")")`).length).toBeGreaterThan(0);
+    // The Acknowledged group's own label is free; the word anywhere else is not.
+    expect(retiredLiterals(`case .known: return "Acknowledged"`)).toEqual([]);
+    expect(retiredLiterals(`case .done: return "Acknowledged"`)).toEqual(['"Acknowledged"']);
   });
 });

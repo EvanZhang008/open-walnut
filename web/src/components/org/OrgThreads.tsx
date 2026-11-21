@@ -80,7 +80,7 @@ import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { Answer, Words } from './thread-card-text';
-import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, backFromKnown, groupThreads, isKnown, threadGroupOf, type ThreadGroup } from '@open-walnut/thread-groups';
+import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown, threadGroupOf, type ThreadGroup } from '@open-walnut/thread-groups';
 import { TaskChips } from './ThreadTaskChips';
 import { KnownBlock } from './ThreadKnown';
 import { OrgThreadsByState, isThreadFilter } from './OrgThreadsByState';
@@ -347,8 +347,11 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   // which is for a card that asks no choice (2026-11-20, the user: "Acknowledge is for when I do not
   // need to make any choice").
   const needs = oneCard && !closed && !asked && t.state === 'needs';
-  // He acknowledged it while its work ran (core/org/thread-known.ts): the card says what it waits on, not its summary.
+  // He acknowledged it (core/org/thread-known.ts): in Acknowledged the card says the AI is deciding;
+  // placed, where it went and why, and what it waits on in place of its summary.
   const known = knownHere(t);
+  const deciding = known && inAcknowledged(t);
+  const ackSays = !asked && !t.owner ? ackCardLine(t) : null;
   const back = backFromKnown(t);
   // Its word is its group's (core/org/thread-groups.ts), the one it is drawn in.
   const label = stateLabel(t, threadGroupOf(t, listed, now), known);
@@ -398,6 +401,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {/* It came here with its work from another node (core/org/thread-follow.ts), or left for one. */}
       {!closed && t.movedFrom && <p className="org-thread-follows" data-testid="org-thread-moved-from" title={t.movedFrom.why}>Moved here from {t.movedFrom.title}{t.movedFrom.why ? `: ${t.movedFrom.why}` : ''}</p>}
       {closed && t.movedTo && <p className="org-thread-follows" data-testid="org-thread-moved-to" title={t.movedTo.why}>Moved to {t.movedTo.title}{t.movedTo.why ? `: ${t.movedTo.why}` : ''}</p>}
+      {ackSays && <p className="org-thread-follows org-thread-ack-line" data-testid="org-thread-ack-line" data-deciding={deciding ? 'true' : undefined}>{ackSays}</p>}
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
       {asked && <AskedIn a={t.askedIn!} />}
       {held && (
@@ -409,7 +413,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {held.reply && <AgentText text={held.reply} compact className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />}
         </div>
       )}
-      {known && <KnownBlock t={t} tasks={tasks} name={name} />}
+      {known && !deciding && <KnownBlock t={t} tasks={tasks} name={name} />}
       {!asked && !held && !known && (card.summary.by === 'node'
         ? (<>
           {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
@@ -475,7 +479,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
             <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
             <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
           </>) : (<>
-            {/* Acknowledged already: it goes where its work stands (core/org/thread-ack-outcome.ts), no second button. */}
+            {/* Acknowledged already: the AI places it (core/org/thread-known.ts), no second button. */}
             {!letter && !known && <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>}
             <ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />
           </>)}

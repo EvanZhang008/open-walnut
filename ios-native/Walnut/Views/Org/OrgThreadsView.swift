@@ -68,6 +68,7 @@ struct OrgThreadsView: View {
 
     private var showWorking: Bool { isOpen("working") }
     private var showWaiting: Bool { isOpen("waiting") }
+    private var showKnown: Bool { isOpen("known") }
     private var showArchived: Bool { isOpen("archived") }
 
     var body: some View {
@@ -141,6 +142,11 @@ struct OrgThreadsView: View {
                     if showWaiting {
                         ForEach(sections.waiting) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                         ForEach(sections.snoozed) { t in card(t, shared: shared, now: now, snoozed: true, compact: true).id(t.id) }
+                    }
+                    // Acknowledged: he acknowledged it and the AI is deciding where it goes.
+                    fold("\(sections.known.count) acknowledged", count: sections.known.count, open: foldBinding("known"), id: "known")
+                    if showKnown {
+                        ForEach(sections.known) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
                     }
                     fold("\(sections.closed.count) closed", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
                     if showClosed {
@@ -408,6 +414,7 @@ struct OrgThreadsView: View {
             switch fold {
             case .working: foldBinding("working").wrappedValue = true
             case .waiting: foldBinding("waiting").wrappedValue = true
+            case .known: foldBinding("known").wrappedValue = true
             case .closed: showClosed = true
             case .archived: foldBinding("archived").wrappedValue = true
             case nil: break
@@ -486,6 +493,7 @@ struct OrgThreadsView: View {
         let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
             ("working", G.working.label, s.working.count, foldBinding("working")),
             ("waiting", G.waiting.label, s.waiting.count + s.snoozed.count, foldBinding("waiting")),
+            ("known", G.known.label, s.known.count, foldBinding("known")),
             ("closed", G.done.label, s.closed.count, foldBinding("closed")),
             ("archived", G.archived.label, archivedTotal(s), foldBinding("archived")),
         ].filter { $0.count > 0 }
@@ -569,7 +577,7 @@ struct OrgThreadsView: View {
     }
 
     private func emptyText(_ s: OrgThreadModel.Sections) -> some View {
-        let quiet = !s.working.isEmpty || !s.waiting.isEmpty || !s.snoozed.isEmpty
+        let quiet = !s.working.isEmpty || !s.waiting.isEmpty || !s.snoozed.isEmpty || !s.known.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             Text(quiet ? "Nothing for you now" : "No open threads")
                 .font(.headline)
@@ -696,8 +704,18 @@ struct OrgThreadCard: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            if known {
-                // He acknowledged it while its work ran: what it waits on, in place of the summary.
+            if let line = OrgThreadModel.ackCardLine(t) {
+                // His Acknowledge: the AI is deciding, or where it went and why.
+                Text(line)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("org.thread.ackLine")
+            }
+            if known && OrgThreadModel.placedSinceAck(t) == nil {
+                // In Acknowledged: the line says it all until it is placed.
+                EmptyView()
+            } else if known {
+                // Placed in Working or Waiting: what it waits on, in place of the summary.
                 OrgThreadKnownBlock(thread: t, name: name)
             } else if let reply = t.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
                 OrgFoldedMarkdown(markdown: reply, budget: OrgThreadCardLayout.summaryBudget, id: "org.thread.summary", source: OrgThreadModel.summarySource(t))
@@ -1036,7 +1054,7 @@ struct OrgThreadCard: View {
 
     @ViewBuilder
     private func actionButtons(fullWidth: Bool) -> some View {
-        // Acknowledged already: it went where its work stands (server thread-ack-outcome.ts), no second button.
+        // Acknowledged already: the AI places it (server thread-known.ts), no second button.
         if !known && !waitsOnHim {
             Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
                 .buttonStyle(.borderedProminent)

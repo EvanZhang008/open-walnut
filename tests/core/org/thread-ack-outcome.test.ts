@@ -1,5 +1,6 @@
 /**
- * Where a card goes at his Acknowledge (src/core/org/thread-ack-outcome.ts ackOutcome; 2026-11-20,
+ * Where Walnut's rule says a card he acknowledged goes (src/core/org/thread-ack-outcome.ts
+ * ackOutcome: the node's hint, and the placement when the node has not decided in time; 2026-11-20,
  * the user: "if I ack and ai should determine if it should go to closed or wait or wip", "If U know
  * why not close"). The rule: its own result delivered and he acknowledged it: Closed, unless a task
  * it lists still works on this thread's subject (Working) or waits on someone, something or a time
@@ -7,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
-import { ackOutcome, onSubject, subjectWords, taskStands, type AckTask } from '../../../src/core/org/thread-ack-outcome.js'
+import { ackOutcome, ackWhy, onSubject, subjectWords, taskStands, type AckTask } from '../../../src/core/org/thread-ack-outcome.js'
 import { threadGroupOf } from '../../../src/core/org/thread-groups.js'
 import { withAwaits } from '../../../src/core/org/thread-ack.js'
 
@@ -97,14 +98,16 @@ describe('his Acknowledge sends the card where its work stands', () => {
     expect(ackOutcome(card('\u4fee\u590d\u767b\u5f55', ['t-1']), byId(running)).outcome).toBe('working')
   })
 
-  it('the read projects the outcome on a card held since his Acknowledge, and the groups draw it there', () => {
+  it('the read says what holds a card he acknowledged, and the rule says why in a few words', () => {
     const held = card('Avatars: version 6 is live', ['t-avatars'], { state: 'pending', ackedAt: AT })
     const [t] = withAwaits([held], [{ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'IN_PROGRESS' }])
-    expect(t.ackGroup).toBe('working')
-    expect(threadGroupOf(t, false, Date.parse(AT))).toBe('working')
-    const [w] = withAwaits([held], [{ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'WAITING' }])
-    expect(threadGroupOf(w, false, Date.parse(AT))).toBe('waiting')
-    const [c] = withAwaits([held], [{ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'COMPLETE' }])
-    expect(c.ackGroup).toBe('closed')
+    expect(t.awaits?.tasks.map((x) => x.id)).toEqual(['t-avatars'])
+    // Not placed yet: Acknowledged, whatever its work does.
+    expect(threadGroupOf(t, false, Date.parse(AT))).toBe('known')
+    expect(ackWhy(ackOutcome(held, byId({ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'IN_PROGRESS' }))))
+      .toBe('\u201cAgent avatars on web and phone\u201d still at work on it')
+    expect(ackWhy(ackOutcome(held, byId({ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'WAITING' }))))
+      .toBe('waits on \u201cAgent avatars on web and phone\u201d')
+    expect(ackWhy(ackOutcome(held, new Map()))).toBe('nothing on it was still open')
   })
 })

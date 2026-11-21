@@ -2,13 +2,13 @@
  * His Acknowledge means he knows (experiment ack_means_known, src/core/org/thread-ack.ts; 2026-11-20,
  * the user: "a human acknowledge means I now know the situation; the thread is truly closed only
  * when the problem is really solved"). The pure steps: what is still open on a thread, the ack that
- * keeps it pending and known (where it goes: thread-ack-outcome.ts), the node's close it allows, the lines the node hears, and each step
- * Walnut takes on a Known thread (thread-known.ts knownStep).
+ * sends it to Acknowledged (pending and known), the node's place and close it allows, the card's
+ * line, the lines the node hears, and each step Walnut takes on one (thread-known.ts knownStep).
  */
 import { describe, it, expect } from 'vitest'
 import { emptyThreads, fileMessage, normalizeThreads, setAnswers, ThreadError, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
-import { ackDoneLine, ackKnown, ackLine, ackWaitsOf, type AckTask } from '../../../src/core/org/thread-ack.js'
-import { backFromKnown, isKnown, KNOWN_CLOSE_MS, knownStep } from '../../../src/core/org/thread-known.js'
+import { ackDoneLine, ackKnown, ackLine, ackPlace, ackWaitsOf, checkPlace, nodePlaced, type AckTask } from '../../../src/core/org/thread-ack.js'
+import { ACK_DECIDING_LINE, ackCardLine, backFromKnown, inAcknowledged, isKnown, KNOWN_CLOSE_MS, knownStep } from '../../../src/core/org/thread-known.js'
 import { hasThreadNews, shownToHim, threadCounts } from '../../../src/core/org/thread-view.js'
 import { THREADS_PENDING_RULE } from '../../../src/core/org/thread-rules.js'
 
@@ -115,17 +115,25 @@ describe('the ack that keeps it open', () => {
     const acked = ackKnown(f, id, at(4)).file
     const back = normalizeThreads(JSON.parse(JSON.stringify(acked)), 'lead-1')
     expect(back.threads[0].ackedAt).toBe(at(4))
-    const bad = normalizeThreads({ threads: [{ ...acked.threads[0], ackedAt: 'soon', ackDone: 42 }] }, 'lead-1')
+    const bad = normalizeThreads({ threads: [{ ...acked.threads[0], ackedAt: 'soon', ackDone: 42, ackPlaced: { to: 'somewhere', by: 'node', at: at(5) } }] }, 'lead-1')
     expect(bad.threads[0].ackedAt).toBeUndefined()
     expect(bad.threads[0].ackDone).toBeUndefined()
+    expect(bad.threads[0].ackPlaced).toBeUndefined()
+    // A placement survives the round trip; a new Acknowledge drops the old one: it is deciding again.
+    const placed = { ...acked, threads: [ackPlace(acked.threads[0], 'waiting', 'node', 'waits on the simulator', at(5))] }
+    expect(normalizeThreads(JSON.parse(JSON.stringify(placed)), 'lead-1').threads[0].ackPlaced).toEqual({ to: 'waiting', by: 'node', at: at(5), why: 'waits on the simulator' })
+    expect(ackKnown(placed, id, at(9)).thread.ackPlaced).toBeUndefined()
   })
 })
 
 describe('what the node hears', () => {
-  it('the ack line names the thread and what it waits on, and what to do when it is over', () => {
-    const line = ackLine({ id: 'th-cccccccccccc', title: 'Oven timer' }, { tasks: [{ id: 't-oven', title: 'Fix the timer' }], replies: true, letter: false })
-    expect(line).toContain('He acknowledged thread th-cccccccccccc "Oven timer": he knows where it stands; it waits on "Fix the timer" (t-oven), his reply on its way to you.')
-    expect(line).toContain('set it answered with the outcome only if there is something he has not seen (he closes it); otherwise close it yourself.')
+  it('the ack line asks the node to place it, with Walnut\'s reading and its deadline', () => {
+    const line = ackLine({ id: 'th-cccccccccccc', title: 'Oven timer' }, { outcome: 'waiting', waits: { tasks: [{ id: 't-oven', title: 'Fix the timer' }], replies: true, letter: false } })
+    expect(line).toContain('He acknowledged thread th-cccccccccccc "Oven timer": he knows where it stands, and his card reads "AI is deciding where this goes".')
+    expect(line).toContain('thread_update place (closed when it is over, waiting with what it waits on, working while work on it runs) and place_why')
+    expect(line).toContain('Walnut reads it as waiting: it waits ("Fix the timer" (t-oven), his reply on its way to you)')
+    expect(line).toContain(`Walnut places it there in ${KNOWN_CLOSE_MS / 60_000} minutes.`)
+    expect(ackLine({ id: 'th-cccccccccccc', title: 'Oven timer' }, { outcome: 'closed', waits: null })).toContain('Walnut reads it as closed: nothing on it is still open, so it closes;')
     const done = ackDoneLine({ id: 'th-cccccccccccc', title: 'Oven timer' })
     expect(done).toContain('nothing on it is open now. If the outcome holds something he has not seen, set it answered with it once; otherwise close it.')
     expect(done).toContain(`Walnut closes it in ${KNOWN_CLOSE_MS / 60_000} minutes`)
@@ -146,9 +154,66 @@ describe('what the node hears', () => {
     expect(backFromKnown(again.thread)).toBe(false)
   })
 
-  it("Walnut's steps on a Known thread: wait while open, tell once when it ends, then close with nothing new or show what is new", () => {
+  it('in Acknowledged until placed: Walnut waits KNOWN_CLOSE_MS for the node, then places it; one the node placed is the node\'s', () => {
     const { f, id } = running()
     const t = ackKnown(f, id, at(4)).thread
+    const due = Date.parse(at(4)) + KNOWN_CLOSE_MS
+    expect(inAcknowledged(t)).toBe(true)
+    expect(knownStep(t, true, due - 1)).toBe('wait')
+    expect(knownStep(t, false, due - 1)).toBe('wait')
+    expect(knownStep(t, true, due)).toBe('place')
+    expect(knownStep(t, false, due)).toBe('place')
+    const byNode = ackPlace(t, 'waiting', 'node', 'waits on the simulator until 22:00', at(6))
+    expect(inAcknowledged(byNode)).toBe(false)
+    expect(knownStep(byNode, false, due + KNOWN_CLOSE_MS * 9)).toBe('none')
+  })
+
+  it('the card says the AI is deciding, then where it went and why', () => {
+    const { f, id } = running()
+    const t = ackKnown(f, id, at(4)).thread
+    expect(ackCardLine(t)).toBe(ACK_DECIDING_LINE)
+    expect(ACK_DECIDING_LINE).toBe('AI is deciding where this goes.')
+    expect(ackCardLine(ackPlace(t, 'waiting', 'node', 'waits on the Mac simulator until 22:00', at(6)))).toBe('Moved to Waiting: waits on the Mac simulator until 22:00')
+    expect(ackCardLine(ackPlace(t, 'working', 'walnut', '"Oven timer" still at work on it', at(14)))).toBe('Moved to Working by Walnut: "Oven timer" still at work on it')
+    const shut = ackPlace(t, 'closed', 'node', 'the timer is fixed and he saw it', at(6))
+    expect(shut.closed).toMatchObject({ how: 'acked', by: 'agent', reacted: true })
+    expect(ackCardLine(shut)).toBe('Moved to Closed: the timer is fixed and he saw it')
+    // He wrote in it since: no line, it is working again.
+    expect(ackCardLine(fileMessage({ ...f, threads: [ackPlace(t, 'waiting', 'node', 'x', at(6))] }, { text: 'and the grill?', via: 'follow-up', threadId: id, at: at(8) }).thread)).toBeNull()
+    expect(ackCardLine(f.threads[0])).toBeNull()
+  })
+
+  it("the node's place: only its own, only on one he acknowledged, with a why", () => {
+    const { f, id } = running()
+    const t = ackKnown(f, id, at(4)).thread
+    expect(() => checkPlace('human', 'closed', 'done', {})).toThrow(ThreadError)
+    expect(() => checkPlace(NODE, 'later', 'x', {})).toThrow(/place must be one of/)
+    expect(() => checkPlace(NODE, 'waiting', '  ', {})).toThrow(/place needs place_why/)
+    expect(() => checkPlace(NODE, 'waiting', 'x', { state: 'pending' })).toThrow(/not with state/)
+    // A reply or options would say something else than where it goes.
+    expect(() => checkPlace(NODE, 'waiting', 'x', { reply: 'Timer fixed.' })).toThrow(/not with reply/)
+    expect(checkPlace(NODE, 'working', 'x', { title: 'Oven timer', known: 'all' })).toEqual({ to: 'working', why: 'x' })
+    const p = checkPlace(NODE, 'waiting', '  waits on\n the simulator ', {})
+    expect(p).toEqual({ to: 'waiting', why: 'waits on the simulator' })
+    expect(nodePlaced(t, t, p, at(6)).ackPlaced).toEqual({ to: 'waiting', by: 'node', at: at(6), why: 'waits on the simulator' })
+    // He pinned it since his ack: a place in Closed is its close (threads-store.ts), which his pin refuses.
+    const pinnedT = { ...t, pinned: { at: at(5), by: 'human' } }
+    expect(() => updateThread({ ...f, threads: [pinnedT] }, id, { close: 'acked' }, NODE, at(6))).toThrow(/pinned/)
+    expect(nodePlaced(pinnedT, pinnedT, { to: 'waiting', why: 'x' }, at(6)).pinned).toBeTruthy()
+    // Placed in Closed: its close records where it went and why.
+    const shutByNode = updateThread({ ...f, threads: [t] }, id, { close: 'acked' }, NODE, at(7)).thread
+    expect(nodePlaced(t, shutByNode, { to: 'closed', why: 'the timer is fixed' }, at(7)).ackPlaced).toEqual({ to: 'closed', by: 'node', at: at(7), why: 'the timer is fixed' })
+    // Not acknowledged: refused, the node sets its state instead.
+    expect(() => nodePlaced(f.threads[0], f.threads[0], p, at(6))).toThrow(/only for a thread he acknowledged/)
+    // A plain close of its own on one he acknowledged is its decision too.
+    const closed = updateThread({ ...f, threads: [t] }, id, { close: 'acked' }, NODE, at(7)).thread
+    expect(nodePlaced(t, closed, null, at(7)).ackPlaced).toEqual({ to: 'closed', by: 'node', at: at(7) })
+    expect(ackCardLine(nodePlaced(t, closed, null, at(7)))).toBe('Moved to Closed.')
+  })
+
+  it("Walnut's steps on one it placed: wait while open, tell once when it ends, then close with nothing new or show what is new", () => {
+    const { f, id } = running()
+    const t = ackPlace(ackKnown(f, id, at(4)).thread, 'working', 'walnut', 'x', at(14))
     const now = Date.parse(at(20))
     expect(knownStep(f.threads[0], false, now)).toBe('none')
     expect(knownStep(t, true, now)).toBe('wait')
@@ -163,7 +228,7 @@ describe('what the node hears', () => {
     expect(knownStep({ ...told, pinned: { at: at(16), by: 'human' } }, false, late)).toBe('wait')
     expect(knownStep({ ...told, snoozed: { until: new Date(late + 60_000).toISOString(), at: at(16) } }, false, late)).toBe('wait')
     // The node wrote a new summary after his ack but left it pending: shown, never closed unseen.
-    const wrote = updateThread(ackKnown(f, id, at(4)).file, id, { state: 'pending', reply: 'Timer fixed and tested.' }, NODE, at(12)).thread
+    const wrote = updateThread({ ...f, threads: [t] }, id, { state: 'pending', reply: 'Timer fixed and tested.' }, NODE, at(16)).thread
     expect(knownStep({ ...wrote, ackDone: at(15) }, false, Date.parse(at(15)) + KNOWN_CLOSE_MS)).toBe('show')
   })
 

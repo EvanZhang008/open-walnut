@@ -28,10 +28,10 @@
  *
  * Every thread read here carries `askedIn` when a task already asks him its decision (projected,
  * never stored: core/org/thread-task-ask.ts), so `shown`, the counts and a client agree. A thread
- * he acknowledged while work on it was not over (core/org/thread-known.ts) carries `ackGroup`, where
- * it stands now (working, waiting, or closed until the follow pass closes it:
- * core/org/thread-ack-outcome.ts), and `awaits`, what holds it:
- * { tasks: [{ id, title, what?, waitingOn?, until? }], replies, letter } (both additive).
+ * he acknowledged (core/org/thread-known.ts) carries `ackedAt`, once placed `ackPlaced`
+ * { to: working | waiting | closed, by: node | walnut, at, why? } (stored), and `awaits`, what holds
+ * it: { tasks: [{ id, title, what?, waitingOn?, until? }], replies, letter } (projected; all additive).
+ * PATCH takes the node's `place` and `place_why` on one (core/org/thread-ack.ts checkPlace).
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on every replica.
  * The session that wrote a summary or a first post is the caller's own, read from its session
@@ -54,7 +54,7 @@ import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { keepsThreads } from '../../core/org/keeps-threads.js'
 import { elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
-import { withAwaits, withKnownAwaits } from '../../core/org/thread-ack.js'
+import { withKnownAwaits } from '../../core/org/thread-ack.js'
 
 export const orgThreadsV1Router = Router()
 
@@ -144,8 +144,8 @@ const positive = (v: unknown) => {
 /**
  * GET /api/v1/thread-states?ids=a,b,c  { on, states: { [taskId]: { state, id, title } }, more? }
  * What each task's own open threads give it (thread-groups.ts threadStateOf: needs > read >
- * working > waiting), read as his Threads read them (withTaskAsks: a decision a task asks waits
- * here; withAwaits: one he acknowledged where its work stands), for a Board card's status while the Brief is off (experiment brief_off). Only the tasks
+ * working > waiting; Acknowledged reads waiting), read as his Threads read them (withTaskAsks: a
+ * decision a task asks waits here), for a Board card's status while the Brief is off (experiment brief_off). Only the tasks
  * that have threads are read, at most THREAD_STATES_MAX of them (`more`: how many were left out).
  * Off, or for a task with no open thread, nothing: the card keeps its own status.
  */
@@ -163,7 +163,7 @@ orgThreadsV1Router.get('/thread-states', route(async (req, res) => {
   for (const id of ids) {
     const file = await readThreads(id).catch(() => null)
     if (!file?.threads.length) continue
-    const got = threadStateOf(withAwaits(await withTaskAsks(id, file.threads, tasks), tasks), now)
+    const got = threadStateOf(await withTaskAsks(id, file.threads, tasks), now)
     if (got) states[id] = got
   }
   res.json({ on: true, states, ...(asked.length > ids.length ? { more: asked.length - ids.length } : {}) })
@@ -177,7 +177,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   if (isFollower()) throw primaryOnly('get the threads from')
   await ownerReads(req, task.id, (await readThreads(task.id)).threads.filter((t) => !t.closed).map((t) => t.id))
   const file = await readThreads(task.id)
-  // `ackGroup` and `awaits` on each thread he acknowledged at work (core/org/thread-ack.ts): where it stands, for its card.
+  // `awaits` on each thread he acknowledged (core/org/thread-ack.ts): what holds it, for its card.
   const all = await withKnownAwaits(await withTaskAsks(task.id, sortedThreads(file.threads)))
   // `shown`: his view shows it, judged over ALL the node's threads (an answer shared with a closed
   // thread counts), the rule `user_status.threads` counts by, so a client's list and its count agree.
@@ -363,7 +363,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const { by, source } = await callerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'user_kind_words', 'user_kind_about', 'same_ask_reason', 'ask_owner', 'user_words'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'user_kind_words', 'user_kind_about', 'same_ask_reason', 'ask_owner', 'user_words', 'place', 'place_why'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }

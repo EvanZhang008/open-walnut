@@ -78,8 +78,8 @@ enum OrgNodePageCover: Identifiable, Equatable {
 /// its id before the page says it is no longer open: the list brings only the newest closed ones
 /// (2026-11-08 review: a thread closed earlier was called gone).
 enum OrgThreadRevealModel {
-    /// The folds below his cards: Working, Waiting / Snoozed (the snoozed ones too), Closed, Archived.
-    enum Fold: String, Equatable { case working, waiting, closed, archived }
+    /// The folds below his cards: Working, Waiting / Snoozed (the snoozed ones too), Acknowledged, Closed, Archived.
+    enum Fold: String, Equatable { case working, waiting, known, closed, archived }
 
     enum Outcome: Equatable {
         /// No read since the request yet (or the last one failed and the thread is not known).
@@ -128,6 +128,7 @@ enum OrgThreadRevealModel {
         if sections.working.contains(where: { $0.id == id }) { return .show(.working) }
         if sections.snoozed.contains(where: { $0.id == id }) { return .show(.waiting) }
         if sections.waiting.contains(where: { $0.id == id }) { return .show(.waiting) }
+        if sections.known.contains(where: { $0.id == id }) { return .show(.known) }
         if sections.closed.contains(where: { $0.id == id }) { return .show(.closed) }
         if sections.archived.contains(where: { $0.id == id }) { return .show(.archived) }
         // A failed read proves nothing about the thread; the page's own error line says so.

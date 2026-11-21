@@ -1736,12 +1736,16 @@ a newer node never changes an older one's. A chosen one is stored on the task as
   reads part of the list still draws the number its header shows. A client reads the open ones
   and a page of the closed ones with `answer_max`: the whole list (over 1 MB for a busy VP) is
   past what the companion carries back from the Mac (256 KB).
-  A thread the user acknowledged while work on it was not over (experiment `ack_means_known`) is
-  open, `state: "pending"`, with `ackedAt`, and `ackDone` once nothing holds it any more. Each such
-  thread carries `ackGroup` (additive, 2026-11-20): `working`, `waiting`, or `closed` (its work is
-  over and Walnut closes it shortly), the group the clients draw it in, and `awaits`: `{ tasks:
-  [{ id, title, what?, waitingOn?, until? }], replies, letter }`, what holds it (`what`: what that
-  task is to finish), empty lists once nothing does. An older client reads it as a pending thread.
+  A thread the user acknowledged (experiment `ack_means_known`) is open, `state: "pending"`, with
+  `ackedAt`; it is in Acknowledged (group id `known`) while the node's AI decides where it goes.
+  Once placed it carries `ackPlaced` (additive, 2026-11-20): `{ to: "working" | "waiting" |
+  "closed", by: "node" | "walnut", at, why? }`: the node's `place` (PATCH `place` and `place_why`,
+  from the node only, on a thread the user acknowledged and has not written in since; `400` or
+  `409 bad_input` otherwise), or Walnut's own rule ten minutes after the ack when the node has not
+  decided. `ackDone` marks when nothing holds one Walnut placed any more. Each such thread also
+  carries `awaits`: `{ tasks: [{ id, title, what?, waitingOn?, until? }], replies, letter }`, what
+  holds it (`what`: what that task is to finish), empty lists once nothing does. An older client
+  reads it as a pending thread.
 - `GET /api/v1/tasks/:id/threads/:thread` → `200 { task_id, thread }`: one thread whole (a
   Conversation opened after a cut read); `404 no_thread`.
 - `PUT /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId` → `200 { task_id, thread_id,

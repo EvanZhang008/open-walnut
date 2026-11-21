@@ -66,7 +66,16 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   /** He acknowledged it while its work ran, and when that work ended (thread-known.ts). */
   ackedAt?: string;
   ackDone?: string;
+  /** Where it went from Acknowledged, who placed it and why (thread-known.ts). */
+  ackPlaced?: AckPlaced;
 }
+
+/** Where a thread he acknowledged went, who placed it there (the node's AI or Walnut's rule) and why (thread-known.ts). */
+export type AckPlace = 'working' | 'waiting' | 'closed';
+export const ACK_PLACES = ['working', 'waiting', 'closed'] as const satisfies readonly AckPlace[];
+/** Longest `place_why` kept: one line on his card. */
+export const PLACE_WHY_MAX = 200;
+export interface AckPlaced { to: AckPlace; by: 'node' | 'walnut'; at: string; why?: string }
 
 /**
  * The task's own ask, read on its thread (thread-report-ask.ts): the thread reads `needs` with this

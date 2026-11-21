@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost } from './client';
-import type { AckWaits } from '@open-walnut/thread-groups';
+import type { AckPlaced, AckWaits } from '@open-walnut/thread-groups';
 
 /** An Org node's Threads: the user's own requests to it (src/core/org/threads-model.ts, the shape the route returns). */
 export type OrgThreadState = 'new' | 'working' | 'needs' | 'answered' | 'pending';
@@ -81,12 +81,12 @@ export interface OrgThread {
   letter?: { id: string; task: string; options: Array<{ id: string; label: string; description?: string; recommended?: true }>; off?: true; done?: true };
   /** The Board choice it holds (experiment brief_off, core/org/choice-thread-model.ts): its card answers the choice. */
   choice?: { board: string; id: string; task?: string; options: Array<{ value: string; label: string }>; recommended?: string; off?: true; done?: true };
-  /** He acknowledged it while work on it was not over, so it went pending instead of closing (experiment ack_means_known, core/org/thread-known.ts). */
+  /** He acknowledged it, so it went to Acknowledged instead of closing (experiment ack_means_known, core/org/thread-known.ts). */
   ackedAt?: string;
   /** When nothing held that thread any more: it settles a few minutes later. */
   ackDone?: string;
-  /** Projected on its read (core/org/thread-ack.ts withAwaits): where it stands now (core/org/thread-ack-outcome.ts), the group it is drawn in. */
-  ackGroup?: 'working' | 'waiting' | 'closed';
+  /** Where it went from Acknowledged, who placed it (the node's AI, or Walnut's rule after 10 minutes) and why (core/org/thread-known.ts). */
+  ackPlaced?: AckPlaced;
   /** Projected on its read: what holds it; empty lists once nothing does. */
   awaits?: AckWaits;
   /** Walnut put the task's own ask on this thread (core/org/thread-report-ask.ts): stored as the place only. */

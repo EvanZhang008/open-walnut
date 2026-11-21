@@ -75,6 +75,6 @@ describe('every group has its place on each surface, in his words', () => {
     const model = read('ios-native/Walnut/Views/Org/OrgThreadModel.swift')
     expect(model).toContain(`case ${THREAD_GROUPS.join(', ')}`)
     for (const g of THREAD_GROUPS) expect(model, g).toContain(`case .${g}: return "${THREAD_GROUP_LABELS[g]}"`)
-    expect(read('ios-native/Walnut/Views/Org/OrgThreadFocus.swift')).toMatch(/enum Fold: String, Equatable \{ case working, waiting, closed, archived \}/)
+    expect(read('ios-native/Walnut/Views/Org/OrgThreadFocus.swift')).toMatch(/enum Fold: String, Equatable \{ case working, waiting, known, closed, archived \}/)
   })
 })

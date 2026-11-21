@@ -2,26 +2,26 @@
  * His Acknowledge means he knows, on a real server (experiment ack_means_known,
  * src/core/org/thread-ack.ts, src/core/org/thread-known.ts; 2026-11-20, the user: "I acknowledge it,
  * but that does not mean the thread is gone ... the thread is truly closed only when the problem is
- * really solved"; then "I ack, she sees it herself, nothing else, so it closes, right?").
+ * really solved"; then "if I ack and ai should determine if it should go to closed or wait or wip",
+ * and "keep Acknowledged, simpler").
  *
  *   Bakery lead (a session) ─ "Fix the oven timer" (open) ─ "Order the flour" (done)
  *
  *   1. off: his Acknowledge closes a thread whose task still runs, as before;
- *   2. A, on: a card that holds the result (answered) closes, its task at work on another subject;
- *      one whose task still works on its subject is held, Working (thread-ack-outcome.ts);
- *   3. B, on, its task still open on its subject: held (pending, every exchange known by him, out
- *      of his view, the ack recorded), the read says where it stands and what holds it; the node
- *      hears it once;
- *   4. on, nothing open: it closes as before;
- *   5. the node may close the thread he acknowledged without a new reaction of his;
- *   6. B's task done and the node writes the outcome: back to Done;
- *   7. B's task done and nothing new: the node hears it once, and 10 minutes later Walnut closes it;
- *   8. he writes in a Known thread: it is working, not Known;
- *   9. the node wrote something new and left it pending: Walnut brings it back to Done;
- *  10. his second Acknowledge (Close) on a Known thread closes it at once;
- *  11. a thread that changed after the pass read it is settled only as it is now;
- *  12. the flag turned off: a Known thread left from before is still settled.
- *   Neither the return nor the close buzzes his phone.
+ *   2. on: every Acknowledge sends the card to Acknowledged ("AI is deciding where this goes."),
+ *      out of his view, the ack recorded; the node hears it once with Walnut's own reading;
+ *   3. the node decides first (thread_update place + place_why): its decision wins, the card says
+ *      where it went and why, and Walnut never moves it after;
+ *   4. the node's own close is its decision too; a place on a thread he did not acknowledge, or
+ *      his own, is refused;
+ *   5. nobody decided in 10 minutes (fake clock): nothing stays in Acknowledged; Walnut places each
+ *      by the rule (Closed, Waiting, Working) with why, and logs it;
+ *   6. one Walnut placed in Working: when its task is done the node hears it once, and 10 minutes
+ *      later Walnut closes it; one with news the node left pending comes back to Done;
+ *   7. he writes in one: it is working, not acknowledged; his second Acknowledge closes it;
+ *   8. a thread that changed after the pass read it is settled only as it is now;
+ *   9. the flag turned off: one left in Acknowledged is still placed.
+ *   Neither the placement nor the close buzzes his phone.
  *
  * What's real: server, bus, task store, threads store, the riding store, the session runner, the
  * push path up to Apple's service. Mocked: constants, the daemon (MockDaemon), the CLI, Apple's service.
@@ -50,7 +50,9 @@ import { ensureProjectLead } from '../../src/core/org/org-store.js'
 import { fileThreadMessage, patchThread, readThreads, setThreadAnswers } from '../../src/core/org/threads-store.js'
 import { runThreadFollowPass } from '../../src/core/org/thread-follow.js'
 import { ackedThreads, openTasksOf, settleKnown } from '../../src/core/org/thread-ack.js'
-import { KNOWN_CLOSE_MS, isKnown } from '../../src/core/org/thread-known.js'
+import { ackOutcome, ackWhy } from '../../src/core/org/thread-ack-outcome.js'
+import { ACK_DECIDING_LINE, KNOWN_CLOSE_MS, ackCardLine, inAcknowledged, isKnown } from '../../src/core/org/thread-known.js'
+import { threadGroupOf } from '../../src/core/org/thread-groups.js'
 import { pendingRiding, ridingLine } from '../../src/core/sessions/status-riding.js'
 import type { AckWaits } from '../../src/core/org/thread-known.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
@@ -92,7 +94,7 @@ async function leadThread(text: string, tasks: string[], state: 'answered' | 'wo
 const answeredThread = (text: string, tasks: string[]) => leadThread(text, tasks, 'answered')
 const runningThread = (text: string, tasks: string[]) => leadThread(text, tasks, 'working')
 
-type ReadThread = OrgThread & { shown: boolean; awaits?: AckWaits; ackGroup?: string }
+type ReadThread = OrgThread & { shown: boolean; awaits?: AckWaits }
 async function readOne(id: string): Promise<ReadThread> {
   const r = await api<{ threads: ReadThread[] }>('GET', `/tasks/${lead}/threads`)
   expect(r.status).toBe(200)
@@ -146,6 +148,11 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 60_000)
 
+/** The node's thread_update on `id` from its own session. */
+const nodePatch = (id: string, body: Record<string, unknown>) => api<{ thread: OrgThread; error?: string }>('PATCH', `/tasks/${lead}/threads/${id}`, body, sid)
+/** Ten minutes after now, and a little: past the node's time to decide. */
+const pastDeadline = () => Date.now() + KNOWN_CLOSE_MS + 1_000
+
 describe('his Acknowledge means he knows', () => {
   it('off: Acknowledge closes a thread whose task still runs, as today', async () => {
     await flag(false)
@@ -157,34 +164,8 @@ describe('his Acknowledge means he knows', () => {
     expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
   })
 
-  it('A, on: a card that holds the result closes for good, its task at work on another subject', async () => {
+  it('on: the card goes to Acknowledged at once, out of his view; the node hears it once with Walnut\'s reading', async () => {
     await flag(true)
-    const sign = await newTask('Paint the shop sign')
-    const id = await answeredThread('Tell me how the oven timer went', [sign])
-    const r = await ack(id)
-    expect(r.status).toBe(200)
-    expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: 'human' })
-    const t = await threadOf(id)
-    expect(t.ackedAt).toBeUndefined()
-    expect(isKnown(t)).toBe(false)
-    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
-    // The follow pass leaves it closed.
-    await runThreadFollowPass()
-    expect((await threadOf(id)).closed).toMatchObject({ how: 'acked', by: 'human' })
-  })
-
-  it('A, on: a card that holds the result, its task still at work on its subject: held, Working', async () => {
-    const id = await answeredThread('Tell me how the oven timer went', [oven])
-    const r = await ack(id)
-    expect(r.status).toBe(200)
-    expect(r.json.thread.closed).toBeUndefined()
-    expect(isKnown(await threadOf(id))).toBe(true)
-    const read = await readOne(id)
-    expect(read.ackGroup).toBe('working')
-    expect(read.awaits?.tasks.map((x) => x.id)).toEqual([oven])
-  })
-
-  it('B, on, its task still open: held, out of his view, the read says where it stands and what holds it, the node hears it once', async () => {
     const proof = await newTask('Prove the oven holds 180', 'Run the oven for an hour and log the temperature every minute.')
     const id = await runningThread('Keep the oven at 180 degrees', [proof])
     const before = await shownCount()
@@ -193,26 +174,23 @@ describe('his Acknowledge means he knows', () => {
     expect(r.json.thread.closed).toBeUndefined()
     expect(r.json.thread.state).toBe('pending')
     const t = await threadOf(id)
-    expect(t.closed).toBeUndefined()
-    expect(t.state).toBe('pending')
     expect(t.ackedAt).toBeTruthy()
-    expect(isKnown(t)).toBe(true)
+    expect(inAcknowledged(t)).toBe(true)
     expect(t.known).toMatchObject({ by: 'human', through: t.messages[t.messages.length - 1].id })
-    // A thread at work was out of his view before; it stays out, Known.
+    expect(threadGroupOf(t, false)).toBe('known')
+    expect(ackCardLine(t)).toBe(ACK_DECIDING_LINE)
     expect(await shownCount()).toBe(before)
     const read = await readOne(id)
     expect(read.shown).toBe(false)
-    expect(read.ackGroup).toBe('working')
     expect(read.awaits).toEqual({
       tasks: [{ id: proof, title: 'Prove the oven holds 180', what: 'Run the oven for an hour and log the temperature every minute.' }],
       replies: false, letter: false,
     })
-    // The write's answer carries it too, so the card says it at once.
-    expect((r.json.thread as ReadThread).awaits?.tasks.map((x) => x.id)).toEqual([proof])
     const line = ridingLine(sid, `thread-ack:${id}`)
     expect(line).toContain(`He acknowledged thread ${id}`)
-    expect(line).toContain(`it waits on "Prove the oven holds 180" (${proof})`)
-    expect(line).toContain('set it answered with the outcome only if there is something he has not seen (he closes it); otherwise close it yourself.')
+    expect(line).toContain('Decide now with thread_update place')
+    expect(line).toContain(`Walnut reads it as working: work on it still runs ("Prove the oven holds 180" (${proof}))`)
+    expect(line).toContain('Walnut places it there in 10 minutes.')
     // Told once: the item leaves with the message that carries it.
     const ride = pendingRiding(sid)!
     expect(ride.text).toContain(`He acknowledged thread ${id}`)
@@ -220,111 +198,181 @@ describe('his Acknowledge means he knows', () => {
     expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
   })
 
-  it('on, nothing open on it: Acknowledge closes it as before', async () => {
-    const id = await runningThread('Order the rye flour', [flour])
+  it('on: even a card the rule would close goes to Acknowledged first, and the node hears the rule says closed', async () => {
+    const sign = await newTask('Paint the shop sign')
+    const id = await answeredThread('Tell me how the oven timer went', [sign])
     const r = await ack(id)
-    expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: 'human' })
-    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
+    expect(r.json.thread.closed).toBeUndefined()
+    expect(inAcknowledged(await threadOf(id))).toBe(true)
+    expect(ridingLine(sid, `thread-ack:${id}`)).toContain('Walnut reads it as closed: nothing on it is still open, so it closes;')
+    pendingRiding(sid)?.markTold()
   })
 
-  it('the node closes the thread he acknowledged without a new reaction of his', async () => {
-    const id = await answeredThread('Check the oven thermostat', [oven])
-    // Before his ack the node may not close an answer he never reacted to.
-    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { close: 'acked' }, sid)).status).toBe(409)
-    await patchThread(lead, id, { state: 'working' }, `task:${lead}`)
-    await ack(id)
-    expect(isKnown(await threadOf(id))).toBe(true)
-    const r = await api<{ thread: OrgThread }>('PATCH', `/tasks/${lead}/threads/${id}`, { close: 'acked' }, sid)
-    expect(r.status).toBe(200)
-    expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: `task:${lead}` })
-  })
-
-  it('B, its task done and the node writes the outcome: back to To read, and the phone stays quiet', async () => {
+  it('the node decides first: its place wins, the card says where and why, and Walnut never moves it after', async () => {
     sendApns.mockClear()
-    const knob = await newTask('Replace the timer knob')
-    const id = await runningThread('Replace the oven timer knob', [knob])
+    const id = await runningThread('Bake the test loaf', [oven])
     await ack(id)
     pendingRiding(sid)?.markTold()
-    await updateTaskRaw(knob, { phase: 'COMPLETE' } as never, { emitEvent: true })
-    await runThreadFollowPass()
-    expect((await threadOf(id)).ackDone).toBeTruthy()
-    pendingRiding(sid)?.markTold()
-    // The node brings the outcome (its thread_update).
-    const r = await api<{ thread: OrgThread }>('PATCH', `/tasks/${lead}/threads/${id}`, { state: 'answered', reply: 'The new knob is on and the timer counts down right.' }, sid)
+    const r = await nodePatch(id, { place: 'waiting', place_why: 'waits on the new thermostat, due Friday' })
     expect(r.status).toBe(200)
-    const read = await readOne(id)
-    expect(read.closed).toBeUndefined()
-    expect(read.state).toBe('answered')
-    expect(read.shown).toBe(true)
-    expect(read.awaits).toBeUndefined()
-    // Settling later leaves it on his card: it is not Known any more.
-    await runThreadFollowPass({ now: Date.now() + KNOWN_CLOSE_MS + 60_000 })
-    expect((await readOne(id)).shown).toBe(true)
-    // And now it is a result: his Acknowledge closes it (A).
-    expect((await ack(id)).json.thread.closed).toMatchObject({ how: 'acked', by: 'human' })
+    const t = await threadOf(id)
+    expect(t.ackPlaced).toMatchObject({ to: 'waiting', by: 'node', why: 'waits on the new thermostat, due Friday' })
+    expect(t.state).toBe('pending')
+    expect(threadGroupOf(t, false)).toBe('waiting')
+    expect(ackCardLine(t)).toBe('Moved to Waiting: waits on the new thermostat, due Friday')
+    // Past the deadline, and long after: the node's decision stands (its task still works, the rule would say Working).
+    await runThreadFollowPass({ now: pastDeadline() })
+    await runThreadFollowPass({ now: pastDeadline() + 6 * KNOWN_CLOSE_MS })
+    expect((await threadOf(id)).ackPlaced).toMatchObject({ to: 'waiting', by: 'node' })
+    expect((await threadOf(id)).closed).toBeUndefined()
+    // It may change its mind while it stays acknowledged.
+    expect((await nodePatch(id, { place: 'working', place_why: 'the oven task is on it now' })).status).toBe(200)
+    expect(threadGroupOf(await threadOf(id), false)).toBe('working')
+    expect((await nodePatch(id, { place: 'closed', place_why: 'the loaf is baked and he saw the photo' })).json.thread.closed).toMatchObject({ how: 'acked', by: `task:${lead}` })
+    expect(ackCardLine(await threadOf(id))).toBe('Moved to Closed: the loaf is baked and he saw the photo')
     await noBuzz(id)
   })
 
-  it('B, its task done and nothing new: the node hears it once, and 10 minutes later Walnut closes it quietly', async () => {
+  it('the node\'s own close on one he acknowledged is its decision; a place anywhere else is refused', async () => {
+    const id = await answeredThread('Check the oven thermostat', [oven])
+    // Before his ack the node may not close an answer he never reacted to, nor place it.
+    expect((await nodePatch(id, { close: 'acked' })).status).toBe(409)
+    expect((await nodePatch(id, { place: 'closed', place_why: 'done' })).status).toBe(409)
+    await ack(id)
+    pendingRiding(sid)?.markTold()
+    // His own place, a place without a why, or with a state: refused.
+    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { place: 'closed', place_why: 'done' })).status).toBe(400)
+    expect((await nodePatch(id, { place: 'waiting' })).status).toBe(400)
+    expect((await nodePatch(id, { place: 'waiting', place_why: 'x', state: 'pending' })).status).toBe(400)
+    expect((await nodePatch(id, { place: 'waiting', place_why: 'x', reply: 'All good.' })).status).toBe(400)
+    const r = await nodePatch(id, { close: 'acked' })
+    expect(r.status).toBe(200)
+    expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: `task:${lead}` })
+    expect((await threadOf(id)).ackPlaced).toMatchObject({ to: 'closed', by: 'node' })
+  })
+
+  it('nobody decided in 10 minutes (fake clock): nothing stays in Acknowledged; the rule places each, with why', async () => {
+    sendApns.mockClear()
+    const proving = await newTask('Proof the rye dough')
+    // Its session at work on it (the status sync may derive it again: wait until it reads working).
+    await updateTaskRaw(proving, { status_report: { state: 'working', now: 'Kneading', at: new Date().toISOString() }, user_status: { state: 'working' } } as never, { emitEvent: true })
+    await vi.waitFor(async () => expect((await listTasks()).find((x) => x.id === proving)?.user_status?.state).toBe('working'), { timeout: 5_000 })
+    const cooling = await newTask('Cool the rye loaves')
+    await updateTaskRaw(cooling, { phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'the loaves to cool', until: new Date(Date.now() + 3_600_000).toISOString() } } as never, { emitEvent: true })
+    const ids = {
+      working: await runningThread('Proof the rye dough today', [proving]),
+      waiting: await runningThread('Cool the rye loaves tonight', [cooling]),
+      closed: await runningThread('Order the rye flour', [flour]),
+    }
+    for (const id of Object.values(ids)) { await ack(id); pendingRiding(sid)?.markTold() }
+    const ackedAt = Date.parse((await threadOf(ids.working)).ackedAt!)
+    // Before the deadline they wait for the node.
+    await runThreadFollowPass({ now: ackedAt + KNOWN_CLOSE_MS - 2_000 })
+    for (const id of Object.values(ids)) expect(inAcknowledged(await threadOf(id)), id).toBe(true)
+    // The rule as it reads the store now.
+    const open = openTasksOf(await listTasks())
+    const rule = new Map(await Promise.all(Object.values(ids).map(async (id) => [id, ackOutcome(await threadOf(id), open)] as const)))
+    expect(rule.get(ids.closed)?.outcome).toBe('closed')
+    expect(rule.get(ids.waiting)?.outcome).toBe('waiting')
+    expect(rule.get(ids.working)?.outcome).toBe('working')
+    await runThreadFollowPass({ now: pastDeadline() })
+    for (const id of Object.values(ids)) expect(inAcknowledged(await threadOf(id)), id).toBe(false)
+    for (const id of [ids.working, ids.waiting]) {
+      const t = await threadOf(id)
+      const r = rule.get(id)!
+      expect(t.ackPlaced, id).toMatchObject({ to: r.outcome, by: 'walnut', why: ackWhy(r) })
+      expect(threadGroupOf(t, false), id).toBe(r.outcome)
+      expect(ackCardLine(t), id).toBe(`Moved to ${r.outcome === 'working' ? 'Working' : 'Waiting'} by Walnut: ${ackWhy(r)}`)
+    }
+    const waiting = await threadOf(ids.waiting)
+    expect(waiting.ackPlaced).toMatchObject({ to: 'waiting', by: 'walnut', why: 'waits on \u201cCool the rye loaves\u201d' })
+    expect(threadGroupOf(waiting, false)).toBe('waiting')
+    expect((await readOne(ids.waiting)).awaits?.tasks[0]).toMatchObject({ id: cooling })
+    const closed = await threadOf(ids.closed)
+    expect(closed.closed).toMatchObject({ how: 'acked', by: 'agent', reacted: true })
+    expect(ackCardLine(closed)).toBe('Moved to Closed by Walnut: nothing on it was still open')
+    // The node is not told again for a placement; nothing buzzed.
+    expect(ridingLine(sid, `thread-ack:${ids.working}`)).toBeUndefined()
+    await noBuzz(...Object.values(ids))
+  })
+
+  it('one he pinned in Acknowledged stays in his hands: Walnut places it in Waiting, never closes it, and its timer never spins', async () => {
+    const id = await runningThread('Order the oven gloves', [flour])
+    await ack(id)
+    pendingRiding(sid)?.markTold()
+    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { pin: true })).status).toBe(200)
+    const t0 = pastDeadline()
+    await runThreadFollowPass({ now: t0 })
+    const placed = await threadOf(id)
+    expect(placed.ackPlaced).toMatchObject({ to: 'waiting', by: 'walnut', why: 'nothing on it is open; you pinned it' })
+    expect(placed.closed).toBeUndefined()
+    await runThreadFollowPass({ now: t0 + 1_000 })
+    pendingRiding(sid)?.markTold()
+    expect((await threadOf(id)).ackDone).toBeTruthy()
+    // Long past its close time: still his, and the next due time is never one already past.
+    const late = t0 + 3 * KNOWN_CLOSE_MS
+    const r = await settleKnown(await ackedThreads(), openTasksOf(await listTasks()), late)
+    expect((await threadOf(id)).closed).toBeUndefined()
+    expect(r.nextAt === undefined || r.nextAt > late).toBe(true)
+    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { pin: false })).status).toBe(200)
+  })
+
+  it('one Walnut placed while its task was open: its task done, the node hears it once, and 10 minutes later Walnut closes it quietly', async () => {
     sendApns.mockClear()
     const dough = await newTask('Proof the dough overnight')
     const id = await runningThread('Proof the dough for tomorrow', [dough])
     await ack(id)
     pendingRiding(sid)?.markTold()
-    await runThreadFollowPass()
-    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
+    await runThreadFollowPass({ now: pastDeadline() })
+    // Working while a session runs it; marked in progress with none, Waiting: either way still open.
+    expect(['working', 'waiting']).toContain((await threadOf(id)).ackPlaced?.to)
+    expect((await threadOf(id)).ackPlaced?.by).toBe('walnut')
     expect((await threadOf(id)).ackDone).toBeUndefined()
     await updateTaskRaw(dough, { phase: 'COMPLETE' } as never, { emitEvent: true })
-    const doneAt = Date.now()
+    const doneAt = pastDeadline() + 60_000
     await runThreadFollowPass({ now: doneAt })
     const line = ridingLine(sid, `thread-ack:${id}`)
     expect(line).toContain(`Thread ${id}`)
     expect(line).toContain('nothing on it is open now.')
     expect(line).toContain('Walnut closes it in 10 minutes.')
-    const told = await threadOf(id)
-    expect(told.ackDone).toBe(new Date(doneAt).toISOString())
-    expect(isKnown(told)).toBe(true)
-    expect((await readOne(id)).awaits).toEqual({ tasks: [], replies: false, letter: false })
+    expect((await threadOf(id)).ackDone).toBe(new Date(doneAt).toISOString())
     pendingRiding(sid)?.markTold()
-    // Told once, and still Known before the 10 minutes are up.
     await runThreadFollowPass({ now: doneAt + KNOWN_CLOSE_MS - 1_000 })
-    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
     expect(isKnown(await threadOf(id))).toBe(true)
-    // The node did nothing: Walnut closes it, as his Acknowledge already covered it.
     await runThreadFollowPass({ now: doneAt + KNOWN_CLOSE_MS })
     const closed = await threadOf(id)
     expect(closed.closed).toMatchObject({ how: 'acked', by: 'agent', reacted: true })
-    expect(closed.state).toBe('pending')
+    expect(ackCardLine(closed)).toBe('Moved to Closed by Walnut: its work ended and nothing new came')
     expect((await readOne(id)).shown).toBe(false)
     await noBuzz(id)
   })
 
-  it('he writes in a Known thread: it is working again, not Known', async () => {
-    const id = await runningThread('Clean the oven door', [oven])
+  it('the node brings the outcome instead of placing it: Done, and the settling leaves it there', async () => {
+    sendApns.mockClear()
+    const knob = await newTask('Replace the timer knob')
+    const id = await runningThread('Replace the oven timer knob', [knob])
     await ack(id)
-    expect(isKnown(await threadOf(id))).toBe(true)
     pendingRiding(sid)?.markTold()
-    await fileThreadMessage(lead, { text: 'and the glass inside too', via: 'follow-up', threadId: id, at: new Date().toISOString() })
-    const t = await threadOf(id)
-    expect(t.state).toBe('working')
-    expect(isKnown(t)).toBe(false)
-    expect((await readOne(id)).awaits).toBeUndefined()
+    const r = await nodePatch(id, { state: 'answered', reply: 'The new knob is on and the timer counts down right.' })
+    expect(r.status).toBe(200)
+    const read = await readOne(id)
+    expect(read.state).toBe('answered')
+    expect(read.shown).toBe(true)
+    await runThreadFollowPass({ now: pastDeadline() })
+    expect((await readOne(id)).shown).toBe(true)
+    expect((await ack(id)).json.thread.closed).toBeUndefined()
+    await noBuzz(id)
   })
 
-  it('the node wrote something new and left it pending: 10 minutes after its work ended Walnut brings it back to To read', async () => {
+  it('news the node left pending while nobody decided: at the deadline it comes back to Done, never closed unseen', async () => {
     sendApns.mockClear()
     const tray = await newTask('Wash the baking trays')
     const id = await runningThread('Wash the trays before Monday', [tray])
     await ack(id)
     pendingRiding(sid)?.markTold()
-    // The node's quiet update after his ack: news he has not seen, kept out of sight.
-    expect((await api('PATCH', `/tasks/${lead}/threads/${id}`, { state: 'pending', reply: 'All twelve trays are washed and stacked.' }, sid)).status).toBe(200)
+    expect((await nodePatch(id, { state: 'pending', reply: 'All twelve trays are washed and stacked.' })).status).toBe(200)
     await updateTaskRaw(tray, { phase: 'COMPLETE' } as never, { emitEvent: true })
-    const doneAt = Date.now()
-    await runThreadFollowPass({ now: doneAt })
-    pendingRiding(sid)?.markTold()
-    expect((await readOne(id)).shown).toBe(false)
-    await runThreadFollowPass({ now: doneAt + KNOWN_CLOSE_MS })
+    await runThreadFollowPass({ now: pastDeadline() })
     const back = await readOne(id)
     expect(back.closed).toBeUndefined()
     expect(back.state).toBe('answered')
@@ -332,14 +380,22 @@ describe('his Acknowledge means he knows', () => {
     await noBuzz(id)
   })
 
-  it('his second Acknowledge on a Known thread closes it at once', async () => {
-    const id = await runningThread('Set the oven timer for the bread', [oven])
+  it('he writes in one he acknowledged: it is working again; his second Acknowledge closes it at once', async () => {
+    const id = await runningThread('Clean the oven door', [oven])
     await ack(id)
-    expect(isKnown(await threadOf(id))).toBe(true)
     pendingRiding(sid)?.markTold()
-    const r = await ack(id)
+    await fileThreadMessage(lead, { text: 'and the glass inside too', via: 'follow-up', threadId: id, at: new Date().toISOString() })
+    const t = await threadOf(id)
+    expect(t.state).toBe('working')
+    expect(isKnown(t)).toBe(false)
+    expect(ackCardLine(t)).toBeNull()
+    expect((await readOne(id)).awaits).toBeUndefined()
+    const id2 = await runningThread('Set the oven timer for the bread', [oven])
+    await ack(id2)
+    pendingRiding(sid)?.markTold()
+    const r = await ack(id2)
     expect(r.json.thread.closed).toMatchObject({ how: 'acked', by: 'human' })
-    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
+    expect(ridingLine(sid, `thread-ack:${id2}`)).toBeUndefined()
   })
 
   it('a thread that changed after the pass read it is settled only as it is now', async () => {
@@ -347,17 +403,15 @@ describe('his Acknowledge means he knows', () => {
     const id = await runningThread('Label the jars', [jar])
     await ack(id)
     pendingRiding(sid)?.markTold()
-    await updateTaskRaw(jar, { phase: 'COMPLETE' } as never, { emitEvent: true })
     const open = openTasksOf(await listTasks())
-    // Read before he writes in it: the pass would tell the node its work ended.
+    // Read before he writes in it: the pass would place it.
     const stale = await ackedThreads()
     expect(stale.some((n) => n.threads.some((t) => t.id === id))).toBe(true)
     await fileThreadMessage(lead, { text: 'use the round labels', via: 'follow-up', threadId: id, at: new Date().toISOString() })
-    const r = await settleKnown(stale, open)
-    expect(r.told).toBe(0)
-    expect((await threadOf(id)).ackDone).toBeUndefined()
+    const r = await settleKnown(stale, open, pastDeadline())
+    expect(r.placed).toBe(0)
+    expect((await threadOf(id)).ackPlaced).toBeUndefined()
     expect((await threadOf(id)).state).toBe('working')
-    expect(ridingLine(sid, `thread-ack:${id}`)).toBeUndefined()
     // A task added to its list after the read: it waits for a pass that knows that task.
     const lid = await newTask('Print the lids')
     const id2 = await runningThread('Print the jar lids', [jar])
@@ -365,24 +419,20 @@ describe('his Acknowledge means he knows', () => {
     pendingRiding(sid)?.markTold()
     const before = await ackedThreads()
     await patchThread(lead, id2, { add_tasks: [lid] }, `task:${lead}`)
-    expect((await settleKnown(before, open)).told).toBe(0)
-    expect((await threadOf(id2)).ackDone).toBeUndefined()
+    expect((await settleKnown(before, open, pastDeadline())).placed).toBe(0)
+    expect(inAcknowledged(await threadOf(id2))).toBe(true)
   })
 
-  it('the flag turned off: a Known thread left from before is still settled, never left Known', async () => {
+  it('the flag turned off: one left in Acknowledged is still placed, never left there', async () => {
     const bin = await newTask('Empty the flour bin')
     const id = await runningThread('Empty the flour bin', [bin])
     await ack(id)
     pendingRiding(sid)?.markTold()
     await flag(false)
     try {
-      await updateTaskRaw(bin, { phase: 'COMPLETE' } as never, { emitEvent: true })
-      const doneAt = Date.now()
-      await runThreadFollowPass({ now: doneAt })
-      expect((await threadOf(id)).ackDone).toBeTruthy()
-      pendingRiding(sid)?.markTold()
-      await runThreadFollowPass({ now: doneAt + KNOWN_CLOSE_MS })
-      expect((await threadOf(id)).closed).toMatchObject({ how: 'acked', by: 'agent' })
+      await runThreadFollowPass({ now: pastDeadline() })
+      expect((await threadOf(id)).ackPlaced?.by).toBe('walnut')
+      expect(inAcknowledged(await threadOf(id))).toBe(false)
     } finally {
       await flag(true)
     }
