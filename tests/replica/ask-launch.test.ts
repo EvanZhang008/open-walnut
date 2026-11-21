@@ -47,6 +47,7 @@ function harness(over: Partial<AskLaunchDeps> = {}): Harness {
     request: async () => ({ sessions: h.sessions }),
     broadcast: (name, data) => { h.events.push({ name, data }) },
     sessionContext: async (task) => `## Your task\n${task.title} (id ${task.id})`,
+    startCaller: { sessionMode: async () => undefined, vouchedJob: () => null },
     randomUUID: () => SID,
     now: () => 1_760_000_000_000,
     log: () => {},
@@ -113,6 +114,28 @@ describe('a new ask while the Mac is away', () => {
     // The phone's ask is born in Focus, as the Mac files it (mobile-launch.ts askLaunchTier).
     expect(h.creates).toEqual([{ title: 'Ask Walnut', project: 'Ask Walnut', focus_tier: 'focus' }])
     launch.stop()
+  })
+
+  it('the Mac\'s start-mode ceiling: a session asks at most its own mode; the person (a device) is not capped', async () => {
+    // A default session asking bypass: the Mac's 403, nothing checked, nothing made.
+    const session = { actorOf: () => ({ kind: 'session' as const, sid: 'sess-default' }), startCaller: { sessionMode: async () => 'default', vouchedJob: () => null } }
+    const refused = harness(session)
+    const r = await send(refused, createAskLaunch(refused.deps), '/sessions/quick-start', { ...ASK, mode: 'bypass' })
+    expect(r).toEqual({ status: 403, body: { error: { code: 'bad_request', message: 'A default session cannot start a task in bypass mode. Change the caller\'s mode first.' } } })
+    expect(refused.calls).toEqual([])
+    expect(refused.creates).toEqual([])
+    // Naming none: its own mode, as the Mac's quick start gives it.
+    const own = harness(session)
+    const launch = createAskLaunch(own.deps)
+    expect((await send(own, launch, '/sessions/quick-start', ASK) as { status: number }).status).toBe(200)
+    expect(own.calls.map((c) => c.params.mode)).toEqual(['default', 'default'])
+    launch.stop()
+    // The person's device: bypass as asked.
+    const device = harness()
+    const l2 = createAskLaunch(device.deps)
+    expect((await send(device, l2, '/sessions/quick-start', { ...ASK, mode: 'bypass' }) as { status: number }).status).toBe(200)
+    expect(device.calls.map((c) => c.params.mode)).toEqual(['bypass', 'bypass'])
+    l2.stop()
   })
 
   it('the launch\'s task meta becomes the create\'s fields as the Mac files an ask', () => {

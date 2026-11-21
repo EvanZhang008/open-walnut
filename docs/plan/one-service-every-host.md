@@ -289,6 +289,10 @@ permission prompts still name Walnut.
 - **Starts made alone** (`src/replica/away-starts.ts`): only for a task this host's journal made, with a
   session id derived from the op id so a retry starts nothing twice, one start of a task at a time (a second
   hears the leader's 409 `session_exists`), and at most as many live sessions as this machine's memory allows.
+  Its mode meets the leader's own start-mode ceiling (`src/replica/start-ceiling.ts`, also for a new ask):
+  a session starts work at most as loose as its own mode (an unreadable one counts as `default`), a plugin
+  job goes uncapped only with its daemon's vouched token, and a looser mode asked for is the leader's 403,
+  final, with nothing started.
 - **A caller follows what it started.** While the leader is away, a session's or a plugin job's reads of a
   task its host started alone answer from that host, in the leader's shape. The routes behind `task_get`,
   `task_list` and `task_get_bulk` answer the task's session linked as the leader links it (`session_id`,

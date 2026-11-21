@@ -90,14 +90,15 @@ function header(req: RequestLike, name: string): string | undefined {
  * The job a request's credential names, else null. Only on a self-call made for the call the job
  * was held for: the anonymous gateway caller, with the relaying host's origin, naming that plugin
  * and job if it names any. A token copied onto another call (a session's, another host's) or read
- * after its minute names none.
+ * after its minute names none. `origin`: the request's origin when it is trusted by other means
+ * (a host replica's own self-call: replica/start-ceiling.ts), else requestOrigin's.
  */
-export function vouchedPluginJob(req: RequestLike, now = Date.now()): VouchedJob | null {
+export function vouchedPluginJob(req: RequestLike, now = Date.now(), origin?: string): VouchedJob | null {
   const held = holds.get(req.headers[CALLER_JOB_HEADER], now)
   if (!held) return null
   if (header(req, CALLER_SID_HEADER) !== EXTERNAL_CALLER_SID) return null
   // The self-call's origin is the relaying host's by construction (capability-router.ts), the link and not a session's host.
-  if (requestOrigin(req) !== hostOrigin(held.host)) return null
+  if ((origin ?? requestOrigin(req)) !== hostOrigin(held.host)) return null
   const plugin = header(req, CALLER_PLUGIN_HEADER)
   const name = header(req, CALLER_PLUGIN_JOB_HEADER)
   if ((plugin && plugin !== held.plugin) || (name && name !== held.job)) return null

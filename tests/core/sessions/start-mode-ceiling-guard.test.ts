@@ -13,6 +13,10 @@
  * passes `job`, or is listed with why a job's call stays capped there (it does not reach it, or
  * a job does not need it). So a new start entry that drops the job fails here, as one that drops
  * the caller does.
+ *
+ * A host's own Walnut server starts work too while the Mac is away (src/replica: `follower.start`
+ * to its daemon). Each file that sends one caps the mode with the Mac's rule (replica/start-ceiling.ts
+ * capAwayStart), and no mode read off the request body reaches the daemon but through it.
  */
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -80,6 +84,12 @@ const CAPS_WITHOUT_JOB: Record<string, { count: number; why: string }> = {
   'src/web/routes/sessions.ts': { count: 4, why: 'the web quick start and a plan\'s execution: no job starts work through them, capped' },
   'src/core/sessions/engine-switch.ts': { count: 1, why: 'an engine switch\'s mode: a job does not need to loosen it, so it stays capped' },
   'src/core/transfer/transfer.ts': { count: 1, why: 'a transfer\'s mode: a job does not need to loosen it, so it stays capped' },
+}
+
+/** file -> its `follower.start` calls (a start the host's own server makes while the Mac is away), and how each is capped. */
+const FOLLOWER_STARTS: Record<string, { count: number; why: string }> = {
+  'src/replica/away-starts.ts': { count: 1, why: 'task_start and task_create\'s start: capAwayStart before anything else, its mode sent' },
+  'src/replica/ask-launch.ts': { count: 2, why: 'a new ask (its check, then its start): capAwayStart, as the Mac\'s quick start caps it' },
 }
 
 /** Routes (src/web/routes) whose mode changes are not a session's request. */
@@ -189,7 +199,25 @@ describe('launch-mode ceiling on every start path', () => {
     expect(start[0]).toMatch(/\bcallerJob\b/)
   })
 
+  it('every start a host\'s own server makes while the Mac is away meets the Mac\'s ceiling', () => {
+    const starts: Record<string, number> = {}
+    // The daemon twins answer the command; they do not send it.
+    for (const { file, src } of files.filter(f => !f.file.startsWith('src/providers/'))) {
+      const n = (src.match(/\.call\(\s*'follower\.start'/g) ?? []).length
+      if (n) starts[file] = n
+    }
+    expect(starts).toEqual(Object.fromEntries(Object.entries(FOLLOWER_STARTS).map(([f, v]) => [f, v.count])))
+    for (const file of Object.keys(FOLLOWER_STARTS)) {
+      const src = files.find(f => f.file === file)!.src
+      const caps = callsIn(src, ['capAwayStart'], 0).map(c => c.call)
+      expect(caps.length, `${file} caps no start mode`).toBeGreaterThan(0)
+      // A mode read off the body (b.mode, bodyOf(req).mode) only inside the cap's call.
+      const outside = caps.reduce((rest, call) => rest.split(call).join(''), src).match(/\b(?:b|body|bodyOf\(req\))\.mode\b/g) ?? []
+      expect(outside, `${file} reads a mode off the body outside capAwayStart`).toEqual([])
+    }
+  })
+
   it('every listed reason says something', () => {
-    for (const { why } of [...Object.values(NOT_A_SESSIONS_START), ...Object.values(SESSION_START_EMITS), ...Object.values(HANDS_CALLER_NOT_JOB), ...Object.values(CAPS_WITHOUT_JOB)]) expect(why.length).toBeGreaterThan(20)
+    for (const { why } of [...Object.values(NOT_A_SESSIONS_START), ...Object.values(SESSION_START_EMITS), ...Object.values(HANDS_CALLER_NOT_JOB), ...Object.values(CAPS_WITHOUT_JOB), ...Object.values(FOLLOWER_STARTS)]) expect(why.length).toBeGreaterThan(20)
   })
 })

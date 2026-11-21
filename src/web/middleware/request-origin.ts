@@ -30,6 +30,15 @@ interface RequestLike {
 
 export function requestOrigin(req: RequestLike): string {
   if (!classifyLocalRequest(req).trusted) return REMOTE_HTTP_ORIGIN
+  return claimedOrigin(req)
+}
+
+/**
+ * The origin the header names, read as requestOrigin reads it, for a request already trusted by
+ * other means: a host replica's own self-call, proven by its in-process credential
+ * (replica/write-actor.ts isSelfCall), where every port is a tunnel port and loopback proves nothing.
+ */
+export function claimedOrigin(req: RequestLike): string {
   const raw = req.headers[ORIGIN_HEADER]
   if (raw === undefined) return LOCAL_ORIGIN
   // Sent more than once (joined with ", ", or an array): `unknown`, never a part of it.

@@ -1990,9 +1990,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A new Ask Walnut while the Mac is away (WP12): a session on this host, started by its
     // daemon from the Mac's template. Before away.writes, which answers only its own rows.
     {
-      const [{ createAskLaunch }, { readPersonaCopy }, { installAwaySessions }, { buildSessionContext }] = await Promise.all([
+      const [{ createAskLaunch }, { readPersonaCopy }, { installAwaySessions }, { buildSessionContext }, { replicaStartCaller }] = await Promise.all([
         import('../replica/ask-launch.js'), import('../core/replication/kinds/personas.js'),
-        import('../core/session-tracker.js'), import('../core/sessions/session-context.js'),
+        import('../core/session-tracker.js'), import('../core/sessions/session-context.js'), import('../replica/start-ceiling.js'),
       ])
       const asks = createAskLaunch({
         port: away.port,
@@ -2003,6 +2003,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
         broadcast: (name, data) => wsHandlerForReplica.broadcastEvent(name, data),
         sessionContext: async (task, cwd) => (await buildSessionContext(task.id, cwd, hostKey ?? undefined, { task })).systemPrompt,
+        startCaller: replicaStartCaller,
         pendingSessions: () => away.overlay.entries().filter((e) => e.kind === 'session').map((e) => e.record),
         log: (level, msg, data) => log.web[level](msg, data),
       })

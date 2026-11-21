@@ -7,7 +7,9 @@
  * Only a task this host's journal made starts here alone (the Mac adopts no other's session),
  * a start's session id comes from its op id (a retry is the same start), concurrent starts
  * each take a slot of the brake before they start, and one start of a task runs at a time
- * (held before the task's sessions are read).
+ * (held before the task's sessions are read). The mode meets the Mac's start-mode ceiling
+ * (start-ceiling.ts): a session starts work at most as loose as its own mode, and a plugin job only
+ * its host's daemon vouched for goes uncapped.
  */
 import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
@@ -16,11 +18,22 @@ import type { Request, Response } from 'express'
 import { awayStarts, startSessionId, type AwayStartsDeps } from '../../src/replica/away-starts.js'
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import type { PortAnswer, WriteActor, WritePort } from '../../src/replica/write-port.js'
+import { awayStartCaller, replicaStartCaller, type StartCallerDeps } from '../../src/replica/start-ceiling.js'
+import { applyStartModeCeiling } from '../../src/core/sessions/delegated-mode.js'
+import { holdRelayJob, _clearRelayJobsForTesting } from '../../src/core/plugin-jobs/job-caller.js'
+import { getSelfCallToken, setSelfApiRoot } from '../../src/lib/self-api-root.js'
+import { hostOrigin } from '../../src/lib/caller-origin.js'
+import type { IncomingMessage } from 'node:http'
 
 const HOST = 'devbox'
 const JOB: WriteActor = { kind: 'plugin-job', plugin: 'acme', job: 'sync' }
 
 const SID_1 = startSessionId('op-1', 't1')
+/** The job's own daemon vouched for it (its in-process token): no ceiling, as on the Mac. */
+const VOUCHED: StartCallerDeps = { sessionMode: async () => undefined, vouchedJob: () => ({ plugin: 'acme', job: 'sync', host: HOST }) }
+/** A session of each mode (an unknown one reads none). */
+const SESSIONS: StartCallerDeps = { sessionMode: async (sid) => ({ 'sess-default': 'default', 'sess-bypass': 'bypass', 'sess-plan': 'plan' } as Record<string, string>)[sid], vouchedJob: () => null }
+const asSession = (sid: string): Partial<AwayStartsDeps> => ({ actorOf: () => ({ kind: 'session', sid }), startCaller: SESSIONS })
 
 function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteResult; live?: number; gate?: Promise<void> } = {}) {
   const calls: Array<{ cmd: string; params: Record<string, unknown> }> = []
@@ -59,6 +72,7 @@ function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteRe
     liveLimit: () => 4,
     freshStart: async () => ({ mode: 'default', modeNamed: false, context: 'ctx for __WALNUT_ROUTINE_TASK_ID__' }),
     frame: async (text) => `[framed] ${text}`,
+    startCaller: VOUCHED,
     started: vi.fn(),
     log: () => {},
     ...over,
@@ -238,5 +252,94 @@ describe('away starts', () => {
     const h = harness({ actorOf: () => ({ kind: 'device', deviceId: 'd1' }) })
     expect((await h.post('/v1/tasks/t1/start', { message: 'go' })).body.error).toMatchObject({ code: 'needs_leader' })
     expect(h.calls).toEqual([])
+  })
+
+  describe('the Mac\'s start-mode ceiling', () => {
+    const REFUSED = 'A default session cannot start a task in bypass mode. Change the caller\'s mode first.'
+
+    it('a default session asking bypass: the Mac\'s 403 with its words, final, and nothing sent to the daemon', async () => {
+      const h = harness(asSession('sess-default'))
+      const r = await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' })
+      expect(r).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
+      expect(h.calls).toEqual([])
+      // Also on a task whose session runs here: the ceiling comes before anything else, as on the Mac.
+      expect((await h.post('/v1/tasks/t3/start', { message: 'more', mode: 'bypass' })).status).toBe(403)
+      expect(h.sends).toEqual([])
+    })
+
+    it('a default session naming no mode, its project defaulting to bypass: started in default, named', async () => {
+      const h = harness({ ...asSession('sess-default'), freshStart: async () => ({ mode: 'bypass', modeNamed: true, context: 'ctx' }) })
+      expect((await h.post('/v1/tasks/t1/start', { message: 'go' })).status).toBe(200)
+      expect(h.calls[0]!.params).toMatchObject({ mode: 'default', modeNamed: true })
+      expect(h.deps.started).toHaveBeenCalledWith(expect.objectContaining({ mode: 'default' }))
+      // The engine's own setting would be bypass: the mode is still named, so the CLI never falls to it.
+      const engine = harness({ ...asSession('sess-default'), freshStart: async () => ({ mode: 'bypass', modeNamed: false, context: 'ctx' }) })
+      await engine.post('/v1/tasks/t1/start', { message: 'go' })
+      expect(engine.calls[0]!.params).toMatchObject({ mode: 'default', modeNamed: true })
+      // A stricter session gives its own mode, as the Mac's task start does.
+      const plan = harness({ ...asSession('sess-plan'), freshStart: async () => ({ mode: 'bypass', modeNamed: true, context: 'ctx' }) })
+      await plan.post('/v1/tasks/t1/start', { message: 'go' })
+      expect(plan.calls[0]!.params).toMatchObject({ mode: 'plan', modeNamed: true })
+    })
+
+    it('a bypass session asking bypass starts in bypass; naming none, the project\'s own default stands', async () => {
+      const h = harness(asSession('sess-bypass'))
+      expect((await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' })).status).toBe(200)
+      expect(h.calls[0]!.params).toMatchObject({ mode: 'bypass', modeNamed: true })
+      const none = harness({ ...asSession('sess-bypass'), freshStart: async () => ({ mode: 'accept', modeNamed: false, context: 'ctx' }) })
+      await none.post('/v1/tasks/t1/start', { message: 'go' })
+      expect(none.calls[0]!.params).toMatchObject({ mode: 'accept', modeNamed: false })
+    })
+
+    it('a session whose mode cannot be read is a default one (fail closed)', async () => {
+      for (const sessionMode of [async () => undefined, async () => { throw new Error('copy unreadable') }]) {
+        const deps = { actorOf: () => ({ kind: 'session' as const, sid: 'sess-unknown' }), startCaller: { sessionMode, vouchedJob: () => null } }
+        const asks = harness(deps)
+        expect(await asks.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' })).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
+        const none = harness({ ...deps, freshStart: async () => ({ mode: 'bypass', modeNamed: true, context: 'ctx' }) })
+        await none.post('/v1/tasks/t1/start', { message: 'go' })
+        expect(none.calls[0]!.params).toMatchObject({ mode: 'default', modeNamed: true })
+      }
+    })
+
+    it('a plugin job its daemon vouched for starts in bypass; one it did not (or another job\'s token) is an outside caller', async () => {
+      const vouched = harness()
+      expect((await vouched.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' })).status).toBe(200)
+      expect(vouched.calls[0]!.params).toMatchObject({ mode: 'bypass', modeNamed: true })
+      for (const vouchedJob of [() => null, () => ({ plugin: 'acme', job: 'other', host: HOST })]) {
+        const h = harness({ startCaller: { sessionMode: async () => undefined, vouchedJob } })
+        const r = await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' })
+        expect(r).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
+        expect(h.calls).toEqual([])
+      }
+    })
+
+    it('a device is the person: no ceiling (it still starts nothing here, needs_leader above)', async () => {
+      const caller = await awayStartCaller({ headers: {} } as IncomingMessage, { kind: 'device', deviceId: 'd1' }, SESSIONS)
+      expect(caller).toEqual({ kind: 'person' })
+      expect(applyStartModeCeiling(caller, 'bypass')).toBe('bypass')
+    })
+
+    it('the real read: only this replica\'s own self-call carrying the relay\'s token for that job is vouched', () => {
+      setSelfApiRoot('http://127.0.0.1:45998', { credential: true })
+      try {
+        const token = holdRelayJob({ plugin: 'acme', job: 'sync' }, HOST)!
+        const headers = (over: Record<string, string> = {}) => ({
+          authorization: `Bearer ${getSelfCallToken()}`, 'x-walnut-caller-sid': 'external', 'x-walnut-origin': hostOrigin(HOST),
+          'x-walnut-plugin-id': 'acme', 'x-walnut-plugin-job': 'sync', 'x-walnut-caller-job': token, ...over,
+        })
+        // Every port of a host replica is a tunnel port: the socket proves nothing, the self-call does.
+        const req = (h: Record<string, string>) => ({ headers: h, socket: { remoteAddress: '10.0.0.9' } }) as unknown as IncomingMessage
+        expect(replicaStartCaller.vouchedJob(req(headers()))).toEqual({ plugin: 'acme', job: 'sync', host: HOST })
+        expect(replicaStartCaller.vouchedJob(req(headers({ authorization: 'Bearer forged' })))).toBeNull()
+        expect(replicaStartCaller.vouchedJob(req(headers({ 'x-walnut-caller-job': 'made-up' })))).toBeNull()
+        expect(replicaStartCaller.vouchedJob(req(headers({ 'x-walnut-caller-sid': 'sess-1' })))).toBeNull()
+        expect(replicaStartCaller.vouchedJob(req(headers({ 'x-walnut-origin': hostOrigin('other-box') })))).toBeNull()
+        expect(replicaStartCaller.vouchedJob(req(headers({ 'x-walnut-plugin-job': 'other' })))).toBeNull()
+      } finally {
+        setSelfApiRoot(null)
+        _clearRelayJobsForTesting()
+      }
+    })
   })
 })
