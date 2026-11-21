@@ -23,6 +23,9 @@ const LETTER_ASKS: Record<string, string> = {
   'src/integrations/mail/approvals.ts': 'outward send: an email leaves the user\'s machines',
   'src/integrations/mail/unsubscribe.ts': 'outward send: contacts an outside sender',
   'src/core/plugins/plugin-letters.ts': 'plugin pass-through: the plugin owns its own asks',
+  // 2026-11-21: the router's only letter, a question card that passed the person gate
+  // (src/core/router/person-gate.ts): only the user can act, by a deadline, nowhere else.
+  'src/core/router/service.ts': 'the user\'s own matter: only they can act on it by its deadline',
 }
 // Not a Walnut ask: a task's own letter (human_inbox_send, any actions it names) is the
 // task's words, held to the inbox rule (only the user's decisions) in its prompt and op help.

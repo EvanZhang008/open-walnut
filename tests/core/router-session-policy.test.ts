@@ -56,7 +56,7 @@ describe('routerAreaProfile', () => {
     const search = prompt.indexOf('1) Search all of the person\'s tasks')
     const check = prompt.indexOf('2) Take the candidates most relevant first and read each with task_get')
     const next = prompt.indexOf('It is not: check the next candidate')
-    const letter = prompt.indexOf('4) Only when no task is this item\'s matter: for_user')
+    const letter = prompt.indexOf('4) Only when no task is this item\'s matter. The mail is already in the person\'s mailbox, so never send it to them again')
     expect(search).toBeGreaterThan(0)
     expect(check).toBeGreaterThan(search)
     expect(next).toBeGreaterThan(check)
@@ -64,6 +64,10 @@ describe('routerAreaProfile', () => {
     expect(prompt).toMatch(/Every task counts alike, whatever its role, open or finished/)
     expect(prompt).not.toMatch(/\bVP\b/)
     expect(prompt).toMatch(/Never add a conflict, mistake or risk you have not checked/)
+    // 2026-11-21: no forward of a mail the person already has; codes and bills never become a letter.
+    expect(prompt).toMatch(/not_routed and keep_in_mail: true/)
+    expect(prompt).toMatch(/Never for_user: a one-time or sign-in code/)
+    expect(prompt).not.toMatch(/for_user when the person must act or know \(a bill, a code/)
   })
 
   it('names the area in its prompt, so two areas never share one profile', () => {

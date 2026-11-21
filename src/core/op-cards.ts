@@ -44,7 +44,8 @@ interface OpCardSpec {
   to?: string[]
   /** Read from the op's answer when the arguments name no one (a new task's id). */
   toFromResult?: string[]
-  toLabel?: (args: Args) => string | undefined
+  /** `result` is the op's answer when known (a letter the gate held back reads "Left in Mail"). */
+  toLabel?: (args: Args, result?: unknown) => string | undefined
   title?: (args: Args) => string | undefined
   /** The words, in order of preference. */
   detail: (args: Args) => string | undefined
@@ -120,7 +121,11 @@ export const OP_CARDS: Record<string, OpCardSpec> = {
   // A mail or Slack item handed to the task that takes it, with the router's brief.
   router_route: {
     kind: 'send', to: ['task_id'], toFromResult: ['taskId', 'targetTaskId'],
-    toLabel: (a) => (a.for_user === true ? 'Letter to you' : a.not_routed === true ? 'Not routed' : undefined),
+    toLabel: (a, result) => {
+      const letter = result && typeof result === 'object' ? (result as { letter?: unknown }).letter : undefined
+      if (a.for_user === true) return letter === 'withheld' ? 'Left in Mail' : 'Question to you'
+      return a.not_routed === true ? (a.keep_in_mail === true ? 'Left in Mail' : 'Not routed') : undefined
+    },
     title: (a) => s(a.new_task_title) ?? s(a.reason), detail: (a) => s(a.text) ?? s(a.reason),
   },
   triage_route: { kind: 'send', toFromResult: ['taskId', 'targetTaskId'], title: (a) => s(a.item), detail: (a) => s(a.text) },
@@ -306,7 +311,7 @@ export function opCardFields(op: string, args: Args | undefined, result?: unknow
       title = clip(head, OP_CARD_TITLE_MAX)
       summary = rest || undefined
     }
-    const toLabel = spec.toLabel?.(a)
+    const toLabel = spec.toLabel?.(a, result)
     return {
       op,
       kind,

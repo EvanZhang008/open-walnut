@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { plainTextOf } from '../../lib/message-text.js';
 import { bus } from '../event-bus.js';
 import { routerLetterContent } from './letter-content.js';
+import { KEEP_IN_MAIL_KINDS, neverForPerson, personLetterVerdict, withheldPrefix, type PersonCard, type PersonOption } from './person-gate.js';
 import { routerStore } from './runtime.js';
 import { handleRouterNoise, hasRouterNoise, readRouterItemForDelivery, resolveRouterItem, type RouterItemContent, type RouterNoiseOutcome } from './source-registry.js';
 import { RETRY_FAILED_PREFIX, type RouterItem, type RouterRoute, type RouterSource } from './types.js';
@@ -64,8 +65,19 @@ export interface RouteItemInput {
   byTaskId?: string;
   text?: string;
   notRouted?: boolean;
-  /** Only the person can act on it: one inbox letter carries the brief, and the receipt reads not routed. */
+  /**
+   * Only the person can act on it: one question card in their inbox carries the brief, and the
+   * receipt reads not routed. It goes out only through the person gate (person-gate.ts): with a
+   * deadline, why only they can act, one question and its options, and never for a code, a security
+   * notice, a bill, a promotion or a calendar invitation; anything else is left in Mail.
+   */
   forUser?: boolean;
+  /** not_routed only: the person may still read it in Mail, so Walnut never marks it read or archives it. */
+  keepInMail?: boolean;
+  deadline?: string;
+  onlyPerson?: string;
+  ask?: string;
+  options?: PersonOption[];
   retry?: boolean;
   callerSid?: string;
 }
@@ -80,8 +92,8 @@ export interface RouterDeliveryDeps {
   send?: (route: RouterRoute, text: string) => Promise<unknown>;
   /** How long to wait for the area's route lock; default ROUTE_LOCK_WAIT_MS. */
   routeLockWaitMs?: number;
-  /** Sends the person's letter for a for_user decision; default: one inbox letter per item. */
-  letter?: (areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string) => Promise<string>;
+  /** Sends the person's question card for a for_user decision the gate let through; default: one inbox letter per item. */
+  letter?: (areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid: string | undefined, card: PersonCard) => Promise<string>;
   /**
    * Tidies an item the router judged noise (mail: mark read, archive). Default: the source's hook,
    * when the person turned on the experiment; null turns it off.
@@ -92,13 +104,14 @@ export interface RouterDeliveryDeps {
 }
 
 /** The router's one letter for an item only the person can act on: who sent it, its subject, why, and what to do. */
-async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string): Promise<string> {
+async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid: string | undefined, card: PersonCard): Promise<string> {
   const [{ sendLetterOnce }, { walnutLetterLanguage }] = await Promise.all([
     import('../human-inbox/store.js'), import('../human-inbox/walnut-letters/languages.js'),
   ]);
   const sent = await sendLetterOnce({
-    ...routerLetterContent(item, route, brief, await walnutLetterLanguage()),
-    type: 'review',
+    ...routerLetterContent(item, route, brief, await walnutLetterLanguage(), card),
+    type: 'action_required',
+    actions: card.options.map((one, i) => ({ id: `option-${i + 1}`, label: one.label, ...(one.description ? { description: one.description } : {}), ...(i === 0 ? { recommended: true } : {}) })),
     ...(route.byTaskId ? { taskRefs: [route.byTaskId] } : {}),
     sender: { sessionId: callerSid?.trim() || 'external', ...(route.byTaskId ? { taskId: route.byTaskId } : {}) },
   }, { opKey: routerLetterOpKey(areaId, route.key) });
@@ -262,7 +275,10 @@ async function resolveForRoute(input: RouteItemInput, deps: RouterDeliveryDeps):
  * lock; inside it everything is read and authorized again, so a rollback that paused the router
  * while this waited is refused, and no claim, send or settle lands after the lock is given back.
  */
-export async function routeItem(input: RouteItemInput, deps: RouterDeliveryDeps = {}): Promise<{ route: RouterRoute; fresh: boolean }> {
+/** A route's answer; `withheld` says why a for_user decision was left in Mail with no letter (person-gate.ts). */
+export interface RouteItemResult { route: RouterRoute; fresh: boolean; withheld?: string }
+
+export async function routeItem(input: RouteItemInput, deps: RouterDeliveryDeps = {}): Promise<RouteItemResult> {
   if (input.forUser) {
     if (input.retry || input.taskId) throw new RouterError('bad_decision', 'A letter to the person names no target or retry.');
     if (!input.text?.trim()) throw new RouterError('text_required', 'A letter to the person needs its brief: what arrived and what they must do.');
@@ -277,7 +293,7 @@ export async function routeItem(input: RouteItemInput, deps: RouterDeliveryDeps 
   // No area, no ledger to write: the checks inside refuse it in their usual order (access first).
   if (!named) return routeItemLocked(input, deps, undefined);
   const ledger = deps.store ?? routerStore(named.id);
-  let result: { route: RouterRoute; fresh: boolean };
+  let result: RouteItemResult;
   try {
     result = await withLedgerRouteLock(ledger, () => routeItemLocked(input, deps, named.id), { timeoutMs: deps.routeLockWaitMs });
   } catch (error) {
@@ -311,11 +327,16 @@ export function noiseActionPrefix(outcome: RouterNoiseOutcome): string | undefin
  * Once per item, by the claim's winner: noise the router just decided is tidied, and its reason says
  * how. A source that cannot or a step that fails leaves the mail where it was, and the decision stands.
  */
-async function tidyNoise(input: RouteItemInput, result: { route: RouterRoute; fresh: boolean }, store: RouterStore,
+async function tidyNoise(input: RouteItemInput, result: RouteItemResult, store: RouterStore,
   deps: RouterDeliveryDeps): Promise<void> {
-  if (!result.fresh || result.route.status !== 'not_routed' || input.forUser || input.retry) return;
+  // An item left in Mail (a withheld letter) stays as it is: the person may still read it there.
+  if (!result.fresh || result.route.status !== 'not_routed' || input.forUser || input.keepInMail || input.retry || result.withheld) return;
   const noise = deps.noise === undefined ? noiseByChoice : deps.noise;
   if (!noise) return;
+  // A bill, a security notice or a calendar invitation stays where the person may read it, even
+  // when a router (one started before keep_in_mail existed) called it noise.
+  const kind = neverForPerson([result.route.subject]);
+  if (kind && KEEP_IN_MAIL_KINDS.has(kind)) return;
   // The ledger's own source: the exact delivery the router decided, version included.
   const outcome = await noise({ ...result.route.source }).catch(() => undefined);
   const prefix = outcome ? noiseActionPrefix(outcome) : undefined;
@@ -324,7 +345,7 @@ async function tidyNoise(input: RouteItemInput, result: { route: RouterRoute; fr
   if (noted) await announce(noted, deps);
 }
 
-async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, lockedAreaId: string | undefined): Promise<{ route: RouterRoute; fresh: boolean }> {
+async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, lockedAreaId: string | undefined): Promise<RouteItemResult> {
   const areas = deps.areas ?? await readRouterAreas(WALNUT_HOME);
   if (!deps.areas && input.callerSid) {
     const { routerAccess } = await import('./access.js');
@@ -340,6 +361,28 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
   if (store.areaId !== area.id) throw new RouterAreaError('area_forbidden', 403, 'The ledger belongs to another area.');
   const item = await resolveForRoute(input, deps);
   if (sourceArea(areas, item.source)?.id !== area.id) throw new RouterAreaError('area_unassigned', 409, 'The current delivery has no confirmation in this area.');
+  // The person gate, before any claim: a letter that would only repeat the mail is left in Mail.
+  let card: PersonCard | undefined;
+  let withheld: string | undefined;
+  if (input.forUser) {
+    const verdict = personLetterVerdict({
+      subject: item.subject, preview: item.preview, reason: input.reason, text: input.text,
+      deadline: input.deadline, onlyPerson: input.onlyPerson, ask: input.ask, options: input.options,
+    });
+    if (verdict.send) card = verdict.card;
+    else {
+      withheld = verdict.why;
+      input = { ...input, forUser: false, notRouted: true, reason: `${withheldPrefix(verdict.why)}${input.reason.trim()}`.slice(0, 500) };
+    }
+  }
+  const result = await routeItemClaimed(input, deps, areas, area.id, store, item, card);
+  // Only the decision that made this row says it was withheld; a repeat answers the row as it is.
+  return withheld && result.fresh ? { ...result, withheld } : result;
+}
+
+async function routeItemClaimed(input: RouteItemInput, deps: RouterDeliveryDeps, areas: RouterAreasFile, areaId: string,
+  store: RouterStore, item: RouterItem, card: PersonCard | undefined): Promise<RouteItemResult> {
+  const area = { id: areaId };
   // By source too: a receipt made while the cache had lost the item has another key.
   const previous = (await store.get(item.key)) ?? (await store.getSource(input.source));
   const key = previous?.key ?? item.key;
@@ -347,8 +390,8 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
   if (previous) await bindSource(store, input.source, previous.key);
   // A letter whose send failed after its claim (its row still says pending) goes out on the router's
   // next for_user call: one letter per item ever, by its op key, so a sent one is never sent twice.
-  if (previous && !input.retry && input.forUser && previous.letterPending) {
-    const letterId = await (deps.letter ?? routerLetter)(area.id, item, previous, input.text!, input.callerSid);
+  if (previous && !input.retry && card && previous.letterPending) {
+    const letterId = await (deps.letter ?? routerLetter)(area.id, item, previous, input.text!, input.callerSid, card);
     if (letterId) await store.noteLetter([previous.key], letterId);
     const route = (letterId ? await store.get(previous.key) : undefined) ?? previous;
     if (letterId) await announce(route, deps);
@@ -372,13 +415,13 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
     }));
   if (!claimed.route) throw new RouterError('route_missing', 'The route disappeared during the retry.', 409);
   if (!claimed.fresh || claimed.route.status === 'not_routed') {
-    if (!(claimed.fresh && input.forUser)) {
+    if (!(claimed.fresh && card)) {
       if (claimed.fresh) await announce(claimed.route, deps);
       return { route: claimed.route, fresh: claimed.fresh };
     }
     // Once per item (the claim's winner, under a fixed op key): the person reads it in the inbox, and
     // the item's line says it went to them (its letter's id on the row).
-    const letterId = await (deps.letter ?? routerLetter)(area.id, item, claimed.route, input.text!, input.callerSid);
+    const letterId = await (deps.letter ?? routerLetter)(area.id, item, claimed.route, input.text!, input.callerSid, card);
     if (letterId) await store.noteLetter([claimed.route.key], letterId);
     const route = (letterId ? await store.get(claimed.route.key) : undefined) ?? claimed.route;
     await announce(route, deps);

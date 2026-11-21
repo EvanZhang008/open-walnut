@@ -327,16 +327,34 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
     }
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js');
     const caller = sid ? await resolveCaller(sid) : undefined;
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+    const options = Array.isArray(b.options)
+      ? b.options.slice(0, 8).flatMap((one) => {
+        const o = one as Record<string, unknown> | null;
+        const label = str(o?.label);
+        return label ? [{ label, ...(str(o?.description) ? { description: str(o?.description)! } : {}) }] : [];
+      })
+      : undefined;
     const result = await routeItem({
       source, reason, taskId, notRouted, retry: b.retry === true, callerSid: sid,
-      ...(forUser ? { forUser: true } : {}),
+      ...(forUser ? {
+        forUser: true,
+        ...(str(b.deadline) ? { deadline: str(b.deadline) } : {}),
+        ...(str(b.only_person) ? { onlyPerson: str(b.only_person) } : {}),
+        ...(str(b.ask) ? { ask: str(b.ask) } : {}),
+        ...(options ? { options } : {}),
+      } : {}),
+      ...(!forUser && b.keep_in_mail === true ? { keepInMail: true } : {}),
       ...(caller?.kind === 'session' && caller.record.taskId ? { byTaskId: caller.record.taskId } : {}),
       ...(typeof b.text === 'string' ? { text: b.text } : {}),
     });
     const [route] = await routeViews([result.route]);
     // A letter to the person is recorded as not_routed (nothing was handed to a task); `letter` says
     // it went out, so the router does not read that status as "the person never heard" (2026-11-16).
-    const letter = forUser && result.fresh ? { letter: 'sent' as const } : {};
+    // A withheld one (person-gate.ts) was left in Mail: `letter: withheld` and why, so the router
+    // knows nothing went to the person and does not try another way to reach them.
+    const letter = result.withheld ? { letter: 'withheld' as const, withheld: result.withheld }
+      : forUser && result.fresh ? { letter: 'sent' as const } : {};
     res.status(result.route.status === 'routed' ? 202 : 200).json({ ...result, route, ...letter });
   } catch (error) { failure(res, next, error); }
 });

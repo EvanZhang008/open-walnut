@@ -36,6 +36,14 @@ const mail = (account: string, message: string): RouterSource => ({ kind: 'mail'
 // Items the config classifies, and two it does not.
 const P_ITEM = mail(SHARED, 'INBOX:1:10')
 const P_ITEM_2 = mail(SHARED, 'INBOX:1:12')
+/** A whole question card (person-gate.ts): deadline a few days ahead, why only the person, one question, options. */
+const CARD = {
+  forUser: true as const,
+  ask: 'Sign the dock lease renewal before it lapses?',
+  deadline: new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+  onlyPerson: 'The lease is in the person\'s own name and needs their signature.',
+  options: [{ label: 'I will sign it today' }, { label: 'Let it lapse' }],
+}
 const W_ITEM = mail(SHARED, 'INBOX:1:20')
 const UNLISTED_ITEM = mail(SHARED, 'INBOX:1:99') // the account is an Area source, this message is not listed
 const FOREIGN_ITEM = mail(OTHER_ACCOUNT, 'INBOX:1:1') // no Area has this account at all
@@ -270,17 +278,19 @@ describe('a route inside one Area', () => {
     expect(await store().get(key)).toMatchObject({ status: 'not_routed' })
   })
 
-  it('a decision only the person can act on sends them one letter with the brief and records it handled', async () => {
+  it('a question card only the person can answer by a deadline sends them one letter with the brief and records it handled', async () => {
     const f = fakes()
     const letter = vi.fn(async () => 'lt-fixture')
     const d = deps(f, { letter })
     const key = routerKey(P_ITEM)
-    const decide = () => routeItem({ source: P_ITEM, forUser: true, reason: 'A bill only the person can pay', text: 'Pay the dock fee by Friday.', byTaskId: 'task-p-router' }, d)
+    const decide = () => routeItem({ source: P_ITEM, ...CARD, reason: 'Only the person can sign the dock lease', text: 'Sign the dock lease by Friday.', byTaskId: 'task-p-router' }, d)
     const first = await decide()
     expect(first.fresh).toBe(true)
-    expect(first.route).toMatchObject({ status: 'not_routed', reason: 'A bill only the person can pay' })
+    expect(first.withheld).toBeUndefined()
+    expect(first.route).toMatchObject({ status: 'not_routed', reason: 'Only the person can sign the dock lease' })
     expect(letter).toHaveBeenCalledTimes(1)
-    expect(letter.mock.calls[0]).toEqual(expect.arrayContaining(['personal', expect.objectContaining({ key }), 'Pay the dock fee by Friday.']))
+    expect(letter.mock.calls[0]).toEqual(expect.arrayContaining(['personal', expect.objectContaining({ key }), 'Sign the dock lease by Friday.',
+      expect.objectContaining({ ask: CARD.ask, options: CARD.options })]))
     // The same decision again is the same row: no second letter.
     const again = await decide()
     expect(again.fresh).toBe(false)
@@ -584,13 +594,41 @@ describe('noise the router decides', () => {
     const letter = vi.fn(async () => 'lt-fixture')
     const d = deps(f, { noise, letter, awaitNoise: true })
     await routeItem(input(), d)
-    await routeItem({ source: P_ITEM_2, forUser: true, reason: 'A bill only the person can pay', text: 'Pay it by Friday.', byTaskId: 'task-p-router' }, d)
+    await routeItem({ source: P_ITEM_2, ...CARD, reason: 'Only the person can sign the dock lease', text: 'Sign it by Friday.', byTaskId: 'task-p-router' }, d)
     expect(noise).not.toHaveBeenCalled()
     await updateRouterAreas(home, (file) => ({ ...file, items: [...file.items, { source: mail(SHARED, 'INBOX:1:13'), areaId: 'personal' }] }))
     areas = await readRouterAreas(home)
     await routeItem(noiseInput({ source: mail(SHARED, 'INBOX:1:13') }), deps(f, { noise, awaitNoise: true }))
     expect(noise).toHaveBeenCalledTimes(1)
     expect(await store().get(routerKey(mail(SHARED, 'INBOX:1:13')))).toMatchObject({ status: 'not_routed', reason: 'Newsletter, nobody owns it' })
+  })
+
+  it('a for_user that only repeats the mail (a code, a bill) or lacks its card is left in Mail: no letter, no tidy', async () => {
+    const f = fakes()
+    const noise = vi.fn(async () => ({ read: true, archived: true }))
+    const letter = vi.fn(async () => 'lt-fixture')
+    const d = deps(f, { noise, letter, awaitNoise: true })
+    // A whole card does not carry a code through: the item's kind wins.
+    const code = await routeItem({ source: P_ITEM, ...CARD, reason: 'A second one-time login code from the library portal', text: 'Use the code within 5 minutes.', byTaskId: 'task-p-router' }, d)
+    expect(code.withheld).toMatch(/code/)
+    expect(code.route).toMatchObject({ status: 'not_routed' })
+    expect(code.route.reason).toMatch(/^Left in Mail, no letter \(a one-time or sign-in code/)
+    // No card at all (the old for_user call): left in Mail too.
+    const bare = await routeItem({ source: P_ITEM_2, forUser: true, reason: 'Only the person can reply to the dock', text: 'Reply to the dock.', byTaskId: 'task-p-router' }, d)
+    expect(bare.withheld).toMatch(/question with options/)
+    expect(letter).not.toHaveBeenCalled()
+    expect(noise).not.toHaveBeenCalled()
+    expect((await store().get(routerKey(P_ITEM)))?.letterPending).toBeFalsy()
+  })
+
+  it('not_routed with keep_in_mail is never tidied; plain not_routed is', async () => {
+    const f = fakes()
+    const noise = vi.fn(async () => ({ read: true, archived: true }))
+    const d = deps(f, { noise, awaitNoise: true })
+    await routeItem({ ...noiseInput(), keepInMail: true, reason: 'A statement nobody owns; the person may read it in Mail' }, d)
+    expect(noise).not.toHaveBeenCalled()
+    await routeItem(noiseInput({ source: P_ITEM_2 }), d)
+    expect(noise).toHaveBeenCalledTimes(1)
   })
 
   it('tidies nothing until the person turns the experiment on, though the mail source can', async () => {

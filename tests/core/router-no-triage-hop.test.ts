@@ -38,6 +38,7 @@ const item = (message: string): RouterSource => ({ kind: 'mail', account: DESK, 
 const HTTP_ITEM = item('INBOX:1:1')
 const CORE_ITEM = item('INBOX:1:2')
 const LETTER_ITEM = item('INBOX:1:3')
+const LETTER_ITEM_2 = item('INBOX:1:4')
 
 let base = ''
 let routerId = ''
@@ -56,7 +57,7 @@ beforeAll(async () => {
     areas: [{ id: 'mail', name: 'Mail', host: '__local__', taskIds: [routerId], sources: [{ kind: 'mail', account: DESK }] }],
     routers: [{ taskId: routerId, areaId: 'mail', paused: false }],
     items: [],
-    openItems: [{ source: HTTP_ITEM, areaId: 'mail' }, { source: CORE_ITEM, areaId: 'mail' }, { source: LETTER_ITEM, areaId: 'mail' }],
+    openItems: [{ source: HTTP_ITEM, areaId: 'mail' }, { source: CORE_ITEM, areaId: 'mail' }, { source: LETTER_ITEM, areaId: 'mail' }, { source: LETTER_ITEM_2, areaId: 'mail' }],
   }))
   await taskManager.updateTaskRaw(routerId, { org_role: 'router', router_area_id: 'mail', router_paused: false }, { source: 'router-areas', emitEvent: false })
   stopSource = registerRouterSource('mail', {
@@ -94,8 +95,21 @@ describe('the router never makes work (POST /api/v1/router/route)', () => {
     expect(await routerStore('mail').getSource(HTTP_ITEM)).toBeUndefined()
   })
 
-  it('a letter to the person answers letter: sent beside its not_routed route, once', async () => {
+  it('a bare for_user that only repeats the mail is left in Mail: letter: withheld and why', async () => {
     const body = { source: LETTER_ITEM, for_user: true, reason: 'Only the person can approve', text: 'Approve the dock slot change.' }
+    const answer = await (await post('/api/v1/router/route', body)).json()
+    expect([answer.route.status, answer.fresh, answer.letter]).toEqual(['not_routed', true, 'withheld'])
+    expect(answer.withheld).toMatch(/question with options/)
+    expect(answer.route.reason).toMatch(/^Left in Mail, no letter/)
+  })
+
+  it('a question card to the person answers letter: sent beside its not_routed route, once', async () => {
+    const deadline = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10)
+    const body = {
+      source: LETTER_ITEM_2, for_user: true, reason: 'Only the person can approve', text: 'Approve the dock slot change.',
+      ask: 'Approve the dock slot change?', deadline, only_person: 'The slot is booked in the person\'s own name.',
+      options: [{ label: 'Approve it' }, { label: 'Keep the old slot' }],
+    }
     const first = await post('/api/v1/router/route', body)
     expect(first.status).toBe(200)
     const answer = await first.json()

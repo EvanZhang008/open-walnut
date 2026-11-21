@@ -19,6 +19,15 @@ import { routeItem, type RouterDeliveryDeps } from '../../src/core/router/servic
 import { RouterStore, routerKey } from '../../src/core/router/store.js'
 import type { RouterItem, RouterSource } from '../../src/core/router/types.js'
 import type { Task } from '../../src/core/types.js'
+
+/** A whole question card (src/core/router/person-gate.ts): only such a for_user decision sends a letter. */
+const CARD = {
+  forUser: true as const,
+  ask: 'Approve the dock slot change?',
+  deadline: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
+  onlyPerson: 'The slot is booked in the person\'s own name.',
+  options: [{ label: 'Approve it' }, { label: 'Keep the old slot' }],
+}
 import { seedTaskStore } from '../helpers/router-task-store.js'
 
 const DESK = 'desk@marina.example.invalid'
@@ -67,17 +76,17 @@ function forgetLetter(key: string): void {
 describe('a letter to the person on its receipt', () => {
   it('a for_user decision notes the letter it sent, once', async () => {
     const letter = vi.fn(async () => 'lt-dock-1')
-    const first = await routeItem({ source: ITEMS[0]!, forUser: true, reason: 'Only the person can approve', text: 'Approve the slot.', byTaskId: 'router' }, deps(letter))
+    const first = await routeItem({ source: ITEMS[0]!, ...CARD, reason: 'Only the person can approve', text: 'Approve the slot.', byTaskId: 'router' }, deps(letter))
     expect(first.route).toMatchObject({ status: 'not_routed', letterId: 'lt-dock-1' })
     expect(first.route.letterUnchecked).toBeUndefined()
     expect(await store.get(first.route.key)).toMatchObject({ letterId: 'lt-dock-1' })
-    const again = await routeItem({ source: ITEMS[0]!, forUser: true, reason: 'Only the person can approve', text: 'Approve the slot.', byTaskId: 'router' }, deps(letter))
+    const again = await routeItem({ source: ITEMS[0]!, ...CARD, reason: 'Only the person can approve', text: 'Approve the slot.', byTaskId: 'router' }, deps(letter))
     expect(again).toMatchObject({ fresh: false, route: { letterId: 'lt-dock-1' } })
     expect(letter).toHaveBeenCalledTimes(1)
   })
 
   it('a letter whose send failed goes out on the next for_user call, and only then', async () => {
-    const decide = { source: ITEMS[2]!, forUser: true, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }
+    const decide = { source: ITEMS[2]!, ...CARD, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }
     await expect(routeItem(decide, deps(async () => { throw new Error('inbox busy') }))).rejects.toThrow('inbox busy')
     const key = routerKey(ITEMS[2]!)
     expect(await store.get(key)).toMatchObject({ status: 'not_routed', letterPending: true })
@@ -98,7 +107,7 @@ describe('a letter to the person on its receipt', () => {
   })
 
   it('an older build\'s row is answered from the inbox by its letter\'s op key, one time only', async () => {
-    const sent = await routeItem({ source: ITEMS[0]!, forUser: true, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }, deps(async () => 'lt-old'))
+    const sent = await routeItem({ source: ITEMS[0]!, ...CARD, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }, deps(async () => 'lt-old'))
     const noise = await routeItem({ source: ITEMS[1]!, notRouted: true, reason: 'A newsletter', byTaskId: 'router' }, deps(vi.fn()))
     for (const key of [sent.route.key, noise.route.key]) forgetLetter(key)
     const rows = [(await store.get(sent.route.key))!, (await store.get(noise.route.key))!]
@@ -115,7 +124,7 @@ describe('a letter to the person on its receipt', () => {
   })
 
   it('an inbox that cannot be read leaves the rows to be asked again', async () => {
-    const sent = await routeItem({ source: ITEMS[2]!, forUser: true, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }, deps(async () => 'lt-x'))
+    const sent = await routeItem({ source: ITEMS[2]!, ...CARD, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }, deps(async () => 'lt-x'))
     forgetLetter(sent.route.key)
     const row = (await store.get(sent.route.key))!
     const answered = await withLetterReceipts([row], { store: () => store, findLetters: async () => { throw new Error('index unreadable') } })
@@ -124,7 +133,7 @@ describe('a letter to the person on its receipt', () => {
   })
 
   it('the router page counts letters apart from what needed nothing', async () => {
-    await routeItem({ source: ITEMS[0]!, forUser: true, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }, deps(async () => 'lt-1'))
+    await routeItem({ source: ITEMS[0]!, ...CARD, reason: 'Only the person can approve', text: 'Approve.', byTaskId: 'router' }, deps(async () => 'lt-1'))
     await routeItem({ source: ITEMS[1]!, notRouted: true, reason: 'A newsletter', byTaskId: 'router' }, deps(vi.fn()))
     const overview = await store.overview()
     expect(overview.counts.not_routed).toBe(2)
