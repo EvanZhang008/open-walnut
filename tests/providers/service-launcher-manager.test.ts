@@ -182,14 +182,14 @@ describe('what an older Walnut reads in the launcher\'s configs', () => {
 })
 
 describe('the cron manager with the launcher', () => {
-  function cronHarness(o: { script: string; launcher?: ReturnType<typeof fakeLauncher>; crontab: string }) {
+  function cronHarness(o: { script: string; launcher?: ReturnType<typeof fakeLauncher>; crontab: string; stateDir?: string }) {
     const files = o.launcher?.files ?? new Map<string, string>()
-    files.set(BOOT, o.script)
+    files.set(o.stateDir ? `${o.stateDir}/daemon-boot.sh` : BOOT, o.script)
     let crontab = o.crontab
     const events: string[] = []
     let daemonExe = OLD
     const deps: CronServiceDeps = {
-      platform: 'linux', home: HOME, uid: 1000, user: 'walnut', path: '/usr/bin:/bin', stateDir: ROOT, runtimeDir: '/tmp/open-walnut',
+      platform: 'linux', home: HOME, uid: 1000, user: 'walnut', path: '/usr/bin:/bin', stateDir: o.stateDir ?? ROOT, runtimeDir: '/tmp/open-walnut',
       run: async (program, args, input) => {
         if (program === 'crontab' && args[0] === '-l') return { code: 0, stdout: crontab, stderr: '' }
         if (program === 'crontab' && args[0] === '-') { crontab = input ?? ''; events.push('crontab'); return { code: 0, stdout: '', stderr: '' } }
@@ -226,6 +226,21 @@ describe('the cron manager with the launcher', () => {
     expect(L.asked).toEqual(['reset', `request ${NEW} prepared=false`, 'chmod', 'prepared id1', 'wait id1'])
   })
 
+  it('walnut daemon restart under the cron launcher says first that the exit is asked for (no probation crash)', async () => {
+    const fs = await import('node:fs/promises')
+    const os = await import('node:os')
+    const stateDir = await fs.mkdtemp(`${os.tmpdir()}/walnut-cron-leaving-`)
+    try {
+      await fs.mkdir(`${stateDir}/launcher`)
+      const h = cronHarness({ script: renderLauncherScript({ ...config(OLD), stateDir }, { backend: 'cron', self: `${stateDir}/daemon-boot.sh` }), crontab: '', stateDir })
+      await h.manager.restart()
+      expect(h.events).toContain('signal 4242 SIGTERM')
+      expect(await fs.readFile(`${stateDir}/launcher/leaving`, 'utf8')).toMatch(/^pid=4242\nreason=restarted by walnut daemon\n/)
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true })
+    }
+  })
+
   it('with the experiment off, the launcher becomes the plain boot script and its single line', async () => {
     const h = cronHarness({
       script: renderLauncherScript(config(OLD), { backend: 'cron', self: BOOT }),
@@ -251,6 +266,31 @@ describe('the launcher state an older Walnut left behind', () => {
       for (const name of ['state', 'request', 'result', 'ready', 'bad', 'rollback']) await fs.writeFile(path.join(dir, name), `${name}\n`)
       await createLauncherControl({ stateDir, backend: 'systemd' }).reset()
       expect((await fs.readdir(dir)).sort()).toEqual(['bad', 'rollback'])
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('waiting for the launcher\'s answer', () => {
+  it('waits past its time while the trial still beats and says it is busy, and stops waiting once it does not', async () => {
+    const fs = await import('node:fs/promises')
+    const os = await import('node:os')
+    const { createLauncherControl } = await import('../../src/providers/service-launcher-control.js')
+    const stateDir = await fs.mkdtemp(`${os.tmpdir()}/walnut-launcher-wait-`)
+    try {
+      const dir = `${stateDir}/launcher`
+      await fs.mkdir(dir)
+      const now = () => Math.floor(Date.now() / 1000)
+      await fs.writeFile(`${dir}/state`, `current=${NEW}\ngood=${OLD}\nphase=trial\nsince=${now()}\nrequest=u1\n`)
+      await fs.writeFile(`${dir}/heartbeat`, `${now()} ${now() + 600} 77\n`)
+      const L = createLauncherControl({ stateDir, backend: 'systemd', sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) })
+      const answer = L.wait('u1', 200)
+      setTimeout(() => void fs.writeFile(`${dir}/result`, `id=u1\noutcome=committed\nexe=${NEW}\nreason=\n`), 600)
+      expect(await answer).toMatchObject({ id: 'u1', outcome: 'committed' })
+      // Not busy any more: the plain timeout holds.
+      await fs.writeFile(`${dir}/heartbeat`, `${now()} 0 77\n`)
+      expect(await L.wait('u2', 200)).toBeNull()
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true })
     }

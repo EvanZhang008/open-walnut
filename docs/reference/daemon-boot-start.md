@@ -114,7 +114,9 @@ version started that an older one cannot follow, refuses that version for a day 
 the put-back to Walnut Health and to the host's Session helper row in Settings. A trial found at
 start (the machine lost power mid-switch) is the old version again, without refusing the new one; a
 trial cut off by a stop (SIGTERM) is the old version again too, its request left for the next
-launcher, which tries it again. A trial that still beats and says it is busy (a long adoption) gets
+launcher, which tries it again (a third cut-off is the version's failure, and a prepared request
+older than an hour is dropped). `walnut daemon restart` under the cron launcher writes `leaving`
+for the daemon it ends, and an update waits for a busy trial as long as the launcher gives it. A trial that still beats and says it is busy (a long adoption) gets
 up to 15 minutes instead of 90 s, and any exit in the probation the daemon did not announce counts.
 A tick 10 s or more off the one before (a sleep, a paused VM, a clock change) moves the trial and
 probation clocks by the gap and gives the heartbeat 60 s more, so a wake ends nothing. A current

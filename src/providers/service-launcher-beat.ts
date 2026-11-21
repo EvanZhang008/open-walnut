@@ -80,6 +80,18 @@ async function writeWhole(file: string, text: string): Promise<void> {
   await fs.promises.rename(tmp, file)
 }
 
+function leavingText(pid: number, reason: string): string {
+  return `pid=${pid}\nreason=${reason.replace(/[\r\n]+/g, ' ')}\nat=${Math.floor(Date.now() / 1000)}\n`
+}
+
+/**
+ * Say for the service `pid` that its next exit is planned (a restart someone asked for): the launcher
+ * in `dir` counts it as no crash. Async, for a caller that ends the service itself (walnut daemon restart).
+ */
+export async function markLauncherLeaving(dir: string, pid: number, reason: string): Promise<void> {
+  await writeWhole(path.join(dir, 'leaving'), leavingText(pid, reason))
+}
+
 export interface LauncherBeat {
   /** The service serves: the launcher may commit it. */
   ready(info: { exe: string; instance?: string }): Promise<void>
@@ -133,7 +145,7 @@ export function startLauncherBeat(opts: { dir: string | undefined; pid?: number;
       // Sync on purpose: process.exit follows this call, so an async write would never land.
       try {
         const file = path.join(dir, 'leaving')
-        fs.writeFileSync(`${file}.t`, `pid=${pid}\nreason=${reason.replace(/[\r\n]+/g, ' ')}\nat=${Math.floor(Date.now() / 1000)}\n`, { mode: 0o600 })
+        fs.writeFileSync(`${file}.t`, leavingText(pid, reason), { mode: 0o600 })
         fs.renameSync(`${file}.t`, file)
       } catch (err) { warn(`launcher leaving mark not written: ${(err as Error).message}`) }
     },

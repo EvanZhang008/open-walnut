@@ -42,7 +42,8 @@ import {
   type DaemonServiceStatus,
   launcherSwitchFailure,
 } from './daemon-service-manager.js'
-import { isLauncherScript } from './service-launcher-script.js'
+import { LAUNCHER_DIR_NAME, isLauncherScript } from './service-launcher-script.js'
+import { markLauncherLeaving } from './service-launcher-beat.js'
 
 export interface CronServiceDeps extends Omit<DaemonServiceDeps, 'run' | 'platform'> {
   platform: 'linux' | 'darwin'
@@ -195,7 +196,11 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     const supervisor = await deps.supervisor()
     if (supervisor) {
       const daemon = await deps.serviceDaemon()
-      if (daemon) await deps.signal(daemon.pid, 'SIGTERM')
+      if (daemon) {
+        // Under the launcher this exit is asked for: no crash in a new version's probation.
+        if (await launcherOnDisk()) await markLauncherLeaving(path.join(deps.stateDir, LAUNCHER_DIR_NAME), daemon.pid, 'restarted by walnut daemon').catch(() => {})
+        await deps.signal(daemon.pid, 'SIGTERM')
+      }
       return null
     }
     const stuck = await stopDaemon()

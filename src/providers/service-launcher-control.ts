@@ -12,7 +12,8 @@ import { execFile } from 'node:child_process'
 import type { DaemonServiceConfig } from './daemon-service-config.js'
 import { DAEMON_BOOT_SCRIPT_NAME } from './daemon-service-config.js'
 import {
-  BAD_SECONDS, LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME, STOP_WAIT_SECONDS, TRIAL_SECONDS, isLauncherScript, renderLauncherScript,
+  BAD_SECONDS, LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME, STALL_SECONDS, STOP_WAIT_SECONDS, TRIAL_BUSY_MAX_SECONDS, TRIAL_SECONDS,
+  isLauncherScript, renderLauncherScript,
 } from './service-launcher-script.js'
 import { readLauncherFacts, type LauncherFacts } from './service-launcher-beat.js'
 
@@ -21,6 +22,8 @@ export interface LauncherResult { id: string; outcome: LauncherOutcome; exe: str
 
 /** How long a switch may take the launcher: the old service's stop, the new one's trial, a put-back's stop. */
 export const SWITCH_WAIT_MS = (STOP_WAIT_SECONDS * 2 + TRIAL_SECONDS + 30) * 1000
+/** The longest it waits for a trial that still beats and says it is busy (the launcher gives it as long). */
+export const SWITCH_BUSY_WAIT_MS = (STOP_WAIT_SECONDS * 2 + TRIAL_BUSY_MAX_SECONDS + 30) * 1000
 
 export interface LauncherControl {
   /** The launcher script's file. */
@@ -101,6 +104,14 @@ export function createLauncherControl(o: {
   const requestFile = path.join(dir, 'request')
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const readRequest = async () => keyValues(await fs.readFile(requestFile, 'utf8').catch(() => ''))
+  /** The launcher still tries `id` and its trial beats and says it is busy (a long adoption). */
+  const trialStillBusy = async (id: string): Promise<boolean> => {
+    const s = keyValues(await fs.readFile(path.join(dir, 'state'), 'utf8').catch(() => ''))
+    if (s.phase !== 'trial' || s.request !== id) return false
+    const [t, busy] = (await fs.readFile(path.join(dir, 'heartbeat'), 'utf8').catch(() => '')).trim().split(' ').map(Number)
+    const nowS = Date.now() / 1000
+    return t! > 0 && nowS - t! <= STALL_SECONDS && busy! > nowS
+  }
   const body = (fields: Record<string, string>) => Object.entries(fields).map(([k, v]) => `${k}=${v.replace(/[\r\n]+/g, ' ')}\n`).join('')
   return {
     script,
@@ -123,11 +134,14 @@ export function createLauncherControl(o: {
       if ((await readRequest()).id === id) await fs.rm(requestFile, { force: true })
     },
     async wait(id, timeoutMs = SWITCH_WAIT_MS) {
-      const end = Date.now() + timeoutMs
+      const started = Date.now()
+      const end = started + timeoutMs
+      const longest = started + Math.max(timeoutMs, SWITCH_BUSY_WAIT_MS)
       for (;;) {
         const r = keyValues(await fs.readFile(path.join(dir, 'result'), 'utf8').catch(() => ''))
         if (r.id === id && r.outcome) return { id, outcome: r.outcome as LauncherOutcome, exe: r.exe ?? '', reason: r.reason ?? '' }
-        if (Date.now() >= end) return null
+        const now = Date.now()
+        if (now >= longest || (now >= end && !(await trialStillBusy(id)))) return null
         await sleep(250)
       }
     },

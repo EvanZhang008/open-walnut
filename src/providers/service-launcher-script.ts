@@ -55,6 +55,10 @@ export const TRIAL_SECONDS = 90
 export const TRIAL_BUSY_MAX_SECONDS = 900
 /** A tick this much later than the one before is a sleep, a pause or a clock jump, not a stall. */
 export const JUMP_SECONDS = 10
+/** A switch cut off by a stop this many times is the version's failure, not the stop's. */
+export const SWITCH_TRIES = 3
+/** A prepared switch older than this is dropped unanswered by the launcher (its update gave up long ago). */
+export const REQUEST_MAX_AGE_SECONDS = 3600
 export const PROBATION_SECONDS = 15 * 60
 export const PROBATION_CRASHES = 2
 export const BAD_SECONDS = 24 * 60 * 60
@@ -152,7 +156,7 @@ export L_LOCKED=$$
 echo $$ > "$STATE/${DAEMON_BOOT_PID_NAME}"
 l_rotate
 
-s_cur=; s_good=; s_phase=; s_since=0; s_crash=0; s_pin=; s_build=; s_gbuild=; s_req=
+s_cur=; s_good=; s_phase=; s_since=0; s_crash=0; s_pin=; s_build=; s_gbuild=; s_req=; s_tries=0
 l_read() {
   s_cur=; s_good=; s_phase=; s_since=0; s_crash=0; s_pin=; s_build=; s_gbuild=; s_req=
   [ -s "$L/state" ] || return 1
@@ -267,6 +271,7 @@ l_exited() {
 l_request() {
   lq_id=$(l_get "$L/request" id); lq_exe=$(l_get "$L/request" exe); lq_op=$(l_get "$L/request" op)
   lq_b=$(l_get "$L/request" build); lq_p=$(l_get "$L/request" prepared); lq_at=$(l_get "$L/request" at)
+  lq_t=$(l_get "$L/request" tries); l_num "$lq_t" || lq_t=0
   [ "$lq_id" = "$s_req" ] && [ "$s_phase" = trial ] && { rm -f "$L/request"; return 0; }
   if [ "$lq_op" = rollback ]; then
     lq_why=$(l_get "$L/request" reason)
@@ -279,6 +284,9 @@ l_request() {
   if [ ! -x "$lq_exe" ]; then rm -f "$L/request"; l_result "$lq_id" refused "$lq_exe" "not an executable file"; return 0; fi
   if l_bad "$lq_exe"; then rm -f "$L/request"; l_result "$lq_id" refused "$lq_exe" "this version failed here in the last day"; return 0; fi
   if [ "$lq_exe" = "$s_cur" ] && [ "$s_phase" != trial ]; then rm -f "$L/request"; l_result "$lq_id" committed "$lq_exe" "already the current version"; return 0; fi
+  if l_num "$lq_at" && [ $(( $(l_now) - lq_at )) -gt ${REQUEST_MAX_AGE_SECONDS} ]; then
+    rm -f "$L/request"; l_result "$lq_id" failed "$lq_exe" "the switch was asked over an hour ago"; return 0
+  fi
   if [ "$lq_p" != 1 ]; then
     # Written before the running service prepared for its update: wait for prepared=1 (or its removal).
     l_num "$lq_at" && [ $(( $(l_now) - lq_at )) -le ${REQUEST_WAIT_SECONDS} ] && return 1
@@ -286,7 +294,7 @@ l_request() {
   fi
   l_log "switching from $s_cur to $lq_exe"
   [ "$s_phase" = committed ] && { s_good=$s_cur; s_gbuild=$s_build; }
-  s_cur=$lq_exe; s_build=$lq_b; s_phase=trial; s_since=$(l_now); s_crash=0; s_req=$lq_id; l_write
+  s_cur=$lq_exe; s_build=$lq_b; s_phase=trial; s_since=$(l_now); s_crash=0; s_req=$lq_id; s_tries=$lq_t; l_write
   rm -f "$L/request"
   l_stop "$K_STOP"
   # The trial's clock starts with the new version, not with the old one's stop.
@@ -315,11 +323,14 @@ l_selfcheck() {
 }
 l_term() {
   l_log "stopping (signal): the service first"; l_stop "$K_STOP"
-  if [ "$s_phase" = trial ] && [ -n "$s_req" ]; then
+  if [ "$s_phase" = trial ] && [ -n "$s_req" ] && [ $((s_tries + 1)) -ge ${SWITCH_TRIES} ]; then
+    # Cut off again and again: whatever stops the launcher comes with this version.
+    l_rollback "the switch to $s_cur was cut off by a stop ${SWITCH_TRIES} times"
+  elif [ "$s_phase" = trial ] && [ -n "$s_req" ]; then
     # A switch cut off by the stop (a restart of the unit right after the update asked for it): the old
     # version again, and the request back for the next launcher. Not the new version's fault.
     l_log "the switch to $s_cur was cut off by the stop: $s_good again, the switch left for the next launcher"
-    printf 'id=%s\nop=switch\nexe=%s\nbuild=%s\nprepared=1\nat=%s\n' "$s_req" "$s_cur" "$s_build" "$(l_now)" > "$L/request.tmp.$$" \
+    printf 'id=%s\nop=switch\nexe=%s\nbuild=%s\nprepared=1\ntries=%s\nat=%s\n' "$s_req" "$s_cur" "$s_build" $((s_tries + 1)) "$(l_now)" > "$L/request.tmp.$$" \
       && mv -f "$L/request.tmp.$$" "$L/request"
     s_cur=$s_good; s_build=$s_gbuild; s_phase=committed; s_since=$(l_now); s_crash=0; s_req=; l_write
   fi
@@ -353,6 +364,13 @@ l_sum=$(cksum < "$SELF" 2>/dev/null); l_tick=0; w_p=$(l_now); hb_grace=0
 l_log "launcher up (current $s_cur, phase $s_phase)"
 
 while :; do
+  w_gap=$(( $(l_now) - w_p ))
+  if [ "$w_gap" -ge ${JUMP_SECONDS} ] || [ "$w_gap" -lt 0 ]; then
+    # Asleep, paused or the clock moved: the gap is no time the service ran, and its next beat is due.
+    l_log "the clock moved $w_gap s in one tick (a sleep, a pause or a clock change): the clocks follow"
+    s_since=$((s_since + w_gap)); c_at=$((c_at + w_gap)); next_start=$((next_start + w_gap)); l_write
+    hb_grace=$(( $(l_now) + K_STALL ))
+  fi
   if [ -e "$STATE/${DAEMON_BOOT_STOP_NAME}" ]; then l_log "stop file: the launcher ends and leaves the service to its stop"; rm -f "$STATE/${DAEMON_BOOT_PID_NAME}"; exit 0; fi
   l_hold=0
   if [ -f "$L/request" ]; then l_request || l_hold=1; fi
@@ -363,13 +381,6 @@ while :; do
     [ "$l_hold" = 1 ] || l_exited "$c_code"
   fi
   w_n=$(l_now)
-  w_gap=$((w_n - w_p)); w_p=$w_n
-  if [ "$w_gap" -ge ${JUMP_SECONDS} ] || [ "$w_gap" -lt 0 ]; then
-    # Asleep, paused or the clock moved: the gap is no time the service ran, and its next beat is due.
-    l_log "the clock moved $w_gap s in one tick (a sleep, a pause or a clock change): the clocks follow"
-    s_since=$((s_since + w_gap)); c_at=$((c_at + w_gap)); next_start=$((next_start + w_gap)); l_write
-    hb_grace=$((w_n + K_STALL))
-  fi
   if [ -z "$c_pid" ]; then
     [ "$l_hold" = 0 ] && [ "$w_n" -ge "$next_start" ] && l_runnable && l_spawn "$s_cur"
   else
@@ -383,7 +394,7 @@ while :; do
         if [ "$tb_p" = "$c_pid" ] && l_num "$tb_t" && l_num "$tb_b" && [ $((w_n - tb_t)) -le "$K_STALL" ] && [ "$tb_b" -gt "$w_n" ] \
           && [ $((w_n - s_since)) -le ${TRIAL_BUSY_MAX_SECONDS} ]; then :
         else
-          l_rollback "the new version was not ready within $K_TRIAL s (it ran $((w_n - s_since)) s)"; continue
+          l_rollback "the new version was not ready within $K_TRIAL s (it ran $((w_n - s_since)) s)"; w_p=$(l_now); continue
         fi
       fi
     elif [ "$s_phase" = probation ] && [ $((w_n - s_since)) -ge "$K_PROB" ]; then
@@ -406,7 +417,8 @@ while :; do
     l_selfcheck
     [ $((l_tick % 3600)) = 0 ] && l_rotate
   fi
-  # fd 9 closed: a sleep that outlives a killed launcher must not hold its lock.
-  sleep "$K_TICK" 9>&-
+  # fd 9 closed: a sleep that outlives a killed launcher must not hold its lock. Only the sleep is
+  # measured for a jump: the launcher's own slow ticks (a stop that waits) are no sleep of the machine.
+  w_p=$(l_now); sleep "$K_TICK" 9>&-
 done
 `.split('\n').slice(1, -1)

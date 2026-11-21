@@ -286,6 +286,33 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(read(path.join(L, 'bad'))).toBe('')
   })
 
+  it('a switch cut off by a stop three times is the version\'s failure: put back and refused', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2', 'noready')
+    const script = writeLauncher(v1)
+    let launcher = launch(script)
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2)
+    for (let i = 1; i <= 3; i++) {
+      await until(() => live('v2').length === 1 && launcherState().phase === 'trial', 6_000, `trial ${i} running`)
+      process.kill(launcher.pid!, 'SIGTERM')
+      await until(() => !alive(launcher.pid!), 8_000, `launcher ${i} stopped`)
+      if (i < 3) { expect(kv(path.join(L, 'request')).tries).toBe(String(i)); launcher = launch(script) }
+    }
+    expect(result()).toMatchObject({ id, outcome: 'rolledback' })
+    expect(read(path.join(L, 'bad'))).toContain(v2)
+    expect(fs.existsSync(path.join(L, 'request'))).toBe(false)
+  }, 40_000)
+
+  it('drops a prepared switch asked over an hour ago', async () => {
+    const v1 = stub('v1'); const v2 = stub('v2')
+    launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2, { at: String(Math.floor(Date.now() / 1000) - 4000) })
+    await until(() => result().id === id, 5_000, 'answered')
+    expect(result().outcome).toBe('failed')
+    expect(live('v1')).toHaveLength(1)
+  })
+
   it('a wake from sleep or a clock jump kills nothing and moves the probation clock', async () => {
     const clock = clockShim()
     const v1 = stub('v1', 'beat:1'); const v2 = stub('v2', 'beat:1')
