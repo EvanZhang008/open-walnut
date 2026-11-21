@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { taskPath } from '@/utils/task-path';
 import { StepIcon, type StepIconName } from './StepIcon';
+import { useCutCue } from './cut-cue';
 import '@/styles/provenance-fold.css';
 import '@/styles/step-rows.css';
 
@@ -85,9 +86,12 @@ export function CardMain({ title, titleCopy, summary, open, onToggle }: {
   open: boolean;
   onToggle: () => void;
 }) {
+  // The card shows its chevron at rest while its words are cut (cut-cue.ts).
+  const mainRef = useCutCue<HTMLButtonElement>(`${title ?? ''}\n${summary ?? ''}`, true);
   return (
     <>
       <button
+        ref={mainRef}
         type="button"
         className="op-card-main"
         aria-expanded={open}

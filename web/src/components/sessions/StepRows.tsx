@@ -11,6 +11,7 @@ import { StepIcon, toolDisplayName } from './StepIcon';
 import { toolTarget } from './step-target';
 import { isRuleDenied } from './tool-run-phrase';
 import { thinkingFirstLine } from './SessionMessage';
+import { useCutCue } from './cut-cue';
 import '@/styles/step-rows.css';
 
 /** Words the session wrote before its answer: the first line, the whole text a click away. */
@@ -18,9 +19,10 @@ export function FoldedWordsRow({ text, foldKey, children }: { text: string; fold
   // A fold key, not a local disclosure: a find or a jump to these words opens it (revealFolded).
   const [open, toggle] = useTurnFold(foldKey);
   const line = thinkingFirstLine(text);
+  const toggleRef = useCutCue<HTMLButtonElement>(`${open}\n${line}`);
   return (
     <div className="tool-run-row tool-run-row--step tool-run-row--words" data-testid="folded-words">
-      <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
+      <button ref={toggleRef} type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <StepIcon name="message" className="tool-run-icon" />
         {!open && <span className="tool-run-detail tool-run-detail--words" data-find-skip="">{line}</span>}
         {open && <span className="tool-run-label">Note</span>}

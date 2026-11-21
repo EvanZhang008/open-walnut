@@ -29,6 +29,8 @@ import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSe
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { StepIcon, toolDisplayName, toolStepIcon } from './StepIcon';
+import { useCutCue } from './cut-cue';
+import '@/styles/chat-reading.css';
 import { InFoldBody, InStepList, RunLive, useInFoldBody, useInStepList, useRunLive } from './fold-body-context';
 
 /** The most calls a run lays out as rows of an opened fold (ToolRunShell `flat`). */
@@ -290,6 +292,8 @@ function formatTime(ts: string): string {
 export function SessionThinking({ text, live, disclosureId }: { text: string; live?: boolean; disclosureId?: string }) {
   const [open, setOpen] = useRowDisclosure(disclosureId, false);
   const inStepList = useInStepList();
+  // Its step row shows the chevron at rest while its first line is cut (cut-cue.ts).
+  const stepRef = useCutCue<HTMLButtonElement>(`${open}\n${inStepList}\n${text.length}`);
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
@@ -315,7 +319,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   const firstLine = open ? '' : thinkingFirstLine(text);
   return (
     <div className="tool-run-row tool-run-row--step">
-      <button className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+      <button ref={stepRef} className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         <StepIcon name="thought" className="tool-run-icon" />
         <span className="tool-run-label">Thinking</span>
         {firstLine && <span className="tool-run-detail" data-find-skip="">{firstLine}</span>}

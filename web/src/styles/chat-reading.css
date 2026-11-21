@@ -1,0 +1,72 @@
+/* ── How the session chat reads (2026-11-21, the UI audit of the user's own chats) ──────────
+   The agent's words ran the whole column: lines near 750 px (about 120 characters) at a
+   1280 px window, headings, paragraphs and lists in one dense block. Now the timeline is one
+   reading column, --chat-column wide (about 75 characters of English at 14 px), centred in a
+   wide panel with the composer under it (the way T3 Code, the user's pick for the rows,
+   lays it out): the prose, every step and message row and the person's bubbles share its
+   edges; a code block or a table scrolls inside it. A narrower panel is the column.
+   The turn line and the cut-row cue live with the rows (step-rows.css).
+   tests/e2e/browser/chat-reading.spec.ts measures it. */
+
+/* ── One column for the timeline, centred, and the composer under it at the same width ──
+   The history's side padding grows past its gutter until the content is --chat-column wide,
+   so the prose, every step and message row, code, tables and the person's bubbles share one
+   column; a narrower panel (a Home column, a split, a phone) keeps its plain gutter. The
+   review sidebar sets its own right padding, so its history keeps the gutter. Padding in %
+   reads the parent's width, the same parent the composer has. */
+:root .session-panel-body .session-history:not([data-review-sidebar]) {
+  padding-left: max(clamp(8px, 4%, 40px), calc((100% - var(--chat-column)) / 2));
+  padding-right: max(clamp(8px, 4%, 40px), calc((100% - var(--chat-column)) / 2));
+}
+:root .session-panel-input {
+  padding-left: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
+  padding-right: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
+}
+
+/* The panel's notices above the timeline (a banner, the threads strip) share the composer's
+   edges, so the chat has one left edge and one right edge (not in a split, where a banner
+   spans both panes). */
+:root .session-panel:not(.is-changed-open) > :is(.session-error-banner, .session-action-panel),
+:root .session-panel-body > .session-top {
+  margin-left: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
+  margin-right: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
+}
+/* A send that did not go out says so in a quiet caption (12 px, the standard's secondary size). */
+:root .session-history .session-msg-failed-badge { font-size: 12px; font-weight: 500; color: var(--error); }
+
+/* ── One type scale (the standard's sizes: 15 px titles, 14 px chat text) ── */
+:root .session-history .session-msg-assistant .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 16px 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg);
+}
+:root .session-history .session-msg-assistant .markdown-body :is(h1, h2) { font-size: 15px; }
+:root .session-history .session-msg-assistant .markdown-body h1 { font-weight: 700; }
+:root .session-history .session-msg-assistant .markdown-body :is(p, ul, ol, blockquote, dl) {
+  margin: 8px 0;
+}
+:root .session-history .session-msg-assistant .markdown-body li + li { margin-top: 4px; }
+:root .session-history .session-msg-assistant .markdown-body li > :is(ul, ol) { margin: 4px 0; }
+:root .session-history .session-msg-assistant .markdown-body li > p { margin: 0; }
+:root .session-history .session-msg-assistant .markdown-body > :first-child { margin-top: 0; }
+:root .session-history .session-msg-assistant .markdown-body > :last-child { margin-bottom: 0; }
+
+/* ── The line under a reply: its time is secondary text ── */
+:root .session-history .session-msg-actions .msg-time { font-size: 12px; }
+
+/* ── Nothing lands under a header ──
+   A jump to a row (find, a reply's quote, a block: 'nearest' scroll) stops clear of the
+   glass header, which the history scrolls under. Where the history's top is a hard edge
+   instead (the "Chat" bar of a split, a strip above it in flow), a row stops 12 px below
+   it, and a line the scroll cuts there fades out rather than ending in a hard cut. */
+:root .session-panel-body .session-history {
+  scroll-padding-top: calc(var(--sp-header-h, 76px) + 8px);
+}
+:root .session-panel-split.is-changed-open .session-panel-chat-col .session-history,
+:root .session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]))) .session-history {
+  scroll-padding-top: 12px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 12px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 12px);
+}

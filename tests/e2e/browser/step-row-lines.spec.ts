@@ -165,6 +165,19 @@ function check(kind: string, state: string, l: Lines) {
   if (l.secondLeft !== null) expect(Math.abs(l.secondLeft - l.firstLeft), `${where}: its second line is a side column`).toBeLessThanOrEqual(6);
 }
 
+/** A row whose words are cut shows its open chevron at rest (cut-cue.ts, 2026-11-21: notices
+ *  cut "with no way to expand"): its line parts, and its chevron's opacity with no pointer on it. */
+async function cueOf(row: Locator): Promise<{ cut: boolean; cue: number | null; text: string }> {
+  return row.evaluate((head: Element) => {
+    const card = head.closest('.provenance-card') ?? head;
+    const parts = [...card.querySelectorAll<HTMLElement>('.op-card-title, .op-card-summary, .op-card-to, .tool-run-label, .tool-run-detail')]
+      .filter((el) => { const inner = el.closest('.op-card-detail, .tool-run-body'); return !(inner && card.contains(inner)); });
+    const cut = parts.some((el) => el.scrollWidth > el.clientWidth + 1);
+    const chev = card.querySelector<HTMLElement>(':scope > .op-card-main .op-card-more-chevron, :scope > .tool-run-toggle .tool-run-chevron, :scope .tool-run-chevron');
+    return { cut, cue: chev ? Number(getComputedStyle(chev).opacity) : null, text: (card.textContent ?? '').slice(0, 60) };
+  });
+}
+
 async function rowsOf(hist: Locator, kind: string): Promise<Locator[]> {
   const sel = KINDS[kind]!;
   const marker = MARKERS[kind];
@@ -231,6 +244,19 @@ for (const width of [1280, 720]) {
       console.log(`[step-rows] ${kind}: ${rows.length} rows`);
       for (const r of rows) check(kind, 'in an opened fold', await linesOf(r, ROW_DETAIL_PARTS));
     }
+    // A row cut short says so at rest: its chevron shows with no pointer on it.
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(200);
+    let cutRows = 0;
+    for (const kind of [...Object.keys(ENVELOPE_ROW_LINES), 'sent', 'thinking', 'words']) {
+      for (const r of await rowsOf(hist, kind)) {
+        const c = await cueOf(r);
+        if (!c.cut || c.cue === null) continue;
+        cutRows++;
+        expect(c.cue, `${kind}: "${c.text}" is cut but its chevron is hidden at rest`).toBeGreaterThanOrEqual(0.5);
+      }
+    }
+    expect(cutRows, 'the fixture holds rows cut short, or this checks nothing').toBeGreaterThan(0);
     // Each card and call opened to its detail keeps its one or two lines.
     for (const kind of ['reply', 'peer-note', 'notification', 'trigger', 'app-state', 'sent', 'bash', 'generic', 'edit', 'run'] as const) {
       const [r] = await rowsOf(hist, kind);

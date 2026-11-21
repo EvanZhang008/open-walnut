@@ -2699,6 +2699,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     onDeleteQueued: handleDelete,
     onRetryFailed: handleRetry,
     folderGoneHistory: session?.cwdGone?.history,
+    folderGoneBanner: !!session?.cwdGone && !session.archived,
     onDismissFailed: dismissFailed,
     onSessionClick,
     onFileOpen: handleFileOpen,
@@ -4258,6 +4259,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onRetryFailed={handleRetry}
             onFolderMoved={handleFolderMoved}
             folderGoneHistory={session?.cwdGone?.history}
+            folderGoneBanner={!!session?.cwdGone && !session.archived}
             onDismissFailed={dismissFailed}
             onSessionClick={onSessionClick}
             onFileOpen={handleFileOpen}

@@ -387,6 +387,10 @@ interface SessionChatHistoryProps {
   onFolderMoved?: (result: ContinueInNewFolderResult) => void;
   /** Whether the gone folder's session still has its history (the button's words follow it). */
   folderGoneHistory?: 'found' | 'missing' | 'unknown';
+  /** The panel shows the folder-gone notice with its button (FolderGoneBanner): a row that
+   *  failed for the same reason says so in one line and keeps only Discard, so one
+   *  condition is one notice (2026-11-21, the UI audit: the VP chat drew it twice). */
+  folderGoneBanner?: boolean;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
   /** Bubbles the hook's isStreaming up so parents don't need to mount their
@@ -738,7 +742,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
 /** How long the history waits for the rest of a moment's signals before it reads (bumpHistory). */
 const HISTORY_BUMP_COALESCE_MS = 150;
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, folderGoneBanner, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
   countRender('SessionChatHistory');
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
@@ -6018,14 +6022,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     <>
       <div className="session-msg-failed-badge">
         {isFolderGoneReason(m.failedError)
-          ? `Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`
+          ? folderGoneBanner
+            ? 'Not delivered yet: it goes out once the session continues in a new folder (the notice above).'
+            : `Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`
           : m.parked
             ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${sendFailureWords(m.failedError)})` : ''}`
             : `Send failed: ${sendFailureWords(m.failedError)}`}
       </div>
       <div className="session-msg-queued-actions">
         {isFolderGoneReason(m.failedError)
-          ? <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
+          ? folderGoneBanner ? null : <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
           : <button type="button" className="btn btn-sm btn-primary" data-testid="send-retry" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>}
         {m.parked
           ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>

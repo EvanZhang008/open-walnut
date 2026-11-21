@@ -10,15 +10,9 @@
 :root .step-icon { width: 16px; height: 16px; flex: 0 0 16px; color: var(--fg-muted); }
 
 /* ── The fold line: chevron first, the words, nothing under it ── */
-:root .process-fold > .tool-run-toggle {
-  gap: 6px;
-  min-height: 26px;
-  padding: 2px 4px 2px 0;
-  font-size: 14px;
-  border-radius: 6px;
-}
-:root .process-fold > .tool-run-toggle .process-fold-chevron { display: inline-flex; }
-:root .process-fold > .tool-run-toggle .process-fold-chevron .step-icon { width: 14px; height: 14px; flex-basis: 14px; }
+:root .process-fold > .tool-run-toggle { gap: 6px; min-height: 26px; padding: 2px 4px 2px 0; font-size: 14px; border-radius: 6px; }
+:root .process-fold > .tool-run-toggle .process-fold-chevron { display: inline-flex; color: var(--fg); }
+:root .process-fold > .tool-run-toggle .process-fold-chevron .step-icon { width: 16px; height: 16px; flex-basis: 16px; color: inherit; }
 :root .process-fold-body {
   margin-top: 2px;
   padding-left: 0;
@@ -96,6 +90,19 @@
 :root .session-history .tool-run-row { margin: 0; }
 :root .session-history .tool-run-row > .tool-run-toggle { min-height: 26px; padding: 1px 4px 1px 0; font-size: 14px; border-radius: 6px; max-width: 100%; min-width: 0; }
 :root .session-history .tool-run-row--step > .tool-run-toggle { padding-left: 4px; gap: 8px; width: 100%; }
+/* The turn's line: quiet, yet plainly something to open (2026-11-21, the UI audit: the line
+   "reads like a grey footnote; its small arrow does not look expandable"): the words a step
+   smaller than the text in secondary grey, the chevron full ink at 16px, a fill on hover.
+   Still no box and no rule; pulled left by its padding so the chevron sits on the text's edge. */
+:root .session-history .process-fold > .tool-run-toggle {
+  margin-left: -4px;
+  padding: 2px 8px 2px 4px;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  border-radius: var(--radius-sm);
+  transition: background-color .12s, color .12s;
+}
+:root .session-history .process-fold > .tool-run-toggle:hover { color: var(--fg); background: var(--bg-hover); }
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-label { color: var(--fg-secondary); flex-shrink: 0; }
 :root .session-history .tool-run-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
 :root .session-history .tool-run-chevron { display: inline-flex; align-items: center; }
@@ -103,6 +110,7 @@
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron { margin-left: auto; opacity: 0; }
 :root .session-history .tool-run-row--step > .tool-run-toggle:hover .tool-run-chevron,
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron--open { opacity: .7; }
+:root .session-history .tool-run-row--step > .tool-run-toggle[data-cut="true"] .tool-run-chevron { opacity: 1; color: var(--fg-secondary); }
 :root .session-history .tool-run-row--step > .tool-run-body { margin: 2px 0 8px 28px; padding: 8px 10px; border-left: none; border-radius: var(--radius-sm); background: var(--bg-secondary); }
 /* A run inside an opened fold is its calls, one row each. */
 :root .session-history .tool-run-flat { display: flex; flex-direction: column; }
@@ -130,6 +138,8 @@
 :root .session-history .provenance-card .op-card-to .op-card-to-pill {
   background: none; border: none; padding: 0; border-radius: 0;
   font-size: 14px; font-weight: 400; color: var(--fg-secondary);
+  /* A long task name ends in an ellipsis, never a glyph cut in half at the who line's edge. */
+  min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 :root .session-history .provenance-card .op-card-to .op-card-to-pill:hover { text-decoration: underline; color: var(--fg); }
 :root .session-history .provenance-card .op-card-to-text { font-weight: 400; }
@@ -149,6 +159,10 @@
 :root .session-history .provenance-card .op-card-more-chevron .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
 :root .session-history .provenance-card:hover .op-card-more-chevron,
 :root .session-history .provenance-card .op-card-main[aria-expanded="true"] .op-card-more-chevron { opacity: .7; }
+/* A card whose words are cut says so at rest (cut-cue.ts): its chevron in secondary grey,
+   full strength, a step larger; the card's hover fill is its hover feedback. */
+:root .session-history .provenance-card[data-cut="true"] .op-card-more-chevron { opacity: 1; color: var(--fg-secondary); }
+:root .session-history .provenance-card[data-cut="true"] .op-card-more-chevron .step-icon { width: 14px; height: 14px; flex-basis: 14px; }
 :root .session-history .provenance-card > .op-card-detail,
 :root .session-history .provenance-card > .provenance-status {
   /* The full width under the row, less its indent; never wider (a long line wraps or ellipses inside). */

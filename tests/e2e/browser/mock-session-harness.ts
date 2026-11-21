@@ -47,8 +47,9 @@ export async function takeLine(page: Page, ...rowIds: string[]) {
 
 /** `stream`: what the stream subscribe answers (a panel opened, or reloaded, mid-turn).
  *  `record`: more fields of the session record (its question anchors, say). */
-export async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle', stream: { blocks: unknown[]; isStreaming: boolean } = { blocks: [], isStreaming: false }, record: Record<string, unknown> = {}) {
-  await page.addInitScript((stream) => {
+/** `rpcs`: socket requests answered here by method (e.g. `session:get-queue`), the rest go to the server. */
+export async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle', stream: { blocks: unknown[]; isStreaming: boolean } = { blocks: [], isStreaming: false }, record: Record<string, unknown> = {}, rpcs: Record<string, unknown> = {}) {
+  await page.addInitScript(({ stream, rpcs }) => {
     const OrigWebSocket = window.WebSocket;
     window.WebSocket = class PatchedWebSocket extends OrigWebSocket {
       constructor(url: string | URL, protocols?: string | string[]) {
@@ -71,6 +72,12 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
                 }, 10);
                 return;
               }
+              if (parsed.type === 'req' && Object.prototype.hasOwnProperty.call(rpcs, parsed.method)) {
+                setTimeout(() => this.dispatchEvent(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: rpcs[parsed.method] }),
+                })), 10);
+                return;
+              }
             } catch { /* non-JSON */ }
             origSend(data);
           };
@@ -82,7 +89,7 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
         try { (window.WebSocket as any)[key] = (OrigWebSocket as any)[key]; } catch { /* read-only */ }
       }
     }
-  }, stream);
+  }, { stream, rpcs });
   await page.route(`**/api/sessions/${MOCK_SESSION_ID}/history**`, async (route) => {
     const since = new URL(route.request().url()).searchParams.get('since');
     if (since !== null) return route.fulfill({ json: { messages: messages.slice(Number(since)), cursor: messages.length, delta: true } });
