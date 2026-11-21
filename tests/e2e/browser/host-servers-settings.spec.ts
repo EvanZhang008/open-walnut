@@ -17,7 +17,7 @@ import { hostRow, openHostDetails } from './host-problems-fixture-helpers'
 
 test.setTimeout(120_000)
 
-const SHOTS = '/tmp/host-servers-settings'
+const SHOTS = process.env.PW_SHOTS_DIR ?? '/tmp/host-servers-settings'
 const KEY = 'pw-hs-box'
 
 async function hostsNow(page: Page): Promise<Record<string, Record<string, unknown>>> {
@@ -114,6 +114,34 @@ test.describe('Walnut on this host, in the host\'s Details', () => {
     const again = await thisHost(page)
     await expect(again.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')
     await expect(again.getByTestId(`host-server-${KEY}`)).toHaveAttribute('data-phase', 'waiting-for-host')
+  })
+
+  test('a host on only by default says so beside its switch, and one the person turned on does not', async ({ page }) => {
+    // The server sends settings.byDefault only with the experiment follower_on_every_host on and a
+    // host it manages (src/web/routes/host-servers.ts); the fixture has neither, so the page gets
+    // that answer for this host while everything else stays the fixture's own.
+    let byDefault = true
+    await page.route('**/api/host-servers', async (route) => {
+      const res = await route.fetch()
+      const body = (await res.json()) as { hosts?: Array<{ hostKey: string; settings: Record<string, unknown> }> }
+      for (const h of body.hosts ?? []) if (h.hostKey === KEY) Object.assign(h.settings, { enabled: true, byDefault, chosenBy: byDefault ? 'default' : 'user' })
+      await route.fulfill({ response: res, json: body })
+    })
+    await page.setViewportSize({ width: 1200, height: 900 })
+    await openRemoteHosts(page)
+    const part = await thisHost(page)
+    const words = part.getByTestId(`host-server-by-default-${KEY}`)
+    await expect(words).toHaveText('On (default)')
+    await expect(words).toHaveAttribute('title', 'Every host runs one by default (an experiment); turning it off keeps it off.')
+    await expect(part.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')
+    await part.scrollIntoViewIfNeeded()
+    await shot(page, '5-on-by-default', part)
+
+    byDefault = false
+    await page.reload()
+    const again = await thisHost(page)
+    await expect(again.getByTestId(`host-server-enabled-${KEY}`)).toHaveAttribute('aria-checked', 'true')
+    await expect(again.getByTestId(`host-server-by-default-${KEY}`)).toHaveCount(0)
   })
 
   test('editing the host in the Hosts editor keeps its server on', async ({ page }) => {
