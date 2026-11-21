@@ -52,7 +52,7 @@ const history = Array.from({ length: 4 }, (_, index) => ({
 }));
 
 test.describe.configure({ timeout: 180_000 });
-test.use({ viewport: { width: 1280, height: 860 }, video: { mode: 'on', size: { width: 1280, height: 860 } } });
+test.use({ viewport: { width: 1280, height: 860 } });
 
 async function open(page: Page, budgetState: 'active' | 'paused' = 'active') {
   await fs.mkdir(SHOTS, { recursive: true });
