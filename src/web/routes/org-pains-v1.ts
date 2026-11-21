@@ -11,6 +11,7 @@
  *
  * Writes run on the primary only, like every other org write, and record who made them.
  */
+import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { OrgError } from '../../core/org/org-store.js'
 import { nodeCaller, primaryOnly, sendError } from './org-v1.js'
@@ -40,7 +41,8 @@ orgPainsV1Router.get('/org/nodes/:id/pains', async (req: Request, res: Response,
     const read = await store.readPainsFile(node.id)
     const entries = read.state === 'ok' ? read.entries : []
     res.json({
-      file: p.painsFileOf(node.id), markdown: p.painsMarkdownOf(node.id), state: read.state, ...(read.state === 'bad' ? { why: read.why } : {}),
+      // Paths in the entries (pictures) are relative to `dir`, the node's folder.
+      file: p.painsFileOf(node.id), markdown: p.painsMarkdownOf(node.id), dir: path.dirname(p.painsFileOf(node.id)), state: read.state, ...(read.state === 'bad' ? { why: read.why } : {}),
       entries: entries.map((e) => ({ ...e, shown: p.statusOf(e) })), guardRun: await store.readGuardRun(node.id),
     })
   } catch (err) {

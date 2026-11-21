@@ -23,7 +23,7 @@ const registry = opt('--registry');
 const outFile = opt('--out');
 const dry = args.includes('--dry-run');
 if (!registry || (!outFile && !dry)) {
-  process.stderr.write('usage: bun scripts/pain-guards.mjs --registry <pains.json> --out <pains-tests.json> [--dry-run]\n');
+  process.stderr.write('usage: bun scripts/pain-guards.mjs --registry <pains.json> --out <pains-tests.json> [--root <checkout>] [--dry-run]\n');
   process.exit(2);
 }
 // --root: the checkout whose tests count (default: the one this script is in).

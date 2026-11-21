@@ -120,7 +120,7 @@ export interface DayEntry {
   /** The task its correction was sent to; absent when none was sent. */
   handedTo?: { taskId: string; title: string };
   /** The pain registry entry his complaint went to (pains.ts), and whether it opened it. */
-  pain?: { id: string; title: string; isNew: boolean };
+  pain?: { id: string; title: string; isNew: boolean } | { pending: true; title: string };
 }
 
 /** The day file's JSON twin: the entries for a script and the nightly note, no Markdown to parse. */
@@ -165,7 +165,7 @@ export function renderDayEntry(e: DayEntry): string {
     `- Correction: ${e.corrected === 'sent' ? 'sent to the session' : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : 'not sent'}`,
     `- Rule: ${ruleLine(e.rule)}`,
     `- Handed to: ${handedToLine(e)}`,
-    ...(e.pain ? [`- Pain registry: ${e.pain.isNew ? 'new pain' : 'added to'} ${e.pain.id} ${e.pain.title}`] : []),
+    ...(e.pain ? ['pending' in e.pain ? `- Pain registry: waits to be filed (the registry cannot be read): ${e.pain.title}` : `- Pain registry: ${e.pain.isNew ? 'new pain' : 'added to'} ${e.pain.id} ${e.pain.title}`] : []),
     '',
   ].join('\n');
 }

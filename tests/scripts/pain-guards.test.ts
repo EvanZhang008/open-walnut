@@ -21,8 +21,8 @@ describe('pain-guards', () => {
       entry('pn-gone', 'tests/fixtures/pain-guards/missing.test.ts', 'anything'),
       entry('pn-renamed', 'tests/fixtures/pain-guards/sample.test.ts', 'a title nobody wrote'),
       entry('pn-helper', 'tests/helpers/mock-constants.ts', 'not a test'),
-      entry('pn-spec', 'tests/e2e/browser/drawing-composer.spec.ts', 'draw, edit, export, theme, reopen, change elsewhere, conflict and attach'),
-      entry('pn-spec-gone', 'tests/e2e/browser/drawing-composer.spec.ts', 'this spec title does not exist'),
+      entry('pn-spec', 'tests/fixtures/pain-guards/sample.spec.ts', 'opens the fixture page for the guard runner'),
+      entry('pn-spec-gone', 'tests/fixtures/pain-guards/sample.spec.ts', 'this spec title does not exist'),
       { id: 'pn-none', title: 'no test named' },
     ] }))
     const run = spawnSync('bun', ['scripts/pain-guards.mjs', '--registry', registry, '--out', out], { cwd: root, encoding: 'utf-8', timeout: 180_000 })

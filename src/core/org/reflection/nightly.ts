@@ -77,7 +77,11 @@ export async function painsNightly(nodeId: string, nowMs: number): Promise<strin
   const read = await readPainsFile(nodeId);
   if (read.state === 'missing') return '';
   // A registry that cannot be read is never written over: someone must fix it, so it is said.
-  if (read.state === 'bad') return `Pain registry (${painsFileOf(nodeId)}): it cannot be read and no complaint is filed until it is fixed: ${read.why}.`;
+  if (read.state === 'bad') {
+    const { pendingCount } = await import('./pain-record.js');
+    const waiting = await pendingCount(nodeId);
+    return `Pain registry (${painsFileOf(nodeId)}): it cannot be read and no complaint is filed until it is fixed: ${read.why}.${waiting ? ` ${waiting} complaint${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} to be filed then.` : ''}`;
+  }
   if (!read.entries.length) return '';
   const run = await readGuardRun(nodeId);
   return painsNightlyText(painsFileOf(nodeId), painsReport(read.entries, run, nowMs), run);
@@ -106,10 +110,12 @@ export async function nightlyNote(node: Task, nodeName: string, nowMs: number, s
   const painsNow = await painsNightly(node.id, nowMs).catch(() => '');
   const painsHash = painsNow ? hashOf(painsNow) : '';
   const pains = painsNow && painsHash !== (await readReflectionState(node.id, nowMs)).painsNote ? painsNow : '';
-  if (pains) await updateReflectionState(node.id, (s) => { s.painsNote = painsHash; }, nowMs);
+
   const found = dayLines(record.markdown, record.entries).length > 0;
   if (!found && !pains) return 'none';
   const text = withPains(found ? nightlyText(nodeName, file, record) : '', pains, nodeName);
   const ok = await send(node, text, `${nodeName}'s reflection: today's record`).catch(() => false);
+  // Marked only once it went out: a failed send carries the same list again tomorrow.
+  if (ok && pains) await updateReflectionState(node.id, (s) => { s.painsNote = painsHash; }, nowMs);
   return ok ? 'sent' : 'failed';
 }

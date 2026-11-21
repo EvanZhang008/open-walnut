@@ -77,7 +77,7 @@ export const painId = (seed: string): string => `pn-${crypto.createHash('sha256'
 export function lacksGenericDefault(e: Pick<PainEntry, 'scope' | 'rule'>): boolean {
   // Only the product's own code (its default instructions, its gates, its UI) is a default for every
   // user: a rule in USER.md, a team's guidance, a skill or a developer doc is not.
-  return e.scope === 'all_users' && !!e.rule && !/(?:^|[\s(;,'/])(?:src|web\/src)\/(?!AGENTS\.md)/.test(e.rule.where);
+  return e.scope === 'all_users' && !!e.rule && !/(?:^|[\s(;,'/])(?:src|web\/src)\/(?![\w/.-]*AGENTS\.md)/.test(e.rule.where);
 }
 
 /** The status shown: what was written, unless no rule or no test covers it yet. Pure. */

@@ -19,7 +19,7 @@ import {
   resolvePainPath, GUARD_RUN_STALE_MS, PAIN_QUOTES_MAX, type PainEntry, type PainReport,
 } from '../../../src/core/org/reflection/pains.js'
 import { readPains, updatePains, writeGuardRun, readGuardRun } from '../../../src/core/org/reflection/pains-store.js'
-import { importPains } from '../../../src/core/org/reflection/pain-record.js'
+import { importPains, painsPendingOf } from '../../../src/core/org/reflection/pain-record.js'
 import { reflectForNode, type ReflectDeps } from '../../../src/core/org/reflection/pipeline.js'
 import { cardText, collectCandidates, type ReflectionThread } from '../../../src/core/org/reflection/candidates.js'
 import { verifyFinding } from '../../../src/core/org/reflection/judge.js'
@@ -128,6 +128,7 @@ describe('what the registry flags', () => {
     expect(lacksGenericDefault({ ...all, rule: { where: 'src/core/team-charter.ts line 58; USER.md', text: '' } })).toBe(false)
     expect(lacksGenericDefault({ ...all, rule: { where: '/x/walnut/src/core/a.ts', text: '' } })).toBe(false)
     expect(lacksGenericDefault({ ...all, rule: { where: 'web/src/AGENTS.md', text: '' } })).toBe(true)
+    expect(lacksGenericDefault({ ...all, rule: { where: 'src/core/AGENTS.md', text: '' } })).toBe(true)
     expect(lacksGenericDefault({ scope: 'only_him', rule: { where: 'USER.md', text: '' } })).toBe(false)
     expect(lacksGenericDefault({ ...all })).toBe(false)
   })
@@ -175,6 +176,15 @@ describe('the nightly report of the registry', () => {
     // The next night, the same list is not sent again.
     const next = evening.getTime() + 24 * 3600_000
     expect(await nightlyNote(node, 'Marina VP', next, async (_n, text) => { sent.push(text); return true })).toBe('none')
+  })
+
+  it('a note that failed to go out carries the same list again the next night', async () => {
+    const node = { ...vp }
+    await fs.mkdir(path.dirname(painsFileOf(node.id)), { recursive: true })
+    await fs.writeFile(painsFileOf(node.id), JSON.stringify({ schemaVersion: 1, entries: [addComplaint([], report()).entries[0]] }))
+    const evening = new Date(NOW); evening.setHours(21, 0, 0, 0)
+    expect(await nightlyNote(node, 'Marina VP', evening.getTime(), async () => false)).toBe('failed')
+    expect(await nightlyNote(node, 'Marina VP', evening.getTime() + 24 * 3600_000, async () => true)).toBe('sent')
   })
 
   it('a registry that cannot be read is said in the note', async () => {
@@ -276,6 +286,42 @@ describe('the registry is never written over what it cannot read', () => {
     expect(done.map((d) => d.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled'])
     expect((await readGuardRun(vp.id))?.results.x.detail).toMatch(/^[123]$/)
     expect((await fs.readdir(path.dirname(painsFileOf(vp.id)))).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+})
+
+describe('a complaint found while the registry cannot be read', () => {
+  it('waits, with no picture copied, and is filed by the first write once the file is fixed', async () => {
+    const pic = path.join(IMAGES_DIR, '1795-wait.png')
+    await fs.mkdir(IMAGES_DIR, { recursive: true })
+    await fs.writeFile(pic, 'png')
+    await fs.mkdir(path.dirname(painsFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(painsFileOf(vp.id), '{ broken')
+    const first = { id: 'u1', at: iso(100), text: 'The reply under the card used to show.', images: [pic] }
+    await reflectForNode(vp, 'Marina VP', [vp, worker], deps({ messages: [first], answers: [verdict({ same_as: '', title: 'Cards lose their reply', scope: 'all_users' })] }).d)
+    expect((await readDayEntries(vp.id, localDate(NOW)))![0].pain).toEqual({ pending: true, title: 'Cards lose their reply' })
+    expect(await fs.readFile(painsFileOf(vp.id), 'utf-8')).toBe('{ broken')
+    expect(await fs.stat(path.join(path.dirname(painsFileOf(vp.id)), 'pains', 'images')).then(() => true, () => false)).toBe(false)
+    expect((await fs.readFile(painsPendingOf(vp.id), 'utf-8')).trim().split('\n')).toHaveLength(1)
+
+    // Fixed by hand; the next complaint files both.
+    await fs.rm(painsFileOf(vp.id))
+    const second = { id: 'u2', at: iso(50), text: 'It is broken again, the reply is gone.' }
+    await reflectForNode(vp, 'Marina VP', [vp, worker], deps({ messages: [first, second], answers: [verdict({ same_as: '', title: 'Replies vanish', scope: 'all_users' }, { user_quote: 'broken again' })] }).d)
+    const all = await readPains(vp.id)
+    expect(all.map((e) => e.title).sort()).toEqual(['Cards lose their reply', 'Replies vanish'])
+    expect(all.find((e) => e.title === 'Cards lose their reply')!.quotes[0].images![0]).toMatch(/^pains\/images\//)
+    expect(await fs.stat(painsPendingOf(vp.id)).then(() => true, () => false)).toBe(false)
+  })
+
+  it('an import is refused before any picture is copied', async () => {
+    await fs.mkdir(path.dirname(painsFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(painsFileOf(vp.id), '{ broken')
+    const pic = path.join(IMAGES_DIR, '1795-imp.png')
+    await fs.mkdir(IMAGES_DIR, { recursive: true })
+    await fs.writeFile(pic, 'png')
+    const entry = { ...addComplaint([], report()).entries[0], quotes: [{ at: iso(1), text: 'x', images: [pic] }] }
+    await expect(importPains(vp.id, 'Marina VP', [entry], NOW)).rejects.toThrow(/not changed/)
+    expect(await fs.stat(path.join(path.dirname(painsFileOf(vp.id)), 'pains', 'images')).then(() => true, () => false)).toBe(false)
   })
 })
 
