@@ -15,6 +15,9 @@ import { injectEvent, MOCK_SESSION_ID, mockSession, open, waitForStream, waitFor
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'MediaRecorder: Chromium only on Linux')
 
+// Keyboard remounts the composer, which reads /api/config again as the page closes.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+
 const LOUD = 0.3
 const QUIET = 0.0005
 
@@ -110,7 +113,7 @@ test('talk, pause sends with the voice hint, the answer is read, then it listens
 
   await answer(page, 'Two meetings and one review. The first is at ten.\n\n---\n\n| time | what |\n|---|---|\n| 10:00 | standup |')
   await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
-  await expect(page.getByTestId('voice-spoken')).toHaveText(/Two meetings and one review\. The first is at ten\.$/)
+  await expect(page.getByTestId('voice-spoken')).toHaveText(/Two meetings and one review\. The first is at ten\. The rest is on screen\.$/)
   await expect(page.getByTestId('voice-engine')).toHaveText('Voice: ElevenLabs')
   // Read piece by piece: the first sentence alone, then the rest; never the table.
   await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)

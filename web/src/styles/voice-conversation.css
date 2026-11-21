@@ -22,29 +22,39 @@
   box-sizing: border-box;
 }
 
-.voice-orb.btn {
+/* The conversation's one main control, like the composer's round Send: --accent, white glyph. */
+.voice-orb {
   --voice-level: 0;
   grid-area: orb;
   width: 56px;
   height: 56px;
   padding: 0;
+  border: none;
   border-radius: 50%;
+  display: flex;
+  align-items: center;
   justify-content: center;
+  cursor: pointer;
+  color: #fff;
+  background: var(--accent);
   /* The ring grows with the voice it hears (listening) or makes (speaking), inside the bar's padding. */
   box-shadow: 0 0 0 calc(4px + var(--voice-level) * 6px) var(--accent-subtle);
   transition: box-shadow 0.08s linear, background 0.15s, opacity 0.15s;
 }
 
-.voice-orb.btn:disabled {
+.voice-orb:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.voice-orb:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 /* Paused: the mic is off, so the orb waits in the quiet grey of an action. */
-.voice-bar.is-paused .voice-orb.btn {
+.voice-bar.is-paused .voice-orb {
   color: var(--fg);
   background: var(--bg-secondary);
-  border-color: transparent;
   box-shadow: 0 0 0 1px var(--border);
 }
 
@@ -138,6 +148,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .voice-orb.btn { transition: none; }
+  .voice-orb { transition: none; }
   .voice-orb-spinner { animation: none; }
 }

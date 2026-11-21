@@ -1568,27 +1568,6 @@ select {
   font-size: 12px;
 }
 
-/* The tool look (.claude/skills/walnut-ui-requirements/standard.md): quiet, no border, fills on hover. */
-.btn.btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--fg-muted);
-  border-radius: 8px;
-  height: 28px;
-  padding: 0 6px;
-  font-size: 13px;
-}
-
-.btn.btn-ghost:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-.btn.btn-ghost:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 /* ===== Task List / Groups ===== */
 
 .task-group {

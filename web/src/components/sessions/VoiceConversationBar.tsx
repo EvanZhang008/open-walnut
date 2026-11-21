@@ -71,7 +71,7 @@ export function VoiceConversationBar({ voice, onStopRun }: { voice: VoiceConvers
       <div className="voice-bar-inner">
       <button
         type="button"
-        className="btn btn-primary voice-orb"
+        className="voice-orb"
         onClick={voice.tap}
         disabled={!state || phase === 'transcribing'}
         aria-label={status.button}
@@ -87,14 +87,17 @@ export function VoiceConversationBar({ voice, onStopRun }: { voice: VoiceConvers
       <div className="voice-bar-tools">
         {engineLabel && <span className="voice-bar-engine" data-testid="voice-engine">{engineLabel}</span>}
         {phase === 'waiting' && onStopRun && (
-          <button type="button" className="btn btn-ghost" onClick={onStopRun} data-testid="voice-stop-run" title="Stop the agent's turn">
+          <button type="button" className="btn btn-sm" onClick={onStopRun} data-testid="voice-stop-run" title="Stop the agent's turn">
             Stop
           </button>
         )}
-        <button type="button" className="btn btn-ghost" onClick={voice.replay} disabled={!state?.lastSpoken || phase === 'speaking'} data-testid="voice-replay" title="Read the last answer again">
-          Replay
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={voice.stop} data-testid="voice-close" title="Back to the keyboard">
+        {/* Shown only when there is an answer to read again, so it never sits there looking clickable. */}
+        {state?.lastSpoken && phase !== 'speaking' && phase !== 'transcribing' && !(phase === 'listening' && state.heard) && (
+          <button type="button" className="btn btn-sm" onClick={voice.replay} data-testid="voice-replay" title="Read the last answer again">
+            Replay
+          </button>
+        )}
+        <button type="button" className="btn btn-sm" onClick={voice.stop} data-testid="voice-close" title="Back to the keyboard">
           Keyboard
         </button>
       </div>
