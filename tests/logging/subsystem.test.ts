@@ -187,3 +187,24 @@ describe('stderr output', () => {
     expect(written).toContain('ERR');
   });
 });
+
+describe('a meta field never replaces a line\'s own field', () => {
+  it('every field a line starts with survives a meta field of the same name (enumerated from a real line)', () => {
+    const logger = createSubsystemLogger('own-fields');
+    logger.warn('the line\'s own words');
+    const own = Object.keys(mockedWriteLogEntry.mock.calls[0]![0]);
+    // A new field every line carries is checked here by itself.
+    expect(own.length).toBeGreaterThanOrEqual(4);
+    for (const key of own) {
+      mockedWriteLogEntry.mockClear();
+      logger.warn('the line\'s own words', { [key]: 'from meta', host: 'h1' });
+      const entry = mockedWriteLogEntry.mock.calls[0]![0] as Record<string, unknown>;
+      expect(entry.message).toBe('the line\'s own words');
+      expect(entry.subsystem).toBe('own-fields');
+      expect(entry.level).toBe('warn');
+      expect(entry[key]).not.toBe('from meta');
+      expect(entry[`meta${key[0]!.toUpperCase()}${key.slice(1)}`]).toBe('from meta');
+      expect(entry.host).toBe('h1');
+    }
+  });
+});

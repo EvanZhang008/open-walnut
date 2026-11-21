@@ -5947,6 +5947,8 @@ function relayAttemptEnded(relayId: number): void {
     return
   }
   gatewayRelayPending.delete(relayId)
+  // A schemas tools.list whose catalog is still on its way is held when it lands (held-catalogs-core.ts).
+  heldCatalogs.timedOut(relayId, call.home, call.capability, call.payload, !!call.pinned)
   if (call.readable && call.home) {
     logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts })
     void offlineHost.handle(call.home, call.callerSid, call.capability, call.payload).then((r) => entry.respond(r as GatewayResponse))
@@ -5996,7 +5998,12 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     return sendError(ws, id, 'gateway-result: not this Walnut\'s relay', { errorKind: 'not_owner' })
   }
   if (!pending) {
-    // Late result after timeout — ack and drop (same as cmdLaunchResult).
+    // Late result after timeout: ack and drop (same as cmdLaunchResult). A late full tool
+    // catalog is still held, so the caller's next ask is answered by its hash (held-catalogs-core.ts).
+    if (typeof relayId === 'number' && result && !error && ws.data?.origin !== 'bridge'
+      && heldCatalogs.late(relayId, result, (home, pinned) => gatewayIdentity.mayAnswer(gatewayClientHomes.get(ws), ws.data?.serverRun, home, pinned))) {
+      logMsg('info', 'gateway: a tool catalog that came after its relay timed out is held', { relayId })
+    }
     return sendOk(ws, id, { stale: true })
   }
   gatewayRelayPending.delete(relayId as number)

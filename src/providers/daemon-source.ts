@@ -644,6 +644,8 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const asked = held.ask('w', 'tools.list', { schemas: true })
       const back = held.settle('w', 'tools.list', asked, { sameAs: 'h1' })
       if (!('result' in back) || back.result !== full) throw new Error('held catalogs did not build')
+      held.timedOut(5, 'w', 'tools.list', { schemas: true })
+      if (!held.late(5, { ops: [], catalogHash: 'h2' }, () => true) || !held.held('w').includes('h2')) throw new Error('held catalogs did not keep a late catalog')
     }
     // Host resume smoke: a reconstructed copy must turn a fresh spawn's command
     // into a resume (no --session-id beside --resume, the bypass flag dropped).
@@ -7266,6 +7268,8 @@ function relayAttemptEnded(relayId) {
     return;
   }
   gatewayRelayPending.delete(relayId);
+  // A schemas tools.list whose catalog is still on its way is held when it lands (twin of daemon-standalone.ts).
+  heldCatalogs.timedOut(relayId, call.home, call.capability, call.payload, !!call.pinned);
   if (call.readable && call.home) {
     logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId: relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts });
     offlineHost.handle(call.home, call.callerSid, call.capability, call.payload).then(function (r) { entry.respond(r); });
@@ -7312,7 +7316,12 @@ function cmdGatewayResult(ws, id, cmd) {
     return sendError(ws, id, "gateway-result: not this Walnut's relay", { errorKind: 'not_owner' });
   }
   if (!pending) {
-    // Late result after timeout — ack and drop (same as cmdLaunchResult).
+    // Late result after timeout: ack and drop (same as cmdLaunchResult). A late full tool
+    // catalog is still held (held-catalogs-core.ts; twin of daemon-standalone.ts).
+    if (typeof relayId === 'number' && result && !error && ws.origin !== 'bridge'
+      && heldCatalogs.late(relayId, result, function (home, pinned) { return gatewayIdentity.mayAnswer(gatewayClientHomes.get(ws), ws.serverRun, home, pinned); })) {
+      logMsg('info', 'gateway: a tool catalog that came after its relay timed out is held', { relayId: relayId });
+    }
     return sendOk(ws, id, { stale: true });
   }
   gatewayRelayPending.delete(relayId);

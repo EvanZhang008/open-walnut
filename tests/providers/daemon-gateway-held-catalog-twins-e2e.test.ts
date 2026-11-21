@@ -275,6 +275,27 @@ for (const twin of TWINS) {
       expect(server.requests.length).toBe(5)
     }, 90_000)
 
+    it('a catalog that comes after its relay timed out is held: the next ask names it (2026-11-21)', async () => {
+      const port = await boot(twin)
+      const server = await connect(port, 'run-a')
+      const full = catalog('dddddddddddddddd', 40)
+      // The answer is slower than the relay's deadline (a paced upload): the caller is told it timed out.
+      const first = listTools('external')
+      expect(await waitFor(() => server.requests.length === 1)).toBe(true)
+      expect((await first).resp).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
+      // It lands late: acked as stale, and held all the same.
+      const late = await answer(server.ws, server.requests[0].relayId, full)
+      expect(late.ok).toBe(true)
+      expect(late.result ?? late).toMatchObject({ stale: true })
+      expect(await waitFor(() => /came after its relay timed out is held/.test(daemonLog()), 3_000)).toBe(true)
+      // The caller's next ask goes naming it, and a hash is all the server sends.
+      const second = listTools('external')
+      expect(await waitFor(() => server.requests.length === 2)).toBe(true)
+      expect(server.requests[1].payload).toEqual({ schemas: true, have: ['dddddddddddddddd'] })
+      expect((await answer(server.ws, server.requests[1].relayId, { sameAs: 'dddddddddddddddd' })).ok).toBe(true)
+      expect((await second).resp).toEqual({ ok: true, result: full })
+    }, 90_000)
+
     it('an older server answers in full with no hash: nothing is held, every caller gets its answer', async () => {
       const port = await boot(twin)
       const server = await connect(port, 'run-a')

@@ -141,6 +141,28 @@ function forwardToLevelTap(level: 'warn' | 'error' | 'fatal', subsystem: string,
   try { tap(level, subsystem, message); } catch { /* the tap must never break logging */ } finally { inLevelTap = false; }
 }
 
+/** The fields every file line starts with; a meta field of the same name never replaces one. */
+const ENTRY_FIELDS = ['time', 'level', 'subsystem', 'message'] as const;
+
+/**
+ * A line's meta as written to the file: a field named like one of the line's own (ENTRY_FIELDS)
+ * goes under `meta<Name>` (`message` -> `metaMessage`). 2026-11-21: `{ message: err.message }`
+ * replaced the line's own words in the file, so "gateway-result send failed" (a log-spike alarm
+ * named it) was nowhere to be found there; only the error it carried was.
+ */
+export function entryMeta(meta?: Record<string, unknown>): Record<string, unknown> {
+  if (!meta) return {};
+  const keys = Object.keys(meta);
+  if (keys.length === 0) return {};
+  if (!ENTRY_FIELDS.some((k) => k in meta)) return meta;
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    const own = (ENTRY_FIELDS as readonly string[]).includes(k);
+    out[own ? `meta${k[0]!.toUpperCase()}${k.slice(1)}` : k] = meta[k];
+  }
+  return out;
+}
+
 function emit(
   level: LogLevel,
   subsystem: string,
@@ -170,7 +192,7 @@ function emit(
     level,
     subsystem,
     message,
-    ...(meta && Object.keys(meta).length > 0 ? meta : {}),
+    ...entryMeta(meta),
   });
 
   // 2. Error/fatal → notification center (sink injected by server.ts; no-op elsewhere)

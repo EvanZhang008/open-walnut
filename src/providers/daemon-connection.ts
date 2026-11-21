@@ -3559,8 +3559,13 @@ export class DaemonConnection {
       }
       return ack?.ok === true
     } catch (err) {
-      log.session.warn('DaemonConnection: gateway-result send failed', {
-        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      // A socket that closed with the answer on it is the link's drop, told once by its own line
+      // (the bulk channel's warns when it took commands with it; the session link's "connection
+      // lost"): the daemon asks again while its caller still waits, and the memo answers it.
+      // Every other failure stays a warning.
+      const lost = linkFailureKind(err) === 'lost'
+      log.session[lost ? 'info' : 'warn']('DaemonConnection: gateway-result send failed', {
+        host: this.hostKey, relayId, error: err instanceof Error ? err.message : String(err), ...(lost ? { linkLost: true } : {}),
       })
       return false
     } finally {
@@ -8402,12 +8407,16 @@ export class DaemonConnection {
     ws.on('error', () => { /* close always follows — handled there */ })
 
     ws.on('close', () => {
-      this.failPendingOn(ws)
+      const lost = this.failPendingOn(ws)
       if (seq !== this.bulkDialSeq) return // superseded or deliberately torn down
       if (this.bulkWs === ws) { this.bulkWs = null; this.bulkSocketOwn = false }
       if (established) {
-        log.session.info('DaemonConnection: bulk channel down — falling back to main socket', {
-          host: this.hostKey,
+        // A drop that took commands with it is the warning (one per drop, naming what it took),
+        // not each command's own line (sendGatewayResult): 2026-11-21, a full paced pipe was cut
+        // every few minutes and only the per-answer warnings showed it.
+        const took = Object.values(lost).reduce((a, b) => a + b, 0)
+        log.session[took > 0 ? 'warn' : 'info']('DaemonConnection: bulk channel down — falling back to main socket', {
+          host: this.hostKey, ...(took > 0 ? { lostCommands: lost } : {}),
         })
       }
       // One pending redial at a time, only while the main connection is up.
@@ -8469,14 +8478,18 @@ export class DaemonConnection {
    * up. The daemon may have run the command: the error says the outcome is
    * unknown (delivery-failure.ts), as a timeout does.
    */
-  private failPendingOn(socket: WebSocket): void {
+  private failPendingOn(socket: WebSocket): Record<string, number> {
+    const lost: Record<string, number> = {}
     for (const [id, pending] of this.pendingCommands) {
       if (pending.socket !== socket) continue
       clearTimeout(pending.timer)
       this.pendingCommands.delete(id)
+      const cmd = pending.cmd ?? 'command'
+      lost[cmd] = (lost[cmd] ?? 0) + 1
       const trace = pending.traceId ? ` [traceId=${pending.traceId}]` : ''
-      pending.reject(markLinkFailure(new Error(`daemon command lost: ${pending.cmd ?? 'command'}: connection closed before ${this.hostKey} answered${trace}`), 'lost'))
+      pending.reject(markLinkFailure(new Error(`daemon command lost: ${cmd}: connection closed before ${this.hostKey} answered${trace}`), 'lost'))
     }
+    return lost
   }
 
   // ── Private: Reconnection ──

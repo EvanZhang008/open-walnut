@@ -62,4 +62,67 @@ describe('held catalogs', () => {
     held.settle('w', 'tools.list', { schemas: true }, { catalogHash: 'aaaa' })
     expect(held.held('w')).toEqual([])
   })
+  it('a full catalog that comes after its relay timed out is held, so the next ask names it (2026-11-21)', () => {
+    let t = 0
+    const held = createHeldCatalogs({ lateMs: 60_000, now: () => t })
+    held.timedOut(7, 'w', 'tools.list', { schemas: true })
+    t = 30_000
+    expect(held.late(7, full('aaaa'), () => true)).toBe(true)
+    expect(held.ask('w', 'tools.list', { schemas: true })).toEqual({ schemas: true, have: ['aaaa'] })
+    // Once only: the same relay's second late answer is nobody's.
+    expect(held.late(7, full('bbbb'), () => true)).toBe(false)
+    expect(held.held('w')).toEqual(['aaaa'])
+  })
+
+  it('a late answer is held only for a timed-out schemas list, in time, in full, from a sender of its Walnut', () => {
+    let t = 0
+    const held = createHeldCatalogs({ lateMs: 60_000, now: () => t })
+    // Never timed out here.
+    expect(held.late(1, full('aaaa'), () => true)).toBe(false)
+    // Not a schemas list.
+    held.timedOut(2, 'w', 'tools.list', {})
+    held.timedOut(3, 'w', 'tools.call', { schemas: true })
+    expect(held.late(2, full('aaaa'), () => true)).toBe(false)
+    expect(held.late(3, full('aaaa'), () => true)).toBe(false)
+    // A late sameAs, an error answer or an older server's catalog without a hash holds nothing.
+    for (const [id, r] of [[4, { sameAs: 'aaaa' }], [5, undefined], [6, { ops: [] }]] as const) {
+      held.timedOut(id, 'w', 'tools.list', { schemas: true })
+      expect(held.late(id, r as Record<string, unknown> | undefined, () => true)).toBe(false)
+    }
+    // Too late.
+    held.timedOut(9, 'w', 'tools.list', { schemas: true })
+    t = 60_000
+    expect(held.late(9, full('aaaa'), () => true)).toBe(false)
+    expect(held.held('w')).toEqual([])
+    // Another Walnut's server: refused, told the pin the relay went with, and the ask stays for the right one.
+    held.timedOut(8, 'w', 'tools.list', { schemas: true }, true)
+    const asked: Array<[string | undefined, boolean]> = []
+    expect(held.late(8, full('ffff'), (home, pinned) => { asked.push([home, pinned]); return false })).toBe(false)
+    expect(asked).toEqual([['w', true]])
+    expect(held.held('w')).toEqual([])
+    expect(held.late(8, full('aaaa'), () => true)).toBe(true)
+    expect(held.held('w')).toEqual(['aaaa'])
+  })
+
+  it('remembers a bounded number of timed-out asks, the oldest out first', () => {
+    const held = createHeldCatalogs({ now: () => 0 })
+    for (let id = 1; id <= 200; id++) held.timedOut(id, 'w', 'tools.list', { schemas: true })
+    // The newest 64 are kept: 137..200.
+    expect(held.late(136, full('aaaa'), () => true)).toBe(false)
+    expect(held.late(137, full('aaaa'), () => true)).toBe(true)
+    expect(held.late(200, full('bbbb'), () => true)).toBe(true)
+  })
+
+  it('an expired ask is swept by the next timed-out one', () => {
+    let t = 0
+    const held = createHeldCatalogs({ lateMs: 1_000, now: () => t })
+    held.timedOut(1, 'w', 'tools.list', { schemas: true })
+    t = 5_000
+    held.timedOut(2, 'w', 'tools.list', { schemas: true })
+    t = 0
+    // Swept, not only refused for its age: with the clock back it is still gone.
+    expect(held.late(1, full('aaaa'), () => true)).toBe(false)
+    t = 5_000
+    expect(held.late(2, full('aaaa'), () => true)).toBe(true)
+  })
 })

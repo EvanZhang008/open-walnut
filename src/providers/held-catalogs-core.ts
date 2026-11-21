@@ -24,6 +24,14 @@
  * A server's catalog differs per caller (its area's ops, what the gateway refuses on
  * this host), which is why it is held by hash and not by host or session.
  *
+ * A full catalog that arrives after its relay timed out is still held (`timedOut`, `late`).
+ * 2026-11-21: the answer to a host whose session link is slow rides the bulk channel's paced
+ * connection (about 14 KB/s), so a 136 KB catalog took longer than the relay's 20 s. Each one
+ * came late, was dropped as stale and never held, so every session's next ask (its MCP server
+ * retries each minute) brought the whole catalog again: about 40 an hour on one host, a paced
+ * pipe always full, its connection cut by the SSH relay every few minutes, and every answer in
+ * it lost ("gateway-result send failed"). Held once it lands, the next ask is a hash.
+ *
  * Compatibility: an older server ignores `have` and answers in full with no hash, so
  * nothing is held and every caller gets its answer as before; an older daemon never
  * sends `have`, so the server always answers in full.
@@ -56,12 +64,27 @@ export interface HeldCatalogs {
   failed(home: string | undefined, capability: string, payload: Record<string, unknown>): void
   /** The hashes held for `home`, oldest use first. */
   held(home: string | undefined): string[]
+  /** Relay `relayId` of `payload` ended unanswered (timed out): a full catalog it brings later is still held. */
+  timedOut(relayId: number, home: string | undefined, capability: string, payload: Record<string, unknown>, pinned?: boolean): void
+  /**
+   * A result for relay `relayId` that nobody waits for any more: held when it is a full catalog
+   * for a schemas list that timed out within LATE_MS and `mayHold(home)` says its sender may
+   * answer that Walnut's relays (`pinned` as the relay was when it went). True when it was held.
+   * A result that is not held leaves the ask in place for the right sender's.
+   */
+  late(relayId: number, result: Record<string, unknown> | undefined, mayHold: (home: string | undefined, pinned: boolean) => boolean): boolean
 }
 
-export function createHeldCatalogs(opts?: { max?: number; maxTotal?: number; waitMs?: number }): HeldCatalogs {
+export function createHeldCatalogs(opts?: { max?: number; maxTotal?: number; waitMs?: number; lateMs?: number; now?: () => number }): HeldCatalogs {
   const max = opts && typeof opts.max === 'number' && opts.max > 0 ? opts.max : 8
   const maxTotal = opts && typeof opts.maxTotal === 'number' && opts.maxTotal > 0 ? opts.maxTotal : 16
   const waitMs = opts && typeof opts.waitMs === 'number' && opts.waitMs >= 0 ? opts.waitMs : 10_000
+  // How long a timed-out schemas list waits for its late catalog (a paced upload behind others).
+  const lateMs = opts && typeof opts.lateMs === 'number' && opts.lateMs > 0 ? opts.lateMs : 10 * 60_000
+  const now = opts && typeof opts.now === 'function' ? opts.now : () => Date.now()
+  // Timed-out schemas lists by relay id, oldest first, at most lateMax.
+  const lateMax = 64
+  const timedOutAsks = new Map<number, { home: string | undefined; capability: string; payload: Record<string, unknown>; pinned: boolean; at: number }>()
   // Walnut home ('' for a server that names none) -> hash -> catalog result, in use order.
   const homes = new Map<string, Map<string, Record<string, unknown>>>()
   // Every hold of every Walnut, in use order ("<home>\n<hash>"), for the cap across them.
@@ -176,5 +199,28 @@ export function createHeldCatalogs(opts?: { max?: number; maxTotal?: number; wai
     return held ? Array.from(held.keys()) : []
   }
 
-  return { ask, settle, wait, failed, held: heldOf }
+  function timedOut(relayId: number, home: string | undefined, capability: string, payload: Record<string, unknown>, pinned?: boolean): void {
+    if (!isSchemasList(capability, payload)) return
+    const at = now()
+    for (const [id, t] of timedOutAsks) {
+      if (at - t.at < lateMs && timedOutAsks.size < lateMax) break
+      timedOutAsks.delete(id)
+    }
+    timedOutAsks.set(relayId, { home, capability, payload, pinned: pinned === true, at })
+  }
+
+  function late(relayId: number, result: Record<string, unknown> | undefined, mayHold: (home: string | undefined, pinned: boolean) => boolean): boolean {
+    const t = timedOutAsks.get(relayId)
+    if (!t) return false
+    if (now() - t.at >= lateMs) { timedOutAsks.delete(relayId); return false }
+    // Only a full catalog is worth keeping: a late sameAs or error answers nobody.
+    if (!result || typeof result !== 'object' || typeof result.catalogHash !== 'string' || !Array.isArray(result.ops)) return false
+    // Another Walnut's server never uses up the ask its own Walnut's late answer is for.
+    if (!mayHold(t.home, t.pinned)) return false
+    timedOutAsks.delete(relayId)
+    settle(t.home, t.capability, t.payload, result)
+    return true
+  }
+
+  return { ask, settle, wait, failed, held: heldOf, timedOut, late }
 }
