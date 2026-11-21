@@ -72,6 +72,21 @@ describe('an append-only file', () => {
     expect((await verifyStandby(sb.target)).drift).toEqual([])
   })
 
+  it('caught in the middle of a line: the batch ends at its last whole line, and the next takes the rest', async () => {
+    sb = await sandbox('append-half-line')
+    await first()
+    fs.appendFileSync(home(LOG), '{"n":1}\n{"n":2,"half')
+    await settle()
+    const out = await snapshotTo(sb.home, sb.target)
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(copy(LOG).endsWith('{"n":1}\n')).toBe(true)
+    fs.appendFileSync(home(LOG), '":true}\n')
+    await settle()
+    expect((await snapshotTo(sb.home, sb.target)).ok).toBe(true)
+    expect(copy(LOG).endsWith('{"n":1}\n{"n":2,"half":true}\n')).toBe(true)
+    expect(copy(LOG)).toBe(fs.readFileSync(home(LOG), 'utf8'))
+  })
+
   it('rewritten in place at its start after the moment voids the batch', async () => {
     sb = await sandbox('append-rewrite-late')
     await first()

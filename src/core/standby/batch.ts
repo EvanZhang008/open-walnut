@@ -19,11 +19,12 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { log } from '../../logging/index.js'
 import { holdWrites } from '../../utils/write-gate.js'
 import { isAppendOnlyHomePath } from '../home-manifest/index.js'
 import { markAppendOnly, stagePrefix, type AppendMark } from './append-only.js'
 import type { ChunkSink, FileDigest } from './chunks.js'
-import { DB_NAME, scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
+import { DB_NAME, limiter, scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
 import { namesAtMoment, type MomentNames } from './moment-names.js'
 import { openPinWorker, type Pin, type PinWorker } from './sqlite-pin.js'
 import { stageFile, type StageContext, type StageOutcome } from './stage.js'
@@ -195,11 +196,14 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       const timeLeft = () => performance.now() - holdStart < (opts.holdReadMs ?? 200)
       // Gated writes that ended just now should land in an earlier tick than the moment.
       await new Promise((r) => setTimeout(r, settleMs))
-      // Just before the moment: what each append-only file holds then is the batch's.
-      for (const rel of appendOnly) {
-        const mark = await markAppendOnly(path.join(opts.home, rel))
+      // Just before the moment: what each append-only file holds then is the batch's (one
+      // unchanged since the last batch is only stat'ed).
+      const markSlot = limiter(64)
+      await Promise.all(appendOnly.map((rel) => markSlot(async () => {
+        const last = prev.get(rel)
+        const mark = await markAppendOnly(path.join(opts.home, rel), last && !last.db ? last.src : undefined)
         if (mark) marks.set(rel, mark)
-      }
+      })))
       fsMoment = await fsClock(stagingDir, opts.home)
       try {
         for (const [p, st] of await dbStatAll()) dbStats.set(p, st)
@@ -282,6 +286,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
         // It did not only grow: the general rule below decides (taken when it was quiet since
         // before the moment, else the batch is void), so one rewrite cannot void every batch after.
         stats.appendFallbacks++
+        log.session.info('standby: an append-only file did not only grow; the general rule places it', { path: rel, why: got.why, detail: got.detail })
       }
       const st = staged.get(rel)
       if (st) { out.set(rel, fileEntry(rel, st.size, st.h, st.chunks, st.x, st.st, false)); continue }

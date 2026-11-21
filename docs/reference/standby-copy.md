@@ -76,14 +76,17 @@ was set back to the exact nanosecond of the old ctime.
 **Append-only files.** A file the manifest marks `appendOnly` (logs Walnut and other processes
 append to, outside the write gate: the session audit log, time samples, replay step logs, the
 voice vocabulary; `src/core/home-manifest/`) changes after the moment almost every time. Its
-size, inode and the hash of its last 4 KiB are noted in the hold just before the moment, and
-the batch takes its first that many bytes (`append-only.ts`), checked: the same inode and at
+size (cut back to the end of its last whole line: an appender outside the gate may be in the
+middle of a write), inode and the hash of its last 4 KiB are noted in the hold just before the
+moment, and the batch takes its first that many bytes (`append-only.ts`), checked: the same inode and at
 least that size before and after the read, the noted tail unchanged, and, when the last batch
 holds the same inode, its first (last batch's size) bytes still the last batch's content. A
 file replaced by a compacted copy (a new inode) is taken as the new file. One that did not only
 grow (cut, rewritten in place) goes to the general rule: taken if it was quiet since before the
 moment, else the batch is void, so one rewrite never voids every batch after it. Not caught: a
-rewrite in place, after the mark, of bytes between the last batch's end and the noted tail.
+rewrite in place, after the mark, of bytes between the last batch's end (the file's start, when
+the last batch holds no copy of this inode) and the noted tail. A marked file whose stat is the
+last batch's is only stat'ed in the hold; the marks run 64 at a time.
 An entry is marked only after reading every writer of it (2026-11-21: `session-audit.jsonl`,
 `time-tracking/` day logs, `browser/replays/*/index.jsonl`, `offline-conflicts/*.ndjson`,
 `config/share/stt-vocab.txt`, `cache/suggest-accuracy.jsonl`); files people edit (notes, the

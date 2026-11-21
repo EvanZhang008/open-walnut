@@ -219,9 +219,14 @@ export class StandbyTarget {
           const st = await fs.lstat(src).catch(() => null)
           const was = copyStats[f.p]
           if (st?.isFile() && was && copyStatOf(st).every((v, i) => v === was[i])) {
-            bytesWritten += await this.buildPatched(f, old, src, dest, hooks)
-            patched++
-            return
+            try {
+              bytesWritten += await this.buildPatched(f, old, src, dest, hooks)
+              patched++
+              return
+            } catch (err) {
+              // A patch that does not come out as the batch's file: build it whole instead.
+              log.session.warn('standby: a patched file did not match its hash; building it whole', { path: f.p, error: String(err) })
+            }
           }
         }
         await this.build(f, dest)
