@@ -23,7 +23,7 @@ import type { ReplicaWrite } from './dispatch.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer, type TaskRow, type WriteActor } from './write-port.js'
 import { isCallId, writeOpId } from '../lib/op-call-id.js'
 import { log } from '../logging/index.js'
-import { INFO_NOT_INBOX, INFO_NOT_INBOX_MESSAGE, passesInfoRule } from '../core/human-inbox/info-letter-rule.js'
+import { passesInfoRule } from '../core/human-inbox/info-letter-rule.js'
 
 /** A task id as Walnut mints them: one this replica's copy lacks is checked by the Mac at replay (as the daemon takes it). */
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{5,79}$/
@@ -142,12 +142,11 @@ export function awayCalls(deps: AwayCallsDeps): RequestHandler {
     if (badArgs) return refusalAnswer('bad_request', badArgs)
     const shaped = deps.letters.shape(b)
     if (!shaped.ok) return refusalAnswer('bad_request', shaped.message)
-    // The info rule as the Mac applies it (letter-ops.ts sendLetter): a session's info letter the user
-    // did not ask for is refused now, never kept for a drain that refuses it unheard; any other caller's
-    // becomes a notice, which only the Mac makes.
+    // An info letter the user did not ask for (info-letter-rule.ts) is never kept for a drain that
+    // refuses it unheard: the Mac alone decides it (a session that keeps Threads has it filed to its
+    // thread, letter-to-thread.ts; another is refused; a caller with no session gets a notice).
     if (!passesInfoRule(b as Parameters<typeof passesInfoRule>[0])) {
-      if (actor.kind === 'session') return refusalAnswer(INFO_NOT_INBOX, INFO_NOT_INBOX_MESSAGE)
-      return needsLeaderAnswer('needs_mac', 'An info notice needs your Mac; nothing was sent.')
+      return needsLeaderAnswer('needs_mac', 'An info letter needs your Mac, which files it to your task\'s thread or refuses it; nothing was saved. Say it in your chat reply, or send it again once your Mac is back.')
     }
     const r = await w.submit('human_inbox_send', b, undefined, actor)
     const a = settleCall(r, 201)
