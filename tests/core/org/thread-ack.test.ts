@@ -32,7 +32,8 @@ describe('what still holds a thread at his Acknowledge', () => {
   it('a card that holds the result (answered) closes unless a task it lists still works on its subject', () => {
     const t = running('answered').f.threads[0]
     expect(ackWaitsOf(t, oven())).toEqual({ tasks: [{ id: 't-oven', title: 'Oven timer' }], replies: false, letter: false })
-    expect(ackWaitsOf(t, oven({ phase: 'NEED_ACTION' }))).toBeNull()
+    // Handed back: its stored status says its result is in (the status decides, never the phase).
+    expect(ackWaitsOf(t, oven({ phase: 'NEED_ACTION', user_status: { state: 'read' } }))).toBeNull()
     expect(ackWaitsOf(t, oven({ title: 'Paint the garden shed' }))).toBeNull()
   })
 
