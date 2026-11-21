@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { ModelPicker, acpModelDisplayName } from './ModelPicker';
-import { SessionSpeedReadout } from './SessionSpeedReadout';
+import { SessionSpeedReadout, SessionSpeedHeadline } from './SessionSpeedReadout';
 import { SubscriptionLimitPillHint, SubscriptionLimitReadout } from './SubscriptionLimitReadout';
 import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import type { SessionEffort } from '@open-walnut/core';
@@ -502,6 +502,7 @@ export function ComposerModelPill({
               ? (catalogLabel) => <SessionSpeedReadout sessionId={sessionId} session={session} modelLabel={acpTurnModelLabel(catalogLabel)} />
               : <><SessionSpeedReadout sessionId={sessionId} session={session} /><SubscriptionLimitReadout host={session?.host} /></>)
             : undefined}
+          speedHeadline={!pending && sessionId ? <SessionSpeedHeadline sessionId={sessionId} session={session} /> : undefined}
         />
       )}
     </>

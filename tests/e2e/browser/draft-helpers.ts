@@ -1122,13 +1122,33 @@ async function waitForModelPickerSettled(picker: Locator): Promise<void> {
   await expect(picker.locator('.model-picker-status', { hasText: /^Loading .* models/ })).toHaveCount(0, { timeout: 30_000 })
 }
 
-/** Close the composer model picker with its × and wait until it is gone. */
-export async function closeDraftModelPicker(page: Page): Promise<void> {
+/**
+ * Open one fold of the model picker's fold bar ("Cost", "Speed", "Details": everything the
+ * picker shows besides its choices lives in one of them, and every open starts with all closed)
+ * and return the fold's body. A click on an open fold's toggle closes it, so an open one is left.
+ */
+export async function openPickerFold(picker: Locator, id: 'cost' | 'speed' | 'details'): Promise<Locator> {
+  const toggle = picker.getByTestId(`picker-fold-${id}`)
+  await expect(toggle).toBeVisible({ timeout: 15_000 })
+  // An ACP pane's list landing re-places the picker: a click aimed during that move is lost.
+  await waitForModelPickerSettled(picker)
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  return picker.getByTestId(`picker-fold-body-${id}`)
+}
+
+/**
+ * Close the open model picker (a draft's or a live session's) and wait until it is gone. A
+ * popout (portalled from a pill: `.model-picker-popout`) has no × and closes on Escape; an
+ * in-place picker closes with its ×.
+ */
+export async function closeModelPicker(page: Page): Promise<void> {
   const picker = draftModelPicker(page)
   if (await picker.count()) {
     // A pick just made may have started the new engine's model list loading: the × moves with it.
     await waitForModelPickerSettled(picker)
-    await picker.locator('.model-picker-close').click()
+    if (await picker.evaluate((el) => el.classList.contains('model-picker-popout'))) await page.keyboard.press('Escape')
+    else await picker.locator('.model-picker-close').click()
   }
   await expect(picker).toHaveCount(0)
 }
@@ -1143,5 +1163,5 @@ export async function pickDraftEngine(page: Page, panel: Locator, engineId: stri
   await expect(button, `${engineId} is locked on this draft`).not.toHaveClass(/provider-rail-item-locked/)
   if ((await button.getAttribute('aria-selected')) !== 'true') await button.click()
   await expect(button).toHaveAttribute('aria-selected', 'true')
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
 }

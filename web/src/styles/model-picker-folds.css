@@ -1,0 +1,102 @@
+/* The model picker's fold bar (components/sessions/PickerFoldBar.tsx): under the Model | Effort
+   columns, the Cost / Speed / Details toggles (the shared .btn .btn-sm) and the open fold. */
+.model-picker-folds {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.model-picker-folds-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-picker-folds-end {
+  margin-left: auto;
+  display: inline-flex;
+}
+
+.model-picker-folds-status {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.model-picker-fold-label {
+  color: var(--fg-muted);
+}
+
+.model-picker-fold-value {
+  color: var(--fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-picker-fold-caret {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.model-picker-fold-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+  flex: none;
+}
+
+/* The budget's dot sits in the value, before the amount. */
+.model-picker-fold-value .model-picker-fold-dot {
+  margin-right: 4px;
+}
+
+/* The open fold: its blocks keep their own looks, laid one under the other. */
+.model-picker-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.model-picker-fold > .model-picker-details,
+.model-picker-fold > .model-picker-live,
+.model-picker-fold > .launch-source-note {
+  margin: 0;
+}
+
+.model-picker-fold-speed:empty::before {
+  content: 'No turn measured yet.';
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* The one line above the choices when the CLI is not running what was asked. */
+.model-picker-warn {
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+/* In-place pickers (no popout) keep a close button, alone at the top right. */
+.model-picker-header-bare {
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.session-cost-fold-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-cost-fold-head:empty {
+  display: none;
+}

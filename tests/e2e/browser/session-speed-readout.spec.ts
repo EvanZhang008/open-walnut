@@ -1,7 +1,7 @@
 /**
  * REAL-PIPELINE Playwright spec for the turn speed readout row inside each
- * session panel's model picker (SessionSpeedReadout under the picker's live
- * strip; the picker opens from the composer's model pill).
+ * session panel's model picker (SessionSpeedReadout in the picker's Speed fold,
+ * whose toggle carries the tok/s; the picker opens from the composer's model pill).
  *
  * Nothing about the readout is injected or route-mocked: session:start WS RPC
  * → MockDaemon spawns the mock Claude CLI → real stream_event JSONL → the
@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { holdPanelCountLock } from './panel-count-lock'
+import { closeModelPicker, openPickerFold } from './draft-helpers'
 
 const SPEED_MESSAGE = 'chunk-delay:300 stream-partial-speed'
 const COLUMNS_KEY = 'open-walnut-home-session-columns'
@@ -147,17 +148,12 @@ function columnFor(page: Page, sid: string): Locator {
 const picker = (page: Page) => page.locator('.model-picker')
 const readoutIn = (page: Page) => picker(page).getByTestId('session-speed-readout')
 
-/** Open `col`'s model picker from its composer pill and wait for it. */
+/** Open `col`'s model picker from its composer pill, then its Speed fold (where the readout is). */
 async function openPicker(page: Page, col: Locator): Promise<void> {
-  await closePicker(page)
+  await closeModelPicker(page)
   await col.locator('.composer-model-pill').first().click()
   await expect(picker(page)).toHaveCount(1)
-}
-
-async function closePicker(page: Page): Promise<void> {
-  if ((await picker(page).count()) === 0) return
-  await picker(page).locator('.model-picker-close').click()
-  await expect(picker(page)).toHaveCount(0)
+  await openPickerFold(picker(page), 'speed')
 }
 
 /** Pick a panel count through the real Settings UI, then wait for it to reach
@@ -274,6 +270,8 @@ async function assertFinalReadout(page: Page, model: string): Promise<number> {
   const m = tpsText.match(/^(\d+) tok\/s$/)
   expect(m, `tok/s reads "${tpsText}"`).not.toBeNull()
   const tps = Number(m![1])
+  // The Speed toggle, readable with every fold closed, carries the same tok/s.
+  await expect(picker(page).getByTestId('picker-fold-speed').getByTestId('speed-headline')).toHaveText(tpsText)
   // 50 tokens over ~3.0s of generation ≈ 17. A wall-clock rate (tool gap
   // counted) would be ≈ 6, well below this floor.
   expect(tps, `tok/s ${tps} excludes the tool gap`).toBeGreaterThanOrEqual(9)
@@ -353,7 +351,7 @@ test('two panels side by side show a live readout each, then final numbers', asy
   test.info().annotations.push({ type: 'tok/s', description: `A (Opus 5.5) ${tpsA}, B (Sonnet 5.5) ${tpsB}` })
   console.log(`observed tok/s: A ${tpsA}, B ${tpsB}`)
   // Closed picker: no readout anywhere on the page (the row is not a panel fixture).
-  await closePicker(page)
+  await closeModelPicker(page)
   await expect(page.getByTestId('session-speed-readout')).toHaveCount(0)
 })
 
@@ -372,7 +370,7 @@ test('reload keeps the last turn\'s readout', async ({ page, request }) => {
   await openPicker(page, col)
   await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 30_000 })
   await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50 tok')
-  await closePicker(page)
+  await closeModelPicker(page)
 
   // The final is written onto the record asynchronously; the cold load below
   // reads that copy, so wait for it to land first.
@@ -442,7 +440,7 @@ test('a subagent on another model gets its own row under the main one, live then
   await expect(lane.getByTestId('speed-lane-first')).toContainText('first')
   await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50 tok')
   await clipShot(page, 'agent-lane-final')
-  await closePicker(page)
+  await closeModelPicker(page)
 
   // Cold load: the record carries the lane.
   await page.reload()
@@ -496,7 +494,7 @@ test('a model switched mid-turn: the row says it takes the next call, then names
   await expect(r.getByTestId('speed-next-model')).toHaveCount(0)
   await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
   await clipShot(page, 'switch-final')
-  await closePicker(page)
+  await closeModelPicker(page)
 
   // Cold load: the record keeps both.
   await page.reload()
@@ -518,10 +516,13 @@ test('a session with no measured turn shows no readout', async ({ page, request 
   await page.goto('/')
   const col = columnFor(page, SID)
   await expect(col).toHaveCount(1, { timeout: 30_000 })
-  // The picker renders its live strip for any live session; the readout row
-  // under it only exists once a turn was measured, so here there is none.
+  // The picker's Speed fold opens for any session; the readout row in it only exists
+  // once a turn was measured, so here there is none, and the toggle names no rate.
   await expect(col.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
   await openPicker(page, col)
-  await expect(picker(page).getByTestId('picker-live-strip')).toBeVisible()
+  await expect(picker(page).getByTestId('picker-fold-body-speed')).toBeVisible()
   await expect(readoutIn(page)).toHaveCount(0)
+  await expect(picker(page).getByTestId('speed-headline')).toHaveCount(0)
+  // The live strip is there for any session, in Details.
+  await expect((await openPickerFold(picker(page), 'details')).getByTestId('picker-live-strip')).toBeVisible()
 })

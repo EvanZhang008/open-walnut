@@ -1,6 +1,6 @@
 /**
  * REAL-PIPELINE spec for the Claude subscription limit readout: the block in
- * the Switch Model popover (SubscriptionLimitReadout, under the turn speed row)
+ * the model picker's Speed fold (SubscriptionLimitReadout, under the turn speed row)
  * and the dot on the composer's model pill (SubscriptionLimitPillHint).
  *
  * Nothing is route-mocked. session:start / session:send WS RPC → MockDaemon
@@ -17,6 +17,7 @@ import { test, expect, type Page, type APIRequestContext, type Locator } from '@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { closeModelPicker, openPickerFold } from './draft-helpers'
 
 const SHOTS = '/tmp/limit-window'
 const COLUMNS_KEY = 'open-walnut-home-session-columns'
@@ -111,16 +112,12 @@ const row = (page: Page, type: string) => readout(page).locator(`[data-testid="l
 const pillOf = (col: Locator) => col.locator('.composer-model-pill').first()
 const hintOf = (col: Locator) => pillOf(col).getByTestId('limit-pill-hint')
 
+/** The picker from the column's model pill, its Speed fold open (where the limits are). */
 async function openPicker(page: Page, col: Locator): Promise<void> {
-  await closePicker(page)
+  await closeModelPicker(page)
   await pillOf(col).click()
   await expect(picker(page)).toHaveCount(1)
-}
-
-async function closePicker(page: Page): Promise<void> {
-  if ((await picker(page).count()) === 0) return
-  await picker(page).locator('.model-picker-close').click()
-  await expect(picker(page)).toHaveCount(0)
+  await openPickerFold(picker(page), 'speed')
 }
 
 /** A crop around `loc` (with some context), never wider than the 1280px viewport. */
@@ -198,7 +195,7 @@ test.describe('subscription limit window', () => {
     await shot(page, picker(page), '2-warning-popover', 8)
 
     // 2. A fresh window, normal state: the dot goes away, the numbers move.
-    await closePicker(page)
+    await closeModelPicker(page)
     await rpc(page, 'session:send', { sessionId: sid, message: lineFor(NORMAL) })
     await expect(hintOf(col)).toHaveCount(0, { timeout: 30_000 })
     await openPicker(page, col)
@@ -206,7 +203,7 @@ test.describe('subscription limit window', () => {
     expect(await rowText(page, 'five_hour')).toMatchObject({ state: 'ok' })
     await expect(row(page, 'seven_day').getByTestId('limit-value')).toHaveText('33%')
     await shot(page, picker(page), '3-normal-popover', 8)
-    await closePicker(page)
+    await closeModelPicker(page)
     await shot(page, pillOf(col), '3-normal-pill', 40)
 
     // 3. A reload keeps the reading (hydrated from the server, not from this tab).
@@ -217,7 +214,7 @@ test.describe('subscription limit window', () => {
     await openPicker(page, colAfter)
     await expect(row(page, 'five_hour').getByTestId('limit-value')).toHaveText('12%', { timeout: 15_000 })
     await expect(row(page, 'seven_day').getByTestId('limit-value')).toHaveText('33%')
-    await closePicker(page)
+    await closeModelPicker(page)
     // Hydrated (the popover above read it), and still no dot in the normal state.
     await expect(hintOf(colAfter)).toHaveCount(0)
     await shot(page, pillOf(colAfter), '4-after-reload-pill', 40)
@@ -231,7 +228,7 @@ test.describe('subscription limit window', () => {
     expect(await rowText(page, 'five_hour')).toMatchObject({ value: '100%' })
     await expect(readout(page).getByTestId('limit-overage')).toHaveText(/^Using extra usage · resets \w{3} \d{1,2}$/)
     await shot(page, picker(page), '5-extra-usage-popover', 8)
-    await closePicker(page)
+    await closeModelPicker(page)
 
     // 5. A window that resets while the user watches: it turns into "reset", not the old 97%.
     await rpc(page, 'session:send', { sessionId: sid, message: lineFor(RESETS_SOON(25)) })
@@ -245,7 +242,7 @@ test.describe('subscription limit window', () => {
     await picker(page).evaluate((el) => { el.setAttribute('data-pw-open-mark', '1') })
     await expect(row(page, 'five_hour')).toHaveAttribute('data-state', 'reset', { timeout: 45_000 })
     await expect(picker(page)).toHaveAttribute('data-pw-open-mark', '1')
-    // The popover is opaque and on top of the chat: its header, the readout and
+    // The popover is opaque and on top of the chat: its fold bar, the readout and
     // the model list all hit-test to the popover itself.
     const covered = await picker(page).evaluate((el) => {
       const probe = (node: Element | null) => {
@@ -257,7 +254,7 @@ test.describe('subscription limit window', () => {
       let opacity = 1
       for (let n: Element | null = el; n; n = n.parentElement) opacity *= Number(getComputedStyle(n).opacity)
       return {
-        header: probe(el.querySelector('.model-picker-header')),
+        folds: probe(el.querySelector('[data-testid="picker-fold-speed"]')),
         readout: probe(el.querySelector('[data-testid="subscription-limit-readout"]')),
         list: probe(el.querySelector('.model-picker-row')),
         opacity,
@@ -265,12 +262,12 @@ test.describe('subscription limit window', () => {
     })
     // (In WebKit the chat still shows faintly through the popover's frosted glass,
     // globals.css "iOS Materials Pass": WebKit does not blur across a backdrop root.)
-    expect(covered).toEqual({ header: 'popover', readout: 'popover', list: 'popover', opacity: 1 })
+    expect(covered).toEqual({ folds: 'popover', readout: 'popover', list: 'popover', opacity: 1 })
     expect(await rowText(page, 'five_hour')).toMatchObject({ state: 'reset', value: null, when: 'reset', age: null })
     // The weekly window has not reset, so it keeps its number.
     expect(await rowText(page, 'seven_day')).toMatchObject({ state: 'ok', value: '34%' })
     await shot(page, picker(page), '7-reset-popover', 8)
-    await closePicker(page)
+    await closeModelPicker(page)
     await expect(hintOf(colAfter)).toHaveCount(0)
     await shot(page, pillOf(colAfter), '7-reset-pill', 40)
   })
@@ -290,7 +287,7 @@ test.describe('subscription limit window', () => {
     await expect(pillOf(col)).toBeVisible({ timeout: 30_000 })
     await hydrated
     await openPicker(page, col)
-    await expect(picker(page).locator('.model-picker-header')).toBeVisible()
+    await expect(picker(page).getByTestId('picker-fold-body-speed')).toBeVisible()
     // No block, no empty meter, no zero: nothing.
     await expect(readout(page)).toHaveCount(0)
     await expect(picker(page).getByText(/Usage limits|5-hour limit|Weekly limit/)).toHaveCount(0)

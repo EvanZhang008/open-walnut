@@ -16,7 +16,7 @@ import { test, expect, type Page } from '@playwright/test'
 import {
   HEALTHY, fixtureFile, hostFixture, hostRow, isolatePrefs, loadApp, loadFixture, openPicker, openRemoteHosts, pickFolder, resetServerHostFixture,
 } from './host-problems-fixture-helpers'
-import { closeDraftModelPicker, draftCwdPill, draftEngineButton, draftModelPicker } from './draft-helpers'
+import { closeModelPicker, draftCwdPill, draftEngineButton, draftModelPicker } from './draft-helpers'
 import { openProblems, pickRail, problemRow, systemHostLine, systemHostRow, systemHosts } from './host-attention-helpers'
 
 const SHOTS = process.env.PW_SHOTS_DIR ?? 'test-results/host-unused-no-row-shots'
@@ -89,7 +89,7 @@ test.describe('a host nothing uses for sessions', () => {
     await expect(draftModelPicker(page).getByTestId('model-picker-engine-unavailable')).toHaveText('Not available on fleet: Claude Code is not installed on Fleet Mac')
     fs.mkdirSync(SHOTS, { recursive: true })
     await draftModelPicker(page).screenshot({ path: `${SHOTS}/06-picker-missing.png` })
-    await closeDraftModelPicker(page)
+    await closeModelPicker(page)
 
     // The same draft moved to a host that runs Claude Code: nothing to say.
     await draftCwdPill(panel).click()

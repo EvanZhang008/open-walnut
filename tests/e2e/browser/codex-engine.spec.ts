@@ -20,7 +20,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import {
-  REAL_PANEL, closeDraftModelPicker, draftEngineButton, draftModelPicker, draftModelPill, openDraft, openDraftOnCwd,
+  REAL_PANEL, closeModelPicker, draftEngineButton, draftModelPicker, draftModelPill, openDraft, openDraftOnCwd,
 } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-ui-final'
@@ -129,7 +129,7 @@ test('the model pill offers the engines; a Codex click swaps the Claude model li
   await expect(picker).toHaveClass(/model-picker-acp/)
   await expect(picker.getByTestId('acp-default-row')).toHaveAttribute('aria-selected', 'true')
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', '')
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
   await audit.assertClean()
 })
 
@@ -143,7 +143,7 @@ test('quick-start with Codex engine sends engine:codex and shows the Codex chip'
   // draft holds the launch meta itself, so re-open the model pill and read the
   // provider rail back (same fact: closing the picker did not reset the engine).
   await expect(await draftEngineButton(page, panel, 'codex')).toHaveAttribute('aria-selected', 'true')
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
 
   // Observe the real quick-start request body. Letting it reach the test server
   // keeps this spec on the same real route/runner path as the live-flow spec.
@@ -341,7 +341,7 @@ test('live Claude Code session uses its engine name on Homepage', async ({ page 
   await pickerInput.press('Shift+Enter')
   await expect(picker).toBeHidden()
   await expect(await draftEngineButton(page, draft, 'claude')).toHaveAttribute('aria-selected', 'true')
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
 
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'

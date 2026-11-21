@@ -43,7 +43,8 @@ test('session budget keeps dirty edits, conflicts, pauses and recovery honest', 
   targetSessionId = sessionId;
   let rejectConflict = false, rejectSave = false, offline = false, patchCount = 0;
   page.on('request', request => { if (request.method() === 'POST' && /\/api\/sessions\/.*\/messages/.test(request.url())) sentMessages++; });
-  await page.route(`**/api/usage/sessions/${sessionId}`, route => offline
+  // By path: the read carries a query (?absent=null), which a plain glob does not match.
+  await page.route(url => url.pathname === `/api/usage/sessions/${sessionId}`, route => offline
     ? route.fulfill({ status: 503, json: { error: 'Host unavailable' } }) : route.fulfill({ json: current }));
   await page.route(`**/api/usage/sessions/${sessionId}/budget`, async route => {
     patchCount++;

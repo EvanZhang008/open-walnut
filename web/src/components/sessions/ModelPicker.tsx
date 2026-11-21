@@ -24,10 +24,13 @@ import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, acpModelDisplayName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
-import { SessionCostBlock } from './SessionCostBlock';
+import { SessionCostBlock, BudgetPausedMark, useSessionCost, costToggleLabel, type CompareModel } from './SessionCostBlock';
+import { PickerFoldBar, type PickerFold } from './PickerFoldBar';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 
 const EFFORTS = SESSION_EFFORTS;
+/** Context at or past this share of the window puts a dot on the Details toggle. */
+const CONTEXT_WARN_PCT = 90;
 
 /** Row label with the REAL version — "Opus 4.8 1M", not "Opus". The catalog's
  *  displayName is bare family (upstream generates it that way), but the row
@@ -372,6 +375,8 @@ interface ModelPickerProps {
    *  handed the catalog's family names, so an ACP readout names the model its
    *  turn ran on the way the catalog does. */
   speedReadout?: React.ReactNode | ((familyLabel: (familyId: string) => string | undefined) => React.ReactNode);
+  /** LIVE session: the Speed toggle's number, tokens per second (SessionSpeedHeadline). */
+  speedHeadline?: React.ReactNode;
   /** LIVE ACP session: what the adapter reports right now, for the Live strip
    *  (Claude's comes from get_settings; an ACP adapter states it in its config
    *  options). `live` is the session's process being up. */
@@ -391,7 +396,7 @@ interface ModelPickerProps {
 const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onEffortDefault, effortDefaultTitle, onClose, onAnchorLost, switchNote, sourceNote, speedReadout,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onEffortDefault, effortDefaultTitle, onClose, onAnchorLost, switchNote, sourceNote, speedReadout, speedHeadline,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow, acpCurrentNote,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
@@ -401,6 +406,8 @@ export function ModelPicker({
   // Which of the two panes shows is a CAPABILITY question: an engine whose model
   // list is provider-advertised has no static catalog and no get_settings.
   const engineCatalog = useEngineCatalog();
+  // The session's cost, read once per open for both the Cost toggle and its fold.
+  const costRead = useSessionCost(sessionId ?? null);
   // The selected engine on a host that cannot run it: said at the top of the pane, in the lock's words.
   const activeEngineUnavailable = providerLockReason?.(engine) ?? null;
   const engineUi = engineCaps(engine, engineCatalog);
@@ -561,12 +568,11 @@ export function ModelPicker({
     return () => clearTimeout(t);
   }, [refreshState]);
 
-  // ── Live details: collapsed by default, but PREFETCHED in the background
+  // ── Live details: in the Details fold, but PREFETCHED in the background
   // the moment the picker opens — the pull is slow (get_context_usage
   // tokenizes the CLI's whole tool surface, ~15s), and making the user click
-  // "details" and THEN wait it out reads as broken (user report 2026-08-16).
-  // Opening the section mid-flight just shows the loading line briefly.
-  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  // "Details" and THEN wait it out reads as broken (user report 2026-08-16).
+  // Opening the fold mid-flight just shows the loading line briefly.
   const [details, setDetails] = React.useState<SessionLiveSettings['details'] | null>(null);
   const [detailsPulling, setDetailsPulling] = React.useState(false);
   React.useEffect(() => {
@@ -583,7 +589,6 @@ export function ModelPicker({
       .finally(() => { if (!cancelled) setDetailsPulling(false); });
     return () => { cancelled = true; };
   }, [sessionId, isAcpPane]);
-  const toggleDetails = () => setDetailsOpen((v) => !v);
 
   const applied = liveSettings?.live ? liveSettings.applied : null;
   // Active row = catalog row matching the LIVE model (applied wins over record).
@@ -815,27 +820,15 @@ export function ModelPicker({
     </button>
   );
 
-  const acpPane = (
-    <>
-      <div className="model-picker-header">
-        <span className="model-picker-title">Switch Model</span>
-        <span className="model-picker-current">
-          Current: {acpCurrent
-            ? (acpActiveFamily
-              ? `${acpActiveFamily.label}${acpActive?.effort ? ` · ${acpEffortLabel(acpActive.effort)}` : ''}`
-              : shortAcpModelName(acpCurrent))
-            : acpDefaultLabel}{acpCurrentNote ? ` · ${acpCurrentNote}` : ''}
-        </span>
-        <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
-      </div>
-      {sessionId && acpLive && (
+  const acpLiveStrip = sessionId && acpLive && (
         <div className="model-picker-live" data-testid="picker-live-strip">
           {acpLive.live ? (
             <>
               <span className="model-picker-live-dot" aria-hidden>●</span>
               <span>
-                Live: <strong>{acpActiveFamily?.label ?? (acpCurrent ? shortAcpModelName(parseAcpModelId(acpCurrent).familyId) : engineUi.displayName)}</strong>
-                {acpLive.effort ? <>{' · '}effort <strong>{acpEffortLabel(acpLive.effort)}</strong></> : null}
+                {/* The model is the ticked row above. The effort is what the adapter reports running,
+                    which can differ from the ticked (requested) one, so it stays here. */}
+                Live{acpLive.effort ? <>{' · '}effort <strong>{acpEffortLabel(acpLive.effort)}</strong></> : null}
                 {acpLive.mode ? <>{' · '}mode <strong>{acpLive.mode}</strong></> : null}
               </span>
             </>
@@ -845,10 +838,9 @@ export function ModelPicker({
             </span>
           )}
         </div>
-      )}
-      {sessionId && renderedSpeedReadout}
-      {sessionId && <SessionCostBlock sessionId={sessionId} compareModels={acpCompareModels} />}
-      {sessionId && acpContext && acpContext.used > 0 && (
+      );
+
+  const acpContextBlock = sessionId && acpContext && acpContext.used > 0 && (
         <div className="model-picker-details" data-testid="picker-acp-context">
           <div className="model-picker-details-block">
             <div className="model-picker-details-title">
@@ -860,7 +852,170 @@ export function ModelPicker({
             </div>
           </div>
         </div>
-      )}
+      );
+
+  const claudeLiveStrip = sessionId && (
+        <div className="model-picker-live" data-testid="picker-live-strip">
+          {pulling && !liveSettings ? (
+            <span className="model-picker-live-checking">Checking live session…</span>
+          ) : applied ? (
+            <>
+              <span className="model-picker-live-dot" aria-hidden>●</span>
+              <span>
+                {/* The model and effort are the ticked rows above (they follow what the CLI applied). */}
+                Live{appliedEffort ? null : <>{' · '}effort from settings <strong>{configuredEffort}</strong></>}
+                {applied.mode ? <>{' · '}mode <strong>{applied.mode}</strong></> : null}
+              </span>
+            </>
+          ) : (
+            <span className="model-picker-live-offline" title="Session process not reachable — showing last known settings; they apply on the next (re)start.">
+              ○ Not live — showing saved settings (apply on next start)
+            </span>
+          )}
+          <button
+            className={`model-picker-refresh model-picker-refresh-${refreshState}`}
+            onClick={refreshCatalog}
+            disabled={refreshing}
+            type="button"
+            title={refreshState === 'failed'
+              ? 'Refresh failed — click to retry.'
+              : refreshState === 'success'
+              ? 'Model list refreshed from the CLI'
+              : 'Re-read the model list and live settings from the CLI (use after editing settings.json)'}
+            aria-label={refreshState === 'failed'
+              ? 'Refresh model catalog — last attempt failed'
+              : refreshState === 'success'
+              ? 'Refresh model catalog — refreshed'
+              : 'Refresh model catalog'}
+            aria-busy={refreshing}
+            data-refresh-state={refreshState}
+            data-testid="picker-refresh"
+          >
+            {refreshState === 'success' ? '✓' : refreshState === 'failed' ? '!' : '⟳'}
+          </button>
+        </div>
+      );
+
+  const claudeDetailsBody = sessionId && (
+        <div className="model-picker-details" data-testid="picker-live-details">
+          {detailsPulling ? (
+            <div className="model-picker-details-loading">Pulling live details from the CLI… (can take ~15s — it tokenizes the full tool surface)</div>
+          ) : !details || (!details.contextUsage && !details.usage && !details.binaryVersion) ? (
+            <div className="model-picker-details-loading">Not available — session not live (or CLI too old).</div>
+          ) : (
+            <>
+              {details.contextUsage && (() => {
+                // Headline divides by the MODEL'S MAX — the same denominator the
+                // badge uses, so the two can't contradict each other (they did:
+                // 9% on the pill vs 25% in this panel, 2026-08-23). The CLI's own
+                // percentage is against the auto-compact window, which gets its
+                // own row below instead of silently redefining the headline.
+                const cu = details.contextUsage;
+                const modelMax = details.windows?.modelMax ?? cu.maxTokens;
+                const compactAt = details.windows?.autoCompactAt ?? null;
+                const pct = cu.totalTokens != null && modelMax
+                  ? Math.round(cu.totalTokens / modelMax * 100)
+                  : cu.percentage;
+                const compactPct = cu.totalTokens != null && compactAt
+                  ? Math.round(cu.totalTokens / compactAt * 100)
+                  : null;
+                return (
+                <div className="model-picker-details-block">
+                  <div className="model-picker-details-title">
+                    Context — {fmtTokens(cu.totalTokens)} / {details.windows?.estimate ? '~' : ''}{fmtTokens(modelMax)}
+                    {pct != null ? ` (${pct}%)` : ''}
+                    {details.windows?.estimate ? ' · estimate' : ''}
+                  </div>
+                  {compactAt != null && (
+                    <div className="model-picker-details-row model-picker-details-note">
+                      <span>auto-compacts at</span>
+                      <span>
+                        {fmtTokens(compactAt)}{compactPct != null ? ` — ${compactPct}% used` : ''}
+                        {cu.autocompactSource === 'env' ? ' (CLAUDE_CODE_AUTO_COMPACT_WINDOW)' : ''}
+                      </span>
+                    </div>
+                  )}
+                  {cu.categories
+                    .filter((c) => c.tokens > 0)
+                    .map((c) => (
+                      <div key={c.name} className="model-picker-details-row">
+                        <span>{c.name}</span>
+                        <span>{fmtTokens(c.tokens)}</span>
+                      </div>
+                    ))}
+                </div>
+                );
+              })()}
+              {details.usage?.total_lines_added != null && (
+                <div className="model-picker-details-row">
+                  <span>Lines changed</span>
+                  <span>+{details.usage.total_lines_added}/-{details.usage.total_lines_removed ?? 0}</span>
+                </div>
+              )}
+              {details.binaryVersion?.version && (
+                <div className="model-picker-details-row model-picker-details-version">
+                  <span>CLI version</span>
+                  <span>{details.binaryVersion.version}</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      );
+
+  // ── Fold bar (design v2, thread th-17fc2b89c52c): under the choices, "Cost $X", "Speed N tok/s"
+  // and "Details", each opening only its own part. Everything the picker used to stack above the
+  // choices lives in one of them, each fact once: cost and budget in Cost, the turn's speed rows
+  // and the subscription limits in Speed, the live strip, context, CLI facts and where the launch
+  // values come from in Details.
+  const foldBar = (o: { details: React.ReactNode; detailsWarn: string | null; notRunning: boolean; compare: CompareModel[]; liveApiMs?: number | null; note?: string }) => {
+    const folds: PickerFold[] = [];
+    if (sessionId) {
+      folds.push({
+        id: 'cost', label: 'Cost', value: <><BudgetPausedMark sessionId={sessionId} />{costToggleLabel(costRead)}</>,
+        content: <SessionCostBlock sessionId={sessionId} read={costRead} fold liveApiMs={o.liveApiMs ?? null} compareModels={o.compare} />,
+      });
+      folds.push({
+        id: 'speed', label: 'Speed', value: speedHeadline ?? '—',
+        content: <div className="model-picker-fold-speed">{renderedSpeedReadout}</div>,
+      });
+    }
+    if (o.details) folds.push({ id: 'details', label: 'Details', content: o.details, warn: o.detailsWarn });
+    const status = o.notRunning
+      ? <span title="The session process is not running: these settings apply when it starts again.">○ Not running</span>
+      : o.note ? <span>{o.note}</span> : null;
+    return <PickerFoldBar folds={folds} status={status} />;
+  };
+  const contextWarn = (pct: number | null) => (pct !== null && pct >= CONTEXT_WARN_PCT ? `Context ${pct}% full` : null);
+  const acpContextPct = acpContext?.size ? Math.round(acpContext.used / acpContext.size * 100) : null;
+  const acpDetails = (acpLiveStrip || acpContextBlock || sourceNote)
+    ? <>{acpLiveStrip}{acpContextBlock}{sourceNote}</>
+    : null;
+  const acpFolds = foldBar({
+    details: acpDetails,
+    detailsWarn: contextWarn(acpContextPct),
+    notRunning: !!(sessionId && acpLive && !acpLive.live),
+    compare: acpCompareModels,
+    note: acpCurrentNote ? `${engineUi.displayName} default · ${acpCurrentNote}` : undefined,
+  });
+  const claudeContextPct = (() => {
+    const cu = details?.contextUsage;
+    const modelMax = details?.windows?.modelMax ?? cu?.maxTokens;
+    return cu?.totalTokens != null && modelMax ? Math.round(cu.totalTokens / modelMax * 100) : null;
+  })();
+  const claudeDetails = sessionId
+    ? <>{claudeLiveStrip}{claudeDetailsBody}{sourceNote}</>
+    : (sourceNote ?? null);
+  const claudeFolds = foldBar({
+    details: claudeDetails,
+    detailsWarn: contextWarn(claudeContextPct),
+    notRunning: !!sessionId && !(pulling && !liveSettings) && !applied,
+    compare: claudeCompareModels,
+    liveApiMs: details?.usage?.total_api_duration_ms ?? null,
+  });
+
+  const acpPane = (
+    <>
       <div className="model-picker-columns">
         {onAcpSwitch && acpGrouped && (
           <div className="model-picker-col model-picker-col-groups" role="listbox" aria-label="Provider">
@@ -1041,6 +1196,7 @@ export function ModelPicker({
           </div>
         )}
       </div>
+      {acpFolds}
     </>
   );
 
@@ -1057,156 +1213,18 @@ export function ModelPicker({
       <div className="model-picker-pane">
       {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
       {activeEngineUnavailable && <div className="model-picker-switch-note" role="status" data-testid="model-picker-engine-unavailable">{activeEngineUnavailable}</div>}
-      {sourceNote}
-      {isAcpPane ? acpPane : (<>
-      <div className="model-picker-header">
-        <span className="model-picker-title">Switch Model</span>
-        <span className="model-picker-current">
-          Current: {activeRow
-            ? catalogRowLabel(activeRow)
-            : (autoRow && !liveModel
-              ? (autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto')
-              : shortModelLabel(liveModel))}
-        </span>
-        {sessionId && (
-          <button
-            className={`model-picker-refresh model-picker-refresh-${refreshState}`}
-            onClick={refreshCatalog}
-            disabled={refreshing}
-            type="button"
-            title={refreshState === 'failed'
-              ? 'Refresh failed — click to retry.'
-              : refreshState === 'success'
-              ? 'Model list refreshed from the CLI'
-              : 'Re-read the model list and live settings from the CLI (use after editing settings.json)'}
-            aria-label={refreshState === 'failed'
-              ? 'Refresh model catalog — last attempt failed'
-              : refreshState === 'success'
-              ? 'Refresh model catalog — refreshed'
-              : 'Refresh model catalog'}
-            aria-busy={refreshing}
-            data-refresh-state={refreshState}
-            data-testid="picker-refresh"
-          >
-            {refreshState === 'success' ? '✓' : refreshState === 'failed' ? '!' : '⟳'}
-          </button>
-        )}
-        <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
-      </div>
-
-      {/* Live-truth strip: what the CLI process is ACTUALLY running right now,
-          pulled via get_settings on open. Mismatch (requested ≠ applied) is the
-          case this exists for — env override / silent downgrade / ignored value. */}
-      {sessionId && (
-        <div className={`model-picker-live${modelMismatch || effortMismatch ? ' model-picker-live-warn' : ''}`} data-testid="picker-live-strip">
-          {pulling && !liveSettings ? (
-            <span className="model-picker-live-checking">Checking live session…</span>
-          ) : applied ? (
-            <>
-              <span className="model-picker-live-dot" aria-hidden>●</span>
-              <span>
-                Live: <strong>{shortModelLabel(applied.model)}</strong>
-                {' · '}effort <strong>{appliedEffort ?? `default (${configuredEffort})`}</strong>
-                {applied.mode ? <>{' · '}mode <strong>{applied.mode}</strong></> : null}
-              </span>
-              {(modelMismatch || effortMismatch) && (
-                <span className="model-picker-live-mismatch" title="The CLI is using different settings than requested (env override or unsupported value silently downgraded/ignored).">
-                  {' '}⚠ requested{modelMismatch ? ` ${requestedRow ? catalogRowLabel(requestedRow) : shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` · effort ${requestedEffort}` : ''} not applied
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="model-picker-live-offline" title="Session process not reachable — showing last known settings; they apply on the next (re)start.">
-              ○ Not live — showing saved settings (apply on next start)
-            </span>
-          )}
-          <button
-            type="button"
-            className="model-picker-details-toggle"
-            data-testid="picker-details-toggle"
-            onClick={toggleDetails}
-            title="Pull the CLI's own context breakdown and version (get_context_usage / get_usage)"
-          >
-            {detailsOpen ? '▾ details' : '▸ details'}
-          </button>
+      {/* In place (not a popout), one × closes the picker; a popout closes on Escape or an outside click. */}
+      {!popped && (
+        <div className="model-picker-header model-picker-header-bare">
+          <button className="model-picker-close" onClick={onClose} type="button" aria-label="Close">&times;</button>
         </div>
       )}
-
-      {/* How fast the last (or running) turn went on this session's model:
-          Walnut's own measurement over the CLI stream, see SessionSpeedReadout. */}
-      {sessionId && renderedSpeedReadout}
-
-      {/* What the session cost, priced per request (SessionCostBlock). */}
-      {sessionId && <SessionCostBlock sessionId={sessionId} liveApiMs={details?.usage?.total_api_duration_ms ?? null} compareModels={claudeCompareModels} />}
-
-      {/* Live details — collapsed by default. Everything here is the CLI's OWN
-          accounting pulled on expand: context breakdown (same source as the
-          /context command, incl. the effective window after env clamps), cost per
-          model (includes subagent calls Walnut never sees), and binary version. */}
-      {sessionId && detailsOpen && (
-        <div className="model-picker-details" data-testid="picker-live-details">
-          {detailsPulling ? (
-            <div className="model-picker-details-loading">Pulling live details from the CLI… (can take ~15s — it tokenizes the full tool surface)</div>
-          ) : !details || (!details.contextUsage && !details.usage && !details.binaryVersion) ? (
-            <div className="model-picker-details-loading">Not available — session not live (or CLI too old).</div>
-          ) : (
-            <>
-              {details.contextUsage && (() => {
-                // Headline divides by the MODEL'S MAX — the same denominator the
-                // badge uses, so the two can't contradict each other (they did:
-                // 9% on the pill vs 25% in this panel, 2026-08-23). The CLI's own
-                // percentage is against the auto-compact window, which gets its
-                // own row below instead of silently redefining the headline.
-                const cu = details.contextUsage;
-                const modelMax = details.windows?.modelMax ?? cu.maxTokens;
-                const compactAt = details.windows?.autoCompactAt ?? null;
-                const pct = cu.totalTokens != null && modelMax
-                  ? Math.round(cu.totalTokens / modelMax * 100)
-                  : cu.percentage;
-                const compactPct = cu.totalTokens != null && compactAt
-                  ? Math.round(cu.totalTokens / compactAt * 100)
-                  : null;
-                return (
-                <div className="model-picker-details-block">
-                  <div className="model-picker-details-title">
-                    Context — {fmtTokens(cu.totalTokens)} / {details.windows?.estimate ? '~' : ''}{fmtTokens(modelMax)}
-                    {pct != null ? ` (${pct}%)` : ''}
-                    {details.windows?.estimate ? ' · estimate' : ''}
-                  </div>
-                  {compactAt != null && (
-                    <div className="model-picker-details-row model-picker-details-note">
-                      <span>auto-compacts at</span>
-                      <span>
-                        {fmtTokens(compactAt)}{compactPct != null ? ` — ${compactPct}% used` : ''}
-                        {cu.autocompactSource === 'env' ? ' (CLAUDE_CODE_AUTO_COMPACT_WINDOW)' : ''}
-                      </span>
-                    </div>
-                  )}
-                  {cu.categories
-                    .filter((c) => c.tokens > 0)
-                    .map((c) => (
-                      <div key={c.name} className="model-picker-details-row">
-                        <span>{c.name}</span>
-                        <span>{fmtTokens(c.tokens)}</span>
-                      </div>
-                    ))}
-                </div>
-                );
-              })()}
-              {details.usage?.total_lines_added != null && (
-                <div className="model-picker-details-row">
-                  <span>Lines changed</span>
-                  <span>+{details.usage.total_lines_added}/-{details.usage.total_lines_removed ?? 0}</span>
-                </div>
-              )}
-              {details.binaryVersion?.version && (
-                <div className="model-picker-details-row model-picker-details-version">
-                  <span>CLI version</span>
-                  <span>{details.binaryVersion.version}</span>
-                </div>
-              )}
-            </>
-          )}
+      {isAcpPane ? acpPane : (<>
+      {/* Only when the CLI is not running what was asked: one line above the choices. */}
+      {applied && (modelMismatch || effortMismatch) && (
+        <div className="model-picker-warn" role="status" data-testid="picker-mismatch"
+          title="The CLI is using different settings than requested (env override or unsupported value silently downgraded/ignored).">
+          ⚠ Requested{modelMismatch ? ` ${requestedRow ? catalogRowLabel(requestedRow) : shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` effort ${requestedEffort}` : ''} not applied: running {shortModelLabel(applied.model)}{appliedEffort ? ` · ${appliedEffort}` : ''}
         </div>
       )}
 
@@ -1328,6 +1346,7 @@ export function ModelPicker({
           </div>
         )}
       </div>
+      {claudeFolds}
 
       </>)}
       </div>{/* .model-picker-pane */}

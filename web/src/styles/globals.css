@@ -18944,18 +18944,6 @@ a.task-kebab-info:hover {
   margin-bottom: 10px;
 }
 
-.model-picker-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-primary);
-}
-
-.model-picker-current {
-  font-size: 11px;
-  color: var(--fg-muted);
-  margin-left: auto;
-}
-
 .model-picker-close {
   background: none;
   border: none;
@@ -19060,11 +19048,6 @@ a.task-kebab-info:hover {
   background: color-mix(in srgb, var(--warning, #e6a700) 12%, transparent);
 }
 
-.model-picker-live-mismatch {
-  color: var(--warning, #e6a700);
-  font-weight: 600;
-}
-
 .model-picker-live-checking,
 .model-picker-live-offline {
   font-style: italic;
@@ -19077,23 +19060,6 @@ a.task-kebab-info:hover {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.model-picker-details-toggle {
-  margin-left: auto;
-  border: none;
-  background: none;
-  color: var(--fg-muted, rgba(128, 128, 128, 0.9));
-  font-size: 11px;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-.model-picker-details-toggle:hover {
-  background: var(--bg-subtle, rgba(128, 128, 128, 0.12));
-  color: var(--fg, inherit);
 }
 
 .model-picker-details {

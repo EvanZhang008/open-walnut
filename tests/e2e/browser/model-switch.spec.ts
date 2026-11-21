@@ -103,8 +103,8 @@ test.describe('Model Switch UI', () => {
     // Verify /model entry exists with correct description (use control class to disambiguate)
     const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
     await expect(modelItem).toBeVisible({ timeout: 3000 })
-    await expect(modelItem).toContainText('Switch model')
-    await expect(modelItem).toContainText('opus / sonnet / haiku')
+    // The description names no model list: what the picker offers comes from the engine's catalog.
+    await expect(modelItem.locator('.command-palette-desc')).toHaveText('Switch model')
 
     // Verify Control badge on /model entry
     const controlBadge = modelItem.locator('.command-palette-source-control')

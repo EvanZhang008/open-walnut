@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
-import { draftModelPill, draftQuickChipFor, openDraft } from './draft-helpers';
+import { closeModelPicker, draftEngineButton, draftModelPill, draftQuickChipFor, openDraft } from './draft-helpers';
 import { isolateUiPrefs } from './todo-panel-helpers';
 
 // Storage contract from web/src/api/engine-model-cache.ts, not a second cache implementation.
@@ -29,10 +29,10 @@ async function loadHome(page: Page, baseURL: string | undefined) {
 }
 
 async function openCodexPicker(page: Page, panel: Locator) {
-  await draftModelPill(panel).click();
-  await expect(picker(page)).toBeVisible();
-  await picker(page).locator('[data-provider="codex"]').click();
-  await expect(picker(page).locator('[data-provider="codex"]')).toHaveAttribute('aria-selected', 'true');
+  // The shared rail helper waits out the picker's re-placement before the click lands.
+  const codex = await draftEngineButton(page, panel, 'codex');
+  await codex.click();
+  await expect(codex).toHaveAttribute('aria-selected', 'true');
 }
 
 async function expectCatalog(page: Page, names = ['Neutral Balanced', 'Neutral Fast', 'Neutral Careful']) {
@@ -75,8 +75,7 @@ test('Codex catalog opens from New, reopens without a request, and survives a pa
     return entry?.fetchedAt as number | undefined;
   }, CACHE_KEY);
   expect(fetchedAt).toBeDefined();
-  await picker(page).locator('.model-picker-close').click();
-  await expect(picker(page)).toHaveCount(0);
+  await closeModelPicker(page);
 
   // A held server would not matter: these rows must render from the browser cache.
   const openedAt = Date.now();
@@ -136,7 +135,7 @@ test('an engine or cwd switch never borrows rows from the previous Codex target'
     await expect(modelRows(page)).not.toContainText('Neutral Fast');
     await picker(page).locator('[data-provider="codex"]').click();
     await expectCatalog(page);
-    await picker(page).locator('.model-picker-close').click();
+    await closeModelPicker(page);
 
     await draftQuickChipFor(panel, second).click();
     await draftModelPill(panel).click();

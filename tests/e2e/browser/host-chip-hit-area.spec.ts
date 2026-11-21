@@ -18,7 +18,7 @@
  *      PW_WEBKIT=1 bun x playwright test host-chip-hit-area --project=webkit --workers=1
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { closeDraftModelPicker, draftEngineButton, openDraft, openDraftSettings } from './draft-helpers'
+import { closeModelPicker, draftEngineButton, openDraft, openDraftSettings } from './draft-helpers'
 import { Hosts, connected, connecting, failed, resetServerHostFixture } from './host-problems-helpers'
 import { dropFakes } from './route-teardown'
 
@@ -253,5 +253,5 @@ test('the picker picks a folder and a host; tier and engine are in More and the 
 
   await expect(await draftEngineButton(page, panel, 'claude')).toHaveAttribute('aria-selected', 'true')
   await expect(await draftEngineButton(page, panel, 'codex')).toBeVisible()
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
 })

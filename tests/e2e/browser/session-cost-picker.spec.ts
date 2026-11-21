@@ -1,6 +1,7 @@
 /**
- * The model picker's session cost line (SessionCostBlock), opened the way the
- * user opens it: the composer's `/model` control on a real session column.
+ * The model picker's session cost (SessionCostBlock in the picker's Cost fold), opened
+ * the way the user opens it: the composer's `/model` control on a real session column,
+ * then the "Cost $X" toggle under the Model | Effort columns.
  *
  * The first two tests answer GET /api/sessions/:id/cost with a payload shaped
  * like a real long-running session (three models, a tiered one, one model
@@ -11,7 +12,7 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs'
 import { presetPanelView } from './todo-panel-helpers'
-import { REAL_PANEL } from './draft-helpers'
+import { REAL_PANEL, openPickerFold } from './draft-helpers'
 import { openHome } from './home-navigation-helpers'
 
 const SHOTS = '/tmp/walnut-session-cost'
@@ -94,13 +95,17 @@ test('shows the session total, what it leaves out, how long it ran, and each mod
   await page.route(`**/api/sessions/${SESSION_ID}/cost`, (route) => route.fulfill({ json: COST }))
   await page.setViewportSize({ width: 1280, height: 860 })
   const picker = await openPicker(page)
-  const block = picker.getByTestId('session-cost')
+  // Closed, the Cost toggle carries the total alone; "+" says some requests have no price.
+  const toggle = picker.getByTestId('picker-fold-cost')
+  await expect(toggle).toHaveText(/^Cost\s*\$141\+/)
+  await expect(picker.getByTestId('session-cost')).toHaveCount(0)
+  // Open, the fold says the whole sentence and how long it ran, and lists every model at once
+  // (no head of its own to open), the most expensive first.
+  const block = (await openPickerFold(picker, 'cost')).getByTestId('session-cost')
   await expect(block).toHaveAttribute('data-status', 'partial')
   await expect(block.getByTestId('session-cost-total')).toHaveText('$141 + 4 requests without a price')
   await expect(block.getByTestId('session-cost-times')).toHaveText('span 5d 11h · model time 1h 5m')
-
-  // Opening lists every model, the most expensive first.
-  await block.locator('.session-cost-head').click()
+  await expect(block.locator('.session-cost-head')).toHaveCount(0)
   const rows = block.getByTestId('session-cost-model')
   await expect(rows).toHaveCount(3)
   await expect(rows.nth(0).locator('.session-cost-model-name')).toHaveText('▸ GPT-6.1 Sol')
@@ -167,9 +172,11 @@ test('prices the same usage on other models, the picker\'s and popular ones', as
   })
   await page.setViewportSize({ width: 1280, height: 860 })
   const picker = await openPicker(page)
-  const block = picker.getByTestId('session-cost')
+  await expect(picker.getByTestId('picker-fold-cost')).toHaveText(/^Cost\s*\$117/)
+  const block = (await openPickerFold(picker, 'cost')).getByTestId('session-cost')
   await expect(block).toHaveAttribute('data-status', 'priced')
-  await block.locator('.session-cost-head').click()
+  // The toggle already says the whole total ("$117"): the fold does not repeat it.
+  await expect(block.getByTestId('session-cost-total')).toHaveCount(0)
   const compare = block.getByTestId('session-cost-compare')
   // Nothing is asked until the section is opened.
   expect(asked).toEqual([])
@@ -210,16 +217,21 @@ test('an unreadable session says why, with nothing to open', async ({ page }) =>
     totalUsd: null, responses: 0, unpricedResponses: 0, models: [], prices: { source: 'litellm' },
   } }))
   const picker = await openPicker(page)
-  const block = picker.getByTestId('session-cost')
+  await expect(picker.getByTestId('picker-fold-cost')).toHaveText(/^Cost\s*n\/a/)
+  const block = (await openPickerFold(picker, 'cost')).getByTestId('session-cost')
   await expect(block.getByTestId('session-cost-total')).toHaveText('not available')
   await expect(block.getByTestId('session-cost-reason')).toHaveText('Goose keeps only session totals, without the cache detail a price needs.')
-  await expect(block.locator('.session-cost-head')).toBeDisabled()
+  // Nothing priced, nothing listed: no model rows, no usage-records line, no comparison.
+  await expect(block.getByTestId('session-cost-model')).toHaveCount(0)
+  await expect(block.locator('.session-cost-body')).toHaveCount(0)
 })
 
 test('the real route settles on an answer for a session with no transcript', async ({ page }) => {
   const picker = await openPicker(page)
-  const block = picker.getByTestId('session-cost')
+  const toggle = picker.getByTestId('picker-fold-cost')
+  const block = (await openPickerFold(picker, 'cost')).getByTestId('session-cost')
   await expect(block).not.toHaveAttribute('data-status', 'loading', { timeout: 40_000 })
+  await expect(toggle).toHaveText(/^Cost\s*(n\/a|\$0)/)
   await expect(block).toHaveAttribute('data-status', /^(unavailable|empty)$/)
   await expect(block.getByTestId('session-cost-total')).not.toHaveText('calculating…')
 })
@@ -244,7 +256,7 @@ test('the budget sits under the cost: set from the picker, then shown as spent o
   })
   await page.setViewportSize({ width: 1280, height: 860 })
   const picker = await openPicker(page)
-  const row = picker.getByTestId('session-cost-budget')
+  const row = (await openPickerFold(picker, 'cost')).getByTestId('session-cost-budget')
   await expect(row.getByTestId('session-cost-budget-summary')).toHaveText('No budget')
   await row.getByRole('button', { name: 'Set budget' }).click()
   const dialog = page.getByRole('dialog', { name: 'Usage & Budget' })

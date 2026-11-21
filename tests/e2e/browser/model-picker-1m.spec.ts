@@ -413,8 +413,10 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    await expect(picker.locator('.model-picker-current')).toContainText('Current: GPT-5.6 Sol')
-    await expect(picker.locator('[data-testid="picker-live-strip"]')).toContainText('effort default (xhigh)')
+    await expect(picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')).toHaveText('GPT-5.6 Sol')
+    // No effort applied on its own: the Details fold's live strip names the settings' one.
+    await picker.getByTestId('picker-fold-details').click()
+    await expect(picker.getByTestId('picker-fold-body-details').getByTestId('picker-live-strip')).toContainText('effort from settings xhigh')
     const segs = picker.locator('.model-picker-col-effort .model-picker-row')
     await expect(segs).toHaveCount(5)
     for (const seg of await segs.all()) await expect(seg).toBeEnabled()
@@ -429,7 +431,7 @@ test.describe('ModelPicker CLI catalog', () => {
     expect(req.postDataJSON()).toEqual({ effort: 'low' })
   })
 
-  // Not live, the picker shows the SAVED settings (its header says so). A pick
+  // Not live, the picker shows the SAVED settings (its fold bar and Details say so). A pick
   // on a stopped session lives only in the record, and the picker used to read
   // the model from the pill alone, so it checked nothing, or the old model.
   test('a saved out-of-catalog pick is the checked row while the session is not live', async ({ page }) => {
@@ -443,7 +445,9 @@ test.describe('ModelPicker CLI catalog', () => {
 
     input = await openSessionPanel(page)
     picker = await openModelPicker(page, input)
-    await expect(picker.getByText('Not live', { exact: false })).toBeVisible()
+    await expect(picker.getByTestId('picker-fold-status')).toHaveText('○ Not running')
+    await picker.getByTestId('picker-fold-details').click()
+    await expect(picker.getByTestId('picker-live-strip')).toContainText('Not live — showing saved settings')
     const saved = picker.getByTestId('picker-out-of-catalog')
     await expect(saved).toHaveCount(1)
     await expect(saved.locator('.model-picker-row-name')).toHaveText('mythos-1')
@@ -451,15 +455,24 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(picker.locator('.model-picker-col-models .model-picker-row-active')).toHaveCount(1)
   })
 
-  test('header Current label uses the active row displayName', async ({ page }) => {
+  // The popout has no header: no title, no "Current: …" line and no × (Escape or an outside
+  // click closes it). The live model is named once, by its ticked row; the live strip in
+  // Details says only what the rows do not.
+  test('the live model is named once, by its ticked row', async ({ page }) => {
     await interceptCatalog(page, CLI_CATALOG)
     await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
 
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const currentLabel = picker.locator('.model-picker-current')
-    await expect(currentLabel).toContainText('Current: Fable')
+    await expect(picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')).toHaveText('Fable 5')
+    await expect(picker.locator('.model-picker-header, .model-picker-title, .model-picker-current, .model-picker-close')).toHaveCount(0)
+    await expect(picker).not.toContainText('Current:')
+    await expect(picker.getByTestId('picker-folds')).toBeVisible()
+    await picker.getByTestId('picker-fold-details').click()
+    const strip = picker.getByTestId('picker-live-strip')
+    await expect(strip).toContainText('Live')
+    await expect(strip).not.toContainText('Fable')
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-header-current.png') })
   })

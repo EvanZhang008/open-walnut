@@ -6,7 +6,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video'
 import { dragAcrossWords, press as click } from './real-press'
-import { DRAFT_PANEL, serverHome, shownHomePath } from './draft-helpers'
+import { DRAFT_PANEL, closeModelPicker, serverHome, shownHomePath } from './draft-helpers'
 import { PHONE_QUERY } from './board-view-helpers'
 
 export const AGENT_TEXT_BASE = process.env.AGENT_TEXT_URL ?? 'http://localhost:3457'
@@ -68,8 +68,7 @@ export async function openDraftOnCwd(page: Page, cwd: string, opts: { engine?: '
     await expect(button, `${engineId} is locked on this draft`).not.toHaveClass(/provider-rail-item-locked/)
     if ((await button.getAttribute('aria-selected')) !== 'true') await click(page, button)
     await expect(button).toHaveAttribute('aria-selected', 'true')
-    await click(page, models.locator('.model-picker-close'))
-    await expect(models).toHaveCount(0)
+    await closeModelPicker(page)
   }
   return panel
 }

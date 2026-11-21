@@ -143,7 +143,6 @@ const PASSING: Record<string, string> = {
   'components/sessions/DraftSessionPanel.tsx#fallbackView': 'the provider tab of the model picker, a popover, while the launch is on the fallback',
   'components/sessions/EngineSettingsPopover.tsx#aboutOpen': 'an about note inside a popover',
   'components/sessions/EngineSettingsPopoverBody.tsx#expanded': 'a row unfolded inside a popover',
-  'components/sessions/ModelPicker.tsx#detailsOpen': 'details inside the model picker, a popover',
   'components/sessions/QuotePinSelectionBar.tsx#commentOpen': 'one comment being written',
   'components/sessions/QuotePinSelectionBar.tsx#askPick': 'the Ask here choice for one selection, gone with the pill',
   'components/sessions/SessionChatHistory.tsx#cardOpen': 'one card unfolded',

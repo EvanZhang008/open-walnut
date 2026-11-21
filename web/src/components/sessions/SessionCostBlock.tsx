@@ -8,7 +8,7 @@ import React from 'react';
 import { fetchSessionCost, fetchSessionCostComparison, type SessionCost, type SessionCostComparison, type SessionCostModel } from '@/api/session-cost';
 import { log } from '@/utils/log';
 import {
-  cacheWriteTokens, costHeadline, costLineLabel, costModelLabel, costTimes, engineName, fmtCost, fmtPriceSource, fmtRate,
+  cacheWriteTokens, costHeadline, costToggleValue, costLineLabel, costModelLabel, costTimes, engineName, fmtCost, fmtPriceSource, fmtRate,
   fmtRates, fmtTokenCount, fmtUsd, tierLabel, visibleLines, comparisonLabel, comparisonRates, fmtRatio,
 } from './session-cost-format';
 import { useOpenSessionUsage, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
@@ -28,9 +28,21 @@ interface Props {
   compareModels?: CompareModel[];
   /** The budget row (off where the budget itself is on show, as in Usage & Budget). */
   budgetRow?: boolean;
+  /** The cost read the caller already holds (useSessionCost), so the block reads nothing itself. */
+  read?: { cost: SessionCost | null; error: string | null };
+  /** The picker's Cost fold: always open, no head of its own (the toggle names the total). */
+  fold?: boolean;
 }
 
 /** The session's budget in one line, with the way to set or change it. */
+/** A dot on the picker's Cost toggle while the session's budget has paused it: seen without opening. */
+export function BudgetPausedMark({ sessionId }: { sessionId: string }) {
+  const usage = useSessionBudgetUsage(sessionId, false);
+  const data = usage.data?.sessionId === sessionId ? usage.data : null;
+  if (data?.budget.state !== 'paused') return null;
+  return <span className="model-picker-fold-dot" role="img" aria-label="Budget reached: the session is paused" title="Budget reached: the session is paused" data-testid="cost-budget-paused" />;
+}
+
 function BudgetRow({ sessionId }: { sessionId: string }) {
   const usage = useSessionBudgetUsage(sessionId, false);
   const open = useOpenSessionUsage();
@@ -222,11 +234,13 @@ function ModelRow({ m }: { m: SessionCostModel }) {
 const lastCost = new Map<string, SessionCost>();
 const LAST_COST_MAX = 100;
 
-export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRow = true }: Props) {
-  const [cost, setCost] = React.useState<SessionCost | null>(() => lastCost.get(sessionId) ?? null);
+/** The session's cost as the engine's usage records price it, read once per open (the picker's
+ *  Cost toggle and its fold share one read). `null` reads nothing. */
+export function useSessionCost(sessionId: string | null): { cost: SessionCost | null; error: string | null } {
+  const [cost, setCost] = React.useState<SessionCost | null>(() => (sessionId ? lastCost.get(sessionId) ?? null : null));
   const [error, setError] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState(false);
   React.useEffect(() => {
+    if (!sessionId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // A closed picker gives its slot back at once: the low-priority lane holds two requests.
@@ -253,11 +267,45 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
     load(0);
     return () => { cancelled = true; clearTimeout(timer); abort.abort(); };
   }, [sessionId]);
+  return { cost, error };
+}
 
+/** The Cost toggle's number: "$102", "$141+", "n/a", "…" while it is read. */
+export function costToggleLabel({ cost, error }: { cost: SessionCost | null; error: string | null }): string {
+  return cost ? costToggleValue(cost) : error ? 'n/a' : '…';
+}
+
+export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRow = true, read, fold = false }: Props) {
+  // A caller that already reads the cost (the picker's Cost toggle) hands it in: one read per open.
+  const own = useSessionCost(read ? null : sessionId);
+  const { cost, error } = read ?? own;
+  const [open, setOpen] = React.useState(false);
   const times = cost ? costTimes(cost, liveApiMs) : '';
   const expandable = !!cost && cost.models.length > 0;
+  // The picker's Cost fold is the opened block (its toggle already says the total); a cost with
+  // nothing priced to break down shows only its reason there, as the old disabled head did.
+  const shown = (fold && expandable) || open;
   return (
-    <div className="model-picker-details session-cost" data-testid="session-cost" data-status={cost?.status ?? (error ? 'error' : 'loading')}>
+    <div className={`model-picker-details session-cost${fold ? ' session-cost-fold' : ''}`} data-testid="session-cost" data-status={cost?.status ?? (error ? 'error' : 'loading')}>
+      {fold ? (
+        <div className="session-cost-fold-head">
+          {/* The whole sentence only where the toggle had to shorten it ("$141+", "n/a"). */}
+          {(!cost || costHeadline(cost) !== costToggleValue(cost)) && (
+            <span className="session-cost-title">
+              <strong data-testid="session-cost-total">{cost ? costHeadline(cost) : error ?? 'calculating…'}</strong>
+              {cost?.status === 'unavailable' && cost.reason && (
+                <span className="session-cost-muted session-cost-reason" data-testid="session-cost-reason">{cost.reason}</span>
+              )}
+            </span>
+          )}
+          {times && (
+            <span className="session-cost-times" data-testid="session-cost-times"
+              title="Span: first to last request. Model time: the time the model spent answering, subagents included.">
+              {times}
+            </span>
+          )}
+        </div>
+      ) : (
       <button
         type="button"
         className="session-cost-head"
@@ -284,8 +332,9 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
           </span>
         )}
       </button>
+      )}
       {budgetRow && <BudgetRow sessionId={sessionId} />}
-      {open && cost && (
+      {shown && cost && (
         <div className="session-cost-body">
           {cost.models.map((m) => <ModelRow key={`${m.model}:${m.speed}`} m={m} />)}
           <div className="session-cost-foot session-cost-muted">

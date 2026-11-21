@@ -73,7 +73,9 @@ function usageBreakdown(speed: SessionTurnSpeed): string {
   return parts.join(' ');
 }
 
-export function SessionSpeedReadout({ sessionId, session, placement = 'picker', modelLabel }: SessionSpeedReadoutProps) {
+/** The session's turn speed as the readout shows it (live frames tick, a dead live frame freezes
+ *  as stopped); null before a turn was measured. Shared by the readout and the picker's Speed toggle. */
+function useTurnReadout(sessionId: string, session: SessionSpeedReadoutProps['session']): { speed: SessionTurnSpeed; clock: number } | null {
   const resolved = useTurnSpeed(sessionId, session?.lastTurnSpeed);
   const liveFrame = !!resolved && !resolved.final;
   const receivedAt = turnSpeedStore.receivedAt(sessionId);
@@ -86,7 +88,30 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
   const now = useTicker((liveFrame && !stale) || laneRunning);
   if (!resolved) return null;
   const speed: SessionTurnSpeed = stale ? { ...resolved, final: true, interrupted: true, endedAt: receivedAt } : resolved;
-  const clock = now || Date.now();
+  return { speed, clock: now || Date.now() };
+}
+
+/**
+ * The picker's Speed toggle: tokens per second, nothing else (the user, 2026-11-21: "spped is
+ * token /s nto just time"). "…" while the turn has produced too little to divide; "—" for a
+ * finished turn with no real token count. A dash when no turn was measured.
+ */
+export function SessionSpeedHeadline({ sessionId, session }: Pick<SessionSpeedReadoutProps, 'sessionId' | 'session'>) {
+  const t = useTurnReadout(sessionId, session);
+  // No measured turn yet: the toggle still says so, never an empty value.
+  if (!t) return <span data-testid="speed-headline-none" title="No turn measured yet">—</span>;
+  const r = computeReadout(t.speed, t.clock);
+  const text = r.tps ?? (r.live ? '…' : '—');
+  const why = r.tps
+    ? (t.speed.tokenScope === 'last-call' ? 'Output tokens per second of the last model call (the engine reports that call only)' : 'Output tokens per second of the last turn')
+    : (r.live ? 'Measuring: not enough output yet to divide' : 'This turn has no token count to divide');
+  return <span data-testid="speed-headline" title={why}>{text}</span>;
+}
+
+export function SessionSpeedReadout({ sessionId, session, placement = 'picker', modelLabel }: SessionSpeedReadoutProps) {
+  const t = useTurnReadout(sessionId, session);
+  if (!t) return null;
+  const { speed, clock } = t;
   const r = computeReadout(speed, clock);
   const lanes = computeLaneRows(speed.lanes, clock);
   // An ACP engine's ids are named by its catalog (modelLabel), which the record's

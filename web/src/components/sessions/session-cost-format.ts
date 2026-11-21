@@ -109,6 +109,17 @@ export function costHeadline(cost: SessionCost): string {
   return cost.unpricedResponses > 0 ? `${base} + ${missing}` : base;
 }
 
+/** The picker's Cost toggle: the total and nothing else ("$141+" when some requests have no
+ *  price; the fold under it says the whole sentence). */
+export function costToggleValue(cost: SessionCost): string {
+  if (cost.status === 'unavailable') return 'n/a';
+  if (cost.status === 'pending') return 'reading…';
+  if (cost.status === 'empty') return '$0';
+  if (cost.totalUsd === null) return '?';
+  const base = fmtUsd(cost.totalUsd);
+  return cost.unpricedResponses > 0 ? `${base}+` : base;
+}
+
 /** "span 5d 11h · model time 1h 6m": first to last request, and the time the model spent answering. */
 export function costTimes(cost: SessionCost, liveApiMs?: number | null): string {
   const parts: string[] = [];

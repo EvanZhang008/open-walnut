@@ -7,10 +7,17 @@
  * all three. Real UI only; page.goto only loads the app.
  */
 import fs from 'node:fs'
-import { test, expect, type Page } from '@playwright/test'
-import { discoverFixtureRoot, draftPanel, loadHome, openDraftOnCwd } from './draft-helpers'
+import { test, expect, type Locator, type Page } from '@playwright/test'
+import { discoverFixtureRoot, draftPanel, loadHome, openDraftOnCwd, openPickerFold } from './draft-helpers'
 import { isolateUiPrefs, openProjectDetails, presetPanelView } from './todo-panel-helpers'
 import { pickMode } from './permission-mode-helpers'
+
+/** Open the model picker from `pill` and its Details fold, where "Where these come from" is. */
+async function openSourceNote(page: Page, pill: Locator): Promise<Locator> {
+  await pill.click()
+  await openPickerFold(page.locator('.model-picker'), 'details')
+  return page.getByTestId('launch-source-note')
+}
 
 const SHOTS = process.env.PLD_SHOT_DIR ?? '/tmp/project-launch-defaults/shots'
 
@@ -106,8 +113,7 @@ test("a new task's draft in the project shows its defaults and where they come f
   await expect(modePill).toHaveAttribute('title', new RegExp(`default of project ${PROJECT}`))
   const modelPill = panel.locator('.draft-model-select')
   await expect(modelPill).toHaveAttribute('data-model', 'sonnet')
-  await modelPill.click()
-  const note = page.getByTestId('launch-source-note')
+  const note = await openSourceNote(page, modelPill)
   await expect(note).toBeVisible()
   await expect(note.getByTestId('launch-source-project')).toHaveText(`Project defaults of ${PROJECT}`)
   await expect(note.locator('.launch-source-row .launch-source-tag')).toHaveText(['Project', 'Project', 'Project'])
@@ -140,8 +146,7 @@ test("a new task's draft in the project shows its defaults and where they come f
   // The running session's model picker says the same, from the task's record of its start.
   const live = page.locator('.main-page-session-column .session-panel:not(.pending-session-panel):not(.draft-session-panel)').first()
   await expect(live).toBeVisible({ timeout: 20_000 })
-  await live.locator('.composer-model-pill').first().click()
-  const liveNote = page.getByTestId('launch-source-note')
+  const liveNote = await openSourceNote(page, live.locator('.composer-model-pill').first())
   await expect(liveNote).toBeVisible()
   await expect(liveNote.locator('.launch-source-row[data-key="mode"] .launch-source-tag')).toHaveText('Project')
   await expect(liveNote.getByTestId('launch-source-project')).toHaveText(`Project defaults of ${PROJECT}`)
@@ -150,7 +155,7 @@ test("a new task's draft in the project shows its defaults and where they come f
   // A switch in the session is the task's own model from then on, at once (no reload).
   await page.locator('.model-picker').getByText('Haiku', { exact: true }).first().click()
   await page.keyboard.press('Escape')
-  await live.locator('.composer-model-pill').first().click()
+  await openSourceNote(page, live.locator('.composer-model-pill').first())
   await expect(liveNote.locator('.launch-source-row[data-key="model"] .launch-source-value')).toHaveText('Haiku')
   await expect(liveNote.locator('.launch-source-row[data-key="model"] .launch-source-tag')).toHaveText('Task')
   await expect(liveNote.locator('.launch-source-row[data-key="mode"] .launch-source-tag')).toHaveText('Project')
@@ -174,8 +179,7 @@ test("the task's own pick wins over the project's, and the draft says so", async
   await expect(modePill).toHaveAttribute('data-source', 'task')
 
   // The picker's note offers the way back to the project's values, and it works.
-  await panel.locator('.draft-model-select').click()
-  const note = page.getByTestId('launch-source-note')
+  const note = await openSourceNote(page, panel.locator('.draft-model-select'))
   await expect(note.locator('.launch-source-row[data-key="mode"] .launch-source-tag')).toHaveText('Task')
   await note.getByTestId('launch-source-reset').click()
   await expect(note.locator('.launch-source-row[data-key="mode"] .launch-source-tag')).toHaveText('Project')
@@ -225,7 +229,7 @@ test("a Codex project's session names the project's mode until one is picked in 
   const modeRow = page.getByTestId('launch-source-note').locator('.launch-source-row[data-key="mode"]')
   // The start writes the adapter preset it ran on to the record: that is no pick.
   await expect.poll(async () => {
-    await live.locator('.composer-model-pill').first().click()
+    await openSourceNote(page, live.locator('.composer-model-pill').first())
     const text = await modeRow.innerText().catch(() => '')
     await page.keyboard.press('Escape')
     return text.replace(/\s+/g, ' ')
@@ -236,12 +240,12 @@ test("a Codex project's session names the project's mode until one is picked in 
   expect(controls.controls.find((c) => c.id === 'collaboration_mode')?.currentValue).toBe('plan')
 
   // A model picked in the session is the task's own at once; the engine's default was no one's.
-  await live.locator('.composer-model-pill').first().click()
+  await openSourceNote(page, live.locator('.composer-model-pill').first())
   const modelRow = page.getByTestId('launch-source-note').locator('.launch-source-row[data-key="model"]')
   await expect(modelRow.locator('.launch-source-tag')).toHaveText('Default')
   await page.locator('.model-picker').getByText('Mock GPT Fast', { exact: true }).first().click()
   await page.keyboard.press('Escape')
-  await live.locator('.composer-model-pill').first().click()
+  await openSourceNote(page, live.locator('.composer-model-pill').first())
   await expect(modelRow.locator('.launch-source-value')).toHaveText('Mock GPT Fast')
   await expect(modelRow.locator('.launch-source-tag')).toHaveText('Task')
   await expect(modeRow.locator('.launch-source-tag')).toHaveText('Project')
@@ -253,14 +257,14 @@ test("a Codex project's session names the project's mode until one is picked in 
   expect((await page.request.post(`/api/sessions/${sessionId}/controls`, { data: { id: 'mode', value: other } })).ok()).toBe(true)
   await page.reload()
   await expect(live).toBeVisible({ timeout: 20_000 })
-  await live.locator('.composer-model-pill').first().click()
+  await openSourceNote(page, live.locator('.composer-model-pill').first())
   await expect(modeRow.locator('.launch-source-tag')).toHaveText('Task')
   await page.keyboard.press('Escape')
   // Picked back to the start's preset: the project's again.
   expect((await page.request.post(`/api/sessions/${sessionId}/controls`, { data: { id: 'mode', value: mode.currentValue } })).ok()).toBe(true)
   await page.reload()
   await expect(live).toBeVisible({ timeout: 20_000 })
-  await live.locator('.composer-model-pill').first().click()
+  await openSourceNote(page, live.locator('.composer-model-pill').first())
   await expect(modeRow.locator('.launch-source-tag')).toHaveText('Project')
   await page.keyboard.press('Escape')
 })

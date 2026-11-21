@@ -329,7 +329,8 @@ test("a new task's draft says where it starts while the default engine is out of
   await panel.locator('.draft-model-select').click()
   const picker = page.locator('.model-picker')
   await expect(picker.getByTestId('acp-default-row')).toHaveAttribute('aria-selected', 'true', { timeout: 15_000 })
-  await expect(picker.locator('.model-picker-current')).toHaveText(/ · fallback$/)
+  // The fold bar's status says the ticked default row is the fallback's.
+  await expect(picker.getByTestId('picker-fold-status')).toHaveText(/ default · fallback$/)
   // The draft's own tab is only a look: the launch stays on Auto, its row says the fallback.
   await expect(picker.locator('.provider-rail-item[data-provider="codex"]')).toHaveAttribute('aria-selected', 'true')
   await picker.locator('.provider-rail-item[data-provider="claude"]').click()
@@ -402,7 +403,6 @@ test("a folder's remembered model: the picker says what runs, and a remembered e
   const picker = page.locator('.model-picker')
   await expect(picker.locator('.provider-rail-item[data-provider="codex"]')).toHaveAttribute('aria-selected', 'true', { timeout: 15_000 })
   await picker.locator('.provider-rail-item[data-provider="claude"]').click()
-  await expect(picker.locator('.model-picker-current')).toHaveText(/^Current: Auto \(Codex, fallback\)$/)
   await expect(picker.locator('.model-picker-row[aria-selected="true"]')).toHaveText([/Auto \(Codex, fallback\)/])
   await page.keyboard.press('Escape')
   await expect(pill).toHaveText('Codex (fallback)')

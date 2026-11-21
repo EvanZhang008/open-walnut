@@ -24,7 +24,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import {
-  REAL_PANEL, basenameOf, closeDraftModelPicker, draftCwdPill, draftEngineButton, draftModelPill, openDraft,
+  REAL_PANEL, basenameOf, closeModelPicker, draftCwdPill, draftEngineButton, draftModelPill, openDraft,
   serverHome, shownHomePath,
 } from './draft-helpers'
 
@@ -118,7 +118,7 @@ async function openDraftWithEngine(page: Page, cwd: string, id: string): Promise
     if (await page.locator('.model-picker').count() === 0) await draftModelPill(panel).click()
     await expect(page.locator('.model-picker').getByTestId('acp-default-row')).toHaveAttribute('aria-selected', 'true')
   }
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
   return panel
 }
 
@@ -425,7 +425,7 @@ test('a newly typed path never confirms a stale listing parent or remembered eng
     // The engine picked before the move is still the launch's, not the new
     // folder's remembered one (a model pill pick owns the engine).
     await expect(await draftEngineButton(page, draft, 'pi')).toHaveAttribute('aria-selected', 'true')
-    await closeDraftModelPicker(page)
+    await closeModelPicker(page)
     await draftCwdPill(draft).click()
     await expect(input).toHaveValue(nextShown)
   } finally {
@@ -520,6 +520,6 @@ test('an engine the server cannot run renders disabled with its reason', async (
   const gemini = await draftEngineButton(page, panel, 'gemini')
   await expect(gemini).not.toHaveClass(/provider-rail-item-locked/)
   await expect(gemini).not.toHaveAttribute('aria-disabled', 'true')
-  await closeDraftModelPicker(page)
+  await closeModelPicker(page)
   await audit.assertClean()
 })
