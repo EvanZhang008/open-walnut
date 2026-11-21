@@ -12,11 +12,14 @@
 }
 /* A thread card in the one ask card (PoppedThreadCard, a thread of a task below) shows what it asks
    and its whole summary, never two lines and a cut (2026-11-20, the user: "the threa over here
-   shoud show all , not just 2 line only the one show on top"). A very long summary stops at about
-   fifteen lines and scrolls inside its own block. Guard: tests/e2e/browser/thread-card-whole-summary.spec.ts. */
+   shoud show all , not just 2 line only the one show on top"). However long, as the node's own
+   summary beside it: a block capped at fifteen lines that scrolled inside itself read as cut off
+   mid-list with no sign of more (2026-11-21, a review on his data). Only the top of a chat bounds
+   it, and there it fades at its cut with Show all (top-thread.css, TopThread useClippedWords).
+   Guard: tests/e2e/browser/thread-card-whole-summary.spec.ts. */
 .org-thread .ask-card { gap: 3px; }
 .org-thread :is(.ask-card-question, .ask-card-detail) { display: block; -webkit-line-clamp: unset; line-clamp: none; }
-.org-thread .ask-card-detail { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; line-height: 1.4; }
+.org-thread .ask-card-detail { line-height: 1.4; }
 .org-thread .ask-card-detail :is(p, ul, ol) { margin-top: 0; margin-bottom: 2px; }
 .org-thread .ask-card-detail > :last-child { margin-bottom: 0; }
 .org-thread.is-closed { background: var(--bg-secondary); }
@@ -170,8 +173,10 @@
 .org-thread-known-ends { font-size: 11px; color: var(--fg-muted, #86868b); }
 .org-thread-back { color: var(--accent, #0a84ff); }
 
-/* A card of a task below reads its group (thread-badge.ts): the orange needs dot only in Needs you. */
-.org-thread.is-popped:not([data-group="needs"]) .ask-card-question::before { background: var(--fg-muted, #86868b); }
+/* A card of a task below says its group on its title line (ThreadState, thread-badge.ts), the
+   group's dot and word as the node's own cards: its question has no dot of its own. */
+.org-thread.is-popped .ask-card-question::before { content: none; }
+.org-thread.is-popped :is(.ask-card-question, .ask-card-detail) { padding-left: 0; }
 
 /* The line a card leaves where it stood when it moves to another group (thread-moves.ts): where it
    went and Show, fading out over its last second. */

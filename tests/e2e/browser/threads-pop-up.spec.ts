@@ -293,6 +293,7 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
     const group = (g: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"]`)
     const inGroup = (g: string) => group(g).locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
     await expect(inGroup('needs')).toBeVisible({ timeout: 20_000 })
+    await expect(inGroup('needs').getByTestId('org-thread-state')).toHaveText('Needs you')
     // On his data a read of the lead's Threads takes seconds (2026-11-20, on a copy of it: 2 to 4 s,
     // and a read started before his reply could draw the card back): the reads are held 6 s from
     // here, so only the card's own answer can move it.
@@ -310,12 +311,18 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
     await expect(working).toBeVisible()
     if ((await working.getAttribute('data-open')) !== 'true') await working.getByTestId('org-thread-group-head').click()
     const card = inGroup('working')
-    // It reads its group now: no needs dot, a box that follows the task up, and a line in Needs you saying where it went.
+    // It reads its group now: Working's green dot and its word, as the node's own cards (ThreadState,
+    // 2026-11-21: it sat there with a grey dot and no word), a box that follows the task up, and a
+    // line in Needs you saying where it went.
     await expect(card).toHaveAttribute('data-group', 'working')
     await expect(card.getByTestId('org-thread-popped-input')).toHaveAttribute('placeholder', `Follow up with Task status foundation ${STAMP}`)
-    const dot = await card.locator('.ask-card-question').evaluate((el) => getComputedStyle(el, '::before').backgroundColor)
-    const needsDot = await page.evaluate(() => { const b = document.createElement('b'); b.style.color = 'var(--warning, #ff9500)'; document.body.append(b); const c = getComputedStyle(b).color; b.remove(); return c })
-    expect(dot).not.toBe(needsDot)
+    const state = card.getByTestId('org-thread-state')
+    await expect(state).toHaveText('Working')
+    const dot = await state.locator('i').evaluate((el) => getComputedStyle(el).backgroundColor)
+    const workingDot = await page.evaluate(() => { const b = document.createElement('b'); b.style.color = 'var(--success, #34C759)'; document.body.append(b); const c = getComputedStyle(b).color; b.remove(); return c })
+    expect(dot).toBe(workingDot)
+    // Its question keeps no dot of its own beside the state's.
+    expect(await card.locator('.ask-card-question').evaluate((el) => getComputedStyle(el, '::before').content)).toBe('none')
     await expect(group('needs').locator(`[data-testid="org-thread-move-note"][data-moved-id="${id}"]`)).toContainText('Moved to Working')
     await expect(card.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
     await expect(card.getByTestId('org-thread-unread-by-task')).toHaveText(`Sent: Task status foundation ${STAMP} has not read it yet.`)
@@ -410,12 +417,14 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   const WORDS = `Put each code in the tab it belongs to ${STAMP}`
-  const why = { user_kind: 'user_own', user_kind_why: 'It is his own settings page.' }
+  const why = { user_kind: 'user_own', user_kind_why: 'It spends his own garden budget.' }
   const open = async (title: string) => (await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
     title: `${title} ${STAMP}`, text: `${title}? ${STAMP}`, state: 'needs', from: 'node', ...why,
   }, ids.ownerSid)).thread.id
-  const first = await open('Where does the Wi-Fi sign-in button go')
-  const second = await open('Which tab holds the companion QR code')
+  // Decisions in words: a question about where a button goes, with no picture, is refused by the
+  // server's clarity gate (core/org/ask-clarity.ts), so the invented ones ask nothing about a screen.
+  const first = await open('Which supplier gets the seed order')
+  const second = await open('Should the shed paint wait until spring')
   await flag(request, true)
   const was = (await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }).config?.experimental ?? {}
   const put = await request.put('/api/config', { data: { experimental: { brief_off: true, top_thread: true } } })

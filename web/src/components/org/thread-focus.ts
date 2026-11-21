@@ -61,11 +61,49 @@ export function topShows(node: string, thread: string): boolean {
 
 /** How long a card a thread line opened stays marked. */
 const FOCUS_MARK_MS = 2_400;
+/** How long a card brought into view is kept at the top while the pane settles. */
+const SETTLE_MS = 1_200;
+/** The space between the sticky head and the card's top. */
+const HEAD_GAP = 8;
+/** What a view keeps at the top of its scroller (the Threads chips, ThreadsFilterBar). */
+const STICKY_HEAD = '[data-sticky-head]';
+/** Him scrolling or acting himself: the card is no longer held in place. */
+const HIS_INPUT = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
+
+/**
+ * Bring a card's top into view just under the view's sticky head (2026-11-21, a review on his data:
+ * Show all scrolled to the middle of a long card, its title under the chips, and once, from a deeply
+ * scrolled Archived, the card ended above the view). A long card's start is what he reads first, so
+ * it aligns at its start, never its centre, and at once: a smooth scroll lands wrong when the chip
+ * change or the cards' words move the layout under it. While the pane settles (SETTLE_MS) every
+ * change of its size aligns it again, until he scrolls or acts himself. Returns the stop.
+ */
+export function scrollCardToTop(root: HTMLElement, id: string): () => void {
+  let card: HTMLElement | null = null;
+  const align = () => {
+    card = root.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    const head = root.querySelector<HTMLElement>(STICKY_HEAD);
+    card.style.scrollMarginTop = `${Math.ceil(head?.getBoundingClientRect().height ?? 0) + HEAD_GAP}px`;
+    card.scrollIntoView?.({ block: 'start', behavior: 'auto' });
+  };
+  let raf = requestAnimationFrame(() => { raf = requestAnimationFrame(align); });
+  const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => align());
+  ro?.observe(root);
+  const stop = () => {
+    cancelAnimationFrame(raf); ro?.disconnect(); window.clearTimeout(settle);
+    if (card) card.style.scrollMarginTop = '';
+    for (const e of HIS_INPUT) window.removeEventListener(e, stop, true);
+  };
+  const settle = window.setTimeout(stop, SETTLE_MS);
+  for (const e of HIS_INPUT) window.addEventListener(e, stop, { capture: true, passive: true });
+  return stop;
+}
 
 /**
  * A view's side of an ask (OrgThreads, TopThread): once its list holds the asked thread, `reveal`
- * makes it show (its section opens, the top steps to it), the card scrolls into view inside `root`,
- * and the id it returns marks it a moment. Each view takes one ask once.
+ * makes it show (its section opens, the top steps to it), the card's top scrolls into view inside
+ * `root` (scrollCardToTop), and the id it returns marks it a moment. Each view takes one ask once.
  */
 export function useFocusedThread<T extends { id: string }>(node: string | undefined, list: readonly T[] | null, root: RefObject<HTMLElement | null>, reveal: (t: T) => void): string | null {
   const askTick = useThreadFocusTick();
@@ -85,11 +123,10 @@ export function useFocusedThread<T extends { id: string }>(node: string | undefi
   }, [askTick, node, list]);
   useEffect(() => {
     if (!focused) return;
-    const raf = requestAnimationFrame(() => {
-      root.current?.querySelector(`[data-thread-id="${CSS.escape(focused.id)}"]`)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
-    });
+    const el = root.current;
+    const stop = el ? scrollCardToTop(el, focused.id) : undefined;
     const done = window.setTimeout(() => setFocused(null), FOCUS_MARK_MS);
-    return () => { cancelAnimationFrame(raf); window.clearTimeout(done); };
+    return () => { stop?.(); window.clearTimeout(done); };
   }, [focused, root]);
   return focused?.id ?? null;
 }

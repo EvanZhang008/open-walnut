@@ -29,7 +29,7 @@
 .top-thread-list > .org-thread > :is(.org-thread-summary, .org-thread-unread, .org-thread-conversation),
 .top-thread-list .org-thread-held-ask > .org-thread-summary { flex: 0 1 auto; min-height: 1.25em; overflow-y: auto; overscroll-behavior: contain; }
 /* A popped thread's whole summary (org-threads.css) scrolls inside itself within part of the room. */
-.top-thread-list .org-thread .ask-card-detail { max-height: max(3em, calc(var(--session-top-room, 300px) * 0.35)); }
+.top-thread-list .org-thread .ask-card-detail { max-height: max(3em, calc(var(--session-top-room, 300px) * 0.35)); overflow-y: auto; overscroll-behavior: contain; }
 .top-thread-list .org-thread-held-ask { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
 /* Too little room for all of it even in a half (SessionActionStrip ROOM_LEVELS, data-room), each
    level folding more away. Snug: the strip (its letters still in Needs you and the inbox), the

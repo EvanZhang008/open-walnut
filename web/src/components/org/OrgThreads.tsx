@@ -70,6 +70,7 @@ import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze, SnoozedUntil } from './OrgThreadSnooze';
 import { threadBadge } from './thread-badge';
+import { ThreadState } from './ThreadState';
 import { PoppedThreadCard } from './PoppedThreadCard';
 import { TopicThreadBadge } from '@/components/topics/TopicThreadBadge';
 import { ThreadsTopicBar } from '@/components/topics/topic-entry';
@@ -349,10 +350,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   return (
     <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${pinned ? ' is-pinned' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-group={badge.group} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-pinned={pinned ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
       <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={onHead}>
-        <span className="org-thread-state" data-testid="org-thread-state">
-          <i className={badge.group === 'known' ? 'is-known' : undefined} style={badge.group === 'known' ? undefined : { background: badge.dot }} />
-          {badge.label}
-        </span>
+        <ThreadState badge={badge} />
         <span className="org-thread-meta">
           {pinned && (<>
             <span className="org-thread-pin" data-testid="org-thread-pinned" title={t.pinned!.by === 'human' ? 'You pinned this thread' : `${name} pinned this thread`}>

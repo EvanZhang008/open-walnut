@@ -10,8 +10,9 @@
  * them, from the message's own delivery. They are read from the thread's record (ThreadSentWords),
  * so a reload or a redraw keeps them. A failed send keeps his words in the box, with the reason.
  *
- * It reads as the group it is drawn in (thread-badge.ts): only in Needs you does it carry the needs
- * dot and an "Answer" box; anywhere else the box follows the task up. Snoozed, it says until when
+ * It reads as the group it is drawn in (thread-badge.ts): its title line starts with the group's dot
+ * and word (ThreadState, as the node's own cards), and only in Needs you is its box an "Answer" box;
+ * anywhere else the box follows the task up. Snoozed, it says until when
  * and offers Unsnooze (OrgThreadSnooze), as the node's own cards do.
  */
 import { useEffect, useRef, useState } from 'react';
@@ -27,6 +28,7 @@ import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze, SnoozedUntil } from './OrgThreadSnooze';
 import { threadBadge } from './thread-badge';
+import { ThreadState } from './ThreadState';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { ThreadSentWords } from './ThreadSentWords';
@@ -43,7 +45,8 @@ export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
   // One key per reply: a retry of the same send is filed once (threads-model.ts fileMessage).
   const key = useRef<{ text: string; key: string } | null>(null);
   const owner = t.owner!;
-  const { group } = threadBadge(t, listed, now);
+  const badge = threadBadge(t, listed, now);
+  const { group } = badge;
   const until = snoozed ? t.snoozed?.until : undefined;
   // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
   const detail = t.heldAsk ? t.heldAsk.reply : t.reply;
@@ -74,7 +77,10 @@ export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
       <AskCardFrame
         testId="org-thread-popped"
         data={{ 'data-can-answer': t.can_answer_now === false ? 'false' : 'true' }}
-        title={<button type="button" className="org-thread-link" data-testid="org-thread-owner" onClick={() => openTask(owner.task_id)}>{owner.title}</button>}
+        title={(<>
+          <ThreadState badge={badge} />{' \u00b7 '}
+          <button type="button" className="org-thread-link" data-testid="org-thread-owner" onClick={() => openTask(owner.task_id)}>{owner.title}</button>
+        </>)}
         question={<AgentText compact inline {...threadSummarySource(t)} text={t.heldAsk?.ask || t.ask?.trim() || t.title} testId="org-thread-popped-ask" />}
         detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} testId="org-thread-popped-summary" /> : undefined}
         status={(<>

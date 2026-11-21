@@ -6,7 +6,9 @@
  *  - under All the same (Archived is not shown under All, so a card that leaves it there leaves none);
  *  - a card new to the list, one deleted, one that stayed, and one that moved between two groups
  *    the filter does not show leave none;
- *  - a read that caught the pane up (opened again, a reconnect) draws no line: he never saw those moves.
+ *  - a read that caught the pane up (opened again, a reconnect) draws no line: he never saw those moves;
+ *  - a line on show always names where its card is now: a card that moves on out of sight renames
+ *    it, one back where it left or gone from the list takes it away.
  * The browser flow is tests/e2e/browser/thread-groups-filter.spec.ts.
  */
 import { describe, expect, it } from 'vitest'
@@ -56,13 +58,36 @@ describe('the line a moved card leaves', () => {
     expect(stepMoves(old, caught, [])).toEqual([])
     // A reconnect read the same (epoch 2), lines already on show stay as they were.
     const line = { id: 'z', title: 'Card z', from: 'needs' as const, to: 'working' as const, index: 0 }
-    const after = { places: placesOf(groups({ needs: [c('a')], waiting: [c('b')] })), filter: 'all' as const, epoch: 2 }
+    const after = { places: placesOf(groups({ needs: [c('a')], waiting: [c('b')], working: [c('z')] })), filter: 'all' as const, epoch: 2 }
     expect(stepMoves(caught, after, [line])).toEqual([line])
     // Within one epoch, a real move draws its line.
-    const moved = { places: placesOf(groups({ working: [c('a')], waiting: [c('b')] })), filter: 'all' as const, epoch: 2 }
+    const moved = { places: placesOf(groups({ working: [c('a'), c('z')], waiting: [c('b')] })), filter: 'all' as const, epoch: 2 }
     expect(stepMoves(after, moved, []).map((m) => [m.id, m.to])).toEqual([['a', 'working']])
     // A chip picked clears them; the first read of a pane draws none.
     expect(stepMoves(after, { ...moved, filter: 'needs' }, [line])).toEqual([])
     expect(stepMoves(null, moved, [])).toEqual([])
+  })
+
+  it('a line on show names where its card is now, not where it went first', () => {
+    // In Done he acknowledges a card with ack_means_known on: drawn in Closed at once (his click),
+    // then the server keeps it open and it sits in Acknowledged, a group Done does not show.
+    const read = { places: placesOf(groups({ read: [c('a'), c('b')] })), filter: 'read' as const, epoch: 0 }
+    const closed = { places: placesOf(groups({ read: [c('b')], done: [c('a')] })), filter: 'read' as const, epoch: 0 }
+    const known = { places: placesOf(groups({ read: [c('b')], known: [c('a')] })), filter: 'read' as const, epoch: 0 }
+    const first = stepMoves(read, closed, [])
+    expect(first.map((m) => [m.id, m.from, m.to])).toEqual([['a', 'read', 'done']])
+    const second = stepMoves(closed, known, first)
+    expect(second.map((m) => [m.id, m.from, m.to, m.index])).toEqual([['a', 'read', 'known', 0]])
+    // Nothing moved: the same lines, so nothing redraws.
+    expect(stepMoves(known, { ...known }, second)).toBe(second)
+    // A new title is read too.
+    const renamed = { ...known, places: placesOf(groups({ read: [c('b')], known: [{ id: 'a', title: 'New name' }] })) }
+    expect(stepMoves(known, renamed, second)[0]?.title).toBe('New name')
+    // So does a read that caught the pane up: it adds no line but keeps each one true.
+    const caught = { places: placesOf(groups({ read: [c('b')], working: [c('a')] })), filter: 'read' as const, epoch: 1 }
+    expect(stepMoves(known, caught, second).map((m) => m.to)).toEqual(['working'])
+    // Back in the group it left, or gone from the list: the line goes.
+    expect(stepMoves(known, read, second)).toEqual([])
+    expect(stepMoves(known, { ...known, places: placesOf(groups({ read: [c('b')] })) }, second)).toEqual([])
   })
 })

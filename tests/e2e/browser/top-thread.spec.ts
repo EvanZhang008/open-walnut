@@ -14,7 +14,10 @@
  *  3. Hide: one line, "5 threads (2 need you) · Show"; still hidden after a reload; Show brings it back.
  *  3b. A card whose words run past the top's room: the cut block fades at its end, and Show all
  *     (or a click on its title) opens it whole in the Threads view beside the chat, scrolled to and
- *     marked, while the top keeps its bound height and never folds into nothing.
+ *     marked, while the top keeps its bound height and never folds into nothing. With the Threads
+ *     in their groups (brief_off), the card's top, its title first, sits just under the sticky
+ *     chips, never its middle, also from another chip scrolled far down (2026-11-21, a review on
+ *     his data: Show all landed mid-card, the title under the chips, once wholly above the view).
  *  4. A task with Threads on and a letter to answer, in a Home column: the letter (not a thread)
  *     still shows in the strip, the thread under it. The switch off: today's strip alone.
  * The fixture is shared: this file makes its own project, tasks and letter, and puts the flags back.
@@ -107,6 +110,23 @@ async function openLead(page: Page): Promise<void> {
 
 const topOf = (scope: Locator | Page) => scope.getByTestId('top-thread')
 const paneCards = (page: Page) => page.getByTestId('org-rail').locator('[data-testid="org-thread-list"][data-show="open"] > [data-testid="org-thread"]')
+
+/** How far a card's top sits under the Threads pane's sticky chips (negative: hidden under them or above). */
+async function gapUnderChips(page: Page, card: Locator): Promise<number> {
+  const chips = (await page.getByTestId('org-rail').getByTestId('org-threads-filter').boundingBox())!
+  const box = (await card.boundingBox())!
+  return Math.round(box.y - (chips.y + chips.height))
+}
+
+async function expectTopUnderChips(page: Page, card: Locator): Promise<void> {
+  await expect.poll(() => gapUnderChips(page, card), { timeout: 5_000 }).toBeGreaterThanOrEqual(0)
+  // Settled there, not drifting on: just under the chips, its head in sight.
+  await page.waitForTimeout(800)
+  const gap = await gapUnderChips(page, card)
+  expect(gap).toBeGreaterThanOrEqual(0)
+  expect(gap).toBeLessThanOrEqual(24)
+  await expect(card.getByTestId('org-thread-head')).toBeInViewport()
+}
 
 async function shot(page: Page, name: string, scope?: Locator): Promise<void> {
   fs.mkdirSync(SHOTS, { recursive: true })
@@ -259,6 +279,9 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   // Well under the summary's cap (THREAD_REPLY_MAX), so the Threads view holds every word of it.
   const long = Array.from({ length: 30 }, (_, i) => `Bed ${i + 1}: soil turned, seedlings up.`).join('\n\n')
   await patch(request, `/api/v1/tasks/${ids.lead}/threads/${thread.id}`, { reply: `${long}\n\nWhich bed gets the beans?`, state: 'needs', ...why }, ids.leadSid)
+  // The Threads in their groups, with Done long enough to scroll far down in.
+  await setFlags(request, { brief_off: true })
+  for (let i = 1; i <= 10; i++) await readThread(request, ids.lead, `Shed shelf ${i} ${STAMP}`)
   await isolateUiPrefs(page)
   await loadHome(page)
   await openLead(page)
@@ -278,12 +301,27 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   const inRail = rail.locator(`[data-testid="org-thread"][data-thread-id="${thread.id}"]`)
   await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
   await expect(inRail).toBeInViewport()
+  // Its top just under the sticky chips: the card is taller than the pane, so a centred one hid its title.
+  expect((await inRail.boundingBox())!.height).toBeGreaterThan((await rail.boundingBox())!.height)
+  await expectTopUnderChips(page, inRail)
   await expect(inRail.getByTestId('org-thread-reply')).toContainText('Bed 30')
   await shot(page, '9-show-all', detail)
-  // A click on its title does the same, and the top neither folds nor grows.
+  // From another chip scrolled far down: a click on its title picks All and brings its top under the
+  // chips the same; the top neither folds nor grows.
   await expect(inRail).not.toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
+  await rail.locator('[data-testid="org-threads-chip"][data-group="read"]').click()
+  await expect(rail.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', 'read')
+  await rail.getByTestId('org-thread').last().evaluate((el) => {
+    let s: HTMLElement | null = el.parentElement
+    while (s && !(s.scrollHeight > s.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(s).overflowY))) s = s.parentElement
+    if (!s) throw new Error('the Threads pane does not scroll')
+    s.scrollTop = s.scrollHeight
+  })
   await top.getByTestId('org-thread-head').click()
+  await expect(rail.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', 'all')
   await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
+  await expectTopUnderChips(page, inRail)
+  await shot(page, '9b-show-all-from-done', detail)
   await expect(top.getByTestId('org-thread-messages')).toHaveCount(0)
   await expect(top.getByTestId('org-thread-reply')).toBeVisible()
   const after = (await top.boundingBox())!
@@ -292,6 +330,7 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   await top.locator('[data-clipped="true"]').first().evaluate((el) => { el.scrollTop = el.scrollHeight })
   await expect(top.getByTestId('org-thread-reply')).not.toHaveAttribute('data-clipped', 'true')
   await patch(request, `/api/v1/tasks/${ids.lead}/threads/${thread.id}`, { close: 'acked' })
+  await setFlags(request, { brief_off: false })
   expect(pageErrors).toEqual([])
   await keepVideo(page, 'show-all')
 })

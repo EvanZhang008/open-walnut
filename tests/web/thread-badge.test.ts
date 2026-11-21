@@ -7,8 +7,11 @@
  *  - For every thread shape (tests/core/org/thread-shapes.ts), as the node's own and as a task's
  *    below: the badge's word is THREAD_GROUP_LABELS[threadGroupOf(t)], its group is that group, and
  *    groupThreads draws it under that same group. Only Needs you has the needs colour.
- *  - The class: every web file that draws a thread card's state reads it through threadBadge; none
- *    keeps a state-to-word or state-to-dot table, or calls threadGroupOf for a word of its own.
+ *  - The class: every web file that draws a thread card reads its state through threadBadge and
+ *    draws it with the one ThreadState piece (its dot and its word), so no kind of card shows a dot
+ *    of its own or no word (2026-11-21: a card of a task below sat in Working with a grey dot and no
+ *    word); none keeps a state-to-word or state-to-dot table, or calls threadGroupOf for a word of
+ *    its own.
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -54,10 +57,13 @@ describe('a card says the group it is drawn in', () => {
   it('every card file reads its state word through threadBadge, with no table of its own', () => {
     const cards = readdirSync(ORG).filter((f) => f.endsWith('.tsx')).map((f) => ({ f, src: readFileSync(join(ORG, f), 'utf8') }))
       // The class: a component that draws a thread card's head or its ask card (found from the source).
-      .filter(({ src }) => /data-testid="org-thread-state"|testId="org-thread-popped"/.test(src))
-    expect(cards.map((c) => c.f).sort()).toEqual(['OrgThreads.tsx', 'PoppedThreadCard.tsx'])
-    for (const { f, src } of cards) {
+      .filter(({ src }) => /data-testid="org-thread-(state|head)"|testId="org-thread-popped"/.test(src))
+    expect(cards.map((c) => c.f).sort()).toEqual(['OrgThreads.tsx', 'PoppedThreadCard.tsx', 'ThreadState.tsx'])
+    // The state word and dot are drawn in one place only.
+    expect(cards.filter((c) => c.src.includes('data-testid="org-thread-state"')).map((c) => c.f)).toEqual(['ThreadState.tsx'])
+    for (const { f, src } of cards.filter((c) => c.f !== 'ThreadState.tsx')) {
       expect(src, f).toMatch(/threadBadge\(/)
+      expect(src, `${f}: draws its state with ThreadState`).toMatch(/<ThreadState badge=\{badge\}/)
       expect(src, `${f}: a state word table`).not.toMatch(/STATE_LABEL|STATE_DOT|stateLabel\(/)
       expect(src, `${f}: its own group call`).not.toMatch(/threadGroupOf\(/)
       expect(src, `${f}: a word by state`).not.toMatch(/'Pending'|'Moved'|'Asked in a task'/)

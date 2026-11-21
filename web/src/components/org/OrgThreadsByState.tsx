@@ -19,8 +19,13 @@ import { useExperimental } from '@/hooks/useExperimental';
 export const isThreadFilter = (v: unknown): v is ThreadFilter =>
   v === 'all' || (THREAD_GROUPS as readonly unknown[]).includes(v);
 
-/** The line a card left in its place: where it went, Show to pick that chip. It goes by itself; one
- *  holding the focus hands it to the chip picked, never to the page. */
+/** One move of one card: a rename keeps it, a new move from another place is another line. */
+const moveKey = (m: ThreadMove) => `moved-${m.id}-${m.from}-${m.index}`;
+
+/** The line a card left in its place: where it is now, Show to pick that chip. It goes by itself
+ *  MOVE_NOTE_MS after it showed: a read that moved the card on out of sight only renames it, a new
+ *  move (another group left: moveKey) is a new line with its own clock. One holding the focus
+ *  hands it to the chip picked, never to the page. */
 function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove) => void; onDone: (id: string) => void }) {
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
@@ -32,10 +37,10 @@ function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove
       onDone(m.id);
     }, MOVE_NOTE_MS);
     return () => window.clearTimeout(id);
-  }, [m, onDone]);
+  }, [m.id, onDone]);
   return (
     <li ref={ref} className="org-thread-move-note" data-testid="org-thread-move-note" data-moved-id={m.id} data-to={m.to} role="status">
-      {/* Where it went first: a long title gives way, never the group. */}
+      {/* Where it is now first: a long title gives way, never the group. */}
       <span className="org-thread-move-to">{`Moved to ${THREAD_GROUP_LABELS[m.to]}`}</span>
       <span className="org-thread-move-words">{`\u201c${m.title}\u201d`}</span>
       <button type="button" className="org-thread-link" data-testid="org-thread-move-show" onClick={() => onShow(m)}>Show</button>
@@ -101,7 +106,7 @@ export function OrgThreadsByState({ groups, filter, onFilter, card, name, onShow
         const notes = moves.filter((m) => m.from === g);
         // Each line stands where its card stood, among the cards still there.
         const items: ReactNode[] = list.map(card);
-        for (const m of [...notes].sort((a, b) => b.index - a.index)) items.splice(Math.min(m.index, items.length), 0, <MoveNote key={`moved-${m.id}`} m={m} onShow={show} onDone={dismiss} />);
+        for (const m of [...notes].sort((a, b) => b.index - a.index)) items.splice(Math.min(m.index, items.length), 0, <MoveNote key={moveKey(m)} m={m} onShow={show} onDone={dismiss} />);
         // Under All an empty group has no head; picked alone, it says it is empty.
         if (!list.length && !notes.length) {
           return filter === 'all' ? null : (

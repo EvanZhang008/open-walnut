@@ -52,18 +52,25 @@ export function movesBetween(prev: ThreadPlaces, next: ThreadPlaces, filter: Thr
 export interface MoveBase { places: ThreadPlaces; filter: ThreadFilter; epoch: number }
 
 /**
- * The lines on show after the groups are read again (useThreadMoves): none across a chip picked, the
- * same lines across a read that caught the pane up (`epoch` moved), else the new moves added, each
- * replacing an older line of its card, and a card back where it left taking its line away. Returns
- * `lines` itself when nothing changed. Pure.
+ * The lines on show after the groups are read again (useThreadMoves): none across a chip picked;
+ * else the new moves added (none across a read that caught the pane up, `epoch` moved), each
+ * replacing an older line of its card. Every line kept names where its card is now: a card that
+ * moved on again out of sight (Closed, then the server keeps it open in Acknowledged; a review on
+ * his data: the line said Closed while the card sat in Acknowledged) gets its new group, and a card
+ * back where it left, or gone from the list, takes its line away. Returns `lines` itself when
+ * nothing changed. Pure.
  */
 export function stepMoves(was: MoveBase | null, now: MoveBase, lines: ThreadMove[]): ThreadMove[] {
   if (!was) return lines;
   if (was.filter !== now.filter) return lines.length ? [] : lines;
-  if (was.epoch !== now.epoch) return lines;
-  const found = movesBetween(was.places, now.places, now.filter);
-  const kept = lines.filter((m) => !found.some((f) => f.id === m.id) && now.places.get(m.id)?.group !== m.from);
-  return kept.length === lines.length && !found.length ? lines : [...kept, ...found];
+  const found = was.epoch === now.epoch ? movesBetween(was.places, now.places, now.filter) : [];
+  const kept = lines.flatMap((m) => {
+    const at = now.places.get(m.id);
+    if (!at || at.group === m.from || found.some((f) => f.id === m.id)) return [];
+    return [at.group === m.to && at.title === m.title ? m : { ...m, to: at.group, title: at.title }];
+  });
+  const same = kept.length === lines.length && kept.every((m, i) => m === lines[i]);
+  return same && !found.length ? lines : [...kept, ...found];
 }
 
 /**

@@ -18,7 +18,7 @@ export function ThreadsFilterBar({ counts, all, at, onPick }: {
   onPick: (f: ThreadFilter) => void;
 }) {
   return (
-    <div className="org-threads-filter" data-testid="org-threads-filter" role="toolbar" aria-label="Thread groups">
+    <div className="org-threads-filter" data-testid="org-threads-filter" data-sticky-head="" role="toolbar" aria-label="Thread groups">
       <button type="button" className="org-threads-chip" data-testid="org-threads-chip" data-group="all" aria-pressed={at === 'all'} onClick={() => onPick('all')}>
         All <span className="org-threads-chip-count">{all}</span>
       </button>

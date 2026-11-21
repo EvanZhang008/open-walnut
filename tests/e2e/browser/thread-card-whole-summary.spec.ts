@@ -6,8 +6,10 @@
  *
  *  1. Class guard: no text block on any thread card is cut to two lines or fewer. Every element
  *     on every card is measured, so a new two-line clamp anywhere on a card fails here.
- *  2. A summary of a few lines reads whole on both kinds of card; a very long one stops at a
- *     bounded height and scrolls inside its own block.
+ *  2. A summary reads whole on both kinds of card, a very long one too: no block on a card in the
+ *     Threads view stops short and scrolls inside itself (2026-11-21, a review on his data: a
+ *     popped card stopped at its third list item with no sign of more). Only the top of a chat
+ *     bounds it, with a fade and Show all (top-thread.spec.ts).
  *  3. The cards are packed tight: small padding and gaps.
  *
  * WALNUT_THREAD_CARD_TEXTS may name a JSON file of `{ title, reply }` rows to fill the cards with
@@ -141,20 +143,20 @@ test('every thread card shows its whole summary, packed tight', async ({ page })
   expect(await cutToTwoLines(page)).toEqual([])
 
   if (!REAL) {
-    // 2. A summary of a few lines reads whole; a very long one is bounded and scrolls inside.
+    // 2. Every summary reads whole, the very long one too.
     const detail = (title: string) => page.locator('[data-testid="org-thread-popped"]', { hasText: title }).locator('.ask-card-detail')
     const medium = await detail(INVENTED[0].title).evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight }))
     expect(medium.sh).toBeLessThanOrEqual(medium.ch + 1)
     await expect(detail(INVENTED[0].title)).toContainText('Reply yes and I order them today.')
-    const long = detail(INVENTED[2].title)
-    const box = await long.evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight, oy: getComputedStyle(el).overflowY }))
-    expect(box.ch).toBeLessThanOrEqual(260)
-    expect(box.ch).toBeGreaterThan(150)
-    expect(box.sh).toBeGreaterThan(box.ch)
-    expect(box.oy).toBe('auto')
-    await long.hover()
-    await page.mouse.wheel(0, 400)
-    await expect.poll(() => long.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+    const long = await detail(INVENTED[2].title).evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight }))
+    expect(long.ch).toBeGreaterThan(400)
+    expect(long.sh).toBeLessThanOrEqual(long.ch + 1)
+    // The class: no word block on any card in the Threads view is cut short with more inside it.
+    const cut = await page.getByTestId('org-rail').locator('[data-testid="org-thread"]').evaluateAll((cards) => cards.flatMap((card) =>
+      [...card.querySelectorAll<HTMLElement>('.ask-card-detail, .ask-card-question, .org-thread-summary')]
+        .filter((el) => getComputedStyle(el).display !== 'none' && el.scrollHeight > el.clientHeight + 1)
+        .map((el) => `${el.className} on ${card.getAttribute('data-thread-id')}`)))
+    expect(cut).toEqual([])
     // The lead's own card reads its summary whole too.
     const own = await page.getByTestId('org-thread-reply').first().evaluate((el) => ({ sh: el.scrollHeight, ch: el.clientHeight }))
     expect(own.sh).toBeLessThanOrEqual(own.ch + 1)
