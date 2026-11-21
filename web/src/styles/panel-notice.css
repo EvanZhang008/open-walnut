@@ -40,7 +40,7 @@
 }
 /* An error's raw text keeps the code font, one size under the words around it (the code
    font reads larger at the same size). */
-.panel-notice .session-error-banner-text:not(.panel-notice-prose) { font-size: 12px; }
+.panel-notice .session-error-banner-text:not(.panel-notice-prose) { font-size: var(--font-size-sm); }
 .panel-notice-actions {
   display: flex;
   flex-wrap: wrap;

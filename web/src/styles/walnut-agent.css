@@ -79,7 +79,7 @@
 .draft-intent-card.is-active .draft-intent-ic { color: var(--accent); }
 .draft-intent-card-walnut.is-active .draft-intent-ic { color: var(--walnut-accent); }
 .draft-intent-t { display: block; font-weight: 700; font-size: 14px; margin-bottom: 5px; color: var(--fg); }
-.draft-intent-d { display: block; font-size: 12px; color: var(--fg-muted); line-height: 1.5; }
+.draft-intent-d { display: block; font-size: var(--font-size-sm); color: var(--fg-muted); line-height: 1.5; }
 .draft-intent-card.is-active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 5%, var(--bg));
@@ -148,7 +148,7 @@
   padding: 3px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg);
 }
 /* The chip's line icon: muted until hover, when it takes the chip's accent. */
@@ -166,7 +166,7 @@
   margin: 0;
   max-width: 420px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-muted);
 }
@@ -326,7 +326,7 @@
   padding: 12px 10px 8px 14px;
 }
 .ask-walnut-drawer-title {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 700;
   color: var(--walnut-accent);
 }
@@ -381,7 +381,7 @@
   width: 100%;
   padding: 6px 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   font-family: inherit;
   text-align: left;
@@ -394,11 +394,11 @@
 }
 .ask-walnut-agent-item.is-selected .ask-walnut-agent-name { color: var(--walnut-accent); }
 .ask-walnut-agent-name {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
 }
 .ask-walnut-agent-desc {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.35;
   color: var(--fg-muted);
   display: -webkit-box;
@@ -451,7 +451,7 @@
   box-shadow: none;
   background: none;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   -webkit-appearance: none;
   appearance: none;
@@ -467,7 +467,7 @@
 }
 .ask-walnut-drawer-empty {
   margin: 8px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 /* The drawer opened before the board arrived: a spinner line, not "no sessions yet". */
@@ -483,10 +483,10 @@
   width: 100%;
   padding: 7px 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: none;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   text-align: left;
   cursor: pointer;
@@ -514,13 +514,13 @@
 /* "3d ago" on the right: last touch, in the header's own time-ago voice. */
 .ask-walnut-drawer-item-time {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 400;
   color: var(--fg-muted);
 }
 /* A row that came after the list opened: "New" where a time would be. */
 .ask-walnut-drawer-item-time.is-new {
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   font-weight: 500;
 }
 /* Status dot: the board's task-circle colours (globals), as a 7px disc. */
@@ -563,7 +563,7 @@
   border-radius: 6px;
   background: none;
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   white-space: nowrap;
   color: var(--fg-muted);
   cursor: pointer;
@@ -582,9 +582,9 @@
   border: none;
   border-radius: 999px;
   background: var(--walnut-accent);
-  color: #fff;
+  color: var(--on-accent);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   cursor: pointer;
 }
@@ -599,7 +599,7 @@
    start), and New moves under it, still on the right. */
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-head { padding: 12px 10px 10px 12px; gap: 8px; flex-wrap: wrap; row-gap: 6px; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-title { color: var(--fg); font-size: 16px; white-space: nowrap; text-align: left; }
-.ask-walnut-drawer-new.is-head { width: auto; padding: 5px 12px; border-radius: 8px; font-size: 12.5px; flex: none; margin-left: auto; white-space: nowrap; }
+.ask-walnut-drawer-new.is-head { width: auto; padding: 5px 12px; border-radius: var(--radius-sm); font-size: var(--font-size-md); flex: none; margin-left: auto; white-space: nowrap; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-search { height: 34px; margin: 0 10px 10px; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-list { padding: 0; }
 /* The list's words start where its head and labels do (review round 4, #7: 8 px, left of them). */
@@ -608,13 +608,13 @@
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-item.is-selected { color: var(--fg); font-weight: 400; }
 .ask-walnut-drawer.is-panel .ask-walnut-drawer-item-time { margin-top: 2px; }
 .ask-walnut-drawer-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.ask-walnut-drawer-item-text .ask-walnut-drawer-item-title { flex: none; font-size: 13.5px; }
-.ask-walnut-drawer-item-line { font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask-walnut-drawer-item-text .ask-walnut-drawer-item-title { flex: none; font-size: var(--font-size-md); }
+.ask-walnut-drawer-item-line { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ask-walnut-drawer-needs { flex: none; width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; }
 .ask-walnut-drawer-needs.is-on { background: var(--error); }
-.ask-walnut-drawer-logo { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 5px; display: grid; place-items: center; background: linear-gradient(145deg, #c58a4f, #8a5a2b); color: #fff; font-size: 10px; font-weight: 700; }
+.ask-walnut-drawer-logo { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: var(--radius-xs); display: grid; place-items: center; background: linear-gradient(145deg, #c58a4f, #8a5a2b); color: var(--on-accent); font-size: var(--font-size-xs); font-weight: 700; }
 .ask-walnut-drawer-pin { flex: none; color: var(--fg-muted); margin-top: 2px; display: inline-flex; }
-.ask-walnut-drawer-label { margin: 10px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.ask-walnut-drawer-label { margin: 10px 12px 4px; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); }
 .ask-walnut-drawer-foot.is-panel { gap: 0; padding: 6px 0 8px; }
 
 /* ── Bodies ── */
@@ -662,7 +662,7 @@
   padding: 24px;
   text-align: center;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 .ask-walnut-pending-status {
   display: flex;
@@ -690,7 +690,7 @@
 .ask-walnut-pending-echo {
   margin: 0;
   max-width: 420px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: pre-wrap;
   opacity: 0.8;
 }

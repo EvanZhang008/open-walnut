@@ -14,11 +14,11 @@
   height: auto;
   padding: 1px 7px 1px 6px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--pr-tone) 12%, transparent);
   color: var(--pr-tone);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   letter-spacing: normal;
   line-height: 1.2;
@@ -104,7 +104,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[aria-expan
   border-radius: 0;
   background: none;
   box-shadow: none;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 15px;
 }
 html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:hover,
@@ -141,7 +141,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 .pr-pill[data-tone="passed"] { --pr-tone: #1a7f37; }
 .pr-pill[data-tone="merged"] { --pr-tone: #8250df; }
 .pr-pill[data-tone="closed"], .pr-pill[data-tone="unknown"], .pr-pill[data-tone="draft"] { --pr-tone: var(--fg-muted); }
-.pr-pill[data-tone="open"] { --pr-tone: var(--accent-text, var(--accent)); }
+.pr-pill[data-tone="open"] { --pr-tone: var(--accent-text); }
 
 :root[data-theme="dark"] .pr-pill[data-tone="failed"] { --pr-tone: #ff7b72; }
 :root[data-theme="dark"] .pr-pill[data-tone="conflict"] { --pr-tone: #ffa657; }
@@ -176,7 +176,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
   background: var(--bg-elevated);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   overflow: auto;
 }
@@ -195,9 +195,9 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
   margin-top: 1px;
   padding: 1px 7px 1px 6px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--pr-green);
 }
 /* Open is the ordinary state: a plain outline, so the checks' and the review's colours are the
@@ -212,18 +212,18 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 .pr-card .pr-card-title {
   min-width: 0;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   text-decoration: none;
   overflow-wrap: anywhere;
 }
-.pr-card .pr-card-title:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
+.pr-card .pr-card-title:hover { color: var(--accent-text); text-decoration: underline; }
 .pr-card .pr-card-number { color: var(--fg-muted); font-weight: 500; }
-.pr-card .pr-card-sub { margin: 4px 0 8px; color: var(--fg-muted); font-size: 11px; overflow-wrap: anywhere; }
-.pr-card .pr-card-sub code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--fg-secondary); }
+.pr-card .pr-card-sub { margin: 4px 0 8px; color: var(--fg-muted); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.pr-card .pr-card-sub code { font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-secondary); }
 
 .pr-card .pr-card-facts { display: grid; grid-template-columns: 58px 1fr; gap: 5px 10px; margin: 0; }
-.pr-card .pr-card-facts dt { color: var(--fg-muted); font-size: 11px; padding-top: 1px; }
+.pr-card .pr-card-facts dt { color: var(--fg-muted); font-size: var(--font-size-xs); padding-top: 1px; }
 .pr-card .pr-card-facts dd { margin: 0; min-width: 0; color: var(--fg); }
 .pr-card .pr-card-facts[data-stale="true"] { opacity: 0.55; }
 .pr-card .pr-card-facts dd[data-tone="failed"] { color: var(--pr-red); font-weight: 500; }
@@ -236,7 +236,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 .pr-card .pr-card-checks-line[data-tone="passed"] { color: var(--pr-green); }
 
 .pr-card .pr-card-checks { list-style: none; margin: 5px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.pr-card .pr-card-check { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 11.5px; }
+.pr-card .pr-card-check { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: var(--font-size-sm); }
 .pr-card .pr-card-check a, .pr-card .pr-card-check > span:not(.pr-card-check-mark):not(.pr-card-required) {
   min-width: 0;
   color: var(--fg-secondary);
@@ -247,24 +247,24 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 }
 /* Who reviewed opens the review. */
 .pr-card :is(.pr-card-review-by, .pr-card-comments) { color: inherit; text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
-.pr-card :is(.pr-card-review-by, .pr-card-comments)::after { content: ' ↗'; color: var(--fg-muted); font-size: 10px; }
-.pr-card :is(.pr-card-review-by, .pr-card-comments):hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
+.pr-card :is(.pr-card-review-by, .pr-card-comments)::after { content: ' ↗'; color: var(--fg-muted); font-size: var(--font-size-xs); }
+.pr-card :is(.pr-card-review-by, .pr-card-comments):hover { color: var(--accent-text); text-decoration: underline; }
 /* What the reviewer wrote with the decision, under it. */
 .pr-card .pr-card-review-quote { display: block; margin-top: 3px; color: var(--fg-secondary); overflow-wrap: anywhere; }
 /* A check's name opens its log: a link that looks like one. */
 .pr-card .pr-card-check a { text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 2px; }
-.pr-card .pr-card-check a::after { content: ' ↗'; color: var(--fg-muted); font-size: 10px; }
-.pr-card .pr-card-check a:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }
+.pr-card .pr-card-check a::after { content: ' ↗'; color: var(--fg-muted); font-size: var(--font-size-xs); }
+.pr-card .pr-card-check a:hover { color: var(--accent-text); text-decoration: underline; }
 .pr-card .pr-card-check-mark { flex: 0 0 12px; text-align: center; font-weight: 700; }
 .pr-card .pr-card-check-mark[data-status="failed"] { color: var(--pr-red); }
 .pr-card .pr-card-check-mark[data-status="pending"] { color: var(--pr-amber); }
 .pr-card .pr-card-check-mark[data-status="passed"] { color: var(--pr-green); }
 .pr-card .pr-card-check-more { padding-left: 18px; }
-.pr-card .pr-card-check-more a { color: var(--accent-text, var(--accent)); }
+.pr-card .pr-card-check-more a { color: var(--accent-text); }
 .pr-card .pr-card-required {
   flex: 0 0 auto;
   padding: 0 5px;
-  border: 1px solid var(--border-strong, var(--border));
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   font-size: 9.5px;
   color: var(--fg-muted);
@@ -272,20 +272,20 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 
 .pr-card .pr-card-muted { color: var(--fg-muted); }
 .pr-card .pr-card-empty { padding: 4px 0; }
-.pr-card .pr-card-note { margin-top: 8px; font-size: 11.5px; color: var(--fg-secondary); }
+.pr-card .pr-card-note { margin-top: 8px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .pr-card .pr-card-error {
   margin-top: 8px;
   padding: 6px 8px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--pr-red) 9%, transparent);
   color: var(--fg);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
 }
 .pr-card .pr-card-error code, .pr-card .pr-card-note code {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   padding: 0 3px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-secondary);
 }
 
@@ -310,14 +310,14 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 .pr-card .pr-card-switch:hover { background: var(--bg-hover); }
 .pr-card .pr-card-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .pr-card .pr-card-switch-text { display: flex; flex-direction: column; min-width: 0; }
-.pr-card .pr-card-switch-label { font-size: 12px; font-weight: 500; }
-.pr-card .pr-card-switch-hint { font-size: 11px; color: var(--fg-muted); }
+.pr-card .pr-card-switch-label { font-size: var(--font-size-sm); font-weight: 500; }
+.pr-card .pr-card-switch-hint { font-size: var(--font-size-xs); color: var(--fg-muted); }
 .pr-card .pr-card-switch-track {
   position: relative;
   flex: 0 0 30px;
   width: 30px;
   height: 18px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--fg-muted);
   transition: background-color 120ms ease-out;
 }
@@ -342,7 +342,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
   justify-content: space-between;
   gap: 8px;
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   /* A card taller than the room it has scrolls under its foot: Refresh and when it was read
      stay in view. The foot covers the card's side and bottom padding so nothing shows past it
      (a sticky box stops at the scroller's padding edge, hence the -10px). */
@@ -365,7 +365,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 }
 .pr-card :is(.pr-card-refresh, .pr-card-complete) {
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   padding: 2px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;

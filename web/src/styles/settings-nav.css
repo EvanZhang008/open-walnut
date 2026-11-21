@@ -47,7 +47,7 @@
 .settings-container .settings-nav-title {
   margin: 0;
   padding: 18px 8px 10px;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 20px;
   font-weight: 600;
   color: var(--fg);
@@ -100,11 +100,11 @@
   margin: 0;
   padding: 0 26px 0 27px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 28px;
   outline: none;
   box-shadow: none;
@@ -201,7 +201,7 @@
 .settings-container .settings-nav-group-label {
   display: block;
   padding: 14px 10px 4px;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 15px;
   font-weight: 600;
   letter-spacing: 0;
@@ -219,11 +219,11 @@
   margin: 0;
   padding: 0 10px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   font-weight: 400;
   text-align: left;
@@ -264,7 +264,7 @@
 
 .settings-container .settings-nav-item.settings-nav-active {
   background: var(--settings-nav-selected-bg);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 500;
 }
 
@@ -306,7 +306,7 @@
 }
 
 .settings-container .settings-nav-hint {
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 15px;
   color: var(--fg-muted);
 }
@@ -348,7 +348,7 @@
 
 .settings-container .settings-nav-empty {
   padding: 14px 10px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--fg-muted);
 }
@@ -361,7 +361,7 @@
 .settings-container .settings-nav-empty.settings-nav-empty-apps {
   margin: 0;
   padding-top: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .settings-container .settings-nav-clear-search {
@@ -370,7 +370,7 @@
   background: none;
   color: var(--accent);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 
@@ -381,7 +381,7 @@
 .settings-container .settings-nav-clear-search:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 
 /* ── Pane column: its own scroller; the page never scrolls ── */
@@ -443,7 +443,7 @@
    the person has not seen this pane yet, so pulse twice and ring the row. */
 .settings-anchor-flash-strong {
   animation: settings-anchor-flash-strong 3000ms ease-out;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 @keyframes settings-anchor-flash-strong {
@@ -466,7 +466,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
   background: none;
   padding: 0;
@@ -522,7 +522,7 @@
     margin: 0 0 8px;
     padding: 0;
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: none;
     color: var(--fg-secondary);
     cursor: pointer;

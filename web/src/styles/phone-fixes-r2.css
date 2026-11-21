@@ -49,7 +49,7 @@
   .app-shell-navigation .wf-card-title,
   .app-shell-navigation .wf-card-count,
   .app-shell-navigation .wf-card-tokens {
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   .app-shell-navigation .wf-card--bar,
   .app-shell-navigation .session-notes-toggle {
@@ -57,7 +57,7 @@
     box-sizing: border-box;
   }
   .app-shell-navigation .session-notes-label,
-  .app-shell-navigation .session-notes-action { font-size: 12px; }
+  .app-shell-navigation .session-notes-action { font-size: var(--font-size-sm); }
   .app-shell-navigation .session-notes-action { min-height: 44px; min-width: 44px; }
   /* The outline rail is a hover affordance at the message's left edge; on a
      phone it overlapped the text and was an 18 px target. */
@@ -95,8 +95,8 @@
   /* N2-22: the cached-history line mixed its tint into an undefined
      --bg-primary, whose #fff fallback drew a cream box on a black page. */
   .app-shell-navigation .session-history-stale-banner {
-    background: color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--bg));
-    font-size: 13px;
+    background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+    font-size: var(--font-size-md);
   }
 }
 
@@ -111,22 +111,22 @@
   html body .nfc-perm-toast .notification-toast-action {
     flex: 1 1 0;
     min-height: 44px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
   /* Deny with a note: a full-row finger target, and a box iOS does not zoom into. */
   html body .nfc-perm-toast .perm-note-toggle {
     min-height: 44px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   html body .nfc-perm-toast .permission-note-input { font-size: 16px; }
   html body .nfc-perm-toast .perm-option-detail,
-  html body .nfc-perm-toast .perm-option-saved { font-size: 12px; }
+  html body .nfc-perm-toast .perm-option-saved { font-size: var(--font-size-sm); }
   html body .nfc-perm-toast .nfc-open-session {
     display: inline-flex;
     align-items: center;
     min-height: 44px;
     padding: 0 8px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   html body .nfc-perm-toast .notification-toast-close {
     min-width: 44px;
@@ -139,7 +139,7 @@
   html body .nfc-perm-toast .nfc-perm-path,
   html body .nfc-perm-toast .nfc-perm-settled,
   html body .nfc-perm-toast .notification-toast-body {
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
 }
 
@@ -162,7 +162,7 @@
     min-height: 44px;
   }
   .app-shell-navigation .task-board-pane :is(.board-view-count, .kanban-chip-count, .kanban-lane-count, small) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -202,7 +202,7 @@
   html body .notification-panel .nfc-answer-hint {
     display: block;
     margin: 6px 0 0;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--fg-secondary);
   }
 }
@@ -246,7 +246,7 @@
     background: linear-gradient(var(--card-bg), var(--card-bg)), var(--bg);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    border: 1px solid var(--border-strong, var(--border));
+    border: 1px solid var(--border-strong);
     box-shadow: 0 2px 10px rgb(0 0 0 / 18%);
   }
   /* Opaque only while it is up and not stepping aside from a prompt card
@@ -267,7 +267,7 @@
     box-sizing: border-box;
   }
   .notification-panel li.hpb-row :is(.hpb-count, .hpb-elapsed, .hpb-receipt, .hpb-subhead, .hpb-step, .hft-when, .hft-hint, .hft-more, .hft-details, .hpb-more) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -311,7 +311,7 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* N2-18: calendar event text on a phone reads at 12 px or more. */
   .app-shell-navigation .cal-page :is(.cal-chip-location, .cal-chip-time, .cal-chip-meta) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -327,7 +327,7 @@
     box-sizing: border-box;
   }
   .app-shell-navigation .routines-view :is(.routine-executor-badge, .cron-form-error, .routine-error) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .app-shell-navigation .routines-view textarea {
     resize: none;
@@ -350,7 +350,7 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* N2-29: the Notes tree's counts read at 12 px. */
   .app-shell-navigation .notes-bookmarks-count {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 

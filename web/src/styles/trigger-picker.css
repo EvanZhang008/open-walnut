@@ -13,12 +13,12 @@
   max-height: min(600px, var(--menu-max-height, 600px));
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--border-strong, var(--border));
-  border-radius: var(--radius-lg, 10px);
-  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
   color: var(--fg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
-  font-size: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), var(--shadow-md);
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   outline: none;
 }
@@ -40,7 +40,7 @@
   gap: 6px;
   padding: 10px 10px 6px 14px;
   flex: 0 0 auto;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
 }
 
 .trigger-picker-title {
@@ -63,7 +63,7 @@
   width: 24px;
   height: 24px;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -88,7 +88,7 @@
 
 .trigger-picker-section-title {
   margin: 4px 6px 4px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -101,14 +101,14 @@
 }
 
 .trigger-picker-note.is-error {
-  color: var(--error, #d14343);
+  color: var(--error);
 }
 
 .trigger-picker-link {
   padding: 0;
   border: none;
   background: none;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   cursor: pointer;
   font: inherit;
   text-decoration: underline;
@@ -121,7 +121,7 @@
   width: 100%;
   padding: 7px 8px;
   border: none;
-  border-radius: var(--radius-md, 6px);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--fg);
   text-align: left;
@@ -141,7 +141,7 @@
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   text-align: center;
   color: var(--fg-muted);
@@ -187,7 +187,7 @@
 .trigger-picker-chip.is-on {
   border-color: var(--accent);
   background: var(--bg-hover);
-  color: var(--accent-text, var(--fg));
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -217,15 +217,15 @@
 
 .trigger-picker-hint {
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 .trigger-picker-input {
   box-sizing: border-box;
   width: 100%;
   padding: 6px 8px;
-  border: 1px solid var(--border-strong, var(--border));
-  border-radius: var(--radius-md, 6px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
@@ -247,10 +247,10 @@
   z-index: 2;
   max-height: 168px;
   overflow-y: auto;
-  border: 1px solid var(--border-strong, var(--border));
-  border-radius: var(--radius-md, 6px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
   padding: 3px;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.16);
 }
 
@@ -261,7 +261,7 @@
   width: 100%;
   padding: 4px 6px;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg);
   text-align: left;
@@ -296,7 +296,7 @@
 .trigger-picker-primary,
 .trigger-picker-secondary {
   padding: 5px 12px;
-  border-radius: var(--radius-md, 6px);
+  border-radius: var(--radius-md);
   font: inherit;
   font-weight: 600;
   cursor: pointer;

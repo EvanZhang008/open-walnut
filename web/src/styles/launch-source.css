@@ -8,13 +8,13 @@
   border: 1px solid var(--border);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   display: grid;
   gap: 2px;
 }
 .launch-source-note-title {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
   text-transform: uppercase;
@@ -31,19 +31,19 @@
 .launch-source-label { color: var(--fg-muted); min-width: 44px; }
 .launch-source-note-project { color: var(--fg-muted); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .launch-source-note-project strong { color: var(--fg); font-weight: 600; }
-.launch-source-note-hint { color: var(--fg-muted); font-size: 11px; margin-top: 2px; }
+.launch-source-note-hint { color: var(--fg-muted); font-size: var(--font-size-xs); margin-top: 2px; }
 .launch-source-note-action {
   justify-self: start;
   margin-top: 4px;
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--accent);
   background: none;
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
 }
-.launch-source-note-action:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
+.launch-source-note-action:hover { background: var(--bg-hover); }
 .launch-source-value {
   font-weight: 500;
   overflow: hidden;
@@ -51,7 +51,7 @@
   white-space: nowrap;
 }
 .launch-source-tag {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -83,12 +83,12 @@
   margin-bottom: 2px;
 }
 .project-launch-defaults-title {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--fg);
 }
 .project-launch-defaults-clear {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   padding: 2px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-strong);
@@ -103,24 +103,24 @@
   min-width: 0;
   padding: 2px 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .detail-setting-select:disabled { opacity: 0.6; }
 .project-launch-defaults .launch-source-tag { flex-shrink: 0; max-width: 90px; }
 .project-launch-defaults-hint {
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-muted);
 }
 .project-launch-defaults-error {
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--error);
 }
 
 .launch-source-tag.is-placeholder { visibility: hidden; min-width: 44px; }
-.project-launch-defaults-warning { margin: 4px 0 0; font-size: 12px; font-weight: 500; color: var(--fg); }
+.project-launch-defaults-warning { margin: 4px 0 0; font-size: var(--font-size-sm); font-weight: 500; color: var(--fg); }

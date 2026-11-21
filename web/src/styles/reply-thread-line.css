@@ -3,7 +3,7 @@
    long title wraps under its own arrow. */
 .msg-reply-thread {
   margin-top: 3px;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-muted);
   overflow-wrap: anywhere;

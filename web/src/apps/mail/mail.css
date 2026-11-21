@@ -127,7 +127,7 @@
 
 .mail-pane-strip .mail-refresh-note {
   padding: 2px 0;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   /* ONE line per answer. The whole sentence is in `title`, and the folder name leads it, so the half
      that identifies the answer is the half that survives the clip. */
   overflow: hidden;
@@ -143,10 +143,10 @@
   height: 18px;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1;
   cursor: pointer;
 }
@@ -172,7 +172,7 @@
 }
 
 .mail-pane-title {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -187,7 +187,7 @@
   width: 26px;
   height: 26px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-secondary);
   cursor: pointer;
@@ -222,14 +222,14 @@
   background: none;
   padding: 0;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
 /* The overflow button's glyph. Three periods rather than an ellipsis character, tightened, so it
    reads as a menu affordance at 26px instead of as clipped text. */
 .mail-overflow-glyph {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1;
   letter-spacing: -1px;
   transform: translateY(-2px);
@@ -249,7 +249,7 @@
 }
 
 .mail-task-error {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--error);
   line-height: 1.3;
   overflow-wrap: anywhere;
@@ -267,10 +267,10 @@
   align-items: center;
   max-width: 240px;
   padding: 3px 8px;
-  border-radius: 4px;
-  background: var(--accent-subtle, rgba(0, 122, 255, 0.08));
+  border-radius: var(--radius-xs);
+  background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   text-decoration: none;
   overflow: hidden;
@@ -280,7 +280,7 @@
 }
 
 .mail-task-pill:hover {
-  background: var(--accent-subtle-hover, rgba(0, 122, 255, 0.16));
+  background: var(--accent-subtle-hover);
   text-decoration: none;
 }
 
@@ -290,14 +290,14 @@
   margin: 0;
   padding: 24px 16px;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   text-align: center;
 }
 
 .mail-inline-error {
   margin: 0;
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--error);
 }
 
@@ -319,7 +319,7 @@
 .mail-refresh-note {
   margin: 0;
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-secondary);
   /* The pane it sits in is already `--bg-secondary`, so the note needs the next tone up or it is
@@ -338,26 +338,26 @@
 }
 
 .mail-account-name {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 
 .mail-account-address {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
 
 .mail-account-state {
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 2px 6px;
   border-radius: 999px;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--warning);
 }
 
@@ -365,7 +365,7 @@
 
 .mail-account-hint {
   margin: 2px 6px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.45;
   color: var(--fg-muted);
 }
@@ -387,10 +387,10 @@
   /* 4px, so the glyph lands in the pane's one glyph column at 12px. See the hierarchy note below. */
   padding: 6px 8px 6px 4px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   /* Load-bearing on a BUTTON in WebKit (see `.mail-tail-row` and `.mail-tail-filter`): left alone, every
      row in this pane is drawn in the engine's own control face, which is wider than the app's and made the
      collapse row's sentence 3px too long for its slot in WebKit while it fitted in Chromium. One face for
@@ -426,8 +426,8 @@
   padding: 1px 5px;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
-  font-size: 11px;
+  color: var(--on-accent);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -455,7 +455,7 @@
   border: none;
   background: none;
   color: var(--fg-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 1.35;
   text-align: left;
   cursor: pointer;
@@ -478,7 +478,7 @@
   border-bottom: 1px solid var(--border);
   background: none;
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   text-align: left;
   cursor: pointer;
@@ -489,7 +489,7 @@
 /* The empty state offers the same control, centred with the copy above it. */
 .mail-app > .empty-state .mail-add-account {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   margin-top: 12px;
   padding: 8px 14px;
   text-align: center;
@@ -518,11 +518,11 @@
 .mail-search-input {
   width: 100%;
   padding: 6px 9px 6px 28px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   outline: none;
 }
 
@@ -538,7 +538,7 @@
   gap: 8px;
   margin: 0;
   padding: 9px 12px 5px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-muted);
@@ -584,7 +584,7 @@
   background: none;
   color: var(--accent);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
@@ -598,7 +598,7 @@
 .mail-unread-chip.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .mail-unread-chip.on:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -624,7 +624,7 @@
 /* Whatever the provider said, one step quieter than the console's own sentence. */
 .mail-folder-detail {
   max-width: 34ch;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   opacity: 0.8;
 }
 
@@ -642,7 +642,7 @@
   padding: 8px 12px 5px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-muted);
@@ -664,7 +664,7 @@
 .mail-search-meta {
   margin: 0;
   padding: 6px 12px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -677,7 +677,7 @@
   border-radius: 999px;
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.03em;
 }
@@ -742,7 +742,7 @@
 .mail-row-from {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -751,7 +751,7 @@
 
 .mail-row-time {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -762,7 +762,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -780,7 +780,7 @@
 
 .mail-row-snippet {
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   color: var(--fg-muted);
   overflow: hidden;
@@ -812,9 +812,9 @@
   white-space: nowrap;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   line-height: 14px;
   text-align: center;
@@ -854,7 +854,7 @@
      a gesture whose whole promise is that it selects nothing. */
   box-shadow: inset 0 0 0 2px var(--border-strong);
   background: var(--bg-hover);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 /* BOTH at once. Two rules setting `box-shadow` at equal specificity meant the later one won outright, so
@@ -934,7 +934,7 @@
   border-top: 1px solid var(--border);
   background: none;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -954,15 +954,15 @@
   gap: 2px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: none;
   text-align: left;
   cursor: pointer;
 }
 
 .mail-provider-option:hover { border-color: var(--accent); background: var(--accent-subtle); }
-.mail-provider-label { font-size: 13px; font-weight: 600; color: var(--fg); }
-.mail-provider-note { font-size: 11px; color: var(--fg-muted); }
+.mail-provider-label { font-size: var(--font-size-md); font-weight: 600; color: var(--fg); }
+.mail-provider-note { font-size: var(--font-size-xs); color: var(--fg-muted); }
 
 .mail-setup-form { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .mail-provider-back { align-self: flex-start; }
@@ -973,7 +973,7 @@
 .mail-setup-row { display: flex; flex-direction: column; gap: 4px; }
 
 .mail-setup-label {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--fg-secondary);
 }
@@ -982,16 +982,16 @@
 
 .mail-setup-input { margin-top: 0; }
 .mail-setup-input::placeholder { color: var(--fg-muted); }
-.mail-setup-help { font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
+.mail-setup-help { font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }
 
 .mail-setup-options { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow-y: auto; }
 
 .mail-setup-preset-help {
   margin: 0;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-secondary);
   line-height: 1.45;
 }
@@ -1015,10 +1015,10 @@
 .mail-setup-option {
   padding: 5px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -1027,12 +1027,12 @@
 .mail-setup-error {
   padding: 10px 12px;
   border: 1px solid var(--error);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 59, 48, 0.08);
 }
 
-.mail-setup-error-lead { margin: 0; font-size: 12px; font-weight: 600; color: var(--fg); line-height: 1.45; }
-.mail-setup-error-detail { margin: 6px 0 0; font-size: 12px; color: var(--fg-secondary); line-height: 1.45; overflow-wrap: anywhere; }
+.mail-setup-error-lead { margin: 0; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg); line-height: 1.45; }
+.mail-setup-error-detail { margin: 6px 0 0; font-size: var(--font-size-sm); color: var(--fg-secondary); line-height: 1.45; overflow-wrap: anywhere; }
 
 /* ── one pane at a time ──
    The panes stay MOUNTED and are hidden with display, so drilling in and back does not refetch
@@ -1078,7 +1078,7 @@
 .mail-smart-head {
   margin: 0;
   padding: 2px 16px 4px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   /* NOT uppercase with letter spacing. It was the only uppercase header in the pane, directly above the
      account heads, so one pane stacked two header styles for the same job.
@@ -1183,7 +1183,7 @@
      space a badge would need is width the sentence can have. */
   padding: 6px 2px 6px 4px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: none;
   /* NOT `--fg-muted`, which measured 3.33:1 against this pane in the light theme. This row is a button,
      and it is the only place in the product that says how many folders are hidden and how many of them
@@ -1204,7 +1204,7 @@
      `58 more folder…` over 202 unread messages. The size gives way; the sentence stays whole. Re-measured,
      not re-argued, in `tests/e2e/browser/mail-sidebar-round3.spec.ts` and its WebKit twin, in both the
      scrolled and unscrolled pane. */
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   /* `font-family: inherit` is load-bearing on a BUTTON in WebKit, exactly as it is on the filter input
      below: left alone, a button is drawn in the engine's own control face, which is wider than the app's
      and is the difference between this row's sentence fitting and being ellipsised. */
@@ -1281,7 +1281,7 @@
   height: 32px;
   padding: 6px 8px 6px 23px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--fg);
   /* `appearance: none` is load-bearing on a `type="search"` box: WebKit gives that type its own control
@@ -1293,7 +1293,7 @@
      height is stated too, so the box is 20 + 12 = 32px in both engines rather than each engine's idea of
      `normal` for a control. */
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 20px;
 }
 
@@ -1302,7 +1302,7 @@
 .mail-tail-empty {
   margin: 2px 0 6px;
   padding: 4px 8px 4px 23px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
 }
 
@@ -1344,7 +1344,7 @@
   padding: 6px 10px;
   border-top: 1px solid var(--border);
   background: var(--bg);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-secondary);
 }
@@ -1357,7 +1357,7 @@
   gap: 4px 10px;
   margin: 0;
   padding: 0 12px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.45;
   color: var(--fg-muted);
 }
@@ -1369,10 +1369,10 @@
   /* The row's own gap is the glyph's 4px; this mark keeps the 8px it always had. */
   margin-left: 4px;
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1416,7 +1416,7 @@
   background: none;
   padding: 0 2px;
   font: inherit;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
   color: var(--warning);
 }
@@ -1457,7 +1457,7 @@
   content: 'unread only';
   margin-left: 6px;
   padding: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--accent-subtle);
   color: var(--accent);
   font-size: 9.5px;
@@ -1490,9 +1490,9 @@
   -webkit-line-clamp: 2;
   overflow: hidden;
 }
-.mail-router-state { font-size: 11.5px; color: var(--fg-secondary); }
+.mail-router-state { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .mail-router-dot { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
-.mail-router-dot[data-tone='ready'] { background: var(--success, #2f9e44); }
+.mail-router-dot[data-tone='ready'] { background: var(--success); }
 .mail-router-dot[data-tone='working'] { background: var(--accent); }
-.mail-router-dot[data-tone='needs'] { background: var(--error, #d70015); }
-.mail-router-row[data-router-state='needs'] .mail-router-state { color: var(--error, #d70015); }
+.mail-router-dot[data-tone='needs'] { background: var(--error); }
+.mail-router-row[data-router-state='needs'] .mail-router-state { color: var(--error); }

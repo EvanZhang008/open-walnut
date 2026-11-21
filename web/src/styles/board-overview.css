@@ -10,7 +10,7 @@
   flex: 0 0 auto;
   gap: 2px;
   padding: 2px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
@@ -25,7 +25,7 @@
   background: transparent;
   color: var(--fg-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 550;
   line-height: 1;
   white-space: nowrap;
@@ -39,7 +39,7 @@
 .board-view-toggle .board-view-seg.is-active {
   color: var(--fg);
   background: var(--bg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--border);
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
 }
 
 .board-view-toggle .board-view-seg[aria-disabled="true"] {
@@ -52,10 +52,10 @@
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--error);
-  color: #fff;
-  font-size: 10px;
+  color: var(--on-accent);
+  font-size: var(--font-size-xs);
   font-weight: 700;
   line-height: 16px;
   text-align: center;

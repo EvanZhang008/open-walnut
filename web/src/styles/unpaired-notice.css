@@ -30,8 +30,8 @@
     max(24px, var(--un-safe-right))
     calc(var(--un-safe-bottom) + 24px)
     max(24px, var(--un-safe-left));
-  background: var(--bg, #FFFFFF);
-  color: var(--fg, #1D1D1F);
+  background: var(--bg);
+  color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   text-align: left;
   -webkit-text-size-adjust: 100%;
@@ -102,15 +102,15 @@
   line-height: 34px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: var(--fg, #1D1D1F);
+  color: var(--fg);
   overflow-wrap: anywhere;
 }
 
 .unpaired-notice-tagline {
   margin: 8px 0 0;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   line-height: 22px;
-  color: var(--fg-secondary, #424245);
+  color: var(--fg-secondary);
 }
 
 .unpaired-notice-steps {
@@ -126,9 +126,9 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   line-height: 24px;
-  color: var(--fg, #1D1D1F);
+  color: var(--fg);
 }
 
 .unpaired-notice-step-n {
@@ -139,11 +139,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1;
   font-weight: 600;
-  color: var(--accent, #007AFF);
-  background: color-mix(in srgb, var(--accent, #007AFF) 12%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .unpaired-notice-rule {
@@ -152,7 +152,7 @@
   height: 1px;
   margin: 28px 0;
   border: 0;
-  background: var(--border, rgba(60, 60, 67, 0.12));
+  background: var(--border);
 }
 
 /* Code first (a Home Screen app): the rule sits between code and steps, and
@@ -168,15 +168,15 @@
 
 .unpaired-notice-h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   line-height: 22px;
   font-weight: 600;
-  color: var(--fg, #1D1D1F);
+  color: var(--fg);
 }
 
 .unpaired-notice-hint {
   margin: 4px 0 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 20px;
   color: var(--un-muted);
 }
@@ -194,10 +194,10 @@
   height: 52px;
   margin: 0;
   padding: 0 14px;
-  border: 1px solid var(--border-strong, rgba(60, 60, 67, 0.18));
-  border-radius: 12px;
-  background: var(--bg-secondary, #F5F5F7);
-  color: var(--fg, #1D1D1F);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--fg);
   font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
   font-size: 22px;
   letter-spacing: 0.12em;
@@ -216,8 +216,8 @@
 }
 
 .unpaired-notice-input:focus {
-  border-color: var(--accent, #007AFF);
-  box-shadow: 0 0 0 1px var(--accent, #007AFF);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .unpaired-notice-input[aria-invalid="true"] {
@@ -237,7 +237,7 @@
   align-items: flex-start;
   gap: 8px;
   margin: 8px 0 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 20px;
   color: var(--un-error);
   overflow-wrap: anywhere;
@@ -254,10 +254,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1;
   font-weight: 700;
-  color: var(--bg, #FFFFFF);
+  color: var(--bg);
   background: var(--un-error);
 }
 
@@ -268,15 +268,15 @@
   margin: 12px 0 0;
   padding: 0 16px;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   background: var(--un-button);
-  color: #FFFFFF;
+  color: var(--on-accent);
   font: inherit;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -305,7 +305,7 @@
 
 .unpaired-notice-submit:focus-visible,
 .unpaired-notice-text-btn:focus-visible {
-  outline: 2px solid var(--accent, #007AFF);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -318,14 +318,14 @@
   margin: 8px 0 0 -8px;
   padding: 0 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   gap: 8px;
   background: transparent;
-  color: var(--accent-text, #0060CC);
+  color: var(--accent-text);
   font: inherit;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -346,7 +346,7 @@
 .unpaired-notice-more {
   margin: auto 0 0;
   padding-top: 32px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--un-muted);
 }
@@ -357,7 +357,7 @@
 
 .unpaired-notice-slow {
   margin: 16px 0 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 20px;
   color: var(--un-muted);
 }
@@ -423,6 +423,6 @@
   text-wrap: pretty;
 }
 .unpaired-notice .unpaired-notice-step-n {
-  color: #fff;
-  background: var(--accent, #007AFF);
+  color: var(--on-accent);
+  background: var(--accent);
 }

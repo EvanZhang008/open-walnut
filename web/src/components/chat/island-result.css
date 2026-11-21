@@ -7,7 +7,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 .island-result[data-sent='true'] {
   opacity: 0.85;
@@ -24,7 +24,7 @@
 }
 .island-result-note {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .island-result-text {
   margin: 0;
@@ -35,7 +35,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -51,19 +51,19 @@
 .island-result-error {
   margin-right: auto;
   color: var(--error);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .island-result-send,
 .island-result-secondary {
   border-radius: 6px;
   padding: 4px 12px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 .island-result-send {
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 .island-result-send:hover:not(:disabled) {

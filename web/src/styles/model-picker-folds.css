@@ -19,7 +19,7 @@
 }
 
 .model-picker-folds-status {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   white-space: nowrap;
 }
@@ -37,7 +37,7 @@
 
 .model-picker-fold-caret {
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 .model-picker-fold-dot {
@@ -70,7 +70,7 @@
 
 .model-picker-fold-speed:empty::before {
   content: 'No turn measured yet.';
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -79,7 +79,7 @@
   margin-bottom: 8px;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
 }

@@ -9,7 +9,7 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 17px;
   font-variant-numeric: tabular-nums;
   min-width: 0;
@@ -17,7 +17,7 @@
 
 .subscription-limit-kicker {
   opacity: 0.75;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   margin-bottom: 2px;
 }
 
@@ -60,7 +60,7 @@
 }
 
 .subscription-limit-row.is-warning .subscription-limit-value {
-  color: var(--warning, #e6a700);
+  color: var(--warning);
 }
 
 .subscription-limit-row.is-rejected .subscription-limit-value,
@@ -69,7 +69,7 @@
 }
 
 .subscription-limit-overage.is-warning {
-  color: var(--warning, #e6a700);
+  color: var(--warning);
 }
 
 .subscription-limit-row.is-reset .subscription-limit-label {
@@ -88,7 +88,7 @@
 }
 
 .composer-limit-hint.is-warning {
-  background: var(--warning, #e6a700);
+  background: var(--warning);
 }
 
 .composer-limit-hint.is-rejected {

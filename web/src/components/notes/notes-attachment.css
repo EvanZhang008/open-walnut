@@ -6,13 +6,13 @@
 
 /* Tree: attachment rows get a slightly muted icon so they read as non-note. */
 .notes-tree-icon-attachment {
-  color: var(--accent, #6b8afd);
+  color: var(--accent);
   opacity: 0.85;
 }
 
 /* "Open in new tab" link in the preview header. */
 .notes-attachment-open {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   text-decoration: none;
 }
@@ -30,7 +30,7 @@
   justify-content: center;
   overflow: auto;
   padding: 24px;
-  background: var(--bg-secondary, #1a1b1e);
+  background: var(--bg-secondary);
 }
 
 .notes-attachment-image {
@@ -53,19 +53,19 @@
 /* Open-with-local-app card (Office docs + any unsupported type). */
 .notes-attachment-card {
   padding: 12px 18px;
-  border: 1px solid var(--border, #2a2c31);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   color: var(--fg);
   text-decoration: none;
-  background: var(--bg, #121316);
+  background: var(--bg);
   font: inherit;
   cursor: pointer;
 }
 .notes-attachment-card:hover {
-  border-color: var(--accent, #6b8afd);
+  border-color: var(--accent);
 }
 
 /* The picture's card on the preview's own grey: lift it onto the page colour. */
 .notes-attachment-preview .notes-image-missing {
-  background: var(--bg, #111214);
+  background: var(--bg);
 }

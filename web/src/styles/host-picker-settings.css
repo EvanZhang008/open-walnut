@@ -12,7 +12,7 @@
 }
 .sps-host-filter-label {
   flex: none;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
   margin-right: 2px;
@@ -46,10 +46,10 @@
 .sps-host-note {
   margin: 4px 8px;
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   display: flex;
   flex-direction: column;
@@ -70,7 +70,7 @@
   align-items: center;
   gap: 6px;
 }
-.sps-host-note .setup-step-btn { font-size: 11px; padding: 2px 10px; }
+.sps-host-note .setup-step-btn { font-size: var(--font-size-xs); padding: 2px 10px; }
 .sps-host-note .setup-step-btn:disabled { opacity: 0.6; cursor: default; }
 .sps-host-note .setup-step-btn:disabled:hover { background: none; color: var(--accent); }
 .sps-host-note .setup-step-btn.sps-note-secondary,
@@ -80,10 +80,10 @@
 }
 .sps-host-note .setup-step-btn.sps-note-secondary:hover,
 .sps-host-note .setup-step-btn.hpb-btn-secondary:hover {
-  background: var(--bg-tertiary, var(--bg-secondary));
+  background: var(--bg-tertiary);
   color: var(--fg);
 }
-.sps-host-note-msg { color: var(--fg-muted); font-size: 11px; }
+.sps-host-note-msg { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .sps-host-note-msg.sps-host-note-error { color: var(--error); }
 .sps-host-note.sps-host-note-off,
 .sps-host-note.sps-host-note-removed {
@@ -93,12 +93,12 @@
   background: transparent;
   border-style: dashed;
 }
-.sps-host-note-last { color: var(--fg-muted); font-size: 11px; }
+.sps-host-note-last { color: var(--fg-muted); font-size: var(--font-size-xs); }
 
 /* ── Picker: the history cap's 'Show N more' option row, and a problem host's dot on a row ── */
 .sps-path-item.sps-more-row {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
 }
@@ -108,8 +108,8 @@
 .rh-host-name,
 .rh-host-alias { flex-shrink: 0; white-space: nowrap; }
 .rh-host-alias {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -133,7 +133,7 @@
   gap: 6px;
   margin-top: 6px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 17px;
 }
 .rh-failure {
@@ -153,7 +153,7 @@
 }
 .rh-readiness-line .rh-readiness { flex: 1 1 16em; min-width: 0; overflow-wrap: anywhere; }
 .rh-readiness-line[data-tone='warn'] .rh-readiness { color: var(--priority-important-text); }
-.rh-readiness-line[data-tone='info'] .rh-readiness { color: var(--fg-secondary, var(--fg-muted)); }
+.rh-readiness-line[data-tone='info'] .rh-readiness { color: var(--fg-secondary); }
 .rh-readiness-line[data-tone='success'] .rh-readiness { color: var(--fg); }
 .rh-readiness-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 /* Its lines stack: a note and "Last checked" ran together as one sentence (2026-11-08). */
@@ -161,8 +161,8 @@
 .rh-readiness-block > .rh-readiness-line { align-self: stretch; }
 .rh-readiness-note { color: var(--fg-muted); overflow-wrap: anywhere; }
 .rh-last-checked,
-.rh-receipt { color: var(--fg-muted); font-size: 11px; }
-.rh-action-failed { color: var(--error); font-size: 11px; }
+.rh-receipt { color: var(--fg-muted); font-size: var(--font-size-xs); }
+.rh-action-failed { color: var(--error); font-size: var(--font-size-xs); }
 .rh-host-detail:empty { display: none; }
 
 /* The relay choice (HostNetworkRelay.tsx): each row's words at the rows' one inset, and a check

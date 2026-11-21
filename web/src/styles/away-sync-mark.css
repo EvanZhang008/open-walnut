@@ -9,8 +9,8 @@
   max-width: 100%;
   padding: 0 6px;
   height: 16px;
-  border-radius: 8px;
-  font-size: 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 16px;
   white-space: nowrap;
@@ -29,7 +29,7 @@
 }
 .away-sync-mark.away-sync-mark:not(.away-sync-board)::after {
   content: 'Syncs later' / '';
-  font-size: 10px;
+  font-size: var(--font-size-xs);
 }
 /* On a Board's bar: centred in the row; a bar too narrow for the mark (a phone)
    wraps its buttons to a second line rather than pushing them off the edge.

@@ -52,13 +52,13 @@
 .session-top:is([data-room="lean"], [data-room="min"]) .top-thread-list .org-thread-title { grid-row: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-top:is([data-room="min"], [data-room="box"]) { max-height: none; }
 .session-top:is([data-room="min"], [data-room="box"]) .top-thread-list > .org-thread { padding: 6px 8px; gap: 4px; }
-.top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg-muted, #86868b); }
+.top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .top-thread-step {
   all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 6px; text-align: center; line-height: 22px;
-  font-size: 15px; color: var(--fg);
+  font-size: var(--font-size-lg); color: var(--fg);
 }
 .top-thread-step:hover:not(:disabled) { background: var(--bg-secondary); }
-.top-thread-step:disabled { cursor: default; color: var(--fg-muted, #86868b); opacity: 0.5; }
+.top-thread-step:disabled { cursor: default; color: var(--fg-muted); opacity: 0.5; }
 .top-thread-step:focus-visible, .top-thread-hide:focus-visible, .top-thread-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .top-thread-pos { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 500; }
 .top-thread-left { margin-left: 4px; }
@@ -73,14 +73,14 @@
 }
 .top-thread-hide { all: unset; cursor: pointer; margin-left: auto; padding: 2px 6px; border-radius: 6px; }
 .top-thread-hide:hover { background: var(--bg-secondary); color: var(--fg); }
-.top-thread-list .org-thread[data-state="needs"] { border-color: color-mix(in srgb, var(--error, #ff3b30) 45%, var(--border)); }
+.top-thread-list .org-thread[data-state="needs"] { border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
 .top-thread-line {
-  all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--fg); min-width: 0;
+  all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg); font-size: var(--font-size-sm); color: var(--fg); min-width: 0;
 }
 .top-thread-line:hover { background: var(--bg-secondary); }
-.top-thread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-muted, #86868b); }
-.top-thread-dot.is-needs { background: var(--error, #ff3b30); }
+.top-thread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-muted); }
+.top-thread-dot.is-needs { background: var(--error); }
 .top-thread-show { color: var(--accent); font-weight: 500; }
 
 /* A phone: finger-sized controls. */

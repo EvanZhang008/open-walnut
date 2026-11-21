@@ -17,7 +17,7 @@
   width: 320px;
   box-sizing: border-box;
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 .fb-menu-body {
   flex: 1 1 auto;
@@ -48,7 +48,7 @@
   outline: none;
   background: transparent;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   padding: 0;
 }
@@ -64,7 +64,7 @@
   height: 20px;
   padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -86,7 +86,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   line-height: 1.2;
   text-align: left;
@@ -121,11 +121,11 @@
   min-height: 22px;
   padding: 4px 8px 2px;
   color: var(--tp-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   letter-spacing: 0.01em;
 }
-.fb-group-action { height: 20px; padding: 0 6px; font-size: 11px; color: var(--accent-text); }
+.fb-group-action { height: 20px; padding: 0 6px; font-size: var(--font-size-xs); color: var(--accent-text); }
 .fb-group-action:hover { color: var(--accent-text); }
 
 /* Property row: the value at the right, muted while it is the default. */
@@ -137,7 +137,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .fb-prop-summary.is-default { color: var(--tp-muted); }
 
@@ -176,8 +176,8 @@
 }
 .fb-back:hover { background: var(--bg-hover); color: var(--fg); }
 .fb-back svg { width: 12px; height: 12px; }
-.fb-page-title { flex: 1; min-width: 0; font-weight: 600; font-size: 12px; color: var(--fg-secondary); }
-.fb-page-reset { font-size: 12px; }
+.fb-page-title { flex: 1; min-width: 0; font-weight: 600; font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.fb-page-reset { font-size: var(--font-size-sm); }
 .fb-page-sub { display: flex; padding: 2px 8px 6px; }
 .fb-page-sub .tp-seg { flex: 1; }
 .fb-page-sub .tp-seg-btn { flex: 1; }
@@ -200,9 +200,9 @@
   height: 14px;
   margin: 0 1px;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-elevated);
-  color: #fff;
+  color: var(--on-accent);
   transition: background-color 80ms ease-out, border-color 80ms ease-out;
 }
 .fb-check-box svg { width: 10px; height: 10px; stroke-width: 2.2; }
@@ -212,10 +212,10 @@
 /* Status: To Do, In Progress and Need Action sit under the Open row. */
 .fb-opt.is-child .fb-opt-body { padding-left: 30px; }
 /* The row a property starts at: a muted word at the right, hidden under `Only` like the count. */
-.fb-opt-default { flex: none; color: var(--tp-muted); font-size: 11px; }
+.fb-opt-default { flex: none; color: var(--tp-muted); font-size: var(--font-size-xs); }
 .fb-opt-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .fb-opt.is-missing .fb-opt-label { font-style: italic; color: var(--tp-muted); }
-.fb-opt-body .tp-count { color: var(--tp-muted); font-size: 12px; }
+.fb-opt-body .tp-count { color: var(--tp-muted); font-size: var(--font-size-sm); }
 .fb-opt-body .tp-count.is-zero { opacity: 0.6; }
 /* The last Status value cannot be removed (F32): no pointer, a dotted underline says so. */
 .fb-opt-body[aria-disabled='true'] { cursor: default; }
@@ -229,15 +229,15 @@
   visibility: hidden;
   padding: 1px 6px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-elevated);
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-family: inherit;
   cursor: pointer;
   box-shadow: 0 0 0 1px var(--border);
 }
-.fb-only:hover { color: var(--fg); background: var(--bg-tertiary, var(--bg-hover)); }
+.fb-only:hover { color: var(--fg); background: var(--bg-tertiary); }
 .fb-opt:hover .fb-only,
 .fb-opt:focus-within .fb-only { visibility: visible; }
 /* Room for `Only` over the count while it shows. */
@@ -250,7 +250,7 @@
   .fb-opt-body .tp-count,
   .fb-opt:has(.fb-only) .fb-opt-default { visibility: hidden; }
 }
-.fb-empty { padding: 10px 8px; color: var(--tp-muted); font-size: 12px; }
+.fb-empty { padding: 10px 8px; color: var(--tp-muted); font-size: var(--font-size-sm); }
 
 /* Time window: the basis segments above the rows, the Custom editor under them. */
 .fb-time-basis { flex: none; }
@@ -264,17 +264,17 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: inherit;
 }
 .fb-custom-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ── Search results (6.3): `Status  In Progress` or `View  Pinned`, the kind muted ── */
 .fb-search-results { display: flex; flex-direction: column; }
-.fb-hit-dim { flex: none; color: var(--tp-muted); font-size: 12px; }
+.fb-hit-dim { flex: none; color: var(--tp-muted); font-size: var(--font-size-sm); }
 .fb-hit-value { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .fb-hit.is-selected .fb-hit-value { color: var(--accent-text); }
-.fb-hit-note { flex: none; color: var(--tp-muted); font-size: 11px; }
+.fb-hit-note { flex: none; color: var(--tp-muted); font-size: var(--font-size-xs); }
 
 /* ── Text buttons: Clear in the Filter title, Reset in a page head ── */
 .fb-text-btn {
@@ -282,17 +282,17 @@
   height: 24px;
   padding: 0 6px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: inherit;
   cursor: pointer;
 }
 .fb-text-btn:hover { background: var(--bg-hover); color: var(--fg); }
 
 /* ── Chip menu (6.4): the same list under a chip ── */
-.fb-chip-menu { display: flex; flex-direction: column; width: 240px; box-sizing: border-box; overflow: hidden; font-size: 13px; }
+.fb-chip-menu { display: flex; flex-direction: column; width: 240px; box-sizing: border-box; overflow: hidden; font-size: var(--font-size-md); }
 .fb-chip-menu .fb-list-rows { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
 .fb-chip-menu .fb-page-sub { padding-top: 6px; }
 .fb-chip-menu-foot { flex: none; border-top: 1px solid var(--border); padding: 4px; }
@@ -306,7 +306,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   text-align: left;
   cursor: pointer;

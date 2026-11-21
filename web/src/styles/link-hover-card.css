@@ -6,11 +6,11 @@
   max-width: min(380px, calc(100vw - 16px));
   padding: 7px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-elevated, var(--bg));
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
   color: var(--fg);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   pointer-events: none;
 }
@@ -31,7 +31,7 @@
 .link-hover-card-target {
   margin-top: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   overflow-wrap: anywhere;
   /* A very long URL stays a few lines, never a wall. */
   display: -webkit-box;

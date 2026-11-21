@@ -58,7 +58,7 @@
 .mail-compose-title {
   flex: 1;
   min-width: 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--fg);
 }
@@ -73,7 +73,7 @@
   border-radius: 999px;
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -112,15 +112,15 @@
   border-radius: 999px;
   background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.mail-compose-drafts-chip:hover { background: var(--accent-subtle-hover, var(--bg-tertiary)); }
+.mail-compose-drafts-chip:hover { background: var(--accent-subtle-hover); }
 
-.mail-compose-close-glyph { font-size: 17px; line-height: 1; }
+.mail-compose-close-glyph { font-size: var(--font-size-xl); line-height: 1; }
 
 /* Destructive on HOVER, not at rest: a red icon sitting in the header of a draft nobody has
    finished reads as an alarm about the draft. */
@@ -150,10 +150,10 @@
   gap: 6px;
   padding: 6px 10px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
-  color: #fff;
-  font-size: 12.5px;
+  color: var(--on-accent);
+  font-size: var(--font-size-md);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -217,7 +217,7 @@
 .mail-compose-label {
   flex: 0 0 46px;
   padding-top: 11px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--fg-muted);
 }
@@ -249,7 +249,7 @@
   border-radius: 999px;
   background: var(--bg-tertiary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -264,7 +264,7 @@
    balances on both ends. */
 .mail-chip.mail-chip-implied { padding-right: 9px; }
 .mail-chip.mail-chip-implied[data-state='finding'] { opacity: 0.7; }
-.mail-chip-note { color: var(--fg-muted, var(--fg)); opacity: 0.75; }
+.mail-chip-note { color: var(--fg-muted); opacity: 0.75; }
 .mail-chip.invalid .mail-chip-note { color: inherit; }
 
 .mail-chip-x {
@@ -287,7 +287,7 @@
   border: none;
   background: none;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   outline: none;
 }
 
@@ -298,12 +298,12 @@
   border: none;
   background: none;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   outline: none;
 }
 
 .mail-compose-input.mail-compose-subject {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   letter-spacing: -0.005em;
 }
@@ -358,7 +358,7 @@
 
 .mail-compose-quote-label {
   display: block;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -368,7 +368,7 @@
 .mail-compose-quote-text {
   margin: 6px 0 0;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
   color: var(--fg-secondary);
   white-space: pre-wrap;
@@ -379,10 +379,10 @@
   flex: 0 0 auto;
   margin: 0 16px 14px;
   padding: 8px 10px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--accent-subtle);
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
 }
 
@@ -408,7 +408,7 @@
 }
 
 .mail-compose-save {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 
@@ -419,7 +419,7 @@
 .mail-compose-save[data-state='blocked'] { color: var(--warning); font-weight: 600; }
 
 .mail-compose-hint {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   opacity: 0.85;
   white-space: nowrap;
@@ -434,10 +434,10 @@
   height: 34px;
   padding: 0 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-secondary);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -449,12 +449,12 @@
 .mail-compose-btn.primary {
   border-color: transparent;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
-.mail-compose-btn.primary:hover:not(:disabled) { background: var(--accent-hover); color: #fff; }
+.mail-compose-btn.primary:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
 .mail-compose-btn.danger { color: var(--error); border-color: transparent; }
 .mail-compose-btn.danger:hover:not(:disabled) { background: rgba(255, 59, 48, 0.1); color: var(--error); }
 
@@ -513,7 +513,7 @@
 .mail-send-status-detail {
   margin: 0;
   max-width: 44ch;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
   color: var(--fg-secondary);
 }
@@ -529,15 +529,15 @@
   width: 100%;
   max-width: 46ch;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-secondary);
   text-align: left;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .mail-send-status-meta dt { color: var(--fg-muted); }
 .mail-send-status-meta dd { margin: 0; color: var(--fg-secondary); overflow-wrap: anywhere; }
-.mail-send-letter-id { font-family: var(--font-mono, monospace); font-size: 11px; }
+.mail-send-letter-id { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 
 .mail-send-status .mail-compose-notice { align-self: stretch; margin: 14px 0 0; }
 
@@ -553,7 +553,7 @@
   border-radius: 999px;
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.03em;
 }

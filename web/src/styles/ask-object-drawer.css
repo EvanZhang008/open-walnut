@@ -25,7 +25,7 @@
   flex: 1;
   min-width: 0;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -60,12 +60,12 @@
   padding: 6px 10px;
   border-left: 2px solid var(--border-strong);
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .ask-object-who {
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 /* The quote's own ×, when the host lets it be left out (the browser side panel's selection). */
@@ -83,7 +83,7 @@
   border-radius: 50%;
   background: none;
   color: var(--fg-muted);
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 1;
   cursor: pointer;
 }
@@ -105,7 +105,7 @@
   flex: 0 0 auto;
   margin: 8px 10px 0;
   color: var(--error);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .ask-object-inline-btn {
@@ -113,7 +113,7 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   cursor: pointer;
   font: inherit;
   text-decoration: underline;

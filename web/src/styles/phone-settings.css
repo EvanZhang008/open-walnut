@@ -77,7 +77,7 @@
 
   .app-shell-navigation .settings-container .settings-layout[data-phone-settings] .settings-nav-group-label {
     padding: 20px 4px 6px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     line-height: 18px;
   }
 
@@ -87,7 +87,7 @@
     gap: 12px;
     padding: 0 8px 0 4px;
     border-radius: 10px;
-    font-size: 17px;
+    font-size: var(--font-size-xl);
     line-height: 22px;
     -webkit-tap-highlight-color: transparent;
   }
@@ -153,13 +153,13 @@
   /* Help reads at phone size and is never cut. */
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-row-help {
     max-width: none;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     line-height: 18px;
     overflow-wrap: anywhere;
   }
 
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-row-label {
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     line-height: 20px;
   }
 
@@ -208,10 +208,10 @@
   align-items: center;
   padding: 1px 6px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   font-weight: 600;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   background: var(--accent-subtle);
 }
 
@@ -222,7 +222,7 @@
   background: none;
   color: var(--error);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 500;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -279,7 +279,7 @@
 
   /* No text under 12 px on a phone (C19): the desktop tags are 11.5. */
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-tag {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-build-line-action {

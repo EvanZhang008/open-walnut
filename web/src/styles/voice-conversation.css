@@ -33,7 +33,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
   /* The ring grows with the voice it hears (listening) or makes (speaking), inside the bar's padding. */
   box-shadow: 0 0 0 calc(4px + var(--voice-level) * 6px) var(--accent-subtle);
@@ -79,7 +79,7 @@
 .voice-bar-title {
   grid-area: title;
   min-width: 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--fg);
   display: flex;
@@ -91,14 +91,14 @@
 }
 
 .voice-bar-hint {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 20px;
   font-weight: 400;
   color: var(--fg-muted);
 }
 
 .voice-bar-line {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
@@ -110,7 +110,7 @@
 }
 
 .voice-bar-who {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
   margin-right: 8px;
@@ -119,7 +119,7 @@
 }
 
 .voice-bar-error {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--error);
 }
 
@@ -133,7 +133,7 @@
 }
 
 .voice-bar-engine {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 

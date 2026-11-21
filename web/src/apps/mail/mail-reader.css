@@ -42,7 +42,7 @@
 
 .mail-reader-nothing-text {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   letter-spacing: 0.01em;
 }
 
@@ -82,7 +82,7 @@
   min-width: 0;
   margin: 0;
   padding-top: 2px;
-  font-size: 20px;
+  font-size: var(--font-size-2xl);
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -118,8 +118,8 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  color: #fff;
-  font-size: 15px;
+  color: var(--on-accent);
+  font-size: var(--font-size-lg);
   font-weight: 600;
   line-height: 1;
   /* The hue comes from the address (see mail-reader-format.ts); the ring keeps a mid-tone circle
@@ -149,7 +149,7 @@
 }
 
 .mail-reader-address {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
@@ -165,7 +165,7 @@
   border-radius: 999px;
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -188,7 +188,7 @@
 
 .mail-reader-unsub {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
@@ -199,7 +199,7 @@
 
 .mail-reader-unsub-check {
   margin-right: 4px;
-  color: var(--success, #1f9d55);
+  color: var(--success);
   font-weight: 600;
 }
 
@@ -216,7 +216,7 @@
   background: var(--bg);
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -227,7 +227,7 @@
 .mail-reader-unsub-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--fg);
-  border-color: var(--border-strong, var(--border));
+  border-color: var(--border-strong);
 }
 
 .mail-reader-unsub-btn:disabled {
@@ -259,7 +259,7 @@
 .mail-reader-unsub[data-state='needs-human'],
 .mail-reader-unsub[data-state='asked'],
 .mail-reader-unsub[data-state='failed'] {
-  color: var(--warning, var(--fg-secondary));
+  color: var(--warning);
 }
 
 .mail-reader-when {
@@ -273,7 +273,7 @@
 }
 
 .mail-reader-date {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   white-space: nowrap;
 }
@@ -286,7 +286,7 @@
   border: none;
   background: none;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   cursor: pointer;
 }
@@ -312,7 +312,7 @@
   overflow-y: auto;
   border-radius: 10px;
   background: var(--bg-hover);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
 }
 
@@ -351,9 +351,9 @@
   max-width: 240px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
 }
 
@@ -374,7 +374,7 @@
 /* A chip that opens its file: the same card, as a real control. Nothing is fetched before the click. */
 .mail-attachment-open {
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   text-align: left;
   text-decoration: none;
   cursor: pointer;
@@ -386,7 +386,7 @@
 /* Where a Download in the Mac app went: the server saved the file into Downloads. */
 .mail-attachment-status {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 .mail-attachment-status.is-failed,
@@ -416,7 +416,7 @@
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .mail-attachment-viewer-name {
@@ -437,7 +437,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .mail-attachment-viewer-btn {
@@ -447,11 +447,11 @@
   align-items: center;
   padding: 0 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   text-decoration: none;
   cursor: pointer;
 }
@@ -478,7 +478,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
 }
 
@@ -494,10 +494,10 @@
 .mail-attachment-viewer-error {
   max-width: 420px;
   padding: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -524,7 +524,7 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: #fff;
   color: #1d1d1f;
   box-shadow: var(--card-shadow);
@@ -537,11 +537,11 @@
   padding: 7px 14px;
   border-bottom: 1px solid rgba(60, 60, 67, 0.12);
   background: #f7f7f9;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   color: #4b4b50;
 }
 
-.mail-blocked-glyph { display: inline-flex; color: #86868b; }
+.mail-blocked-glyph { display: inline-flex; color: var(--fg-muted); }
 .mail-blocked-text { flex: 1; min-width: 0; }
 
 /* A control ON the paper: the app's accent would be the only theme-aware thing on a white card. */
@@ -551,7 +551,7 @@
   border: none;
   background: none;
   color: #0a5bd5;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   cursor: pointer;
 }
@@ -576,7 +576,7 @@
   padding: 20px 24px;
   max-width: 80ch;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 1.65;
   color: #1d1d1f;
   white-space: pre-wrap;
@@ -586,7 +586,7 @@
 .mail-body-text[data-shape='code'] {
   max-width: none;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.6;
   color: #2c2c30;
   overflow-wrap: normal;
@@ -601,16 +601,16 @@
   gap: 8px;
   padding: 20px 22px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
   color: var(--fg-secondary);
 }
 
 .mail-body-footnote {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 
@@ -688,7 +688,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
 }
 
 .mail-invite[data-state='canceled'] {
@@ -719,13 +719,13 @@
 }
 
 .mail-invite-when {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
 }
 
 .mail-invite-where {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -735,7 +735,7 @@
 .mail-invite-status,
 .mail-invite-reason,
 .mail-invite-note {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
@@ -747,19 +747,19 @@
 
 .mail-invite-status[data-confirmed='true']::before {
   content: '\2713\00a0';
-  color: var(--success, #1f9d55);
+  color: var(--success);
   font-weight: 600;
 }
 
 .mail-invite-note {
-  color: var(--warning, var(--fg-secondary));
+  color: var(--warning);
 }
 
 .mail-invite-link {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   font: inherit;
   cursor: pointer;
   text-decoration: underline;
@@ -788,7 +788,7 @@
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -797,7 +797,7 @@
 
 .mail-invite-btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-strong, var(--border));
+  border-color: var(--border-strong);
 }
 
 /* Hover never hides the answer: the mouse is still on the button right after the click. */
@@ -805,7 +805,7 @@
 .mail-invite-btn.chosen:hover:not(:disabled) {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
 }
 
 .mail-invite-btn.chosen:hover:not(:disabled) {

@@ -26,11 +26,11 @@
 }
 
 /* A step that needs the person (a refused permission) stands above the fold, red. */
-:root .step-lifted { margin: 2px 0 4px; padding: 4px 6px; border-radius: 8px; background: color-mix(in srgb, var(--error) 8%, transparent); }
+:root .step-lifted { margin: 2px 0 4px; padding: 4px 6px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--error) 8%, transparent); }
 :root .step-lifted-head { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--error); font-size: 14px; min-width: 0; }
 :root .step-lifted-head .step-icon { color: var(--error); }
 :root .step-lifted-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-:root .step-lifted-why { margin: 0 0 2px 24px; font-size: 13px; line-height: 1.45; color: var(--fg-secondary); overflow-wrap: anywhere;
+:root .step-lifted-why { margin: 0 0 2px 24px; font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 
 /* ── Tool calls ── */
@@ -75,8 +75,8 @@
 }
 :root .session-history .chat-tool-block-bash .chat-tool-block-desc { color: var(--fg-secondary); }
 :root .session-history .chat-tool-block .chat-tool-block-command {
-  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
-  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
 }
 :root .session-history .chat-tool-block .chat-tool-block-arrow { display: inline-flex; margin-left: auto; opacity: 0; transition: opacity .12s, transform .12s; }
@@ -86,9 +86,9 @@
 :root .session-history .chat-tool-block > .chat-tool-block-body {
   margin: 2px 0 8px 28px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
 }
 :root .session-history .chat-tool-block > .chat-tool-block-body .chat-tool-block-section + .chat-tool-block-section { border-top: 1px solid var(--border); }
 
@@ -103,7 +103,7 @@
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron { margin-left: auto; opacity: 0; }
 :root .session-history .tool-run-row--step > .tool-run-toggle:hover .tool-run-chevron,
 :root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron--open { opacity: .7; }
-:root .session-history .tool-run-row--step > .tool-run-body { margin: 2px 0 8px 28px; padding: 8px 10px; border-left: none; border-radius: 8px; background: var(--bg-secondary); }
+:root .session-history .tool-run-row--step > .tool-run-body { margin: 2px 0 8px 28px; padding: 8px 10px; border-left: none; border-radius: var(--radius-sm); background: var(--bg-secondary); }
 /* A run inside an opened fold is its calls, one row each. */
 :root .session-history .tool-run-flat { display: flex; flex-direction: column; }
 
@@ -158,9 +158,9 @@
   box-sizing: border-box;
   margin: 2px 0 8px 24px;
   border-top: none;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
-:root .session-history .provenance-card > .op-card-detail { padding: 8px 10px; border-radius: 8px; background: var(--bg-secondary); }
+:root .session-history .provenance-card > .op-card-detail { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-secondary); }
 :root .session-history .provenance-card > .provenance-status { color: var(--error); margin-top: 0; }
 :root .session-history .op-card-stack { gap: 0; }
 :root .session-history .provenance-card.provenance-card-slim { gap: 8px; }
@@ -188,7 +188,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   overflow-wrap: normal;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.4;
   color: var(--fg-muted);
   cursor: pointer;
@@ -214,7 +214,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   overflow-wrap: normal;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.4;
 }
 :root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-decision * { white-space: nowrap; }

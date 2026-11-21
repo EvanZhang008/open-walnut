@@ -23,5 +23,5 @@
 .session-action-chip.session-header-more-btn { padding: 1px 5px; letter-spacing: 0.06em; }
 .task-kebab-menu.session-header-more-menu { min-width: 150px; }
 .task-kebab-item .session-header-more-name { flex: 1 1 auto; }
-.task-kebab-item .session-header-more-value { color: var(--fg-muted); font-size: 11px; }
+.task-kebab-item .session-header-more-value { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .task-kebab-item:disabled { opacity: 0.5; cursor: default; }

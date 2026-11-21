@@ -31,7 +31,7 @@
 
 .browser-access-qr {
   flex: 0 0 auto;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   /* Black on white in a dark theme too, as a phone camera expects. */
   background: #fff;
   border: 1px solid var(--border);
@@ -43,7 +43,7 @@
   display: inline;
   min-width: 0;
   margin-bottom: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -71,7 +71,7 @@
 /* A sign-in code's two ways in (cloud/SignInWays.tsx): On a computer, then On a phone. */
 .sign-in-ways { display: flex; flex-direction: column; gap: 10px; }
 .sign-in-way { display: flex; flex-direction: column; gap: 4px; }
-.sign-in-way-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.sign-in-way-title { font-size: var(--font-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
 .sign-in-way-body { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--fg); }
 .sign-in-way[data-way="phone"] .sign-in-way-body { flex-wrap: nowrap; }
 /* Smaller than the link was, beside its sentence: a phone camera reads it at this size. */
@@ -81,5 +81,5 @@
 .sign-in-way-steps { display: flex; flex-direction: column; gap: 2px; color: var(--fg); }
 .sign-in-step { display: flex; align-items: baseline; gap: 10px; }
 .sign-in-step-key { flex: 0 0 3em; color: var(--fg-muted); }
-.sign-in-step .browser-access-code-inline { font-size: 15px; }
+.sign-in-step .browser-access-code-inline { font-size: var(--font-size-lg); }
 .sign-in-way-aside { color: var(--fg-muted); flex: 1 1 16em; }

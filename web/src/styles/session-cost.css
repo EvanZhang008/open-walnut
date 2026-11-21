@@ -24,7 +24,7 @@
 }
 
 .session-cost-title {
-  color: var(--fg, inherit);
+  color: var(--fg);
   /* One line whatever lands in it (the picker's rows below must not move). */
   min-width: 0;
   overflow: hidden;
@@ -65,7 +65,7 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .session-cost-model-row:hover {
@@ -73,7 +73,7 @@
 }
 
 .session-cost-model-name {
-  color: var(--fg, inherit);
+  color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -86,7 +86,7 @@
 }
 
 .session-cost-model-usd {
-  color: var(--fg, inherit);
+  color: var(--fg);
   font-weight: 600;
   min-width: 52px;
   text-align: right;
@@ -101,11 +101,11 @@
 }
 
 .session-cost-muted {
-  color: var(--fg-muted, #888);
+  color: var(--fg-muted);
 }
 
 .session-cost-warn {
-  color: var(--warning, #e6a700);
+  color: var(--warning);
 }
 
 .session-cost-foot {
@@ -140,20 +140,20 @@
 }
 
 .session-cost-table thead th {
-  color: var(--fg-muted, #888);
+  color: var(--fg-muted);
   font-size: 0.92em;
-  border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  border-bottom: 1px solid var(--border);
 }
 
 .session-cost-table tbody td:last-child,
 .session-cost-table tfoot td {
-  color: var(--fg, inherit);
+  color: var(--fg);
 }
 
 .session-cost-tier th,
 .session-cost-tier td {
   padding-top: 5px;
-  color: var(--fg-muted, #888);
+  color: var(--fg-muted);
   font-size: 0.92em;
 }
 
@@ -164,9 +164,9 @@
 .session-cost-table tfoot th,
 .session-cost-table tfoot td {
   padding-top: 3px;
-  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  border-top: 1px solid var(--border);
   font-weight: 600;
-  color: var(--fg, inherit);
+  color: var(--fg);
 }
 
 /* "Same usage on other models": a toggle under the model list, then one table. */
@@ -179,7 +179,7 @@
   background: none;
   padding: 2px 0;
   font: inherit;
-  color: var(--fg, inherit);
+  color: var(--fg);
   cursor: pointer;
 }
 
@@ -198,16 +198,16 @@
 .session-cost-compare-table tr.is-current th,
 .session-cost-compare-table tr.is-current td {
   font-weight: 600;
-  color: var(--fg, inherit);
+  color: var(--fg);
 }
 
 .session-cost-compare-table tbody tr:not(.session-cost-tier) th,
 .session-cost-compare-table tbody td:nth-child(2) {
-  color: var(--fg, inherit);
+  color: var(--fg);
 }
 
 .session-cost-compare-table tbody td:last-child {
-  color: var(--fg-muted, #888);
+  color: var(--fg-muted);
 }
 
 /* The budget line under the cost: what it allows, and the way to change it. */
@@ -229,7 +229,7 @@
   background: none;
   padding: 2px 0;
   font: inherit;
-  color: var(--accent, inherit);
+  color: var(--accent);
   cursor: pointer;
   white-space: nowrap;
 }

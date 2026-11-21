@@ -17,19 +17,19 @@
 .ask-card.org-ask {
   padding: 12px 12px 8px;
   border-radius: 18px;
-  background: var(--glass-legible-bg, var(--bg-elevated, var(--card-bg)));
+  background: var(--glass-legible-bg, var(--bg-elevated));
   border: 1px solid var(--glass-frost-border, var(--border));
   box-shadow: inset 0 1px 0 var(--glass-frost-highlight, transparent), var(--card-shadow-hover);
 }
 .ask-card.org-ask { margin: 6px 8px; }
 
 .ask-card-title {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-muted);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-sm); color: var(--fg-muted);
 }
 .ask-card-title a { color: inherit; text-decoration: none; font-weight: 600; }
 .ask-card-title a:hover { text-decoration: underline; }
 /* A node's list says "needs you" with the same dot, on its title's line. */
-.ask-card .org-ask-mark .wn-dot { background: var(--warning, #ff9500); }
+.ask-card .org-ask-mark .wn-dot { background: var(--warning); }
 
 /* What it asks, after the dot; the why under it, its words in line with the question's. */
 .ask-card-question {
@@ -39,19 +39,19 @@
 }
 .ask-card-question::before {
   content: ''; position: absolute; left: 0; top: 6.5px; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--warning, #ff9500);
+  background: var(--warning);
 }
 /* A node's list has the dot on its title's line already. */
 .ask-card:has(.org-ask-mark) .ask-card-question { padding-left: 0; }
 .ask-card:has(.org-ask-mark) .ask-card-question::before { content: none; }
 .ask-card-detail {
   min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow-wrap: anywhere; font-size: 13px; line-height: 19px; color: var(--fg-secondary, var(--fg-muted));
+  overflow-wrap: anywhere; font-size: var(--font-size-md); line-height: 19px; color: var(--fg-secondary);
 }
 .ask-card-question + .ask-card-detail { padding-left: 15px; }
 .ask-card:has(.org-ask-mark) .ask-card-detail { padding-left: 0; }
-.ask-card :is(.ask-card-question, .ask-card-detail) a:not(.btn) { color: var(--accent-text, var(--accent)); }
-.ask-card-status { color: var(--fg-muted); font-size: 12px; }
+.ask-card :is(.ask-card-question, .ask-card-detail) a:not(.btn) { color: var(--accent-text); }
+.ask-card-status { color: var(--fg-muted); font-size: var(--font-size-sm); }
 
 /* The answer row. Its lines are 8 px apart, kept by each part's own 4 px above and below rather than
    the row's gap, so the zero-height line break below adds no second gap. */
@@ -83,7 +83,7 @@
 /* The box: a soft grey field inside the card, no frame of its own until it has the focus. */
 .ask-card-answer .org-answer-words .chat-input-container { padding: 0; }
 .ask-card-answer .org-answer-words .chat-input-box {
-  background: var(--bg-secondary); border-color: transparent; border-radius: 8px; box-shadow: none;
+  background: var(--bg-secondary); border-color: transparent; border-radius: var(--radius-sm); box-shadow: none;
 }
 /* One key's height, 34 px with its 1 px edge: one line of text, the mic and send inside it. */
 .ask-card-answer .org-answer-words .chat-input-box > .chat-input-textarea { min-height: 32px; padding-top: 6px; padding-bottom: 6px; line-height: 20px; }
@@ -92,29 +92,29 @@
 .ask-card-answer .org-answer-words .chat-input-box:focus-within { border-color: var(--border-strong); box-shadow: none; }
 /* Its composer greys the theme's colours as every chat's does (chat-palette.css); an ask that waits
    on him keeps its blue send, from the theme's own accent. */
-.ask-card-answer .org-answer-words .chat-send-btn-icon { width: 28px; height: 28px; background: var(--chat-hue-accent, var(--accent)); color: #fff; }
+.ask-card-answer .org-answer-words .chat-send-btn-icon { width: 28px; height: 28px; background: var(--chat-hue-accent, var(--accent)); color: var(--on-accent); }
 .ask-card-answer .org-answer-words .chat-send-btn-icon svg { width: 15px; height: 15px; }
-.ask-card-answer .org-answer-words .chat-send-btn-icon:disabled { opacity: 1; background: var(--bg-tertiary, var(--bg-hover)); color: var(--fg-muted); cursor: default; }
+.ask-card-answer .org-answer-words .chat-send-btn-icon:disabled { opacity: 1; background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }
 
 /* Its keys (2026-11-21, the user, of ten whole-card designs: "2 is good"): one height with the box,
    34 px, corner 8. The card's one main action is solid blue: Acknowledge, or the recommended option
    ("Ack button shoudl be blue, or recommended optiion shoudl be blue also"); the rest are quiet. */
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) {
-  min-height: 34px; padding: 4px 12px; border: none; border-radius: 8px;
-  background: var(--bg-secondary); color: var(--fg); font-size: 13px; font-weight: 500; box-shadow: none;
+  min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm);
+  background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); font-weight: 500; box-shadow: none;
 }
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, var(--bg-secondary)); }
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):disabled { opacity: 0.5; }
-.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { background: var(--accent); color: #fff; }
-.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
+.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { background: var(--accent); color: var(--on-accent); }
+.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: var(--accent-hover); }
 
 /* An approval's Deny and Approve are the same keys; Approve is the card's one blue. */
 .ask-card .ask-card-answer .approval-actions .approval-btn {
-  min-height: 34px; padding: 4px 12px; border: none; border-radius: 8px;
-  background: var(--bg-secondary); color: var(--fg); font-size: 13px; font-weight: 500;
+  min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm);
+  background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); font-weight: 500;
 }
-.ask-card .ask-card-answer .approval-actions .approval-btn-approve { background: var(--accent); color: #fff; }
-.ask-card .ask-card-answer .approval-actions .approval-btn-approve:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
+.ask-card .ask-card-answer .approval-actions .approval-btn-approve { background: var(--accent); color: var(--on-accent); }
+.ask-card .ask-card-answer .approval-actions .approval-btn-approve:hover:not(:disabled) { background: var(--accent-hover); }
 
 /* Its options: a list, one row each, its line of why beside it in small grey (cut to the row), the
    recommended row blue with its word at the right. The why is the button's data-detail, drawn
@@ -129,19 +129,19 @@
 .ask-card-answer .org-answer-options .btn[data-detail]::before {
   content: attr(data-detail); order: 1; flex: 1 1 0; min-width: 0;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  font-size: 12px; font-weight: 400; color: var(--fg-muted);
+  font-size: var(--font-size-sm); font-weight: 400; color: var(--fg-muted);
 }
 .ask-card-answer .org-answer-options .btn.btn-primary[data-detail]::before { color: inherit; opacity: 0.82; }
-.ask-card-answer .org-answer-options .btn[data-recommended]::after { order: 2; flex: none; margin-left: auto; font-size: 11px; font-weight: 400; color: inherit; opacity: 0.82; }
+.ask-card-answer .org-answer-options .btn[data-recommended]::after { order: 2; flex: none; margin-left: auto; font-size: var(--font-size-xs); font-weight: 400; color: inherit; opacity: 0.82; }
 /* Several may be picked: the same rows, a box to tick in each, the picked ones edged in blue. */
-.ask-card .org-answer-check { min-height: 34px; padding: 4px 12px; border: none; border-radius: 8px; font-size: 13px; font-weight: 500; gap: 8px; cursor: pointer; }
+.ask-card .org-answer-check { min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm); font-size: var(--font-size-md); font-weight: 500; gap: 8px; cursor: pointer; }
 .ask-card .org-answer-check.is-on { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--accent); }
 
 /* The card's own tools at the right (Snooze, a thread's Pin): quiet text, "Snooze ▾" as on
    the Needs you card the user picked (2026-11-21, "I lkike P1 button"). */
 .ask-card-tools .btn {
   display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px;
-  border: none; border-radius: 8px; background: transparent; color: var(--fg-muted); font-size: 13px; box-shadow: none;
+  border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: var(--font-size-md); box-shadow: none;
 }
 .ask-card-tools .btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 
@@ -149,9 +149,9 @@
 .ask-card.is-snoozed :is(.ask-card-question, .ask-card-detail) { color: var(--fg-muted); }
 .ask-card.is-snoozed .ask-card-question::before { background: var(--fg-muted); }
 /* Answered from here: the words stay, the dot goes, a line says what was said. */
-.ask-card.is-answered .ask-card-question { color: var(--fg-secondary, var(--fg)); }
+.ask-card.is-answered .ask-card-question { color: var(--fg-secondary); }
 .ask-card.is-answered .ask-card-question::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--fg-muted); }
-.ask-card-answered { flex: 1 1 100%; min-width: 0; font-size: 13px; line-height: 19px; color: var(--fg-muted); overflow-wrap: break-word; }
+.ask-card-answered { flex: 1 1 100%; min-width: 0; font-size: var(--font-size-md); line-height: 19px; color: var(--fg-muted); overflow-wrap: break-word; }
 .ask-card-answered-mark { margin-right: 6px; font-weight: 600; }
 .ask-card-answered-said { color: var(--fg); }
 
@@ -161,7 +161,7 @@
     min-height: 44px;
     min-width: 44px;
   }
-  .app-shell-navigation .ask-card :is(.ask-card-status, .org-answer-note, .org-answer-error) { font-size: 12px; }
+  .app-shell-navigation .ask-card :is(.ask-card-status, .org-answer-note, .org-answer-error) { font-size: var(--font-size-sm); }
   /* Its keys and box share one height there too: a finger's 44 px. */
   .app-shell-navigation .ask-card .ask-card-answer :is(.btn, .approval-btn, .org-answer-check):not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { min-height: 44px; }
   .app-shell-navigation .ask-card .ask-card-answer .org-answer-words .chat-input-box > .chat-input-textarea { min-height: 42px; padding-top: 11px; padding-bottom: 11px; }

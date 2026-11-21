@@ -15,7 +15,7 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 20px;
   font-weight: 500;
 }
@@ -36,7 +36,7 @@
   min-height: 32px;
   padding: 3px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--settings-input-bg);
   cursor: text;
   transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -63,10 +63,10 @@
   height: 24px;
   padding: 0 2px 0 8px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   cursor: default;
 }
@@ -79,7 +79,7 @@
 
 .tp-rule-text--pattern {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 /* A line the server cannot use: kept, shown, and plainly not in force. */
@@ -102,7 +102,7 @@
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -129,7 +129,7 @@
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .tp-rule-input::placeholder,
@@ -150,7 +150,7 @@
 
 .tp-rules-unused {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--priority-important-text);
   overflow-wrap: anywhere;
@@ -172,7 +172,7 @@
 
 .tp-link:focus-visible {
   outline: none;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   box-shadow: var(--settings-focus-ring);
 }
 
@@ -184,11 +184,11 @@
   padding: 8px 10px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--settings-input-bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 20px;
   resize: none;
   transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -224,7 +224,7 @@
   align-items: baseline;
   gap: 8px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--fg-secondary);
 }

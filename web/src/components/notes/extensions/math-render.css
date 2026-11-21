@@ -13,7 +13,7 @@
   display: block;
   margin: 0.5em 0;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   overflow-x: auto;
   overflow-y: hidden;
   text-align: center;
@@ -35,12 +35,12 @@
   margin-top: 0;
   border: 1px dashed var(--border);
   border-top: none;
-  border-radius: 0 0 4px 4px;
+  border-radius: 0 0 var(--radius-xs) var(--radius-xs);
 }
 
 .tiptap .notes-math-inline {
   padding: 0 1px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   cursor: text;
 }
 
@@ -54,7 +54,7 @@
 
 /* KaTeX not loaded yet: the source, quietly. */
 .tiptap .notes-math-pending {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 0.9em;
   color: var(--fg-secondary);
   white-space: pre-wrap;
@@ -62,12 +62,12 @@
 
 /* Invalid latex (or KaTeX failed to load): the source in red, the message on hover. */
 .tiptap .notes-math-error {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 0.9em;
   white-space: pre-wrap;
-  color: var(--error, #cc0000);
-  background: color-mix(in srgb, var(--error, #cc0000) 8%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--error, #cc0000) 40%, transparent);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--error) 40%, transparent);
 }
 
 .tiptap .notes-math-error .katex-error {

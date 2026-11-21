@@ -15,10 +15,10 @@
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 7px 7px 7px 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) var(--radius-sm) 2px;
   background: rgb(240, 100, 20);
-  color: #fff;
-  font-size: 10px;
+  color: var(--on-accent);
+  font-size: var(--font-size-xs);
   line-height: 1;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
@@ -37,7 +37,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   z-index: 1000;
   /* useMenuPlacement caps the height to the room it has; the card scrolls inside it. */
   overflow-y: auto;
@@ -45,10 +45,10 @@
 }
 .passage-comment-card > * { flex-shrink: 0; }
 .passage-comment-card-head { display: flex; gap: 8px; align-items: baseline; font-weight: 600; }
-.passage-comment-card-state { font-weight: 400; font-size: 11px; color: var(--fg-muted); }
+.passage-comment-card-state { font-weight: 400; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .passage-comment-card-quote {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   border-left: 2px solid var(--border-strong);
   padding-left: 8px;
 }
@@ -66,17 +66,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .passage-comment-card-cancel {
   flex-shrink: 0;
   height: 24px;
   padding: 0 9px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .passage-comment-card-cancel:hover { color: var(--fg); background: var(--bg-hover); }
@@ -88,7 +88,7 @@
   border-radius: 6px;
   color: var(--accent);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .passage-comment-card-remove:hover { background: var(--bg-hover); }
 
@@ -107,10 +107,10 @@
   align-items: baseline;
   gap: 8px;
   padding: 5px 10px 3px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .pending-comments-count { font-weight: 600; color: var(--fg); }
-.pending-comments-hint { color: var(--fg-secondary); font-size: 11px; }
+.pending-comments-hint { color: var(--fg-secondary); font-size: var(--font-size-xs); }
 .pending-comments-list {
   list-style: none;
   margin: 0;
@@ -126,13 +126,13 @@
   mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
 }
-.pending-comments-sep { flex: 0 0 auto; color: var(--fg-muted); font-size: 12px; }
+.pending-comments-sep { flex: 0 0 auto; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .pending-comments-row {
   display: flex;
   align-items: center;
   gap: 2px;
   height: 34px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 .pending-comments-row:hover { background: var(--bg-hover); }
 .pending-comments-jump {
@@ -148,7 +148,7 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 .pending-comments-doc {
   flex: 0 0 auto;
@@ -157,10 +157,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 .pending-comments-where {
   flex: 0 1 auto;
@@ -170,7 +170,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .pending-comments-text {
   flex: 1 1 0;
@@ -180,7 +180,7 @@
   white-space: nowrap;
   /* The quoted words' size, at full contrast: one weight per row. */
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 /* What the row is (Quote or Comment): a small tag at its start, one width on every
    row so the words after it start on one line. */
@@ -191,10 +191,10 @@
   box-sizing: border-box;
   text-align: center;
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--fg) 6%, transparent);
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 .pending-comments-edit,
 .pending-comments-remove {
@@ -203,7 +203,7 @@
   height: 30px;
   border: none;
   background: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   color: var(--fg-secondary);
   cursor: pointer;
   font-size: 16px;

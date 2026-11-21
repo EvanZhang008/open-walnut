@@ -72,7 +72,7 @@
    hovered row's bg-hover in the light theme; keep it a visible control. */
 .engine-settings-popover .engine-setting-row:hover .toggle-switch:not(.toggle-on) {
   background: var(--bg);
-  border-color: var(--border-strong, var(--fg-muted));
+  border-color: var(--border-strong);
 }
 
 /* Help reads in full: the second sentence of some rows is the only place that
@@ -115,19 +115,19 @@
 .engine-setting-env-walnut,
 .engine-setting-help-match {
   padding: 0 10px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
 }
 
 .engine-setting-env-walnut {
-  color: var(--warning, var(--priority-important));
+  color: var(--warning);
 }
 
 /* Inside the card, right under the status line, in the status line's own
    11px muted type; italic marks it as a verdict, not a source. */
 .engine-setting-not-honored {
   display: block;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-muted);
   font-style: italic;
@@ -140,7 +140,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-muted);
   opacity: 0;
@@ -188,9 +188,9 @@
 }
 
 .engine-setting-help-match {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.35;
-  color: var(--fg-secondary, var(--fg-muted));
+  color: var(--fg-secondary);
 }
 
 .engine-setting-help-match mark {
@@ -227,7 +227,7 @@
   padding: 4px 2px;
   list-style: none;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--fg-muted);
 }
@@ -247,7 +247,7 @@
 
 .engine-settings-popover-group-help {
   margin: 0 2px 2px;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-muted);
 }

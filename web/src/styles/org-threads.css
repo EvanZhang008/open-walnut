@@ -3,11 +3,11 @@
    toggle away. One 4px grid, three text sizes (11, 12, 13), three text roles; the accent marks
    only the answers he has not reacted to yet (the rule beside them). */
 .org-threads { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
-.org-threads-empty { margin: 4px 0; font-size: 13px; color: var(--fg-muted, #86868b); }
+.org-threads-empty { margin: 4px 0; font-size: var(--font-size-md); color: var(--fg-muted); }
 .org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 /* Packed tight (2026-11-20, the user: "shoudl be narrow"): small padding and gaps, the words whole. */
 .org-thread {
-  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--bg);
   display: flex; flex-direction: column; gap: 6px; min-width: 0;
 }
 /* A thread card in the one ask card (PoppedThreadCard, a thread of a task below) shows what it asks
@@ -31,40 +31,40 @@
   background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
 }
 .org-thread-state {
-  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-secondary, var(--fg)); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap;
 }
 .org-thread-state i, .org-thread-task i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.4; overflow-wrap: break-word; }
+.org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: var(--font-size-md); line-height: 1.4; overflow-wrap: break-word; }
 /* The row beside the state fills its column and lays its pieces out right-aligned; only the node's
    name gives way (ellipsis, the full name on hover), the state and the time stay whole. An
    end-aligned item at its text width overflowed to the left over the state in WebKit (2026-11-09). */
 .org-thread-meta {
   grid-column: 2; grid-row: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: baseline;
-  font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; white-space: pre; overflow: hidden;
+  font-size: var(--font-size-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: pre; overflow: hidden;
 }
 .org-thread-from, .org-thread-meta .org-thread-pin { min-width: 0; flex: 0 1 auto; }
 .org-thread-from, .org-thread-pin-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-thread-pin-who { min-width: 0; }
 .org-thread-time { flex: none; }
-.org-thread-head:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 4px; }
-.org-thread-follows { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
+.org-thread-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+.org-thread-follows { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
 /* A thread holding its task's own ask: the ask card, then the thread's own summary under it. */
 .org-thread-held-ask { display: flex; flex-direction: column; gap: 6px; }
 .org-thread-summary.is-stand-in p { margin: 0; }
-.org-thread-stand-in-note { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted, #86868b); }
+.org-thread-stand-in-note { display: block; margin-top: 2px; font-size: var(--font-size-xs); color: var(--fg-muted); }
 /* His reply a card below sent: his words, then whether its task read them (PoppedThreadCard). */
 /* A tint, never a bar down one side (no-side-bars.test.ts). */
-.org-thread-sent { margin: 0; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent, #0a84ff) 8%, transparent); }
-.org-thread-sent-words { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.org-thread-overdue { margin: 0; font-size: 12px; color: color-mix(in srgb, var(--warning, #ff9f0a) 75%, var(--fg, #1d1d1f)); }
+.org-thread-sent { margin: 0; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.org-thread-sent-words { margin: 0; font-size: var(--font-size-md); white-space: pre-wrap; overflow-wrap: anywhere; }
+.org-thread-overdue { margin: 0; font-size: var(--font-size-sm); color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
 /* The node's summary: what the card is about now, latest first. */
-.org-thread-summary { font-size: 13px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
+.org-thread-summary { font-size: var(--font-size-md); line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
 .org-thread-summary > :first-child { margin-top: 0; }
 .org-thread-summary > :last-child { margin-bottom: 0; }
 .org-thread-tasks { display: flex; flex-wrap: wrap; gap: 4px; }
 .org-thread-task {
   display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--border);
-  border-radius: 6px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: 11px; cursor: pointer;
+  border-radius: 6px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-xs); cursor: pointer;
 }
 .org-thread-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -72,28 +72,28 @@
 .org-thread-unread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .org-thread-unread .org-thread-answer { margin-left: 0; }
 .org-thread-unread .org-thread-answer-body { -webkit-line-clamp: 4; }
-.org-thread-re { font-size: 12px; color: var(--fg-muted, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-thread-re { font-size: var(--font-size-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Expand / Collapse, on the text it opens (left, under it), and the card's Conversation toggle. */
 .org-thread-toggle {
   align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 4px; margin-left: -4px;
-  border: 0; border-radius: 6px; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-size-sm); font-weight: 500; cursor: pointer;
   transition: background-color 120ms ease-out;
 }
 .org-thread-toggle:hover { background: var(--bg-secondary); }
-.org-thread-toggle:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; }
+.org-thread-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .org-thread-toggle > span[aria-hidden] { width: 12px; text-align: center; }
-.org-thread-history { color: var(--fg-secondary, var(--fg)); }
+.org-thread-history { color: var(--fg-secondary); }
 .org-thread-fold.is-folded { cursor: pointer; }
 
 /* The conversation: his words beside their number, the node's answer under them. */
 .org-thread-conversation { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .org-thread-exchange { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .org-thread-message { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 4px; align-items: baseline; min-width: 0; }
-.org-thread-n { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; text-align: right; padding-right: 4px; }
+.org-thread-n { font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; text-align: right; padding-right: 4px; }
 .org-thread-said { min-width: 0; }
-.org-thread-via { font-size: 11px; color: var(--fg-muted, #86868b); }
-.org-thread-words { font-size: 13px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
+.org-thread-via { font-size: var(--font-size-xs); color: var(--fg-muted); }
+.org-thread-words { font-size: var(--font-size-md); line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
 .org-thread-words > :first-child { margin-top: 0; }
 .org-thread-words > :last-child { margin-bottom: 0; }
 .org-thread-words img { max-width: min(100%, 320px); max-height: 160px; border-radius: 6px; }
@@ -105,8 +105,8 @@
   margin-left: 24px; padding: 4px 0 4px 12px; border-left: 2px solid var(--border); min-width: 0;
   display: flex; flex-direction: column; gap: 4px;
 }
-.org-thread-answer.is-waiting { font-size: 12px; color: var(--fg-muted, #86868b); }
-.org-thread-answer-by { font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
+.org-thread-answer.is-waiting { font-size: var(--font-size-sm); color: var(--fg-muted); }
+.org-thread-answer-by { font-size: var(--font-size-xs); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .org-thread-answer-by > .wn-dot { margin-right: 6px; vertical-align: 1px; }
 .org-thread-fold { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 /* Structured replies scroll instead of cutting a block or fading its words. */
@@ -114,36 +114,36 @@
 .org-thread .org-thread-fold.is-whole,
 .org-thread[data-state="needs"] .org-thread-fold { display: block; -webkit-line-clamp: unset; max-height: none; overflow: visible; }
 .org-thread-words-fold { -webkit-line-clamp: 6; }
-.org-thread-answer-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; -webkit-line-clamp: 8; }
+.org-thread-answer-body { font-size: var(--font-size-md); line-height: 1.5; overflow-wrap: anywhere; -webkit-line-clamp: 8; }
 .org-thread-answer-body .markdown-body > :first-child { margin-top: 0; }
 /* A heading in a reply reads as a bold line here, not a page title. */
-.org-thread-answer-body .markdown-body :is(h1, h2, h3, h4, h5, h6) { font-size: 13px; line-height: 1.5; font-weight: 600; margin: 4px 0; }
+.org-thread-answer-body .markdown-body :is(h1, h2, h3, h4, h5, h6) { font-size: var(--font-size-md); line-height: 1.5; font-weight: 600; margin: 4px 0; }
 .org-thread-answer-body .markdown-body > :last-child { margin-bottom: 0; }
 .org-thread-answer .msg-about { margin-top: 0; }
 
-.org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 11px; cursor: pointer; }
+.org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-size-xs); cursor: pointer; }
 .org-thread-actions { display: flex; align-items: center; column-gap: 8px; flex-wrap: wrap; }
-.org-thread-snoozed { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
+.org-thread-snoozed { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
 /* A pinned thread leads the list: its mark beside the time, and a quiet accent edge. */
-.org-thread.is-pinned { border-color: color-mix(in srgb, var(--accent, #0a84ff) 45%, var(--border)); }
-.org-thread-pin { display: inline-flex; align-items: center; gap: 3px; color: var(--accent, #0a84ff); }
+.org-thread.is-pinned { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.org-thread-pin { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
 .org-thread-pin .thread-icon { flex: none; }
 .org-thread-pin-btn { display: inline-flex; align-items: center; justify-content: center; padding-left: 8px; padding-right: 8px; }
-.org-thread-pin-btn[aria-pressed="true"] { color: var(--accent, #0a84ff); }
-.org-thread-closed { font-size: 12px; color: var(--fg-muted, #86868b); margin-right: auto; }
+.org-thread-pin-btn[aria-pressed="true"] { color: var(--accent); }
+.org-thread-closed { font-size: var(--font-size-sm); color: var(--fg-muted); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
-.org-thread-error { margin: 0 auto 0 0; font-size: 12px; color: var(--error, #ff3b30); }
+.org-thread-error { margin: 0 auto 0 0; font-size: var(--font-size-sm); color: var(--error); }
 .org-threads-closed-toggle {
-  align-self: flex-start; border: 0; padding: 4px 0; background: transparent; color: var(--fg-muted, #86868b);
-  font: inherit; font-size: 12px; cursor: pointer;
+  align-self: flex-start; border: 0; padding: 4px 0; background: transparent; color: var(--fg-muted);
+  font: inherit; font-size: var(--font-size-sm); cursor: pointer;
 }
-.org-threads-closed-toggle:hover { color: var(--fg-secondary, var(--fg)); }
+.org-threads-closed-toggle:hover { color: var(--fg-secondary); }
 
 /* Threads in their three groups (experiment brief_off, components/org/OrgThreadsByState.tsx): a heading per group. */
 .org-thread-groups { display: flex; flex-direction: column; gap: 6px; }
 .org-thread-group { display: flex; flex-direction: column; gap: 8px; }
-.org-thread-group-head { display: inline-flex; align-items: baseline; gap: 6px; margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-secondary, var(--fg)); }
-.org-thread-group-count { font-weight: 400; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
+.org-thread-group-head { display: inline-flex; align-items: baseline; gap: 6px; margin: 4px 0 0; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
+.org-thread-group-count { font-weight: 400; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
 /* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
 .org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }
@@ -157,21 +157,21 @@
 }
 .org-threads-chip {
   display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border-radius: 999px;
-  border: 1px solid transparent; background: var(--bg-secondary, #f2f2f7); color: var(--fg, #1d1d1f);
-  font-size: 12px; cursor: pointer;
+  border: 1px solid transparent; background: var(--bg-secondary); color: var(--fg);
+  font-size: var(--font-size-sm); cursor: pointer;
 }
-.org-threads-chip:hover { border-color: var(--border, #d1d1d6); }
-.org-threads-chip[aria-pressed="true"] { border-color: var(--accent, #0a84ff); color: var(--accent, #0a84ff); }
-.org-threads-chip-count { color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
+.org-threads-chip:hover { border-color: var(--border); }
+.org-threads-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.org-threads-chip-count { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
 /* A card he acknowledged at work (ThreadKnown.tsx): what it waits on, how it ends. */
-.org-thread-state i.is-known { background: transparent; border: 1.5px solid var(--accent, #0a84ff); box-sizing: border-box; }
-.org-thread-known { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.org-thread-state i.is-known { background: transparent; border: 1.5px solid var(--accent); box-sizing: border-box; }
+.org-thread-known { display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-md); }
 .org-thread-known p { margin: 0; }
 .org-thread-known-wait .org-thread-task { display: inline-flex; vertical-align: middle; max-width: 100%; }
-.org-thread-known-what { color: var(--fg-secondary, var(--fg)); }
-.org-thread-known-ends { font-size: 11px; color: var(--fg-muted, #86868b); }
-.org-thread-back { color: var(--accent, #0a84ff); }
+.org-thread-known-what { color: var(--fg-secondary); }
+.org-thread-known-ends { font-size: var(--font-size-xs); color: var(--fg-muted); }
+.org-thread-back { color: var(--accent); }
 
 /* A card of a task below says its group on its title line (ThreadState, thread-badge.ts), the
    group's dot and word as the node's own cards: its question has no dot of its own. */
@@ -182,10 +182,10 @@
    went and Show, fading out over its last second. */
 .org-thread-move-note {
   display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 6px 10px;
-  border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; color: var(--fg-muted, #86868b);
+  border: 1px dashed var(--border); border-radius: var(--radius-sm); font-size: var(--font-size-sm); color: var(--fg-muted);
   animation: org-thread-move-note-fade 6s linear forwards;
 }
-.org-thread-move-to { flex: none; color: var(--fg-secondary, var(--fg)); }
+.org-thread-move-to { flex: none; color: var(--fg-secondary); }
 .org-thread-move-words { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-thread-move-note .org-thread-link { flex: none; }
 @keyframes org-thread-move-note-fade { 0%, 83% { opacity: 1; } 100% { opacity: 0; } }

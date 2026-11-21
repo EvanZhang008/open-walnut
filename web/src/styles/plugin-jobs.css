@@ -13,7 +13,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 4px 6px 4px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 .plugin-job-log-text {
@@ -23,7 +23,7 @@
   padding: 8px 10px;
   border-top: 1px solid var(--border);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

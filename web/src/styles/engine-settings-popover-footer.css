@@ -13,7 +13,7 @@
 
 .engine-settings-slow-note {
   margin: 0 0 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -22,14 +22,14 @@
   gap: 6px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-md);
   background: var(--bg-secondary);
 }
 
 .engine-settings-skeleton-bar {
   display: block;
   height: 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--bg-hover);
   animation: engine-settings-skeleton-pulse 1.4s ease-in-out infinite;
 }
@@ -43,23 +43,23 @@
 .engine-settings-popover-empty,
 .engine-settings-popover-nomatch {
   margin: 8px 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
 }
 
 .engine-settings-popover-error {
   margin: 0 0 8px;
-  color: var(--error, var(--priority-immediate));
+  color: var(--error);
 }
 
 .engine-settings-retry {
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -77,7 +77,7 @@
   gap: 4px;
   padding: 8px 14px 10px;
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 /* The status slot: one line reserved at rest; a landed sentence
@@ -130,7 +130,7 @@
   border: 0;
   background: transparent;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   cursor: pointer;
 }
@@ -206,7 +206,7 @@
   align-items: baseline;
   gap: 2px 6px;
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 
@@ -217,8 +217,8 @@
 /* Paths break after a slash (<wbr>), never inside a file name; `anywhere` is
    the fallback for one segment wider than the box. */
 .engine-settings-popover .engine-settings-file code {
-  font-size: 11px;
-  color: var(--fg-secondary, var(--fg));
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
 
@@ -244,19 +244,19 @@
 }
 
 .engine-settings-file-created {
-  color: var(--success, var(--accent));
+  color: var(--success);
 }
 
 .engine-settings-file-error {
-  color: var(--error, var(--priority-immediate));
+  color: var(--error);
 }
 
 .engine-settings-copy-path {
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }

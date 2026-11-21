@@ -12,7 +12,7 @@
   min-width: 0;
   background: var(--bg);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 /* Full screen: the same element over the page area (drawing-overlay.ts lifts the ancestors that
    would hold it in their box). Like every full screen in Walnut (styles/fullscreen-tab.css), the
@@ -60,7 +60,7 @@
   height: 28px;
   padding: 0 10px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 .drawing-quiet-button {
@@ -98,13 +98,13 @@
   height: 44px;
   padding: 0 8px 0 16px;
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
 }
 .drawing-workspace .drawing-workspace-new { border-color: transparent; color: var(--fg-secondary); padding: 0 8px; }
 .drawing-workspace .drawing-workspace-new:hover { color: var(--fg); }
-.drawing-workspace-files-note { margin: 4px 16px; color: var(--fg-muted); font-size: 12px; }
-.drawing-workspace-files-heading { margin: 14px 16px 4px; color: var(--fg-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.drawing-workspace-files-note { margin: 4px 16px; color: var(--fg-muted); font-size: var(--font-size-sm); }
+.drawing-workspace-files-heading { margin: 14px 16px 4px; color: var(--fg-muted); font-size: var(--font-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .drawing-workspace-files-note[role="alert"] { color: var(--error); }
 .drawing-workspace-file-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; }
 .drawing-workspace-file-row {
@@ -133,7 +133,7 @@
 }
 .drawing-workspace-file-row[aria-current="true"] .drawing-workspace-file-title { color: var(--accent-text); }
 .drawing-workspace-file-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.drawing-workspace-file-time { color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.drawing-workspace-file-time { color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 /* The pencil shows on the row under the pointer or the keyboard. */
 .drawing-workspace .drawing-workspace-file-rename { opacity: 0; margin-right: 2px; }
 .drawing-workspace-file-row:hover .drawing-workspace-file-rename,
@@ -158,7 +158,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
 }
 .drawing-workspace .drawing-name-button {
@@ -187,8 +187,8 @@
 }
 .drawing-workspace-bar .drawing-name-field { flex: 0 1 320px; }
 .drawing-name-field > .drawing-name-input { width: 100%; }
-.drawing-name-error { flex: 1 1 100%; padding: 0 8px 4px; color: var(--error); font-size: 11px; }
-.drawing-workspace-status { margin-left: 4px; color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+.drawing-name-error { flex: 1 1 100%; padding: 0 8px 4px; color: var(--error); font-size: var(--font-size-xs); }
+.drawing-workspace-status { margin-left: 4px; color: var(--fg-muted); font-size: var(--font-size-sm); white-space: nowrap; }
 .drawing-workspace-status[data-state="conflict"],
 .drawing-workspace-status[data-state="offline"],
 .drawing-workspace-status[data-state="missing"],
@@ -207,9 +207,9 @@
   background: var(--bg-secondary);
 }
 .drawing-workspace-conflict span { flex: 1 1 260px; }
-.drawing-workspace-warning { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; color: var(--fg-secondary); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.drawing-workspace-warning { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: var(--font-size-sm); color: var(--fg-secondary); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .drawing-workspace-warning span { flex: 1; }
-.drawing-workspace-notice { margin: 0; padding: 6px 12px; color: var(--error); font-size: 12px; border-bottom: 1px solid var(--border); }
+.drawing-workspace-notice { margin: 0; padding: 6px 12px; color: var(--error); font-size: var(--font-size-sm); border-bottom: 1px solid var(--border); }
 
 /* The canvas and what sits on it. */
 .drawing-workspace-canvas { position: relative; flex: 1 1 auto; min-height: 240px; }
@@ -241,7 +241,7 @@
   border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
 }
 .drawing-diagram-pill[data-below="true"] { transform: translate(-100%, 0); }
@@ -264,7 +264,7 @@
   gap: 8px;
   max-width: calc(100% - 24px);
   padding: 4px 4px 4px 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
 }
 .drawing-diagram-note[data-phase="error"] span { color: var(--error); }
@@ -295,7 +295,7 @@
   gap: 12px;
   padding: 2px 12px;
   border-top: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 .drawing-workspace-credit a { color: var(--fg-muted); text-decoration: none; }
 .drawing-workspace-credit a:hover { text-decoration: underline; }
@@ -345,20 +345,20 @@
   background: transparent;
   color: var(--fg);
   font-weight: 500;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .drawing-workspace .excalidraw .library-menu-browse-button:hover { background: var(--bg-hover); }
 /* The Library panel's section names are labels, not headlines in the accent; its open tab is a
    quiet pressed state, not a filled accent block. */
 .drawing-workspace .excalidraw .library-menu-items-container__header {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   margin-bottom: 8px;
 }
 .drawing-workspace .excalidraw .library-menu-items__no-items__label {
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   margin-bottom: 6px;
 }
@@ -390,11 +390,11 @@
   width: min(720px, 100%);
   height: min(640px, calc(100dvh - 48px));
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg-elevated);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   box-shadow: 0 16px 48px rgb(0 0 0 / 20%);
 }
 .drawing-library-head {
@@ -428,7 +428,7 @@
   align-items: center;
   gap: 16px;
   padding: 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 .drawing-library-item:hover { background: var(--bg-hover); }
 .drawing-library-preview {
@@ -443,9 +443,9 @@
 .drawing-library-preview img { width: 100%; height: 100%; object-fit: contain; }
 .drawing-library-text { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
 .drawing-library-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.drawing-library-meta { color: var(--fg-muted); font-size: 11px; }
-.drawing-library-desc { color: var(--fg-secondary); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.drawing-library-error { color: var(--error); font-size: 11px; }
+.drawing-library-meta { color: var(--fg-muted); font-size: var(--font-size-xs); }
+.drawing-library-desc { color: var(--fg-secondary); font-size: var(--font-size-sm); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.drawing-library-error { color: var(--error); font-size: var(--font-size-xs); }
 .drawing-library-foot {
   display: flex;
   align-items: center;
@@ -456,7 +456,7 @@
   padding: 0 20px;
   border-top: 1px solid var(--border);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 .drawing-library-foot [role="alert"] { color: var(--error); }
 .drawing-library-foot a { color: var(--fg-muted); }
@@ -500,8 +500,8 @@
 }
 .drawing-assistant-chat { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .drawing-assistant-chat > * { flex: 1 1 auto; min-height: 0; }
-.drawing-assistant-intro { padding: 4px 4px 0; color: var(--fg-secondary); font-size: 13px; line-height: 1.5; }
+.drawing-assistant-intro { padding: 4px 4px 0; color: var(--fg-secondary); font-size: var(--font-size-md); line-height: 1.5; }
 .drawing-assistant-intro p { margin: 0 0 8px; }
 .drawing-assistant-intro ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
 .drawing-assistant-head-gap { flex: 1 1 auto; }
-.drawing-assistant-open-task { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+.drawing-assistant-open-task { height: 26px; padding: 0 10px; border-radius: 6px; font-size: var(--font-size-sm); }

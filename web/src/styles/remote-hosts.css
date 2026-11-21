@@ -10,7 +10,7 @@
    is laid over the page colour, which is always solid. Outweighs overlay-glass.css. The kind
    picker (a task settings flyout) is opaque everywhere already (overlay-glass.css). ── */
 html body .wn-context-menu.rh-add-menu {
-  background: linear-gradient(var(--bg-elevated, var(--card-bg)), var(--bg-elevated, var(--card-bg))), var(--bg);
+  background: linear-gradient(var(--bg-elevated), var(--bg-elevated)), var(--bg);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -20,8 +20,8 @@ html body .wn-context-menu.rh-add-menu {
 .rh-add-menu .wn-context-menu-item { padding: 7px 10px; border-radius: 6px; }
 .rh-add-menu .wn-context-menu-label { white-space: normal; overflow: visible; }
 .rh-add-item { display: flex; flex-direction: column; gap: 1px; }
-.rh-add-item-title { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--fg); }
-.rh-add-item-sub { font-size: 12px; line-height: 16px; color: var(--fg-muted); }
+.rh-add-item-title { font-size: var(--font-size-md); line-height: 18px; font-weight: 500; color: var(--fg); }
+.rh-add-item-sub { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); }
 .rh-add-anchor { display: inline-flex; }
 
 /* ── A row of the list: the name line (28 px, the height of its action) and one state line;
@@ -35,10 +35,10 @@ html body .wn-context-menu.rh-add-menu {
 .rh-row-name-line .settings-tag { flex: none; }
 .rh-row-state { overflow-wrap: anywhere; }
 .rh-row-lines { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; min-width: 0; }
-.rh-row-line { font-size: 12.5px; line-height: 17px; color: var(--fg-muted); overflow-wrap: anywhere; max-width: 72ch; }
-.rh-row-line[data-tone='warn'] { color: var(--priority-important-text, var(--warning)); }
+.rh-row-line { font-size: var(--font-size-md); line-height: 17px; color: var(--fg-muted); overflow-wrap: anywhere; max-width: 72ch; }
+.rh-row-line[data-tone='warn'] { color: var(--priority-important-text); }
 .rh-row-line[data-tone='bad'] { color: var(--error); }
-.rh-row-line[data-tone='good'] { color: var(--success, var(--fg)); }
+.rh-row-line[data-tone='good'] { color: var(--success); }
 .rh-host-row > .settings-row-actions { align-self: flex-start; }
 .rh-row-actions { display: inline-flex; align-items: center; gap: 4px; }
 .rh-row-primary { display: inline-flex; justify-content: flex-end; min-width: 104px; }
@@ -53,7 +53,7 @@ html body .wn-context-menu.rh-add-menu {
   margin: 0;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -74,10 +74,10 @@ html body .wn-context-menu.rh-add-menu {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   font-weight: 500;
-  color: var(--priority-important-text, var(--warning));
+  color: var(--priority-important-text);
 }
 .rh-look-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
@@ -95,9 +95,9 @@ html body .wn-context-menu.rh-add-menu {
   border-radius: 6px;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
-  color: var(--priority-important-text, var(--warning));
+  color: var(--priority-important-text);
   cursor: pointer;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -117,16 +117,16 @@ html body .wn-context-menu.rh-add-menu {
   padding: 2px var(--settings-row-pad-x, 14px) 16px var(--settings-row-indent, 36px);
   min-width: 0;
 }
-.rh-details-empty { margin: 0; font-size: 12.5px; line-height: 17px; color: var(--fg-muted); }
-.rh-details-heading { margin: 0 0 -6px; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary, var(--fg)); }
+.rh-details-empty { margin: 0; font-size: var(--font-size-md); line-height: 17px; color: var(--fg-muted); }
+.rh-details-heading { margin: 0 0 -6px; font-size: var(--font-size-md); line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
 .rh-details .rh-host-detail { margin-top: 0; }
 .rh-readiness-block { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 /* The first line: the system, its roles, and how old the reading is (right). */
-.rh-details .hf-card-sys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; }
+.rh-details .hf-card-sys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; font-size: var(--font-size-md); line-height: 18px; font-weight: 500; }
 .rh-details .hf-card-sys .hf-roles { margin-left: 0; }
 /* Every problem the reading shows: one line each, in its tone (the row names the first). */
-.hf-problem-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; line-height: 17px; color: var(--fg-muted); }
-.hf-problem-list > li[data-tone='warn'] { color: var(--priority-important-text, var(--warning)); }
+.hf-problem-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--font-size-md); line-height: 17px; color: var(--fg-muted); }
+.hf-problem-list > li[data-tone='warn'] { color: var(--priority-important-text); }
 .hf-problem-list > li[data-tone='bad'] { color: var(--error); }
 /* A command's Copy and Check again sit on the command's first line, not centred on its block. */
 .rh-details .rh-readiness-line { align-items: flex-start; }
@@ -139,9 +139,9 @@ html body .wn-context-menu.rh-add-menu {
   min-height: 28px;
   padding: 5px 10px;
   border: 1px solid var(--settings-group-border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   overflow: visible;
   white-space: pre-wrap;
@@ -155,11 +155,11 @@ html body .wn-context-menu.rh-add-menu {
   height: 28px;
   padding: 0 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--settings-group-bg, var(--card-bg));
   color: var(--fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 500;
 }
 .rh-details .hc .setup-copy-btn:hover { background: var(--bg-hover); }
@@ -171,7 +171,7 @@ html body .wn-context-menu.rh-add-menu {
   background: none;
   color: var(--accent);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   text-decoration: none;
   cursor: pointer;
@@ -182,7 +182,7 @@ html body .wn-context-menu.rh-add-menu {
 /* The System line with Probe again on its right, then when it was probed and read. */
 .rh-details .hf-card-sys-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
 .rh-details .hf-card-sys-row > .settings-button { flex: none; margin-top: -5px; }
-.rh-details .hf-card-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: -7px 0 0; font-size: 12px; line-height: 16px; color: var(--fg-muted); }
+.rh-details .hf-card-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: -7px 0 0; font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); }
 .rh-details .hf-card-meta:empty { display: none; }
 .hf-probe-note[data-tone='bad'] { color: var(--error); }
 /* The command by hand, behind its own toggle (the row's button is the fix). */
@@ -192,13 +192,13 @@ html body .wn-context-menu.rh-add-menu {
 .rh-this-host-heading {
   margin: 4px 0 2px;
   padding: 0 var(--settings-row-pad-x, 14px);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   font-weight: 600;
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
 }
 .rh-host-server-part { display: contents; }
-.rh-this-host-note { margin: 4px 0 0; padding: 0 var(--settings-row-pad-x, 14px); font-size: 12px; line-height: 16px; color: var(--fg-muted); }
+.rh-this-host-note { margin: 4px 0 0; padding: 0 var(--settings-row-pad-x, 14px); font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); }
 .rh-edit { padding-bottom: 4px; }
 .settings-row.rh-edit-done .settings-row-actions { margin-left: auto; }
 
@@ -211,7 +211,7 @@ html body .wn-context-menu.rh-add-menu {
   width: 100%;
   min-width: 0;
 }
-.rh-join-step { font-size: 13px; line-height: 18px; color: var(--fg); }
+.rh-join-step { font-size: var(--font-size-md); line-height: 18px; color: var(--fg); }
 .rh-join-command {
   display: flex;
   align-items: flex-start;
@@ -225,10 +225,10 @@ html body .wn-context-menu.rh-add-menu {
   box-sizing: border-box;
   padding: 6px 10px;
   border: 1px solid var(--settings-group-border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   min-height: 32px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   /* Wraps instead of scrolling (2026-11-04 review: a permanent scrollbar in WebKit). */
   overflow: visible;
@@ -246,7 +246,7 @@ html body .wn-context-menu.rh-add-menu {
 .rh-join-error-text { color: var(--error); }
 .rh-join-error-why { color: var(--settings-help-fg, var(--fg-muted)); }
 a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-decoration: none; }
-.rh-join-wait { font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); font-variant-numeric: tabular-nums; }
+.rh-join-wait { font-size: var(--font-size-md); line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); font-variant-numeric: tabular-nums; }
 .rh-join-more {
   appearance: none;
   display: inline-flex;
@@ -257,17 +257,17 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
   border: 0;
   background: none;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--accent);
   cursor: pointer;
 }
 .rh-join-more:hover { text-decoration: underline; }
-.rh-join-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.rh-join-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
 .rh-join-more[aria-expanded='true'] .settings-disclosure-chevron { transform: rotate(90deg); }
 .rh-join-notes { display: flex; flex-direction: column; gap: 6px; max-width: 72ch; }
 .rh-join-notes[hidden] { display: none; }
-.rh-join-note { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); }
+.rh-join-note { display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-md); line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); }
 
 /* ── The Overview's diagram: a node takes a ring like any control ── */
 .hf-topo-node:focus { outline: none; }
@@ -333,7 +333,7 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
   background: var(--settings-group-bg, var(--card-bg));
   border-bottom: 1px solid var(--settings-hairline);
 }
-.rh-details-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; font-weight: 600; }
+.rh-details-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-md); line-height: 18px; font-weight: 600; }
 .rh-details-head > .settings-button { flex: none; }
 .rh-details-part { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .rh-details-part + .rh-details-part { border-top: 1px solid var(--settings-hairline); padding-top: 10px; }
@@ -356,9 +356,9 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 .rh-details-part-toggle .settings-disclosure-chevron { flex: none; width: 10px; }
 .rh-details-part-toggle[aria-expanded='true'] .settings-disclosure-chevron { transform: rotate(90deg); }
 .rh-details-part-toggle:focus-visible,
-.rh-details-part-toggle[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.rh-details-part-title { font-size: 13px; line-height: 18px; font-weight: 600; }
-.rh-details-part-summary { font-size: 12.5px; line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); }
+.rh-details-part-toggle[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+.rh-details-part-title { font-size: var(--font-size-md); line-height: 18px; font-weight: 600; }
+.rh-details-part-summary { font-size: var(--font-size-md); line-height: 17px; color: var(--settings-help-fg, var(--fg-muted)); }
 .rh-details-part-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 /* One divider per part: the facts table draws none of its own inside Details. */
 .rh-details .hf-details { border-top: 0; padding-top: 0; }
@@ -399,4 +399,4 @@ a.settings-button.rh-join-fix { display: inline-flex; align-items: center; text-
 }
 .rh-inline-link:hover { text-decoration: underline; }
 .rh-inline-link:focus-visible,
-.rh-inline-link[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.rh-inline-link[data-landed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }

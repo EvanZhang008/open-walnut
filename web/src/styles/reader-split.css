@@ -54,7 +54,7 @@
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 28px;
   white-space: nowrap;
 }
@@ -75,12 +75,12 @@
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
 }
-.session-reader-btn:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.14)); color: var(--fg); }
+.session-reader-btn:hover { background: var(--bg-hover); color: var(--fg); }
 .session-reader-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .session-reader-body {
   flex: 1 1 auto;

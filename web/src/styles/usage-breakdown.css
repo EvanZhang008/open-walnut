@@ -20,23 +20,23 @@
 }
 
 .usage-bd-switch { display: inline-flex; align-items: center; gap: 8px; }
-.usage-bd-switch-label { font-size: 12px; color: var(--fg-muted); }
+.usage-bd-switch-label { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .usage-bd-body { display: block; padding-top: 12px; container: usage-bd / inline-size; }
 
 .usage-bd-chart { position: relative; width: 100%; min-height: 240px; touch-action: pan-y; cursor: crosshair; }
 .usage-bd-chart[aria-busy] { opacity: 0.6; transition: opacity 0.2s; }
 .usage-bd-chart svg { display: block; overflow: visible; }
 .usage-bd-grid { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
-.usage-bd-tick { font-size: 11px; fill: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.usage-bd-tick { font-size: var(--font-size-xs); fill: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .usage-bd-area { fill-opacity: 0.85; stroke: var(--card-bg); stroke-width: 1.5; stroke-linejoin: round; }
 .usage-bd-cross line { stroke: var(--fg-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .usage-bd-cross circle { stroke: var(--card-bg); stroke-width: 2; }
 
 .usage-bd-tip {
   position: absolute; top: 8px; z-index: 2; min-width: 180px; max-width: 280px; pointer-events: none;
-  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--bg-elevated); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  font-size: 12px; color: var(--fg);
+  font-size: var(--font-size-sm); color: var(--fg);
 }
 .usage-bd-tip-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-weight: 600; }
 .usage-bd-tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.6; }
@@ -44,13 +44,13 @@
 .usage-bd-tip-row b, .usage-bd-tip-head b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-bd-tip-row.muted { color: var(--fg-muted); }
 .usage-bd-tip-row i, .usage-bd-swatch {
-  display: inline-block; flex: 0 0 auto; width: 9px; height: 9px; border-radius: 3px;
+  display: inline-block; flex: 0 0 auto; width: 9px; height: 9px; border-radius: var(--radius-xs);
 }
 
-.usage-bd-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; table-layout: fixed; }
+.usage-bd-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: var(--font-size-md); table-layout: fixed; }
 .usage-bd-table th {
   padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
-  font-size: 11px; font-weight: 500; color: var(--fg-muted);
+  font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted);
 }
 .usage-bd-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .usage-bd-table tr:last-child td { border-bottom: 0; }
@@ -68,7 +68,7 @@
 .usage-bd-spark path { fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 .usage-bd-more {
   margin-top: 6px; padding: 0; border: 0; background: none; cursor: pointer;
-  font: inherit; font-size: 12px; color: var(--accent);
+  font: inherit; font-size: var(--font-size-sm); color: var(--accent);
 }
 
 /* A narrow card keeps the name readable: requests go first, the trend gets thinner. */
@@ -79,11 +79,11 @@
 
 /* Above the chart: the two switches, then how much of the period is stored. */
 .usage-bd-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
-.usage-bd-coverage { margin: 8px 0 4px; font-size: 12px; color: var(--fg-muted); }
-.usage-bd-foot { margin: 8px 0 0; font-size: 12px; color: var(--fg-muted); }
-.usage-bd-tip-note { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-muted); }
+.usage-bd-coverage { margin: 8px 0 4px; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.usage-bd-foot { margin: 8px 0 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.usage-bd-tip-note { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); font-size: var(--font-size-xs); color: var(--fg-muted); }
 .usage-bd-unrecorded rect { fill: color-mix(in srgb, var(--fg) 5%, transparent); }
-.usage-bd-unrecorded text { font-size: 11px; fill: var(--fg-muted); }
+.usage-bd-unrecorded text { font-size: var(--font-size-xs); fill: var(--fg-muted); }
 .usage-bd-col-share2 { width: 76px; }
 /* A switch wider than the card wraps its label above it instead of overflowing. */
 .usage-bd-switch { flex-wrap: wrap; min-width: 0; }
@@ -98,9 +98,9 @@
 .usage-account:first-child { border-top: 0; }
 .usage-account-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .usage-account-cost { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
-.usage-account-meta { grid-column: 1 / -1; color: var(--fg-muted); font-size: 12px; }
+.usage-account-meta { grid-column: 1 / -1; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .usage-account[data-direct] { background: color-mix(in srgb, var(--usage-s2) 12%, var(--bg-secondary)); }
-.usage-account-flag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--usage-s2); color: #fff; }
+.usage-account-flag { font-size: var(--font-size-xs); font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--usage-s2); color: var(--on-accent); }
 /* The headline sits outside .usage-bd, so the stat carries its own copy of the orange slot. */
 .settings-addons-stat[data-direct] { --usage-s2: #c2410c; }
 :root[data-theme="dark"] .settings-addons-stat[data-direct] { --usage-s2: #f08a5d; }
@@ -112,18 +112,18 @@
 /* Engines compared (EngineCompareCard): metrics are rows, engines are columns. */
 .usage-ec-body { display: block; padding-top: 10px; }
 .usage-ec-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
-.usage-ec-split { margin: 0; font-size: 12px; color: var(--fg-muted); flex: 1 1 260px; }
-.usage-ec-project { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
-.usage-ec-verdict { margin: 10px 0 6px; font-size: 13px; font-weight: 600; color: var(--fg); }
+.usage-ec-split { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); flex: 1 1 260px; }
+.usage-ec-project { display: inline-flex; align-items: center; gap: 8px; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.usage-ec-verdict { margin: 10px 0 6px; font-size: var(--font-size-md); font-weight: 600; color: var(--fg); }
 .usage-ec-scroll { overflow-x: auto; }
 .usage-ec-table { table-layout: auto; min-width: 420px; }
 .usage-ec-table th.num { white-space: nowrap; }
 .usage-ec-table td:first-child { color: var(--fg-muted); }
 /* Bold alone barely shows in the dark theme: a faint accent ground marks the best value in both. */
-.usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); background: color-mix(in srgb, var(--accent, #2563eb) 14%, transparent); border-radius: 4px; }
+.usage-ec-table td[data-best] { font-weight: 700; color: var(--fg); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius-xs); }
 .usage-ec-val { white-space: nowrap; }
-.usage-ec-cellsub { display: block; font-size: 10px; font-weight: 400; color: var(--fg-muted); white-space: nowrap; }
-.usage-ec-few { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); }
+.usage-ec-cellsub { display: block; font-size: var(--font-size-xs); font-weight: 400; color: var(--fg-muted); white-space: nowrap; }
+.usage-ec-few { margin-left: 6px; padding: 0 5px; border-radius: var(--radius-xs); font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); }
 /* Fixed layout: a long title is cut with an ellipsis instead of pushing the cost column out of the card. */
 .usage-ec-tasks { table-layout: fixed; width: 100%; }
 .usage-ec-tasks td.num { width: 96px; }
@@ -131,10 +131,10 @@
 .usage-ec-open { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--fg); font: inherit; text-align: left;
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-ec-open:hover { text-decoration: underline; }
-.usage-ec-open:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; border-radius: 3px; }
-.usage-ec-sub { display: block; margin-top: 2px; font-size: 11px; color: var(--fg-muted); overflow-wrap: anywhere; }
-.usage-ec-partial { margin-left: 3px; font-size: 10px; color: var(--fg-muted); font-weight: 500; }
+.usage-ec-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+.usage-ec-sub { display: block; margin-top: 2px; font-size: var(--font-size-xs); color: var(--fg-muted); overflow-wrap: anywhere; }
+.usage-ec-partial { margin-left: 3px; font-size: var(--font-size-xs); color: var(--fg-muted); font-weight: 500; }
 .usage-ec-which { display: inline-flex; }
-.usage-ec-defs { margin: 6px 0 0; display: grid; gap: 6px; font-size: 12px; }
+.usage-ec-defs { margin: 6px 0 0; display: grid; gap: 6px; font-size: var(--font-size-sm); }
 .usage-ec-defs dt { font-weight: 600; color: var(--fg); }
 .usage-ec-defs dd { margin: 0; color: var(--fg-muted); }

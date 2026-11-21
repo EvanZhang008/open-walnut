@@ -109,9 +109,9 @@
   background: var(--bg-elevated);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   overflow-y: auto;
   overscroll-behavior: contain;
   animation: status-item-pop 0.16s ease-out;
@@ -132,14 +132,14 @@
 .status-item-popover-head svg.status-ring-lg { width: 38px; height: 38px; }
 .status-item-popover-text { min-width: 0; }
 .status-item-popover-title {
-  font-size: 14.5px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   line-height: 19px;
 }
 .status-item-popover[data-tone="warning"] .status-item-popover-title { color: var(--priority-important-text); }
 .status-item-popover-detail {
   margin-top: 1px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -158,12 +158,12 @@
 .status-item-btn {
   height: 28px;
   padding: 0 12px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 26px;
   white-space: nowrap;
@@ -174,7 +174,7 @@
 .status-item-btn.is-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .status-item-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .status-item-btn:disabled { opacity: 0.55; cursor: default; }
@@ -183,7 +183,7 @@
 
 .status-item-popover-error {
   margin-top: 10px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--error);
 }
@@ -195,7 +195,7 @@
   margin-top: 10px;
   padding-top: 9px;
   border-top: 1px solid var(--border);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 .status-item-link {

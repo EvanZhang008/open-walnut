@@ -74,7 +74,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   background: var(--settings-switch-off);
   cursor: pointer;
   vertical-align: middle;
@@ -140,7 +140,7 @@
   margin: 0;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--settings-group-bg);
   cursor: pointer;
 }
@@ -179,7 +179,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--on-accent);
   opacity: 0;
   pointer-events: none;
 }
@@ -233,7 +233,7 @@
   max-width: 100%;
   padding: 2px;
   overflow-x: auto;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--settings-segmented-bg);
   vertical-align: middle;
   scrollbar-width: none;
@@ -251,8 +251,8 @@
   justify-content: center;
   height: 22px;
   padding: 0 10px;
-  border-radius: 5px;
-  font-size: 12.5px;
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 17px;
   color: var(--fg);
@@ -313,11 +313,11 @@
   height: 28px;
   padding: 0 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--settings-group-bg, var(--card-bg));
   color: var(--fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 17px;
   white-space: nowrap;
@@ -347,11 +347,11 @@
   background: var(--accent);
   border-color: transparent;
   box-shadow: none;
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .settings-button.settings-button-primary:hover:not(:disabled):not([aria-disabled='true']) {
-  background: var(--accent-hover, var(--accent));
+  background: var(--accent-hover);
 }
 
 /* A disabled default button loses its fill, as on macOS: every disabled push
@@ -441,11 +441,11 @@
   height: 28px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--settings-input-bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
 }
 
@@ -462,7 +462,7 @@
 .settings-input.settings-input--short { width: 240px; }
 .settings-input.settings-input--number { width: 120px; font-variant-numeric: tabular-nums; }
 .settings-input.settings-input--long { width: 380px; }
-.settings-input.settings-input--mono { font-family: var(--font-mono); font-size: 12.5px; }
+.settings-input.settings-input--mono { font-family: var(--font-mono); font-size: var(--font-size-md); }
 
 textarea.settings-input {
   width: 100%;
@@ -471,7 +471,7 @@ textarea.settings-input {
   padding: 8px;
   resize: vertical;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
 }
 
 .settings-input-with-unit {
@@ -490,7 +490,7 @@ textarea.settings-input {
      whatever the unit word (N3-08). 64px holds "characters". */
   box-sizing: border-box;
   min-width: 64px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--fg-secondary);
   white-space: nowrap;
@@ -507,11 +507,11 @@ textarea.settings-input {
   height: 28px;
   padding: 0 28px 0 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background-color: var(--settings-input-bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 /* Default engine, "When it is out of usage" and its Model (DefaultEngineRow, FallbackEngineRow):
@@ -555,12 +555,12 @@ textarea.settings-input {
   right: 2px;
   height: 22px;
   transform: translateY(-50%);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .settings-secret-saved-text {
   margin-right: 4px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -618,8 +618,8 @@ textarea.settings-input {
   display: inline-block;
   margin-left: 6px;
   padding: 0 6px;
-  border-radius: 8px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -631,8 +631,8 @@ textarea.settings-input {
 .message-hint-origin-badge--yours,
 .message-hint-origin-badge--changed {
   color: var(--fg);
-  background: color-mix(in srgb, var(--accent, #0a84ff) 18%, transparent);
-  border-color: color-mix(in srgb, var(--accent, #0a84ff) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* Task providers' "Try a task title": the title field and its Ask AI button on one line. */

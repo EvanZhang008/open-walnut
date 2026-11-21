@@ -54,8 +54,8 @@
   padding: 4px 8px;
   border-radius: 6px;
   background: #1d1d1f;
-  color: #fff;
-  font-size: 12px;
+  color: var(--on-accent);
+  font-size: var(--font-size-sm);
   line-height: 1.35;
   pointer-events: none;
   white-space: nowrap;
@@ -70,11 +70,11 @@
   width: 100%;
   padding: 7px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--fg);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
   text-align: left;
   cursor: pointer;
@@ -84,13 +84,13 @@
 .thread-quote-head:focus:not(:focus-visible) { outline: none; }
 .thread-quote-context { color: var(--fg-muted); }
 .thread-quote-exact { color: var(--fg); }
-.thread-same-passage { color: var(--fg-muted); font-size: 12px; }
+.thread-same-passage { color: var(--fg-muted); font-size: var(--font-size-sm); }
 
 /* ── Asked from this answer ── */
 .thread-asked-from { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; }
 .thread-asked-heading {
   color: var(--fg-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -106,7 +106,7 @@
   border-radius: 10px;
   background: var(--bg);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 .thread-asked-row:hover { border-color: var(--border-strong); background: var(--bg-secondary); }
 .thread-asked-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -131,7 +131,7 @@
 }
 .thread-asked-takeaway {
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -144,7 +144,7 @@
   align-items: center;
   gap: 4px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 .thread-asked-state--failed { color: var(--error); }
@@ -152,7 +152,7 @@
 .thread-asked-inline-btn {
   padding: 1px 6px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--accent-text);
   font: inherit;
@@ -168,7 +168,7 @@
 .thread-stack [data-thread-head] .markdown-body > blockquote:first-child { display: none; }
 
 /* A question sent while another is answering waits its turn. */
-.thread-queue-note { margin-top: 2px; color: var(--fg-muted); font-size: 11.5px; text-align: right; }
+.thread-queue-note { margin-top: 2px; color: var(--fg-muted); font-size: var(--font-size-sm); text-align: right; }
 
 /* The drawer toggle's fixed slot in the session header. */
 /* Zero layout height, centred on the row: the 24px toggle appearing on the first
@@ -249,7 +249,7 @@
   background: none;
   color: var(--fg-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -261,7 +261,7 @@
 
 /* The quote head's source line (N35): which answer the passage came from. */
 .thread-quote-from {
-  margin: 0 0 3px 2px; overflow: hidden; color: var(--fg-muted); font-size: 11.5px; line-height: 15px;
+  margin: 0 0 3px 2px; overflow: hidden; color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 15px;
   text-overflow: ellipsis; white-space: nowrap;
 }
 .thread-quote-from-title { color: var(--fg-secondary); font-weight: 550; }

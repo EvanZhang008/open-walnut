@@ -18,7 +18,7 @@ html:root {
   /* The raised surface, not the card's: in the dark theme --bg-elevated is one
      step lighter than the page and its columns, so a menu reads as a layer over
      them (the same in light, where both are white). */
-  --overlay-glass-bg: var(--bg-elevated, var(--card-bg));
+  --overlay-glass-bg: var(--bg-elevated);
   --overlay-glass-blur: none;
   /* The Materials Pass menus (globals.css) take the same glass. */
   --glass-bg-menu: var(--overlay-glass-bg);
@@ -89,7 +89,7 @@ html:root {
   /* The workspace flyout opens over its own kebab menu and holds output to read
      (a setup's log): opaque, or the rows behind show through their text. */
   html .workspace-flyout.workspace-flyout {
-    background: var(--bg-elevated, var(--card-bg));
+    background: var(--bg-elevated);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
@@ -114,7 +114,7 @@ html:root {
    it by adding `wn-glass` to its overlay and listing that overlay there.
    `wn-glass-fill` is the material alone, with no frame (a popover's arrow). */
 html:root {
-  --glass-legible-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 84%, transparent);
+  --glass-legible-bg: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   --glass-legible-blur: blur(30px) saturate(1.8);
   --glass-legible-border: rgba(0, 0, 0, 0.1);
   --glass-legible-highlight: rgba(255, 255, 255, 0.75);
@@ -157,7 +157,7 @@ html:root {
      card: "not glass, I want glass"): a grey tint, as a macOS notification has, and a blur light
      enough that the page's lines and blocks show through soft while its words never read. A
      white tint under a heavy blur over a white page looked like a solid white card. */
-  --glass-frost-bg: color-mix(in srgb, var(--bg-tertiary, #e8e8ed) 60%, transparent);
+  --glass-frost-bg: color-mix(in srgb, var(--bg-tertiary) 60%, transparent);
   --glass-frost-blur: blur(24px) saturate(1.8);
   /* Light: a dark hairline, as a macOS panel's edge; a white one vanished on a white page
      (2026-11-20). The white top highlight stays. Dark keeps its own below. */
@@ -167,7 +167,7 @@ html:root {
 }
 
 html:root[data-theme="dark"] {
-  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 38%, transparent);
+  --glass-frost-bg: color-mix(in srgb, var(--bg-elevated) 38%, transparent);
   --glass-frost-border: rgba(255, 255, 255, 0.16);
   --glass-frost-highlight: rgba(255, 255, 255, 0.14);
   --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
@@ -175,7 +175,7 @@ html:root[data-theme="dark"] {
 
 @media (prefers-color-scheme: dark) {
   html:root:not([data-theme]) {
-    --glass-frost-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 38%, transparent);
+    --glass-frost-bg: color-mix(in srgb, var(--bg-elevated) 38%, transparent);
     --glass-frost-border: rgba(255, 255, 255, 0.16);
     --glass-frost-highlight: rgba(255, 255, 255, 0.14);
     --glass-frost-shadow: 0 22px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
@@ -212,7 +212,7 @@ html .wn-glass-frost {
   html .wn-glass.wn-glass,
   html .wn-glass-fill.wn-glass-fill,
   html .wn-glass-frost.wn-glass-frost {
-    background: var(--bg-elevated, var(--card-bg));
+    background: var(--bg-elevated);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
@@ -221,7 +221,7 @@ html .wn-glass-frost {
 html[data-glass="solid"] .wn-glass.wn-glass,
 html[data-glass="solid"] .wn-glass-fill.wn-glass-fill,
 html[data-glass="solid"] .wn-glass-frost.wn-glass-frost {
-  background: var(--bg-elevated, var(--card-bg));
+  background: var(--bg-elevated);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

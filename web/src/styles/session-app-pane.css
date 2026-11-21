@@ -28,7 +28,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -90,7 +90,7 @@
 
 .session-app-pane-empty {
   padding: 24px 18px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.6;
   color: var(--fg-muted);
   max-width: 46em;

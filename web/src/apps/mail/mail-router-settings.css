@@ -1,18 +1,18 @@
 /* Mail's routers on its page in Apps (MailRouterSettings): one block per router. Every rule is scoped
    to .mail-router-settings: Mail's own sidebar uses the same class names (mail.css), and this sheet
    stays loaded once the page was opened (tests/web/mail-router-settings.test.ts guards it). */
-.mail-router-settings { display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
-.mail-router-settings .mail-router-lead, .mail-router-settings .mail-router-empty { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--fg-secondary); }
+.mail-router-settings { display: flex; flex-direction: column; gap: 12px; font-size: var(--font-size-md); }
+.mail-router-settings .mail-router-lead, .mail-router-settings .mail-router-empty { margin: 0; font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); }
 .mail-router-settings .mail-router-block { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
 .mail-router-settings .mail-router-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .mail-router-settings .mail-router-name { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mail-router-settings .mail-router-state { font-size: 12px; color: var(--fg-secondary); }
-.mail-router-settings .mail-router-state.is-paused, .mail-router-settings .mail-router-state.is-closed { color: var(--warning, #b25000); }
+.mail-router-settings .mail-router-state { font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.mail-router-settings .mail-router-state.is-paused, .mail-router-settings .mail-router-state.is-closed { color: var(--warning); }
 .mail-router-settings .mail-router-actions[hidden] { display: none; }
-.mail-router-settings .mail-router-open { margin-left: auto; flex: none; font-size: 12px; color: var(--accent); text-decoration: none; }
+.mail-router-settings .mail-router-open { margin-left: auto; flex: none; font-size: var(--font-size-sm); color: var(--accent); text-decoration: none; }
 .mail-router-settings .mail-router-open:hover { text-decoration: underline; }
 .mail-router-settings .mail-router-accounts { margin: 0 0 4px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg-secondary); }
-.mail-router-settings .mail-router-hint { margin: 0; font-size: 12px; color: var(--fg-secondary); }
-.mail-router-settings .mail-router-error { margin: 0; font-size: 12px; color: var(--error, #d70015); }
+.mail-router-settings .mail-router-hint { margin: 0; font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.mail-router-settings .mail-router-error { margin: 0; font-size: var(--font-size-sm); color: var(--error); }
 .mail-router-settings .mail-router-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .mail-router-settings .mail-router-block.is-unrouted { background: transparent; border-style: dashed; }

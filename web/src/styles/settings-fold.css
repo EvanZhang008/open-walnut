@@ -36,7 +36,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 10px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--settings-help-fg, var(--fg-muted));
 }
@@ -44,7 +44,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: var(--priority-important-text, var(--warning));
+  color: var(--priority-important-text);
   font-weight: 500;
 }
 .settings-fold-needs::before {
@@ -97,7 +97,7 @@
 .settings-fold-group-summary {
   grid-column: 2;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--settings-help-fg, var(--fg-muted));
   overflow-wrap: anywhere;

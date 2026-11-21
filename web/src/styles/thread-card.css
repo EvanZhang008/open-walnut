@@ -24,7 +24,7 @@
   min-height: 0;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--fg);
   /* Off the page in both themes: a darker ring and a deeper shadow. */
@@ -61,7 +61,7 @@
   min-width: 0;
   padding: 8px 8px 8px 10px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
 }
 .thread-card-head .thread-map-num { background: var(--fg); color: var(--bg-elevated); }
@@ -87,7 +87,7 @@
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -121,7 +121,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 /* The conversation reads as the chat does (ThreadCardConversation): the
    question is the chat's blue bubble on the right, the answer a normal
@@ -130,23 +130,23 @@
 .thread-card-turn + .thread-card-turn { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border); }
 /* The question's wrapper: a block, so the bubble's auto margin anchors it right. */
 .thread-card-q { display: block; min-width: 0; }
-.thread-card-body .session-msg-assistant { margin: 0; padding: 0; font-size: 13px; line-height: 1.55; color: var(--fg); }
+.thread-card-body .session-msg-assistant { margin: 0; padding: 0; font-size: var(--font-size-md); line-height: 1.55; color: var(--fg); }
 /* The bubble keeps its own padding; only its size follows the card. */
-.thread-card-body .session-msg-user { margin: 2px 0 0 auto; padding: 7px 12px; max-width: 88%; font-size: 13px; line-height: 1.5; }
+.thread-card-body .session-msg-user { margin: 2px 0 0 auto; padding: 7px 12px; max-width: 88%; font-size: var(--font-size-md); line-height: 1.5; }
 .thread-card-body .session-msg-user .markdown-body p { margin: 0; }
 .thread-card-body .session-msg-content > :first-child { margin-top: 0; }
 .thread-card-body .session-msg-content > :last-child { margin-bottom: 0; }
 .thread-card-body .markdown-body > :first-child { margin-top: 0; }
 .thread-card-body .markdown-body > :last-child { margin-bottom: 0; }
-.thread-card-empty { color: var(--fg-muted); font-size: 12px; padding: 2px 0; }
+.thread-card-empty { color: var(--fg-muted); font-size: var(--font-size-sm); padding: 2px 0; }
 /* A finished turn whose reply had tool calls and no words. */
-.thread-card-noanswer { color: var(--fg-muted); font-size: 12px; font-style: italic; padding: 2px 0 4px; }
+.thread-card-noanswer { color: var(--fg-muted); font-size: var(--font-size-sm); font-style: italic; padding: 2px 0 4px; }
 .thread-card-answering {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 2px 0 2px;
 }
 /* Sent, no words yet: amber and breathing, like the passage's mark. */
@@ -190,7 +190,7 @@
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 20px;
   resize: none;
   outline: none;
@@ -231,7 +231,7 @@
   overflow: hidden;
   min-width: 0;
   color: var(--fg-muted);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 15px;
   overflow-wrap: anywhere;
 }
@@ -243,7 +243,7 @@
    shape at the top of the composer box. */
 .chat-input-thread-pill .pill-verb {
   flex: none;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 .chat-input-thread-pill .pill-target {
@@ -253,7 +253,7 @@
   min-width: 0;
   padding: 1px 4px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: none;
   color: inherit;
   font: inherit;
@@ -288,7 +288,7 @@
   z-index: 1;
   /* The margin around it is covered too: the timeline does not show at its
      edges, and a click there is the card's, not an outside click. */
-  box-shadow: 0 0 0 12px var(--card-bg, var(--bg));
+  box-shadow: 0 0 0 12px var(--card-bg);
 }
 .thread-card.is-full::before { content: ''; position: absolute; inset: -12px; z-index: -1; }
 .thread-card.is-full .thread-card-body { padding: 14px 24px 10px; }

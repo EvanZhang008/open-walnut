@@ -53,7 +53,7 @@
 /* Build identity under the open pane: one muted, selectable line. */
 .settings-build-line {
   margin: 32px 0 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
@@ -119,7 +119,7 @@
 
 .settings-diagnostics-fallback-note {
   margin: 0 0 8px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -167,8 +167,8 @@
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: 9px;
-  color: #fff;
+  border-radius: var(--radius-sm);
+  color: var(--on-accent);
   background: var(--fg-muted);
 }
 
@@ -180,7 +180,7 @@
 .settings-pane-tile.settings-pane-tile-20 {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
 }
 
 .settings-pane-tile.settings-pane-tile-20 svg {
@@ -212,14 +212,14 @@
 .settings-pane-title:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .settings-pane-desc.settings-card-desc,
 .settings-pane-desc {
   margin: 2px 0 0;
   max-width: 60ch;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--fg-secondary);
 }
@@ -253,7 +253,7 @@
 .settings-folded-title.settings-section-title,
 .settings-card-head .settings-section-title {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   line-height: 22px;
   font-weight: 600;
   color: var(--fg);
@@ -267,7 +267,7 @@
   /* The content column's width, like the pane description: one sentence is
      one line at 1280 instead of breaking at 460px with an orphan (N3-30). */
   max-width: 100%;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -333,7 +333,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 20px;
   font-weight: 600;
   color: var(--fg);
@@ -355,7 +355,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
   white-space: nowrap;
@@ -402,7 +402,7 @@
   display: block;
   width: 42%;
   height: 10px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--settings-skeleton-bar);
 }
 
@@ -426,13 +426,13 @@
   height: 28px;
   max-width: 100%;
   padding: 0 8px;
-  border-radius: 7px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-md);
 }
 
 .settings-plugin-body button:not(.toggle-switch, .settings-switch, .settings-segment) {
   min-height: 28px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
 }
 
 /* ── Reduced motion: nothing in Settings moves ── */

@@ -93,7 +93,7 @@
   .app-shell-navigation .todo-section-tab-count,
   .app-shell-navigation .todo-section-tabs .todo-section-tab:not(.is-active) .todo-section-tab-count {
     display: inline;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .app-shell-navigation .todo-section-tabs-menu {
     width: 44px;
@@ -114,7 +114,7 @@
 .phone-tier-empty-line {
   margin: 0;
   color: var(--fg-secondary);
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
 }
 .phone-tier-empty-btn {
@@ -123,8 +123,8 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
-  color: var(--accent-text, var(--accent));
-  font-size: 15px;
+  color: var(--accent-text);
+  font-size: var(--font-size-lg);
   font-weight: 500;
 }
 .phone-tier-empty-btn:active { background: var(--bg-secondary); }
@@ -134,7 +134,7 @@
   margin-left: auto;
   padding-left: 12px;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 400;
 }
 
@@ -165,7 +165,7 @@
     height: 32px;
     padding: 0;
     border: 0;
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--fg-muted);
     opacity: 0.55;
@@ -253,7 +253,7 @@
     min-height: 48px;
     font-size: 16px;
   }
-  .app-shell-navigation .ask-walnut-drawer-item-time { font-size: 12px; }
+  .app-shell-navigation .ask-walnut-drawer-item-time { font-size: var(--font-size-sm); }
   .app-shell-navigation :is(.ask-walnut-drawer-title, .ask-walnut-agent-item) { min-height: 44px; }
 }
 
@@ -283,14 +283,14 @@
     right: -10px;
   }
   html body .notification-panel.nfc-panel-wide :is(.nfc-count-badge, .nfc-rail-subcount, .notification-feed-item-time) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   html body .notification-panel.nfc-panel-wide .nfc-card-toggle {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     min-height: 44px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   html body .notification-panel.nfc-panel-wide .notification-feed-empty {
     display: flex;
@@ -332,7 +332,7 @@
     gap: 8px;
   }
   .app-shell-navigation .notes-editor-pane .notes-editor-updated {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--fg-muted);
   }
   .app-shell-navigation .notes-backlinks-toggle {
@@ -367,7 +367,7 @@
   }
   .app-shell-navigation .notes-tree-pane :is(.notes-tree-item, .notes-bookmark-row, .notes-bookmarks-header) {
     min-height: 44px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
   .app-shell-navigation .notes-tree-pane .notes-bookmark-remove {
     min-width: 44px;
@@ -385,7 +385,7 @@
     .task-completed-time, .task-blocked-badge, .task-pill-long, .task-team-pill,
     .session-supervision, .session-supervision button, .session-supervision-footer
   ) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   /* Team pills in a row are buttons: a 44 px hit area around the pill (the
      inset is from the padding box, inside the pill's 1 px border). */
@@ -408,7 +408,7 @@
   /* The tier's "+ Add to ..." row and its heading's add button. */
   .app-shell-navigation .focus-inline-add-trigger {
     min-height: 44px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
   .app-shell-navigation .navigation-heading :is(button, [role=button]) {
     min-width: 44px;
@@ -422,7 +422,7 @@
   /* The composer's mode pill ("Bypass") and its other small pills. */
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel, .ask-walnut-slot) :is(.mode-toggle-pill, .composer-model-pill, .session-detail-model-pill) {
     min-height: 44px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   /* A draft's own discard x (a standalone draft keeps its header). */
   .app-shell-navigation .draft-session-panel .session-panel-close {
@@ -459,7 +459,7 @@
   .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch {
     width: 51px;
     height: 31px;
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
   }
   .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch .toggle-thumb {
     width: 27px;
@@ -542,7 +542,7 @@
     margin-left: 0;
     padding: 0 8px;
     border-left: 0;
-    border-radius: var(--radius-sm, 6px);
+    border-radius: var(--radius-sm);
   }
   .app-shell-navigation .cal-toolbar-right {
     flex-wrap: nowrap;
@@ -567,7 +567,7 @@
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
     color: var(--fg-secondary);
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     line-height: 20px;
     text-align: center;
   }
@@ -578,7 +578,7 @@
    tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .mail-app :is(.mail-attachment, .mail-blocked-images) {
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   .app-shell-navigation .mail-app .mail-attachment {
     height: 32px;

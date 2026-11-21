@@ -7,10 +7,10 @@
   margin: 4px 12px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
 }
 .engine-switch-line-error { border-color: var(--error); }
@@ -29,7 +29,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -55,7 +55,7 @@
   border: none;
   background: transparent;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 4px 0;
   cursor: pointer;
   overflow: hidden;
@@ -72,7 +72,7 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
 }
 
@@ -80,7 +80,7 @@
 .session-switch-ready {
   margin: 12px 0 0;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 /* A switch divider's words wrap in a narrow column instead of running off its edge. */

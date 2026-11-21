@@ -18,11 +18,11 @@
   min-height: 0;
   display: flex;
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   background: var(--bg);
   --tp-row-border: color-mix(in srgb, var(--border) 55%, transparent);
-  --tp-p0: #ff3b30;
-  --tp-p1: #ff9500;
+  --tp-p0: var(--error);
+  --tp-p1: var(--warning);
   --tp-p2: #c7c7cc;
 }
 
@@ -61,7 +61,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -87,9 +87,9 @@
   padding: 0 10px;
   border: none;
   background: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -97,11 +97,11 @@
 .tp-rail-item:hover { background: var(--bg-hover); }
 .tp-rail-item.active { background: var(--bg-hover); font-weight: 600; }
 
-.tp-ri-icon { width: 16px; flex: none; text-align: center; color: var(--fg-muted); font-size: 12px; }
+.tp-ri-icon { width: 16px; flex: none; text-align: center; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .tp-rail-item.active .tp-ri-icon { color: var(--accent); }
 .tp-ri-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tp-ri-fav { color: #ffcc00; font-size: 10px; flex: none; }
-.tp-ri-count { font-size: 11px; color: var(--fg-muted); flex: none; }
+.tp-ri-fav { color: #ffcc00; font-size: var(--font-size-xs); flex: none; }
+.tp-ri-count { font-size: var(--font-size-xs); color: var(--fg-muted); flex: none; }
 
 /* hover ⋮ on rail rows + table group headers (shared trigger style; the menu
    itself is the portalled .task-kebab-menu). Swaps with the count on hover so
@@ -131,7 +131,7 @@
 .tp-group-plus-wrap .todo-group-action-btn {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   font-size: 14px;
   line-height: 1;
   padding: 0;
@@ -157,7 +157,7 @@
   width: 20px;
   height: 20px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--fg-muted);
   font-size: 14px;
@@ -187,9 +187,9 @@
   padding: 0 10px;
   border: none;
   background: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--fg-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -199,9 +199,9 @@
   width: 100%;
   height: 32px;
   border: 1.5px solid var(--accent);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   padding: 0 10px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   outline: none;
   background: var(--bg);
@@ -231,7 +231,7 @@
   flex: none;
 }
 .tp-title {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 700;
   margin-right: 2px;
   white-space: nowrap;
@@ -243,7 +243,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
   white-space: nowrap;
   margin-right: 6px;
@@ -255,11 +255,11 @@
   gap: 5px;
   height: 24px;
   padding: 0 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: none;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: inherit;
   cursor: pointer;
   flex: none;
@@ -274,10 +274,10 @@
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   outline: none;
 }
@@ -288,11 +288,11 @@
   height: 28px;
   padding: 0 12px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   cursor: pointer;
   flex: none;
@@ -356,7 +356,7 @@
   background: none;
   padding: 0;
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
   text-transform: uppercase;
@@ -386,7 +386,7 @@
   padding-right: 16px;
 }
 .tp-row-title {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -424,7 +424,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 .tp-p-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -434,13 +434,13 @@
 .tp-cell-pri.lp0 { color: var(--tp-p0); }
 .tp-cell-pri.lp1 { color: var(--tp-p1); }
 
-.tp-cell-due { font-size: 12px; color: var(--fg-muted); }
+.tp-cell-due { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .tp-cell-due.overdue { color: var(--tp-p0); }
 
-.tp-cell-empty { color: var(--fg-muted); opacity: 0.45; font-size: 12px; }
+.tp-cell-empty { color: var(--fg-muted); opacity: 0.45; font-size: var(--font-size-sm); }
 
 /* optional columns: phase / tags / timestamps */
-.tp-cell-phase { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.tp-cell-phase { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; }
 .tp-cell-phase.ph-need_action { color: var(--tp-p0); }
 .tp-cell-phase.ph-in_progress { color: var(--accent); }
 .tp-cell-tags {
@@ -452,7 +452,7 @@
   white-space: nowrap;
 }
 .tp-cell-tags .tag-chip { flex: none; }
-.tp-cell-time { font-size: 12px; color: var(--fg-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tp-cell-time { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* unsortable header (Tags) — same type as .tp-th, no pointer */
 .tp-th-static { cursor: default; }
@@ -467,7 +467,7 @@
   width: 20px;
   height: 20px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--fg-muted);
   cursor: pointer;
@@ -480,7 +480,7 @@
 .tp-cols-popover {
   position: fixed;
   z-index: 9500;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -491,7 +491,7 @@
   overflow-y: auto;
 }
 .tp-cols-head {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
   text-transform: uppercase;
@@ -504,7 +504,7 @@
   gap: 8px;
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   cursor: pointer;
   user-select: none;
@@ -519,7 +519,7 @@
   background: none;
   padding: 8px 4px 4px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--accent);
   cursor: pointer;
   text-align: left;
@@ -546,7 +546,7 @@
   border-radius: 10px;
   background: var(--bg-secondary);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   max-width: 120px;
   overflow: hidden;
 }
@@ -576,7 +576,7 @@
   width: 22px;
   height: 22px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--fg-muted);
   cursor: pointer;
@@ -610,7 +610,7 @@
 .tp-pri-popover {
   position: fixed;
   z-index: 9500;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -627,7 +627,7 @@
   background: none;
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   color: var(--fg);
   cursor: pointer;
@@ -644,7 +644,7 @@
 .tp-proj-popover {
   position: fixed;
   z-index: 9500;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -660,10 +660,10 @@
   height: 26px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: inherit;
   outline: none;
   flex: none;
@@ -675,12 +675,12 @@
 .tp-proj-empty {
   padding: 8px 10px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 /* due cell hosts the shared DatePicker trigger — keep it row-height compact */
 .tp-due-picker .dp-trigger {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 2px 6px;
   margin-left: -6px;
 }
@@ -694,7 +694,7 @@
   padding: 0 20px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   cursor: pointer;
   user-select: none;
@@ -704,20 +704,20 @@
 }
 .tp-group-header:hover { background: var(--bg-hover); }
 .tp-group-chevron {
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   transition: transform 0.12s ease;
   flex: none;
 }
 .tp-group-header.closed .tp-group-chevron { transform: rotate(-90deg); }
-.tp-group-icon { flex: none; font-size: 12px; }
+.tp-group-icon { flex: none; font-size: var(--font-size-sm); }
 .tp-group-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tp-group-count { color: var(--fg-muted); font-weight: 400; font-size: 11.5px; }
+.tp-group-count { color: var(--fg-muted); font-weight: 400; font-size: var(--font-size-sm); }
 
 /* ghost "＋ New task…" row at the very top of the body */
 .tp-ghost {
@@ -738,7 +738,7 @@
 }
 .tp-ghost.editing .tp-gplus { color: var(--accent); }
 .tp-ghost-text {
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -749,7 +749,7 @@
   border: none;
   outline: none;
   background: transparent;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   color: var(--fg);
 }
@@ -761,5 +761,5 @@
   padding: 40px;
   text-align: center;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }

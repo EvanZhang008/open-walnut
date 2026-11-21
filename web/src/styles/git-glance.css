@@ -57,7 +57,7 @@
 .git-glance-add { color: var(--git-glance-add); }
 .git-glance-del { color: var(--git-glance-del); }
 .git-glance-ahead { color: var(--git-glance-ahead); font-weight: 600; }
-.git-glance-behind { color: var(--warning, #b7791f); font-weight: 600; }
+.git-glance-behind { color: var(--warning); font-weight: 600; }
 .git-glance-conflict { color: var(--git-glance-del); font-weight: 600; }
 .git-glance-clean, .git-glance-more { color: var(--fg-muted); }
 .git-glance.is-stale { opacity: 0.6; }
@@ -71,10 +71,10 @@
   height: 16px;
   padding: 0 7px;
   gap: 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 14px;
   max-width: 100%;
@@ -102,7 +102,7 @@ html .home-navigation-scroll .todo-search-results .todo-item-title-row > .git-gl
 html .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta]:has(> .todo-item-title-row > .git-glance-pill) > .todo-search-meta-row { min-width: 44px; }
 
 /* The phone search's result row: its own line under the title (12px: a phone's smallest text). */
-.phone-search-row .git-glance-pill { align-self: flex-start; height: 20px; margin-top: 2px; font-size: 12px; }
+.phone-search-row .git-glance-pill { align-self: flex-start; height: 20px; margin-top: 2px; font-size: var(--font-size-sm); }
 
 /* A Home card's top line: the same pill (status-sections.css flattens the pills
    there; these outrank it), its own separator (no "·" before it), shrinking
@@ -113,10 +113,10 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   min-width: 0;
   height: 15px;
   padding: 0 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 15px;
   gap: 3px;
 }
@@ -129,7 +129,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
 
 /* Session row line and the Changed tab's strip. */
 .git-glance-line {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-secondary);
   max-width: 100%;
 }
@@ -153,8 +153,8 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   background: var(--bg-secondary);
   min-width: 0;
 }
-.session-diff-gitstrip .git-glance-line { font-size: 12px; gap: 6px; color: var(--fg-secondary); }
-.session-diff-gitstrip-when { font-size: 11px; color: var(--fg-secondary); opacity: 0.8; white-space: nowrap; margin-left: auto; }
+.session-diff-gitstrip .git-glance-line { font-size: var(--font-size-sm); gap: 6px; color: var(--fg-secondary); }
+.session-diff-gitstrip-when { font-size: var(--font-size-xs); color: var(--fg-secondary); opacity: 0.8; white-space: nowrap; margin-left: auto; }
 
 /* A narrow Changed tab (a phone, a split beside the chat): its toolbar wraps onto a
    second line instead of cutting its right-hand buttons off, and the file count
@@ -170,7 +170,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   .git-glance-line,
   .session-diff-gitstrip .git-glance-line,
   .git-glance-line .git-glance-branch,
-  .session-diff-gitstrip-when { font-size: 12px; }
+  .session-diff-gitstrip-when { font-size: var(--font-size-sm); }
   .app-shell-navigation .session-panel :is(
     .session-diff-ai-toggle, .session-diff-commit-btn, .session-diff-refresh,
     .session-diff-compare-trigger, .session-diff-ws-toggle, .session-diff-next-unviewed, .session-diff-viewed-toggle
@@ -180,7 +180,7 @@ html .home-navigation-scroll .status-card-meta .git-glance-pill.todo-item-due-pi
   }
   .app-shell-navigation .session-panel :is(
     .session-diff-ws-toggle, .session-diff-next-unviewed, .session-diff-viewed-toggle, .session-diff-viewed-changed
-  ) { font-size: 12px; }
+  ) { font-size: var(--font-size-sm); }
 }
 
 /* The Changed toolbar's ↻ keeps its room while idle (SessionDiffView). */

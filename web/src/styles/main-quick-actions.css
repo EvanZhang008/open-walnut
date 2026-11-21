@@ -2,7 +2,7 @@
    "Projects" heading says when one is on its way, or why it was not sent. */
 
 .main-qa-note { color: var(--fg-muted); margin-left: 4px; }
-.main-qa-error { color: var(--error, #ff3b30); font-size: 11px; margin-left: 4px; white-space: nowrap; }
+.main-qa-error { color: var(--error); font-size: var(--font-size-xs); margin-left: 4px; white-space: nowrap; }
 
 .tp-rail-title .main-qa-note,
-.tp-rail-title .main-qa-error { font-size: 11px; font-weight: 500; letter-spacing: normal; text-transform: none; }
+.tp-rail-title .main-qa-error { font-size: var(--font-size-xs); font-weight: 500; letter-spacing: normal; text-transform: none; }

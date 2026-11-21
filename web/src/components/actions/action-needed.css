@@ -2,7 +2,7 @@
    with "‹ 1/3 ›" beside Snooze when it asks more. */
 .action-needed {
   display: flex; flex-direction: column; margin: 6px 0 2px;
-  color: var(--fg); font-size: 12px; cursor: default; flex-basis: 100%; min-width: 0;
+  color: var(--fg); font-size: var(--font-size-sm); cursor: default; flex-basis: 100%; min-width: 0;
 }
 /* The block's heading and the page it is on are for a screen reader only: its card says what it
    is (2026-11-20, the user: "why so much garbage Action needed, Ask just now"). */
@@ -11,12 +11,12 @@
 /* Sideways strokes page (AskPager.tsx usePageGestures); the list still scrolls up and down. */
 .action-needed.is-paged .ask-pages { touch-action: pan-y; }
 
-.ask-pager { display: inline-flex; align-items: center; gap: 0; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ask-pager { display: inline-flex; align-items: center; gap: 0; color: var(--fg-muted); font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; }
 .ask-pager-at { min-width: 26px; text-align: center; }
-.ask-pager-unsent { margin: 0 4px 0 2px; color: var(--error, #d70015); white-space: nowrap; }
+.ask-pager-unsent { margin: 0 4px 0 2px; color: var(--error); white-space: nowrap; }
 .ask-pager-btn {
   all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 28px; border-radius: 8px; color: var(--fg-muted); cursor: pointer;
+  width: 24px; height: 28px; border-radius: var(--radius-sm); color: var(--fg-muted); cursor: pointer;
 }
 .ask-pager-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .ask-pager-btn:disabled { opacity: 0.35; cursor: default; }
@@ -24,8 +24,8 @@
 
 /* A row's own state beside its ask: "Working" while its turn still runs. */
 .status-card-also-working {
-  flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px;
-  color: var(--accent, #0a84ff); border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
+  flex: none; font-size: var(--font-size-xs); padding: 0 6px; border-radius: var(--radius-sm); line-height: 16px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .status-card-actions-below, .todo-row-actions-below { padding: 0 8px 4px 34px; }
 
@@ -36,6 +36,6 @@
 
 /* A phone: the pager's arrows are a finger's size (ask-card.css gives every control 44 px). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .status-card-also-working { font-size: 12px; }
-  .app-shell-navigation .ask-pager { font-size: 13px; }
+  .app-shell-navigation .status-card-also-working { font-size: var(--font-size-sm); }
+  .app-shell-navigation .ask-pager { font-size: var(--font-size-md); }
 }

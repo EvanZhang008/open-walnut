@@ -110,7 +110,7 @@
     background: transparent;
     color: var(--fg);
     font: inherit;
-    font-size: 17px;
+    font-size: var(--font-size-xl);
     font-weight: 600;
     line-height: 1.2;
     cursor: default;
@@ -125,11 +125,11 @@
   }
 
   .app-shell-navigation .phone-topbar-title.has-subtitle {
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
 
   .phone-topbar-subtitle {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: 400;
     color: var(--fg-secondary);
   }
@@ -234,7 +234,7 @@
     z-index: 1;
     padding-bottom: 4px;
     margin-right: 2px;
-    background: var(--bg-secondary, var(--bg));
+    background: var(--bg-secondary);
   }
 
   .app-shell-navigation .notes-tab-strip-empty .notes-tab-leading {
@@ -251,7 +251,7 @@
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--accent);
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
 
   /* Calendar: the page fits the area under the bar (100vh is the TALL viewport
@@ -406,7 +406,7 @@
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
     color: var(--fg);
-    font-size: 13px;
+    font-size: var(--font-size-md);
     line-height: 1.3;
   }
 
@@ -425,7 +425,7 @@
     border: 0;
     background: transparent;
     color: var(--accent);
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     font-weight: 600;
     text-decoration: none;
     white-space: nowrap;
@@ -484,7 +484,7 @@
   .app-shell-navigation .sidebar .sidebar-link {
     min-height: 48px;
     gap: 12px;
-    font-size: 17px;
+    font-size: var(--font-size-xl);
   }
 
   .app-shell-navigation .sidebar .sidebar-link > svg,
@@ -664,13 +664,13 @@
 
 .phone-confirm-sheet-title {
   margin: 0 0 6px;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
 }
 
 .phone-confirm-sheet-body {
   margin: 0 0 12px;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
   color: var(--fg-secondary);
 }
@@ -700,7 +700,7 @@
 .phone-confirm-sheet-btn-primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .phone-confirm-sheet-btn-primary.is-destructive {

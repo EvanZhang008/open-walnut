@@ -2,17 +2,17 @@
 
 .mail-rules-crosslink,
 .mail-rules-help,
-.mail-rules-progress { margin: 0 0 8px; font-size: 13px; color: var(--fg-secondary); overflow-wrap: anywhere; }
-.mail-rules-help { color: var(--fg-muted); font-size: 12px; }
+.mail-rules-progress { margin: 0 0 8px; font-size: var(--font-size-md); color: var(--fg-secondary); overflow-wrap: anywhere; }
+.mail-rules-help { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .mail-rules-crosslink a { color: var(--accent-text); }
 .mail-rules-inline-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; }
 
 .mail-rules-file { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-width: 0; }
 .mail-rules-file-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.mail-rules-file-label { font-weight: 600; font-size: 13px; }
+.mail-rules-file-label { font-weight: 600; font-size: var(--font-size-md); }
 .mail-rules-file-path {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   user-select: text;
   overflow-wrap: anywhere;
   min-width: 0;
@@ -48,24 +48,24 @@
 .mail-rule-row[data-flash='true'] { background: var(--accent-subtle); }
 .mail-rule-row[data-enabled='false'] .mail-rule-summary { color: var(--fg-muted); }
 .mail-rule-copy { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
-.mail-rule-summary { font-size: 13px; overflow-wrap: anywhere; }
+.mail-rule-summary { font-size: var(--font-size-md); overflow-wrap: anywhere; }
 /* A subject pattern in a summary: code on one line, cut with an ellipsis where the column ends (the
    whole pattern is in its tooltip and in the editor), never broken inside a word. */
 .mail-rule-pattern {
   display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  vertical-align: bottom; font-family: var(--font-mono); font-size: 12px;
+  vertical-align: bottom; font-family: var(--font-mono); font-size: var(--font-size-sm);
 }
 /* `→ Build results`: never split from its arrow or across lines. */
 .mail-rule-target { white-space: nowrap; }
-.mail-rule-provenance { font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.mail-rule-provenance { font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 /* Off because of its pattern, or a hint that the rule would not do what it seems to: a warning, so
    it reads apart from a rule the user switched off. Mixed toward the text colour so it reads at a
    glance on both themes' backgrounds. */
 .mail-rule-off,
-.mail-rule-hint[data-warn='true'] { font-size: 12px; color: color-mix(in srgb, var(--warning) 60%, var(--fg)); overflow-wrap: anywhere; }
+.mail-rule-hint[data-warn='true'] { font-size: var(--font-size-sm); color: color-mix(in srgb, var(--warning) 60%, var(--fg)); overflow-wrap: anywhere; }
 .mail-rule-actions { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .mail-rule-toggle-wrap { display: inline-flex; }
-.mail-rules-empty { margin: 0; padding: 10px; color: var(--fg-muted); font-size: 13px; }
+.mail-rules-empty { margin: 0; padding: 10px; color: var(--fg-muted); font-size: var(--font-size-md); }
 
 .mail-rules-move { display: inline-flex; gap: 2px; flex-shrink: 0; }
 .mail-rules-icon-btn {
@@ -86,7 +86,7 @@
 .mail-rules-icon-btn:focus-visible,
 .mail-rules-picker:focus-visible,
 .mail-rules-picker-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.mail-rules-moved { min-width: 44px; font-size: 12px; color: var(--accent-text); flex-shrink: 0; }
+.mail-rules-moved { min-width: 44px; font-size: var(--font-size-sm); color: var(--accent-text); flex-shrink: 0; }
 
 /* The inline editor. */
 .mail-rule-editor {
@@ -98,27 +98,27 @@
   background: var(--bg-secondary);
   min-width: 0;
 }
-.mail-rule-editor-head { font-size: 12px; font-weight: 600; color: var(--fg-secondary); margin-top: 4px; }
+.mail-rule-editor-head { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); margin-top: 4px; }
 .mail-rule-conditions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .mail-rule-condition { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .mail-rule-value-input { flex: 1 1 180px; min-width: 0; }
 .mail-rule-then { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.mail-rule-skip-inbox { display: flex; align-items: flex-start; gap: 7px; margin-top: 2px; font-size: 12.5px; line-height: 1.45; color: var(--fg-secondary); cursor: pointer; }
+.mail-rule-skip-inbox { display: flex; align-items: flex-start; gap: 7px; margin-top: 2px; font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); cursor: pointer; }
 .mail-rule-skip-inbox input { margin: 2px 0 0; flex: 0 0 auto; }
 .mail-rule-skip-inbox:has(input:disabled) { opacity: 0.55; cursor: default; }
-.mail-rule-skip-badge { margin-left: 6px; font-size: 11px; color: var(--accent); white-space: nowrap; }
-.mail-rule-field-error { flex-basis: 100%; margin: 0; font-size: 12px; color: color-mix(in srgb, var(--error) 80%, var(--fg)); overflow-wrap: anywhere; }
+.mail-rule-skip-badge { margin-left: 6px; font-size: var(--font-size-xs); color: var(--accent); white-space: nowrap; }
+.mail-rule-field-error { flex-basis: 100%; margin: 0; font-size: var(--font-size-sm); color: color-mix(in srgb, var(--error) 80%, var(--fg)); overflow-wrap: anywhere; }
 /* The calm lines under a condition: why it stays off, a hint, what the field takes. */
 .mail-rule-condition .mail-rule-off,
 .mail-rule-hint,
-.mail-rule-help { flex-basis: 100%; margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.mail-rule-help { flex-basis: 100%; margin: 0; font-size: var(--font-size-sm); overflow-wrap: anywhere; }
 .mail-rule-hint:not([data-warn='true']) { color: var(--fg-secondary); }
 /* The one-click fix a hint offers, on the hint's own line. */
 .mail-rule-hint-fix { margin-left: 6px; padding: 0; border: none; background: none; font: inherit; color: var(--accent-text); cursor: pointer; }
 .mail-rule-hint-fix:hover { text-decoration: underline; }
 .mail-rule-help { color: var(--fg-muted); }
 .mail-rule-add-condition { align-self: flex-start; }
-.mail-rule-preview { margin: 4px 0 0; min-height: 18px; font-size: 12px; color: var(--fg-muted); }
+.mail-rule-preview { margin: 4px 0 0; min-height: 18px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .mail-rule-editor-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
 .mail-rules-picker {
@@ -129,7 +129,7 @@
   max-width: 100%;
   padding: 2px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--border-strong);
@@ -157,7 +157,7 @@
   padding: 4px 8px;
   min-height: 28px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   text-align: left;
   color: var(--fg);
   background: none;
@@ -167,7 +167,7 @@
 }
 .mail-rules-picker-option:hover,
 .mail-rules-picker-option[aria-selected='true'] { background: var(--accent-subtle); }
-.mail-rules-picker-hint { font-size: 11px; color: var(--fg-muted); }
+.mail-rules-picker-hint { font-size: var(--font-size-xs); color: var(--fg-muted); }
 
 @media (prefers-reduced-motion: reduce) {
   .mail-rule-row { transition: none; }
@@ -175,7 +175,7 @@
 /* The matching mails under the preview, on request: sender and subject, one line each. */
 .mail-rule-samples {
   list-style: none; margin: 0; padding: 4px 8px; display: flex; flex-direction: column; gap: 4px;
-  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); font-size: var(--font-size-sm);
 }
 .mail-rule-sample { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .mail-rule-sample-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

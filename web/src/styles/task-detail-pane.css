@@ -15,7 +15,7 @@
   height: min(780px, 90vh);
   min-height: min(360px, 90vh);
   max-height: 90vh;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
 }
 
 /* ── Header ── */
@@ -73,7 +73,7 @@
   align-items: baseline;
   gap: 6px;
   margin: 0 0 12px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
@@ -96,14 +96,14 @@
   cursor: pointer;
   transition: background 0.12s;
 }
-.tdp .tdp-row:hover { background: var(--bg-tertiary, rgba(0, 0, 0, 0.04)); }
+.tdp .tdp-row:hover { background: var(--bg-tertiary); }
 .tdp .tdp-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tdp-row-line {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 20px;
 }
 .tdp-dot {
@@ -124,13 +124,13 @@
 .tdp-row-title.is-loading { color: var(--fg-muted); }
 .tdp-row-end {
   flex: none;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
 .tdp-row-sub {
   margin-left: 15px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
   color: var(--fg-muted);
   overflow: hidden;
@@ -147,7 +147,7 @@
   align-self: flex-start;
   padding: 0;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--accent);
   background: none;
   border: none;
@@ -166,7 +166,7 @@
 }
 .tdp-doc .todo-detail-note.markdown-body {
   max-width: 760px;
-  font-size: 13.5px;
+  font-size: var(--font-size-md);
   line-height: 1.6;
   color: var(--fg-secondary);
 }
@@ -175,7 +175,7 @@
   border-top: 1px solid var(--border);
 }
 
-.tdp-muted { font-size: 12.5px; color: var(--fg-muted); }
+.tdp-muted { font-size: var(--font-size-md); color: var(--fg-muted); }
 
 /* ── Rail: one fact per row ── */
 
@@ -184,7 +184,7 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   background: var(--bg-secondary);
   border-left: 1px solid var(--border);
   display: flex;
@@ -212,7 +212,7 @@
   font-variant-numeric: tabular-nums;
 }
 .tdp-fact .copyable-id { margin-right: 0; }
-.tdp-fact .dp-trigger { font-size: 12px; }
+.tdp-fact .dp-trigger { font-size: var(--font-size-sm); }
 .tdp-fact .dp-trigger-bare:not(.dp-trigger-has-date):not(:hover) { padding-right: 0; }
 .tdp-source { color: var(--accent); text-decoration: none; white-space: nowrap; }
 .tdp-source:hover { text-decoration: underline; }
@@ -249,7 +249,7 @@
 .tdp-action {
   padding: 6px 12px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   color: var(--fg);
   background: var(--bg-secondary);
@@ -257,23 +257,23 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.tdp-action:hover { background: var(--bg-tertiary, var(--bg-secondary)); }
+.tdp-action:hover { background: var(--bg-tertiary); }
 .tdp-action-primary {
   color: var(--fg);
   background: var(--bg-secondary);
   border-color: var(--border);
 }
 .tdp-action-primary:hover { background: var(--bg-tertiary); }
-.tdp-action-danger { color: var(--error, #ff3b30); }
+.tdp-action-danger { color: var(--error); }
 
 .tdp-blocked {
   align-self: flex-start;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: #b45309;
   background: #f59e0b22;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .tdp-dep-row .tdp-row-line { gap: 8px; }
 .tdp-dep-title {
@@ -281,7 +281,7 @@
   flex: 1;
   padding: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   text-align: left;
   color: var(--fg);
   background: none;
@@ -311,7 +311,7 @@
   min-width: 0;
   padding: 4px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -320,12 +320,12 @@
 .tdp-dep-result {
   padding: 4px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   text-align: left;
   color: var(--fg);
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
 }
 .tdp-dep-result:hover { background: var(--bg-secondary); }
@@ -333,7 +333,7 @@
 .tdp-dependents-label { margin: 10px 0 2px; }
 .tdp-dep-empty {
   padding: 4px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   color: var(--fg-muted);
 }
@@ -379,17 +379,17 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 .tdp-start-queue-label { font-weight: 600; }
 .tdp-start-queue-text { flex: 1 1 240px; color: var(--fg-muted); }
 .tdp-start-queue-actions { display: inline-flex; gap: 6px; }
 .tdp-start-queue-btn {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 1px 8px;
   cursor: pointer;
 }
@@ -397,25 +397,25 @@
 .tdp-start-queue-btn:disabled { opacity: 0.5; cursor: default; }
 /* Withdraw on an answer given for the user (AnsweredForLine.tsx), also on a Board Status row. */
 .answered-for-confirm { display: inline-flex; gap: 6px; }
-.answered-for-btn-compact { margin-left: 6px; font-size: 11px; padding: 0 6px; }
+.answered-for-btn-compact { margin-left: 6px; font-size: var(--font-size-xs); padding: 0 6px; }
 
 /* The selected design keeps the header and actions visible around independent columns. */
 .task-detail-modal .todo-detail-pane.tdp { padding: 0; overflow: hidden; height: 100%; }
 .tdp-footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--border); background: var(--bg); }
-.tdp-open-session { padding: 6px 12px; font: inherit; font-size: 12.5px; color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: 6px; cursor: pointer; }
+.tdp-open-session { padding: 6px 12px; font: inherit; font-size: var(--font-size-md); color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: 6px; cursor: pointer; }
 .tdp-open-session:hover { opacity: .85; }
 .tdp-open-session:focus-visible, .tdp-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tdp-facts { border-top: 1px solid var(--border); padding-top: 16px; }
-.tdp .todo-detail-project { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.tdp .todo-detail-project { font-size: var(--font-size-sm); font-weight: 400; text-transform: none; letter-spacing: 0; }
 .tdp .todo-detail-close { width: 28px; height: 28px; margin-left: 4px; opacity: 1; }
-.tdp .todo-detail-badges .badge-phase { background: transparent; padding: 0; font-size: 12px; }
+.tdp .todo-detail-badges .badge-phase { background: transparent; padding: 0; font-size: var(--font-size-sm); }
 .tdp .todo-detail-badges { gap: 12px; }
 .tdp-rail .todo-detail-session-item { background: var(--bg); border: 1px solid var(--border); margin: 0; padding: 12px; }
 .tdp-rail .tdp-task-row { border-bottom: 1px solid var(--border); border-radius: 0; }
 .tdp-rail .tdp-row-line { align-items: baseline; }
 .tdp-rail .tdp-dot { align-self: center; }
 .tdp .notes-editor .ProseMirror { font-size: 14px; line-height: 1.7; }
-.tdp .notes-editor .ProseMirror h1, .tdp .notes-editor .ProseMirror h2 { font-size: 20px; line-height: 1.4; font-weight: 500; }
+.tdp .notes-editor .ProseMirror h1, .tdp .notes-editor .ProseMirror h2 { font-size: var(--font-size-2xl); line-height: 1.4; font-weight: 500; }
 .tdp .notes-editor .ProseMirror h3 { font-size: 16px; line-height: 1.5; font-weight: 500; }
 .tdp .notes-editor .ProseMirror > :first-child { margin-top: 0; }
 /* Phone uses the same fields and a single body scroller, below its own page header. */

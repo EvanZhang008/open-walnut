@@ -16,12 +16,12 @@
   overflow: auto;
   padding: 14px 18px 40px;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
 }
 
 .board-status .bs-who {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--fg-muted);
@@ -29,7 +29,7 @@
 
 .board-status .bs-h {
   margin: 2px 0 6px;
-  font-size: 18px;
+  font-size: var(--font-size-xl);
   font-weight: 650;
 }
 
@@ -70,7 +70,7 @@
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 
@@ -91,7 +91,7 @@
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-align: left;
@@ -110,7 +110,7 @@
 .board-status .bs-row-needs td { background: color-mix(in srgb, var(--bs-needs) 7%, transparent); }
 
 .board-status .bs-c-status { width: 104px; }
-.board-status .bs-c-when { width: 64px; color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+.board-status .bs-c-when { width: 64px; color: var(--fg-muted); font-size: var(--font-size-sm); white-space: nowrap; }
 
 .board-status .bs-pill {
   display: inline-flex;
@@ -118,7 +118,7 @@
   gap: 5px;
   padding: 1px 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   white-space: nowrap;
   background: color-mix(in srgb, var(--bs-waiting) 16%, transparent);
@@ -131,7 +131,7 @@
 .board-status .bs-pill-stuck { background: color-mix(in srgb, var(--bs-stuck) 16%, transparent); color: var(--bs-stuck); }
 
 .board-status .bs-title { display: block; font-weight: 600; }
-.board-status .bs-sub { display: block; color: var(--fg-muted); font-size: 11.5px; }
+.board-status .bs-sub { display: block; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .board-status .bs-c-where > span, .board-status .bs-c-next > span { display: block; }
 .board-status .bs-on { font-weight: 550; }
 .board-status .bs-on-stuck { color: var(--bs-stuck); }
@@ -143,20 +143,20 @@
 .board-status .bs-needs-category { flex: none; font-weight: 600; }
 .board-status .bs-needs-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-status .bs-needs-category-decide { color: var(--bs-needs); }
-.board-status .bs-needs-category-review { color: var(--warning, #c77700); }
+.board-status .bs-needs-category-review { color: var(--warning); }
 .board-status .bs-needs-category-look { color: var(--accent); }
-.board-status .bs-needs-category-close { color: var(--success, #2f9e44); }
+.board-status .bs-needs-category-close { color: var(--success); }
 /* When a session's ask was last checked; amber once it is too old to be fact. */
-.board-status .bs-checked { color: var(--fg-muted); font-size: 11.5px; }
-.board-status .bs-checked.is-unverified, .board-status .bs-unverified { color: color-mix(in srgb, var(--warning, #FF9500) 70%, var(--fg)); font-weight: 600; }
+.board-status .bs-checked { color: var(--fg-muted); font-size: var(--font-size-sm); }
+.board-status .bs-checked.is-unverified, .board-status .bs-unverified { color: color-mix(in srgb, var(--warning) 70%, var(--fg)); font-weight: 600; }
 
 .board-status .bs-stale {
   display: inline-block !important;
   margin-top: 2px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, #f5b400 22%, transparent);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
 }
 
@@ -166,9 +166,9 @@
   border: 1px solid var(--bs-needs);
   border-radius: 6px;
   background: var(--bs-needs);
-  color: #fff;
+  color: var(--on-accent);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -200,24 +200,24 @@
   background: color-mix(in srgb, #f5b400 22%, transparent);
   color: var(--fg);
 }
-.board-status .bs-partial { margin-top: 2px; font-size: 11.5px; color: color-mix(in srgb, #b07a00 70%, var(--fg)); }
+.board-status .bs-partial { margin-top: 2px; font-size: var(--font-size-sm); color: color-mix(in srgb, #b07a00 70%, var(--fg)); }
 /* Past or near its due date (user-status.ts `due`). */
 .board-status .bs-due {
   display: inline-block !important;
   margin-top: 2px;
   padding: 0 6px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   background: color-mix(in srgb, #f5b400 22%, transparent);
 }
 .board-status .bs-due-overdue { background: color-mix(in srgb, var(--bs-needs) 16%, transparent); color: var(--bs-needs); }
 
 /* Team stop (core/sessions/team-stop.ts): one quiet button, or the stopped line with the way back. */
-.bs-team-stop { margin: 4px 0 10px; font-size: 12.5px; color: var(--fg-muted); }
-.bs-team-stop.is-stopped { color: var(--fg); padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); }
+.bs-team-stop { margin: 4px 0 10px; font-size: var(--font-size-md); color: var(--fg-muted); }
+.bs-team-stop.is-stopped { color: var(--fg); padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); }
 .bs-team-stop-btn {
-  font: inherit; font-size: 12px; color: var(--fg-muted); background: none; border: 1px solid var(--border);
+  font: inherit; font-size: var(--font-size-sm); color: var(--fg-muted); background: none; border: 1px solid var(--border);
   border-radius: 6px; padding: 2px 8px; cursor: pointer;
 }
 .bs-team-stop-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }

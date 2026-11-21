@@ -5,7 +5,7 @@
   width: max-content;
   max-width: min(300px, calc(100vw - 16px));
   overflow-y: auto;
-  background: var(--bg-elevated, var(--card-bg));
+  background: var(--bg-elevated);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }

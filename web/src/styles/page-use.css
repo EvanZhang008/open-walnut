@@ -3,7 +3,7 @@
   width: 100%;
   max-width: 620px;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 .page-use-table th {
@@ -30,7 +30,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
 }
 .page-use-where { color: var(--fg-muted); }

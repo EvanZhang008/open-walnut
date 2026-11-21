@@ -64,13 +64,13 @@
   padding: 0 14px 0 18px;
   background: var(--seg-bg);
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%, 11px 50%);
 }
 .tree-path-seg[data-first] {
   margin-left: 0;
   padding-left: 8px;
-  border-radius: 8px 0 0 8px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%);
 }
 /* The pages on screen keep their words longest; the others give way first. */
@@ -104,7 +104,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent-text);
-  font: 600 11.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
+  font: 600 var(--font-size-sm)/18px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .tree-path-title {
   min-width: 0;
@@ -130,10 +130,10 @@
 .tree-path-role {
   flex: none;
   padding: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
-  color: #fff;
-  font: 700 10px/15px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  color: var(--on-accent);
+  font: 700 var(--font-size-xs)/15px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
 }
 .tree-path-role[data-role="only"] { padding: 0 5px; }
 .tree-path-caret {
@@ -144,7 +144,7 @@
   height: 22px;
   margin-left: 2px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -158,21 +158,21 @@
   gap: 4px;
   flex: none;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 .tree-path-hint kbd {
   padding: 0 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  font: 500 10.5px/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  border-radius: var(--radius-xs);
+  font: 500 var(--font-size-xs)/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
 }
 .tree-path-hint span { margin-left: 3px; }
 
 /* A level's list (portalled, placed by useMenuPlacement) */
 .tree-path-menu { width: 340px; max-width: min(360px, calc(100vw - 16px)); }
-.tree-path-menu-heading { padding: 6px 8px 4px; color: var(--fg-muted); font-size: 11.5px; font-weight: 600; }
-.tree-path-menu-empty { padding: 6px 8px 8px; color: var(--fg-muted); font-size: 12.5px; }
+.tree-path-menu-heading { padding: 6px 8px 4px; color: var(--fg-muted); font-size: var(--font-size-sm); font-weight: 600; }
+.tree-path-menu-empty { padding: 6px 8px 8px; color: var(--fg-muted); font-size: var(--font-size-md); }
 .tree-path-menu-item[data-current] { background: var(--accent-subtle); }
 .tree-path-menu-num {
   display: inline-flex;
@@ -181,7 +181,7 @@
   flex: none;
   min-width: 46px;
   color: var(--fg-secondary);
-  font: 600 11.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
+  font: 600 var(--font-size-sm)/18px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .tree-path-menu-title { flex: 1 1 auto; }
 .tree-path-menu-status { flex: none; color: var(--fg-muted); }
@@ -238,10 +238,10 @@
 .thread-half-badge {
   flex: none;
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
-  color: #fff;
-  font: 700 10.5px/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  color: var(--on-accent);
+  font: 700 var(--font-size-xs)/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
 }
 .thread-half-name {
   min-width: 0;
@@ -249,7 +249,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-secondary);
-  font: 600 12.5px/18px ui-monospace, 'SF Mono', Menlo, monospace;
+  font: 600 var(--font-size-md)/18px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .thread-half-status { flex: none; }
 .thread-half-row .thread-half-name { flex: none; }
@@ -260,7 +260,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 600;
 }
 /* A page's header in a narrow column: its title keeps the room, the status is
@@ -277,7 +277,7 @@
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-secondary);
   cursor: pointer;
@@ -304,10 +304,10 @@
 .thread-half-where {
   flex: none;
   padding: 0 6px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--fg) 7%, transparent);
   color: var(--fg-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
   white-space: nowrap;
 }
@@ -334,7 +334,7 @@
   border-radius: 6px;
   background: var(--bg);
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .thread-half-swap:hover { background: var(--bg-hover); color: var(--fg); }

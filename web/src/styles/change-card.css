@@ -80,11 +80,11 @@
   max-height: min(640px, calc(100vh - 16px));
   padding: 16px 16px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   overflow: auto;
   overscroll-behavior: contain;
@@ -98,12 +98,12 @@
 
 /* Head: name, state, facts; the title under them */
 .change-card .change-card-head-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; margin-top: 4px; }
-.change-card .change-card-label.change-card-label { font-family: var(--font-mono); font-size: 12px; font-weight: 500; color: var(--fg); }
-.change-card .change-card-state { padding: 0 6px; border-radius: 4px; font-size: 11px; line-height: 18px; font-weight: 500; color: var(--fg-secondary); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.change-card .change-card-label.change-card-label { font-family: var(--font-mono); font-size: var(--font-size-sm); font-weight: 500; color: var(--fg); }
+.change-card .change-card-state { padding: 0 6px; border-radius: var(--radius-xs); font-size: var(--font-size-xs); line-height: 18px; font-weight: 500; color: var(--fg-secondary); background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .change-card .change-card-state:is([data-tone="blocked"], [data-tone="waiting"]) { color: var(--change-tone); }
 .change-card .change-card-facts { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .change-card .change-card-title {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   line-height: 1.4;
   color: var(--fg);
@@ -116,7 +116,7 @@
 .change-card .change-card-error {
   margin-top: 12px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--fg-secondary);
   background: color-mix(in srgb, var(--change-blocked) 8%, transparent);
 }
@@ -141,11 +141,11 @@
   background: var(--change-tone, var(--change-quiet));
 }
 .change-card .change-card-now[data-tone="blocked"]::before { box-shadow: 0 0 0 3px color-mix(in srgb, var(--change-blocked) 18%, transparent); }
-.change-card .change-card-now-title { font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--fg); }
+.change-card .change-card-now-title { font-size: var(--font-size-lg); font-weight: 600; line-height: 1.35; color: var(--fg); }
 .change-card .change-card-now-detail { margin-top: 2px; color: var(--fg-secondary); overflow-wrap: anywhere; }
 .change-card .change-card-next-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; min-height: 24px; }
 .change-card .change-card-next { color: var(--fg-muted); }
-.change-card .change-card-next[data-person="true"] { padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 18px; background: color-mix(in srgb, var(--change-waiting) 12%, transparent); }
+.change-card .change-card-next[data-person="true"] { padding: 1px 8px; border-radius: var(--radius-xs); font-size: var(--font-size-xs); font-weight: 500; line-height: 18px; background: color-mix(in srgb, var(--change-waiting) 12%, transparent); }
 .change-card .change-card-now[data-tone="blocked"] .change-card-next[data-person="true"] { background: color-mix(in srgb, var(--change-blocked) 12%, transparent); }
 .change-card .change-card-now-sub { color: var(--fg-muted); }
 .change-card a.change-card-action { text-decoration: none; color: var(--fg); }
@@ -177,13 +177,13 @@
 .change-card .change-card-deploy[data-stale="true"] { opacity: 0.7; }
 .change-card .change-card-deploy-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .change-card .change-card-deploy-name { font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.change-card .change-card-commit { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); }
+.change-card .change-card-commit { font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-muted); }
 .change-card .change-card-count { margin-left: auto; flex: 0 0 auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
 .change-card .change-card-track { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 4px; }
 .change-card .change-card-track-group { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 0; }
 .change-card .change-card-track-segs { display: flex; align-items: center; gap: 2px; height: 20px; }
-.change-card .change-card-track-label { min-height: 13px; font-size: 10px; line-height: 13px; text-align: center; color: var(--fg-secondary); overflow: hidden; white-space: nowrap; }
+.change-card .change-card-track-label { min-height: 13px; font-size: var(--font-size-xs); line-height: 13px; text-align: center; color: var(--fg-secondary); overflow: hidden; white-space: nowrap; }
 .change-card .change-card-track:not([data-grouped]) .change-card-track-label { display: none; }
 .change-card .change-card-seg {
   /* 20 px to aim at, a 6 px bar drawn in its middle. */
@@ -203,7 +203,7 @@
 .change-card .change-card-seg[data-status="waiting"] { background-color: var(--change-waiting); }
 .change-card .change-card-seg:is([data-status="blocked"], [data-status="failed"]) { background-color: var(--change-blocked); }
 .change-card .change-card-seg[data-now="true"] { padding-block: 4px; }
-.change-card .change-card-seg[data-open="true"] { outline: 1.5px solid var(--fg-secondary); outline-offset: -4px; border-radius: 3px; }
+.change-card .change-card-seg[data-open="true"] { outline: 1.5px solid var(--fg-secondary); outline-offset: -4px; border-radius: var(--radius-xs); }
 .change-card .change-card-seg:hover { padding-block: 5px; }
 .change-card .change-card-seg:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 
@@ -221,7 +221,7 @@
   min-height: 32px;
   padding: 4px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;
@@ -239,8 +239,8 @@
 .change-card .change-card-stage-name { flex: 0 0 auto; font-weight: 500; color: var(--fg); }
 .change-card .change-card-stage[data-status="pending"] .change-card-stage-name,
 .change-card .change-card-fold .change-card-stage-name { font-weight: 400; color: var(--fg-secondary); }
-.change-card .change-card-stage-target { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); }
-.change-card .change-card-fold .change-card-stage-target { font-family: inherit; font-size: 12px; }
+.change-card .change-card-stage-target { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-muted); }
+.change-card .change-card-fold .change-card-stage-target { font-family: inherit; font-size: var(--font-size-sm); }
 .change-card .change-card-stage-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); text-align: right; }
 .change-card .change-card-stage-end { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 8px; white-space: nowrap; }
 .change-card .change-card-stage-words[data-tone] { color: var(--change-tone); font-weight: 500; }
@@ -257,7 +257,7 @@
   background: none;
   color: var(--fg-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }
 .change-card .change-card-hide-row:hover { color: var(--fg-secondary); background: var(--bg-hover); }
@@ -272,7 +272,7 @@
   grid-template-columns: auto minmax(0, 1fr);
   column-gap: 8px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--change-panel);
   box-shadow: inset 0 0 0 1px var(--border);
 }
@@ -310,5 +310,5 @@
 
 /* A merged pull request's deploy inside its own card (PrPill.tsx): the change card's rules, laid
    flat in the pull request's section. */
-.change-card.pr-card-deploy { margin-top: 8px; color: var(--fg); font-size: 12px; line-height: 1.45; }
+.change-card.pr-card-deploy { margin-top: 8px; color: var(--fg); font-size: var(--font-size-sm); line-height: 1.45; }
 .change-card.pr-card-deploy .change-card-deploy { margin-top: 0; padding-top: 8px; border-top: 1px solid var(--border); }

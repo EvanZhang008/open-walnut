@@ -2,7 +2,7 @@
    card and the form field. */
 .routine-description {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
   color: var(--fg);
   overflow-wrap: anywhere;

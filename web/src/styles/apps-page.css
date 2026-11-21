@@ -52,11 +52,11 @@
   width: 48px;
   height: 48px;
   flex: none;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   display: grid;
   place-items: center;
-  color: #fff;
-  background: linear-gradient(135deg, #ff2d55, #ff9500);
+  color: var(--on-accent);
+  background: linear-gradient(135deg, #ff2d55, var(--warning));
   box-shadow: 0 4px 14px rgba(255, 45, 85, 0.25);
 }
 .apps-hero-text { min-width: 0; }
@@ -79,7 +79,7 @@
   width: 260px;
   flex: none;
   padding: 6px 10px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--settings-group-bg);
   color: var(--fg-muted);
@@ -106,10 +106,10 @@
   border: 1px solid var(--border);
   background: var(--settings-group-bg);
   color: var(--fg);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   padding: 4px 12px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -128,13 +128,13 @@
   align-items: baseline;
   gap: 8px;
   margin: 0 0 4px;
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   line-height: 22px;
   letter-spacing: -0.01em;
   color: var(--fg);
 }
 .apps-section-count {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 400;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
@@ -147,7 +147,7 @@
 .apps-empty {
   margin-top: 26px;
   padding: 18px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--settings-group-bg);
   color: var(--fg-muted);
   display: flex;
@@ -245,7 +245,7 @@
 .apps-card-text:has(> .apps-card-badge) > .apps-card-main { display: inline-block; max-width: calc(100% - 34px); vertical-align: top; }
 .apps-card-line {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   color: var(--fg-muted);
   display: -webkit-box;
@@ -255,7 +255,7 @@
 }
 .apps-card-note {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 15px;
   color: var(--fg-muted);
 }
@@ -274,31 +274,31 @@
   gap: 4px;
   pointer-events: none;
 }
-.apps-card-part { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 12px; color: var(--fg); }
+.apps-card-part { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--font-size-sm); color: var(--fg); }
 /* A long part name wraps; its switch keeps its own column. */
 .apps-card-part-name { min-width: 0; overflow-wrap: anywhere; }
-.apps-card-part-kind { flex: none; font-size: 11px; color: var(--fg-muted); }
+.apps-card-part-kind { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .apps-card-part-control { margin-left: auto; display: inline-flex; align-items: center; pointer-events: auto; }
 .apps-card-part-lock { display: inline-flex; color: var(--fg-muted); padding: 0 4px; }
-.apps-part-kind { font-size: 11px; color: var(--fg-muted); }
+.apps-part-kind { font-size: var(--font-size-xs); color: var(--fg-muted); }
 .apps-card-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-top: auto;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   min-height: 24px;
 }
 .apps-card-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg); }
-.apps-card-status i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #34c759; }
+.apps-card-status i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--success); }
 .apps-card-status--off { color: var(--fg-muted); }
 .apps-card-status--off i { background: var(--fg-muted); opacity: 0.6; }
 .apps-card-status--warn { color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
-.apps-card-status--warn i { background: #ff9500; }
+.apps-card-status--warn i { background: var(--warning); }
 .apps-card-status--bad { color: color-mix(in srgb, var(--error) 80%, var(--fg)); }
-.apps-card-status--bad i { background: #ff3b30; }
+.apps-card-status--bad i { background: var(--error); }
 .apps-card-status--update { color: var(--accent); }
 .apps-card-status--update i { background: var(--accent); }
 .apps-card-status--get { color: var(--accent); font-weight: 600; }
@@ -312,13 +312,13 @@
   position: relative;
   z-index: 1;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 3px 12px;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
   font: inherit;
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .apps-card-open:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
@@ -338,11 +338,11 @@
 }
 .apps-card-add[aria-expanded='true'] { border-color: var(--accent); }
 .apps-add-form { margin-top: 14px; }
-.apps-builtin-icon { display: inline-grid; place-items: center; color: #fff; flex: none; }
+.apps-builtin-icon { display: inline-grid; place-items: center; color: var(--on-accent); flex: none; }
 .apps-builtin-icon svg { stroke: currentColor; }
 .plugin-icon.plugin-icon--lg { width: 40px; height: 40px; border-radius: 10px; }
 .plugin-icon.plugin-icon--lg .plugin-icon-image { width: 22px; height: 22px; }
-.plugin-icon.plugin-icon--lg .plugin-icon-monogram::before { font-size: 18px; }
+.plugin-icon.plugin-icon--lg .plugin-icon-monogram::before { font-size: var(--font-size-xl); }
 .plugin-icon.plugin-icon--xl { width: 72px; height: 72px; border-radius: 18px; }
 .plugin-icon.plugin-icon--xl .plugin-icon-image { width: 40px; height: 40px; }
 .plugin-icon.plugin-icon--xl .plugin-icon-monogram::before { font-size: 32px; }
@@ -372,7 +372,7 @@
   padding: 0;
   color: var(--accent);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 .apps-detail-line { margin: 3px 0 10px; color: var(--fg-muted); font-size: 14px; }
@@ -384,13 +384,13 @@
   align-items: center;
   gap: 8px;
   padding: 3px 6px 3px 10px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--settings-group-border);
   background: var(--settings-group-bg);
   color: var(--fg);
   cursor: pointer;
 }
-.apps-install-consent { color: var(--fg-muted); font-size: 12.5px; max-width: 360px; }
+.apps-install-consent { color: var(--fg-muted); font-size: var(--font-size-md); max-width: 360px; }
 .apps-detail-group { margin-bottom: 14px; }
 /* Groups core code draws on a plugin's page (Calendar's accounts) space like the page's own. */
 .apps-detail-core-sections > .settings-group, .apps-detail-core-sections > .settings-notice { margin-bottom: 14px; }
@@ -406,7 +406,7 @@
 .plugin-settings-panel { padding: 12px 16px; min-width: 0; overflow-wrap: anywhere; scroll-margin-top: 64px; }
 .plugin-settings-panel + .plugin-settings-panel,
 .settings-row + .plugin-settings-panel { border-top: 1px solid var(--settings-hairline); }
-.plugin-settings-panel-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--fg); }
+.plugin-settings-panel-title { margin: 0 0 8px; font-size: var(--font-size-md); font-weight: 600; color: var(--fg); }
 .apps-about { padding: 12px 16px; }
 .apps-about p { margin: 0; line-height: 1.55; color: var(--fg); }
 .apps-about-adds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
@@ -421,9 +421,9 @@
   text-align: right;
 }
 .apps-fact-value code {
-  font: 12px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+  font: var(--font-size-sm)/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
   padding: 1px 6px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
   overflow-wrap: anywhere;
   user-select: text;
@@ -435,7 +435,7 @@
   padding: 0;
   color: var(--accent);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .apps-note {
@@ -449,11 +449,11 @@
   color: var(--fg);
   line-height: 1.5;
 }
-.apps-note--warn { background: color-mix(in srgb, #ff9500 12%, var(--settings-group-bg)); }
+.apps-note--warn { background: color-mix(in srgb, var(--warning) 12%, var(--settings-group-bg)); }
 .apps-note--info { background: color-mix(in srgb, var(--accent) 10%, var(--settings-group-bg)); }
-.apps-app-glyph { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: #fff; flex: none; }
+.apps-app-glyph { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--on-accent); flex: none; }
 .apps-app-glyph svg { stroke: currentColor; }
-.apps-app-switch-label { color: var(--fg-muted); font-size: 12.5px; }
+.apps-app-switch-label { color: var(--fg-muted); font-size: var(--font-size-md); }
 .apps-app-row .apps-card-badge { position: static; display: inline-flex; border: none; }
 .apps-part + .apps-part { border-top: 1px solid var(--settings-hairline); }
 .apps-part-account { white-space: normal; }
@@ -466,7 +466,7 @@
   gap: 12px;
   margin-top: 26px;
   color: var(--fg-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
 }
 .apps-plugins-bar:empty { display: none; }
 .apps-plugins .settings-notice { margin-top: 16px; }
@@ -475,7 +475,7 @@
 /* A source's head: where it comes from, whether it is current, its verbs; the cards follow. */
 .apps-source-head {
   margin: 0 0 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--settings-group-bg);
   border: 1px solid var(--border);
 }
@@ -491,8 +491,8 @@
 .apps-make {
   border-radius: 18px;
   padding: 22px 24px;
-  color: #fff;
-  background: radial-gradient(120% 140% at 0% 0%, #5e5ce6 0%, #007aff 45%, #30b0c7 100%);
+  color: var(--on-accent);
+  background: radial-gradient(120% 140% at 0% 0%, #5e5ce6 0%, var(--accent) 45%, #30b0c7 100%);
   box-shadow: 0 10px 30px rgba(0, 122, 255, 0.2);
 }
 .apps-make-title {
@@ -500,7 +500,7 @@
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 19px;
+  font-size: var(--font-size-2xl);
   line-height: 24px;
   letter-spacing: -0.01em;
 }
@@ -510,7 +510,7 @@
   gap: 8px;
   align-items: center;
   padding: 6px 6px 6px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.97);
 }
 .apps-make-ask input {
@@ -524,13 +524,13 @@
   font-size: 14px;
   line-height: 20px;
 }
-.apps-make-ask input::placeholder { color: #86868b; }
+.apps-make-ask input::placeholder { color: var(--fg-muted); }
 .apps-make-go {
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   padding: 7px 16px;
-  background: #007aff;
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -541,7 +541,7 @@
 .apps-make-error {
   margin-top: 8px;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.25);
 }
 .apps-make-ideas {
@@ -554,11 +554,11 @@
 .apps-make-manual-row button {
   border: 1px solid rgba(255, 255, 255, 0.45);
   background: rgba(255, 255, 255, 0.14);
-  color: #fff;
+  color: var(--on-accent);
   border-radius: 14px;
   padding: 3px 10px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .apps-make-ideas button:hover,
@@ -566,16 +566,16 @@
 .apps-make-manual {
   margin-top: 14px;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.18);
 }
 .apps-make-manual summary { cursor: pointer; font-weight: 500; }
-.apps-make-manual p { margin: 8px 0 0; font-size: 12.5px; opacity: 0.92; }
+.apps-make-manual p { margin: 8px 0 0; font-size: var(--font-size-md); opacity: 0.92; }
 .apps-make-manual pre {
   margin: 6px 0 8px;
   white-space: pre-wrap;
   word-break: break-all;
-  font: 12px/1.55 ui-monospace, 'SF Mono', Menlo, monospace;
+  font: var(--font-size-sm)/1.55 ui-monospace, 'SF Mono', Menlo, monospace;
   user-select: text;
 }
 .apps-make-manual-row { display: flex; gap: 8px; }
@@ -603,7 +603,7 @@
 .apps-detail .plugin-update-chip { line-height: 14px; }
 
 /* "Check now" beside the update status: the text-safe accent, as on the chip (N3-9). */
-.plugin-store-updates-head .settings-addons-link { color: var(--accent-text, var(--accent)); }
+.plugin-store-updates-head .settings-addons-link { color: var(--accent-text); }
 
 /* An Update's result line under the Version row: top-aligned, so opening Details grows it
    downward and the toggle the user pressed stays put (N3-6). */
@@ -657,7 +657,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;

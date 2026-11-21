@@ -32,8 +32,8 @@
 
 .composer-ref-pill {
   --pill-fg: var(--accent);
-  border-radius: 4px;
-  background: var(--accent-subtle, rgba(0, 122, 255, 0.08));
+  border-radius: var(--radius-xs);
+  background: var(--accent-subtle);
   color: var(--pill-fg);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
@@ -58,7 +58,7 @@
   mask: var(--pill-icon) center / contain no-repeat;
 }
 .composer-ref-pill-lead {
-  color: color-mix(in srgb, var(--pill-fg) 62%, var(--fg-muted, #888));
+  color: color-mix(in srgb, var(--pill-fg) 62%, var(--fg-muted));
 }
 
 /* One rule per kind (tests/web/composer-ref-pills.test.ts checks every kind has one). */
@@ -73,7 +73,7 @@
 .composer-ref-pill[data-kind="project"] {
   --pill-fg: var(--fg);
   --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/></svg>");
-  background: var(--bg-tertiary, var(--bg-secondary));
+  background: var(--bg-tertiary);
 }
 .composer-ref-pill[data-kind="source"] {
   --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1'/><path d='M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1'/></svg>");

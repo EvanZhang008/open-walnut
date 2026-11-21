@@ -29,7 +29,7 @@
   align-items: center;
   gap: 4px;
 }
-.fb-row-lead { display: inline-flex; align-items: center; height: 24px; color: var(--tp-muted); font-size: 12px; }
+.fb-row-lead { display: inline-flex; align-items: center; height: 24px; color: var(--tp-muted); font-size: var(--font-size-sm); }
 /* A chip: `Status: To Do` in a hairline box, the name muted, the value in --fg,
    a divider before its x. 24px tall, 6px corners, no fill, so a row of chips
    reads as quiet labels and never as a second row of buttons. */
@@ -42,7 +42,7 @@
   border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   box-sizing: border-box;
   animation: fb-chip-in 80ms ease-out;
 }
@@ -56,11 +56,11 @@
   border: none;
   background: transparent;
   color: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: inherit;
   cursor: pointer;
 }
-.fb-chip-body { gap: 3px; min-width: 0; padding: 0 5px 0 8px; border-radius: 5px 0 0 5px; }
+.fb-chip-body { gap: 3px; min-width: 0; padding: 0 5px 0 8px; border-radius: var(--radius-xs) 0 0 var(--radius-xs); }
 .fb-chip-dim { flex: none; color: var(--tp-muted); }
 .fb-chip-val {
   min-width: 0;
@@ -82,7 +82,7 @@
   width: 22px;
   padding: 0;
   border-left: 1px solid var(--border);
-  border-radius: 0 5px 5px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   color: var(--fg-muted);
 }
 .fb-chip-x svg { width: 11px; height: 11px; }
@@ -119,11 +119,11 @@
   line-height: 24px;
   padding: 0 4px;
   color: var(--tp-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.fb-row-empty { display: inline-flex; align-items: center; height: 24px; color: var(--tp-muted); font-size: 12px; }
+.fb-row-empty { display: inline-flex; align-items: center; height: 24px; color: var(--tp-muted); font-size: var(--font-size-sm); }
 .fb-chip-body:focus-visible,
 .fb-chip-x:focus-visible,
 .fb-chip-plus:focus-visible,

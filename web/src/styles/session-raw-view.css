@@ -34,8 +34,8 @@
 
 .raw-view-sid {
   color: var(--fg-muted);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -43,7 +43,7 @@
 
 .raw-view-close {
   margin-left: auto;
-  font-size: 20px;
+  font-size: var(--font-size-2xl);
   line-height: 1;
   background: none;
   border: none;
@@ -73,7 +73,7 @@
 
 .raw-turn {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   margin-bottom: 12px;
 }
@@ -81,7 +81,7 @@
 .raw-turn-head {
   display: flex;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   margin-bottom: 6px;
 }
@@ -92,7 +92,7 @@
 
 .raw-turn-label,
 .raw-part-tag {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -106,8 +106,8 @@
   background: var(--bg-secondary);
   color: var(--fg);
   border-radius: 6px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;

@@ -182,10 +182,10 @@
     min-height: 52px;
     flex-direction: column;
     gap: 2px;
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-sm);
     line-height: 1.2;
-    color: var(--accent-text, var(--accent));
+    color: var(--accent-text);
   }
   /* The name each button already carries for a screen reader, shown. */
   .app-shell-navigation .mail-app .mail-reader-actions .mail-round-btn[data-label]::after {
@@ -235,7 +235,7 @@
     flex: 0 0 auto;
     min-height: 44px;
     padding: 0 12px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     white-space: nowrap;
   }
   /* The document bar's icon buttons and its path are touch targets too (C19). */
@@ -258,7 +258,7 @@
      the reader's other buttons. */
   .app-shell-navigation .mail-app .mail-route,
   .app-shell-navigation .mail-app .mail-router-state {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .app-shell-navigation .mail-app .mail-router-link,
   .app-shell-navigation .mail-app .mail-route-reader .mail-route-link {

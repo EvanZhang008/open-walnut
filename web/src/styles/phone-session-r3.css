@@ -13,12 +13,12 @@
   }
   .app-shell-navigation .session-panel.is-phone-layer .session-show-earlier-btn {
     min-height: 44px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   .app-shell-navigation .session-panel.is-phone-layer :is(
     .tool-run-fail, .bg-tasks-chip-icon, .bg-tasks-chip-status, .bg-tasks-chip-label, .task-group-model
   ) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -38,7 +38,7 @@
     .kanban-card-sev, .kanban-card-project, .kanban-card-leader-pill,
     .kanban-card-ids .tag-chip, .kanban-card-ids .tag-chip-value, .kanban-lane-needs
   ) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -51,7 +51,7 @@
     .bs-who, .bs-table th, .bs-sub, .bs-stale, .bs-c-when, .bs-pill, .bs-chip, .bs-act,
     .board-view-count, .task-board-bar-sub
   ) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
   .app-shell-navigation .task-board-pane :is(.bs-chip, .bs-act) {
     min-height: 44px;
@@ -77,14 +77,14 @@
     min-height: 44px;
     min-width: 44px;
     padding: 0 12px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
   html body :is(
     .hib-type, .hib-time, .hib-chip, .hib-answered-chip, .hib-taskrefs-label, .hib-thread-head,
     .hib-turn-who, .hib-turn-time, .hib-delivery, .session-inbox-bar-sub,
     .hib-origin-kind, .hib-origin-from
   ) {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }
 

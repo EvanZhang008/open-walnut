@@ -23,9 +23,9 @@
 .trigger-jobs-state {
   padding: 0 5px;
   border: 1px dashed color-mix(in srgb, var(--fg-secondary) 55%, transparent);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   color: var(--fg-secondary);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -40,7 +40,7 @@
 .trigger-jobs-row[data-state="stopped"] .trigger-jobs-tally[data-fired="true"] {
   color: var(--fg-secondary);
 }
-.trigger-jobs-off { font-size: 11px; color: var(--fg-secondary); }
+.trigger-jobs-off { font-size: var(--font-size-xs); color: var(--fg-secondary); }
 .trigger-jobs-off[data-state="stopped"] { color: var(--error); }
 .trigger-jobs-actions button.trigger-jobs-resume {
   border-color: var(--accent);

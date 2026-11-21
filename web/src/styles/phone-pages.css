@@ -88,10 +88,10 @@
     align-items: center;
     height: 22px;
     padding: 0 8px;
-    border-radius: 11px;
+    border-radius: var(--radius-md);
     background: var(--error-subtle);
     color: var(--error);
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     font-weight: 600;
     line-height: 1;
   }
@@ -116,7 +116,7 @@
   }
 
   .app-shell-navigation .task-session-pill.task-session-pill-phone {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   /* Secondary row buttons are real 44 px boxes on the phone: a pseudo-element
@@ -174,12 +174,12 @@
   .app-shell-navigation .todo-panel .todo-group-count,
   .app-shell-navigation .todo-panel .home-navigation-scroll .todo-group-header-controls > .todo-group-count,
   .app-shell-navigation .todo-panel .home-navigation-scroll .tier-project-label > .tier-project-label-count {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   .app-shell-navigation .todo-panel .todo-filter-footer-chip {
     min-height: 44px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   /* A long project's "Show more" row (list-batch.ts) is a row-wide button: a
@@ -193,7 +193,7 @@
      no color, and the stroke is centered on its own. */
   .app-shell-navigation .todo-panel .home-navigation-scroll .collapse-chevron {
     position: relative;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: transparent;
   }
 
@@ -235,10 +235,10 @@
     height: 18px;
     padding: 0 5px;
     box-sizing: border-box;
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
     background: var(--warning);
-    color: #fff;
-    font-size: 12px;
+    color: var(--on-accent);
+    font-size: var(--font-size-sm);
     font-weight: 700;
     line-height: 18px;
     text-align: center;
@@ -286,16 +286,16 @@
     min-width: 44px;
     min-height: 44px;
     padding: 0 12px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
 
   html body .notification-panel.nfc-panel-wide .nfc-quiet-chip {
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
 
   html body .notification-panel.nfc-panel-wide .nfc-rail-btn {
     min-height: 44px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
 
   html body .notification-panel.nfc-panel-wide .nfc-detail {
@@ -305,7 +305,7 @@
   }
 
   html body .notification-panel.nfc-panel-wide .notification-feed-item {
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
 
   html body .notification-panel.nfc-panel-wide .notification-feed-item button,
@@ -316,26 +316,26 @@
 
   html body .notification-panel.nfc-panel-wide .notification-feed-item-time,
   html body .notification-panel.nfc-panel-wide .nfc-chip {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   /* Deny with a note and a choice's rule: phone-size text. */
-  html body .notification-panel.nfc-panel-wide .perm-note-toggle { font-size: 13px; }
+  html body .notification-panel.nfc-panel-wide .perm-note-toggle { font-size: var(--font-size-md); }
   html body .notification-panel.nfc-panel-wide .perm-option-detail,
-  html body .notification-panel.nfc-panel-wide .perm-option-saved { font-size: 12px; }
+  html body .notification-panel.nfc-panel-wide .perm-option-saved { font-size: var(--font-size-sm); }
   html body .notification-panel.nfc-panel-wide .permission-note-input { font-size: 16px; }
 
   html body .notification-panel.nfc-panel-wide .nfc-rail-badge {
     min-width: 20px;
     height: 20px;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   html body .notification-panel.nfc-panel-wide .notification-group-toggle,
   html body .notification-panel.nfc-panel-wide .nfc-open-session {
     min-height: 44px;
     padding: 0 8px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
 }
 
@@ -347,7 +347,7 @@
   transform: translateX(-50%);
   min-height: 32px;
   padding: 0 14px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   color: var(--fg-secondary);
   box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
@@ -477,7 +477,7 @@
   html body .is-phone-layer .tdp-label,
   html body .is-phone-layer .tdp-label-count,
   html body .is-phone-layer .tdp-row-end {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   .phone-detail-head {
@@ -488,7 +488,7 @@
   }
 
   .phone-detail-title-label {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     color: var(--fg-muted);
   }
 
@@ -510,7 +510,7 @@
 
   .phone-detail-save {
     margin: 0;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--fg-muted);
   }
 
@@ -560,7 +560,7 @@
   border-radius: 10px;
   background: transparent;
   color: var(--fg);
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   text-align: left;
 }
 
@@ -617,7 +617,7 @@
 
   .phone-search-note {
     margin: 24px 16px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     color: var(--fg-secondary);
     text-align: center;
   }
@@ -625,7 +625,7 @@
   .phone-search-group-title {
     margin: 0;
     padding: 14px 16px 6px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
     font-weight: 600;
     color: var(--fg-muted);
     text-transform: uppercase;
@@ -660,13 +660,13 @@
 
   /* A note's folder and its own title, under its file name. */
   .phone-search-row-meta {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--fg-muted);
     overflow-wrap: anywhere;
   }
 
   .phone-search-row-snippet {
-    font-size: 13px;
+    font-size: var(--font-size-md);
     color: var(--fg-secondary);
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -683,7 +683,7 @@
     border: 0;
     background: transparent;
     color: var(--accent);
-    font-size: 17px;
+    font-size: var(--font-size-xl);
   }
 
   /* The home search row: 44 px, 16 px text. */
@@ -714,8 +714,8 @@
     border: 0;
     border-radius: 22px;
     background: var(--accent);
-    color: #fff;
-    font-size: 15px;
+    color: var(--on-accent);
+    font-size: var(--font-size-lg);
     font-weight: 600;
     box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
     white-space: nowrap;
@@ -732,7 +732,7 @@
     border: 0;
     background: transparent;
     color: var(--accent);
-    font-size: 17px;
+    font-size: var(--font-size-xl);
     font-weight: 500;
   }
 
@@ -834,7 +834,7 @@
   .app-shell-navigation .cal-now-label,
   .app-shell-navigation .cal-grid-range-end,
   .app-shell-navigation .cal-chip-title {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   /* The Notes tree's header actions and its search field. */
@@ -867,7 +867,7 @@
 
   .app-shell-navigation .notes-split-view .notes-editor-updated,
   .app-shell-navigation .notes-split-view .notes-format-toolbar code {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   /* Mail: the message reads at 16 px; a wide HTML mail scrolls in its own box. */
@@ -942,7 +942,7 @@
   .app-shell-navigation .mail-app .mail-row-time,
   .app-shell-navigation .mail-app .mail-reader-account,
   .app-shell-navigation .mail-app .mail-reader-details-btn {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 
   /* Plugin pages start right under the bar (the shell already pads the bar's

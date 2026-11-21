@@ -22,7 +22,7 @@
 }
 
 .session-threads-bar-title {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
   flex-shrink: 0;
@@ -30,7 +30,7 @@
 
 .session-threads-bar-sub {
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -46,7 +46,7 @@
 }
 
 .session-threads-error {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--error);
 }
 
@@ -61,10 +61,10 @@
 .session-action-chip-count {
   margin-left: 5px;
   padding: 0 5px;
-  border-radius: 8px;
-  font-size: 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 15px;
-  background: var(--accent, #4f6bed);
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
 }

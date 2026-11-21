@@ -19,7 +19,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   letter-spacing: 0;
   text-transform: none;
 }
@@ -56,7 +56,7 @@
   background: none;
   color: var(--fg-muted);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   letter-spacing: 0;
   text-transform: none;
   white-space: nowrap;
@@ -83,7 +83,7 @@
   gap: 4px 10px;
   margin: 0;
   padding: 0 12px 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-secondary);
 }
@@ -91,7 +91,7 @@
 .mail-list-status-line[data-tone='error'] { color: var(--error); }
 .mail-list-status-text { min-width: 0; }
 .mail-text-btn { min-height: 24px; }
-.mail-list-status-action, .mail-list-status-close { font-size: 12px; }
+.mail-list-status-action, .mail-list-status-close { font-size: var(--font-size-sm); }
 
 .mail-grouped-state .mail-list-note { padding-top: 2px; }
 .mail-rules-error, .mail-groups-error { color: var(--fg-secondary); }
@@ -110,7 +110,7 @@
   min-height: 34px;
   padding: 6px 8px 6px 12px;
   box-sizing: border-box;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
@@ -135,7 +135,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   color: var(--fg-secondary);
 }
@@ -179,10 +179,10 @@
   min-width: 18px;
   box-sizing: border-box;
   padding: 0 6px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 17px;
   text-align: center;
@@ -202,7 +202,7 @@
 
 .mail-group-time {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -247,17 +247,17 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
   white-space: nowrap;
 }
 
-.mail-group-stop { font-size: 12px; min-height: 0; }
+.mail-group-stop { font-size: var(--font-size-sm); min-height: 0; }
 
 /* ── an open group: compact one-line rows, then `N more`, then the footer ── */
 
 .mail-group-kids { padding-bottom: 4px; }
-.mail-group-kids-note { margin: 0; padding: 4px 12px 4px 29px; font-size: 12px; color: var(--fg-muted); }
+.mail-group-kids-note { margin: 0; padding: 4px 12px 4px 29px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 
 .mail-row.mail-kid {
   flex-direction: row;
@@ -266,7 +266,7 @@
   gap: 6px;
   padding: 6px 12px 6px 17px;
   border-bottom: none;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .mail-row.mail-kid .mail-route { flex: 1 0 100%; max-width: 100%; padding-left: 12px; box-sizing: border-box; }
@@ -304,7 +304,7 @@
   background: none;
   color: var(--fg-muted);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -317,10 +317,10 @@
   gap: 2px 14px;
   margin: 0;
   padding: 2px 12px 6px 29px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
-.mail-group-foot .mail-text-btn { font-size: 12px; }
+.mail-group-foot .mail-text-btn { font-size: var(--font-size-sm); }
 
 /* ── nothing unread ── */
 
@@ -331,7 +331,7 @@
   gap: 2px;
   padding: 26px 16px;
   text-align: center;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 
@@ -355,13 +355,13 @@
 /* The section's one press, after its unread word (which already took the free space). */
 .mail-not-important-head .mail-mark-all {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   letter-spacing: 0;
   text-transform: none;
 }
 .mail-important-unread {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   letter-spacing: 0;
   text-transform: none;
   color: var(--fg-muted);
@@ -386,19 +386,19 @@
 
 /* ── the group cards (the correction card's frame, mail-learn.css) ── */
 
-.mail-group-card-body { margin: 0; font-size: 12px; line-height: 1.45; color: var(--fg-secondary); }
+.mail-group-card-body { margin: 0; font-size: var(--font-size-sm); line-height: 1.45; color: var(--fg-secondary); }
 .mail-group-card-check {
   display: flex;
   align-items: flex-start;
   gap: 7px;
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg);
   cursor: pointer;
 }
 .mail-group-card-check input { margin: 2px 0 0; flex: 0 0 auto; }
-.mail-group-card-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--fg-muted); }
+.mail-group-card-note { margin: 0; font-size: var(--font-size-sm); line-height: 1.45; color: var(--fg-muted); }
 
 /* ── the unsubscribe checklist (spec 10) ── */
 
@@ -427,8 +427,8 @@
   box-sizing: border-box;
 }
 
-.mail-unsub-title { margin: 0; font-size: 15px; font-weight: 600; }
-.mail-unsub-summary, .mail-unsub-note { margin: 0; font-size: 12px; color: var(--fg-secondary); line-height: 1.45; }
+.mail-unsub-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; }
+.mail-unsub-summary, .mail-unsub-note { margin: 0; font-size: var(--font-size-sm); color: var(--fg-secondary); line-height: 1.45; }
 
 .mail-unsub-list {
   flex: 1 1 auto;
@@ -447,7 +447,7 @@
   gap: 2px 8px;
   padding: 7px 2px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .mail-unsub-label { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
@@ -455,7 +455,7 @@
 .mail-unsub-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .mail-unsub-method { flex: 0 1 auto; color: var(--fg-secondary); }
 .mail-unsub-mails { flex: 0 0 auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-.mail-unsub-small { padding-left: 24px; color: var(--fg-muted); font-size: 11px; }
+.mail-unsub-small { padding-left: 24px; color: var(--fg-muted); font-size: var(--font-size-xs); }
 .mail-unsub-deadend { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; padding-left: 24px; }
 .mail-unsub-run { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-left: 24px; color: var(--fg-secondary); }
 .mail-unsub-run[data-status='done'] { color: var(--success); }
@@ -464,7 +464,7 @@
 .mail-correct.mail-group-card { width: min(300px, calc(100vw - 24px)); }
 .mail-correct.mail-filter-card { width: min(340px, calc(100vw - 24px)); }
 .mail-filter-field { display: flex; flex-direction: column; gap: 3px; }
-.mail-filter-label { font-size: 11.5px; font-weight: 600; color: var(--fg-secondary); }
+.mail-filter-label { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
 
 /* ── the reader head's sorting line ── */
 
@@ -474,10 +474,10 @@
   align-items: baseline;
   gap: 2px 6px;
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
 .mail-reader-sort-text { min-width: 0; overflow-wrap: anywhere; }
 .mail-reader-sort-sep { opacity: 0.7; }
-.mail-reader-sort-fix { font-size: 12px; min-height: 0; }
+.mail-reader-sort-fix { font-size: var(--font-size-sm); min-height: 0; }

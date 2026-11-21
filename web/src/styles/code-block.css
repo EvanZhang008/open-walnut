@@ -53,7 +53,7 @@
      block's top, the fold's fade at its foot). A header stuck mid-block is
      square: the block reads as cut at the glass, and no code shows through
      a rounded corner. */
-  .md-code { overflow: clip; border-radius: var(--radius-sm, 8px); }
+  .md-code { overflow: clip; border-radius: var(--radius-sm); }
   .md-code-head { border-radius: 0; }
   .md-code-head::before {
     content: '';
@@ -144,14 +144,14 @@
   box-sizing: border-box;
   z-index: 2;
   background: var(--md-code-bg);
-  border-radius: 7px 7px 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--md-code-rule);
   color: var(--md-code-ink);
-  font: 500 12px/1 var(--font-mono);
+  font: 500 var(--font-size-sm)/1 var(--font-mono);
   -webkit-user-select: none;
   user-select: none;
 }
@@ -195,8 +195,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--warning, #ff9500);
-  font: 500 12px/1 var(--font-sans);
+  color: var(--warning);
+  font: 500 var(--font-size-sm)/1 var(--font-sans);
 }
 .md-code-status:not([data-visible]) {
   position: absolute;
@@ -259,7 +259,7 @@
 .md-code[data-kbd-focus]:has(> pre:focus) {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .md-code-btn {
@@ -274,7 +274,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--md-code-ink);
-  font: 500 12px/1 var(--font-sans);
+  font: 500 var(--font-size-sm)/1 var(--font-sans);
   cursor: pointer;
   transition: background-color 0.12s, color 0.12s;
 }
@@ -301,8 +301,8 @@
 .md-code-icon-done { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-copy { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-done { display: block; }
-.md-code-copy[data-state="copied"] { color: var(--success, #34c759); }
-.md-code-copy[data-state="failed"] { color: var(--warning, #ff9500); }
+.md-code-copy[data-state="copied"] { color: var(--success); }
+.md-code-copy[data-state="failed"] { color: var(--warning); }
 
 /* Wrap: per block, `data-wrap` on the frame (code-block-actions.ts). A block
    with no line too long for it has nothing to wrap: no Wrap button.
@@ -345,10 +345,10 @@
   height: 30px;
   padding: 0 14px;
   border: 1px solid var(--md-code-rule);
-  border-radius: 15px;
+  border-radius: var(--radius-lg);
   background: var(--md-code-bg);
   color: var(--md-code-ink-strong);
-  font: 500 12px/1 var(--font-sans);
+  font: 500 var(--font-size-sm)/1 var(--font-sans);
   cursor: pointer;
 }
 @media (hover: hover) {
@@ -368,10 +368,10 @@
   flex-shrink: 0;
   margin-left: 4px;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--md-code-hover);
   color: var(--md-code-ink);
-  font: 500 11px/1 var(--font-sans);
+  font: 500 var(--font-size-xs)/1 var(--font-sans);
 }
 @media (max-width: 640px) {
   .md-code-note { display: none; }

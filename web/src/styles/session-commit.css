@@ -4,7 +4,7 @@
   border: 1px solid var(--border);
   background: transparent;
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   padding: 3px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -35,7 +35,7 @@
   border: none;
   background: transparent;
   color: var(--fg-muted);
-  font-size: 20px;
+  font-size: var(--font-size-2xl);
   line-height: 1;
   padding: 2px 6px;
   cursor: pointer;
@@ -49,14 +49,14 @@
   padding-top: 10px;
 }
 
-.scd-status { padding: 28px 8px; text-align: center; color: var(--fg-muted); font-size: 13px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.scd-status { padding: 28px 8px; text-align: center; color: var(--fg-muted); font-size: var(--font-size-md); display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .scd-status-error { color: var(--error); }
 .scd-banner {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
   background: color-mix(in srgb, var(--warning) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin-bottom: 10px;
 }
@@ -64,20 +64,20 @@
 .scd-repo { padding: 8px 0 14px; border-bottom: 1px solid var(--border); }
 .scd-repo:last-child { border-bottom: none; }
 .scd-repo-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; min-width: 0; }
-.scd-repo-label { font-weight: 600; font-size: 13px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scd-branch, .scd-ahead { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.scd-repo-label { font-weight: 600; font-size: var(--font-size-md); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scd-branch, .scd-ahead { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; }
 .scd-ahead { color: var(--accent-text); }
-.scd-behind { font-size: 12px; color: var(--priority-important-text); white-space: nowrap; }
-.scd-warn { margin-top: 4px; font-size: 12px; color: var(--priority-important-text); }
+.scd-behind { font-size: var(--font-size-sm); color: var(--priority-important-text); white-space: nowrap; }
+.scd-warn { margin-top: 4px; font-size: var(--font-size-sm); color: var(--priority-important-text); }
 .scd-blocked {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--error);
   background: color-mix(in srgb, var(--error) 8%, transparent);
   border-radius: 6px;
   padding: 6px 8px;
   margin-bottom: 8px;
 }
-.scd-muted { font-size: 12px; color: var(--fg-muted); }
+.scd-muted { font-size: var(--font-size-sm); color: var(--fg-muted); }
 
 .scd-files { display: flex; flex-direction: column; gap: 2px; }
 .scd-file { border-radius: 6px; }
@@ -86,7 +86,7 @@
   align-items: center;
   gap: 6px;
   padding: 3px 4px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   min-width: 0;
 }
 .scd-file-head:hover { background: var(--bg-hover); border-radius: 6px; }
@@ -97,20 +97,20 @@
   width: 18px;
   padding: 0;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 .scd-disclose-spacer { width: 18px; flex: none; }
-.scd-status-letter { font-family: var(--font-mono); font-size: 11px; width: 12px; flex: none; color: var(--fg-muted); }
+.scd-status-letter { font-family: var(--font-mono); font-size: var(--font-size-xs); width: 12px; flex: none; color: var(--fg-muted); }
 .scd-st-added { color: var(--success); }
 .scd-st-deleted { color: var(--error); }
-.scd-path { font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-.scd-stat { font-family: var(--font-mono); font-size: 11px; white-space: nowrap; flex: none; }
+.scd-path { font-family: var(--font-mono); font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.scd-stat { font-family: var(--font-mono); font-size: var(--font-size-xs); white-space: nowrap; flex: none; }
 .scd-add { color: var(--success); }
 .scd-del { color: var(--error); }
-.scd-file-note { font-size: 11.5px; color: var(--fg-muted); padding: 0 4px 4px 48px; }
+.scd-file-note { font-size: var(--font-size-sm); color: var(--fg-muted); padding: 0 4px 4px 48px; }
 
 .scd-owner {
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   padding: 1px 6px;
   border-radius: 999px;
   white-space: nowrap;
@@ -134,7 +134,7 @@
   align-items: center;
   gap: 8px;
   padding: 3px 8px;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   background: var(--bg-secondary);
   cursor: pointer;
 }
@@ -143,7 +143,7 @@
   margin: 0;
   padding: 2px 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   max-height: 420px;
   overflow: auto;
@@ -157,7 +157,7 @@
   border: none;
   background: transparent;
   color: var(--accent-text);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 4px 4px;
   cursor: pointer;
   text-align: left;
@@ -170,13 +170,13 @@
   width: 100%;
   min-height: 56px;
   resize: vertical;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   padding: 7px 10px;
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   box-sizing: border-box;
   outline: none;
 }
@@ -192,8 +192,8 @@
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   background: var(--accent-subtle);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-md);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -203,8 +203,8 @@
 .scd-url { font-family: var(--font-mono); word-break: break-all; margin-top: 2px; }
 
 .scd-job { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
-.scd-error { font-size: 12.5px; color: var(--error); white-space: pre-wrap; word-break: break-word; margin-top: 8px; }
-.scd-ok { font-size: 12.5px; color: var(--fg); }
+.scd-error { font-size: var(--font-size-md); color: var(--error); white-space: pre-wrap; word-break: break-word; margin-top: 8px; }
+.scd-ok { font-size: var(--font-size-md); color: var(--fg); }
 .scd-ok code { font-family: var(--font-mono); color: var(--accent-text); }
 .scd-ok a { color: var(--accent-text); word-break: break-all; }
 .scd-output {
@@ -212,7 +212,7 @@
   max-height: 240px;
   overflow: auto;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;

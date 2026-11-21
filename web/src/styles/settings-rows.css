@@ -53,7 +53,7 @@
 .settings-group-title.settings-subcard-title,
 .settings-group-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   font-weight: 600;
   color: var(--fg-secondary);
@@ -63,7 +63,7 @@
 
 .settings-group-heading-trailing {
   flex: 0 0 auto;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
@@ -74,7 +74,7 @@
   margin: -2px 0 6px;
   padding: 0 calc(var(--settings-row-pad-x) + 1px);
   max-width: 72ch;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -84,7 +84,7 @@
   margin: 6px 0 0;
   padding: 0 calc(var(--settings-row-pad-x) + 1px);
   max-width: 72ch;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -134,7 +134,7 @@
   display: block;
   margin: 0;
   max-width: 60ch;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -143,7 +143,7 @@
 .settings-group-footer code,
 .settings-row-help code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .settings-row[data-state='warning'] .settings-row-help {
@@ -212,7 +212,7 @@
 .settings-row-error {
   margin: -4px 0 0;
   padding: 0 var(--settings-row-pad-x) 10px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--settings-error-text);
   overflow-wrap: anywhere;
@@ -293,7 +293,7 @@
   align-items: center;
   min-height: 44px;
   padding: 10px var(--settings-row-pad-x);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--fg-muted);
 }
@@ -301,8 +301,8 @@
 .settings-notice {
   margin: 0 0 12px;
   padding: 8px 12px;
-  border-radius: 7px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-md);
   line-height: 18px;
 }
 
@@ -345,7 +345,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   color: var(--fg-muted);
 }

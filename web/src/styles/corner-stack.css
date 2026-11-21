@@ -87,7 +87,7 @@
 
 /* A board toast's actions look like every other toast's (.notification-toast-action). */
 .corner-stack .kanban-toast-btn {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--accent);
   border: 1px solid var(--accent);
@@ -106,7 +106,7 @@
   margin: -2px 0 -2px 4px;
   border-radius: 6px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--fg-muted);
   cursor: pointer;
@@ -114,10 +114,10 @@
 .corner-stack .notification-toast-more:hover { background: var(--bg-hover); color: var(--fg); }
 /* "N more …" is a NoticeCard of one line: its words only. */
 .corner-stack .corner-more .wn-notice-head { padding: 7px 12px; }
-.corner-stack .corner-more .wn-notice-line { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+.corner-stack .corner-more .wn-notice-line { font-size: var(--font-size-sm); font-weight: 500; color: var(--fg-muted); }
 .corner-stack .corner-more:hover .wn-notice-line { color: var(--fg); }
 .corner-stack .kanban-toast-main { gap: 6px 6px; }
-.corner-stack .kanban-toast-text { flex: 1 0 100%; font-size: 13px; color: var(--fg); }
+.corner-stack .kanban-toast-text { flex: 1 0 100%; font-size: var(--font-size-md); color: var(--fg); }
 
 
 
@@ -161,13 +161,13 @@
 /* A command breaks only between its words; a word longer than the line wraps inside itself. */
 .notice-cmd-word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; vertical-align: top; }
 .notice-cmd-code {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.95em;
   font-weight: 500;
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 0 4px;
   /* Sliced where a line breaks, never cloned: line breaking leaves out a cloned end's padding and
      border, so at some widths a line's box ran up to 5px past the text's edge and was cut there
@@ -185,7 +185,7 @@
   padding: 0;
   vertical-align: -4px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--fg-secondary);
   cursor: pointer;
@@ -202,7 +202,7 @@
   border: none;
   background: none;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--fg-secondary);
   cursor: pointer;
@@ -225,13 +225,13 @@
   margin: 0;
   vertical-align: baseline;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
 }
 .nfc-perm-cmd-tools .notice-details-toggle { margin: 0; }
 /* The raw line behind a toast (the record's detail), opened from Details, under its label. */
 .notification-toast-log { flex: 0 0 100%; min-width: 0; margin: 2px 0 6px; cursor: text; }
-.notification-toast-log-label { font-size: 11px; font-weight: 500; color: var(--fg-muted); margin-bottom: 2px; }
+.notification-toast-log-label { font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted); margin-bottom: 2px; }
 .notification-toast-detail {
   margin: 0;
   padding: 6px 8px;
@@ -239,8 +239,8 @@
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-secondary);
   background: var(--bg-secondary);

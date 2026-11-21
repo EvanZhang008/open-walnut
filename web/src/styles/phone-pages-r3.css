@@ -41,6 +41,6 @@
   /* N2-19: a routine card's last error ('agent "x" not found') is
      .cron-job-error with .text-xs (11 px); on a phone it reads at 12 px. */
   .app-shell-navigation .routines-view .cron-job-error {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
   }
 }

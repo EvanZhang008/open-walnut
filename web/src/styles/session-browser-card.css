@@ -4,7 +4,7 @@
    24 px bordered buttons, and Stop quiet at the far left, red only on hover. */
 .session-browser-card {
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
 }
 .session-browser-card--ended {
@@ -32,15 +32,15 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--success, #2e9e5b);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #2e9e5b) 22%, transparent);
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
 }
-.session-browser-dot--idle { background: var(--warning, #c98a14); box-shadow: none; }
+.session-browser-dot--idle { background: var(--warning); box-shadow: none; }
 .session-browser-dot--off { background: var(--fg-muted); box-shadow: none; }
 .session-browser-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
   overflow: hidden;
@@ -56,11 +56,11 @@
   white-space: nowrap;
 }
 .session-browser-url {
-  color: var(--fg-secondary, var(--fg-muted));
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
 }
-.session-browser-where { color: var(--fg-muted); font-size: 11px; }
+.session-browser-where { color: var(--fg-muted); font-size: var(--font-size-xs); }
 
 /* Buttons: the servers popover's (.session-server-btn), clear over the popover as its row
    buttons are, so they look the same in both themes. */
@@ -76,12 +76,12 @@
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1;
   cursor: pointer;
   white-space: nowrap;
 }
-.session-browser-btn:hover:not(:disabled) { background: var(--bg-hover, var(--bg-tertiary)); }
+.session-browser-btn:hover:not(:disabled) { background: var(--bg-hover); }
 .session-browser-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .session-browser-btn:disabled { opacity: 0.45; cursor: default; }
 /* The boxed × (.session-server-btn-icon .session-servers-list-close). */
@@ -93,8 +93,8 @@
   color: var(--fg-muted);
 }
 /* Stop as quiet as the servers' Stop: red only under the pointer. */
-.session-browser-btn--stop { color: var(--fg-secondary, var(--fg)); }
-.session-browser-btn--stop:hover:not(:disabled) { color: var(--error, #c0392b); border-color: color-mix(in srgb, var(--error, #c0392b) 45%, var(--border)); }
+.session-browser-btn--stop { color: var(--fg-secondary); }
+.session-browser-btn--stop:hover:not(:disabled) { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
 .session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .session-browser-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, #000); }
 
@@ -109,20 +109,20 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   background: transparent;
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   padding: 1px 8px;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-browser-tab.is-on { border-color: var(--accent); color: var(--fg); background: var(--accent-subtle, transparent); }
+.session-browser-tab.is-on { border-color: var(--accent); color: var(--fg); background: var(--accent-subtle); }
 .session-browser-shot {
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg-tertiary, var(--bg));
+  background: var(--bg-tertiary);
   height: min(38vh, 320px);
   display: flex;
   align-items: center;
@@ -147,10 +147,10 @@
   gap: 2px 10px;
   padding-top: 6px;
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 .session-browser-foot:empty { display: none; }
-.session-browser-note { color: var(--fg-secondary, var(--fg-muted)); }
+.session-browser-note { color: var(--fg-secondary); }
 /* Stop alone on the left, Larger and Take over together on the right. */
 .session-browser-actions {
   display: flex;
@@ -166,8 +166,8 @@
   margin-bottom: 8px;
   padding: 6px 8px 6px 10px;
   border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--warning, #c98a14) 45%, var(--border));
-  background: color-mix(in srgb, var(--warning, #c98a14) 12%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg));
   color: var(--fg);
 }
 .session-browser-hand.is-driving {
@@ -186,8 +186,8 @@
    Everything fits the popover (at most min(80vh, 720px)) in both sizes, so nothing scrolls out of view. */
 .session-browser-replay-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .session-browser-replay-names { flex: 1 1 auto; min-width: 0; }
-.session-browser-replay-names .session-browser-url { font-size: 11px; color: var(--fg-muted); }
-.session-browser-replay-where { flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.session-browser-replay-names .session-browser-url { font-size: var(--font-size-xs); color: var(--fg-muted); }
+.session-browser-replay-where { flex: 0 0 auto; color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .session-browser-replay-body { min-width: 0; }
 .session-browser-replay-main { min-width: 0; }
 .session-browser-replay .session-browser-shot { height: min(28vh, 260px); }
@@ -195,13 +195,13 @@
 .session-browser-replay.session-browser-card--large .session-browser-shot { height: min(52vh, 420px, calc(min(80vh, 720px) - 230px)); }
 .session-browser-replay-icon { display: inline-flex; flex: 0 0 auto; width: 14px; height: 14px; color: var(--fg-muted); }
 .session-browser-replay-icon svg { width: 100%; height: 100%; display: block; }
-.session-browser-replay-step { display: flex; align-items: center; gap: 7px; padding: 8px 2px 0; min-width: 0; font-size: 13px; }
+.session-browser-replay-step { display: flex; align-items: center; gap: 7px; padding: 8px 2px 0; min-width: 0; font-size: var(--font-size-md); }
 .session-browser-replay-step .session-browser-replay-icon { color: var(--accent); }
 .session-browser-replay-label { flex: 0 1 auto; min-width: 0; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-browser-replay-detail { flex: 0 1 auto; min-width: 0; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-browser-replay-step.is-failed .session-browser-replay-icon { color: var(--warning, #c98a14); }
-.session-browser-replay-step.is-failed .session-browser-replay-detail { color: var(--error, #c0392b); }
-.session-browser-replay-clock { margin-left: auto; padding-left: 8px; flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.session-browser-replay-step.is-failed .session-browser-replay-icon { color: var(--warning); }
+.session-browser-replay-step.is-failed .session-browser-replay-detail { color: var(--error); }
+.session-browser-replay-clock { margin-left: auto; padding-left: 8px; flex: 0 0 auto; color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 /* The filmstrip, Play and the speed at its left. */
 .session-browser-replay-film { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .session-browser-replay-play {
@@ -212,26 +212,26 @@
 .session-browser-replay-play svg { width: 100%; height: 100%; display: block; }
 .session-browser-replay-speed {
   flex: 0 0 auto; width: 30px; height: 24px; border: 0; border-radius: 6px; background: transparent;
-  color: var(--fg-muted); font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer;
+  color: var(--fg-muted); font: inherit; font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; cursor: pointer;
 }
-.session-browser-replay-speed:hover { background: var(--bg-hover, var(--bg-tertiary)); color: var(--fg); }
+.session-browser-replay-speed:hover { background: var(--bg-hover); color: var(--fg); }
 .session-browser-replay-strip {
   flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; padding: 4px; overflow-x: auto; scrollbar-width: none;
-  border: 1px solid var(--border); border-radius: 9px; background: var(--bg-tertiary, var(--bg));
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary);
 }
 .session-browser-replay-strip::-webkit-scrollbar { display: none; }
 .session-browser-replay-frame {
-  flex: 0 0 auto; width: 56px; height: 35px; padding: 0; border: 0; border-radius: 5px; overflow: hidden; position: relative;
+  flex: 0 0 auto; width: 56px; height: 35px; padding: 0; border: 0; border-radius: var(--radius-xs); overflow: hidden; position: relative;
   background: var(--border); opacity: 0.72; cursor: pointer; transition: opacity 0.15s, box-shadow 0.15s;
 }
 .session-browser-replay-frame:hover { opacity: 1; }
 .session-browser-replay-frame.is-on { opacity: 1; box-shadow: 0 0 0 2px var(--accent); }
-.session-browser-replay-frame.is-failed::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--warning, #c98a14); }
+.session-browser-replay-frame.is-failed::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--warning); }
 .session-browser-replay-thumb { display: block; width: 100%; height: 100%; }
 .session-browser-replay-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; user-select: none; }
 /* The ruler: a tick per step at its real time; a long pause is a break with its length. */
 .session-browser-replay-ruler { position: relative; height: 34px; margin: 6px 10px 0 76px; cursor: pointer; outline: none; }
-.session-browser-replay-ruler:focus-visible { box-shadow: 0 0 0 2px var(--accent-subtle, var(--accent)); border-radius: 4px; }
+.session-browser-replay-ruler:focus-visible { box-shadow: 0 0 0 2px var(--accent-subtle); border-radius: var(--radius-xs); }
 .session-browser-replay-line { position: absolute; left: -6px; right: -6px; top: 11px; height: 2px; border-radius: 1px; background: var(--border); }
 .session-browser-replay-tick { position: absolute; top: 3px; width: 9px; height: 18px; margin-left: -4.5px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .session-browser-replay-tick::before {
@@ -239,18 +239,18 @@
   background: var(--fg-muted); opacity: 0.7; transition: all 0.15s;
 }
 .session-browser-replay-tick:hover::before { opacity: 1; background: var(--fg); }
-.session-browser-replay-tick.is-failed::before { background: var(--warning, #c98a14); opacity: 1; }
+.session-browser-replay-tick.is-failed::before { background: var(--warning); opacity: 1; }
 .session-browser-replay-tick.is-on::before { left: 2.5px; top: 0; width: 4px; height: 18px; border-radius: 2px; background: var(--accent); opacity: 1; }
 .session-browser-replay-fold { position: absolute; top: 4px; transform: translateX(-50%); }
-.session-browser-replay-fold b { display: block; width: 10px; height: 16px; position: relative; background: var(--bg-elevated, var(--card-bg, var(--bg))); }
+.session-browser-replay-fold b { display: block; width: 10px; height: 16px; position: relative; background: var(--bg-elevated); }
 .session-browser-replay-fold b::before,
 .session-browser-replay-fold b::after { content: ""; position: absolute; top: 1px; bottom: 1px; width: 1.5px; background: var(--fg-muted); transform: skewX(-20deg); }
 .session-browser-replay-fold b::before { left: 2px; }
 .session-browser-replay-fold b::after { right: 2px; }
-.session-browser-replay-fold em { position: absolute; top: 17px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: 10px; color: var(--fg-muted); white-space: nowrap; }
-.session-browser-replay-ends { position: absolute; left: -4px; right: -4px; top: 21px; display: flex; justify-content: space-between; font-size: 10px; color: var(--fg-muted); pointer-events: none; font-variant-numeric: tabular-nums; }
+.session-browser-replay-fold em { position: absolute; top: 17px; left: 50%; transform: translateX(-50%); font-style: normal; font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; }
+.session-browser-replay-ends { position: absolute; left: -4px; right: -4px; top: 21px; display: flex; justify-content: space-between; font-size: var(--font-size-xs); color: var(--fg-muted); pointer-events: none; font-variant-numeric: tabular-nums; }
 /* The list of steps: number, icon, what it did and where, its time. */
-.session-browser-replay-list { list-style: none; margin: 8px 0 0; padding: 3px; max-height: min(150px, 20vh); overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-tertiary, var(--bg)); }
+.session-browser-replay-list { list-style: none; margin: 8px 0 0; padding: 3px; max-height: min(150px, 20vh); overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); }
 .session-browser-replay-side { position: relative; min-height: 0; display: flex; flex-direction: column; }
 .session-browser-replay-side .session-browser-replay-list { flex: 1 1 0; min-height: 0; max-height: none; margin: 0; }
 .session-browser-replay-row {
@@ -258,25 +258,25 @@
   width: 100%; border: 0; border-radius: 6px; background: transparent; color: var(--fg);
   font: inherit; text-align: left; padding: 4px 8px 4px 2px; cursor: pointer;
 }
-.session-browser-replay-row:hover { background: var(--bg-hover, var(--bg)); }
-.session-browser-replay-row.is-on { background: var(--accent-subtle, var(--bg)); }
+.session-browser-replay-row:hover { background: var(--bg-hover); }
+.session-browser-replay-row.is-on { background: var(--accent-subtle); }
 .session-browser-replay-row.is-on .session-browser-replay-row-label,
 .session-browser-replay-row.is-on .session-browser-replay-icon { color: var(--accent); }
-.session-browser-replay-row.is-failed .session-browser-replay-icon { color: var(--warning, #c98a14); }
-.session-browser-replay-row.is-failed .session-browser-replay-row-detail { color: var(--error, #c0392b); }
-.session-browser-replay-n { font-size: 10px; color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.session-browser-replay-row.is-failed .session-browser-replay-icon { color: var(--warning); }
+.session-browser-replay-row.is-failed .session-browser-replay-row-detail { color: var(--error); }
+.session-browser-replay-n { font-size: var(--font-size-xs); color: var(--fg-muted); text-align: right; font-variant-numeric: tabular-nums; }
 .session-browser-replay-words { display: flex; flex-direction: column; min-width: 0; }
-.session-browser-replay-row-label { font-size: 12px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-browser-replay-row-detail { font-size: 11px; color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-browser-replay-time { color: var(--fg-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.session-browser-replay-days { margin-top: 6px; color: var(--fg-muted); font-size: 11px; }
+.session-browser-replay-row-label { font-size: var(--font-size-sm); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-browser-replay-row-detail { font-size: var(--font-size-xs); color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-browser-replay-time { color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
+.session-browser-replay-days { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-size-xs); }
 /* The ended line above a replay: a gap between them. */
 .session-browser-card--ended + .session-browser-replay { margin-top: 10px; }
 
 /* Open in Chrome that could not open (BrowserRevealButton.tsx): its reason, small, beside it. */
 .session-browser-reveal-trouble {
-  font-size: 11px;
-  color: var(--error, #c0392b);
+  font-size: var(--font-size-xs);
+  color: var(--error);
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -287,6 +287,6 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }

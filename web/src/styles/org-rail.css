@@ -7,7 +7,7 @@
 .org-detail-split.is-stacked > .org-rail { order: -1; }
 .org-detail-col { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
-.org-rail { display: flex; flex-direction: column; min-height: 0; background: var(--bg); font-size: 12.5px; }
+.org-rail { display: flex; flex-direction: column; min-height: 0; background: var(--bg); font-size: var(--font-size-md); }
 .org-rail.is-side { flex: none; width: clamp(300px, 27vw, max(300px, calc(100% - 420px))); border-left: 1px solid var(--border); }
 /* Every divider between two Org panes (OrgPaneHandle): a 7px grab strip over the border line. */
 .org-pane-handle {
@@ -16,7 +16,7 @@
 }
 .org-pane-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background 0.12s; }
 .org-pane-handle:hover::after, .org-pane-handle:focus-visible::after, .org-pane-handle.resizing::after,
-.org-detail-split.resizing .org-rail-handle::after { width: 2px; left: 2.5px; background: var(--accent, #0a84ff); }
+.org-detail-split.resizing .org-rail-handle::after { width: 2px; left: 2.5px; background: var(--accent); }
 /* While dragging nothing under the pointer selects or takes the pointer (an iframe in a Board). */
 .org-detail-split.resizing { user-select: none; }
 .org-detail-split.resizing iframe { pointer-events: none; }
@@ -33,7 +33,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 /* Close the panel: the chat takes its room; the header's button brings it back (OrgNodeDetail). */
 .org-rail-close {
   flex: none; margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent;
-  color: var(--fg-muted, #86868b); font: inherit; font-size: 17px; line-height: 1; cursor: pointer;
+  color: var(--fg-muted); font: inherit; font-size: var(--font-size-xl); line-height: 1; cursor: pointer;
 }
 .org-rail-close:hover, .org-rail-close:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 /* Full screen and close (OrgTaskRail). */
@@ -41,14 +41,14 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-top-acts .org-rail-close { margin-left: 0; }
 .org-rail-icon {
   flex: none; width: 24px; height: 24px; display: inline-grid; place-items: center; border: 0; border-radius: 6px;
-  background: transparent; color: var(--fg-muted, #86868b); cursor: pointer;
+  background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .org-rail-icon:hover, .org-rail-icon:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 .org-rail-icon[aria-pressed="true"] { color: var(--fg); }
 /* Tasks: all of them in one list, or as the Board. */
-.org-task-modes { flex: none; display: inline-flex; align-self: flex-start; gap: 2px; margin: 8px 10px 2px; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--fg) 6%, transparent); }
-.org-task-modes button { border: 0; border-radius: 5px; padding: 2px 10px; background: transparent; color: var(--fg-secondary, var(--fg)); font: inherit; font-size: 12px; cursor: pointer; }
-.org-task-modes button.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.org-task-modes { flex: none; display: inline-flex; align-self: flex-start; gap: 2px; margin: 8px 10px 2px; padding: 2px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.org-task-modes button { border: 0; border-radius: var(--radius-xs); padding: 2px 10px; background: transparent; color: var(--fg-secondary); font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
+.org-task-modes button.is-on { background: var(--bg); color: var(--fg); box-shadow: var(--shadow-sm); }
 /* The Board fills the side bar below the switch. */
 .org-rail-board { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 6px; border-top: 1px solid var(--border); }
 .org-rail-board > * { flex: 1; min-height: 0; }
@@ -65,7 +65,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-task-section + .org-task-section { border-top: 1px solid var(--border); }
 .org-task-section-head {
   position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; width: 100%;
-  padding: 7px 12px; border: 0; background: var(--bg); color: var(--fg); font: inherit; font-size: 12px;
+  padding: 7px 12px; border: 0; background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-sm);
   font-weight: 600; text-align: left; cursor: pointer;
 }
 .org-task-section-head:hover { background: var(--bg-secondary); }
@@ -76,31 +76,31 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-task-section-icon { flex: none; display: inline-flex; color: var(--fg-muted); }
 .org-task-section-icon svg { width: 12px; height: 12px; }
 .org-task-section-count { color: var(--fg-muted); font-weight: 400; }
-.org-task-empty { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--fg-muted); }
+.org-task-empty { margin: 0; padding: 8px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 
 /* Working / Waiting / Completed: one row per task, its own line under its name. */
 .org-task-list { list-style: none; margin: 0; padding: 2px 4px; display: flex; flex-direction: column; }
 .org-task-row {
   width: 100%; display: flex; align-items: center; gap: 8px; padding: 4px 8px;
-  border: 0; border-radius: 7px; background: transparent; color: var(--fg); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer;
 }
 .org-task-row:hover { background: var(--bg-secondary); }
 .org-task-row > i { flex: none; width: 7px; height: 7px; border-radius: 50%; }
 /* Not started: the dashed ring of Home's section, never a filled dot. */
-.org-task-row > .org-task-ring { flex: none; display: inline-flex; color: var(--fg-muted, #86868b); }
+.org-task-row > .org-task-ring { flex: none; display: inline-flex; color: var(--fg-muted); }
 .org-task-row > .org-task-ring svg { width: 10px; height: 10px; }
 .org-task-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .org-task-title, .org-task-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.org-task-note { font-size: 11.5px; color: var(--fg-secondary, var(--fg-muted)); }
+.org-task-note { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .org-task-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
-.org-task-time { font-size: 11px; color: var(--fg-muted); }
+.org-task-time { font-size: var(--font-size-xs); color: var(--fg-muted); }
 /* The line was set by its lead or the user, not the task itself. */
-.org-set-by { font-size: 10.5px; color: color-mix(in srgb, var(--accent, #0a84ff) 75%, var(--fg)); white-space: nowrap; }
+.org-set-by { font-size: var(--font-size-xs); color: color-mix(in srgb, var(--accent) 75%, var(--fg)); white-space: nowrap; }
 
 /* Needs you: summary first, then its task, then the answer in the row. */
 .org-alerts { display: flex; flex-direction: column; }
 /* The cards with only something to read, folded into one row after the asks (2026-11-18). */
-.org-to-look { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--fg-secondary, var(--fg)); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.org-to-look { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--fg-secondary); font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer; }
 .org-to-look:hover { background: var(--bg-secondary); }
 .org-to-look:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .org-to-look-chev { width: 10px; color: var(--fg-muted); }
@@ -109,15 +109,15 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 /* Needs you: a red dot before the task it is from, never a bar down the row's edge (2026-11-20). */
 .org-ask-mark { display: inline-flex; vertical-align: 1px; margin-right: 6px; }
 /* The node's own ask, first: named for the node. */
-.org-ask-own { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--error, #d70015); }
-.org-alert-link { color: var(--fg-secondary, var(--fg)); text-decoration: none; }
+.org-ask-own { font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.02em; color: var(--error); }
+.org-alert-link { color: var(--fg-secondary); text-decoration: none; }
 .org-ask-via { color: var(--fg-muted); text-decoration: none; }
 .org-ask-via:hover { color: var(--accent); text-decoration: underline; }
 .org-alert-link:hover { color: var(--accent); text-decoration: underline; }
-.org-alert-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+.org-alert-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-xs); }
 .org-ask-tool, .org-ask-tools .org-alert-snooze {
-  border: 0; background: transparent; padding: 1px 6px; border-radius: 5px;
-  color: var(--fg-muted); font: inherit; font-size: 11.5px; cursor: pointer;
+  border: 0; background: transparent; padding: 1px 6px; border-radius: var(--radius-xs);
+  color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); cursor: pointer;
 }
 .org-ask-tool:hover:not(:disabled), .org-ask-tools .org-alert-snooze:hover { background: var(--bg-secondary); color: var(--fg); }
 .org-ask-tool:disabled { opacity: 0.5; cursor: default; }
@@ -131,7 +131,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
   border: 1px solid var(--border); border-radius: 10px;
   /* Solid in both themes, never the overlays' glass: the raised surface, one step
      lighter than the page in dark (tests/web/org-overlays-opaque.test.ts). */
-  background: var(--bg-elevated, var(--card-bg, var(--bg))); color: var(--fg); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); font-size: 12.5px;
+  background: var(--bg-elevated); color: var(--fg); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); font-size: var(--font-size-md);
 }
 .org-answer-menu > * { flex-shrink: 0; }
 .org-answer-q { color: var(--fg-muted); line-height: 1.35; }
@@ -142,11 +142,11 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-task-item > .org-task-row { flex: 1; min-width: 0; }
 .org-watch-toggle {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
-  border: 0; border-radius: 5px; background: transparent; color: var(--fg-muted); cursor: pointer; opacity: 0;
+  border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--fg-muted); cursor: pointer; opacity: 0;
 }
 .org-task-item:hover .org-watch-toggle, .org-ask:hover .org-watch-toggle, .org-watch-toggle:focus-visible, .org-watch-toggle.is-on { opacity: 1; }
 .org-watch-toggle:hover { background: var(--bg-secondary); color: var(--fg); }
-.org-watch-toggle.is-on { color: var(--accent, #0a84ff); }
+.org-watch-toggle.is-on { color: var(--accent); }
 .org-ask-tools .org-watch-toggle { width: 20px; height: 18px; padding: 0; }
 /* Touch screens have no hover: the eye is always there. */
 @media (hover: none) { .org-watch-toggle { opacity: 1; } }
@@ -161,7 +161,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-watched-item[data-open]:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .org-watched-open {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px 3px;
-  border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
 .org-watched-open > i { flex: none; width: 6px; height: 6px; border-radius: 50%; }
 /* Why it hangs here: an eye, a lock, or both in one glyph, centred on the guide line like a tree's node
@@ -169,7 +169,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
    and muted: it reads as a label, and the dot stays the state. */
 .org-watched-why {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 15px;
-  margin: 0 0 0 -11.25px; padding: 0; border: 0; border-radius: 4px; background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
+  margin: 0 0 0 -11.25px; padding: 0; border: 0; border-radius: var(--radius-xs); background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
 }
 /* A lock is a button: it unlocks the panel, and an open lock locks it again. */
 .org-watched-why.is-lock { cursor: pointer; font: inherit; }
@@ -177,12 +177,12 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-watched-item[data-relock] .org-watched-why { opacity: .6; }
 .org-watched-why svg { width: 12px; height: 12px; }
 .org-watched-item:hover .org-watched-why { color: var(--fg); opacity: 1; }
-.org-watched-item .org-watched-why.is-lock:hover { color: var(--accent, #0a84ff); }
+.org-watched-item .org-watched-why.is-lock:hover { color: var(--accent); }
 .org-watched-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-watched-item[data-state="done"] .org-watched-title { color: var(--fg-muted); text-decoration: line-through; }
-.org-watched-open:focus-visible, .org-watched-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 5px; }
+.org-watched-open:focus-visible, .org-watched-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-xs); }
 .org-watched-stop {
-  flex: none; width: 20px; height: 20px; margin-right: 2px; border: 0; border-radius: 5px; background: transparent;
+  flex: none; width: 20px; height: 20px; margin-right: 2px; border: 0; border-radius: var(--radius-xs); background: transparent;
   color: var(--fg-muted); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0;
 }
 .org-watched-item:hover .org-watched-stop, .org-watched-stop:focus-visible { opacity: 1; }

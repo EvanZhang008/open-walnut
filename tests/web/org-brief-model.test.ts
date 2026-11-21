@@ -58,7 +58,7 @@ describe('applyBriefDecorations', () => {
     const css = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/org-brief.css'), 'utf8')
     const globals = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/globals.css'), 'utf8')
     expect(css).toMatch(/a\.task-link\[data-user-state='needs'\]::before,\s*\.org-brief-body a\.task-link\[data-user-state='read'\]::before/)
-    expect(globals).toContain("a.task-link[data-user-state='read']::before { background: var(--error, #ff3b30); }")
+    expect(globals).toContain("a.task-link[data-user-state='read']::before { background: var(--error); }")
     expect(css).not.toContain('#6d5bd0')
   })
 

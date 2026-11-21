@@ -15,7 +15,7 @@
 /* Inline mono value inside a row copy column (Fires on, paths). */
 .settings-mono-value {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   overflow-wrap: anywhere;
 }
@@ -87,7 +87,7 @@
 .settings-help-warning {
   display: block;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--priority-important-text);
 }
@@ -96,7 +96,7 @@
 .settings-help-now {
   display: block;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg);
 }
@@ -159,7 +159,7 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .hook-row-disclose:focus-visible {
@@ -191,7 +191,7 @@
 }
 
 .hook-detail-value {
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -221,7 +221,7 @@
   width: 160px;
   height: 6px;
   margin: 0;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
   overflow: hidden;
 }
@@ -229,14 +229,14 @@
 .settings-progress-fill {
   display: block;
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
   transition: width 120ms linear;
 }
 
 .settings-progress-pct {
   min-width: 3.5ch;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;
   text-align: right;

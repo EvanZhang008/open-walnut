@@ -4,7 +4,7 @@
   gap: 4px;
   min-width: 0;
   max-width: 100%;
-  color: var(--fg-secondary, var(--fg-muted));
+  color: var(--fg-secondary);
 }
 
 .setup-progress-label { min-width: 0; overflow-wrap: anywhere; }
@@ -16,7 +16,7 @@
   min-width: 24px;
   height: 6px;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
 }
 
@@ -35,8 +35,8 @@
 
 .setup-progress-value {
   flex: none;
-  color: var(--fg-secondary, var(--fg-muted));
-  font-size: 12px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 

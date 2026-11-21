@@ -5,12 +5,12 @@
 
 .settings-addons-mono {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   overflow-wrap: anywhere;
 }
 .settings-addons-muted {
   color: var(--fg-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-variant-numeric: tabular-nums;
 }
 .settings-addons-inline {
@@ -33,7 +33,7 @@
 .settings-addons-live {
   color: var(--error);
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 /* Calendar checklist rows: 10px colour dot after the checkbox. */
@@ -59,7 +59,7 @@
   border: 0;
   padding: 0;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 400;
   color: var(--accent);
   cursor: pointer;
@@ -71,7 +71,7 @@
 .settings-addons-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 a.settings-button { text-decoration: none; }
 
@@ -148,7 +148,7 @@ a.settings-button { text-decoration: none; }
   box-shadow: inset 1px 0 0 var(--settings-hairline, var(--border));
 }
 .settings-addons-stat-value {
-  font-size: 20px;
+  font-size: var(--font-size-2xl);
   line-height: 26px;
   font-weight: 600;
   color: var(--fg);
@@ -158,7 +158,7 @@ a.settings-button { text-decoration: none; }
   white-space: nowrap;
 }
 .settings-addons-stat-label {
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
 }
@@ -200,18 +200,18 @@ a.settings-button { text-decoration: none; }
 .settings-group > :not(:first-child).settings-addons-contents > .settings-row.settings-row-indent:first-child::before {
   left: var(--settings-row-indent, 36px);
 }
-.settings-addons-account { color: var(--fg-muted); font-size: 12.5px; max-width: 28ch; }
+.settings-addons-account { color: var(--fg-muted); font-size: var(--font-size-md); max-width: 28ch; }
 
 /* Plugins: "Also needs: ..." under a store row is a warning, not help text. */
 span.plugin-store-why {
-  color: var(--priority-important, var(--fg-muted));
+  color: var(--priority-important);
   white-space: normal;
 }
 
 /* Plugins: the device code of an outstanding sign-in, read aloud or typed on
    another device, so it is larger and spaced. */
 .plugin-connection-code {
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   letter-spacing: 0.08em;
   user-select: all;
@@ -251,10 +251,10 @@ span.plugin-store-why {
   height: 18px;
   padding: 0 6px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   line-height: 18px;
   letter-spacing: 0;
@@ -273,7 +273,7 @@ span.plugin-store-why {
 
 :is(.settings-pane, .apps-plugins) .plugin-update-chip--available {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
 }
 
 :is(.settings-pane, .apps-plugins) .plugin-update-chip--dirty,
@@ -288,7 +288,7 @@ span.plugin-store-why {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   line-height: 17px;
   font-variant-numeric: tabular-nums;
   color: var(--fg);
@@ -319,11 +319,11 @@ span.plugin-store-why {
 .settings-usage-table :is(th, td):first-child { padding-left: 0; }
 .settings-usage-table :is(th, td):last-child { padding-right: 0; }
 .settings-usage-table .num { text-align: right; }
-.settings-usage-table .mono { font-family: var(--font-mono); font-size: 12px; }
+.settings-usage-table .mono { font-family: var(--font-mono); font-size: var(--font-size-sm); }
 .settings-usage-table tbody tr[title^='Filter'],
 .settings-usage-table tbody tr.is-active { cursor: pointer; }
 .settings-usage-table tbody tr:hover td { background: var(--bg-hover); }
-.settings-usage-table tbody tr.is-active td { color: var(--accent-text, var(--accent)); font-weight: 500; }
+.settings-usage-table tbody tr.is-active td { color: var(--accent-text); font-weight: 500; }
 
 .settings-usage-col-name { width: 20%; }
 .settings-usage-col-num { width: 11%; }
@@ -335,7 +335,7 @@ span.plugin-store-why {
 .settings-usage-breakdown th {
   padding-left: 4px;
   padding-right: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 /* Recent calls: the text columns (source, model) take the spare width, the
    numbers only what a token count or a cost needs (N3-29). */
@@ -366,7 +366,7 @@ span.plugin-store-why {
 
 .settings-usage-empty {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 
@@ -399,7 +399,7 @@ span.plugin-store-why {
 @container uchart (min-width: 520px) { .settings-pane .usage-chart-axis { font-size: 21.2px; } }
 @container uchart (min-width: 620px) { .settings-pane .usage-chart-axis { font-size: 17.8px; } }
 @container uchart (min-width: 740px) { .settings-pane .usage-chart-axis { font-size: 14.9px; } }
-@container uchart (min-width: 880px) { .settings-pane .usage-chart-axis { font-size: 12.5px; } }
+@container uchart (min-width: 880px) { .settings-pane .usage-chart-axis { font-size: var(--font-size-md); } }
 
 /* A host that is off keeps its name readable: only its dot and its Off line are muted (the
    2026-11-05 review: at 45% the name read as a record that was gone, though it still turns on). */
@@ -436,7 +436,7 @@ span.plugin-store-why {
   background: transparent;
 }
 
-.settings-group .settings-row.cloud-step-running .cloud-step-label { color: var(--accent-text, var(--accent)); }
+.settings-group .settings-row.cloud-step-running .cloud-step-label { color: var(--accent-text); }
 .settings-group .settings-row.cloud-step-error .cloud-step-label { color: var(--settings-error-text, var(--error)); }
 
 /* macOS Access: one action slot per row, wide enough for "Open System
@@ -463,26 +463,26 @@ span.plugin-store-why {
 .usage-headline-note {
   margin: 0;
   padding: 0 16px 12px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
 }
 /* One engine picked in the agents view: said above the numbers, in the accent. */
 .usage-scope {
   margin: 0;
   padding: 12px 16px 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 600;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
 }
 .usage-more > summary {
   cursor: pointer;
   padding: 10px 16px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 .usage-how > summary {
   cursor: pointer;
   padding: 10px 4px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 

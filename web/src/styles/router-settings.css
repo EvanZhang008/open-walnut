@@ -1,7 +1,7 @@
 /* A router's settings form (RouterSettingsBody), its folder picker (RouterFolderPicker) and its dialog (RouterSettingsDialog):
    loaded wherever the dialog opens, the Org page and Apps › Mail alike. */
 /* The open settings: one quiet column of rows, a label on the left and its control on the right. */
-.org-router-settings-body { --org-router-label-w: 136px; --org-router-gap: 16px; display: flex; flex-direction: column; padding: 0 20px 16px 38px; max-width: 760px; font-size: 13px; }
+.org-router-settings-body { --org-router-label-w: 136px; --org-router-gap: 16px; display: flex; flex-direction: column; padding: 0 20px 16px 38px; max-width: 760px; font-size: var(--font-size-md); }
 .org-router-row {
   display: grid; grid-template-columns: var(--org-router-label-w) minmax(0, 1fr); column-gap: var(--org-router-gap); align-items: start;
   padding: 12px 0; border-top: 1px solid var(--border);
@@ -14,21 +14,21 @@
 .org-router-value > input:not([type]),
 .org-router-value > .mic-field > input:not([type]) {
   box-sizing: border-box; width: 100%; max-width: 380px; height: 30px; padding: 0 10px; font: inherit;
-  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .org-router-value > input:not([type]):focus-visible, .org-router-value > .mic-field > input:not([type]):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
-.org-router-hint { font-size: 12px; line-height: 1.45; color: var(--fg-secondary); }
+.org-router-hint { font-size: var(--font-size-sm); line-height: 1.45; color: var(--fg-secondary); }
 .org-router-sources { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.org-router-kind { margin-left: 4px; font-size: 12px; color: var(--fg-secondary); }
+.org-router-kind { margin-left: 4px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .org-router-filter { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 2px 0 4px; }
-.org-router-filter .org-router-check { font-size: 13px; }
+.org-router-filter .org-router-check { font-size: var(--font-size-md); }
 .org-router-link-out { color: var(--accent); text-decoration: none; }
 .org-router-link-out:hover { text-decoration: underline; }
-.org-router-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+.org-router-check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: var(--font-size-md); }
 .org-router-check.is-stale { color: var(--fg-secondary); font-style: italic; }
 /* Many VPs: a finder above, and the list scrolls inside its own box so Save stays near. */
 .org-router-link-filter {
-  width: 100%; max-width: 320px; margin: 0 0 6px; padding: 5px 8px; font: inherit; font-size: 13px;
+  width: 100%; max-width: 320px; margin: 0 0 6px; padding: 5px 8px; font: inherit; font-size: var(--font-size-md);
   color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
 }
 .mic-field.org-router-link-filter-field { width: 100%; max-width: 320px; margin: 0 0 6px; }
@@ -36,50 +36,50 @@
 .org-router-link-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .org-router-link-list { max-height: 228px; overflow-y: auto; }
 .org-router-links .org-router-value > .org-router-hint { margin: 0 0 4px; }
-.org-router-warn { margin: 6px 0 0; font-size: 12px; color: var(--warning, #b25000); }
-.org-router-error { margin: 0; font-size: 12px; color: var(--error, #d70015); }
+.org-router-warn { margin: 6px 0 0; font-size: var(--font-size-sm); color: var(--warning); }
+.org-router-error { margin: 0; font-size: var(--font-size-sm); color: var(--error); }
 .org-router-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 0 0 calc(var(--org-router-label-w) + var(--org-router-gap)); border-top: 1px solid var(--border); }
 .org-router-settings-body > .org-router-error { padding: 8px 0 0 calc(var(--org-router-label-w) + var(--org-router-gap)); }
 
 .router-folder-picker { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 440px; }
 .router-folder-filter {
-  box-sizing: border-box; width: 100%; height: 30px; padding: 0 10px; font: inherit; font-size: 13px;
-  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  box-sizing: border-box; width: 100%; height: 30px; padding: 0 10px; font: inherit; font-size: var(--font-size-md);
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .router-folder-filter:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .router-folder-list {
-  max-height: 260px; overflow-y: auto; padding: 4px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  max-height: 260px; overflow-y: auto; padding: 4px 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
 }
 .router-folder-group + .router-folder-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
-.router-folder-group-title { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 500; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.router-folder-group-title { padding: 6px 10px 2px; font-size: var(--font-size-sm); font-weight: 500; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .router-folder {
   display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 10px 4px 8px; margin: 0 4px;
-  border-radius: 6px; font-size: 13px; color: var(--fg); cursor: pointer;
+  border-radius: 6px; font-size: var(--font-size-md); color: var(--fg); cursor: pointer;
 }
 .router-folder:hover { background: var(--bg-secondary); }
 .router-folder.is-on { color: var(--fg); }
 .router-folder input { flex: none; margin: 0; accent-color: var(--accent); }
 .router-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.router-folder-note { margin: 0; padding: 6px 10px; font-size: 12px; color: var(--fg-secondary); }
-.router-folder-note.is-error { color: var(--error, #d70015); }
+.router-folder-note { margin: 0; padding: 6px 10px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.router-folder-note.is-error { color: var(--error); }
 .router-folder-retry { margin-left: 4px; padding: 0; border: none; background: none; font: inherit; color: var(--accent); cursor: pointer; }
 .router-folder-retry:hover { text-decoration: underline; }
-.router-folder-warn { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 12px; line-height: 1.45; color: var(--warning, #b25000); }
+.router-folder-warn { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: var(--font-size-sm); line-height: 1.45; color: var(--warning); }
 .router-folder-warn::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; transform: translateY(-1px); }
 
 /* The dialog: centered, one column, its own scroll; Save stays at the bottom. */
 .app-modal.router-settings-dialog:focus { outline: none; }
 .app-modal.router-settings-dialog {
   display: flex; flex-direction: column; box-sizing: border-box; width: min(640px, calc(100vw - 48px)); max-height: calc(100vh - 64px);
-  padding: 0; overflow: hidden; background: var(--bg-elevated, var(--bg, #1c1f26));
+  padding: 0; overflow: hidden; background: var(--bg-elevated);
 }
 .router-settings-dialog-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 12px 20px; border-bottom: 1px solid var(--border); }
 .router-settings-dialog-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.router-settings-dialog-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.router-settings-dialog-sub { font-size: 12px; color: var(--fg-secondary); }
+.router-settings-dialog-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.router-settings-dialog-sub { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .router-settings-dialog-close {
   flex: none; width: 28px; height: 28px; border: none; border-radius: 6px; background: none;
-  color: var(--fg-secondary); font-size: 18px; line-height: 1; cursor: pointer;
+  color: var(--fg-secondary); font-size: var(--font-size-xl); line-height: 1; cursor: pointer;
 }
 .router-settings-dialog-close:hover { background: var(--bg-secondary); color: var(--fg); }
 .router-settings-dialog-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
@@ -87,7 +87,7 @@
 .router-settings-dialog .org-router-settings-body { max-width: none; padding: 4px 20px 0; }
 .router-settings-dialog .org-router-actions {
   position: sticky; bottom: 0; z-index: 1; margin-top: 8px; padding: 12px 0 16px calc(var(--org-router-label-w) + var(--org-router-gap));
-  background: var(--bg-elevated, var(--bg, #1c1f26));
+  background: var(--bg-elevated);
 }
 @media (max-width: 640px) {
   .router-settings-dialog .org-router-row { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }

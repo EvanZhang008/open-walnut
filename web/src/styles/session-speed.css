@@ -20,7 +20,7 @@
   border-radius: 6px;
   background: var(--bg-tertiary);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 16px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -32,7 +32,7 @@
 .session-speed-readout-picker {
   margin: 0 0 8px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   background: var(--bg-secondary);
 }
@@ -84,7 +84,7 @@
 }
 
 .session-speed-flag {
-  color: var(--warning, var(--fg-muted));
+  color: var(--warning);
 }
 
 @keyframes session-speed-pulse {
@@ -135,6 +135,6 @@
 .session-speed-note {
   margin: 0 0 8px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
 }

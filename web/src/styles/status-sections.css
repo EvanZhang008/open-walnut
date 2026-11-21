@@ -20,7 +20,7 @@
 .home-navigation-scroll .navigation-heading.navigation-heading-divider .navigation-heading-open,
 .navigation-heading.navigation-heading-divider.status-section-heading .navigation-heading-open {
   /* 4px in, as every heading: its name stays on the panel's 12 px text column. */
-  gap: 8px; padding: 0 6px 0 4px; color: var(--fg-muted); font-size: 12.5px; font-weight: 500;
+  gap: 8px; padding: 0 6px 0 4px; color: var(--fg-muted); font-size: var(--font-size-md); font-weight: 500;
 }
 .home-navigation-scroll .navigation-heading.navigation-heading-divider .navigation-heading-open:hover,
 .navigation-heading.navigation-heading-divider.status-section-heading .navigation-heading-open:hover { color: var(--fg); background: transparent; }
@@ -38,7 +38,7 @@
 .home-navigation-scroll .status-section-card.status-card-two-line { min-height: 44px; padding-top: 4px; padding-bottom: 4px; align-items: center; }
 .status-card-body { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
 .status-card-body > .todo-pinned-title { line-height: 18px; }
-.status-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 15px; font-size: 11px; line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
+.status-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 15px; font-size: var(--font-size-xs); line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
 .status-card-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* The project name is a link (RowProjectName): a click filters the panel to it. It reads as
    the label it was until the pointer is on it, and only it underlines, not the row. */
@@ -55,8 +55,8 @@
 .status-card-reason { flex: 0 4 auto; min-width: min(8ch, 30%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
 /* Flat: the wait sentence is its own third line under the title, with the whole width
    (2026-11-02, the user: on the top line it was cut, and it pushed the wake time off). */
-.status-card-body > .status-card-reason.status-card-wait-line { min-width: 0; font-size: 11.5px; line-height: 15px; }
-.status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: 11px; margin-left: 6px; min-width: 0; }
+.status-card-body > .status-card-reason.status-card-wait-line { min-width: 0; font-size: var(--font-size-sm); line-height: 15px; }
+.status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: var(--font-size-xs); margin-left: 6px; min-width: 0; }
 /* A project's fold in a narrow panel: the title keeps a floor, the wait sentence gives way first. */
 .status-section-card.status-card-reason-inline > .todo-pinned-title { min-width: min(10ch, 34%); }
 /* The tags on the meta line read as words, not pills: no fill, the line's own size.
@@ -67,7 +67,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:foc
 html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill[aria-expanded="true"],
 html .home-navigation-scroll .status-card-meta .todo-item-due-pill.todo-item-due-pill {
   flex: none; height: auto; margin: 0; padding: 0; border: 0; background: none; box-shadow: none;
-  font-size: 11px; font-weight: 500; line-height: 15px;
+  font-size: var(--font-size-xs); font-weight: 500; line-height: 15px;
 }
 .status-card-meta .todo-item-due-pill.todo-item-due-pill { color: var(--fg-muted); }
 html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hover { text-decoration: underline; }
@@ -75,22 +75,22 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
   /* static: a phone gives a team pill's ::before an absolute 44 px hit area (phone-fixes.css). */
   content: '·'; position: static; inset: auto; margin-right: 6px; color: var(--fg-muted); font-weight: 400;
 }
-.status-card-meta .todo-recent-ago { flex: none; font-size: 11px; }
+.status-card-meta .todo-recent-ago { flex: none; font-size: var(--font-size-xs); }
 /* On a phone the meta line's tags are labels, as a tier card's are (phone-fixes-r4.css
    R3-04): a 15 px button is no target, so a tap opens the row, whose detail has the links. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  html .app-shell-navigation .todo-panel .status-card-meta .task-team-pill { min-width: 0; pointer-events: none; font-size: 11px; }
+  html .app-shell-navigation .todo-panel .status-card-meta .task-team-pill { min-width: 0; pointer-events: none; font-size: var(--font-size-xs); }
   html .app-shell-navigation .todo-panel .status-card-meta .row-project-link { pointer-events: none; }
 }
 .status-section-more {
   align-self: flex-start; margin: 2px 0 0 22px; padding: 2px 6px; border: 0; border-radius: 6px;
-  background: transparent; color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer;
+  background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); cursor: pointer;
 }
 .status-section-more:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .status-section-more:disabled { cursor: default; opacity: .7; }
 
 /* Status counts (glyph + number, muted, the Needs you one red): the By project folds. */
-.project-status-counts { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: 10px; font-weight: 500; color: var(--fg-muted, #8a8f98); white-space: nowrap; }
+.project-status-counts { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted); white-space: nowrap; }
 .project-status-count { display: inline-flex; align-items: center; gap: 2px; }
 .project-status-count-icon { display: inline-flex; }
 .project-status-count-icon svg { width: 10px; height: 10px; display: block; }
@@ -101,7 +101,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 /* Last in its run: the gap to the next section is the section's own (36 px above Projects). */
 .project-status-folds:last-child { margin-bottom: 0; }
 .project-status-fold-row { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 18px; }
-.project-status-fold { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.project-status-fold { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
 .project-status-fold:hover, .project-status-fold.open { background: var(--bg-hover); color: var(--fg-secondary); }
 .project-status-fold .project-status-count-icon svg { width: 11px; height: 11px; }
 .project-status-fold .navigation-chevron { width: 8px; height: 8px; }
@@ -110,10 +110,10 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
    C18, C19): the counts and fold lines above are 10 and 11.5 px, and a fold is 22 px tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html .app-shell-navigation .project-status-counts,
-  html .app-shell-navigation .project-status-fold { font-size: 12px; }
+  html .app-shell-navigation .project-status-fold { font-size: var(--font-size-sm); }
   html .app-shell-navigation .project-status-count-icon svg { width: 12px; height: 12px; }
   html .app-shell-navigation .project-status-fold { min-height: 44px; padding: 0 10px; }
-  html .app-shell-navigation .status-section-more { min-height: 44px; font-size: 13px; }
+  html .app-shell-navigation .status-section-more { min-height: 44px; font-size: var(--font-size-md); }
 }
 
 /* The open-session chevron sits at the right edge: the time yields room for it. */
@@ -138,13 +138,13 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-card-needs-line .needs-line-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Both lines are agent text (AgentText, whose base rule wraps): the row keeps its one line. */
 .status-card-reason[data-agent-text], .status-card-needs-line .needs-line-text[data-agent-text] { white-space: nowrap; overflow-wrap: normal; }
-.needs-category-decide { color: var(--error, #ff3b30); }
-.needs-category-review { color: var(--warning, #c77700); }
+.needs-category-decide { color: var(--error); }
+.needs-category-review { color: var(--warning); }
 .needs-category-look { color: var(--accent); }
-.needs-category-close { color: var(--success, #2f9e44); }
+.needs-category-close { color: var(--success); }
 .status-card-needs-line .needs-close-btn {
-  flex: none; margin-left: auto; padding: 0 8px; height: 18px; border-radius: 9px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: 11px; line-height: 16px; cursor: pointer;
+  flex: none; margin-left: auto; padding: 0 8px; height: 18px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: var(--font-size-xs); line-height: 16px; cursor: pointer;
 }
 .status-card-needs-line .needs-close-btn:hover { background: var(--bg-secondary); }
 .status-section-card .pinned-phase-picker[data-row-mark="needs-read"] { color: var(--accent); }
@@ -159,38 +159,38 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-card-limit-tag {
   display: inline-block;
   padding: 0 5px;
-  border-radius: 4px;
-  font-size: 10.5px;
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 15px;
-  color: var(--accent, #0a84ff);
-  background: color-mix(in srgb, var(--accent, #0a84ff) 14%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 /* Off (the user's choice) and refused again wear their banner's colours (usage-limit.css). */
-.status-card-limit-tag.is-off { color: var(--fg-secondary, var(--fg-muted)); background: color-mix(in srgb, var(--fg, #000) 8%, transparent); }
-.status-card-limit-tag.is-refused { color: var(--warning, #b45309); background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent); }
+.status-card-limit-tag.is-off { color: var(--fg-secondary); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.status-card-limit-tag.is-refused { color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); }
 /* A count in words beside the heading's own count, not a pill: it filters nothing. */
-.status-section-limited { flex: none; margin-left: 4px; font-size: 12px; font-weight: 500; color: var(--accent, #0a84ff); }
+.status-section-limited { flex: none; margin-left: 4px; font-size: var(--font-size-sm); font-weight: 500; color: var(--accent); }
 /* Background: a dot after the count while one of its tasks asks the user something (the task stays in Background). */
 .status-section-asks-dot { flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--error); }
 /* While a usage limit holds sessions: one line over the sections, a way to their rows. */
 .status-limit-summary {
   display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 6px 8px 2px; padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 24%, transparent); border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #0a84ff) 7%, var(--bg-secondary)); color: var(--fg);
-  font-size: 12px; text-align: left;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent); border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary)); color: var(--fg);
+  font-size: var(--font-size-sm); text-align: left;
 }
 .status-limit-summary-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
-.status-limit-summary-when { font-size: 11px; color: var(--fg-secondary, var(--fg-muted)); }
+.status-limit-summary-when { font-size: var(--font-size-xs); color: var(--fg-secondary); }
 /* Each count is a way to its own rows. */
 .status-limit-summary-part {
   padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
-  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--fg, #000) 30%, transparent); text-underline-offset: 2px;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--fg) 30%, transparent); text-underline-offset: 2px;
 }
-.status-limit-summary-part:hover { color: var(--accent, #0a84ff); text-decoration-color: currentColor; }
-.status-limit-summary-part:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 3px; }
+.status-limit-summary-part:hover { color: var(--accent); text-decoration-color: currentColor; }
+.status-limit-summary-part:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
 /* The rows a count led to, marked a moment. */
-.status-section-card.is-limit-flash { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent); border-radius: 8px; transition: box-shadow 0.3s; }
+.status-section-card.is-limit-flash { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); border-radius: var(--radius-sm); transition: box-shadow 0.3s; }
 
 /* A limit row that is the user's: "[Auto-continue off] resets 5:44 AM", why in its tag, then the
    reset, one line like every needs line. */
@@ -200,7 +200,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
    tag and words after the title, one line; the words give way before the title does. */
 .todo-item-limit-pill {
   display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0;
-  font-size: 11px; color: var(--fg-secondary, var(--fg-muted)); white-space: nowrap;
+  font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap;
 }
 .todo-item-limit-pill .status-card-limit-tag { flex: none; }
 .todo-item-limit-pill-words { overflow: hidden; text-overflow: ellipsis; min-width: 0; }

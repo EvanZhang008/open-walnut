@@ -29,7 +29,7 @@
 }
 
 .task-board-bar-title {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
   flex-shrink: 0;
@@ -47,7 +47,7 @@
 
 .task-board-bar-sub {
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -68,8 +68,8 @@
   gap: 10px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
-  color: var(--error, #d93025);
-  font-size: 12px;
+  color: var(--error);
+  font-size: var(--font-size-sm);
   flex-shrink: 0;
 }
 
@@ -94,7 +94,7 @@
 .task-board-loading {
   padding: 24px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .task-board-empty {
@@ -109,7 +109,7 @@
   max-width: 420px;
   padding: 20px 22px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-secondary);
   text-align: center;
 }
@@ -122,15 +122,15 @@
 
 .task-board-empty-text {
   margin: 6px 0 14px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
   color: var(--fg-muted);
 }
 
 .task-board-empty-error {
   margin-top: 10px;
-  font-size: 12px;
-  color: var(--error, #d93025);
+  font-size: var(--font-size-sm);
+  color: var(--error);
 }
 
 /* The Board's reply box (components/board/BoardReplyDock.tsx): Walnut's own
@@ -155,7 +155,7 @@
   box-sizing: border-box;
   padding: 6px 10px 8px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
@@ -173,7 +173,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -202,7 +202,7 @@
   flex-shrink: 0;
   padding: 0 6px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--fg-muted);
   font-size: 16px;

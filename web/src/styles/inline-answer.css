@@ -7,12 +7,12 @@
 .org-answer-inline:empty { display: none; }
 .org-answer-options .btn { max-width: 100%; white-space: normal; text-align: left; }
 .org-answer-options .btn[data-recommended]::after { content: 'Recommended'; margin-left: 6px; font-size: 0.75em; opacity: 0.8; font-weight: 500; }
-.org-answer-check { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; cursor: pointer; }
-.org-answer-check.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent, #0a84ff) 8%, var(--bg)); }
+.org-answer-check { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: var(--font-size-sm); cursor: pointer; }
+.org-answer-check.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 .org-answer-check input { margin: 0; }
 /* The words box is the shared AnswerBox (styles/answer-box.css). */
-.org-answer-note, .org-answer-error { font-size: 11.5px; color: var(--fg-muted); }
+.org-answer-note, .org-answer-error { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .org-answer-note:empty { display: none; }
-.org-answer-error { color: var(--error, #d70015); }
+.org-answer-error { color: var(--error); }
 .org-answer-inline .kanban-prompt { margin: 0; }
 

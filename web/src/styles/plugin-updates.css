@@ -19,9 +19,9 @@
  * `native-plugin.spec.ts` measures every chip kind in both themes (C34, C53).
  */
 .plugin-update-chip {
-  --plugin-update-chip-quiet: var(--fg-secondary, var(--fg));
-  --plugin-update-chip-available: var(--accent-text, var(--accent));
-  --plugin-update-chip-amber: var(--priority-important-text, var(--priority-important));
+  --plugin-update-chip-quiet: var(--fg-secondary);
+  --plugin-update-chip-available: var(--accent-text);
+  --plugin-update-chip-amber: var(--priority-important-text);
 }
 
 :root[data-theme='dark'] .plugin-update-chip {
@@ -52,7 +52,7 @@
   background: transparent;
   color: var(--plugin-update-chip-quiet);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: inherit;
   letter-spacing: 0.04em;
@@ -172,7 +172,7 @@ button.plugin-update-chip--current:hover {
 .plugin-update-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  box-shadow: 0 0 0 2px var(--bg-secondary, var(--bg));
+  box-shadow: 0 0 0 2px var(--bg-secondary);
 }
 
 /*
@@ -224,8 +224,8 @@ button.plugin-update-chip--current:hover {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 8px;
-  color: var(--fg-secondary, var(--fg));
-  font-size: 12px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   line-height: 1.4;
 }
 
@@ -238,7 +238,7 @@ button.plugin-update-chip--current:hover {
   flex: none;
   align-self: center;
   margin-right: -4px;
-  color: var(--plugin-update-chip-available, var(--accent-text, var(--accent)));
+  color: var(--plugin-update-chip-available, var(--accent-text));
 }
 
 /* The text span sits in the row copy, whose `span` rule (muted, 11px) outranks a bare class:
@@ -259,9 +259,9 @@ button.plugin-update-chip--current:hover {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -280,9 +280,9 @@ button.plugin-update-chip--current:hover {
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -301,10 +301,10 @@ button.plugin-update-chip--current:hover {
   padding: 5px 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary, var(--bg));
+  background: var(--bg-secondary);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
-  color: var(--fg-secondary, var(--fg));
-  font-size: 12px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -345,10 +345,10 @@ button.plugin-update-chip--current:hover {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-elevated, var(--bg-secondary));
+  background: var(--bg-elevated);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   overflow-y: auto;
   overflow-wrap: anywhere;
@@ -381,7 +381,7 @@ button.plugin-update-chip--current:hover {
 
 .plugin-provenance-list code {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
 }
 
 .plugin-provenance-path {
@@ -398,7 +398,7 @@ button.plugin-update-chip--current:hover {
   background: none;
   color: var(--accent);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -411,7 +411,7 @@ button.plugin-update-chip--current:hover {
   padding-top: 8px;
   border-top: 1px solid var(--border);
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 /* ---- Installed header: "Checked 3 min ago · Check now", right-aligned on the title row ---- */
@@ -421,8 +421,8 @@ button.plugin-update-chip--current:hover {
   align-items: center;
   gap: 6px;
   margin-left: auto;
-  color: var(--fg-secondary, var(--fg));
-  font-size: 12px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -433,9 +433,9 @@ button.plugin-update-chip--current:hover {
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -523,7 +523,7 @@ button.plugin-update-chip--current:hover {
 .plugin-store-installed .btn-danger-outline.btn-sm,
 .plugin-sources-group .btn-danger-outline.btn-sm {
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
 }
 

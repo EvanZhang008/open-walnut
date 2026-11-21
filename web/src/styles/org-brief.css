@@ -18,14 +18,14 @@
   margin-bottom: -1px;
   padding: 8px 2px 7px;
   background: transparent;
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 .org-top-tab:hover { color: var(--fg); }
 .org-top-tab.is-on { color: var(--fg); font-weight: 600; border-bottom-color: var(--fg); }
-.org-top-count { color: var(--fg-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.org-top-count { color: var(--fg-muted); font-size: var(--font-size-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
 .org-top-tab .org-top-new { position: static; flex: none; }
 .org-top-new {
   position: absolute;
@@ -34,14 +34,14 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent, #0a84ff);
+  background: var(--accent);
 }
 .org-top-fold {
   border: 0;
   background: transparent;
-  color: var(--accent, #0a84ff);
+  color: var(--accent);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -51,13 +51,13 @@
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
-.org-brief.is-empty { padding: 10px 18px; font-size: 12.5px; }
+.org-brief.is-empty { padding: 10px 18px; font-size: var(--font-size-md); }
 .org-brief.is-empty p { margin: 0; }
 /* A letter, not a document: about ten lines, the rest a scroll away, so the chat keeps its room. */
 .org-brief-body {
   max-height: min(240px, 34vh);
   overflow-y: auto;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.45;
 }
 .org-brief.is-folded .org-brief-body { max-height: 4.4em; overflow: hidden; }
@@ -75,21 +75,21 @@
   margin-right: 4px;
   border-radius: 50%;
   vertical-align: 1px;
-  background: var(--fg-muted, #86868b);
+  background: var(--fg-muted);
 }
 /* To read is drawn under Needs you (shownState, 2026-11-03): its pill wears the Needs you dot. */
 .org-brief-body a.task-link[data-user-state='needs']::before,
 .org-brief-body a.task-link[data-user-state='read']::before,
-.org-brief-body [data-brief-section='needs']::before { background: var(--error, #ff3b30); }
+.org-brief-body [data-brief-section='needs']::before { background: var(--error); }
 .org-brief-body a.task-link[data-user-state='working']::before,
-.org-brief-body [data-brief-section='working']::before { background: var(--success, #34c759); }
-.org-brief-body a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff); }
+.org-brief-body [data-brief-section='working']::before { background: var(--success); }
+.org-brief-body a.task-link[data-user-state='done']::before { background: var(--accent); }
 /* The three section headings (Needs you, Working, Waiting / snoozed): small, not a document's. */
 .org-brief-body h1, .org-brief-body h2, .org-brief-body h3, .org-brief-body h4 {
   margin: 8px 0 2px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
   border: 0;
   padding: 0;
 }
@@ -100,15 +100,15 @@
 .org-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 /* When it was written, what moved since, and a refresh on its way (OrgBrief.tsx head). */
-.org-brief-head { margin: 0 0 6px; font-size: 11.5px; }
-.org-brief-moved { color: var(--warning, #b25000); }
-.org-brief-updating { color: var(--accent, #0a84ff); }
+.org-brief-head { margin: 0 0 6px; font-size: var(--font-size-sm); }
+.org-brief-moved { color: var(--warning); }
+.org-brief-updating { color: var(--accent); }
 /* A line whose task moved since the letter was written: the writer's words dimmed, the live ones under it. */
-.org-brief-body li[data-brief-moved] { color: var(--fg-muted, #86868b); }
+.org-brief-body li[data-brief-moved] { color: var(--fg-muted); }
 .org-brief-body .org-brief-now {
   display: block;
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .org-brief-body .org-brief-now::before {
   content: '';
@@ -118,12 +118,12 @@
   margin-right: 4px;
   border-radius: 50%;
   vertical-align: 1px;
-  background: var(--fg-muted, #86868b);
+  background: var(--fg-muted);
 }
 .org-brief-body .org-brief-now[data-user-state='needs']::before,
-.org-brief-body .org-brief-now[data-user-state='read']::before { background: var(--error, #ff3b30); }
-.org-brief-body .org-brief-now[data-user-state='working']::before { background: var(--success, #34c759); }
-.org-brief-body .org-brief-now[data-user-state='done']::before { background: var(--accent, #0a84ff); }
-.org-top-updating { font-size: 12px; color: var(--accent, #0a84ff); }
+.org-brief-body .org-brief-now[data-user-state='read']::before { background: var(--error); }
+.org-brief-body .org-brief-now[data-user-state='working']::before { background: var(--success); }
+.org-brief-body .org-brief-now[data-user-state='done']::before { background: var(--accent); }
+.org-top-updating { font-size: var(--font-size-sm); color: var(--accent); }
 /* A line Walnut added for an ask the letter missed: the ask in the task's words, then the note. */
-.org-brief-body li[data-brief-added] .org-brief-now { color: var(--fg-muted, #86868b); }
+.org-brief-body li[data-brief-added] .org-brief-now { color: var(--fg-muted); }

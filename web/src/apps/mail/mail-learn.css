@@ -10,7 +10,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow-hover);
   padding: 12px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .mail-correct-step { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -46,7 +46,7 @@
 /* The why box is the shared AnswerBox (styles/answer-box.css). */
 .mail-correct-why-box { width: 100%; box-sizing: border-box; }
 .mail-correct-why-label { color: var(--fg-secondary); margin-top: 4px; }
-.mail-correct-counter { align-self: flex-end; color: var(--fg-muted); font-size: 12px; }
+.mail-correct-counter { align-self: flex-end; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .mail-correct-field-error { margin: 0; color: var(--error); overflow-wrap: anywhere; }
 .mail-correct-loading { margin: 0; color: var(--fg-muted); }
 
@@ -78,7 +78,7 @@
 .mail-correct-matches {
   padding-left: 28px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
   overflow-wrap: anywhere;
 }
@@ -90,7 +90,7 @@
   border-radius: var(--radius-sm);
   background: var(--accent-subtle);
   color: var(--accent-text);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 16px;
   vertical-align: 1px;
 }
@@ -104,7 +104,7 @@
   box-sizing: border-box;
   padding: 2px 4px 2px 28px;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
   overflow-wrap: anywhere;
 }
@@ -129,14 +129,14 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .mail-correct-sample { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .mail-correct-sample-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-correct-sample-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-correct-sample-meta { color: var(--fg-muted); }
-.mail-correct-shadow { margin: 0; padding-left: 28px; font-size: 12px; color: var(--fg-secondary); overflow-wrap: anywhere; }
-.mail-correct-recipients { margin: 0; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.mail-correct-shadow { margin: 0; padding-left: 28px; font-size: var(--font-size-sm); color: var(--fg-secondary); overflow-wrap: anywhere; }
+.mail-correct-recipients { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
   .mail-correct-spinner { animation: none; }

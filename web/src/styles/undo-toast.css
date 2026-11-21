@@ -6,7 +6,7 @@
 
 .notification-toast-action .notification-toast-kbd {
   margin-left: 8px;
-  font: 500 11px/1 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font: 500 var(--font-size-xs)/1 var(--font-mono);
   color: var(--fg-muted);
   background: none;
   border: none;
@@ -24,7 +24,7 @@
 
 .notification-toast-timer-bar {
   height: 100%;
-  background: var(--success, #3aa757);
+  background: var(--success);
   opacity: 0.55;
   transform-origin: left center;
   animation-name: notification-toast-timer;

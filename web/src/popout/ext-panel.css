@@ -39,14 +39,14 @@
 
 .ext-panel-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .ext-panel-host {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -66,13 +66,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
 .ext-panel-note {
   margin: 6px 12px 0;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 
@@ -94,7 +94,7 @@
 .ext-panel-link {
   all: unset;
   cursor: pointer;
-  color: var(--accent, #8a5a2b);
+  color: var(--accent);
   text-decoration: underline;
 }
 
@@ -106,41 +106,41 @@
 /* The row's head with its Add to Focus, which shows on hover or keyboard focus. */
 /* The hover band is the whole row, Add to Focus included (review R2-8: it was the head's alone,
    narrower than the row, with the button floating outside it). */
-.ext-task-headrow { display: flex; align-items: center; gap: 4px; border-radius: 8px; }
+.ext-task-headrow { display: flex; align-items: center; gap: 4px; border-radius: var(--radius-sm); }
 .ext-task:not(.is-open) .ext-task-headrow:hover { background: var(--hover-bg, var(--bg-secondary)); }
 .ext-task-headrow > .ext-task-head { flex: 1; min-width: 0; }
 .ext-task-focus.is-row { flex: none; margin-right: 6px; opacity: 0; pointer-events: none; transition: opacity 0.12s ease; }
 .ext-task-headrow:hover .ext-task-focus.is-row, .ext-task-focus.is-row:focus-visible, .ext-task.is-open .ext-task-focus.is-row { opacity: 1; pointer-events: auto; }
 .ext-task.is-open .ext-task-focus.is-row { display: none; }
-.ext-task-infocus { flex: none; margin-right: 10px; font-size: 11px; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
-.ext-task-replied { font-size: 11.5px; color: var(--fg-secondary, var(--fg)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-task-infocus { flex: none; margin-right: 10px; font-size: var(--font-size-xs); color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 6px; }
+.ext-task-replied { font-size: var(--font-size-sm); color: var(--fg-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-approval { display: flex; flex-direction: column; gap: 4px; margin: 0 6px 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); }
 .ext-approval-what { font-weight: 600; overflow-wrap: anywhere; }
-.ext-approval-who { font-size: 12px; color: var(--fg-muted); }
+.ext-approval-who { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-approval .approval-actions { justify-content: flex-end; }
-.ext-tasks-note { font-size: 12px; color: var(--fg-muted); }
+.ext-tasks-note { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-tasks-lists { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 12px; }
 .ext-tasks-section { padding: 6px 0; }
-.ext-tasks-heading { display: flex; align-items: baseline; gap: 6px; margin: 6px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.ext-tasks-heading { display: flex; align-items: baseline; gap: 6px; margin: 6px 12px 4px; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); }
 .ext-tasks-count { font-weight: 400; }
-.ext-tasks-empty { margin: 2px 12px 6px; font-size: 12px; color: var(--fg-muted); }
-.ext-task { border-radius: 8px; margin: 0 6px; }
+.ext-tasks-empty { margin: 2px 12px 6px; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.ext-task { border-radius: var(--radius-sm); margin: 0 6px; }
 .ext-task.is-open { background: var(--bg-secondary); }
-.ext-task-head { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
+.ext-task-head { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
 .ext-task-dot { flex: 0 0 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
 .ext-task-dot.state-needs { background: var(--error); }
-.ext-task-dot.state-working { background: var(--accent, #3b82f6); }
+.ext-task-dot.state-working { background: var(--accent); }
 .ext-task-text { display: flex; flex-direction: column; min-width: 0; }
-.ext-task-title { font-size: 13px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.ext-task-line { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-task-title { font-size: var(--font-size-md); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ext-task-line { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-task-reply { padding: 0 8px 8px 24px; display: flex; flex-direction: column; gap: 6px; }
 /* The reply's field draws no frame of its own: AnswerBox's box is the one frame (review R2-8: a
    second border inside it). */
-.ext-task-input { font-size: 13px; }
+.ext-task-input { font-size: var(--font-size-md); }
 .ext-task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ext-tasks-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: 13px; color: var(--fg-muted); }
-.ext-tasks-updating { margin: 4px 12px 0; font-size: 12px; color: var(--fg-muted); }
-.ext-task-asked { font-size: 12.5px; line-height: 1.45; color: var(--fg-secondary, var(--fg)); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow: auto; }
+.ext-tasks-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: var(--font-size-md); color: var(--fg-muted); }
+.ext-tasks-updating { margin: 4px 12px 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.ext-task-asked { font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow: auto; }
 .ext-task-asked p { margin: 0; overflow-wrap: anywhere; }
 .ext-task-asked p + p, .ext-task-said + .ext-task-said { margin-top: 4px; }
 .ext-task-said :is(ul, ol) { margin: 2px 0; padding-left: 18px; }
@@ -149,15 +149,15 @@
 
 /* ── the page's selection in a conversation already going (Ask) ── */
 /* Inset in the composer's card (radius 14px); a quote, so a grey quote line, never a coloured bar. */
-.ext-panel-selection { display: flex; align-items: flex-start; gap: 6px; width: auto; margin: 6px 6px 0; box-sizing: border-box; padding: 4px 6px 4px 8px; border-left: 2px solid var(--border-strong); border-radius: 8px; background: var(--bg-secondary); font-size: 12px; color: var(--fg); }
+.ext-panel-selection { display: flex; align-items: flex-start; gap: 6px; width: auto; margin: 6px 6px 0; box-sizing: border-box; padding: 4px 6px 4px 8px; border-left: 2px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-secondary); font-size: var(--font-size-sm); color: var(--fg); }
 .ext-panel-selection-text { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ext-panel-selection-label { color: var(--fg-muted); }
-.ext-panel-selection-drop { flex: 0 0 auto; border: 0; background: none; color: var(--fg-muted); font-size: 15px; line-height: 1; padding: 0 2px; cursor: pointer; border-radius: 4px; }
-.ext-panel-selection-drop:hover { color: var(--fg); background: var(--bg-hover, rgba(0,0,0,.06)); }
+.ext-panel-selection-drop { flex: 0 0 auto; border: 0; background: none; color: var(--fg-muted); font-size: var(--font-size-lg); line-height: 1; padding: 0 2px; cursor: pointer; border-radius: var(--radius-xs); }
+.ext-panel-selection-drop:hover { color: var(--fg); background: var(--bg-hover); }
 /* Under the person's bubble: what it took from the page. */
 /* Inside the person's (accent) bubble: a quiet inset of what the message took from the page. */
-.ext-panel-attached { margin: 8px 0 0; padding: 6px 9px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); color: inherit; font-size: 12px; line-height: 1.45; text-align: left; }
-.ext-panel-attached figcaption { font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 2px; }
+.ext-panel-attached { margin: 8px 0 0; padding: 6px 9px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.16); color: inherit; font-size: var(--font-size-sm); line-height: 1.45; text-align: left; }
+.ext-panel-attached figcaption { font-size: var(--font-size-xs); font-weight: 600; opacity: 0.85; margin-bottom: 2px; }
 .ext-panel-attached blockquote { margin: 0; padding: 0 0 0 8px; border-left: 2px solid rgba(255, 255, 255, 0.55); opacity: 0.95; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 
 :root[data-theme="dark"] .ext-panel { --accent: #a8733f; --accent-hover: #bb8650; --accent-subtle: rgba(216, 162, 106, 0.14); --accent-text: #d8a26a; }
@@ -196,15 +196,15 @@
   overflow: hidden;
 }
 .ext-ask-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 52px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--border); }
-.ext-ask-head .ask-walnut-menu-btn { width: 30px; height: 30px; border-radius: 8px; color: var(--fg-secondary); }
+.ext-ask-head .ask-walnut-menu-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); color: var(--fg-secondary); }
 .ext-ask-head .ask-walnut-menu-btn svg { width: 18px; height: 18px; }
 .ext-ask-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-left: 4px; }
 .ext-ask-title { font-weight: 650; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ext-ask-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--fg-muted); cursor: pointer; border-radius: 5px; }
+.ext-ask-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); cursor: pointer; border-radius: var(--radius-xs); }
 .ext-ask-agent:hover { color: var(--fg); }
 .ext-ask-agent.is-plain { cursor: default; }
-.ext-ask-titles.is-popup .ext-ask-agent { font-size: 15px; color: var(--fg); font-weight: 650; }
-.ext-ask-icon { flex: none; position: relative; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--fg-secondary); cursor: pointer; }
+.ext-ask-titles.is-popup .ext-ask-agent { font-size: var(--font-size-lg); color: var(--fg); font-weight: 650; }
+.ext-ask-icon { flex: none; position: relative; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: none; color: var(--fg-secondary); cursor: pointer; }
 .ext-ask-icon:hover { background: var(--hover-bg); color: var(--walnut-accent); }
 .ext-ask-icon:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 .ext-ask-key.is-pressed { background: var(--hover-bg); color: var(--walnut-accent); }
@@ -213,7 +213,7 @@
 
 /* The composer's chips, in its bottom row after "+" (SessionPanel / DraftSessionPanel `composerBar`). */
 .ext-chips { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
-.ext-chip { flex: 0 1 auto; min-width: 0; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-secondary); color: var(--fg-secondary); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+.ext-chip { flex: 0 1 auto; min-width: 0; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-secondary); color: var(--fg-secondary); font: inherit; font-size: var(--font-size-sm); white-space: nowrap; cursor: pointer; }
 .ext-chip.is-on { border-color: color-mix(in srgb, var(--walnut-accent) 45%, transparent); background: var(--hover-bg); color: var(--walnut-accent); }
 .ext-chip-page { max-width: 220px; padding: 0 4px 0 0; overflow: hidden; }
 /* The page chip says what it is: a page icon, the word "Page", then the page's name (2026-11-09). */
@@ -223,32 +223,32 @@
 .ext-chip-page:not(.is-on) { opacity: .75; }
 .ext-chip-body { min-width: 0; height: 100%; display: inline-flex; align-items: center; gap: 5px; padding: 0 2px 0 5px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .ext-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ext-chip-fav { flex: none; width: 14px; height: 14px; border-radius: 4px; background: #2f6f8f; color: #fff; font-size: 8.5px; font-weight: 700; display: grid; place-items: center; }
+.ext-chip-fav { flex: none; width: 14px; height: 14px; border-radius: var(--radius-xs); background: #2f6f8f; color: var(--on-accent); font-size: 8.5px; font-weight: 700; display: grid; place-items: center; }
 .ext-chip-x { flex: none; width: 16px; height: 16px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--fg-muted); font-size: 14px; line-height: 1; cursor: pointer; }
 .ext-chip-x:hover { color: var(--fg); background: var(--bg-secondary); }
 .ext-chip-act { flex: none; }
 .ext-chip:focus-visible, .ext-chip-body:focus-visible, .ext-chip-x:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 
 /* What a message took from the page, in the person's bubble. */
-.ext-panel-attached-page { display: flex; align-items: center; gap: 5px; margin-top: 6px; padding: 4px 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.16); font-size: 11.5px; line-height: 1.35; overflow: hidden; white-space: nowrap; }
+.ext-panel-attached-page { display: flex; align-items: center; gap: 5px; margin-top: 6px; padding: 4px 8px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.16); font-size: var(--font-size-sm); line-height: 1.35; overflow: hidden; white-space: nowrap; }
 .ext-panel-attached-page-ic { flex: none; display: inline-flex; }
 .ext-panel-attached-page-ic svg { width: 12px; height: 12px; }
 .ext-panel-attached-page-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* The drawer's foot rows (Tasks, Passwords, Open Walnut). */
-.ext-drawer-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 14px; border: 0; background: none; color: var(--fg); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.ext-drawer-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 14px; border: 0; background: none; color: var(--fg); font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer; }
 .ext-drawer-row:hover { background: var(--hover-bg); }
 .ext-drawer-row-ic { flex: none; width: 18px; display: inline-grid; place-items: center; color: var(--fg-secondary); }
 .ext-drawer-row-label { flex: 1; min-width: 0; }
-.ext-drawer-count { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--error); color: #fff; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
-.ext-drawer-meta { flex: none; font-size: 12px; color: var(--fg-muted); }
+.ext-drawer-count { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--error); color: var(--on-accent); font-size: var(--font-size-xs); font-weight: 700; display: grid; place-items: center; }
+.ext-drawer-meta { flex: none; font-size: var(--font-size-sm); color: var(--fg-muted); }
 
 /* The toolbar popup: the asks to continue over the composer. */
 .ext-ask.is-popup .ext-ask-head { min-height: 46px; }
 .ext-popup-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ext-continue { flex: 1; min-height: 0; overflow: auto; padding: 8px 0 4px; }
-.ext-continue-label { margin: 6px 12px 4px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
-.ext-continue-empty { margin: 8px 12px; font-size: 12px; color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
+.ext-continue-label { margin: 6px 12px 4px; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); }
+.ext-continue-empty { margin: 8px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
 .ext-continue-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 12px 7px 10px; border: 0; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
 .ext-continue-row:hover { background: var(--hover-bg); }
 .ext-continue.is-panel { flex: 0 1 auto; max-height: 45%; padding-top: 4px; }
@@ -258,7 +258,7 @@
    38 px, and the Continue rows covered the quote's ×). In a conversation the chat takes what is
    left, its messages scroll, and the approvals are held to part of the view. */
 .ext-ask.is-fresh > .ext-panel-chat { flex: 1 0 auto; }
-.ext-continue-row .ask-walnut-drawer-item-time { flex: none; margin-top: 2px; font-size: 11px; color: var(--fg-muted); }
+.ext-continue-row .ask-walnut-drawer-item-time { flex: none; margin-top: 2px; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .ext-popup-composer { flex: none; display: flex; flex-direction: column; }
 .ext-popup-composer .draft-session-panel { flex: none; min-height: 0; }
 .ext-popup-composer .draft-session-body { display: none; }
@@ -272,21 +272,21 @@
 .ext-ask-approvals:has(.approval-detail[open]) { max-height: 65%; }
 .ext-ask-approval { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 6px; padding: 8px 8px 8px 10px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-secondary); }
 .ext-ask-approval.is-mine { background: var(--hover-bg); }
-.ext-ask-approval-what { grid-column: 1 / -1; font-size: 12.5px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
-.ext-ask-approval-who { min-width: 0; font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-ask-approval-what { grid-column: 1 / -1; font-size: var(--font-size-md); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.ext-ask-approval-who { min-width: 0; font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-ask-approval .approval-actions { margin-top: 0; gap: 6px; flex-wrap: nowrap; justify-self: end; }
-.ext-ask-approval .approval-actions .approval-btn { padding: 4px 10px; font-size: 12px; }
+.ext-ask-approval .approval-actions .approval-btn { padding: 4px 10px; font-size: var(--font-size-sm); }
 /* The whole request under the title's row, across the card. */
 .ext-ask-approval > .approval-detail { grid-column: 1 / -1; margin-top: 0; min-width: 0; }
 .ext-ask-approval > .approval-detail summary { width: max-content; }
 /* On the card's own colour, the text sits on the view's: it reads as a box of its own. */
-.ext-ask-approval > .approval-detail pre { max-height: 160px; margin-top: 4px; background: var(--bg); border: 1px solid var(--border); font-family: inherit; font-size: 12px; line-height: 1.45; }
+.ext-ask-approval > .approval-detail pre { max-height: 160px; margin-top: 4px; background: var(--bg); border: 1px solid var(--border); font-family: inherit; font-size: var(--font-size-sm); line-height: 1.45; }
 /* The card's notes and a failed answer, under the words and buttons. */
 .ext-approval-lines { grid-column: 1 / -1; min-width: 0; }
-.ext-approval-lines .approval-note, .ext-approval-lines .approval-error { font-size: 11.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.ext-approval-lines .approval-note, .ext-approval-lines .approval-error { font-size: var(--font-size-sm); line-height: 1.4; overflow-wrap: anywhere; }
 /* Approvals that read the same say which of them each is, and when it was asked (alikeLines). */
-.ext-approval-alike { display: block; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; color: var(--fg-secondary, var(--fg)); }
-.ext-ask-approvals-more { align-self: flex-start; padding: 0 2px; border: 0; background: none; font: inherit; font-size: 12px; color: var(--walnut-accent); cursor: pointer; text-decoration: underline; }
+.ext-approval-alike { display: block; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; color: var(--fg-secondary); }
+.ext-ask-approvals-more { align-self: flex-start; padding: 0 2px; border: 0; background: none; font: inherit; font-size: var(--font-size-sm); color: var(--walnut-accent); cursor: pointer; text-decoration: underline; }
 
 /* ── the first page (ExtHome, design option A): New task, the relay, Home's task panel ── */
 .ext-home { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -294,21 +294,21 @@
 .ext-home-head { gap: 2px; }
 .ext-home-brand { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding-left: 2px; }
 .ext-home-mark { flex: none; width: 22px; height: 22px; border-radius: 6px; }
-.ext-home-name { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.ext-home-name { font-weight: 700; font-size: var(--font-size-lg); letter-spacing: -0.01em; }
 .ext-home-composer { flex: none; padding: 8px 8px 4px; }
 .ext-home-composer .draft-session-panel { flex: none; min-height: 0; background: none; }
 .ext-home-notes { flex: none; padding: 0 8px; }
 .ext-home-notes:empty { display: none; }
-.ext-home-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 4px 0; font-size: 12px; color: var(--fg-muted); }
+.ext-home-note { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 4px 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-home-tasks { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ext-home-tasks > .todo-panel { flex: 1; min-height: 0; }
 /* Home's own controls for Home's layout have no place here: the panel is the only list. */
 .ext-home .todo-panel-hide, .ext-home .todo-panel-board { display: none; }
-.ext-home-loading { display: flex; align-items: center; gap: 8px; margin: 14px 12px; font-size: 13px; }
+.ext-home-loading { display: flex; align-items: center; gap: 8px; margin: 14px 12px; font-size: var(--font-size-md); }
 .ext-panel-detail { flex: 1; min-height: 0; overflow: auto; }
 
 /* The relay pill in the header: green while agents may use the browser, blue while one acts here. */
-.ext-relay-pill { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border: 1px solid transparent; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--bg-secondary); color: var(--fg-muted); }
+.ext-relay-pill { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px 0 7px; border: 1px solid transparent; border-radius: 999px; font: inherit; font-size: var(--font-size-sm); font-weight: 600; cursor: pointer; background: var(--bg-secondary); color: var(--fg-muted); }
 .ext-relay-pill.is-on { background: rgba(34, 160, 80, 0.12); color: #1f8a46; }
 .ext-relay-pill.is-tab { background: rgba(37, 99, 235, 0.12); color: #2457c5; }
 .ext-relay-pill.is-open { border-color: currentColor; }
@@ -323,19 +323,19 @@
 }
 
 /* The relay panel under the pill (useMenuPlacement places it; solid in both themes). */
-.ext-relay-panel { position: fixed; z-index: 60; left: 8px; width: auto; max-width: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); font-size: 12.5px; }
+.ext-relay-panel { position: fixed; z-index: 60; left: 8px; width: auto; max-width: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); font-size: var(--font-size-md); }
 .ext-relay-head { display: flex; align-items: center; gap: 8px; }
 .ext-relay-title { flex: 1; font-weight: 700; font-size: 14px; }
-.ext-relay-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
+.ext-relay-switch { display: inline-flex; align-items: center; gap: 6px; font-size: var(--font-size-md); cursor: pointer; }
 .ext-relay-note { margin: 0 0 4px; color: var(--fg-muted); line-height: 1.4; }
-.ext-relay-label { margin: 6px 0 2px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); }
-.ext-relay-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 8px; }
+.ext-relay-label { margin: 6px 0 2px; font-size: var(--font-size-xs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); }
+.ext-relay-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: var(--radius-sm); }
 .ext-relay-row.is-here { background: var(--hover-bg); }
-.ext-relay-row .ext-chip-fav { width: 18px; height: 18px; font-size: 10px; border-radius: 5px; }
+.ext-relay-row .ext-chip-fav { width: 18px; height: 18px; font-size: var(--font-size-xs); border-radius: var(--radius-xs); }
 .ext-relay-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ext-relay-row-name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ext-relay-row-what { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ext-relay-row-btn { flex: none; padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--bg); color: var(--walnut-accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ext-relay-row-what { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-relay-row-btn { flex: none; padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--walnut-accent); font: inherit; font-size: var(--font-size-sm); font-weight: 600; cursor: pointer; }
 .ext-relay-row-btn:hover { background: var(--hover-bg); }
 .ext-relay-row-btn.is-stop { color: var(--error); }
 .ext-relay-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -344,14 +344,14 @@
 .ext-relay-strip { flex: none; display: flex; align-items: center; gap: 8px; margin: 2px 8px 6px; padding: 7px 8px 7px 10px; border: 1px solid rgba(37, 99, 235, 0.25); border-radius: 10px; background: rgba(37, 99, 235, 0.07); }
 .ext-relay-strip-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
 .ext-relay-strip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.ext-relay-strip-title { font-size: 12.5px; font-weight: 650; }
-.ext-relay-strip-what { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-relay-strip-title { font-size: var(--font-size-md); font-weight: 650; }
+.ext-relay-strip-what { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* A task opened from the first page: Back, its title, its state and project. */
-.ext-taskpage-back { flex: none; display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 8px 0 4px; border: 0; border-radius: 8px; background: none; color: var(--walnut-accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.ext-taskpage-back { flex: none; display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--walnut-accent); font: inherit; font-size: var(--font-size-md); font-weight: 600; cursor: pointer; }
 .ext-taskpage-back:hover { background: var(--hover-bg); }
 .ext-taskpage-back:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
-.ext-taskpage-line { font-size: 11.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-taskpage-line { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-taskpage-state { font-weight: 600; }
 .ext-taskpage-state.state-needs { color: var(--error); }
 .ext-taskpage-state.state-working { color: #1f8a46; }
@@ -372,9 +372,9 @@
    seen as the controls they are: "Bypass" and "Auto" as bare grey words were missed. */
 html body .is-plain-chat-pickers .mode-toggle-pill, html body .is-plain-chat-pickers .composer-model-pill {
   height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px;
-  background: var(--bg-secondary); color: var(--fg-secondary); font-size: 11.5px; font-weight: 600; line-height: 1;
+  background: var(--bg-secondary); color: var(--fg-secondary); font-size: var(--font-size-sm); font-weight: 600; line-height: 1;
 }
-.is-plain-chat-pickers .mode-toggle-pill .mode-toggle-pill-label { font-family: inherit; font-size: 11.5px; font-weight: 600; }
+.is-plain-chat-pickers .mode-toggle-pill .mode-toggle-pill-label { font-family: inherit; font-size: var(--font-size-sm); font-weight: 600; }
 html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-chat-pickers .composer-model-pill:hover { color: var(--walnut-accent); background: var(--hover-bg); }
 /* Where the bar has no room for them beside its own controls (the first page's grown composer, with
    Act in this tab and Save as todo; any bar under 420 px), they take a line of their own over it. */
@@ -389,7 +389,7 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 .ext-home-pills .ext-panel-selection { margin: 0; }
 .ext-home-pills .ext-chips { overflow: visible; }
 .ext-home-pills .ext-chip-page { max-width: 100%; }
-.ext-home-act { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg-secondary, var(--fg)); cursor: pointer; white-space: nowrap; }
+.ext-home-act { display: inline-flex; align-items: center; gap: 7px; font-size: var(--font-size-md); color: var(--fg-secondary); cursor: pointer; white-space: nowrap; }
 /* "Save as todo" or "Todo" as Home picks them (the controls row's container query): beside the
    side bar a 400 px panel gives the row about 330 px, where "Todo" leaves the send arrow its room. */
 /* Home's phone label on a row is drawn by Home's phone shell; here the row's red dot says it. */
@@ -401,7 +401,7 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 .ext-home.is-c > .ext-home-tasks { flex: 1; min-height: 0; }
 /* As C draws it: the tab bar over the search box. */
 .ext-home.is-c .todo-panel > .todo-section-tabs { order: -1; }
-.ext-home.is-c .todo-section-tabs-menu-label { margin-right: 2px; font-size: 12px; font-weight: 600; }
+.ext-home.is-c .todo-section-tabs-menu-label { margin-right: 2px; font-size: var(--font-size-sm); font-weight: 600; }
 .ext-home.is-c > .ext-relay-strip { margin: 6px 8px 2px; }
 .ext-home.is-c > .ext-home-notes { padding: 2px 8px 0; }
 .ext-home.is-c > .ext-home-composer { padding: 6px 8px 10px; border-top: 1px solid var(--border); background: var(--bg); }
@@ -414,8 +414,8 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 .ext-home-composer.is-docked .ext-home-dock-chip { order: 2; }
 .ext-home-composer.is-docked .chat-send-group { order: 3; }
 .ext-home-composer.is-docked .chat-input-controls > :not(.chat-plus-group):not(.chat-send-group):not(.ext-home-dock-chip) { display: none; }
-.ext-home-dock-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 132px; height: 26px; padding: 0 9px 0 5px; border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
-.ext-home-dock-chip .ext-chip-fav { width: 16px; height: 16px; font-size: 9.5px; border-radius: 4px; background: none; color: inherit; }
+.ext-home-dock-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 132px; height: 26px; padding: 0 9px 0 5px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--font-size-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.ext-home-dock-chip .ext-chip-fav { width: 16px; height: 16px; font-size: 9.5px; border-radius: var(--radius-xs); background: none; color: inherit; }
 .ext-home-dock-chip .ext-chip-fav svg { width: 13px; height: 13px; }
 /* Grown: the full composer; its controls get room in a 400 px popup (review round 5, Sol #4). */
 .ext-home-composer.is-grown .chat-input-controls { gap: 4px; padding-right: 2px; }
@@ -435,7 +435,7 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 /* ── Browser control (ExtControl.tsx), the side bar's third entry ── */
 .ext-control { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ext-control-head { gap: 6px; }
-.ext-control-title { flex: 1; min-width: 0; font-weight: 700; font-size: 15px; padding-left: 6px; }
+.ext-control-title { flex: 1; min-width: 0; font-weight: 700; font-size: var(--font-size-lg); padding-left: 6px; }
 .ext-control-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 10px 16px; display: flex; flex-direction: column; gap: 10px; }
 .ext-control-status { display: flex; align-items: center; gap: 12px; margin-top: 6px; padding: 14px 14px; border: 1px solid var(--border); border-radius: 14px; color: var(--fg-muted); }
 .ext-control-status.is-on { background: rgba(34, 160, 80, .08); border-color: rgba(34, 160, 80, .35); color: #1f8a46; }
@@ -444,18 +444,18 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 .ext-control-status.is-off .ext-control-status-dot { background: none; border: 2px solid currentColor; box-sizing: border-box; }
 .ext-control-status-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ext-control-status-title { font-size: 16px; font-weight: 700; color: var(--fg); }
-.ext-control-status-line { font-size: 12.5px; line-height: 1.4; color: var(--fg-muted); }
-.ext-control-group { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.ext-control-status-line { font-size: var(--font-size-md); line-height: 1.4; color: var(--fg-muted); }
+.ext-control-group { display: flex; flex-direction: column; gap: 2px; font-size: var(--font-size-md); }
 .ext-control-tab { display: flex; flex-direction: column; }
-.ext-control-recent { margin: 0 6px 4px 32px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; color: var(--fg-muted); }
+.ext-control-recent { margin: 0 6px 4px 32px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-control-recent li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-control-recent li::before { content: '↳ '; opacity: .7; }
-.ext-control-setting { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+.ext-control-setting { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: var(--radius-sm); cursor: pointer; }
 .ext-control-setting:hover { background: var(--hover-bg); }
 .ext-control-setting-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .ext-control-setting-name { font-weight: 600; color: var(--fg); }
-.ext-control-setting-line { font-size: 11.5px; color: var(--fg-muted); }
-.ext-control-more { align-self: flex-start; margin: 4px 6px 0; font-size: 12.5px; }
+.ext-control-setting-line { font-size: var(--font-size-sm); color: var(--fg-muted); }
+.ext-control-more { align-self: flex-start; margin: 4px 6px 0; font-size: var(--font-size-md); }
 @media (prefers-color-scheme: dark) {
   .ext-control-status.is-on { color: #4cc27a; }
   .ext-control-status.is-tab { color: #7aa7ff; }

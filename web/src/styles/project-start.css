@@ -25,10 +25,10 @@
   max-width: 140px;
   margin-left: 6px;
   padding: 0 6px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -47,9 +47,9 @@
   margin-top: 4px;
   padding: 5px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--accent-subtle);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
 }
 .draft-work-in-suggest-text { flex: 1 1 180px; min-width: 0; }
@@ -60,7 +60,7 @@
   padding: 0 9px;
   border-radius: 6px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 /* Both quiet: a suggestion, not a call to action. */
@@ -68,7 +68,7 @@
 .draft-work-in-suggest-keep { border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
 .draft-work-in-suggest-use { color: var(--accent); }
 .draft-work-in-suggest-use:hover,
-.draft-work-in-suggest-keep:hover { background: var(--bg-hover, var(--bg-secondary)); }
+.draft-work-in-suggest-keep:hover { background: var(--bg-hover); }
 
 /* The value chips: one line per array input, wrapping inside the column. */
 .draft-project-source-row {
@@ -82,7 +82,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .draft-source-field-label { color: var(--fg-muted); margin-right: 2px; }
 .draft-source-value {
@@ -94,11 +94,11 @@
   padding: 0 2px 0 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--accent-subtle, var(--bg-secondary));
+  background: var(--accent-subtle);
   color: var(--fg);
 }
 .draft-source-value-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.draft-source-star { color: var(--accent); font-size: 10px; }
+.draft-source-star { color: var(--accent); font-size: var(--font-size-xs); }
 .draft-source-remove,
 .draft-source-add {
   border: none;
@@ -114,7 +114,7 @@
   padding: 0;
   line-height: 1;
 }
-.draft-source-remove:hover { background: var(--bg-hover, var(--border)); color: var(--fg); }
+.draft-source-remove:hover { background: var(--bg-hover); color: var(--fg); }
 .draft-source-add {
   height: 22px;
   padding: 0 8px;
@@ -129,28 +129,28 @@
   min-width: 220px;
   max-width: 360px;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-elevated, var(--bg));
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   padding: 4px 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
   z-index: 1200;
 }
 .work-in-picker { width: 380px; padding: 0 0 4px; }
-.psp-title-small { font-size: 11px; font-weight: 500; color: var(--fg-muted); padding: 4px 10px 2px; }
+.psp-title-small { font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted); padding: 4px 10px 2px; }
 .psp-search {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
   outline: none;
@@ -159,7 +159,7 @@
 .psp-search:focus { border-color: var(--accent); }
 .psp-group {
   padding: 8px 10px 2px;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--fg-muted);
@@ -192,9 +192,9 @@
   flex-direction: column;
   gap: 6px;
   padding: 8px 8px 6px;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
 }
-.wip-tabs { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bg-secondary); }
+.wip-tabs { display: flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: var(--bg-secondary); }
 .wip-tab {
   flex: 1;
   height: 24px;
@@ -203,13 +203,13 @@
   background: none;
   color: var(--fg-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
-.wip-tab.is-on { background: var(--bg-elevated, var(--bg)); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.wip-tab.is-on { background: var(--bg-elevated); color: var(--fg); font-weight: 600; box-shadow: var(--shadow-sm); }
 .wip-list { display: flex; flex-direction: column; padding: 0 4px; }
-.wip-row { position: relative; display: flex; align-items: center; border-radius: 8px; }
-.wip-row:hover, .wip-row:focus-within { background: var(--bg-hover, var(--accent-subtle)); }
+.wip-row { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
+.wip-row:hover, .wip-row:focus-within { background: var(--bg-hover); }
 .wip-row.is-current { background: var(--accent-subtle); }
 .wip-pick {
   flex: 1;
@@ -237,7 +237,7 @@
 }
 .wip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .wip-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wip-line { color: var(--fg-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wip-line { color: var(--fg-muted); font-size: var(--font-size-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-in-check { flex: none; color: var(--accent); }
 .wip-row .draft-work-in-project-tag { margin-left: 0; }
 /* "Set up source…": one small action, shown on the row under the pointer or the keyboard. */
@@ -281,12 +281,12 @@
   position: sticky;
   bottom: -4px;
   z-index: 1;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
 }
 .wip-host strong { color: var(--fg); font-weight: 500; }
-.wip-host:hover, .wip-browse:hover { color: var(--fg); background: var(--bg-hover, var(--accent-subtle)); }
+.wip-host:hover, .wip-browse:hover { color: var(--fg); background: var(--bg-hover); }
 /* The hover tint is see-through: over the sticky row's solid ground, never over the rows behind it. */
-.wip-host:hover { background: linear-gradient(var(--bg-hover, var(--accent-subtle)), var(--bg-hover, var(--accent-subtle))) var(--bg-elevated, var(--bg)); }
+.wip-host:hover { background: linear-gradient(var(--bg-hover), var(--bg-hover)) var(--bg-elevated); }
 .wip-caret { margin-left: auto; }
 
 /* Project settings: Code source. */
@@ -299,35 +299,35 @@
   background: none;
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .pcs-choice.is-picked { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
-.pcs-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.pcs-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-sm); }
 .pcs-field-label { color: var(--fg-muted); }
 .pcs-input {
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .pcs-input:focus { outline: none; border-color: var(--accent); }
 .pcs-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .pcs-chips .pcs-input { width: 140px; }
-.pcs-note { font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
+.pcs-note { font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }
 .pcs-note.is-error { color: var(--error); }
 .pcs-actions { display: flex; gap: 6px; align-items: center; }
 .pcs-save {
   padding: 3px 12px;
   border: 1px solid var(--accent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--on-accent);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .pcs-save:disabled { opacity: 0.5; cursor: default; }

@@ -3,7 +3,7 @@
 
 .host-agent-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; max-width: 100%; margin: 4px 0; }
 .host-agent-fix-button { flex: none; }
-.host-agent-fix-error { flex: 1 1 100%; color: var(--error); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 72px; overflow-y: auto; }
+.host-agent-fix-error { flex: 1 1 100%; color: var(--error); font-size: var(--font-size-sm); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 72px; overflow-y: auto; }
 /* On a row's or the local section's action line, beside the other buttons (rowActionsFor). */
 .nfc-host-list .hpb-row .host-agent-fix,
 .ab-local .setup-alt .host-agent-fix { flex: 0 1 auto; margin: 0; }
@@ -50,14 +50,14 @@
 .hpb-subhead {
   flex: none;
   margin-bottom: 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
 }
 .hpb-subhead-row { flex: none; display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .hpb-subhead-row > .hpb-subhead { margin-bottom: 0; }
 /* How many hosts need attention (shown, scrolled or behind 'and N more'). */
-.hpb-count { font-size: 11px; font-weight: 400; color: var(--fg-muted); white-space: nowrap; }
+.hpb-count { font-size: var(--font-size-xs); font-weight: 400; color: var(--fg-muted); white-space: nowrap; }
 .hpb-header .hpb-count { margin-left: auto; padding-left: 8px; }
 .hpb-scroll {
   flex: 1 1 auto;
@@ -81,7 +81,7 @@
   padding: 0;
   border: none;
   background: none;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   cursor: pointer;
   min-height: 24px;
@@ -107,7 +107,7 @@
   grid-template-areas: 'dot body x';
   align-items: start;
   column-gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
   max-height: 600px;
   transition: max-height 150ms ease, opacity 150ms ease;
@@ -131,7 +131,7 @@
   line-clamp: 2;
   overflow: hidden;
 }
-.hpb-rest { color: var(--fg-secondary, var(--fg-muted)); line-height: 1.45; }
+.hpb-rest { color: var(--fg-secondary); line-height: 1.45; }
 /* Words break between words; a command or a host name never splits mid-token
    unless it cannot fit a line on its own. */
 .nfc-host-list .hft-hint,
@@ -147,13 +147,13 @@
 .hpb-btn:disabled { opacity: 0.6; cursor: default; }
 .hpb-btn:disabled:hover { background: none; color: var(--accent); }
 .hpb-btn-secondary { color: var(--fg-muted); border-color: var(--border); }
-.hpb-btn-secondary:hover { background: var(--bg-tertiary, var(--border)); color: var(--fg); }
+.hpb-btn-secondary:hover { background: var(--bg-tertiary); color: var(--fg); }
 /* .hpb-btn-stack (a label that never changes the button's width) lives in host-status.css. */
 
 /* ── Row bodies ── */
 .hpb-message { line-height: 1.45; }
-.hpb-message code { font-family: var(--font-mono); font-size: 11px; }
-.hpb-last { color: var(--fg-muted); font-size: 12px; }
+.hpb-message code { font-family: var(--font-mono); font-size: var(--font-size-xs); }
+.hpb-last { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .hpb-trying, .hpb-fixing {
   display: flex;
   align-items: center;
@@ -161,7 +161,7 @@
   gap: 6px;
   min-height: 18px;
 }
-.hpb-step, .hpb-elapsed { color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.hpb-step, .hpb-elapsed { color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 .hpb-spinner {
   flex: none;
   width: 11px;
@@ -173,7 +173,7 @@
 }
 @keyframes hpb-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .hpb-spinner { animation: none; } }
-.hpb-receipt, .host-connect-retry-msg { color: var(--fg-muted); font-size: 11px; }
+.hpb-receipt, .host-connect-retry-msg { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .hpb-ready-text { color: var(--success); font-weight: 500; }
 .hpb-ready .hpb-body { justify-content: center; min-height: 18px; }
 
@@ -182,7 +182,7 @@
   border: none;
   background: none;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   text-decoration: underline;
 }
@@ -231,7 +231,7 @@
 /* The bar carries the shared host sentence, not a stack trace: the panel is ~600px wide, so the
    actions sit under the text and the text keeps the session-error font without the 120px scroll clip. */
 .host-gate-bar .session-error-banner-text { font-family: inherit; max-height: none; overflow: visible; }
-.host-gate-body { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.host-gate-body { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-sm); }
 .host-gate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .session-host-error { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .session-host-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
@@ -279,6 +279,6 @@
 /* One copy control in the card (local section and host rows): the text Copy /
    Copied button, a 24px hit target. */
 .nfc-host-list .setup-copy-btn,
-.nfc-local-claude .setup-copy-btn { min-height: 24px; font-size: 11px; display: inline-flex; align-items: center; }
+.nfc-local-claude .setup-copy-btn { min-height: 24px; font-size: var(--font-size-xs); display: inline-flex; align-items: center; }
 /* A row held to its height through an attempt (HostProblemRows useHeightLock): no animation, nothing spills. */
 .hpb-row.hpb-locked { transition: none; overflow: hidden; }

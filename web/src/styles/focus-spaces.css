@@ -11,12 +11,12 @@
 
 .focus-panel { display: flex; flex-direction: column; gap: 8px; }
 .focus-panel-head { display: flex; flex-direction: column; gap: 4px; }
-.focus-panel-title { font-size: 15px; font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
-.focus-panel-detail { font-size: 12px; line-height: 16px; color: var(--fg-muted); overflow-wrap: anywhere; }
-.focus-panel-outside { font-size: 12px; line-height: 16px; color: var(--fg-secondary); margin-top: 4px; }
-.focus-panel-caption { font-size: 11px; font-weight: 600; color: var(--fg-muted); margin-top: 4px; }
-.focus-panel-empty { font-size: 12px; line-height: 16px; color: var(--fg-muted); }
-.focus-panel-error { font-size: 12px; line-height: 16px; color: var(--error); }
+.focus-panel-title { font-size: var(--font-size-lg); font-weight: 600; line-height: 20px; overflow-wrap: anywhere; }
+.focus-panel-detail { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.focus-panel-outside { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-secondary); margin-top: 4px; }
+.focus-panel-caption { font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); margin-top: 4px; }
+.focus-panel-empty { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); }
+.focus-panel-error { font-size: var(--font-size-sm); line-height: 16px; color: var(--error); }
 .focus-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
 /* Layout only: the option rows, ticks and buttons are the card family's (ask-card.css). */
@@ -26,7 +26,7 @@
 .focus-ticks { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
 .focus-ticks .focus-tick-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-block: 4px; }
 .focus-ticks .focus-tick-label { overflow-wrap: anywhere; }
-.focus-ticks .focus-tick-detail { font-size: 12px; font-weight: 400; color: var(--fg-muted); overflow-wrap: anywhere; }
+.focus-ticks .focus-tick-detail { font-size: var(--font-size-sm); font-weight: 400; color: var(--fg-muted); overflow-wrap: anywhere; }
 .focus-length { margin-block: 0; flex-wrap: nowrap; }
 .focus-length .org-answer-check { flex: 1 1 0; justify-content: center; }
 
@@ -51,10 +51,10 @@
   /* Not glass: the page's glass is for portalled overlays only (overlay-glass.css). */
   background: color-mix(in srgb, var(--bg) 96%, transparent);
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
 }
-.focus-column-cover-title { font-size: 13px; font-weight: 500; color: var(--fg); }
+.focus-column-cover-title { font-size: var(--font-size-md); font-weight: 500; color: var(--fg); }
 .main-page-session-column:has(> .focus-column-cover) { position: relative; }
 
 /* Home's task list, while in a focus: one quiet line on top (FocusBanner.tsx). */
@@ -67,13 +67,13 @@
   min-height: 44px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
 }
 .focus-banner svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--accent); }
 .focus-banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .focus-banner-name { font-weight: 600; color: var(--accent); }
-.focus-banner-detail { color: var(--fg-muted); font-size: 12px; }
+.focus-banner-detail { color: var(--fg-muted); font-size: var(--font-size-sm); }
 /* A caption sits as close to its list as to its input (the rows bring their own 4 px). */
 .focus-panel-caption + .focus-form-projects { margin-top: -4px; }
 .focus-banner-actions { margin-block: 0; flex: none; }

@@ -3,7 +3,7 @@
    they would unfolded, set in by the same left rule a tool run's body uses. */
 .no-action-mark {
   padding: 2px 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 

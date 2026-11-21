@@ -49,7 +49,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
   white-space: nowrap;
 }
@@ -74,7 +74,7 @@
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-muted);
   cursor: pointer;
@@ -96,7 +96,7 @@
   height: 28px;
   display: inline-flex;
   align-items: center;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   padding: 0 7px;
   border: none;
@@ -114,11 +114,11 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   padding: 0 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-muted);
 }
@@ -148,7 +148,7 @@
   align-items: center;
   gap: 5px;
   margin-right: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1;
   color: var(--fg-muted);
   white-space: nowrap;
@@ -180,7 +180,7 @@
   border-radius: 50%;
   background: var(--warning);
 }
-.fv-save-state[data-state='held'] { color: var(--priority-important-text, var(--warning)); }
+.fv-save-state[data-state='held'] { color: var(--priority-important-text); }
 
 /* ── The save banner: why a file is not saving, and its choices ───────────── */
 .fv-save-error {
@@ -195,7 +195,7 @@
 .fv-save-error-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .fv-save-error-actions .fv-html-tab { max-width: 100%; white-space: normal; text-align: left; }
 .fv-save-error-actions .fv-html-tab {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   padding: 3px 10px;
   border: 1px solid var(--border-strong);
@@ -209,7 +209,7 @@
 .fv-save-error-actions .fv-retry-save-btn {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .fv-save-error-actions .fv-keep-mine-btn:hover:not(:disabled),
 .fv-save-error-actions .fv-retry-save-btn:hover:not(:disabled) { background: var(--accent-hover); }
@@ -218,7 +218,7 @@
   display: inline-flex;
   padding: 3px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   color: inherit;
   cursor: pointer;
@@ -240,7 +240,7 @@
   border: none;
   background: none;
   color: var(--fg-muted);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   min-width: 28px;
   height: 28px;
   justify-content: center;
@@ -249,7 +249,7 @@
 .sfe-nav-lead .sfe-btn:hover:not(:disabled),
 .sfe-tree-head .sfe-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .sfe-nav-lead .sfe-btn:disabled:hover { background: none; }
-.sfe-nav-lead .sfe-nav-group .sfe-nav-btn { font-size: 17px; line-height: 1; padding: 0 4px; border-radius: 7px; }
+.sfe-nav-lead .sfe-nav-group .sfe-nav-btn { font-size: var(--font-size-xl); line-height: 1; padding: 0 4px; border-radius: var(--radius-sm); }
 .sfe-nav-lead .sfe-nav-group .sfe-nav-btn:last-child { border-left-width: 0; }
 
 /* The path of what is open, as breadcrumbs; click to type a path instead. */
@@ -264,7 +264,7 @@
   border-radius: 6px;
   background: none;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -305,7 +305,7 @@
   border-radius: 6px;
   background: none;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--fg-muted);
   text-align: left;
@@ -342,8 +342,8 @@
   padding: clamp(28px, 22%, 180px) 24px 24px max(24px, calc(50% - 190px));
   text-align: left;
 }
-.sfe-preview-empty-title { font-size: 20px; font-weight: 600; color: var(--fg); }
-.sfe-preview-empty-hint { font-size: 13px; color: var(--fg-muted); }
+.sfe-preview-empty-title { font-size: var(--font-size-2xl); font-weight: 600; color: var(--fg); }
+.sfe-preview-empty-hint { font-size: var(--font-size-md); color: var(--fg-muted); }
 
 /* ── Fitting a narrow pane (data-fit, measured by FileContentView) ────────── */
 /* The lead gives way first, and never to nothing: the tree toggle and ‹ › keep
@@ -393,7 +393,7 @@
 .fv-more-path {
   display: flex;
   max-width: 320px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   color: var(--fg-muted);
   white-space: nowrap;
@@ -457,7 +457,7 @@
 .session-file-explorer-node .sfe-arrow svg { width: 10px; height: 10px; }
 .session-file-explorer-node .sfe-icon { display: inline-flex; align-items: center; color: var(--fg-muted); }
 .session-file-explorer-node .sfe-icon svg { width: 14px; height: 14px; }
-.session-file-explorer-node .sfe-icon[data-kind='dir'] { color: var(--accent-text, var(--fg-muted)); }
+.session-file-explorer-node .sfe-icon[data-kind='dir'] { color: var(--accent-text); }
 .session-file-explorer-node.selected .sfe-icon { color: inherit; }
 
 /* Nothing open: the last few files, one click back in. */
@@ -469,7 +469,7 @@
   margin-top: 22px;
   text-align: left;
 }
-.sfe-recent-label { padding: 0 2px 6px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.sfe-recent-label { padding: 0 2px 6px; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); }
 .sfe-recent-list {
   display: flex;
   flex-direction: column;
@@ -496,8 +496,8 @@
 .sfe-recent-file .sfe-icon { display: inline-flex; color: var(--fg-muted); }
 .sfe-recent-file .sfe-icon svg { width: 15px; height: 15px; }
 .sfe-recent-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.sfe-recent-name { font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sfe-recent-dir { font-size: 11.5px; color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfe-recent-name { font-size: var(--font-size-md); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfe-recent-dir { font-size: var(--font-size-sm); color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The path suggestions float in a portal (SessionFileExplorer PathSuggestions):
    placed by useMenuPlacement, so the old in-flow offsets must not apply. */
@@ -511,7 +511,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 .fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab svg { width: 15px; height: 15px; display: block; }
 .fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab.active { background: var(--bg-tertiary); color: var(--fg); }
@@ -521,7 +521,7 @@
    WebKit. */
 html body .wn-context-menu.fv-more-menu,
 html body .sfe-path-suggest.sfe-path-suggest-floating {
-  background: var(--card-bg, var(--bg));
+  background: var(--card-bg);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

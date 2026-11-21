@@ -7,18 +7,18 @@
 .cc-import-list {
   margin: 4px 0 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   max-height: 180px;
   overflow-y: auto;
   overflow-wrap: anywhere;
 }
 .cc-import-list li { margin: 2px 0; }
-.cc-import-name { color: var(--fg); font-family: var(--font-mono, ui-monospace, monospace); }
+.cc-import-name { color: var(--fg); font-family: var(--font-mono); }
 .cc-import-source { opacity: 0.8; }
 .cc-import-gateway {
   margin: 4px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   overflow-wrap: anywhere;
 }

@@ -59,10 +59,10 @@ html .file-content-view.fv-fullscreen {
      off the bottom of the window. */
   width: auto;
   height: auto;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
-  background: var(--card-bg, var(--bg));
+  background: var(--card-bg);
   /* Above the page and its backdrop (9000) but under what opens FROM it: the
      confirm dialog (9300) and menus (9999). At 10000 both were painted under
      the document in a pop-out tab, where nothing else lifts them. */

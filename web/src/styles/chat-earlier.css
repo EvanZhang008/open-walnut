@@ -7,7 +7,7 @@
 
 .chat-earlier-label {
   padding: 4px 0 8px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--fg-muted);
   text-transform: uppercase;
@@ -20,7 +20,7 @@
 
 .chat-earlier-steps {
   padding: 2px 0 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -41,7 +41,7 @@
 }
 
 .chat-earlier-divider span {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--fg-muted);
   white-space: nowrap;

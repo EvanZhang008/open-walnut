@@ -28,7 +28,7 @@
   gap: 6px;
   min-width: 0;
   height: 16px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 16px;
   color: var(--fg-muted);
   white-space: nowrap;
@@ -73,7 +73,7 @@
   gap: 4px;
   min-height: 28px;
   padding: 0 2px 0 4px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 .worker-fold-item:hover,
 .worker-fold-item:focus-within { background: var(--bg-hover); }
@@ -92,7 +92,7 @@
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -101,7 +101,7 @@
 .worker-fold-icon svg { width: 14px; height: 14px; }
 .worker-fold-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The state gives its room up before the title: the line's icon already says it. */
-.worker-fold-state { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--fg-muted); }
+.worker-fold-state { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .worker-fold-tree { container-type: inline-size; }
 @container (max-width: 240px) { .worker-fold-state { display: none; } }
 /* The actions are icons at the end of a line, the size and colours of the row's start button
@@ -139,7 +139,7 @@
   background: transparent;
   color: var(--worker-fold-ink);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
@@ -164,10 +164,10 @@
   z-index: 10000;
   max-width: min(320px, calc(100vw - 12px));
   padding: 4px 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: rgba(28, 28, 30, 0.95);
-  color: #fff;
-  font-size: 11.5px;
+  color: var(--on-accent);
+  font-size: var(--font-size-sm);
   font-weight: 400;
   line-height: 16px;
   white-space: nowrap;

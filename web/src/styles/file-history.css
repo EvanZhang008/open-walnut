@@ -15,7 +15,7 @@
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
@@ -33,7 +33,7 @@
 }
 
 .fh-title {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -47,17 +47,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 
 .fh-close {
   flex: 0 0 auto;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   padding: 2px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1;
   color: var(--fg-muted);
   cursor: pointer;
@@ -76,14 +76,14 @@
 .fh-same {
   flex: 0 0 auto;
   padding: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
 .fh-error {
   flex: 0 0 auto;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   border-bottom: 1px solid var(--error);
   background: color-mix(in srgb, var(--error) 8%, transparent);
@@ -109,7 +109,7 @@
   padding: 4px 8px;
   border: none;
   background: none;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: left;
   color: var(--fg);
   cursor: pointer;
@@ -126,8 +126,8 @@
 .fh-pill {
   flex: 0 0 auto;
   padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 10px;
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 1.6;
   white-space: nowrap;
@@ -202,7 +202,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-secondary);
 }
 
@@ -210,11 +210,11 @@
   flex: 0 0 auto;
   padding: 3px 10px;
   border: 1px solid var(--accent);
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
 }
 
@@ -225,7 +225,7 @@
 .fh-restore-hint {
   flex: 0 0 auto;
   padding: 0 8px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-muted);
 }
@@ -238,7 +238,7 @@
 
 .fh-diff-table {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 /* ── The flyout the editor mounts the panel in ─────────────────────────────

@@ -9,7 +9,7 @@
 .bg-tasks-light-prompt > summary {
   cursor: pointer;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
 }
 .bg-tasks-light-prompt > pre {
@@ -19,11 +19,11 @@
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
 }
 .bg-tasks-light-label {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -35,7 +35,7 @@
    not code: the chips read in the UI font. In the list the chips take their own line under
    the title; in the reader's head the title keeps its width and the timing line gives way. */
 .bg-task-kind.bg-task-kind--walnut,
-.bg-task-kind.bg-task-kind--host { font-family: inherit; font-size: 10.5px; }
+.bg-task-kind.bg-task-kind--host { font-family: inherit; font-size: var(--font-size-xs); }
 .bg-task-kind.bg-task-kind--walnut { background: rgba(196, 122, 30, 0.14); color: #9A5B12; font-weight: 600; }
 .bg-task-kind.bg-task-kind--host { background: var(--bg-tertiary); color: var(--fg-secondary); }
 [data-theme="dark"] .bg-task-kind.bg-task-kind--walnut { color: #E8A557; }

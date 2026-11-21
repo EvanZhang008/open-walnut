@@ -19,17 +19,17 @@
   background: transparent;
   color: var(--fg-muted);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   cursor: pointer;
 }
-.draft-workspace-hint { margin: 4px 0 0 24px; font-size: 11px; line-height: 1.4; color: var(--fg-muted); }
+.draft-workspace-hint { margin: 4px 0 0 24px; font-size: var(--font-size-xs); line-height: 1.4; color: var(--fg-muted); }
 .draft-workspace-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .draft-workspace-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .draft-workspace-toggle.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
 /* A new draft's switch is a row of its More menu (DraftWorkspaceMenuItem). */
 .draft-workspace-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.draft-workspace-menu-hint { font-size: 11px; color: var(--fg-muted); }
+.draft-workspace-menu-hint { font-size: var(--font-size-xs); color: var(--fg-muted); }
 /* While on: one quiet pill leads the body, its × turns the option off. */
 .draft-workspace-on {
   display: inline-flex;
@@ -39,7 +39,7 @@
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
   border-radius: 999px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   white-space: nowrap;
 }
@@ -55,7 +55,7 @@
   background: transparent;
   color: var(--fg-muted);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1;
   cursor: pointer;
 }
@@ -113,7 +113,7 @@
   background: transparent;
   color: var(--fg-secondary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   cursor: pointer;
 }
@@ -128,7 +128,7 @@
   min-width: 0;
   flex: 1 1 220px;
 }
-.draft-workspace-field-label { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.draft-workspace-field-label { font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; }
 .draft-workspace-input {
   flex: 1 1 auto;
   min-width: 80px;
@@ -138,11 +138,11 @@
   background: var(--bg);
   color: var(--fg);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
 }
 .draft-workspace-input:focus { outline: none; border-color: var(--accent); }
-.draft-workspace-note { font-size: 11px; color: var(--fg-muted); }
+.draft-workspace-note { font-size: var(--font-size-xs); color: var(--fg-muted); }
 .draft-workspace-note.is-warn { color: var(--warning); }
 .draft-workspace-note.is-error { color: var(--error); }
 
@@ -156,7 +156,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-pill-glyph { font-size: 10px; opacity: 0.8; }
+.workspace-pill-glyph { font-size: var(--font-size-xs); opacity: 0.8; }
 .workspace-pill-text.is-quiet { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* Two classes: the shared .todo-item-due-pill (globals.css, loaded later) would grey them out. */
 .workspace-pill.workspace-pill-ok { color: var(--accent); }
@@ -190,8 +190,8 @@
   gap: 8px;
   padding: 2px 12px 6px;
 }
-.workspace-flyout-title { font-size: 12px; font-weight: 600; color: var(--fg); }
-.workspace-flyout-state { font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+.workspace-flyout-title { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg); }
+.workspace-flyout-state { font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; }
 .workspace-flyout-state.is-failed { color: var(--error); }
 .workspace-flyout-state.is-kept { color: var(--warning); }
 .workspace-flyout-state.is-ready { color: var(--accent); }
@@ -202,7 +202,7 @@
 .task-kebab-project-current-name.tone-warn { color: var(--warning); }
 .workspace-flyout-note {
   margin: 0 12px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
   color: var(--fg-secondary);
   overflow-wrap: anywhere;
@@ -214,24 +214,24 @@
   grid-template-columns: 78px minmax(0, 1fr);
   gap: 6px;
   padding: 2px 12px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.45;
 }
 .workspace-fact-label { color: var(--fg-muted); }
 .workspace-fact-value { color: var(--fg); overflow-wrap: anywhere; user-select: text; }
-.workspace-fact-value.is-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; overflow-wrap: break-word; }
+.workspace-fact-value.is-mono { font-family: var(--font-mono); font-size: var(--font-size-xs); overflow-wrap: break-word; }
 /* Breaks only where Breakable put a break (after a slash or a dash): globals.css, loaded later, sets break-all. */
 .workspace-preparing-changed {
-  margin: 10px auto 0; max-width: 460px; font-size: 12.5px; line-height: 1.5; color: var(--fg-secondary); text-align: center; overflow-wrap: anywhere;
+  margin: 10px auto 0; max-width: 460px; font-size: var(--font-size-md); line-height: 1.5; color: var(--fg-secondary); text-align: center; overflow-wrap: anywhere;
 }
-.workspace-preparing-changed code { font-size: 11.5px; }
+.workspace-preparing-changed code { font-size: var(--font-size-sm); }
 .workspace-preparing-panel .workspace-preparing-root { overflow-wrap: break-word; word-break: normal; }
 .workspace-repos { display: flex; flex-wrap: wrap; gap: 3px 4px; }
 .workspace-repo {
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   color: var(--fg-secondary);
 }
 .workspace-flyout .task-kebab-item { margin-top: 2px; }
@@ -243,7 +243,7 @@
    is monospace with break-all, which split words mid-way ("beta-w / ebkit"). */
 .workspace-preparing-panel .workspace-preparing-progress,
 .workspace-preparing-panel .workspace-preparing-error {
-  font-family: inherit; font-size: 12px; word-break: normal; overflow-wrap: anywhere; max-width: 420px;
+  font-family: inherit; font-size: var(--font-size-sm); word-break: normal; overflow-wrap: anywhere; max-width: 420px;
 }
 .workspace-preparing-panel .workspace-preparing-progress { color: var(--fg-secondary); }
 .workspace-preparing-panel .workspace-preparing-error { color: var(--error); white-space: pre-wrap; }
@@ -256,9 +256,9 @@
   margin: 6px 12px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary, transparent);
-  font-size: 11.5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   min-width: 0;
   text-align: left;
@@ -269,7 +269,7 @@
 .workspace-preparing-panel .pending-session-actions .pending-session-dismiss-btn { margin-top: 0; }
 .workspace-preparing-panel .script-run-card { margin: 12px auto 0; max-width: min(460px, 100%); width: 100%; box-sizing: border-box; }
 .script-run-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; min-width: 0; }
-.script-run-role { color: var(--fg-muted); font-size: 10.5px; white-space: nowrap; }
+.script-run-role { color: var(--fg-muted); font-size: var(--font-size-xs); white-space: nowrap; }
 .script-run-name { font-weight: 600; color: var(--fg); flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .script-run-status { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); white-space: nowrap; max-width: 100%; }
 .script-run-card.is-done .script-run-status { color: var(--success); }
@@ -280,18 +280,18 @@
 .script-run-card.is-skipped .script-run-status { flex: 1 1 10em; min-width: 0; justify-content: flex-end; }
 /* Waiting for the user's OK is no failure: amber, not red. */
 .script-run-card[data-untrusted] .script-run-status { color: var(--warning); }
-.script-run-reason { color: var(--fg-secondary); font-size: 11px; line-height: 1.4; }
+.script-run-reason { color: var(--fg-secondary); font-size: var(--font-size-xs); line-height: 1.4; }
 .script-run-command,
 .script-run-progress {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .script-run-progress { color: var(--fg-muted); }
-.script-run-output summary { cursor: pointer; color: var(--fg-muted); font-size: 11px; user-select: none; }
+.script-run-output summary { cursor: pointer; color: var(--fg-muted); font-size: var(--font-size-xs); user-select: none; }
 .script-run-output summary:hover { color: var(--fg); }
 .script-run-output pre {
   margin: 4px 0 0;
@@ -301,8 +301,8 @@
   border-radius: 6px;
   background: var(--bg);
   border: 1px solid var(--border);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   line-height: 1.45;
   color: var(--fg-secondary);
   white-space: pre-wrap;
@@ -318,7 +318,7 @@
   background: transparent;
   color: var(--fg-secondary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }
 .script-run-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
@@ -341,9 +341,9 @@
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   position: sticky; top: -20px; z-index: 2;
   margin: -20px -22px 0; padding: 20px 22px 8px;
-  background: inherit; border-radius: 12px 12px 0 0;
+  background: inherit; border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
-.project-scripts-lede { margin-top: 6px; font-size: 12.5px; color: var(--fg-secondary); line-height: 1.5; }
+.project-scripts-lede { margin-top: 6px; font-size: var(--font-size-md); color: var(--fg-secondary); line-height: 1.5; }
 .project-scripts-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
 .project-scripts-row {
   display: flex;
@@ -351,16 +351,16 @@
   gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   min-width: 0;
 }
 .project-scripts-row.is-file { border-style: dashed; }
 .project-scripts-row-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; flex: 1 1 auto; }
-.project-scripts-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.project-scripts-name { font-size: var(--font-size-md); font-weight: 600; color: var(--fg); }
 .project-scripts-command {
   flex-basis: 100%;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -372,7 +372,7 @@
   border-radius: 999px;
   background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   line-height: 1.6;
   white-space: nowrap;
 }
@@ -384,27 +384,27 @@
   background: transparent;
   color: var(--fg-secondary);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
-.project-scripts-link:hover:not(:disabled) { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); color: var(--fg); }
+.project-scripts-link:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .project-scripts-link.is-danger:hover:not(:disabled) { color: var(--error); }
 .project-scripts-link:disabled { opacity: 0.5; cursor: default; }
 .project-scripts-add {
   margin-top: 8px;
   padding: 6px 12px;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--accent);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   cursor: pointer;
   width: 100%;
   text-align: left;
 }
 .project-scripts-add:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-subtle); }
-.project-scripts-empty { margin-top: 10px; font-size: 12.5px; color: var(--fg-muted); }
+.project-scripts-empty { margin-top: 10px; font-size: var(--font-size-md); color: var(--fg-muted); }
 .project-scripts-form {
   margin-top: 12px;
   padding: 12px;
@@ -416,33 +416,33 @@
 }
 .project-scripts-form .app-modal-input { margin-top: 4px; }
 .project-scripts-form .app-modal-actions { margin-top: 2px; }
-.project-scripts-field { display: flex; flex-direction: column; font-size: 12px; color: var(--fg-secondary); }
-.project-scripts-textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.5; resize: vertical; min-height: 60px; }
-.project-scripts-check { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--fg); }
+.project-scripts-field { display: flex; flex-direction: column; font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.project-scripts-textarea { font-family: var(--font-mono); font-size: var(--font-size-md); line-height: 1.5; resize: vertical; min-height: 60px; }
+.project-scripts-check { display: flex; align-items: flex-start; gap: 8px; font-size: var(--font-size-md); color: var(--fg); }
 .project-scripts-check input { margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
 .project-scripts-check label { cursor: pointer; }
 .project-scripts-check span { display: flex; flex-direction: column; gap: 1px; }
-.project-scripts-check small { font-size: 11.5px; color: var(--fg-muted); }
+.project-scripts-check small { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .project-scripts-check.is-nested { margin-left: 22px; margin-top: -4px; }
-.project-scripts-error { margin-top: 8px; font-size: 12px; color: var(--error); overflow-wrap: anywhere; }
+.project-scripts-error { margin-top: 8px; font-size: var(--font-size-sm); color: var(--error); overflow-wrap: anywhere; }
 .project-scripts-form .project-scripts-error { margin-top: 0; }
 .project-scripts-file { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
-.project-scripts-file-head { font-size: 12px; font-weight: 600; color: var(--fg-secondary); }
+.project-scripts-file-head { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
 .project-scripts-file-head code { font-weight: 500; }
-.project-scripts-field-hint { margin-top: 4px; font-size: 11px; color: var(--fg-muted); line-height: 1.4; }
-.project-scripts-field-hint.is-warn { color: var(--warning); font-size: 12px; overflow-wrap: anywhere; }
-.project-scripts-note { font-size: 12px; color: var(--fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.project-scripts-field-hint { margin-top: 4px; font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }
+.project-scripts-field-hint.is-warn { color: var(--warning); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.project-scripts-note { font-size: var(--font-size-sm); color: var(--fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
 .project-scripts-note.is-warn { color: var(--warning); }
 .project-scripts-note code, .project-scripts-file-head code {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.92em;
 }
 /* The project pane's short list. */
 .project-scripts-mini { display: flex; flex-direction: column; gap: 6px; }
 .project-scripts-mini-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
-.project-scripts-mini-row .project-scripts-name { font-size: 12.5px; }
-.project-scripts-mini-row .project-scripts-command { font-size: 11px; }
-.project-scripts-edit { font-size: 11px; }
+.project-scripts-mini-row .project-scripts-name { font-size: var(--font-size-md); }
+.project-scripts-mini-row .project-scripts-command { font-size: var(--font-size-xs); }
+.project-scripts-edit { font-size: var(--font-size-xs); }
 
 .draft-workspace-setup { display: flex; flex-basis: 100%; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
 .draft-workspace-setup-lead { white-space: nowrap; flex-shrink: 0; }
@@ -452,9 +452,9 @@
   flex-wrap: wrap;
   row-gap: 4px;
   padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, var(--warning, #ff9500) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--warning, #ff9500) 9%, var(--bg));
+  background: color-mix(in srgb, var(--warning) 9%, var(--bg));
   color: var(--fg);
 }
 .draft-workspace-setup.needs-ok .draft-workspace-setup-lead { display: inline-flex; align-items: baseline; gap: 6px; white-space: normal; }
@@ -463,9 +463,9 @@
   border: 1px solid var(--accent);
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 20px;
   cursor: pointer;
@@ -480,23 +480,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   color: var(--fg-secondary);
   padding: 0 4px;
-  border-radius: 4px;
-  background: var(--bg-secondary, transparent);
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary);
 }
 
 .project-scripts-allow-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 
-.project-scripts-role.is-replaced { color: var(--fg-secondary, var(--fg-muted)); background: var(--bg-secondary, transparent); }
+.project-scripts-role.is-replaced { color: var(--fg-secondary); background: var(--bg-secondary); }
 .project-scripts-form .app-modal-input[aria-invalid] { border-color: var(--error); box-shadow: 0 0 0 1px var(--error); }
 .workspace-preparing-fix .project-scripts-link { color: var(--accent); }
-.workspace-preparing-fix { margin-top: 10px; font-size: 12px; color: var(--fg-muted); text-align: center; max-width: 420px; }
+.workspace-preparing-fix { margin-top: 10px; font-size: var(--font-size-sm); color: var(--fg-muted); text-align: center; max-width: 420px; }
 
 /* A long command folded to one line: a click shows all of it. */
 .script-command-toggle { cursor: zoom-in; }
 .script-command-toggle.is-open { cursor: zoom-out; white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; overflow: visible; }
 .script-command-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.project-scripts-save-hint { font-size: 12px; color: var(--fg-muted); margin-top: 2px; }
+.project-scripts-save-hint { font-size: var(--font-size-sm); color: var(--fg-muted); margin-top: 2px; }

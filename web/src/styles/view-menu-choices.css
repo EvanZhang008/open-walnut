@@ -21,6 +21,6 @@
 .wn-context-menu.todo-section-tabs-ctx .wn-context-menu-section {
   text-transform: none;
   letter-spacing: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
 }

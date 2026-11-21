@@ -76,7 +76,7 @@
 
 .session-panel-input .chat-plus-menu {
   /* The raised surface every menu paints; --bg is pure black in dark, the chat behind it. */
-  background: var(--bg-elevated, var(--card-bg));
+  background: var(--bg-elevated);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -96,7 +96,7 @@
 .chat-plus-menu-control-value {
   margin-left: auto;
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 .composer-overflow-btn {
@@ -113,7 +113,7 @@
   cursor: pointer;
   /* The glyph is three dots, not a font-dependent ellipsis: it has to read as a
      button at 11px in both engines. */
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1;
   letter-spacing: 1px;
 }
@@ -133,8 +133,8 @@
   max-width: 260px;
   padding: 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-elevated, var(--bg));
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   overflow-y: auto;
 }
@@ -150,7 +150,7 @@
   background: none;
   color: var(--fg-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.35;
   text-align: left;
   /* A row names one control; a long model name wraps rather than running out of
@@ -172,7 +172,7 @@
 .composer-overflow-item-value {
   margin-left: auto;
   color: var(--fg-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   text-align: right;
   min-width: 0;
 }
@@ -187,7 +187,7 @@
 }
 
 .permission-mode-menu .permission-mode-danger .permission-mode-name {
-  color: var(--warning, #e8833a);
+  color: var(--warning);
 }
 
 /* A picker's current item is shown by colour alone: no checkmark, no column kept

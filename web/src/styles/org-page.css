@@ -36,9 +36,9 @@
 }
 .org-list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .org-settings-btn { display: inline-flex; align-items: center; gap: 4px; }
-.org-settings-btn.is-off { color: var(--error, #FF3B30); }
-.org-settings-off { font-size: 11px; font-weight: 600; }
-.org-list-title { display: flex; min-width: 0; margin: 0 8px 0 0; font-size: 17px; font-weight: 600; }
+.org-settings-btn.is-off { color: var(--error); }
+.org-settings-off { font-size: var(--font-size-xs); font-weight: 600; }
+.org-list-title { display: flex; min-width: 0; margin: 0 8px 0 0; font-size: var(--font-size-xl); font-weight: 600; }
 .org-search-field { margin: 0 12px 8px; }
 .org-search-field > .org-search { margin: 0; }
 .org-search {
@@ -47,17 +47,17 @@
   margin: 0 12px 8px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
 .org-list-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 6px 12px; padding-bottom: max(12px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
 .org-list-section {
   padding: 10px 8px 4px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -71,7 +71,7 @@
   width: 100%;
   padding: 7px 8px;
   border: none;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg);
   font: inherit;
@@ -85,7 +85,7 @@
   margin: 2px 0 4px;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   background: var(--bg);
 }
 .org-channel.is-main.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
@@ -96,16 +96,16 @@
   margin-right: auto;
   padding: 0 5px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--fg-muted);
-  font-size: 10.5px;
+  font-size: var(--font-size-xs);
   line-height: 15px;
 }
-.org-detail-led { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.org-detail-led { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .org-detail-led::before { content: '· '; }
 .org-channel-name {
   font-weight: 600;
-  font-size: 13.5px;
+  font-size: var(--font-size-md);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -120,16 +120,16 @@
   background: var(--accent);
   vertical-align: middle;
 }
-.org-channel-time { flex: none; font-size: 11.5px; color: var(--fg-muted); }
+.org-channel-time { flex: none; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .org-channel-latest {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.org-channel-latest.is-alert { color: var(--error, #d70015); }
-.org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 3px; color: var(--accent, #0a84ff); }
+.org-channel-latest.is-alert { color: var(--error); }
+.org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 3px; color: var(--accent); }
 
 .org-badge {
   flex: none;
@@ -140,18 +140,18 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
 }
-.org-badge.is-alert { background: var(--error, #FF3B30); color: #fff; }
+.org-badge.is-alert { background: var(--error); color: var(--on-accent); }
 /* A node's "0 threads": its count stays, in grey. */
 .org-badge.is-none {
-  background: color-mix(in srgb, var(--fg-muted, #8e8e93) 16%, transparent);
-  color: var(--fg-muted, #8e8e93);
+  background: color-mix(in srgb, var(--fg-muted) 16%, transparent);
+  color: var(--fg-muted);
 }
 .org-badge.is-working {
-  background: color-mix(in srgb, var(--success, #34C759) 16%, transparent);
-  color: color-mix(in srgb, var(--success, #34C759) 70%, var(--fg));
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: color-mix(in srgb, var(--success) 70%, var(--fg));
 }
 
 .org-avatar {
@@ -160,8 +160,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9px;
-  color: #fff;
+  border-radius: var(--radius-sm);
+  color: var(--on-accent);
   font-weight: 600;
   line-height: 1;
 }
@@ -181,8 +181,8 @@
   background: var(--fg-muted);
 }
 .org-detail-head .org-state-dot { border-color: var(--bg); }
-.org-state-dot.org-state-alert { background: var(--error, #FF3B30); }
-.org-state-dot.org-state-working { background: var(--success, #34C759); animation: org-pulse 1.6s ease-in-out infinite; }
+.org-state-dot.org-state-alert { background: var(--error); }
+.org-state-dot.org-state-working { background: var(--success); animation: org-pulse 1.6s ease-in-out infinite; }
 .org-state-dot.org-state-quiet { background: #AEAEB2; }
 .org-state-dot.org-state-parked { background: #AF52DE; }
 @keyframes org-pulse { 50% { opacity: 0.45; } }
@@ -193,9 +193,9 @@
   margin: 0 12px 8px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary, var(--bg));
-  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-md);
   color: var(--fg);
   display: flex;
   flex-direction: column;
@@ -210,23 +210,23 @@
   background: var(--bg);
   color: var(--fg-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   padding: 2px 8px;
   cursor: pointer;
 }
 .org-reorg-btn:hover { color: var(--fg); }
 .org-reorg-btn.is-primary { color: var(--fg); }
 
-.org-empty-note { margin: 12px 8px; font-size: 12.5px; color: var(--fg-muted); }
+.org-empty-note { margin: 12px 8px; font-size: var(--font-size-md); color: var(--fg-muted); }
 
 /* ── The detail ── */
 
 .org-detail-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .org-router-setup { padding: 20px; overflow-y: auto; min-width: 0; color: var(--fg); background: var(--bg); }
 .org-router-setup > label { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
-.org-router-setup fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.org-router-setup fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .org-router-setup fieldset label { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
-.org-router-setup p { font-size: 13px; color: var(--fg-secondary); max-width: 560px; }
+.org-router-setup p { font-size: var(--font-size-md); color: var(--fg-secondary); max-width: 560px; }
 .org-router-setup .btn { margin-right: 8px; }
 /* A router's own settings (OrgRouterSettings): folded inline under its header, never a menu. Open, it
    takes the height its form needs, up to all but the chat's floor below (.is-router-split), and a
@@ -234,22 +234,22 @@
 .org-router-settings { flex: none; border-bottom: 1px solid var(--border); background: var(--bg); color: var(--fg); }
 .org-router-settings-head {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 18px;
-  border: 0; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  border: 0; background: transparent; color: inherit; font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer;
 }
 .org-router-settings-head:hover { background: var(--bg-secondary); }
 .org-router-settings-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .org-router-settings-title { flex: none; font-weight: 600; }
 .org-router-settings-summary { flex: 1; min-width: 0; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-router-settings-open { flex: none; font-size: 12px; color: var(--accent); }
+.org-router-settings-open { flex: none; font-size: var(--font-size-sm); color: var(--accent); }
 .org-detail-split.is-router-split { min-height: 160px; }
 /* Mail's "Open router": the message, its state and the next step, under the router's header. */
-.org-router-from-mail { flex: none; padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); color: var(--fg); font-size: 13px; }
+.org-router-from-mail { flex: none; padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); }
 .org-router-from-mail p { margin: 0; }
 .org-router-from-mail p + p { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-router-from-mail-label { font-weight: 600; }
 .org-router-from-mail-state { color: var(--fg-secondary); }
 /* A router's state above its chat (OrgRouterOverview): what it does, whether it runs, what it routed. */
-.org-router-overview { flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border); color: var(--fg); font-size: 13px; overflow-wrap: anywhere; }
+.org-router-overview { flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border); color: var(--fg); font-size: var(--font-size-md); overflow-wrap: anywhere; }
 .org-router-overview p { margin: 0; }
 .org-router-overview-what { color: var(--fg-secondary); }
 .org-router-overview-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 0; }
@@ -288,10 +288,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.org-detail-sub { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12px; }
+.org-detail-sub { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: var(--font-size-sm); }
 .org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
 /* "Tasks" before the task pills: they count tasks, the threads pill before them threads for him. */
-.org-pills-label { align-self: center; margin-left: 4px; color: var(--fg-muted, #86868B); font-size: 11px; }
+.org-pills-label { align-self: center; margin-left: 4px; color: var(--fg-muted); font-size: var(--font-size-xs); }
 .org-pill {
   display: inline-flex;
   align-items: center;
@@ -299,13 +299,13 @@
   padding: 1px 8px;
   border-radius: 999px;
   background: var(--bg-secondary);
-  color: var(--fg-secondary, var(--fg));
-  font-size: 11.5px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 .org-pill i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 /* A count that opens its tab in the Task view. */
-.org-pill.is-button { border: 0; font: inherit; font-size: 11.5px; cursor: pointer; }
+.org-pill.is-button { border: 0; font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
 .org-pill.is-button:hover { background: color-mix(in srgb, var(--fg) 10%, var(--bg-secondary)); color: var(--fg); }
 
 .org-muted { color: var(--fg-muted); }
@@ -322,7 +322,7 @@
 .org-detail-chat-tools:empty { display: none; }
 .org-rail-toggle {
   position: relative; flex: none; width: 28px; height: 28px; display: inline-grid; place-items: center;
-  border: 0; border-radius: 7px; background: transparent; color: var(--fg-muted, #86868b); cursor: pointer;
+  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .org-rail-toggle:hover, .org-rail-toggle:focus-visible { background: var(--bg-secondary); color: var(--fg); }
 .org-rail-toggle.is-on { background: var(--bg-secondary); color: var(--fg); }
@@ -333,7 +333,7 @@
    teams end clear of the stack while one shows (--corner-stack-room, corner-stack.css). */
 .org-detail-body-team { overflow: auto; padding: 14px 18px; padding-bottom: max(14px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
 .org-detail-body-board > * { flex: 1; min-height: 0; }
-.org-detail-loading { margin: auto; font-size: 12.5px; color: var(--fg-muted); }
+.org-detail-loading { margin: auto; font-size: var(--font-size-md); color: var(--fg-muted); }
 
 .org-chat-host { flex: 1; min-height: 0; display: flex; }
 .org-chat-host > * { flex: 1; min-width: 0; min-height: 0; }
@@ -351,14 +351,14 @@
   align-items: center;
   gap: 10px;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 /* The Team tab: one column per state. */
 /* Side by side; past the pane's width they scroll sideways rather than wrap under a long column. */
 .org-team { display: flex; gap: 10px; align-items: flex-start; }
 .org-team-col { flex: 1 1 0; min-width: 190px; overflow: hidden; background: var(--bg-secondary); border-radius: 10px; padding: 9px 10px; }
-.org-team-head { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+.org-team-head { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; font-size: var(--font-size-sm); font-weight: 600; }
 .org-team-head i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .org-team-count { color: var(--fg-muted); font-weight: 500; }
 .org-team-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
@@ -369,11 +369,11 @@
   gap: 7px;
   padding: 6px 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   text-align: left;
   cursor: pointer;
 }
@@ -382,8 +382,8 @@
 .org-team-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .org-team-title, .org-team-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Where the task stands, in its status's words. */
-.org-team-note { font-size: 11px; color: var(--fg-muted); }
-.org-team-meta { flex: none; font-size: 11px; color: var(--fg-muted); }
+.org-team-note { font-size: var(--font-size-xs); color: var(--fg-muted); }
+.org-team-meta { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }
 
 /* The composer under Board and Team. */
 .org-composer {
@@ -401,17 +401,17 @@
   max-height: 160px;
   padding: 9px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   resize: none;
   field-sizing: content;
   overflow-y: auto;
 }
-.org-composer-error { align-self: center; font-size: 12px; color: var(--error, #d70015); }
-.org-composer-note { font-size: 12.5px; color: var(--fg-muted); }
+.org-composer-error { align-self: center; font-size: var(--font-size-sm); color: var(--error); }
+.org-composer-note { font-size: var(--font-size-md); color: var(--fg-muted); }
 
 /* Phone: the tabs take their own row under who it is. */
 .org-page.is-phone .org-detail-head { flex-wrap: wrap; gap: 10px; padding: 10px 12px; }
@@ -464,7 +464,7 @@
   /* Laid over the node there, so no divider to drag. */
   .org-side-handle { display: none; }
 }
-.org-side-lock.is-locked { color: var(--accent, var(--fg)); }
+.org-side-lock.is-locked { color: var(--accent); }
 .org-page.is-phone .org-side { width: 100%; border-left: none; }
 .org-side-home {
   display: inline-flex;
@@ -489,18 +489,18 @@
   padding: 14px 16px 10px;
   border-bottom: 1px solid var(--border);
 }
-.org-side-card-title { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.org-side-card-title { flex: 1; min-width: 0; margin: 0; font-size: var(--font-size-lg); font-weight: 600; overflow-wrap: anywhere; }
 .org-side-close {
   border: none;
   background: transparent;
   color: var(--fg-muted);
-  font-size: 20px;
+  font-size: var(--font-size-2xl);
   line-height: 1;
   padding: 0 2px;
   cursor: pointer;
 }
 .org-side-close:hover { color: var(--fg); }
-.org-side-card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; font-size: 13px; }
+.org-side-card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; font-size: var(--font-size-md); }
 .org-side-card-body p { margin: 0; }
 .org-side-card-desc { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
 .org-side-card-actions { display: flex; gap: 8px; margin-top: 4px; }
@@ -520,7 +520,7 @@
 }
 .org-moved-toggle:hover { color: var(--fg); }
 .org-moved-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
-.org-moved-chevron { width: 10px; font-size: 10px; }
+.org-moved-chevron { width: 10px; font-size: var(--font-size-xs); }
 .org-moved-row {
   display: flex;
   align-items: center;
@@ -528,7 +528,7 @@
   width: 100%;
   padding: 5px 8px;
   border: none;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   font: inherit;
@@ -549,7 +549,7 @@
   padding: 0 3px;
   margin: 0 -3px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: none;
   color: inherit;
   font: inherit;
@@ -568,7 +568,7 @@
   padding: 0 3px;
   margin: 0 -3px;
   border: 1px solid var(--accent);
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
@@ -614,7 +614,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--fg-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 .org-locked-dock-item svg { flex: none; width: 13px; height: 13px; }

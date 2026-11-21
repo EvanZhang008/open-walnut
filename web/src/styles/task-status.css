@@ -17,7 +17,7 @@
 .task-kebab-status-value {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
@@ -42,7 +42,7 @@
 }
 
 .task-kebab-status-label {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-secondary);
   white-space: nowrap;
 }
@@ -62,17 +62,17 @@
   min-width: 0;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 18px;
   white-space: nowrap;
   cursor: pointer;
 }
 
-.task-status-pill:hover { background: var(--bg-hover, var(--bg-tertiary)); }
+.task-status-pill:hover { background: var(--bg-hover); }
 .task-status-pill-icon { display: inline-flex; flex: none; }
 .task-status-pill-icon svg { width: 12px; height: 12px; }
 
@@ -116,11 +116,11 @@ button.task-status-badge:hover { filter: brightness(0.96); }
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
 }
-.task-status-until-toggle:hover { background: var(--bg-hover, var(--bg-tertiary)); }
+.task-status-until-toggle:hover { background: var(--bg-hover); }
 .task-status-until-icon { display: inline-flex; flex: none; color: var(--phase-waiting); }
 .task-status-until-icon svg { width: 12px; height: 12px; }
 .task-status-until-label {
@@ -136,11 +136,11 @@ button.task-status-badge:hover { filter: brightness(0.96); }
   flex: none;
   padding: 1px 8px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }
 .task-status-until-clear:hover { color: var(--fg); background: var(--bg-tertiary); }
@@ -160,7 +160,7 @@ button.task-status-badge:hover { filter: brightness(0.96); }
   background: color-mix(in srgb, var(--phase-waiting) 8%, transparent);
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -177,11 +177,11 @@ button.task-status-badge:hover { filter: brightness(0.96); }
   max-width: 340px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--fg-secondary);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
 }
 .task-waiting-card-head { color: var(--fg); font-weight: 600; margin-bottom: 4px; }

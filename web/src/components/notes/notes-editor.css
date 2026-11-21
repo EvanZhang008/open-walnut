@@ -83,12 +83,12 @@
   background: var(--bg-secondary);
   color: var(--notes-code-text);
   border: none;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   padding: 2px 4px;
 }
 .notes-editor:not(.global-notes-editor-inline) .tiptap pre {
   background: var(--bg-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 16px;
   margin: 0.75em 0;
   overflow-x: auto;
@@ -126,11 +126,11 @@
 /* ── Slash menu: group headers (new) ───────────────────────────────────── */
 .notes-slash-group {
   padding: 6px 12px 2px;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
   user-select: none;
 }
 
@@ -153,7 +153,7 @@
 }
 .notes-editor .tiptap table td,
 .notes-editor .tiptap table th {
-  border: 1px solid var(--border, #2a2d34);
+  border: 1px solid var(--border);
   padding: 4px 8px;
   vertical-align: top;
   text-align: left;
@@ -164,7 +164,7 @@
 }
 /* Uniform header treatment for EVERY th (not first-row-only). */
 .notes-editor .tiptap table th {
-  background: var(--bg-secondary, #1a1c20);
+  background: var(--bg-secondary);
   font-weight: 600;
 }
 /* Empty-cell caret fix: table cells are `content: inline*` (table-kit.ts) so an
@@ -176,7 +176,7 @@
 .notes-editor .tiptap table td,
 .notes-editor .tiptap table th {
   min-height: 1.6em;
-  caret-color: var(--fg, currentColor);
+  caret-color: var(--fg);
 }
 .notes-editor .tiptap table td > p,
 .notes-editor .tiptap table th > p {
@@ -188,7 +188,7 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: var(--accent-subtle, rgba(99, 102, 241, 0.18));
+  background: var(--accent-subtle);
   pointer-events: none;
 }
 /* Column-resize handle from @tiptap/extension-table — clearly visible on hover. */
@@ -198,7 +198,7 @@
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--accent, #6366f1);
+  background: var(--accent);
   cursor: col-resize;
   opacity: 0;
 }
@@ -223,24 +223,24 @@
   padding: 1px 6px;
   margin: 0 1px;
   border-radius: 999px;
-  background: var(--accent-subtle, rgba(99, 102, 241, 0.16));
-  color: var(--accent, #6366f1);
+  background: var(--accent-subtle);
+  color: var(--accent);
   font-size: 0.88em;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
 }
 .notes-editor .tiptap .notes-tag.ProseMirror-selectednode {
-  outline: 2px solid var(--accent, #6366f1);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
 /* ── Callouts ──────────────────────────────────────────────────────────── */
 /* Its kind is the coloured label on top; the box keeps the same hairline all round. */
 .notes-callout {
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-sm, 6px);
-  background: var(--bg-secondary, #1a1c20);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
   padding: 10px 14px;
   margin: 12px 0;
 }
@@ -248,18 +248,18 @@
 .notes-callout > *:last-child { margin-bottom: 0; }
 .notes-callout::before {
   display: block;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   margin-bottom: 4px;
   opacity: 0.85;
 }
-.notes-callout-note::before { content: 'Note'; color: var(--accent, #6366f1); }
-.notes-callout-tip::before { content: 'Tip'; color: var(--success, #22c55e); }
-.notes-callout-info::before { content: 'Info'; color: var(--accent, #3b82f6); }
-.notes-callout-warning::before { content: 'Warning'; color: var(--warning, #f59e0b); }
-.notes-callout-danger::before { content: 'Danger'; color: var(--error, #ef4444); }
+.notes-callout-note::before { content: 'Note'; color: var(--accent); }
+.notes-callout-tip::before { content: 'Tip'; color: var(--success); }
+.notes-callout-info::before { content: 'Info'; color: var(--accent); }
+.notes-callout-warning::before { content: 'Warning'; color: var(--warning); }
+.notes-callout-danger::before { content: 'Danger'; color: var(--error); }
 
 /* Foldable callout (`> [!kind]- Title` / `> [!kind]+ Title`): the kind label
    spans the top row, then the chevron sits left of the title (the first
@@ -287,15 +287,15 @@
   height: 1.6em;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-muted, #8e8e93);
+  color: var(--fg-muted);
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
 }
-.notes-callout-fold-toggle:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); color: var(--fg, inherit); }
-.notes-callout-fold-toggle:focus-visible { outline: 2px solid var(--accent, #6366f1); outline-offset: 1px; }
+.notes-callout-fold-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.notes-callout-fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Chevron: points down when open, right when folded. */
 .notes-callout-fold-toggle::before {
   content: '';
@@ -320,10 +320,10 @@
   align-items: center;
   gap: 1px;
   padding: 3px;
-  background: var(--bg-elevated, #23262d);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: var(--card-shadow, 0 4px 16px rgba(0, 0, 0, 0.3));
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
   z-index: 10002;
 }
 .notes-bubble-actions {
@@ -340,21 +340,21 @@
   height: 28px;
   padding: 0 6px;
   border: none;
-  border-radius: var(--radius-sm, 5px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-secondary, #c4c7cc);
-  font-size: 13px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-md);
   line-height: 1;
   cursor: pointer;
 }
-.notes-bubble-btn:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
-.notes-bubble-btn.active { background: var(--accent-subtle, rgba(99, 102, 241, 0.2)); color: var(--accent, #6366f1); }
-.notes-bubble-btn code { font-family: var(--font-mono, monospace); font-size: 11px; }
+.notes-bubble-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.notes-bubble-btn.active { background: var(--accent-subtle); color: var(--accent); }
+.notes-bubble-btn code { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 .notes-bubble-sep {
   width: 1px;
   align-self: stretch;
   margin: 2px 3px;
-  background: var(--border, #2a2d34);
+  background: var(--border);
 }
 
 /* ── Format toolbar (always-visible row under the title bar) ───────────── */
@@ -364,8 +364,8 @@
   flex-wrap: wrap;
   gap: 1px;
   padding: 4px 16px;
-  border-bottom: 1px solid var(--border, #2a2d34);
-  background: var(--bg, #1a1c21);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
   flex-shrink: 0;
 }
 .notes-format-btn {
@@ -376,22 +376,22 @@
   height: 28px;
   padding: 0 6px;
   border: none;
-  border-radius: var(--radius-sm, 5px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-secondary, #c4c7cc);
-  font-size: 13px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-md);
   line-height: 1;
   cursor: pointer;
 }
-.notes-format-btn:hover:not(:disabled) { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
-.notes-format-btn.active { background: var(--accent-subtle, rgba(99, 102, 241, 0.2)); color: var(--accent, #6366f1); }
+.notes-format-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.notes-format-btn.active { background: var(--accent-subtle); color: var(--accent); }
 .notes-format-btn:disabled { opacity: 0.35; cursor: default; }
-.notes-format-btn code { font-family: var(--font-mono, monospace); font-size: 11px; }
+.notes-format-btn code { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 .notes-format-sep {
   width: 1px;
   height: 18px;
   margin: 0 5px;
-  background: var(--border, #2a2d34);
+  background: var(--border);
 }
 
 /* Block-type picker trigger: a text label + chevron, wide enough that the
@@ -404,16 +404,16 @@
   min-width: 118px;
   padding: 0 8px 0 10px;
   border: none;
-  border-radius: var(--radius-sm, 5px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg, #e8eaed);
-  font-size: 13px;
+  color: var(--fg);
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
-.notes-format-block-btn:hover:not(:disabled) { background: var(--bg-hover, #2d3038); }
+.notes-format-block-btn:hover:not(:disabled) { background: var(--bg-hover); }
 .notes-format-block-btn:disabled { opacity: 0.35; cursor: default; }
 .notes-format-block-label { flex: 1; text-align: left; white-space: nowrap; }
-.notes-format-block-btn svg { color: var(--fg-muted, #8a8f98); flex-shrink: 0; }
+.notes-format-block-btn svg { color: var(--fg-muted); flex-shrink: 0; }
 
 /* Portalled menu — position/maxHeight come from useMenuPlacement; overflow-y
    is the hook's contract (a capped menu must scroll, never clip). */
@@ -421,10 +421,10 @@
   min-width: 190px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--bg-elevated, #23262d);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: var(--card-shadow, 0 4px 16px rgba(0, 0, 0, 0.3));
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
 }
 .notes-format-block-item {
   display: flex;
@@ -434,24 +434,24 @@
   width: 100%;
   padding: 6px 10px;
   border: none;
-  border-radius: var(--radius-sm, 5px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg, #e8eaed);
-  font-size: 13px;
+  color: var(--fg);
+  font-size: var(--font-size-md);
   text-align: left;
   cursor: pointer;
 }
-.notes-format-block-item:hover { background: var(--bg-hover, #2d3038); }
-.notes-format-block-item.active { color: var(--accent, #6366f1); font-weight: 600; }
+.notes-format-block-item:hover { background: var(--bg-hover); }
+.notes-format-block-item.active { color: var(--accent); font-weight: 600; }
 /* Each row previews its own style, so the picker reads without trying it. */
-.notes-format-block-sample.sample-h1 { font-size: 17px; font-weight: 700; }
-.notes-format-block-sample.sample-h2 { font-size: 15px; font-weight: 650; }
+.notes-format-block-sample.sample-h1 { font-size: var(--font-size-xl); font-weight: 700; }
+.notes-format-block-sample.sample-h2 { font-size: var(--font-size-lg); font-weight: 650; }
 .notes-format-block-sample.sample-h3 { font-size: 14px; font-weight: 600; }
-.notes-format-block-sample.sample-codeBlock { font-family: var(--font-mono, monospace); font-size: 12px; }
-.notes-format-block-sample.sample-blockquote { border-left: 2px solid var(--border, #2a2d34); padding-left: 6px; color: var(--fg-secondary, #c4c7cc); }
-.notes-format-block-sample.sample-bulletList::before { content: '•  '; color: var(--fg-muted, #8a8f98); }
-.notes-format-block-sample.sample-orderedList::before { content: '1.  '; color: var(--fg-muted, #8a8f98); }
-.notes-format-block-sample.sample-taskList::before { content: '☐  '; color: var(--fg-muted, #8a8f98); }
+.notes-format-block-sample.sample-codeBlock { font-family: var(--font-mono); font-size: var(--font-size-sm); }
+.notes-format-block-sample.sample-blockquote { border-left: 2px solid var(--border); padding-left: 6px; color: var(--fg-secondary); }
+.notes-format-block-sample.sample-bulletList::before { content: '•  '; color: var(--fg-muted); }
+.notes-format-block-sample.sample-orderedList::before { content: '1.  '; color: var(--fg-muted); }
+.notes-format-block-sample.sample-taskList::before { content: '☐  '; color: var(--fg-muted); }
 
 /* ── Tag autocomplete popup ────────────────────────────────────────────── */
 .notes-tag-panel {
@@ -459,10 +459,10 @@
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--bg-elevated, #23262d);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: var(--card-shadow, 0 4px 16px rgba(0, 0, 0, 0.3));
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
 }
 .notes-tag-item {
   display: flex;
@@ -470,22 +470,22 @@
   justify-content: space-between;
   gap: 8px;
   padding: 6px 10px;
-  border-radius: var(--radius-sm, 5px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
-  color: var(--fg-secondary, #c4c7cc);
+  font-size: var(--font-size-md);
+  color: var(--fg-secondary);
 }
 .notes-tag-item.selected,
-.notes-tag-item:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
+.notes-tag-item:hover { background: var(--bg-hover); color: var(--fg); }
 .notes-tag-item-name { font-weight: 500; }
 .notes-tag-item-count {
-  font-size: 11px;
-  color: var(--fg-muted, #8a8f98);
-  background: var(--bg-secondary, #1a1c20);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
   padding: 0 6px;
   border-radius: 999px;
 }
-.notes-tag-create .notes-tag-item-name { color: var(--accent, #6366f1); }
+.notes-tag-create .notes-tag-item-name { color: var(--accent); }
 
 /* ── Cmd+K command palette (front door — §4.3 / §9.3) ──────────────────── */
 .notes-cmdk-overlay {
@@ -504,9 +504,9 @@
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-elevated, #23262d);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-lg, 12px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
@@ -515,14 +515,14 @@
   align-items: center;
   gap: 8px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border, #2a2d34);
+  border-bottom: 1px solid var(--border);
 }
 .notes-cmdk-glyph {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--fg-muted, #8a8f98);
-  background: var(--bg-secondary, #1a1c20);
-  border-radius: var(--radius-sm, 5px);
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
   user-select: none;
 }
@@ -531,30 +531,30 @@
   border: none;
   outline: none;
   background: transparent;
-  color: var(--fg, #e8eaed);
-  font-size: 15px;
+  color: var(--fg);
+  font-size: var(--font-size-lg);
 }
-.notes-cmdk-input::placeholder { color: var(--fg-muted, #8a8f98); }
+.notes-cmdk-input::placeholder { color: var(--fg-muted); }
 .notes-cmdk-spinner {
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
   font-size: 14px;
   animation: notes-cmdk-spin 0.8s linear infinite;
 }
 @keyframes notes-cmdk-spin { to { transform: rotate(360deg); } }
 .notes-cmdk-degraded {
   padding: 6px 14px;
-  font-size: 12px;
-  color: var(--warning, #f59e0b);
+  font-size: var(--font-size-sm);
+  color: var(--warning);
   background: var(--warning-subtle);
-  border-bottom: 1px solid var(--border, #2a2d34);
+  border-bottom: 1px solid var(--border);
 }
 /* The tree's search: a replica whose copy leaves notes out says so above the results. */
 .notes-search-partial {
   margin: 4px 8px 6px;
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   border-radius: 6px;
-  color: var(--warning, #f59e0b);
+  color: var(--warning);
   background: var(--warning-subtle);
 }
 .notes-cmdk-list {
@@ -565,19 +565,19 @@
 .notes-cmdk-empty {
   padding: 24px 14px;
   text-align: center;
-  color: var(--fg-muted, #8a8f98);
-  font-size: 13px;
+  color: var(--fg-muted);
+  font-size: var(--font-size-md);
 }
 .notes-cmdk-item {
   display: flex;
   flex-direction: column;
   gap: 3px;
   padding: 8px 10px;
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-md);
   cursor: pointer;
 }
 .notes-cmdk-item.selected,
-.notes-cmdk-item:hover { background: var(--bg-hover, #2d3038); }
+.notes-cmdk-item:hover { background: var(--bg-hover); }
 .notes-cmdk-item-head {
   display: flex;
   align-items: center;
@@ -587,29 +587,29 @@
 .notes-cmdk-item-title {
   font-size: 14px;
   font-weight: 500;
-  color: var(--fg, #e8eaed);
+  color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .notes-cmdk-item-path {
-  font-size: 11px;
-  color: var(--fg-muted, #8a8f98);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 /* The note's own title, under its file name, only when the two differ. */
 .notes-cmdk-item-note-title {
-  font-size: 12px;
-  color: var(--fg-secondary, #c4c7cc);
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .notes-cmdk-item-snippet {
-  font-size: 12px;
-  color: var(--fg-secondary, #c4c7cc);
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -618,7 +618,7 @@
 }
 .notes-cmdk-item-snippet mark,
 .notes-cmdk-item-snippet .notes-search-mark {
-  background: var(--accent-subtle, rgba(99, 102, 241, 0.32));
+  background: var(--accent-subtle);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
@@ -627,8 +627,8 @@
    browser's default harsh yellow. Bold accent text keeps it readable on the
    subtle background in both themes. */
 mark.notes-search-mark {
-  background: var(--accent-subtle, rgba(99, 102, 241, 0.18));
-  color: var(--accent, #6366f1);
+  background: var(--accent-subtle);
+  color: var(--accent);
   font-weight: 600;
   border-radius: 2px;
   padding: 0 1px;
@@ -637,8 +637,8 @@ mark.notes-search-mark {
 .notes-cmdk-searching {
   padding: 14px;
   text-align: center;
-  color: var(--fg-muted, #8a8f98);
-  font-size: 13px;
+  color: var(--fg-muted);
+  font-size: var(--font-size-md);
 }
 /* Hybrid match badge: ● exact / ◐ both / ○ semantic (trust legend §9.2). */
 .notes-cmdk-badge {
@@ -646,7 +646,7 @@ mark.notes-search-mark {
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -654,26 +654,26 @@ mark.notes-search-mark {
   border-radius: 999px;
 }
 .notes-cmdk-badge-glyph { font-size: 9px; }
-.notes-cmdk-badge-exact { color: var(--success, #22c55e); background: rgba(34, 197, 94, 0.14); }
-.notes-cmdk-badge-both { color: var(--accent, #6366f1); background: rgba(99, 102, 241, 0.16); }
-.notes-cmdk-badge-semantic { color: var(--fg-muted, #8a8f98); background: var(--bg-secondary, #1a1c20); }
-.notes-cmdk-badge-attachment { color: var(--warning, #e8a838); background: rgba(232, 168, 56, 0.14); }
+.notes-cmdk-badge-exact { color: var(--success); background: rgba(34, 197, 94, 0.14); }
+.notes-cmdk-badge-both { color: var(--accent); background: rgba(99, 102, 241, 0.16); }
+.notes-cmdk-badge-semantic { color: var(--fg-muted); background: var(--bg-secondary); }
+.notes-cmdk-badge-attachment { color: var(--warning); background: rgba(232, 168, 56, 0.14); }
 .notes-cmdk-create .notes-cmdk-create-label {
   font-size: 14px;
-  color: var(--accent, #6366f1);
+  color: var(--accent);
 }
 .notes-cmdk-footer {
   padding: 8px 14px;
-  border-top: 1px solid var(--border, #2a2d34);
-  font-size: 11px;
-  color: var(--fg-muted, #8a8f98);
+  border-top: 1px solid var(--border);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
 }
 .notes-cmdk-footer kbd {
-  font-family: var(--font-mono, monospace);
-  font-size: 10px;
-  background: var(--bg-secondary, #1a1c20);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
   padding: 1px 4px;
 }
 
@@ -695,48 +695,48 @@ mark.notes-search-mark {
 }
 .notes-empty-state-title {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
-  color: var(--fg, #e8eaed);
+  color: var(--fg);
 }
 .notes-empty-state-hint {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
 }
 .notes-empty-state-hint kbd {
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  background: var(--bg-secondary, #1a1c20);
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
 }
 .notes-empty-state-cta {
   margin-top: 4px;
   padding: 8px 16px;
   border: none;
-  border-radius: var(--radius-md, 8px);
-  background: var(--accent, #6366f1);
-  color: #fff;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
 }
-.notes-empty-state-cta:hover { background: var(--accent-hover, #5457e0); }
+.notes-empty-state-cta:hover { background: var(--accent-hover); }
 /* The quiet second choice beside the CTA (NoteMissingState's Close). */
 .notes-empty-state-secondary {
   margin-top: 4px;
   padding: 8px 16px;
-  border: 1px solid var(--border, #d4d4d8);
-  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--fg, inherit);
+  color: var(--fg);
   font-size: 14px;
   cursor: pointer;
 }
-.notes-empty-state-secondary:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
+.notes-empty-state-secondary:hover { background: var(--bg-hover); }
 
 /* ── External/AI-write reload banner (§6.2 dirty-guard) ────────────────── */
 .notes-reload-banner {
@@ -747,47 +747,47 @@ mark.notes-search-mark {
   flex-wrap: wrap;
   margin: 8px 16px 0;
   padding: 8px 12px;
-  border: 1px solid var(--accent, #6366f1);
-  border-radius: var(--radius-md, 8px);
-  background: var(--accent-subtle, rgba(99, 102, 241, 0.12));
-  font-size: 13px;
-  color: var(--fg, #e8eaed);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  font-size: var(--font-size-md);
+  color: var(--fg);
 }
 .notes-reload-banner.conflict {
-  border-color: var(--warning, #f59e0b);
+  border-color: var(--warning);
   background: var(--warning-subtle);
 }
 .notes-reload-banner-text { flex: 1; min-width: 200px; }
 .notes-reload-banner-actions { display: flex; gap: 6px; }
 .notes-reload-banner-btn {
   padding: 4px 10px;
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-secondary, #c4c7cc);
-  font-size: 12px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
-.notes-reload-banner-btn:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
+.notes-reload-banner-btn:hover { background: var(--bg-hover); color: var(--fg); }
 .notes-reload-banner-btn.primary {
-  background: var(--accent, #6366f1);
-  border-color: var(--accent, #6366f1);
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
 .notes-reload-banner.conflict .notes-reload-banner-btn.primary {
-  background: var(--warning, #f59e0b);
-  border-color: var(--warning, #f59e0b);
+  background: var(--warning);
+  border-color: var(--warning);
 }
 
 /* ── Backlinks: ambiguous edge badge (§4.3 — shown, not hidden) ─────────── */
 .notes-backlink-ambiguous {
   display: inline-block;
   margin-left: 6px;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: var(--warning, #f59e0b);
+  color: var(--warning);
   background: var(--warning-subtle);
   border-radius: 999px;
   padding: 0 6px;
@@ -813,8 +813,8 @@ mark.notes-search-mark {
   padding: 4px 6px 0;
   overflow-x: auto;
   overflow-y: hidden;
-  border-bottom: 1px solid var(--border, #2a2d35);
-  background: var(--bg-secondary, #1a1c22);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
 }
 /* Firefox only: elsewhere the ::-webkit-scrollbar rules below draw it. */
 @supports not selector(::-webkit-scrollbar) {
@@ -822,7 +822,7 @@ mark.notes-search-mark {
 }
 /* Keep the strip slim — hide the horizontal scrollbar track visually. */
 .notes-tab-strip::-webkit-scrollbar { height: 4px; }
-.notes-tab-strip::-webkit-scrollbar-thumb { background: var(--border, #2a2d35); border-radius: 999px; }
+.notes-tab-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 
 /* No tabs open → still show a strip so the trailing AI button has a home (and the
    editor pane's top edge stays consistent between the two states). */
@@ -841,7 +841,7 @@ mark.notes-search-mark {
   gap: 4px;
   padding-left: 8px;
   padding-bottom: 4px;
-  background: var(--bg-secondary, #1a1c22);
+  background: var(--bg-secondary);
 }
 
 /* The way back from a note to the tree. Only a phone, which shows one of the two,
@@ -860,18 +860,18 @@ mark.notes-search-mark {
   border-bottom: none;
   border-top-left-radius: var(--radius-sm);
   border-top-right-radius: var(--radius-sm);
-  font-size: 13px;
-  color: var(--fg-secondary, #c4c7cc);
+  font-size: var(--font-size-md);
+  color: var(--fg-secondary);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.notes-tab:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
+.notes-tab:hover { background: var(--bg-hover); color: var(--fg); }
 .notes-tab.active {
-  background: var(--bg, #15171c);
-  color: var(--fg, #e8eaed);
-  border-color: var(--border, #2a2d35);
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
   /* Visually bridge the strip's bottom border so the active tab "owns" the pane. */
   margin-bottom: -1px;
   padding-bottom: 7px;
@@ -890,16 +890,16 @@ mark.notes-search-mark {
   height: 16px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
   cursor: pointer;
   opacity: 0.6;
   flex: 0 0 auto;
 }
 .notes-tab:hover .notes-tab-close,
 .notes-tab.active .notes-tab-close { opacity: 1; }
-.notes-tab-close:hover { background: var(--bg-tertiary, #3a3d45); color: var(--fg, #e8eaed); }
+.notes-tab-close:hover { background: var(--bg-tertiary); color: var(--fg); }
 
 .notes-tab-new {
   display: inline-flex;
@@ -909,13 +909,13 @@ mark.notes-search-mark {
   padding: 0;
   margin: 0 2px;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
   cursor: pointer;
   flex: 0 0 auto;
 }
-.notes-tab-new:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
+.notes-tab-new:hover { background: var(--bg-hover); color: var(--fg); }
 
 /* ══ Note bookmarks (#5) ═══════════════════════════════════════════════════ */
 
@@ -928,17 +928,17 @@ mark.notes-search-mark {
   height: 26px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
   cursor: pointer;
 }
-.notes-bookmark-btn:hover { background: var(--bg-hover, #2d3038); color: var(--fg, #e8eaed); }
-.notes-bookmark-btn.active { color: var(--accent, #6366f1); }
+.notes-bookmark-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.notes-bookmark-btn.active { color: var(--accent); }
 
 /* Bookmarks group at the top of the tree. */
 .notes-bookmarks-group {
-  border-bottom: 1px solid var(--border, #2a2d35);
+  border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
 }
 .notes-bookmarks-header {
@@ -948,9 +948,9 @@ mark.notes-search-mark {
   padding: 8px 12px;
   cursor: pointer;
   font-weight: 600;
-  color: var(--fg-secondary, #c4c7cc);
+  color: var(--fg-secondary);
 }
-.notes-bookmarks-header:hover { background: var(--bg-hover, #2d3038); }
+.notes-bookmarks-header:hover { background: var(--bg-hover); }
 .notes-bookmarks-header .notes-tree-arrow {
   display: inline-flex;
   transition: transform 0.12s ease;
@@ -958,9 +958,9 @@ mark.notes-search-mark {
 .notes-bookmarks-header .notes-tree-arrow.expanded { transform: rotate(90deg); }
 .notes-bookmarks-count {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
 }
 
 .notes-bookmark-row {
@@ -983,15 +983,15 @@ mark.notes-search-mark {
   height: 18px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-muted, #8a8f98);
+  color: var(--fg-muted);
   cursor: pointer;
   opacity: 0;
   flex: 0 0 auto;
 }
 .notes-bookmark-row:hover .notes-bookmark-remove { opacity: 0.7; }
-.notes-bookmark-remove:hover { opacity: 1 !important; background: var(--bg-tertiary, #3a3d45); color: var(--fg, #e8eaed); }
+.notes-bookmark-remove:hover { opacity: 1 !important; background: var(--bg-tertiary); color: var(--fg); }
 
 /* ── Images (ResolvedImage node view, `![[embed]]` images) ─────────────── */
 /* Where a click opens the picture large (image-zoom.ts): reading, or a picture
@@ -1009,7 +1009,7 @@ mark.notes-search-mark {
 }
 .notes-editor .tiptap .notes-picture-selected .notes-image img,
 .notes-editor .tiptap .notes-image.notes-picture-selected img {
-  outline: 2px solid var(--accent, #6366f1);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 /* What a picture that is not there becomes: its name, never an empty gap. */
@@ -1021,11 +1021,11 @@ mark.notes-search-mark {
   max-width: 100%;
   margin: 6px 0;
   padding: 8px 12px;
-  border: 1px dashed var(--border, #2a2d34);
-  border-radius: var(--radius-sm, 6px);
-  background: var(--bg-secondary, #1a1c20);
-  color: var(--fg-muted, #8a8f98);
-  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: var(--font-size-md);
   line-height: 1.4;
   cursor: default;
 }
@@ -1033,7 +1033,7 @@ mark.notes-search-mark {
   display: none;
 }
 .notes-editor .tiptap .notes-image.notes-picture-selected .notes-image-missing {
-  outline: 2px solid var(--accent, #6366f1);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .notes-editor .tiptap .notes-image-missing-icon,
@@ -1045,15 +1045,15 @@ mark.notes-search-mark {
   height: 18px;
   flex: none;
   border-radius: 50%;
-  background: var(--border, #2a2d34);
-  color: var(--fg, #e6e6e6);
-  font-size: 12px;
+  background: var(--border);
+  color: var(--fg);
+  font-size: var(--font-size-sm);
   font-weight: 600;
 }
 .notes-editor .tiptap .notes-image-missing-label,
 .notes-attachment-preview .notes-image-missing-label {
   flex: none;
-  color: var(--fg, #e6e6e6);
+  color: var(--fg);
 }
 .notes-editor .tiptap .notes-image-missing-name,
 .notes-attachment-preview .notes-image-missing-name {
@@ -1070,16 +1070,16 @@ mark.notes-search-mark {
   align-items: center;
   min-height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--border, #2a2d34);
-  border-radius: var(--radius-sm, 6px);
-  background: var(--bg, #111214);
-  color: var(--fg, #e6e6e6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
   text-decoration: none;
   cursor: pointer;
 }
 .notes-editor .tiptap .notes-image-download:hover,
 .notes-attachment-preview .notes-image-download:hover {
-  border-color: var(--accent, #6366f1);
+  border-color: var(--accent);
 }
 
 /* Reading selects nothing worth showing: no ring around a tapped picture.

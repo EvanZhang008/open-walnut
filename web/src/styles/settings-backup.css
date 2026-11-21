@@ -2,18 +2,18 @@
 .settings-steps {
   margin: 0;
   padding: 10px var(--settings-row-pad-x) 10px calc(var(--settings-row-pad-x) + 22px);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.55;
   color: var(--fg-secondary);
 }
 .settings-steps li + li { margin-top: 4px; }
 .settings-steps a { color: var(--accent); }
 .settings-steps code,
-.settings-row-help code { font-family: var(--font-mono); font-size: 12px; }
+.settings-row-help code { font-family: var(--font-mono); font-size: var(--font-size-sm); }
 .settings-steps-note {
   margin: 0;
   padding: 0 var(--settings-row-pad-x) 12px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
 .settings-inline-pair {
@@ -25,7 +25,7 @@
 .settings-inline-pair .settings-input { min-width: 0; flex: 1 1 260px; }
 .backup-key {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   letter-spacing: 0.02em;
   color: var(--fg);
   user-select: all;
@@ -49,14 +49,14 @@
   gap: 8px;
   padding: 6px 8px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg);
   cursor: pointer;
 }
 .backup-restore-item[data-picked='true'] { background: var(--bg-tertiary); }
-.backup-restore-meta { color: var(--fg-muted); font-size: 12.5px; }
+.backup-restore-meta { color: var(--fg-muted); font-size: var(--font-size-md); }
 .backup-key-shown { padding-top: 10px; padding-bottom: 10px; }
-.backup-key-shown .backup-key { white-space: normal; word-break: break-all; font-size: 13px; }
+.backup-key-shown .backup-key { white-space: normal; word-break: break-all; font-size: var(--font-size-md); }
 /* The restore list spans the row: each backup lines up under the Restore label. */
 .backup-restore-list.settings-row { justify-content: flex-start; align-items: stretch; }
 .backup-restore-list .backup-restore-item { width: 100%; box-sizing: border-box; }
@@ -66,8 +66,8 @@
 /* After a restore: the exact commands that make it the live data. */
 .backup-restore-swap { display: flex; gap: 8px; align-items: flex-start; padding-top: 4px; padding-bottom: 10px; }
 .backup-restore-commands { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere;
-  font-family: var(--font-mono); font-size: 12px; background: var(--bg-secondary); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; }
-.backup-restore-target-full { margin: 0; padding-top: 0; color: var(--fg-muted); font-size: 12.5px; overflow-wrap: anywhere; }
+  font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--bg-secondary); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; }
+.backup-restore-target-full { margin: 0; padding-top: 0; color: var(--fg-muted); font-size: var(--font-size-md); overflow-wrap: anywhere; }
 
 /* The service backups go to now: a small dot before its name in the Service control. */
 .backup-service-in-use .settings-segment-label::before {
@@ -77,7 +77,7 @@
   height: 6px;
   margin-right: 6px;
   border-radius: 50%;
-  background: var(--success, #34c759);
+  background: var(--success);
   vertical-align: middle;
   position: relative;
   top: -1px;

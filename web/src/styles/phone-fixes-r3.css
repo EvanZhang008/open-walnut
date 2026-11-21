@@ -11,7 +11,7 @@
     align-items: center;
     gap: 8px;
     margin: 0 0 4px;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     font-weight: 600;
     color: var(--fg);
   }
@@ -49,14 +49,14 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
     line-height: 20px;
   }
   .app-shell-navigation .phone-needs-you-meta {
     display: flex;
     gap: 8px;
     max-width: 100%;
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 16px;
     color: var(--fg-secondary);
   }
@@ -75,15 +75,15 @@
     padding: 0 4px;
     border: 0;
     background: transparent;
-    color: var(--accent-text, var(--accent));
+    color: var(--accent-text);
     font: inherit;
-    font-size: 15px;
+    font-size: var(--font-size-lg);
   }
   /* An empty Pinned says so in one short line, not a 110 px block. */
   .app-shell-navigation .todo-pinned-empty {
     margin: 0;
     padding: 4px 16px 8px;
-    font-size: 13px;
+    font-size: var(--font-size-md);
   }
 }
 

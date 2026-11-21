@@ -19,8 +19,8 @@
   margin: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 
@@ -34,5 +34,5 @@
   justify-content: flex-start;
   gap: 8px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }

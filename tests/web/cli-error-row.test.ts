@@ -24,7 +24,7 @@ describe('the CLI error line', () => {
   it('notice lines are 13px in the notice grey, which reads 4.5:1 or more on the light theme', () => {
     const css = readFileSync(path.resolve(__dirname, '../../web/src/styles/globals.css'), 'utf8');
     const line = css.match(/\.session-system-line \{[^}]*\}/)?.[0] ?? '';
-    expect(line).toMatch(/font-size: 13px/);
+    expect(line).toMatch(/font-size: var\(--font-size-md\)/);
     expect(line).toMatch(/color: var\(--fg-notice\)/);
     const light = css.match(/--fg-notice: (#[0-9A-Fa-f]{6})/)?.[1];
     const lum = (hex: string) => {

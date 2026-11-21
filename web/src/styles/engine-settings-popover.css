@@ -18,15 +18,15 @@
   width: min(620px, 100vw - 24px);
   height: min(720px, var(--menu-max-height, 720px));
   padding: 0;
-  border: 1px solid var(--border-strong, var(--border));
-  border-radius: var(--radius-lg, 10px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   /* The raised surface, not the page's. In the light theme both are
      white; in the dark theme --bg-elevated is one step lighter than the
      near-black panel under it, so the popover reads as a layer. */
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
   color: var(--fg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
-  font-size: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), var(--shadow-md);
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   outline: none;
 }
@@ -83,7 +83,7 @@
 .engine-settings-popover-subtitle {
   display: flex;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
   white-space: nowrap;
 }
@@ -113,7 +113,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -135,7 +135,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -155,8 +155,8 @@
   overflow-y: auto;
   padding: 10px 14px 12px;
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border-strong, var(--border));
-  background: var(--bg-elevated, var(--bg));
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
 }
 
@@ -170,9 +170,9 @@
 .engine-settings-about-scope,
 .engine-settings-about-body {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
-  color: var(--fg-secondary, var(--fg));
+  color: var(--fg-secondary);
 }
 
 .engine-settings-about-scope {
@@ -182,10 +182,10 @@
 .engine-settings-about-close {
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -204,7 +204,7 @@
   margin: 0;
   padding: 0;
   min-width: 0;
-  color: var(--error, var(--priority-immediate));
+  color: var(--error);
 }
 
 .engine-settings-popover-alert > span {
@@ -240,7 +240,7 @@
 }
 
 .engine-settings-scope-label {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -248,17 +248,17 @@
   display: inline-flex;
   padding: 2px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-md);
   background: var(--bg-secondary);
 }
 
 .engine-settings-scope-option {
   padding: 4px 10px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-secondary, var(--fg));
-  font-size: 12px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
   line-height: 1.3;
   cursor: pointer;
 }
@@ -280,7 +280,7 @@
   cursor: default;
 }
 
-.engine-settings-scope-option.is-disabled:hover { color: var(--fg-secondary, var(--fg)); }
+.engine-settings-scope-option.is-disabled:hover { color: var(--fg-secondary); }
 
 /* Unavailable for good (no project file for this session) is a different
    state from "not the one picked": a lock glyph, struck text, a dotted edge and
@@ -335,7 +335,7 @@
   left: 0;
   right: 0;
   z-index: 1;
-  background: var(--bg-elevated, var(--bg));
+  background: var(--bg-elevated);
 }
 
 .engine-settings-scope-reason,
@@ -343,28 +343,28 @@
 .engine-settings-applies-on,
 .engine-settings-group-help {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-muted);
 }
 
 /* The group's help sentence, shown in the About overlay. */
 .engine-settings-group-help {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   margin: 0 0 8px;
 }
 
 .engine-settings-env-unchecked {
   margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--warning, var(--priority-important));
+  font-size: var(--font-size-sm);
+  color: var(--warning);
 }
 
 .engine-settings-draft-guard {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
-  color: var(--warning, var(--priority-important));
+  color: var(--warning);
 }
 
 /* ── Filter ── */
@@ -379,10 +379,10 @@
   width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--fg);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .engine-settings-filter:focus { outline: none; border-color: var(--accent); }
