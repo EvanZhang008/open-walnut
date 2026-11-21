@@ -110,3 +110,39 @@ describe('the UI requirements skill', () => {
     expect(text).not.toMatch(/[\u2013\u2014]/);
   });
 });
+
+/**
+ * Go-live of a Walnut change is not the user's to ask (2026-11-21, the user, by voice: "just ship it
+ * when it is ready to ship, don't ask me about this"): a new design ships after its review and tests
+ * and he hears in one line after; only a real choice of look and his own kinds of decision go to him.
+ * Every rule text an agent doing UI work reads must say so, and none may bring back the old gate.
+ */
+describe('a new design ships after review and tests, the user hears after', () => {
+  const READERS = [path.relative(ROOT, SKILL_FILE), 'web/src/AGENTS.md', 'AGENTS.md', 'web/src/CLAUDE.md',
+    '.claude/skills/walnut-ui-requirements/standard.md', '.claude/skills/walnut-ui-requirements/review-prompt.md']
+  const OLD_GATE = [
+    /ships before the user has seen it and said yes/i,
+    /said yes himself/i,
+    /(his|the user's)( own)? yes (on|for) (a|any) new design/i,
+    /agent never approves it for him/i,
+    /(no|never) (new )?design .{0,40}ships? (before|until|without) (he|the user)/i,
+  ]
+
+  it('no rule text brings back the old gate', () => {
+    const hits: string[] = []
+    for (const f of READERS) {
+      const p = path.join(ROOT, f)
+      if (!fs.existsSync(p)) continue
+      const text = fs.readFileSync(p, 'utf8')
+      for (const re of OLD_GATE) if (re.test(text)) hits.push(`${f}: ${re}`)
+    }
+    expect(hits).toEqual([])
+  })
+
+  it('rule 4 says ship after review and tests, tell him after, and what stays his', () => {
+    const text = fs.readFileSync(SKILL_FILE, 'utf8')
+    expect(text).toMatch(/4\. \*\*A new design ships once its review and tests pass; tell the user in one line in its thread after it is live\./)
+    expect(text).toMatch(/Only a real choice of look \(which of several designs\) goes to him first/)
+    expect(text).toMatch(/a public release, an outward send, spending, credentials, deleting data\) stay his/)
+  })
+})

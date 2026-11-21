@@ -30,8 +30,8 @@ detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../..
 
 3. **Use as few states and tabs as possible, named with the user's own words, and a tab shows only its own kind.**
    Example (2026-11-20): Threads shipped All / Needs you / To read / Waiting / Done plus a "Known" group, which the user could not read; he asked for Needs you / Waiting / Closed.
-4. **No new design of an everyday view ships before the user has seen it and said yes himself; an agent never approves it for him.**
-   Example (2026-11-20): the "Known" state went live without the user ever seeing its design. Send the choice as ONE HTML page with every option's picture inline, your pick and why first.
+4. **A new design ships once its review and tests pass; tell the user in one line in its thread after it is live. Only a real choice of look (which of several designs) goes to him first, and his own kinds of decision (a public release, an outward send, spending, credentials, deleting data) stay his.**
+   Example (2026-11-21): the user said "just ship it when it is ready to ship, don't ask me about this"; go-live of a Walnut change is not his to ask. A choice of look is ONE HTML page with every option's picture inline, your pick and why first; the rest of the work goes on meanwhile.
 5. **Plain input is a plain message: never attach what the user types to a question or thread on its own.**
    Example (2026-11-20): every message in the main chat was labelled "Answer to ...".
 6. **A card that asks the user to decide holds one decision at a time; several decisions page left and right.**
@@ -64,4 +64,4 @@ detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../..
 ## Before you land
 
 Go through this list for the change: every item of rule 1 checked, the core flows of rule 2 walked,
-the video of rule 13 watched by you frame by frame, and the user's own yes for any new design (rule 4).
+the video of rule 13 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).
