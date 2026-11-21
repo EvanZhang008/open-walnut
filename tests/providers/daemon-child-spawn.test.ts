@@ -3,7 +3,7 @@
  * umask 077 when its caller names none, through every way the daemon starts one, and the
  * process's own umask is back the moment the call returns. Real children (`sh -c`), temp dirs.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as cp from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -122,9 +122,8 @@ describe('createDaemonChildSpawn with contain', () => {
     await new Promise<void>((resolve) => {
       proc.on('close', () => { resolve(); throw new Error('close boom') })
     })
-    await new Promise((r) => setTimeout(r, 5))
+    await vi.waitFor(() => expect(errors.some((e) => e.includes('close boom'))).toBe(true))
     expect(errors.some((e) => e.includes('data boom'))).toBe(true)
-    expect(errors.some((e) => e.includes('close boom'))).toBe(true)
     expect(errors.some((e) => e.includes('removed one ran'))).toBe(false)
   })
 

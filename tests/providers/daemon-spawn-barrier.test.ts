@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { spawn, execFile, execFileSync, execSync } from 'node:child_process'
 import { spawnBehindRegistry } from '../../src/providers/daemon-spawn-barrier.js'
 import { createDaemonChildSpawn } from '../../src/providers/daemon-child-spawn.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let root: string
 let input: fs.FileHandle
@@ -29,7 +30,7 @@ afterEach(async () => {
 
 function start(args = ['-c', 'printf "%s" "$$"']) {
   const gate = spawnBehindRegistry('/bin/sh', args, {
-    cwd: root, env: { HOME: root, PATH: '/usr/bin:/bin' },
+    cwd: root, env: { HOME: root, PATH: guardedPath([], '/usr/bin:/bin') },
     stdio: [input.fd, output.fd, stderr.fd],
   })
   const exited = once(gate.process, 'exit', { signal: AbortSignal.timeout(5000) })
@@ -78,10 +79,10 @@ describe('real process execution waits for registry commit', () => {
       spawn: ((...a: Parameters<typeof spawn>) => { forks.push(String(a[0])); return spawn(...a) }) as typeof spawn,
       execFile, execFileSync, execSync,
       umask: (mask?: number) => (mask === undefined ? process.umask() : process.umask(mask)),
-    }, { env: { PATH: '/usr/bin:/bin' }, cwd: () => undefined, umask: 0o077 })
+    }, { env: { PATH: guardedPath([], '/usr/bin:/bin') }, cwd: () => undefined, umask: 0o077 })
     const before = process.umask()
     const gate = spawnBehindRegistry('/bin/sh', ['-c', 'printf "%s|%s" "$(umask)" "$CLI_MARK"'], {
-      cwd: root, env: { HOME: root, PATH: '/usr/bin:/bin', CLI_MARK: 'session' },
+      cwd: root, env: { HOME: root, PATH: guardedPath([], '/usr/bin:/bin'), CLI_MARK: 'session' },
       stdio: [input.fd, output.fd, stderr.fd],
     }, runtime)
     const exited = once(gate.process, 'exit', { signal: AbortSignal.timeout(5000) })

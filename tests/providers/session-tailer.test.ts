@@ -664,9 +664,9 @@ describe('createSessionTailer: a file call that never settles', () => {
       onLines: () => {}, onBoundary: () => {}, onError: (_err, consecutive) => { errors.push(consecutive) },
     })
     try {
-      await new Promise((r) => setTimeout(r, 300))
+      // Six read timeouts in a row (each 20 ms of the real clock), and still only one call out.
+      await vi.waitFor(() => expect(errors.length).toBeGreaterThan(5), { timeout: 5_000, interval: 20 })
       expect(outstanding).toBe(1)
-      expect(errors.length).toBeGreaterThan(5)
     } finally { tailer.stop() }
   })
 

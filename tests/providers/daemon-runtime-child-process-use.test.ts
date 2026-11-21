@@ -17,6 +17,7 @@ import { gitRunnerWith, readOpenPaths } from '../../src/providers/task-dir-core.
 import { macPromptProbe } from '../../src/providers/host-exec-watch.js'
 import { cpuOfPid } from '../../src/providers/host-exec-matcher.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
+import { guardedPath } from '../setup/exec-guard.js'
 import { createCodeServer } from '../../src/providers/vscode-server-core.js'
 import { grepReferencesHostLocal } from '../../src/providers/search-grep-core.js'
 
@@ -36,7 +37,8 @@ function fakeExecFile(stdout = '') {
 const roots: string[] = []
 afterAll(() => { for (const r of roots) fs.rmSync(r, { recursive: true, force: true }) })
 const tempDir = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'child-use-')); roots.push(d); return d }
-const ENV = { PATH: '/usr/bin:/bin', RUNTIME_MARK: 'rt', GIT_DIR: '/elsewhere/.git' }
+// Data only (the fake execFile runs nothing), built as the exec guard wants any PATH a test hands on.
+const ENV = { PATH: guardedPath(), RUNTIME_MARK: 'rt', GIT_DIR: '/elsewhere/.git' }
 
 describe('a module of the daemon runtime starts its children the way its caller says', () => {
   it('detached-registry processStart: ps through the given execFile', async () => {
@@ -63,7 +65,7 @@ describe('a module of the daemon runtime starts its children the way its caller 
     const { fn, calls } = fakeExecFile('')
     await gitRunnerWith({ execFile: fn, env: ENV })(tempDir(), ['status'])
     expect(calls[0]!.file).toBe('git')
-    expect(calls[0]!.opts.env).toEqual({ PATH: '/usr/bin:/bin', RUNTIME_MARK: 'rt' })
+    expect(calls[0]!.opts.env).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt' })
     await readOpenPaths(tempDir(), { execFile: fn })
     expect(calls[1]!.file).toBe('lsof')
   })
@@ -76,7 +78,7 @@ describe('a module of the daemon runtime starts its children the way its caller 
   })
 
   it('git-env gitChildEnv: built from the given env, redirects dropped', () => {
-    expect(gitChildEnv(undefined, ENV)).toEqual({ PATH: '/usr/bin:/bin', RUNTIME_MARK: 'rt' })
+    expect(gitChildEnv(undefined, ENV)).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt' })
     expect(gitChildEnv({ GIT_DIR: '/mine' }, ENV)).toEqual({ ...ENV, GIT_DIR: '/mine' })
   })
 
@@ -86,7 +88,7 @@ describe('a module of the daemon runtime starts its children the way its caller 
     const server = createCodeServer({ execFile: fn, env: { ...ENV, HOME: home } })
     expect(await server.resolveOpenTarget('~')).toEqual({ kind: 'folder', path: home })
     expect(calls.map((c) => c.file)).toEqual(['git'])
-    expect(calls[0]!.opts.env).toEqual({ PATH: '/usr/bin:/bin', RUNTIME_MARK: 'rt', HOME: home })
+    expect(calls[0]!.opts.env).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt', HOME: home })
     expect(await server.codeServerStatus()).toEqual({ running: false })
   })
 

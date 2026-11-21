@@ -192,11 +192,18 @@ describe('demo.quiesce twin wiring', () => {
     return src.slice(at, src.indexOf(close, at))
   }
 
+  const CLI_LAUNCH = /\b(?:spawn|spawnBehindRegistry|spawnDetached)\(/g
+
   it('every process spawn a fenced Demo could still reach reads the fence synchronously before it', () => {
+    // The bun binary's in-process launch goes through the pool: the class guard below must see it.
+    expect(body(standalone, 'async function startSessionProcess(')).toMatch(/spawnPool\.spawnDetached\(/)
     const sites: Array<[string, string, RegExp, string]> = [
-      ['standalone startSessionProcess', body(standalone, 'async function startSessionProcess('), /\bspawn\(/g, 'demoQuiesce.fenced'],
-      ['source startSessionProcess', body(source, 'async function startSessionProcess('), /\bspawn\(/g, 'demoQuiesce.fenced'],
-      ['ACP worker spawn', body(read('src/providers/acp-daemon.ts'), 'async function acpStart(', '\n  }\n'), /\bspawn\(/g, 'deps.maySpawn'],
+      // A CLI starts through spawn, the registry barrier, or (inside another program) the spawn pool's
+      // thread, which spawnDetached asks at once: each is a launch, each after the final fence read.
+      ['standalone startSessionProcess', body(standalone, 'async function startSessionProcess('), CLI_LAUNCH, 'demoQuiesce.fenced'],
+      ['source startSessionProcess', body(source, 'async function startSessionProcess('), CLI_LAUNCH, 'demoQuiesce.fenced'],
+      // The ACP daemon spawns through its runtime's own spawn when it has one: `(use.spawn ?? spawn)(`.
+      ['ACP worker spawn', body(read('src/providers/acp-daemon.ts'), 'async function acpStart(', '\n  }\n'), /\bspawn\)?\(/g, 'deps.maySpawn'],
       ['one-shot prewarm', body(read('src/providers/oneshot-core.ts'), 'function prewarm(', '\n  }\n'), /\bspawnChild\(/g, 'poolClosed'],
       ['one-shot run', body(read('src/providers/oneshot-core.ts'), 'function run(', '\n  }\n'), /\bspawnChild\(/g, 'poolClosed'],
     ]
@@ -547,6 +554,8 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
     const armedTriggers = new Map([['/h\nt1', entry]])
     const env: Record<string, unknown> = {
       demoQuiesce: fence, armedTriggers, triggerKey: (h: string, id: string) => `${h}\n${id}`,
+      // The bun binary's checkRunFence hands its runtime's child-process use to the check.
+      childUse: {},
       demoTriggerChecks: new AbortController(), demoTriggerCheckPids: new Set<number>(), triggerChecksRunning: new Set<unknown>(),
       runCheckProcess, buildCheckStdin: core.buildCheckStdin, parseCheckStdout: core.parseCheckStdout, checkErrorOf: core.checkErrorOf,
       applyCheckError: core.applyCheckError, decideCheck: core.decideCheck, applyCheckOutcome: core.applyCheckOutcome,

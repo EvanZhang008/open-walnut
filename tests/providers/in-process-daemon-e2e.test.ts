@@ -22,6 +22,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const FIXTURE = path.resolve(__dirname, 'fixtures/in-process-daemon-session.ts')
 const BUN = process.versions.bun ? process.execPath : null
@@ -49,7 +50,7 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
       // Every frame either way is frozen and checked to be plain JSON (daemon-in-process-client.ts).
       WALNUT_IN_PROCESS_FRAME_CHECK: '1',
       SHELL: '/bin/sh',
-      PATH: '/usr/bin:/bin',
+      PATH: guardedPath([], '/usr/bin:/bin'),
     }
     for (const k of DROPPED_ENV) delete env[k]
 

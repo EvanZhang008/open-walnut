@@ -297,7 +297,10 @@ describe('fold checkpoint', () => {
     // 2026-11-19, format 8: foldLine and applyTaskEvent take the CLI's start of an ended
     // background call under its own id as the call running again (bg-task-resume.ts). A checkpoint
     // folded before it may hold such a subagent ended while it works.
-    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 8, logicHash: '7ec6f1b2facf6543' })
+    // 2026-11-21: foldLine takes an optional parseLine, the line's JSON as its tailer parsed it once
+    // (session-tailer.ts parseOnce: JSON.parse of the same text, its throw kept). foldLine only reads
+    // the parsed line, so every stream folds to the same state, and the format stays.
+    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 8, logicHash: '8aa6058e4de73087' })
 
     // The factory's own FORMAT is the one written.
     fs.writeFileSync(jsonl, content(20))

@@ -94,7 +94,10 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     // host_exec runs: handleCommand asks whether an exec.read is a resumable run's; none here.
     hostExec: { resumableJob: () => false },
   }
-  const names = ['handleCommand', 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession', 'isServerClient']
+  // The bun binary parses a socket line in handleCommand and handles the frame in handleCommandFrame
+  // (a client in this process hands the frame itself); its replies go through sendFrame.
+  const twinOnly = kind === 'standalone' ? ['handleCommandFrame', 'sendFrame'] : []
+  const names = ['handleCommand', ...twinOnly, 'dispatchCommand', 'cmdSessionPermission', 'answerPermission', 'isJournalSid', 'sendOk', 'sendError', 'bridgeSpeaksFor', 'bridgeHomeOf', 'bridgeHearsSession', 'isServerClient']
   const code = names.map((name) => functionText(sources[kind], name)).join('\n')
   // Every module-level name the extracted functions read is handed in, whichever branch
   // reads it, judged against the vm context's own globals (no process, timers or Buffer).

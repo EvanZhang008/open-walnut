@@ -88,7 +88,6 @@ const LITERAL_PATH_BUDGET: Record<string, number> = {
   'tests/providers/daemon-send-dedupe-twins-e2e.test.ts': 1,
   'tests/providers/daemon-service-cron.test.ts': 1,
   'tests/providers/daemon-source-fallback-loaders-e2e.test.ts': 1,
-  'tests/providers/daemon-spawn-barrier.test.ts': 1,
   'tests/providers/daemon-spawn-gate-e2e.test.ts': 1,
   'tests/providers/daemon-spawn-journal-twins-e2e.test.ts': 1,
   'tests/providers/daemon-start-cmd.test.ts': 2,

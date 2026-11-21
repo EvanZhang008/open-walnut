@@ -31,7 +31,8 @@ describe('task directory busy check in both daemon twins', () => {
   it.each(Object.entries(twins))('%s reads the open files for a low-disk prune of directories in use', (_name, src) => {
     const body = fnBody(src, 'cmdTaskDirPrune')
     expect(body).toMatch(/cmd\.live === true/)
-    expect(body).toMatch(/readOpenPaths\(TASK_DIR_ROOT\)/)
+    // The bun binary passes its runtime's child-process use as the second argument.
+    expect(body).toMatch(/readOpenPaths\(TASK_DIR_ROOT(, childUse)?\)/)
     expect(body).toMatch(/openPaths/)
   })
 

@@ -87,6 +87,8 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/host-exec-matcher.ts': 1,         // the wait_for matcher ends its own process once the daemon that started it is gone
   'src/providers/daemon-boot-proof.ts': 1,         // the trial daemon it spawned detached, its group only while that leader lives
   'src/providers/host-fix-core.ts': 3,             // its own fix-script child (a process.kill wrapper + its two calls)
+  'src/providers/spawn-pool.ts': 2,                // a child its own Worker spawned, once that Worker died: kill() of a lost child and giveUp's SIGTERM of one
+                                                   // still running (pid > 1; nothing else reaps it, so it stays this process's zombie and its pid cannot be reused)
   'src/providers/local-daemon.ts': 1,              // an ISOLATED daemon it manages (refuses the production dir)
   'src/providers/trigger-check-core.ts': 1,        // its own check-script child's group
   'src/providers/vscode-server-core.ts': 2,        // the editor server it launched

@@ -33,7 +33,7 @@ describe('host vitals twin wiring', () => {
   it('both twins dispatch host.vitals, start the ledger at boot and keep it under HOME', () => {
     for (const src of [standalone, source]) {
       expect(src).toContain("case 'host.vitals':")
-      expect(src).toMatch(/hostVitals\.start\(\);?\n\s+(console\.log\(port\)|options\.onListening\?\.\(port\))/)
+      expect(src).toMatch(/hostVitals\.start\(\);?\n\s+(console\.log\(port\)|(if \(LISTEN\) )?options\.onListening\?\.\(port\))/)
       expect(src).toContain("path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals')")
       expect(src).toContain("path.join(DAEMON_DIR, 'host-vitals')")
     }

@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const FIXTURE = path.resolve(__dirname, 'fixtures/in-process-daemon-self-end.ts')
 const BUN = process.versions.bun ? process.execPath : null
@@ -32,7 +33,7 @@ describe.skipIf(!BUN)('an in-process runtime that ends itself', () => {
       WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy'),
       WALNUT_DAEMON_HEARTBEAT_MS: '200',
       SHELL: '/bin/sh',
-      PATH: '/usr/bin:/bin',
+      PATH: guardedPath([], '/usr/bin:/bin'),
     }
     for (const k of ['WALNUT_STREAMS_DIR', 'WALNUT_DAEMON_KEEP_SESSIONS', 'WALNUT_DAEMON_STATE_DIR', 'WALNUT_DAEMON_PARENT_PID']) delete env[k]
     const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {

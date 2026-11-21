@@ -124,6 +124,9 @@ const CLIENTS: Record<string, Client> = {
   'src/commands/net.ts': { frames: 1, resends: 'daemonRpc is the loop over daemonRpcOnce' },
   'src/providers/local-daemon.ts': { frames: 3, exempt: 'its probes of the daemon on one port (hello, exec.list, the login-session check): they ask that daemon itself, and the next probe or ensureRunning asks the next one' },
   'src/providers/daemon-service-ready.ts': { frames: 1, exempt: 'the service check after a swap (daemonReady) says hello to learn which daemon serves; a draining one is the answer it looks for' },
+  // A DaemonConnection command reaches an in-process runtime through send(), as the frame
+  // daemon-connection.ts built inside its resendThroughSwap loop; this file builds a frame only in request().
+  'src/providers/daemon-in-process-client.ts': { frames: 1, exempt: "request() is only the in-process runtime's serves check of itself (in-process-daemon.ts inProcessDaemonServesCheck: hello, then status): a drain of that very runtime is the answer it asks for" },
   'src/providers/stream-lane.ts': { frames: 1, exempt: 'the lane dial (hello, stream.lane): a refusal drops the lane and its own redial reaches the next daemon' },
 }
 

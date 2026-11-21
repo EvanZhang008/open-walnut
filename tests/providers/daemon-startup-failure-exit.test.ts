@@ -88,11 +88,18 @@ describe('a CLI exit reads as what this process did', () => {
 
   it('both twins record where this process starts writing, at spawn', () => {
     const root = path.resolve(import.meta.dirname, '..', '..')
+    const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf-8')
     for (const rel of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = fs.readFileSync(path.join(root, rel), 'utf-8')
+      const src = read(rel)
       expect(src, rel).toMatch(/sessionData\.outputStartOffset = cronStartOffset/)
       expect(src, rel).toMatch(/sessionData\.stderrStartOffset = stderrStartOffset/)
-      expect(src, rel).toMatch(/const stderrStartOffset = fs\.fstatSync\(stderrFd\)\.size/)
     }
+    // The JS twin measures the stderr file itself; the bun binary takes both offsets from the
+    // files session-spawn-files.ts opens for it, measured once the stderr file is open.
+    expect(read('src/providers/daemon-source.ts')).toMatch(/const stderrStartOffset = fs\.fstatSync\(stderrFd\)\.size/)
+    expect(read('src/providers/daemon-standalone.ts')).toMatch(/\{[^}]*\bcronStartOffset\b[^}]*\bstderrStartOffset\b[^}]*\} = await prepareSpawnFiles\(/)
+    const spawnFiles = read('src/providers/session-spawn-files.ts')
+    expect(spawnFiles).toMatch(/const cronStartOffset = \(await fstat\(outputFd\)\)\.size/)
+    expect(spawnFiles).toMatch(/const stderrStartOffset = \(await fstat\(stderrFd\)\)\.size/)
   })
 })

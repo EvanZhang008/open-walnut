@@ -67,7 +67,7 @@ export class PooledChild extends EventEmitter {
       try { process.kill(this.pid!, signal); this.killed = true; return true } catch { return false }
     }
     this.killed = true
-    this.send({ op: 'kill', id: this.id, signal })
+    this.send({ op: 'signal', id: this.id, signal })
     return true
   }
   ref(): this { return this }
@@ -151,7 +151,7 @@ const handle = (m) => {
     child.on('error', (err) => postMessage({ op: 'error', id: m.id, error: errorOf(err) }))
     child.on('exit', (code, signal) => { children.delete(m.id); postMessage({ op: 'exit', id: m.id, code, signal }) })
     child.unref()
-  } else if (m.op === 'kill') {
+  } else if (m.op === 'signal') {
     try { children.get(m.id)?.kill(m.signal) } catch {}
   } else if (m.op === 'stdin') {
     try { children.get(m.id)?.stdin?.write(m.data) } catch {}

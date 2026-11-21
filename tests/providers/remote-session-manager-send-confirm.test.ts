@@ -568,9 +568,26 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
     await expect(mgr.writeMessage('hello', { uuid: 'u-1', markers })).resolves.toBe(true)
     expect(mgr.pid).toBe(88)
     expect(mgr.tailOffset).toBe(100)
-    expect(onOutput).toHaveBeenCalledExactlyOnceWith({ line: JSON.stringify({ type: 'assistant', uuid: 'a1' }), v: 100 })
+    // The exact raw line, and its one parse handed down beside it (the session's parser reads that, not the line again).
+    expect(onOutput).toHaveBeenCalledExactlyOnceWith({ line: JSON.stringify({ type: 'assistant', uuid: 'a1' }), v: 100, parsed: { type: 'assistant', uuid: 'a1' } })
     fallback.links[0].emit({ ev: 'jsonl', sid: 'sid-1', v: 100, line: JSON.stringify({ type: 'assistant', uuid: 'a1' }) })
     expect(onOutput).toHaveBeenCalledOnce()
+  })
+
+  // Every manager on a host hears every session's lines: only its own are parsed (and handed down).
+  it('a line of another session on the host is neither parsed nor forwarded', () => {
+    const mgr = new RemoteSessionManager('sid-1', 'remote-box', null)
+    const onOutput = vi.fn()
+    Object.assign(mgr, { _sid: 'sid-1', _onOutput: onOutput })
+    const foreign = JSON.stringify({ type: 'assistant', uuid: 'foreign-1' })
+    const parse = vi.spyOn(JSON, 'parse')
+    try {
+      ;(mgr as unknown as { handleDaemonEvent(event: Record<string, unknown>): void }).handleDaemonEvent({ ev: 'jsonl', sid: 'sid-2', v: 100, line: foreign })
+      expect(parse.mock.calls.some(([text]) => text === foreign)).toBe(false)
+    } finally {
+      parse.mockRestore()
+    }
+    expect(onOutput).not.toHaveBeenCalled()
   })
 
   it('native recovery closes the independent cloud link on its next event', async () => {

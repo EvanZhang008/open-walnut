@@ -7744,9 +7744,11 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     // Last synchronous point before the CLI exists: a fence set during the awaits above wins.
     if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')
     barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions, childUse) : null
-    proc = barrier?.process
-      // Inside another program: started on the pool's thread, its pid known once it runs (spawn-pool.ts).
-      ?? (spawnPool ? containListeners(await spawnPool.spawnDetached(userShell, ['-c', shellCmd], spawnOptions), runtimeTimers.contain) as unknown as ReturnType<typeof spawn> : spawn(userShell, ['-c', shellCmd], spawnOptions))
+    // Every launch is issued here, synchronously after the fence read. Inside another program the
+    // pool's thread starts it (spawn-pool.ts posts the request at once) and its pid comes back after.
+    const launched = barrier?.process
+      ?? (spawnPool ? spawnPool.spawnDetached(userShell, ['-c', shellCmd], spawnOptions) : spawn(userShell, ['-c', shellCmd], spawnOptions))
+    proc = launched instanceof Promise ? containListeners(await launched, runtimeTimers.contain) as unknown as ReturnType<typeof spawn> : launched
   } catch (error) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd)
     throw error
@@ -13563,7 +13565,6 @@ function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string
   sendFrame(ws, { ...data, id, ok: false, error })
 }
 
-/** `local`: fields only a client in this process gets (a jsonl line's parsed object), never on the wire. */
 /**
  * What a live jsonl line carries for a client in this process: its JSON as the tailer parsed it
  * once (`parsed`), so the server reads the object and never parses the line again. A socket client

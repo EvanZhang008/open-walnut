@@ -104,7 +104,7 @@ function budgetStopSinkTwin(twin: 'standalone' | 'source') {
   const functions = new Map<string, ts.FunctionDeclaration>()
   for (const node of daemonStatements(ts, source)) if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node)
   const pause = functions.get('pauseBudgetSession')
-  const protocolNames = twin === 'standalone' ? ['enqueueForDrain', 'safeSend', 'sendOk', 'sendError'] : ['sendOk', 'sendError']
+  const protocolNames = twin === 'standalone' ? ['enqueueForDrain', 'safeSend', 'sendFrame', 'sendOk', 'sendError'] : ['sendOk', 'sendError']
   if (!pause) throw new Error('Actual budget pause function not found')
   let sink: ts.VariableDeclaration | undefined
   const visitSink = (node: ts.Node) => {

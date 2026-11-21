@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSpawnPool, type SpawnPool } from '../../src/providers/spawn-pool.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const isBun = !!process.versions.bun
 let pool: SpawnPool | null = null
@@ -20,6 +21,17 @@ const run = (p: SpawnPool, file: string, args: string[], options: Record<string,
   new Promise<{ error: (Error & Record<string, unknown>) | null; stdout: unknown; stderr: unknown }>((resolve) => {
     p.execFile(file, args, options, (error, stdout, stderr) => resolve({ error: error as (Error & Record<string, unknown>) | null, stdout, stderr }))
   })
+
+/** As run(), with the child at hand: `started` settles once the pool's thread started it. */
+const runStarted = (p: SpawnPool, file: string, args: string[]) => {
+  let started!: () => void
+  const startedP = new Promise<void>((resolve) => { started = resolve })
+  const answer = new Promise<{ error: (Error & Record<string, unknown>) | null }>((resolve) => {
+    const child = p.execFile(file, args, {}, (error) => resolve({ error: error as (Error & Record<string, unknown>) | null }))
+    child.once('spawn', () => started())
+  })
+  return { answer, started: startedP }
+}
 
 describe.skipIf(!isBun)('createSpawnPool', () => {
   it('execFile: output, exit codes and the umask, as from node', async () => {
@@ -57,7 +69,7 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
       // A PATH search goes on past it and says EACCES when nothing later runs (node's rule; Bun's own
       // spawn says ENOENT here, so only the umask shell's resolver is held to it).
       pool = createSpawnPool({ umask: 0o077 })
-      const searched = await run(pool, 'noexec', [], { env: { PATH: `/walnut-no-such-dir:${dir}` } })
+      const searched = await run(pool, 'noexec', [], { env: { PATH: guardedPath(['/walnut-no-such-dir', dir], '') } })
       expect(searched.error).toMatchObject({ code: 'EACCES', errno: -13 })
       await expect(pool.spawnDetached(file, [], { stdio: 'ignore', detached: true })).rejects.toMatchObject({ code: 'EACCES' })
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
@@ -151,21 +163,21 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
     bare.stdin.end(Buffer.alloc(1 << 20))
     const next = await run(pool, 'echo', ['ok'], { encoding: 'utf8' })
     expect(String(next.stdout).trim()).toBe('ok')
-    await new Promise((r) => setTimeout(r, 50))
-    expect(pool.pending).toBe(0)
+    await vi.waitFor(() => expect(pool!.pending).toBe(0))
   })
 
   it('a pool thread that dies answers every waiting call, keeps a started child reachable, and the next call works', async () => {
     const errors: unknown[] = []
     pool = createSpawnPool({ umask: null, onError: (e) => errors.push(e) })
-    const waiting = run(pool, 'sleep', ['5'])
+    const waiting = runStarted(pool, 'sleep', ['5'])
     const detached = await pool.spawnDetached('sleep', ['5'], { stdio: 'ignore', detached: true })
     const told = new Promise<Error & Record<string, unknown>>((resolve) => detached.once('error', resolve))
     let exited = false
     detached.once('exit', () => { exited = true })
-    await new Promise((r) => setTimeout(r, 50))
+    // Both run in the pool's thread when it dies: the helper is killed, the detached child runs on.
+    await waiting.started
     pool.__terminateWorkerForTest()
-    expect((await waiting).error?.code).toBe('POOL_WORKER_DIED')
+    expect((await waiting.answer).error?.code).toBe('POOL_WORKER_DIED')
     expect((await told).code).toBe('POOL_WORKER_DIED')
     expect(errors.some((e) => (e as Record<string, unknown>).code === 'POOL_WORKER_DIED')).toBe(true)
     expect(pool.pending).toBe(0)
@@ -188,7 +200,7 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
       child.on('error', () => {})
       const events: Array<[string, unknown, unknown]> = []
       for (const ev of ['exit', 'close']) child.on(ev, (code, signal) => events.push([ev, code, signal]))
-      await new Promise((r) => setTimeout(r, 50))
+      // spawnDetached resolved once the pool's thread started it: it runs when the thread dies.
       pool.__terminateWorkerForTest()
       await vi.waitFor(() => expect(child.lost).toBe(true), { timeout: 2000, interval: 20 })
       const lostAt = Date.now()
@@ -261,8 +273,9 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
       const child = pool!.execFile('walnut-no-such-program-x', [], {}, (e) => resolve(e as (Error & Record<string, unknown>) | null))
       for (const ev of ['error', 'exit', 'close']) child.on(ev, () => events.push(ev))
     })
-    await new Promise((r) => setTimeout(r, 20))
     expect(missing?.code).toBe('ENOENT')
+    // 'close' comes after the callback; no 'exit' comes at all (it would precede 'close').
+    await vi.waitFor(() => expect(events).toContain('close'))
     expect(events).toEqual(['error', 'close'])
     const ended = pool.execFile('true', [], {}, () => {})
     await new Promise((r) => ended.once('close', r))
@@ -277,10 +290,10 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
 
   it('close() answers what still waits', async () => {
     pool = createSpawnPool({ umask: null })
-    const waiting = run(pool, 'sleep', ['5'])
-    await new Promise((r) => setTimeout(r, 50))
+    const waiting = runStarted(pool, 'sleep', ['5'])
+    await waiting.started
     pool.close()
     pool = null
-    expect((await waiting).error?.code).toBe('POOL_CLOSED')
+    expect((await waiting.answer).error?.code).toBe('POOL_CLOSED')
   })
 })

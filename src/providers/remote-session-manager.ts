@@ -47,6 +47,7 @@ import type { SshTarget } from './session-io.js'
 import { spawnGateSentence } from '../core/hosts/host-readiness.js'
 import type {
   LineWriteOptions,
+  OutputEvent,
   SessionManager,
   TransportStartOptions,
   TransportStartResult,
@@ -192,7 +193,7 @@ export class RemoteSessionManager implements SessionManager {
    */
   private _lastPreparedOutbound: string | undefined
   private unsubscribeEvent: (() => void) | null = null
-  private _onOutput: ((event: { line: string; v?: number }) => void) | null = null
+  private _onOutput: ((event: OutputEvent) => void) | null = null
   private _onExit: ((code: number, stderr?: string) => void) | null = null
   private _sid: string | null = null
   /**
@@ -1760,7 +1761,9 @@ export class RemoteSessionManager implements SessionManager {
     if (this.conn?.connected && this.cloudLink) this.closeCloudLink()
     // A line is parsed once here, or not at all when the daemon in this process handed it over
     // parsed (event.parsed), and that object goes down to the session's own parser (OutputEvent.parsed).
-    const parsedLine = event.ev === 'jsonl' && event.line ? parsedJsonlLine(event) : undefined
+    // Only this session's own lines: every manager on a host hears every session's lines.
+    const ownLine = event.ev === 'jsonl' && !!event.line && (event.sid === this._sid || event.sid === this._prevSid)
+    const parsedLine = ownLine ? parsedJsonlLine(event) : undefined
     if (event.ev === 'jsonl' && event.sid === this._sid && event.line) {
       if (parsedLine) {
         const raw = parsedLine as { type?: string; request_id?: string; request?: { tool_name?: string }; response?: { request_id?: string } }

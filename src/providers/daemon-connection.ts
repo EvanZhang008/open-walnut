@@ -3129,8 +3129,7 @@ export class DaemonConnection {
         this.noteLinkSent(message.length)
       }
       if (ownBulk) this.bulkOwnWritten += message.length
-      if (isInProcessDaemonSocket(sentOn)) sentOn.sendFrame(payload)
-      else sentOn.send(message)
+      if (isInProcessDaemonSocket(sentOn)) sentOn.sendFrame(payload); else sentOn.send(message)
     })
   }
 

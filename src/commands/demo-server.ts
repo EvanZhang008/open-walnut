@@ -9,6 +9,7 @@ import { closeDemoWork } from '../core/sessions/demo-admission.js'
 import { closeDemoSignIns, reopenDemoSignIns, writeDemoSignInScript } from './demo-sign-ins.js'
 import { demoBeforeRoutes } from './demo-routes.js'
 import { startDemoRealSsh } from './demo-real-ssh.js'
+import { IN_PROCESS_DAEMON_URL } from '../providers/in-process-daemon-socket.js'
 
 /** Which configured hosts the Demo runs its own daemon on (providers/demo-remote-host.ts); none when config cannot be read. */
 async function demoLiftedHosts(): Promise<{ lifted(host: string): boolean }> {
@@ -49,8 +50,8 @@ export async function stopDemoProcesses(paths: DemoPaths, recovering = false): P
   if (reopened) gate.reopenDaemonDials()
   try {
     const port = await localDaemon.ensureRunning()
-    // In process (experiment in_process_daemon) there is no port: its own address is the daemon's.
-    const conn = await connections.getDirectDaemonConnection('__local__', localDaemon.runsInProcess && localDaemon.wsUrl ? localDaemon.wsUrl : `ws://127.0.0.1:${port}`)
+    // In process (experiment in_process_daemon) there is no port: the runtime is dialed at its fixed address.
+    const conn = await connections.getDirectDaemonConnection('__local__', localDaemon.runsInProcess ? IN_PROCESS_DAEMON_URL : `ws://127.0.0.1:${port}`)
     const deps = { connection: async () => conn }
     const quiet = await conn.send('demo.quiesce', { home: paths.data }, 30_000)
     if (quiet.ok !== true || quiet.quiet !== true || !Array.isArray(quiet.acpRuntimes)

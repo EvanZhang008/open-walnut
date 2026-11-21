@@ -1,9 +1,10 @@
 /**
  * The clocks of one daemon runtime (daemon-runtime-timers.ts): every timer is tracked so
  * clearAll() ends them, and a callback that throws or rejects is reported, never left to the
- * process as an uncaught error. Real timers with delays of a few milliseconds.
+ * process as an uncaught error. Real timers with delays of a few milliseconds: a test waits on what
+ * the callbacks leave (vi.waitFor), and sleeps a fixed time only to see that nothing fires.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRuntimeTimers, type RuntimeTimers } from '../../src/providers/daemon-runtime-timers.js'
 
 const sleep = (ms: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms))
@@ -32,7 +33,7 @@ describe('createRuntimeTimers: errors are reported, never thrown at the process'
   it('reports a throwing setTimeout callback as a timer', async () => {
     const boom = new Error('timer boom')
     rt.setTimeout(() => { throw boom }, 1)
-    await sleep(20)
+    await vi.waitFor(() => expect(reported).toHaveLength(1))
     expect(reported).toEqual([{ what: 'timer', err: boom }])
     expect(uncaught).toEqual([])
   })
@@ -40,7 +41,7 @@ describe('createRuntimeTimers: errors are reported, never thrown at the process'
   it('reports a throwing setInterval callback as an interval, on every run', async () => {
     let runs = 0
     const t = rt.setInterval(() => { runs++; throw new Error(`run ${runs}`) }, 2)
-    await sleep(40)
+    await vi.waitFor(() => expect(runs).toBeGreaterThanOrEqual(2))
     rt.clearInterval(t)
     expect(runs).toBeGreaterThanOrEqual(2)
     expect(reported.length).toBe(runs)
@@ -62,8 +63,7 @@ describe('createRuntimeTimers: errors are reported, never thrown at the process'
     rt.setTimeout(async () => { throw errs.timer }, 1)
     const iv = rt.setInterval(() => { rt.clearInterval(iv); return Promise.reject(errs.interval) }, 1)
     rt.setImmediate(async () => { throw errs.immediate })
-    await sleep(30)
-    expect(reported).toHaveLength(3)
+    await vi.waitFor(() => expect(reported).toHaveLength(3))
     expect(reported).toEqual(expect.arrayContaining([
       { what: 'timer', err: errs.timer },
       { what: 'interval', err: errs.interval },
@@ -73,9 +73,11 @@ describe('createRuntimeTimers: errors are reported, never thrown at the process'
   })
 
   it('reports nothing for callbacks that return normally or resolve', async () => {
-    rt.setTimeout(() => 42, 1)
-    rt.setImmediate(async () => 'ok')
-    await sleep(15)
+    const ran: string[] = []
+    rt.setTimeout(() => { ran.push('timer'); return 42 }, 1)
+    rt.setImmediate(async () => { ran.push('immediate'); return 'ok' })
+    // Both ran; the immediate's promise settled in the microtasks right after it, long before this poll.
+    await vi.waitFor(() => expect(ran).toHaveLength(2))
     expect(reported).toEqual([])
   })
 })
@@ -86,7 +88,7 @@ describe('createRuntimeTimers: arguments and bookkeeping', () => {
     rt.setTimeout((...a: unknown[]) => { seen.push(['timer', ...a]) }, 1, 'a', 1)
     const iv = rt.setInterval((...a: unknown[]) => { seen.push(['interval', ...a]); rt.clearInterval(iv) }, 1, 'b', 2)
     rt.setImmediate((...a: unknown[]) => { seen.push(['immediate', ...a]) }, 'c', 3)
-    await sleep(30)
+    await vi.waitFor(() => expect(seen).toHaveLength(3))
     expect(seen).toEqual(expect.arrayContaining([
       ['timer', 'a', 1],
       ['interval', 'b', 2],
@@ -101,8 +103,7 @@ describe('createRuntimeTimers: arguments and bookkeeping', () => {
     rt.setImmediate(() => {})
     const iv = rt.setInterval(() => {}, 1)
     expect(rt.pending).toBe(3)
-    await sleep(20)
-    expect(rt.pending).toBe(1)
+    await vi.waitFor(() => expect(rt.pending).toBe(1))
     rt.clearInterval(iv)
     expect(rt.pending).toBe(0)
   })
@@ -142,8 +143,7 @@ describe('createRuntimeTimers: arguments and bookkeeping', () => {
     let fired = false
     rt.setTimeout(() => { fired = true }, 1)
     expect(rt.pending).toBe(1)
-    await sleep(15)
-    expect(fired).toBe(true)
+    await vi.waitFor(() => expect(fired).toBe(true))
     expect(rt.pending).toBe(0)
   })
 })
@@ -158,7 +158,7 @@ describe('createRuntimeTimers: contain() guards an event handler the same way', 
     expect(seen).toEqual([3, 'SIGTERM'])
     expect(() => rt.contain('throws', () => { throw new Error('boom') })()).not.toThrow()
     rt.contain('rejects', async () => { throw new Error('late') })()
-    await new Promise((r) => setTimeout(r, 5))
+    await vi.waitFor(() => expect(errors).toHaveLength(2))
     expect(errors).toEqual([{ what: 'throws', message: 'boom' }, { what: 'rejects', message: 'late' }])
     rt.clearAll()
   })
@@ -183,8 +183,8 @@ describe('createRuntimeTimers without contain: errors reach the process, as befo
     const seen: unknown[] = []
     p.catch((e) => seen.push(e))
     rt.contain('rejects', () => p)()
-    await new Promise((r) => setTimeout(r, 5))
+    // The test's own catch ran (microtasks before this poll), and contain added no report of it.
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
     expect(reported).toEqual([])
-    expect(seen).toHaveLength(1)
   })
 })

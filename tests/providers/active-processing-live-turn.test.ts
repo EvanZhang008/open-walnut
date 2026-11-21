@@ -129,7 +129,9 @@ describe('activeProcessing safety timer and a turn still running', () => {
     const sid = 'rebatched'
     const { runner, internal, session } = setup(sid, { processStatus: 'running', turnEnded: false })
     try {
-      vi.useFakeTimers()
+      // Timeouts only: the count below is of this runner's clocks. The logger starts its flush
+      // interval at its first line, inside this clock when this test runs first or alone.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
       internal.setActiveProcessing(sid, 1, ['qm-a'])
       const first = runner.currentTurn(sid)!.then(() => 'resolved', () => 'rejected')
       await vi.advanceTimersByTimeAsync(90_000)
