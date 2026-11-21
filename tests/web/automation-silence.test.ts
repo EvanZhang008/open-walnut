@@ -367,6 +367,9 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
     'web/src/components/settings/sections/BackupSection.tsx': "a backup's destination setting (cfg.destination), no audio",
     'web/src/components/settings/sections/backup/backup-model.ts': "a backup's destination setting (cfg.destination), no audio",
     'plugin-store/walnut-rhythm/src/web/music.ts': 'a media element in the page: muted by the page silencer',
+    'web/src/components/chat/camera/CameraDock.tsx': "the chat camera's live picture and its video preview: muted elements, and the page silencer holds them",
+    'web/src/components/chat/camera/camera-frames.ts': "a muted video element that reads a phone video's frames for its stills, never played aloud",
+    'web/src/components/chat/camera/useCameraStream.ts': "the chat camera's live picture: a muted element with no sound track (the camera asks for no audio)",
   };
 
   it('lists every file that can make sound', () => {

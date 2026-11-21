@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { log } from '@/utils/log';
 import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
+import { acquireMediaHold, type MediaHoldHandle } from '@/api/media-hold';
 import {
   MAX_CLIP_MS, STILL_EVERY_MS, extensionFor, pickRecorderType, pickStills, signatureDiff, stillName,
 } from './camera-model';
@@ -46,6 +47,8 @@ interface Running {
   soundChunks: Blob[];
   soundType: string;
   mic: MediaStream | null;
+  /** The music stays off while the recording's microphone is open, as with voice input. */
+  hold: MediaHoldHandle | null;
   startedAt: number;
   samples: Sample[];
   lastSig: Uint8Array | null;
@@ -129,7 +132,7 @@ export function useClipRecorder(onLimit: () => void): ClipRecorder {
     const r: Running = {
       recorder, chunks: [], type: recorder.mimeType || type || 'video/webm',
       soundRecorder, soundChunks: [], soundType: soundRecorder?.mimeType || soundType || 'audio/webm',
-      mic, startedAt: performance.now(), samples: [], lastSig: null, base: opts.base, video,
+      mic, hold: mic ? acquireMediaHold('camera') : null, startedAt: performance.now(), samples: [], lastSig: null, base: opts.base, video,
       timer: setInterval(() => {
         const cur = run.current;
         if (!cur) return;
@@ -153,6 +156,7 @@ export function useClipRecorder(onLimit: () => void): ClipRecorder {
   const finish = useLeanCallback((r: Running) => {
     clearInterval(r.timer);
     stopStream(r.mic);
+    r.hold?.release();
     run.current = null;
     setRecording(false);
   }, []);

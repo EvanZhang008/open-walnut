@@ -15,6 +15,7 @@ import { transcribeAudio } from '@/api/stt';
 import type { ClipInfo } from '@/components/common/composer-clip';
 import { log } from '@/utils/log';
 import { inMacApp } from '@/utils/mac-app';
+import { usePageView } from '@/utils/view-memory';
 import { captureBaseName, recordingLabel, sttFormatFor } from './camera-model';
 import { blobToBase64, grabStill, recorderAvailable } from './camera-frames';
 import { useCameraStream } from './useCameraStream';
@@ -22,6 +23,7 @@ import { useClipRecorder, type RecordedClip } from './useClipRecorder';
 import './camera-dock.css';
 
 type Mode = 'photo' | 'video';
+const isMode = (v: unknown): v is Mode => v === 'photo' || v === 'video';
 type Words = { state: 'none' | 'pending' | 'done' | 'failed'; text: string; note?: string };
 type Capture =
   | { kind: 'photo'; file: File; url: string }
@@ -52,7 +54,8 @@ const ICON = {
 
 export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBusy, onMicHeld }: CameraDockProps) {
   const videoOk = !!onClip && recorderAvailable();
-  const [mode, setMode] = useState<Mode>('photo');
+  // Photo or Video is kept, as every view choice: the next open starts where the person left it.
+  const [mode, setMode] = usePageView<Mode>('chat-camera', 'mode', 'photo', isMode);
   const [sound, setSound] = useState(true);
   const [capture, setCapture] = useState<Capture | null>(null);
   const [photosTaken, setPhotosTaken] = useState(0);
@@ -189,7 +192,7 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
             ? <img className="camera-dock-media" src={capture.url} alt="The photo you took" data-testid="camera-preview-photo" />
             : <video className="camera-dock-media" src={capture.url} poster={capture.poster} controls playsInline muted data-testid="camera-preview-video" />
         ) : (
-          <video ref={cam.videoRef} className="camera-dock-media is-live" autoPlay muted playsInline data-testid="camera-live" />
+          <video ref={cam.videoRef} className="camera-dock-media is-live" autoPlay muted playsInline controls={false} data-testid="camera-live" />
         )}
         {!refused && (
           <div className="camera-dock-top">

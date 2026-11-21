@@ -22,7 +22,10 @@ const SOURCES = ['Walnut', 'Shared', 'WalnutWidgets', 'WalnutAutoFill']
 const HELPER = 'Shared/TestRunMark.swift'
 
 /** Files whose URLRequests outnumber their marks, and why the rest never reach Walnut. */
-const UNMARKED: Record<string, string> = {}
+const UNMARKED: Record<string, string> = {
+  'Walnut/Views/Chat/Camera/CameraClipMaker.swift': 'its AVURLAsset reads a video the phone just recorded, a local file: no request',
+  'Walnut/Core/VideoStills.swift': 'its AVURLAsset reads a local video file for its stills: no request',
+}
 
 /** Source without comments, so a name in a comment neither adds nor approves a request. */
 const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
@@ -57,7 +60,7 @@ export function auditTestRunMarks(files: Array<{ file: string; text: string }>, 
       findings.push({ file, problem: 'loads from a bare URL; build a URLRequest and mark it, or list the file in UNMARKED with why' })
     }
     const assets = count(src, ASSET_RE)
-    if (assets > count(src, ASSET_MARK_RE)) {
+    if (assets > count(src, ASSET_MARK_RE) && !unmarked[file]) {
       findings.push({ file, problem: `opens ${assets} AVURLAsset(s) without TestRunMark.headers(token:)` })
     }
   }
@@ -99,7 +102,7 @@ describe('iOS requests to Walnut carry the test-run mark under automation', () =
       const found = sources.find((s) => s.file === file)
       expect(found, file).toBeDefined()
       const src = code(found!.text)
-      expect(count(src, BUILDS_RE) !== count(src, MARKS_RE) || count(src, BARE_URL_RE) > 0, file).toBe(true)
+      expect(count(src, BUILDS_RE) !== count(src, MARKS_RE) || count(src, BARE_URL_RE) > 0 || count(src, ASSET_RE) > count(src, ASSET_MARK_RE), file).toBe(true)
     }
   })
 
