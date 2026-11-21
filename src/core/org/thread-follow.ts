@@ -28,7 +28,7 @@
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
-import { sameProject } from '../inbox-project.js';
+import { projectOrInbox, sameProject } from '../inbox-project.js';
 import { leadsAlso, orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
 import { isOpen, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
@@ -58,7 +58,8 @@ export function orgPlaces(all: readonly FollowTask[]): OrgPlaces {
   const byId = new Map(all.map((t) => [t.id, t] as const));
   const openLeads = all.filter((t) => t.org_role === 'lead' && openTask(t));
   const main = pickMain(all.filter((t) => t.org_role === 'main' && openTask(t)) as Task[]);
-  return { byId, leadOf: (project) => ((project ?? '').trim() ? pickLead(openLeads as Task[], project!.trim()) : undefined), main, all };
+  // '' is the Inbox, whose lead is found like any project's (pickLead compares by projectKey).
+  return { byId, leadOf: (project) => pickLead(openLeads as Task[], projectOrInbox(project)), main, all };
 }
 
 /**
