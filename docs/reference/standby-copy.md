@@ -1,7 +1,8 @@
 # Standby copy of the data folder
 
 A standby copy is a second, complete copy of this Walnut's home, kept current in batches,
-so another machine could one day take over as the leader. This phase builds the copy and
+in a folder on this machine or on another host, so another machine could one day take over
+as the leader. This phase builds the copy and
 keeps it honest; it does not switch leaders. Code: `src/core/standby/`. Behind the
 experiment `switchable_leader` (off by default).
 
@@ -157,7 +158,40 @@ and built again; a dir it cannot read is opened. Last, every dir gets its read-o
 the server hands each report, a commit's included, to Walnut Health once
 (`publishErrorNotification`, no `needsYou`: it never pops up to the person). A CLI pass leaves
 its report for the server's next pass. The runner verifies after every batch; `--deep` also
-removes chunks no file uses any more.
+removes chunks no file uses any more, once they are six hours old (a batch cut off part way
+sent them, and the next batch takes them instead of sending them again).
+
+## A target on another host
+
+With `standby.host` set, the target folder is on that host, reached through its session
+daemon over the link Walnut already keeps to it (`src/core/hosts/link.ts`: SSH or the host
+network alike). It opens no port, needs no credential of its own and adds no daemon command
+(`remote-transport.ts`, the leader's side; `receive.ts`, the host's side).
+
+**Before you turn it on: the host needs the walnut program.** The receiving side is
+`walnut standby receive <op> <dir>`, the same `StandbyTarget` code a local target runs, so it
+needs Walnut installed there (`standby.walnut` names it when it is not `walnut` on the PATH a
+script there sees). A host that runs only Walnut's session daemon has no such program yet; once
+the daemon and the server are one program, every host has it.
+
+| Step | How it goes | Why that way |
+|---|---|---|
+| Read the target | `walnut standby receive init` (run by the daemon's `exec.script`) makes the target owner-only, finishes an apply a kill cut off, and writes into `.incoming/` the chunk ids it holds and its current files, only those the leader does not hold already; the leader reads that file with `fs.readRange` | One run and one read per batch; an unchanged batch reads about 100 bytes back |
+| Send chunks | `fs.writePart`, one 1 MiB chunk a part, eight in flight: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch |
+| Send the batch | an upload (`BatchUpload`: the files that differ from the target's batch, and the paths gone), gzipped, written the same way | An incremental batch sends its few changed entries, not a manifest of every file |
+| Make it current | `walnut standby receive apply` rebuilds the whole manifest from its own current batch and the upload, takes it only when its sha256 is the leader's, then runs `StandbyTarget.commit` and a verify pass | The same rules as a local target, word for word: every chunk and file checked, one switch, a kill or a full disk leaves the batch before whole |
+
+A dropped link is dialled again and the command sent again for up to two minutes; only commands
+that do the same thing twice are sent twice. An apply whose answer was lost (the link went
+while it ran) is never sent again: the leader asks the target which batch it holds and takes
+the answer from there. A target another leader moved meanwhile refuses the upload (it is
+against another batch), and the next batch reads it again. A chunk the leader believed the
+target held, gone there, fails one batch; the next reads the target's list again and sends it.
+
+Limits: an apply runs within the daemon's script limit (10 minutes), which a first batch of a
+very large home on a slow disk could pass (it is then stopped there, and the batch before stays
+current); the runner reads the target's state through the same link, so a host that cannot be
+reached for five minutes is reported behind once.
 
 ## Running it
 
@@ -165,7 +199,9 @@ Settings › Experimental › "Standby copy of this Walnut", and in `config.yaml
 
 ```yaml
 standby:
-  dir: /path/to/standby   # on this machine, outside the home
+  dir: /path/to/standby   # on this machine, outside the home, or on `host`
+  host: my-standby-box    # optional: a host Walnut knows (it needs the walnut program, above)
+  walnut: /opt/walnut/bin/walnut   # optional: the walnut program there (default `walnut`)
   interval_seconds: 30    # optional
 ```
 
@@ -226,9 +262,12 @@ every 20 ms to the session audit log voided every batch.
 
 ## Not done yet
 
-- No remote transport: the target is a directory on this machine (`StandbyTransport` in
-  `types.ts` is the interface a remote one implements). No promotion: swapping the copy in at
-  boot (`src/core/backup/restore-switch.ts`) and making it writable is phase B.
+- No promotion: swapping the copy in at boot (`src/core/backup/restore-switch.ts`) and making
+  it writable is phase B.
+- A target on another host needs the walnut program there (above), and its real bandwidth
+  between two machines is not measured yet (the numbers above are a real daemon on one machine
+  over a link slowed in the transport); that is for phase B's drill on the Mac's own link.
+- Chunks travel base64 inside the daemon's JSON frames, a third more bytes than the chunk.
 - No change log ("about to change" / "done" lines): the scan is fast enough every 30 s.
 - A changed database is copied whole into the pin worker's memory each batch it changed (its
   size in memory for a moment, then hashed; only changed chunks travel). On ext4 its file in

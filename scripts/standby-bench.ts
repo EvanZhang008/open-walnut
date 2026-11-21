@@ -6,9 +6,16 @@
  * Synthetic data only: it never reads a real home.
  *
  *   bun scripts/standby-bench.ts <work dir> [--gb 20] [--files 100000] [--batches 20] [--keep]
+ *     [--remote [--mbit 20] [--down-mbit 100] [--rtt-ms 50] [--fast-first]]
  *
  * <work dir> gets home/ (built once, reused) and target/ (made fresh). Prints one JSON line
  * of results at the end.
+ *
+ * --remote puts the target behind a real session daemon on this machine (the standalone twin,
+ * tests/core/standby/twin-link.ts) and the walnut CLI there, as a standby host would have it
+ * (remote-transport.ts), over a link this script slows to a given bandwidth each way and round
+ * trip (a frame waits for its bytes on the wire and half the round trip before and after).
+ * It also times single chunks sent through that link, one at a time and eight at once.
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -16,7 +23,9 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import Database from '../src/lib/sqlite.js'
 import { scanHome } from '../src/core/standby/scan.js'
-import { snapshotTo, verifyStandby } from '../src/core/standby/index.js'
+import { snapshotTo, takeBatch, verifyStandby, type BatchOutcome } from '../src/core/standby/index.js'
+import { RemoteStandbyTarget, type DaemonLink } from '../src/core/standby/remote-transport.js'
+import { bootStandbyTwin, type StandbyTwin } from '../tests/core/standby/twin-link.js'
 import { removeTree } from '../src/core/standby/target-files.js'
 import { setWriteGateEnabled } from '../src/utils/write-gate.js'
 import { writeTextFile } from '../src/utils/fs.js'
@@ -29,6 +38,11 @@ const GB = flag('gb', 20)
 const FILES = flag('files', 100_000)
 const BATCHES = flag('batches', 20)
 const APPEND_MS = flag('append-ms', 20)
+const REMOTE = args.includes('--remote')
+const MBIT = flag('mbit', 20)
+const DOWN_MBIT = flag('down-mbit', 100)
+const RTT_MS = flag('rtt-ms', 50)
+const FAST_FIRST = args.includes('--fast-first')
 const home = path.join(work, 'home')
 const target = path.join(work, 'target')
 const log = (...a: unknown[]) => console.log(`[bench ${new Date().toISOString().slice(11, 19)}]`, ...a)
@@ -93,6 +107,56 @@ async function build(): Promise<void> {
 const diskWrites = (): number | null => {
   try { return Number(/write_bytes: (\d+)/.exec(fs.readFileSync('/proc/self/io', 'utf8'))![1]) } catch { return null }
 }
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** A link slowed to `mbit` up, `downMbit` down and `rttMs` round trip: each frame waits for its bytes on the wire. */
+function slowLink(connect: () => Promise<DaemonLink>, mbit: number, downMbit: number, rttMs: number): { connect: () => Promise<DaemonLink>; wire: { up: number; down: number }; slow: { on: boolean } } {
+  const wire = { up: 0, down: 0 }
+  const slow = { on: true }
+  let upFree = 0
+  let downFree = 0
+  const take = async (bytes: number, rate: number, dir: 'up' | 'down') => {
+    const now = performance.now()
+    const free = dir === 'up' ? upFree : downFree
+    const end = Math.max(now, free) + (bytes * 8) / (rate * 1e6) * 1000
+    if (dir === 'up') upFree = end; else downFree = end
+    wire[dir] += bytes
+    if (!slow.on) return
+    await sleep(end - now)
+  }
+  return {
+    wire,
+    slow,
+    connect: async () => {
+      const l = await connect()
+      return {
+        async send(cmd, params = {}, timeoutMs) {
+          await take(Buffer.byteLength(JSON.stringify({ cmd, ...params })), mbit, 'up')
+          if (slow.on) await sleep(rttMs / 2)
+          const reply = await l.send(cmd, params, timeoutMs)
+          await take(Buffer.byteLength(JSON.stringify(reply)), downMbit, 'down')
+          if (slow.on) await sleep(rttMs / 2)
+          return reply
+        },
+      }
+    },
+  }
+}
+
+/** ms per 1 MiB chunk through `link`, one at a time and eight at once. */
+async function chunkCost(connect: () => Promise<DaemonLink>, dir: string, walnut: string[]): Promise<{ oneAtATimeMs: number; eightAtOnceMs: number }> {
+  const timeIt = async (n: number, window: number) => {
+    const t = new RemoteStandbyTarget({ connect, dir, walnut, window })
+    await t.current()
+    const chunks = Array.from({ length: n }, () => rnd(1024 * 1024))
+    const started = performance.now()
+    for (const c of chunks) await t.putChunk(crypto.createHash('sha256').update(c).digest('hex'), c)
+    await t.flush()
+    return +((performance.now() - started) / n).toFixed(1)
+  }
+  return { oneAtATimeMs: await timeIt(20, 1), eightAtOnceMs: await timeIt(40, 8) }
+}
+
 const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))]) }
 
 async function main(): Promise<void> {
@@ -107,11 +171,48 @@ async function main(): Promise<void> {
   result.scanMs = scans.map(Math.round)
   log('scan', result.scanMs, 'ms for', result.leaderFiles, 'files')
 
+  // The target: a folder here, or one behind a real daemon over a slowed link (--remote).
+  let twin: StandbyTwin | null = null
+  let remote: RemoteStandbyTarget | null = null
+  let wire: { up: number; down: number } | null = null
+  let slowSwitch: { on: boolean } | null = null
+  const walnut = [process.execPath, path.resolve(__dirname, '../src/cli.ts')]
+  if (REMOTE) {
+    twin = await bootStandbyTwin(path.join(work, 'twin'), process.execPath)
+    const slow = slowLink(() => twin!.connect(), MBIT, DOWN_MBIT, RTT_MS)
+    wire = slow.wire
+    slowSwitch = slow.slow
+    remote = new RemoteStandbyTarget({ connect: slow.connect, dir: target, walnut, linkWaitMs: 10 * 60_000 })
+    result.link = { mbitUp: MBIT, mbitDown: DOWN_MBIT, rttMs: RTT_MS }
+    const probeDir = path.join(work, 'probe-target')
+    await removeTree(probeDir)
+    result.chunkCost = {
+      fast: await chunkCost(() => twin!.connect(), probeDir, walnut),
+      slowed: await chunkCost(slow.connect, probeDir, walnut),
+    }
+    await removeTree(probeDir)
+    log('chunk cost (ms per 1 MiB chunk)', result.chunkCost)
+  }
+  const oneBatch = (): Promise<BatchOutcome> => remote
+    ? takeBatch({ home, transport: remote, stagingDir: path.join(home, 'tmp', 'standby-staging') })
+    : snapshotTo(home, target)
+  const wireMB = () => (wire ? { up: wire.up, down: wire.down } : null)
+  const commands = () => remote?.stats.commands ?? 0
+
   setWriteGateEnabled(true)
-  const first = await snapshotTo(home, target)
+  // --fast-first: the first batch over the unslowed link (its wire bytes still counted), to
+  // measure the apply of a whole home there; the slowed first batch is then wire bytes / rate.
+  if (slowSwitch && FAST_FIRST) slowSwitch.on = false
+  const w0 = wireMB()
+  const c0 = commands()
+  const first = await oneBatch()
   if (!first.ok) throw new Error(`first batch void: ${first.reason}`)
-  result.firstBatch = { totalMs: Math.round(first.stats.totalMs), holdMs: Math.round(first.stats.holdMs), sentGB: +(first.stats.sentBytes / 1024 ** 3).toFixed(2), files: first.stats.files }
+  result.firstBatch = {
+    totalMs: Math.round(first.stats.totalMs), holdMs: Math.round(first.stats.holdMs), sentGB: +(first.stats.sentBytes / 1024 ** 3).toFixed(2), files: first.stats.files,
+    ...(remote ? { applyMs: Math.round(remote.stats.lastApplyMs), commands: commands() - c0, wireUpGB: +((wireMB()!.up - w0!.up) / 1024 ** 3).toFixed(2), wireDownMB: +((wireMB()!.down - w0!.down) / 1024 ** 2).toFixed(1) } : {}),
+  }
   log('first batch', result.firstBatch)
+  if (slowSwitch) slowSwitch.on = true
 
   // Steady writes while batches run: notes through the gated writer, rows into two databases.
   let writing = true
@@ -138,15 +239,22 @@ async function main(): Promise<void> {
     let patched = 0
     let voids = 0
     const reasons: string[] = []
+    const wireUp: number[] = []
+    const cmds: number[] = []
+    const applies: number[] = []
     for (let b = 0; b < BATCHES; b++) {
       const w0 = diskWrites()
-      const out = await snapshotTo(home, target)
+      const u0 = wireMB()
+      const c = commands()
+      const out = await oneBatch()
       const w1 = diskWrites()
+      if (u0) { wireUp.push(wireMB()!.up - u0.up); cmds.push(commands() - c) }
       holds.push(out.stats.holdMs)
       names.push(out.stats.namesMs ?? 0)
       scansInc.push(out.stats.scanMs)
       if (!out.ok) { voids++; reasons.push(out.reason.slice(0, 120)); continue }
       totals.push(out.stats.totalMs)
+      if (remote) applies.push(remote.stats.lastApplyMs)
       sent.push(out.stats.sentBytes)
       handWritten.push(out.commit.bytesWritten ?? 0)
       patched += out.commit.patched ?? 0
@@ -162,6 +270,11 @@ async function main(): Promise<void> {
       patchedFiles: patched,
       copyWrittenMB: handWritten.length ? { p50: +(q(handWritten, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...handWritten) / 1024 ** 2).toFixed(1) } : null,
       diskWrittenMB: disk.length ? { p50: +(q(disk, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...disk) / 1024 ** 2).toFixed(1) } : null,
+      ...(wireUp.length ? {
+        wireUpMB: { p50: +(q(wireUp, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...wireUp) / 1024 ** 2).toFixed(1) },
+        commands: { p50: q(cmds, 0.5), max: Math.max(...cmds) },
+        applyMs: applies.length ? { p50: q(applies, 0.5), max: Math.round(Math.max(...applies)) } : null,
+      } : {}),
     }
     log(label, r)
     return r
@@ -186,14 +299,15 @@ async function main(): Promise<void> {
   setWriteGateEnabled(false)
 
   let t = performance.now()
-  const v = await verifyStandby(target)
+  const v = remote ? (await remote.verify()).verify : await verifyStandby(target)
   result.verifyMs = Math.round(performance.now() - t)
   result.verifyDrift = v.drift.length
   t = performance.now()
-  const deep = await verifyStandby(target, { deep: true })
+  const deep = remote ? (await remote.verify({ deep: true })).verify : await verifyStandby(target, { deep: true })
   result.deepVerifyMs = Math.round(performance.now() - t)
   result.deepVerifyDrift = deep.drift.length
   result.targetBytes = du(target)
+  await twin?.stop()
   log('verify', result.verifyMs, 'ms; deep', result.deepVerifyMs, 'ms')
   console.log(`RESULT ${JSON.stringify(result)}`)
   if (!args.includes('--keep')) await removeTree(target)

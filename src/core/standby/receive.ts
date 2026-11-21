@@ -32,8 +32,10 @@ const gunzip = promisify(zlib.gunzip)
 
 export const RECEIVE_MARK = 'walnut-standby-receive: '
 export const INCOMING = '.incoming'
-/** An upload or export the leader left behind (its link went) is removed after this long. */
+/** An upload the leader left behind (its link went) is removed after this long. */
 const INCOMING_STALE_MS = 60 * 60_000
+/** An export is read right after the init that wrote it; older ones are removed by the next init. */
+const EXPORT_STALE_MS = 2 * 60_000
 
 /** The current manifest file's identity: the leader keeps its parsed files while this holds. */
 export interface ManifestRef { n: number; size: number; mtimeMs: number; ino: number }
@@ -61,7 +63,8 @@ async function sweepIncoming(dir: string, now: number): Promise<void> {
   for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
     const p = path.join(dir, name)
     const st = await fs.lstat(p).catch(() => null)
-    if (st && now - st.mtimeMs > INCOMING_STALE_MS) await fs.rm(p, { recursive: true, force: true }).catch(() => {})
+    const stale = name.startsWith('export-') ? EXPORT_STALE_MS : INCOMING_STALE_MS
+    if (st && now - st.mtimeMs > stale) await fs.rm(p, { recursive: true, force: true }).catch(() => {})
   }
 }
 

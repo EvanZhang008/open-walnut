@@ -80,10 +80,12 @@ export interface RemoteStats {
   resent: number
   /** Payload bytes written there (chunks and uploads, before base64). */
   sentBytes: number
+  /** How long the last apply ran there, its answer's way back included (ms). */
+  lastApplyMs: number
 }
 
 export class RemoteStandbyTarget implements StandbyTransport {
-  readonly stats: RemoteStats = { commands: 0, resent: 0, sentBytes: 0 }
+  readonly stats: RemoteStats = { commands: 0, resent: 0, sentBytes: 0, lastApplyMs: 0 }
   /** The last apply's answer (its verify pass and the drift reports waiting). */
   lastApply: ApplyAnswer | null = null
   private link: DaemonLink | null = null
@@ -249,9 +251,14 @@ export class RemoteStandbyTarget implements StandbyTransport {
     this.inflight.add(p)
   }
 
-  async commit(manifest: BatchManifest): Promise<CommitResult> {
+  /** Wait for every chunk in flight; throws the first one that failed (and forgets what the target holds). */
+  async flush(): Promise<void> {
     await Promise.allSettled([...this.inflight])
     if (this.failed) { const err = this.failed; this.failed = null; this.reset(); throw err }
+  }
+
+  async commit(manifest: BatchManifest): Promise<CommitResult> {
+    await this.flush()
     const viewed = this.viewed
     if (!viewed) throw new Error('the target was not read yet (current() first)')
     this.viewed = null
@@ -272,8 +279,10 @@ export class RemoteStandbyTarget implements StandbyTransport {
       throw err
     }
     let answer: ApplyAnswer
+    const applyStarted = performance.now()
     try {
       answer = await this.receive<ApplyAnswer>('apply', ['--upload', file, '--verify'], SCRIPT_MAX_TIMEOUT_MS)
+      this.stats.lastApplyMs = performance.now() - applyStarted
     } catch (err) {
       // Its answer was lost (the link went) or it was refused: what the target holds now says which.
       const now = await this.receiveAgain<InitAnswer>('init', []).catch(() => null)
