@@ -254,8 +254,21 @@ async function clipShot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: test.info().outputPath(`${name}.png`), clip: box! })
 }
 
+/** The session's speed totals once the record holds this turn's final (written after the turn ends). */
+async function recordTotals(request: APIRequestContext, sid: string): Promise<Record<string, { outputTokens: number; generationMs: number; turns: number }>> {
+  let totals: Record<string, { outputTokens: number; generationMs: number; turns: number }> = {}
+  await expect.poll(async () => {
+    const res = await request.get(`/api/sessions/${sid}`)
+    if (!res.ok()) return false
+    const session = ((await res.json()) as { session?: { lastTurnSpeed?: { final?: boolean; outputTokens?: number }; speedTotals?: typeof totals } }).session
+    totals = session?.speedTotals ?? {}
+    return session?.lastTurnSpeed?.final === true && session.lastTurnSpeed.outputTokens === 50
+  }, { timeout: 15_000 }).toBe(true)
+  return totals
+}
+
 /** The final-numbers contract, identical for both models (picker open). Returns tok/s. */
-async function assertFinalReadout(page: Page, model: string): Promise<number> {
+async function assertFinalReadout(page: Page, request: APIRequestContext, sid: string, model: string): Promise<number> {
   const r = readoutIn(page)
   await expect(r).toHaveAttribute('data-live', 'false')
   await expect(r.getByTestId('speed-model')).toHaveText(model)
@@ -270,8 +283,15 @@ async function assertFinalReadout(page: Page, model: string): Promise<number> {
   const m = tpsText.match(/^(\d+) tok\/s$/)
   expect(m, `tok/s reads "${tpsText}"`).not.toBeNull()
   const tps = Number(m![1])
-  // The Speed toggle, readable with every fold closed, carries the same tok/s.
-  await expect(picker(page).getByTestId('picker-fold-speed').getByTestId('speed-headline')).toHaveText(tpsText)
+  // The Speed toggle, readable with every fold closed, carries the session's average on its model
+  // (this turn and any earlier counted one, token-weighted), the turn's own rate while none counted.
+  const totals = Object.values(await recordTotals(request, sid))
+  const tokens = totals.reduce((n, t) => n + t.outputTokens, 0)
+  const ms = totals.reduce((n, t) => n + t.generationMs, 0)
+  expect(totals.length, 'one model ran in this session').toBeLessThanOrEqual(1)
+  const average = tokens > 0 && ms >= 500 ? `${Math.round(tokens / (ms / 1000))} tok/s avg` : tpsText
+  await expect(picker(page).getByTestId('picker-fold-speed').getByTestId('speed-headline')).toHaveText(average)
+  if (tokens > 0) await expect(picker(page).getByTestId('speed-average-tps')).toHaveText(average.replace(/ avg$/, ''))
   // 50 tokens over ~3.0s of generation ≈ 17. A wall-clock rate (tool gap
   // counted) would be ≈ 6, well below this floor.
   expect(tps, `tok/s ${tps} excludes the tool gap`).toBeGreaterThanOrEqual(9)
@@ -341,12 +361,12 @@ test('two panels side by side show a live readout each, then final numbers', asy
   await openPicker(page, colA)
   await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 20_000 })
   await report('final-A', sidA, page)
-  const tpsA = await assertFinalReadout(page, 'Opus 5.5')
+  const tpsA = await assertFinalReadout(page, request, sidA, 'Opus 5.5')
   await clipShot(page, 'two-panels-final-A')
   await openPicker(page, colB)
   await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 20_000 })
   await report('final-B', sidB, page)
-  const tpsB = await assertFinalReadout(page, 'Sonnet 5.5')
+  const tpsB = await assertFinalReadout(page, request, sidB, 'Sonnet 5.5')
   await clipShot(page, 'two-panels-final-B')
   test.info().annotations.push({ type: 'tok/s', description: `A (Opus 5.5) ${tpsA}, B (Sonnet 5.5) ${tpsB}` })
   console.log(`observed tok/s: A ${tpsA}, B ${tpsB}`)

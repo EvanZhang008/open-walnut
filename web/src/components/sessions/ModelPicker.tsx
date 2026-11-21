@@ -24,7 +24,8 @@ import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, acpModelDisplayName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
-import { SessionCostBlock, BudgetPausedMark, useSessionCost, costToggleLabel, type CompareModel } from './SessionCostBlock';
+import { SessionCostBlock, BudgetPausedMark, costToggleLabel, type CompareModel } from './SessionCostBlock';
+import { useSessionCost } from '@/hooks/useSessionCost';
 import { PickerFoldBar, type PickerFold } from './PickerFoldBar';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 

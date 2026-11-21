@@ -117,3 +117,24 @@
 .session-speed-readout-picker.session-speed-lane.is-last {
   margin-bottom: 8px;
 }
+
+/* The session's average on its model sits first, a little tighter to the
+   last-turn row under it; the note after the rows says what it averages. */
+.session-speed-readout-picker.session-speed-average {
+  margin-bottom: 4px;
+}
+
+/* The average's number reads like the row's model name: the strong value of the line. */
+.session-speed-average-value {
+  flex: 0 0 auto;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* Secondary sentence text: 12 px on the 4 px grid. */
+.session-speed-note {
+  margin: 0 0 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 16px;
+}

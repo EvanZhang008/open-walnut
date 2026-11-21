@@ -81,6 +81,21 @@ describe('session-extras relay payloads on a REPLICA', () => {
     expectRelay('settings', { details: true })
   })
 
+  it('cost relays to the leader and answers its payload', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { cost: { status: 'empty', totalUsd: 0 }, budget: null } })
+    const res = await request(createApp()).get(`/api/v1/sessions/${SID}/cost`)
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ cost: { status: 'empty', totalUsd: 0 }, budget: null })
+    expectRelay('cost')
+  })
+
+  it('cost from a primary that predates it → 400 session_control_needs_upgrade', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Unknown control action: cost' })
+    const res = await request(createApp()).get(`/api/v1/sessions/${SID}/cost`)
+    expect(res.status).toBe(400)
+    expect(res.body.error.code).toBe('session_control_needs_upgrade')
+  })
+
   it('side-question family relays', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: true, result: { sideQuestions: [] } })
     const app = createApp()

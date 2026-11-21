@@ -41,6 +41,11 @@ export default defineConfig({
       '@open-walnut/keeps-threads': path.resolve(__dirname, '../src/core/org/keeps-threads.ts'),
       '@open-walnut/budget-engines': path.resolve(__dirname, '../src/core/usage/budget-engines.ts'),
       '@open-walnut/model-line': path.resolve(__dirname, '../src/core/usage/model-line.ts'),
+      // One rule for counting a turn into the session's average speed: the server folds each final
+      // in, and this browser folds a final it holds live into a record read before it landed.
+      '@open-walnut/speed-totals': path.resolve(__dirname, '../src/core/sessions/speed-totals.ts'),
+      // Same reason: which cost answer is a finished read has one rule, the server cache's and this browser's.
+      '@open-walnut/session-cost-settled': path.resolve(__dirname, '../src/core/usage/session-cost-settled.ts'),
       // Same reason once more: the ✦ search's prompt and answer are BUILT by the
       // server and READ BACK by the transcript renderer, so the sentinels and
       // their parser must have one owner or a card silently stops matching.

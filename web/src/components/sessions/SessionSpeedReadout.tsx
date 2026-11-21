@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { SessionTurnSpeed } from '@open-walnut/core';
+import type { SessionSpeedTotal, SessionTurnSpeed } from '@open-walnut/core';
+import { foldTurnSpeed } from '@open-walnut/speed-totals';
 import { turnSpeedStore, useTurnSpeed } from '@/stores/turn-speed-store';
 import { formatModelName } from '@/utils/model-name';
-import { computeReadout, computeLaneRows, turnModelSlot } from './turn-speed-format';
+import { computeReadout, computeLaneRows, speedAverage, turnModelSlot, type SpeedAverage } from './turn-speed-format';
+import { parseAcpModelId } from './acp-model-id';
 import '@/styles/session-speed.css';
 
 /**
@@ -32,7 +34,10 @@ import '@/styles/session-speed.css';
 interface SessionSpeedReadoutProps {
   sessionId: string;
   /** The panel's record (may still be loading). */
-  session: { model?: string; process_status?: string; lastTurnSpeed?: SessionTurnSpeed } | null | undefined;
+  session: {
+    model?: string; acpModel?: string; process_status?: string; lastTurnSpeed?: SessionTurnSpeed;
+    speedTotals?: Record<string, SessionSpeedTotal>;
+  } | null | undefined;
   /** Where the row sits: inside the model picker (default) or on its own. */
   placement?: 'picker' | 'standalone';
   /** Names the turn's model when its id does not prettify (an ACP engine's
@@ -91,15 +96,42 @@ function useTurnReadout(sessionId: string, session: SessionSpeedReadoutProps['se
   return { speed, clock: now || Date.now() };
 }
 
+/** What the average line says it covers. */
+const AVERAGE_NOTE = 'Output tokens per second of model generation, averaged over this session\'s turns on this model '
+  + '(thinking counted; tool waits and time to first token not).';
+
+/**
+ * The session's average on the model it runs on now (an ACP id without its effort, as the meter
+ * keys it), with a final this page holds live folded into a record read before it landed, by the
+ * server's own rule (speed-totals.ts), so the number moves the moment the turn ends.
+ */
+function sessionAverage(
+  session: SessionSpeedReadoutProps['session'],
+  speed: SessionTurnSpeed | undefined,
+  name: (model: string) => string | undefined,
+): { avg: SpeedAverage; model: string } | null {
+  const totals = speed ? foldTurnSpeed(session?.speedTotals, speed) : session?.speedTotals;
+  const model = session?.acpModel ? parseAcpModelId(session.acpModel).familyId : (session?.model || speed?.model);
+  const avg = model ? speedAverage(totals, model, name) : null;
+  return avg && model ? { avg, model } : null;
+}
+
 /**
  * The picker's Speed toggle: tokens per second, nothing else (the user, 2026-11-21: "spped is
- * token /s nto just time"). "…" while the turn has produced too little to divide; "—" for a
+ * token /s nto just time"), and the session's average on its model ("128 tok/s avg"; then: "the
+ * speed can we shoudl the avg speed?"), since one turn swings widely. Until a turn was counted it
+ * is the last turn's rate: "…" while the turn has produced too little to divide; "—" for a
  * finished turn with no real token count. A dash when no turn was measured.
  */
 export function SessionSpeedHeadline({ sessionId, session }: Pick<SessionSpeedReadoutProps, 'sessionId' | 'session'>) {
   const t = useTurnReadout(sessionId, session);
   // No measured turn yet: the toggle still says so, never an empty value.
   if (!t) return <span data-testid="speed-headline-none" title="No turn measured yet">—</span>;
+  const average = sessionAverage(session, t.speed, (m) => formatModelName(m) || undefined);
+  if (average) {
+    const { tps, turns } = average.avg;
+    return <span data-testid="speed-headline" title={`${AVERAGE_NOTE} ${turns} turn${turns === 1 ? '' : 's'} counted.`}>{tps} avg</span>;
+  }
   const r = computeReadout(t.speed, t.clock);
   const text = r.tps ?? (r.live ? '…' : '—');
   const why = r.tps
@@ -119,6 +151,8 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
   const slot = turnModelSlot(speed, modelLabel ? undefined : session?.model,
     (m) => modelLabel?.(m) || formatModelName(m) || undefined);
   const model = slot.label || formatModelName(session?.model) || 'Model';
+  const label = (m: string) => modelLabel?.(m) || formatModelName(m) || undefined;
+  const average = placement === 'picker' ? sessionAverage(session, speed, label) : null;
   const title = [
     'Measured by Walnut from the CLI stream.',
     speed.models && speed.models.length > 1 ? 'The model was switched during this turn: the row names each model it ran on, in order; the numbers cover all of them.' : '',
@@ -141,6 +175,16 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
     + 'an estimate (characters ÷ 4 of its messages and final answer): the CLI reports no output count for an agent.';
 
   return (<>
+    {average && (
+      <div className="session-speed-readout session-speed-readout-picker session-speed-average" data-testid="speed-average"
+        aria-label={`Average ${average.avg.tps} over ${average.avg.turns} turns on ${label(average.model) ?? average.model}`}>
+        <span className="session-speed-kicker">Average</span>
+        <span className="session-speed-average-value" data-testid="speed-average-tps">{average.avg.tps}</span>
+        <span className="session-speed-stat" data-testid="speed-average-scope">
+          {average.avg.turns.toLocaleString('en-US')} turn{average.avg.turns === 1 ? '' : 's'} on {label(average.model) ?? average.model}
+        </span>
+      </div>
+    )}
     <div
       className={`session-speed-readout session-speed-readout-${placement}${r.live ? ' is-live' : ''}${r.interrupted ? ' is-interrupted' : ''}${lanes.length ? ' has-lanes' : ''}`}
       data-testid="session-speed-readout"
@@ -201,5 +245,6 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
         </div>
       );
     })}
+    {average && <div className="session-speed-note" data-testid="speed-average-note">{AVERAGE_NOTE}</div>}
   </>);
 }

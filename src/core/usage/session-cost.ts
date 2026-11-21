@@ -8,6 +8,9 @@
 import { ensurePriceBook, priceBookInfo, priceThresholds, resolvePrice, type UserPriceRates } from './price-book.js';
 import { priceScanWith, type SessionCostPayload } from './session-cost-pricing.js';
 import type { SessionCostScan } from '../../providers/session-cost-core.js';
+import type { BudgetState } from '../../providers/usage-budget-runtime.js';
+import { SwrCache } from './session-cost-cache.js';
+import { settledCost } from './session-cost-settled.js';
 
 export type { SessionCostLine, SessionCostModel, SessionCostPayload, SessionCostRates, SessionCostTier } from './session-cost-pricing.js';
 export { priceBucket } from './session-cost-pricing.js';
@@ -57,9 +60,74 @@ export async function readSessionScan(sessionId: string): Promise<SessionScanRea
   }
 }
 
-/** One session's cost, answered within the deadline (degraded, never hanging). */
-export async function getSessionCost(sessionId: string): Promise<SessionCostPayload> {
+/** One session's cost read now, within the deadline (degraded, never hanging). */
+async function readSessionCost(sessionId: string): Promise<SessionCostPayload> {
   const read = await readSessionScan(sessionId);
   if (!read.ok) return read.payload;
   return priceSessionScan(read.scan, read.thresholds, read.overrides);
+}
+
+const costCache = new SwrCache<SessionCostPayload>({
+  read: readSessionCost,
+  keep: settledCost,
+  max: 200,
+  freshMs: 5_000,
+  onRefreshError: (sessionId, err) => {
+    void import('../../logging/index.js').then(({ log }) => log.usage.warn('session cost refresh failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    })).catch(() => {});
+  },
+});
+let watchingTurns = false;
+
+/** A session's turn ended: its kept cost is stale, so the next read starts a refresh. Nothing is read
+ *  now (a read per turn end of every kept session would push the daemon's own cache out). */
+function watchTurnEnds(): void {
+  if (watchingTurns) return;
+  watchingTurns = true;
+  void import('../event-bus.js').then(({ bus, EventNames }) => {
+    bus.subscribe('session-cost-cache', (event) => {
+      const sid = (event.data as { sessionId?: string } | undefined)?.sessionId;
+      if (sid) costCache.invalidate(sid);
+    }, { global: true, interest: [EventNames.SESSION_RESULT] });
+  }).catch(() => { watchingTurns = false; });
+}
+
+/**
+ * One session's cost. The last finished read answers at once and one background read brings it
+ * current (SwrCache): the picker's first frame and the phone's sheet get a number, never the
+ * host's long first read. With nothing read yet it waits for the read, within its deadline.
+ */
+export async function getSessionCost(sessionId: string): Promise<SessionCostPayload> {
+  watchTurnEnds();
+  return costCache.get(sessionId);
+}
+
+/** Test seam: forget every kept cost. */
+export function resetSessionCostCacheForTests(): void { costCache.clear(); }
+
+/** GET /api/v1/sessions/:id/cost (the phone's model sheet): the cost and the budget in one answer. */
+export interface SessionCostFacts {
+  cost: SessionCostPayload;
+  /** null: no budget here (an engine without per-request usage, a host that does not know the session, or no answer in time). */
+  budget: BudgetState | null;
+}
+
+/**
+ * The cost and the budget of one session, read in parallel, each within its own deadline (cost
+ * 25s, budget 10s), so the answer is degraded, never hung. A session nobody recorded is a 404
+ * (SessionControlError, so the v1 route and the replica relay answer it the same way).
+ */
+export async function getSessionCostFacts(sessionId: string): Promise<SessionCostFacts> {
+  const [{ SessionControlError }, { getSessionBudget }] = await Promise.all([
+    import('../sessions/session-controls.js'), import('./session-budget.js'),
+  ]);
+  const budget = getSessionBudget(sessionId).then((answer) => answer.budget, () => null);
+  try {
+    const cost = await getSessionCost(sessionId);
+    return { cost, budget: await budget };
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 404) throw new SessionControlError('session not found', 404);
+    throw err;
+  }
 }

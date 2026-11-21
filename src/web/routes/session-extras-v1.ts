@@ -12,6 +12,7 @@
  *   GET    /sessions/:id/controls               → { engine, controls }
  *   POST   /sessions/:id/controls { id, value } → { engine, controls }
  *   GET    /sessions/:id/settings?details=1     → { live, requested, applied, effective, details? }
+ *   GET    /sessions/:id/cost                   → { cost, budget } (budget null = none here)
  *   GET    /sessions/:id/side-questions         → { sideQuestions }
  *   POST   /sessions/:id/side-question { question } → { sideQuestion }
  *   POST   /sessions/:id/side-question/:qid/promote → { taskId, parentTaskId? }
@@ -40,7 +41,7 @@ import { logRouteError } from './route-error-log.js'
 import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
-import { isCompanion } from '../../core/server-role.js'
+import { isCompanion, runsSessions } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
@@ -258,6 +259,29 @@ sessionExtrasV1Router.get('/sessions/:id/settings', async (req: Request, res: Re
     }
     const { getSessionSettings } = await import('../../core/sessions/session-extras.js')
     await runLocal(res, next, 200, () => getSessionSettings(sessionId, details))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Cost and budget ──────────────────────────────────────────────────────────
+
+// GET /api/v1/sessions/:id/cost — what the session cost (the web's GET
+// /api/sessions/:id/cost payload) and its budget, for the phone's model sheet.
+// Degraded within its deadlines (cost 'unavailable', budget null), never hung.
+// A box that runs no sessions (the companion) relays it to the leader, which
+// reads the session's usage on its host (an older leader: needs_upgrade); a
+// host replica reads it through its own daemon, as the web cost route does.
+sessionExtrasV1Router.get('/sessions/:id/cost', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    if (!runsSessions()) {
+      await relayControlAction(res, 'cost', sessionId, undefined, 200)
+      return
+    }
+    const { getSessionCostFacts } = await import('../../core/usage/session-cost.js')
+    await runLocal(res, next, 200, () => getSessionCostFacts(sessionId))
   } catch (err) {
     next(err)
   }

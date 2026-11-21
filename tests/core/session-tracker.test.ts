@@ -125,6 +125,44 @@ describe('first turn time', () => {
   });
 });
 
+describe('speed totals', () => {
+  const turn = (endedAt: number, outputTokens: number, generationMs: number, model = 'claude-opus-5-5') => ({
+    startedAt: endedAt - 10_000, endedAt, final: true, ttftMs: 900, generationMs, outputTokens, messages: 2, model,
+    inFlight: false, inFlightChars: 0, inFlightMs: 0, inFlightVisibleMs: 0,
+  });
+
+  it('adds each later final turn once per model, and keeps them through a cold read', async () => {
+    await createSessionRecord('speed-totals', '', 'demo');
+    await updateSessionRecord('speed-totals', { lastTurnSpeed: turn(1_000_000, 1_000, 10_000) });
+    // The same frozen final written again (a backgrounded agent ended): not counted twice.
+    await updateSessionRecord('speed-totals', { lastTurnSpeed: { ...turn(1_000_000, 1_000, 10_000), lanes: [] } });
+    // A live frame is no turn; a later final is.
+    await updateSessionRecord('speed-totals', { lastTurnSpeed: { ...turn(1_100_000, 50, 900), final: false } });
+    await updateSessionRecord('speed-totals', { lastTurnSpeed: turn(1_200_000, 3_000, 20_000) });
+    await updateSessionRecord('speed-totals', { lastTurnSpeed: turn(1_300_000, 400, 2_000, 'claude-haiku-5-5') });
+    _resetSessionTrackerForTesting();
+    expect((await getSessionByClaudeId('speed-totals'))?.speedTotals).toEqual({
+      'claude-opus-5-5': { outputTokens: 4_000, generationMs: 30_000, turns: 2, lastAt: 1_200_000 },
+      'claude-haiku-5-5': { outputTokens: 400, generationMs: 2_000, turns: 1, lastAt: 1_300_000 },
+    });
+    // It is a payload key like any other: an older Walnut, which reads the payload whole and
+    // writes the record back whole, carries it along without knowing it.
+    const row = getSessionDb()!.prepare('SELECT payload FROM sessions WHERE claude_session_id = ?').get('speed-totals') as { payload: string };
+    expect(Object.keys(JSON.parse(row.payload).speedTotals)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5']);
+  });
+
+  it('a journal replay that resumes mid-session counts no turn twice', async () => {
+    await createSessionRecord('speed-replay', '', 'demo');
+    for (const end of [1_000_000, 1_100_000, 1_200_000]) await updateSessionRecord('speed-replay', { lastTurnSpeed: turn(end, 1_000, 10_000) });
+    // The replay sets lastTurnSpeed back to T2, then finishes T3 again, keyed by the model it runs now.
+    await updateSessionRecord('speed-replay', { lastTurnSpeed: turn(1_100_000, 1_000, 10_000, 'gpt-6.2-sol') });
+    await updateSessionRecord('speed-replay', { lastTurnSpeed: turn(1_200_000, 1_000, 10_000, 'gpt-6.2-sol') });
+    expect((await getSessionByClaudeId('speed-replay'))?.speedTotals).toEqual({
+      'claude-opus-5-5': { outputTokens: 3_000, generationMs: 30_000, turns: 3, lastAt: 1_200_000 },
+    });
+  });
+});
+
 describe('live command failure PID', () => {
   it('counts a live failed CLI as idle capacity', async () => {
     await createSessionRecord('capacity-error', '', 'demo', undefined, { pid: 4242 });

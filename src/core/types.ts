@@ -3532,6 +3532,22 @@ export interface SessionTurnSpeed {
 }
 
 /**
+ * One model's speed totals over a session's turns (SessionRecord.speedTotals): the sums of the
+ * counted turns' `outputTokens` and `generationMs`, so tokens ÷ time is the token-weighted
+ * average tok/s. Only turns the readout gives a rate count (tokens > 0, a window of 500 ms or
+ * more). A 'last-call' turn (Codex over ACP) adds its counted call, which keeps the ratio honest.
+ */
+export interface SessionSpeedTotal {
+  outputTokens: number;
+  generationMs: number;
+  turns: number;
+  /** Epoch ms the last counted turn on this model ended. The newest across models is the
+   *  watermark: only a turn that ended after it counts (sessions/speed-totals.ts), and the oldest
+   *  model goes first past the cap. */
+  lastAt?: number;
+}
+
+/**
  * One subagent's part of a turn. The CLI streams no partial events for a
  * subagent: its lane (`parent_tool_use_id`) carries whole `assistant` messages
  * as they finish and the `user` tool results it is given, so what Walnut can
@@ -4031,6 +4047,12 @@ export interface SessionRecord {
    *  reloaded page shows the last turn's numbers until the next turn streams.
    *  Written once per turn at its result. Spilled into `payload` (no column). */
   lastTurnSpeed?: SessionTurnSpeed;
+  /** Running speed totals of the session's measured turns, per model id (the turn's `model`), so
+   *  the readout can show a token-weighted average instead of one turn's swing. Folded in by
+   *  session-tracker each time a later final `lastTurnSpeed` is written (sessions/speed-totals.ts),
+   *  at most 8 models. Absent on records from before it and on sessions with no countable turn.
+   *  Spilled into `payload` (no column). */
+  speedTotals?: Record<string, SessionSpeedTotal>;
   /** ISO time the session's first model turn ran, written once by session-tracker from the first sign of
    *  a turn (its speed, prompt cache facts, an ACP turn's context); absent on records from before it.
    *  Spilled into `payload` (no column). */

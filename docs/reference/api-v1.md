@@ -259,6 +259,7 @@ path on the companion".
 | GET | `/api/v1/sessions/list-dirs` | Host directory listing for the path picker (cloud relays) |
 | GET/POST | `/api/v1/sessions/:id/controls` | Provider-neutral controls read/apply (cloud relays) |
 | GET | `/api/v1/sessions/:id/settings?details=1` | Requested vs applied settings snapshot (cloud relays) |
+| GET | `/api/v1/sessions/:id/cost` | What the session cost and its budget, for the model sheet (cloud relays) |
 | GET | `/api/v1/sessions/:id/side-questions` | Side-question history (cloud relays) |
 | POST | `/api/v1/sessions/:id/side-question` | Ask the live CLI a side question (cloud relays) |
 | POST | `/api/v1/sessions/:id/side-question/:qid/promote` | Promote a Q&A to a task (cloud relays) |
@@ -3720,6 +3721,15 @@ an id outside `[A-Za-z0-9_-]`.
   "pendingPermissions": [ { "requestId", "toolName"?, "input"?, "reason"? } ] }`
   — the full liveness-corrected record plus any live tool-permission prompts
   (pair each with `POST …/permission`).
+  The phone's model sheet reads these record fields when present (all
+  optional; the companion's degraded reply carries none): `lastTurnSpeed`
+  (`{ outputTokens, generationMs, ttftMs, durationMs?, model?, final,
+  inFlight, tokenScope?, turnOutputTokens?, … }`, the last turn's speed),
+  `speedTotals` (additive, 2026-11: `{ [model]: { outputTokens, generationMs,
+  turns, lastAt? } }`, the sums over the session's counted turns per model id,
+  at most 8 models; tokens ÷ time is the average tok/s the Speed row shows; an
+  ACP session's ids carry no effort suffix, so match `acpModel` without its
+  `[effort]`), `acpModel`, `contextTokens`, `modelMaxWindow` and `engine`.
 - `PATCH /api/v1/sessions/:id` body — any subset of `{ "title" (≤500 chars),
   "archived" (boolean), "mode" ("default"|"plan"|"bypass"|"accept"),
   "human_note" (≤50000 chars) }` → `200 { "session" }`. At least one field
@@ -4247,6 +4257,24 @@ needed; an old primary answers `400 session_control_needs_upgrade`).
   "applied", "effective", "details"? }` — requested vs actually-applied
   model/effort/mode; `details=1` adds context usage + CLI binary version
   when the CLI is live.
+- `GET /api/v1/sessions/:id/cost` (additive, 2026-11) → `{ "cost", "budget" }`
+  for the phone's model sheet. `cost` is the web's `GET /api/sessions/:id/cost`
+  payload: `{ sessionId, engine, source, status: "priced"|"partial"|"unpriced"|
+  "empty"|"pending"|"unavailable", reason?, totalUsd (null = some requests have
+  no price), responses, unpricedResponses, models: [{ model, speed, responses,
+  costUsd, … }], firstAt?, lastAt?, apiDurationMs?, prices }`, priced per
+  request on the session's host. `budget` is `{ limitUsd (null = none), spentUsd,
+  state: "unlimited"|"checking"|"active"|"paused", reason, … }`, or `null` when
+  the session has no budget here (an engine without per-request usage, a host
+  that does not know it, or no answer in time). Degraded within its deadlines
+  (cost 25s → `status: "unavailable"` with a `reason`; budget 10s → `null`),
+  never hung. Once a session's cost was read, later reads answer at once with
+  the last finished read (any status but `pending` and `unavailable`) while
+  one background read brings it current, and a turn's end refreshes it, so a
+  number can be a few seconds behind the transcript. Unknown session →
+  `404 not_found`. A box that runs no sessions (the companion) relays it as the
+  `cost` action; an older primary answers
+  `400 session_control_needs_upgrade`, which a client reads as "no cost".
 - Side questions (ask the live CLI something WITHOUT injecting into its main
   conversation):
   - `GET /api/v1/sessions/:id/side-questions` → `{ "sideQuestions" }`.

@@ -10,7 +10,7 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
  *  server's the moment a third engine landed. SESSION_ENGINE_IDS is the runtime
  *  membership list (validators, catalog defaults). Imported rather than
  *  `export ... from` because SessionRecord below refers to it. */
-import type { SessionEngine, SessionTurnSpeed, SessionUsageLimit, SessionUsageLimitContinued } from '@open-walnut/core';
+import type { SessionEngine, SessionSpeedTotal, SessionTurnSpeed, SessionUsageLimit, SessionUsageLimitContinued } from '@open-walnut/core';
 export type { SessionEngine, SessionTurnSpeed };
 export { SESSION_ENGINE_IDS, DEFAULT_PICKER_ENGINES } from '@open-walnut/core';
 
@@ -272,6 +272,8 @@ export interface SessionRecord {
   /** Final speed readout of the most recent turn; the cold-load source for the
    *  readout row above the composer (live frames come over the WS). */
   lastTurnSpeed?: SessionTurnSpeed;
+  /** Per-model running speed totals of the session's counted turns; the picker's average tok/s. */
+  speedTotals?: Record<string, SessionSpeedTotal>;
 }
 
 export interface SessionSummaryInfo {

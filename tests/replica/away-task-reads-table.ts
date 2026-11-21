@@ -128,5 +128,6 @@ export const AWAY_TASK_READS: Readonly<Record<string, AwayTaskReadDecision>> = {
   'GET /api/sessions/:sessionId/models': { answer: 'unchanged', why: 'the engine\'s model list from this replica\'s config copy' },
   'GET /api/v1/sessions/:id/model-options': { answer: 'unchanged', why: 'the engine\'s model list from this replica\'s config copy' },
   'GET /api/sessions/:sessionId/cost': { answer: 'unchanged', why: 'the session\'s spend from this replica\'s own usage store, as for any session while away (the Mac counts usage)' },
+  'GET /api/v1/sessions/:id/cost': { answer: 'unchanged', why: 'the phone\'s model sheet: the same spend as GET /api/sessions/:sessionId/cost from this replica\'s own usage store, and the budget its host\'s daemon knows (null when it does not answer)' },
   'GET /api/sessions/:sessionId/cost/compare': { answer: 'unchanged', why: 'the session\'s spend from this replica\'s own usage store, as for any session while away (the Mac counts usage)' },
 }

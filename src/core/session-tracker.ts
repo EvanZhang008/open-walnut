@@ -43,6 +43,7 @@ import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-sessio
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
+import { foldTurnSpeed } from './sessions/speed-totals.js';
 import { OrgError } from './org/org-store.js';
 import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import {
@@ -2344,12 +2345,17 @@ function applyUpdateToSession(
   // Only from the first sign of a turn this record ever got: a record that already had one before this
   // field existed keeps none, rather than a later turn's time.
   const firstTurnAt = !session.firstTurnAt && !turnEvidenceAt(session) ? turnEvidenceAt(updates) : undefined;
+  // A later final turn adds to the session's per-model speed totals, once (sessions/speed-totals.ts).
+  const speedTotals = updates.lastTurnSpeed
+    ? foldTurnSpeed(session.speedTotals, updates.lastTurnSpeed)
+    : undefined;
 
   const prevStatus = session.process_status;
   const prevPid = session.pid;
   const now = new Date().toISOString();
   Object.assign(session, updates);
   if (firstTurnAt) session.firstTurnAt = firstTurnAt;
+  if (speedTotals) session.speedTotals = speedTotals;
 
   if (updates.process_status && updates.process_status !== prevStatus) {
     const transition: StatusTransition = {

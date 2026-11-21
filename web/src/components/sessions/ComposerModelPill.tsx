@@ -23,6 +23,7 @@ import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import type { SessionEffort } from '@open-walnut/core';
 import { setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
 import { useSessionUsage, formatModelName, sessionContextWindow, contextBadgeTitle } from '@/hooks/useSessionUsage';
+import { useSessionCostPrefetch } from '@/hooks/useSessionCost';
 import { shortModelName } from '@/utils/model-name';
 import { useComposerRowFit } from '@/components/chat/ComposerControlsBar';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
@@ -166,6 +167,8 @@ export function ComposerModelPill({
 
   // Real-time model + context window usage
   const liveUsage = useSessionUsage(sessionId ?? null);
+  // The picker's Cost toggle draws a known number in its first frame (SessionCostStore).
+  useSessionCostPrefetch(pending ? null : sessionId ?? null);
   const rawModel = pending
     ? pending.model
     : (liveUsage.model || session?.model || fallbackAssistant?.model);

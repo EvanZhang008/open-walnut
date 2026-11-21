@@ -17,6 +17,7 @@
  *     time since the turn's start on this browser's clock.
  */
 import type { SessionTurnSpeed, SessionTurnSpeedLane } from '@open-walnut/core';
+import { averageOf, MIN_RATE_WINDOW_MS, type SpeedTotals } from '@open-walnut/speed-totals';
 
 /** Same heuristic the streaming block's progress number uses. */
 const CHARS_PER_TOKEN = 4;
@@ -62,8 +63,9 @@ export function formatCost(usd: number): string {
 }
 
 /** A rate over a shorter window than this is noise (a four-token reply that
- *  arrives in one delta reads as thousands of tok/s), so the slot stays empty. */
-export const MIN_RATE_WINDOW_MS = 500;
+ *  arrives in one delta reads as thousands of tok/s), so the slot stays empty.
+ *  One constant with the session average's rule for which turns count. */
+export { MIN_RATE_WINDOW_MS };
 /** An interim rate from fewer characters than this rounds to noise ("~0 tok/s"). */
 export const MIN_ESTIMATE_TOKENS = 20;
 
@@ -190,6 +192,27 @@ export function turnModelSlot(
   const switched = name(sessionModel);
   if (!now || !switched || sameModel(now, switched)) return { label };
   return { label, next: switched };
+}
+
+/** The session's average on one model: "128 tok/s" over `turns` counted turns. */
+export interface SpeedAverage { tps: string; turns: number }
+
+/**
+ * The session's token-weighted average tok/s on `model` (SessionRecord.speedTotals): its own
+ * entry, else the entries `name` gives the same display name (the 1M window of the same version
+ * is the same model), summed. An alias without a version ("opus") matches none: it does not say
+ * which version ran. null while nothing matches (the caller shows the last turn's rate then).
+ */
+export function speedAverage(
+  totals: SpeedTotals | null | undefined,
+  model: string | undefined,
+  name?: (model: string) => string | undefined,
+): SpeedAverage | null {
+  if (!totals || !model) return null;
+  let avg = averageOf(totals, (k) => k === model);
+  const want = !avg && name ? name(model) : undefined;
+  if (want && hasVersion(want)) avg = averageOf(totals, (k) => { const n = name!(k); return !!n && baseName(n) === baseName(want); });
+  return avg ? { tps: `${Math.round(avg.tps)} tok/s`, turns: avg.turns } : null;
 }
 
 export interface LaneReadout {

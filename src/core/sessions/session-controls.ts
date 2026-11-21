@@ -949,6 +949,8 @@ export type SessionControlAction =
   // snapshot, side questions, workflow/plan reads, subagent lanes,
   // execute-compact, and queued-message management.
   | 'controls' | 'controls.apply' | 'settings'
+  // The phone's model sheet: what the session cost and its budget (usage/session-cost.ts).
+  | 'cost'
   | 'side-questions' | 'side-question.ask' | 'side-question.promote' | 'side-question.delete'
   | 'workflow' | 'plan' | 'subagent-history' | 'execute-compact'
   | 'queue' | 'queue.edit' | 'queue.delete'
@@ -1328,6 +1330,11 @@ export async function handleSessionControlRelay(
       case 'settings': {
         const { getSessionSettings } = await import('./session-extras.js');
         result = await getSessionSettings(sessionId, p.details === true) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'cost': {
+        const { getSessionCostFacts } = await import('../usage/session-cost.js');
+        result = await getSessionCostFacts(sessionId) as unknown as Record<string, unknown>;
         break;
       }
       case 'side-questions': {

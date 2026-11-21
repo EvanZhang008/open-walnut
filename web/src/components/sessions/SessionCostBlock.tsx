@@ -5,7 +5,8 @@
  * rates it was priced at and where those rates came from.
  */
 import React from 'react';
-import { fetchSessionCost, fetchSessionCostComparison, type SessionCost, type SessionCostComparison, type SessionCostModel } from '@/api/session-cost';
+import { fetchSessionCostComparison, type SessionCost, type SessionCostComparison, type SessionCostModel } from '@/api/session-cost';
+import { useSessionCost } from '@/hooks/useSessionCost';
 import { log } from '@/utils/log';
 import {
   cacheWriteTokens, costHeadline, costToggleValue, costLineLabel, costModelLabel, costTimes, engineName, fmtCost, fmtPriceSource, fmtRate,
@@ -15,7 +16,8 @@ import { useOpenSessionUsage, useSessionBudgetUsage } from '@/hooks/useSessionBu
 import { budgetSummary } from './session-usage-model';
 import '@/styles/session-cost.css';
 
-const PENDING_RETRIES = 20;
+/** The comparison's long first read answers `pending`: asked again this many times, this often. */
+const COMPARE_RETRIES = 20;
 const PENDING_RETRY_MS = 2_000;
 
 export interface CompareModel { id: string; label: string }
@@ -62,8 +64,6 @@ function BudgetRow({ sessionId }: { sessionId: string }) {
     </div>
   );
 }
-
-const COMPARE_RETRIES = PENDING_RETRIES;
 
 /** The session's usage priced at other models' list prices; asked for only once opened. */
 function CostComparison({ sessionId, models, actualUsd }: { sessionId: string; models: CompareModel[]; actualUsd: number | null }) {
@@ -225,49 +225,6 @@ function ModelRow({ m }: { m: SessionCostModel }) {
       )}
     </div>
   );
-}
-
-/**
- * Each session's cost as this page last read it: the picker draws that in its first frame and the
- * read behind it brings it current, so its rows never grow under the pointer on a second open.
- */
-const lastCost = new Map<string, SessionCost>();
-const LAST_COST_MAX = 100;
-
-/** The session's cost as the engine's usage records price it, read once per open (the picker's
- *  Cost toggle and its fold share one read). `null` reads nothing. */
-export function useSessionCost(sessionId: string | null): { cost: SessionCost | null; error: string | null } {
-  const [cost, setCost] = React.useState<SessionCost | null>(() => (sessionId ? lastCost.get(sessionId) ?? null : null));
-  const [error, setError] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    if (!sessionId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // A closed picker gives its slot back at once: the low-priority lane holds two requests.
-    const abort = new AbortController();
-    setCost(lastCost.get(sessionId) ?? null);
-    setError(null);
-    // A long first read answers `pending`; ask again until it lands (the host keeps reading).
-    const load = (attempt: number) => {
-      fetchSessionCost(sessionId, abort.signal)
-        .then((c) => {
-          if (cancelled) return;
-          lastCost.delete(sessionId);
-          lastCost.set(sessionId, c);
-          if (lastCost.size > LAST_COST_MAX) lastCost.delete(lastCost.keys().next().value as string);
-          setCost(c);
-          if (c.status === 'pending' && attempt < PENDING_RETRIES) timer = setTimeout(() => load(attempt + 1), PENDING_RETRY_MS);
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          log.warn('session-cost', 'cost fetch failed', { sessionId, error: String(err) });
-          setError('could not be read');
-        });
-    };
-    load(0);
-    return () => { cancelled = true; clearTimeout(timer); abort.abort(); };
-  }, [sessionId]);
-  return { cost, error };
 }
 
 /** The Cost toggle's number: "$102", "$141+", "n/a", "…" while it is read. */

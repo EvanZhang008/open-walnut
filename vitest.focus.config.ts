@@ -36,6 +36,8 @@ const config = mergeConfig(
         '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
         '@open-walnut/org-avatars': path.resolve(import.meta.dirname, 'src/core/org/avatars/index.ts'),
         '@open-walnut/model-line': path.resolve(import.meta.dirname, 'src/core/usage/model-line.ts'),
+        '@open-walnut/speed-totals': path.resolve(import.meta.dirname, 'src/core/sessions/speed-totals.ts'),
+        '@open-walnut/session-cost-settled': path.resolve(import.meta.dirname, 'src/core/usage/session-cost-settled.ts'),
         '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
         '@open-walnut/board-summary-text': path.resolve(import.meta.dirname, 'src/core/boards/board-summary-text.ts'),
         '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),

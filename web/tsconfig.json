@@ -27,6 +27,8 @@
       "@open-walnut/keeps-threads": ["../src/core/org/keeps-threads"],
       "@open-walnut/budget-engines": ["../src/core/usage/budget-engines"],
       "@open-walnut/model-line": ["../src/core/usage/model-line"],
+      "@open-walnut/speed-totals": ["../src/core/sessions/speed-totals"],
+      "@open-walnut/session-cost-settled": ["../src/core/usage/session-cost-settled"],
       "@open-walnut/search-transcript": ["../src/core/task-search-transcript"],
       "@open-walnut/host-problem": ["../src/core/hosts/host-problem"],
       "@open-walnut/notice-audience": ["../src/core/notifications/audience"],
