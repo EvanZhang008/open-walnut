@@ -109,14 +109,35 @@ export interface ThreadAskedIn {
 }
 
 /** The nearest future deadline of this thread's open tasks, never stored on the thread. */
-export function threadDeadline(t: { tasks?: readonly string[] }, tasks: readonly { id: string; due_date?: string; phase?: string }[], now = Date.now()): string | undefined {
-  const linked = new Set(t.tasks ?? []);
+export function threadDeadline(t: { tasks?: readonly string[] }, tasks: readonly DeadlineTask[], now = Date.now()): string | undefined {
+  if (!t.tasks?.length) return undefined;
+  const byId = deadlineIndex(tasks);
   let due = Infinity;
-  for (const task of tasks) {
-    const at = Date.parse(task.due_date ?? '');
-    if (linked.has(task.id) && task.phase !== 'COMPLETE' && at > now && at < due) due = at;
+  for (const id of t.tasks) {
+    for (const task of byId.get(id) ?? []) {
+      const at = Date.parse(task.due_date ?? '');
+      if (task.phase !== 'COMPLETE' && at > now && at < due) due = at;
+    }
   }
   return Number.isFinite(due) ? new Date(due).toISOString() : undefined;
+}
+
+type DeadlineTask = { id: string; due_date?: string; phase?: string };
+
+/**
+ * The tasks by id, built once per `tasks` array: every thread of a node (and every card of the
+ * Threads view) asks for its deadline against the same whole board, so a scan of the board per
+ * thread cost threads x tasks (2026-11-20, the threads re-check on 7,900 tasks). Keyed by the array
+ * and its length: a caller never replaces rows of `tasks` in place.
+ */
+const deadlineIndexes = new WeakMap<readonly DeadlineTask[], { size: number; byId: Map<string, DeadlineTask[]> }>();
+function deadlineIndex(tasks: readonly DeadlineTask[]): ReadonlyMap<string, readonly DeadlineTask[]> {
+  const cached = deadlineIndexes.get(tasks);
+  if (cached && cached.size === tasks.length) return cached.byId;
+  const byId = new Map<string, DeadlineTask[]>();
+  for (const task of tasks) (byId.get(task.id) ?? byId.set(task.id, []).get(task.id)!).push(task);
+  deadlineIndexes.set(tasks, { size: tasks.length, byId });
+  return byId;
 }
 
 /** One exchange: his message (or a few in a row the node answered at once) and the answer. */

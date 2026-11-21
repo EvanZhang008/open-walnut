@@ -52,12 +52,31 @@ export function teamKeysOf(task: Task, byId: ReadonlyMap<string, Task>, leads: r
   keys.push(`root:${root.id}`);
   // Its own project only: a subtask filed in another project is that project's, and its top-level
   // task's tree (the root key) already holds it with its own family.
-  const projects = new Set([projectKey(task.project)].filter(Boolean));
-  for (const l of leads) {
-    if (keys.includes(`lead:${l.id}`)) continue;
-    if ([l.project, ...(l.org_leads ?? [])].some((p) => projects.has(projectKey(p)))) keys.push(`lead:${l.id}`);
+  const own = projectKey(task.project);
+  for (const l of own ? leadsByProject(leads).get(own) ?? [] : []) {
+    if (!keys.includes(`lead:${l.id}`)) keys.push(`lead:${l.id}`);
   }
   return keys;
+}
+
+/**
+ * The leads of each project key, in the order `leads` lists them, built once per `leads` array:
+ * teamKeysOf runs for every task of the board, so a scan of every lead's projects per task made one
+ * read of the board cost tasks x leads x projects (2026-11-20: 7,900 tasks held the event loop for
+ * seconds at a time, every Threads read of every node). Callers never edit `leads` in place.
+ */
+const leadIndexes = new WeakMap<readonly Task[], { size: number; byProject: Map<string, Task[]> }>();
+function leadsByProject(leads: readonly Task[]): ReadonlyMap<string, readonly Task[]> {
+  const cached = leadIndexes.get(leads);
+  if (cached && cached.size === leads.length) return cached.byProject;
+  const byProject = new Map<string, Task[]>();
+  for (const l of leads) {
+    for (const p of new Set([l.project, ...(l.org_leads ?? [])].map(projectKey).filter(Boolean))) {
+      (byProject.get(p) ?? byProject.set(p, []).get(p)!).push(l);
+    }
+  }
+  leadIndexes.set(leads, { size: leads.length, byProject });
+  return byProject;
 }
 
 /** A task that is in a team: open, not Main, a VP or a lead (never Needs you), not a plugin's own. */
