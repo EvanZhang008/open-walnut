@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { withPrivateTmp } from '../lib/cli-private-tmp.js'
 
 /** What the primary sends for an adapter that must be resolved on the host. */
@@ -61,7 +62,8 @@ export interface HostEngineAvailability {
   path?: string
 }
 
-export interface AcpHostResolveDeps {
+/** `env` is the env PATH is searched in and a version probe runs with (default process.env); `execFile` the daemon runtime's own. */
+export interface AcpHostResolveDeps extends ChildProcessUse<'execFile'> {
   /** The directory holding ACP_HOST_FILES; undefined = this daemon has none. */
   artifactDir?: string
   /**
@@ -72,7 +74,6 @@ export interface AcpHostResolveDeps {
   artifactNames?: Readonly<Record<string, string>>
   /** The runtime that runs the worker and bundled adapters (the daemon's own). */
   execPath?: string
-  env?: NodeJS.ProcessEnv
   home?: string
   /** The dirs searched after PATH (tests); default the per-user install dirs under home and the system bins. */
   extraDirs?: readonly string[]
@@ -160,10 +161,10 @@ function firstLine(s: string): string | null {
   return line ? line.slice(0, 200) : null
 }
 
-function runVersion(binary: string, args: readonly string[], env: NodeJS.ProcessEnv, ms: number): Promise<string | null> {
+function runVersion(binary: string, args: readonly string[], env: NodeJS.ProcessEnv, ms: number, run: typeof execFile = execFile): Promise<string | null> {
   return withPrivateTmp(env, (runEnv) => new Promise((resolve) => {
     try {
-      execFile(binary, [...args], { env: runEnv, timeout: ms, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 }, (err, stdout, stderr) => {
+      run(binary, [...args], { env: runEnv, timeout: ms, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 }, (err, stdout, stderr) => {
         if (err && !String(stdout ?? '').trim()) return resolve(null)
         resolve(firstLine(String(stdout ?? '')) ?? firstLine(String(stderr ?? '')))
       })
@@ -187,7 +188,7 @@ export function createHostEngineProbe(deps: AcpHostResolveDeps = {}) {
       value = { installed: false, version: null, reason: resolved.error.replace(/^.*? cannot run on this host: /, '') }
     } else {
       const bin = findHostBinary(spec, deps).path!
-      const version = spec.versionArgs?.length ? await runVersion(bin, spec.versionArgs, deps.env ?? process.env, VERSION_MS) : null
+      const version = spec.versionArgs?.length ? await runVersion(bin, spec.versionArgs, deps.env ?? process.env, VERSION_MS, deps.execFile) : null
       value = { installed: true, version, reason: null, path: bin }
     }
     cache.set(key, { at: Date.now(), value })

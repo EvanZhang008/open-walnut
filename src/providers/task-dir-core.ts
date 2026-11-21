@@ -25,6 +25,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { TASK_DIR_MARKER, isTaskDirId, taskDirPath } from '../lib/task-dir.js'
 
 export { taskDirRoot, taskDirPath, isTaskDirId, TASK_DIR_MARKER } from '../lib/task-dir.js'
@@ -113,11 +114,14 @@ const isDerivedData = (entries: fs.Dirent[]): boolean =>
   && entries.some((e) => (e.name === 'ModuleCache.noindex' || e.name === 'Index.noindex') && e.isDirectory())
 const DERIVED_PARTS = new Set(['Build', 'ModuleCache.noindex', 'Index.noindex', 'CompilationCache.noindex', 'SDKStatCaches.noindex'])
 
-/** git with a clean env: an inherited GIT_DIR outranks cwd (src/lib/git-env.ts). */
-export const defaultGitRunner: GitRunner = (cwd, args, input) => new Promise((resolve, reject) => {
-  const env = { ...process.env }
+/**
+ * git with a clean env: an inherited GIT_DIR outranks cwd (src/lib/git-env.ts). `use`: the daemon
+ * runtime's execFile and the env it is cleaned from; default node's and process.env.
+ */
+export const gitRunnerWith = (use: ChildProcessUse<'execFile'> = {}): GitRunner => (cwd, args, input) => new Promise((resolve, reject) => {
+  const env = { ...(use.env ?? process.env) }
   for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
-  const child = execFile('git', args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 << 20 }, (err, stdout) => {
+  const child = (use.execFile ?? execFile)('git', args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 16 << 20 }, (err, stdout) => {
     if (err) reject(err); else resolve(String(stdout))
   })
   if (input !== undefined) {
@@ -125,6 +129,7 @@ export const defaultGitRunner: GitRunner = (cwd, args, input) => new Promise((re
     child.stdin?.end(input)
   }
 })
+export const defaultGitRunner: GitRunner = gitRunnerWith()
 
 /** Temp dirs: a remote there is gone after the next boot (WALNUT_TASK_DIR_VOLATILE replaces the list, colon-separated; tests). */
 export function volatileRoots(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -567,12 +572,12 @@ async function scanBuild(root: string): Promise<{ repo: boolean; complete: boole
  * directory, an open file, a mapped binary (a running app's executable). From `lsof`, or
  * /proc where there is no lsof; null when neither answers, so nothing in use is pruned.
  */
-export async function readOpenPaths(under: string): Promise<string[] | null> {
+export async function readOpenPaths(under: string, use: ChildProcessUse<'execFile'> = {}): Promise<string[] | null> {
   const prefix = real(under)
   const keep = (p: string) => p === prefix || p.startsWith(prefix + path.sep) || p.startsWith(under + path.sep)
   let lsofMissing = false
   const fromLsof = await new Promise<string[] | null>((resolve) => {
-    execFile('lsof', ['-n', '-P', '-w', '-F', 'n'], { timeout: 90_000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout) => {
+    (use.execFile ?? execFile)('lsof', ['-n', '-P', '-w', '-F', 'n'], { timeout: 90_000, maxBuffer: 256 * 1024 * 1024 }, (err, stdout) => {
       const e = err as (NodeJS.ErrnoException & { killed?: boolean; signal?: string | null }) | null
       if (e?.code === 'ENOENT') { lsofMissing = true; return resolve(null) }
       // Only a whole answer counts: exit 0, or 1 (lsof's "some file could not be listed", printed

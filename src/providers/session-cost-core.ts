@@ -18,6 +18,7 @@
  * buckets are split once more by the local calendar day each response was written.
  */
 import { execFile } from 'node:child_process';
+import type { ChildProcessUse } from './daemon-child-spawn.js';
 import { withPrivateTmp } from '../lib/cli-private-tmp.js';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
@@ -40,6 +41,8 @@ export interface SessionCostRequest {
    * this IANA zone. An unknown zone counts in UTC. Unset: no day, as before.
    */
   byDay?: { timeZone: string };
+  /** How `opencode export` starts and the env it is built from: the daemon runtime's own; default node's and process.env. */
+  childProcess?: ChildProcessUse<'execFile'>;
 }
 
 export interface SessionCostBucket {
@@ -344,10 +347,10 @@ export async function parseCodexRollout(file: string): Promise<UsageRow[]> {
 
 // ── OpenCode ────────────────────────────────────────────────────────────────
 
-function openCodeBinaryEnv(): NodeJS.ProcessEnv {
+function openCodeBinaryEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const home = os.homedir();
   const extra = ['/opt/homebrew/bin', '/usr/local/bin', path.join(home, '.opencode', 'bin'), path.join(home, '.local', 'bin')];
-  return { ...process.env, PATH: [process.env.PATH ?? '', ...extra].filter(Boolean).join(path.delimiter) };
+  return { ...base, PATH: [base.PATH ?? '', ...extra].filter(Boolean).join(path.delimiter) };
 }
 
 export function parseOpenCodeExport(text: string): { rows: UsageRow[]; costUsd: number } {
@@ -380,9 +383,9 @@ export function parseOpenCodeExport(text: string): { rows: UsageRow[]; costUsd: 
   return { rows, costUsd };
 }
 
-function runOpenCodeExport(sessionId: string): Promise<string> {
-  return withPrivateTmp(openCodeBinaryEnv(), (env) => new Promise((resolve, reject) => {
-    execFile('opencode', ['export', sessionId], { timeout: 20_000, maxBuffer: 128 * 1024 * 1024, env },
+function runOpenCodeExport(sessionId: string, use: ChildProcessUse<'execFile'> = {}): Promise<string> {
+  return withPrivateTmp(openCodeBinaryEnv(use.env), (env) => new Promise((resolve, reject) => {
+    (use.execFile ?? execFile)('opencode', ['export', sessionId], { timeout: 20_000, maxBuffer: 128 * 1024 * 1024, env },
       (err, stdout) => err ? reject(err) : resolve(String(stdout)));
   }));
 }
@@ -502,7 +505,7 @@ export async function scanSessionCost(req: SessionCostRequest): Promise<SessionC
     const dbKnown = !stamp.startsWith(`${db}:-`);
     if (hit && (dbKnown ? hit.stamp === stamp : Date.now() - hit.at < OPENCODE_TTL_MS)) return { ...hit.result, scanMs: Date.now() - started };
     let text: string;
-    try { text = await runOpenCodeExport(req.sessionId); }
+    try { text = await runOpenCodeExport(req.sessionId, req.childProcess); }
     catch (err) {
       return done({ source: 'opencode-export', found: false, reason: `opencode export failed: ${(err as Error).message.split('\n')[0]}` });
     }

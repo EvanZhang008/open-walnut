@@ -15,6 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ChildProcessUse } from './daemon-child-spawn.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import {
@@ -1327,6 +1328,8 @@ export function runCheckProcess(
     signal?: AbortSignal;
     /** The live check pids: each joins at its spawn and leaves only at its real 'close', never at the settle timer. */
     children?: Set<number>;
+    /** How the check starts and the env `env` is laid over: the daemon runtime's own; default node's spawn and process.env. */
+    childProcess?: ChildProcessUse<'spawn'>;
   } = {},
 ): Promise<CheckProcessResult> {
   const now = opts.nowMs ?? Date.now;
@@ -1372,11 +1375,11 @@ export function runCheckProcess(
     }
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn('/bin/sh', ['-c', spec.run], {
+      child = (opts.childProcess?.spawn ?? spawn)('/bin/sh', ['-c', spec.run], {
         cwd: spec.cwd || undefined,
         detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: templateCheckEnv(spec.run, { ...process.env, ...(opts.env ?? {}) }, opts.templateShimDir),
+        env: templateCheckEnv(spec.run, { ...(opts.childProcess?.env ?? process.env), ...(opts.env ?? {}) }, opts.templateShimDir),
       });
     } catch (err) {
       resolve({

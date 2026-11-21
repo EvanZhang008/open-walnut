@@ -21,6 +21,7 @@
 
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import type { ChildProcessUse } from './daemon-child-spawn.js';
 
 export interface GrepMatch {
   /** Absolute path of the file the match is in. */
@@ -42,6 +43,8 @@ export interface GrepRefsOptions {
   maxMatches?: number;
   /** Wall-clock budget for the search subprocess. */
   budgetMs?: number;
+  /** How git and grep start: the daemon runtime's own; default node's. */
+  childProcess?: ChildProcessUse<'execFile'>;
 }
 
 export interface GrepRefsResult {
@@ -83,10 +86,11 @@ function run(
   args: string[],
   cwd: string | undefined,
   budgetMs: number | undefined,
+  exec: typeof execFile = execFile,
 ): Promise<{ stdout: string; code: number }> {
   const timeout = Math.min(budgetMs ?? DEFAULT_BUDGET_MS, SUBPROCESS_TIMEOUT_MS);
   return new Promise((resolve) => {
-    const child = execFile(
+    const child = exec(
       cmd, args,
       { cwd, timeout, maxBuffer: 16 * 1024 * 1024, encoding: 'utf-8' },
       (err, stdout) => {
@@ -207,10 +211,11 @@ export async function grepReferencesHostLocal(opts: GrepRefsOptions): Promise<Gr
   const maxMatches = Math.max(1, Math.min(requested, HARD_MAX_MATCHES));
   const dir = path.dirname(file);
   const budgetMs = opts.budgetMs;
+  const exec = opts.childProcess?.execFile;
 
   // Step 1 — is this a git repo? Its root is both the search scope and the base
   // that git grep's relative paths are reported against.
-  const top = await run('git', ['-C', dir, 'rev-parse', '--show-toplevel'], undefined, budgetMs);
+  const top = await run('git', ['-C', dir, 'rev-parse', '--show-toplevel'], undefined, budgetMs, exec);
   const root = top.code === 0 && top.stdout.trim() ? top.stdout.trim() : null;
 
   // Step 2 — git grep: index-backed, submodule-aware, .gitignore-respecting.
@@ -218,7 +223,7 @@ export async function grepReferencesHostLocal(opts: GrepRefsOptions): Promise<Gr
     const res = await run(
       'git',
       ['grep', '-n', '-I', '--recurse-submodules', '-w', '-F', '-e', symbol, '--'],
-      root, budgetMs,
+      root, budgetMs, exec,
     );
     return buildResult(res, 'git-grep', root, symbol, maxMatches, (rel) => path.join(root, rel));
   }
@@ -233,16 +238,16 @@ export async function grepReferencesHostLocal(opts: GrepRefsOptions): Promise<Gr
   const args = ['-r', '-n', '-I', '-w', '-F', '--devices=skip'];
   for (const d of PRUNE_DIRS) args.push('--exclude-dir=' + d);
   args.push('-e', symbol, dir);
-  let res = await run('grep', args, dir, budgetMs);
+  let res = await run('grep', args, dir, budgetMs, exec);
   // BSD grep predating --devices= exits 2 with a usage error. Retry once with
   // -D skip (its spelling); if that's also refused, go without and rely on the
   // timeout, which is the pre-existing behavior rather than a regression.
   if (res.code === 2 && !res.stdout) {
     const bsd = args.map((a) => (a === '--devices=skip' ? '-D' : a));
     bsd.splice(bsd.indexOf('-D') + 1, 0, 'skip');
-    res = await run('grep', bsd, dir, budgetMs);
+    res = await run('grep', bsd, dir, budgetMs, exec);
     if (res.code === 2 && !res.stdout) {
-      res = await run('grep', args.filter((a) => a !== '--devices=skip'), dir, budgetMs);
+      res = await run('grep', args.filter((a) => a !== '--devices=skip'), dir, budgetMs, exec);
     }
   }
   return buildResult(res, 'grep', dir, symbol, maxMatches, (p) => p);

@@ -40,6 +40,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
+import type { ChildProcessUse } from './daemon-child-spawn.js';
 import { resolveJsonlPathHostLocal } from './session-changes-core.js';
 import { parsePathRef, isUnsafePathRef } from './path-ref-parse.js';
 
@@ -68,6 +69,8 @@ export interface ResolvePathOptions {
   homeDir?: string;
   /** Total wall-clock budget for the whole search. */
   budgetMs?: number;
+  /** How git and find start: the daemon runtime's own; default node's. */
+  childProcess?: ChildProcessUse<'execFile'>;
 }
 
 export interface ResolvePathResult {
@@ -180,17 +183,19 @@ async function realDir(p: string): Promise<string> {
   }
 }
 
+type Run = (cmd: string, args: string[], cwd?: string) => Promise<string>;
+
 /** Run a subprocess, never throwing. Returns stdout ('' on any failure). */
-function run(cmd: string, args: string[], cwd?: string): Promise<string> {
+const runner = (exec: typeof execFile = execFile): Run => (cmd, args, cwd) => {
   return new Promise((resolve) => {
-    const child = execFile(
+    const child = exec(
       cmd, args,
       { cwd, timeout: SUBPROCESS_TIMEOUT_MS, maxBuffer: 8 << 20, encoding: 'utf-8' },
       (_err, stdout) => resolve(stdout || ''),
     );
     child.on('error', () => resolve(''));
   });
-}
+};
 
 /** Map over `items` with at most `limit` in flight. Preserves input order. */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -475,6 +480,7 @@ async function gitSearchScoped(
   wantDir: boolean,
   cwd: string | undefined,
   outOfTime: () => boolean,
+  run: Run,
 ): Promise<Map<string, string[]>> {
   const specs = pathspecsFor(needles, wantDir);
   const empty = new Map<string, string[]>();
@@ -547,7 +553,7 @@ async function gitSearchScoped(
  * wraps fs/promises for log forwarding, which makes a many-directory BFS take
  * >10s in-process while native `find` returns in milliseconds.
  */
-async function findSearch(root: string, needle: string): Promise<string[]> {
+async function findSearch(root: string, needle: string, run: Run): Promise<string[]> {
   const baseName = needle.split('/').pop() ?? needle;
   const pruneArgs: string[] = [];
   for (const d of PRUNE_DIRS) pruneArgs.push('-name', d, '-prune', '-o');
@@ -588,6 +594,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const claudeHome = opts.claudeHome ?? path.join(homeDir, '.claude');
   const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
   const outOfTime = () => Date.now() >= deadline;
+  const run = runner(opts.childProcess?.execFile);
 
   const rawRef = typeof opts.ref === 'string' ? opts.ref : '';
   // Parse decoration off BEFORE the safety check: a reference wrapped in backticks
@@ -670,7 +677,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const fsRoot = searchRoots[searchRoots.length - 1] ?? cwd;
   for (const root of searchRoots) {
     if (outOfTime()) break;
-    const byNeedle = await gitSearchScoped(root, needles, wantDir, cwd, outOfTime);
+    const byNeedle = await gitSearchScoped(root, needles, wantDir, cwd, outOfTime, run);
     for (const needle of needles) {
       const hits = rankHits(byNeedle.get(needle) ?? [], needle, cwd);
       for (const hit of hits) {
@@ -686,7 +693,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   if (fsRoot && !outOfTime()) {
     for (const needle of needles) {
       if (outOfTime()) break;
-      const raw = await findSearch(fsRoot, needle);
+      const raw = await findSearch(fsRoot, needle, run);
       // Exact-case suffix first: if both a correctly-cased and a differently-cased
       // file exist, the one the reference actually names must win.
       for (const hit of rankHits(matchingSuffix(raw, needle), needle, cwd)) {

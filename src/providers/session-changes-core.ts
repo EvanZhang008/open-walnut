@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import type { ChildProcessUse } from './daemon-child-spawn.js';
 import { createHash } from 'node:crypto';
 import { parseBashFileOps } from '../core/bash-file-ops.js';
 import { restoreArchivedAt } from './transcript-archive.js';
@@ -513,6 +514,8 @@ export interface HostLocalComputeOptions {
   /** The previous compute's `changesMemo` for this session: files whose ops,
    *  on-disk stat and HEAD content did not change reuse their reconstruction. */
   changesMemo?: HostLocalChangesMemo;
+  /** How git starts: the daemon runtime's own; default node's. */
+  childProcess?: ChildProcessUse<'execFile'>;
 }
 
 export interface HostLocalComputeOutput {
@@ -798,13 +801,13 @@ function sameOps(a: readonly FileOp[], b: readonly FileOp[]): boolean {
 
 type GitRun = (args: string[], cwd: string, input?: string, maxBuffer?: number) => Promise<{ stdout: Buffer; code: number }>;
 
-function makeGitRun(stats: HostLocalComputeStats): GitRun {
+function makeGitRun(stats: HostLocalComputeStats, exec: typeof execFile = execFile): GitRun {
   return (args, cwd, input, maxBuffer = GIT_SHOW_MAX_BYTES) => new Promise((resolve) => {
     stats.gitSpawns++;
     const done = (code: number, stdout?: Buffer | string) =>
       resolve({ stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? ''), code });
     try {
-      const child = execFile('git', args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer, encoding: 'buffer' },
+      const child = exec('git', args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer, encoding: 'buffer' },
         (err, stdout) => done(err ? 1 : 0, stdout));
       if (input !== undefined && child.stdin) {
         child.stdin.on('error', () => { /* git exited early: its exit code says so */ });
@@ -1069,7 +1072,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   const prevMemo = opts.changesMemo;
   const memo: HostLocalChangesMemo = { files: new Map(), topByDir: new Map(), headBlobs: new Map() };
   const stats: HostLocalComputeStats = { files: 0, reconstructed: 0, reused: 0, gitSpawns: 0 };
-  const git = makeGitRun(stats);
+  const git = makeGitRun(stats, opts.childProcess?.execFile);
 
   // 3a. Stat every candidate (bounded pool, local fs). An out-of-repo file is
   //     never shown, so it is never read: on 2026-09-30 every compute of one

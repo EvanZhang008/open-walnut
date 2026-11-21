@@ -32,6 +32,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { probeCodexModels } from './codex-model-probe.js'
 import { findThreadToRestore } from './acp-thread-restore.js'
 import { createHostEngineProbe, resolveHostAcpArtifacts, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
@@ -145,11 +146,16 @@ export interface AcpDaemonDeps<W> {
   registryDir?: string
   /** What ps names as a pid's start, as the rollback stop compares it (tests stub it). */
   registryStart?: (pid: number) => Promise<string | null>
+  /**
+   * How this daemon starts its children (workers, ps, mkfifo, the engine probes) and the env a
+   * worker's env is built from: the daemon runtime's own; default node's and process.env.
+   */
+  childProcess?: ChildProcessUse<'spawn' | 'execFile'>
 }
 
-function psField(pid: number, field: string): Promise<string | null | undefined> {
+function psField(pid: number, field: string, run: typeof execFile): Promise<string | null | undefined> {
   return new Promise((resolve) => {
-    execFile('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { timeout: 5_000 }, (error, stdout, stderr) => {
+    run('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { timeout: 5_000 }, (error, stdout, stderr) => {
       const out = String(stdout ?? '').trim()
       // ps answers 1 with nothing at all for a pid that is not there; anything else
       // (a usage message from a ps without these options, a timeout) is no answer.
@@ -159,9 +165,9 @@ function psField(pid: number, field: string): Promise<string | null | undefined>
   })
 }
 
-function psGroupCommands(pgid: number): Promise<string[] | null> {
+function psGroupCommands(pgid: number, run: typeof execFile = execFile): Promise<string[] | null> {
   return new Promise((resolve) => {
-    execFile('ps', ['-A', '-ww', '-o', 'pgid=', '-o', 'command='], { timeout: 5_000, maxBuffer: 16 << 20 }, (error, stdout) => {
+    run('ps', ['-A', '-ww', '-o', 'pgid=', '-o', 'command='], { timeout: 5_000, maxBuffer: 16 << 20 }, (error, stdout) => {
       if (error) return resolve(null)
       const out: string[] = []
       for (const line of String(stdout).split('\n')) {
@@ -173,11 +179,11 @@ function psGroupCommands(pgid: number): Promise<string[] | null> {
   })
 }
 
-async function psProcessInfo(pid: number): Promise<AcpProcessInfo> {
-  const start = await psField(pid, 'lstart')
+async function psProcessInfo(pid: number, run: typeof execFile = execFile): Promise<AcpProcessInfo> {
+  const start = await psField(pid, 'lstart', run)
   if (start === undefined) return { state: 'unknown' }
   if (start === null) return { state: 'gone' }
-  const command = await psField(pid, 'command')
+  const command = await psField(pid, 'command', run)
   if (command === undefined) return { state: 'unknown' }
   return command === null ? { state: 'gone' } : { state: 'alive', start, command }
 }
@@ -233,13 +239,15 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   // A stopping worker that exited while its process group lives on: kept (also in the pid file) until that group is gone.
   const exitedGroups = new Map<string, { pid: number; cmd: string; adapter: string; boot: number; start?: string }>()
   const pidFile = path.join(daemonDir, 'acp-workers.json')
-  const processInfo = deps.processInfo ?? psProcessInfo
+  const use = deps.childProcess ?? {}
+  const baseEnv = use.env ?? process.env
+  const processInfo = deps.processInfo ?? ((pid: number) => psProcessInfo(pid, use.execFile))
   // Every request id of this daemon life is at least this (acp-survive.ts firstRpcId): a lower one is an earlier life's.
   const lifeFirstRpcId = firstRpcId()
-  const groupCommands = deps.groupCommands ?? psGroupCommands
+  const groupCommands = deps.groupCommands ?? ((pgid: number) => psGroupCommands(pgid, use.execFile))
   const boot = deps.bootMinute ?? bootMinute
   const registryDir = deps.registryDir ?? path.join(daemonDir, 'detached')
-  const registryStart = deps.registryStart ?? psStart
+  const registryStart = deps.registryStart ?? ((pid: number) => psStart(pid, use))
   // Workers still being adopted at startup: a start, an op or a subscribe for one waits for it.
   const adopting = new Map<string, Promise<void>>()
   let stopScriptPut = false
@@ -584,7 +592,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
 
     if ((!Array.isArray(workerCmd) || workerCmd.length === 0) && params.hostAdapter) {
-      const resolved = resolveHostAcpArtifacts(params.hostAdapter, { artifactDir: deps.artifactDir, artifactNames: deps.artifactNames })
+      const resolved = resolveHostAcpArtifacts(params.hostAdapter, { artifactDir: deps.artifactDir, artifactNames: deps.artifactNames, env: use.env })
       if (!resolved.ok) return { ok: false, error: resolved.error, errorKind: resolved.errorKind }
       workerCmd = resolved.workerCmd
       adapterCmd = resolved.adapterCmd
@@ -607,7 +615,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     let survivePipeFd: number | null = null
     try {
       // A surviving worker reads its pipe and writes its files (acp-survive.ts), never this daemon's pipes.
-      const files = survive ? await prepareSurviveFiles(paths) : null
+      const files = survive ? await prepareSurviveFiles(paths, use) : null
       survivePipeFd = files ? files.inFd : null
       // The files took an await: a Demo that began stopping meanwhile starts no worker.
       if (files && deps.maySpawn && !deps.maySpawn()) {
@@ -617,10 +625,10 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
         return { ok: false, error: 'acpStart: Demo is stopping; no new worker starts', errorKind: 'demo_stopping' }
       }
       try {
-        proc = spawn(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath, ...(files ? ['--fifo', paths.fifo] : [])], {
+        proc = (use.spawn ?? spawn)(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath, ...(files ? ['--fifo', paths.fifo] : [])], {
           cwd,
           stdio: files ? ['ignore', files.outFd, files.errFd] : ['pipe', 'pipe', 'pipe'],
-          env: mergeAcpSpawnEnv(process.env, env),
+          env: mergeAcpSpawnEnv(baseEnv, env),
           // Worker becomes PGID leader; adapter, provider, and tool descendants
           // inherit the group so an explicit abort can terminate all of them.
           detached: true,
@@ -1370,12 +1378,12 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }) + '\n')
   }
 
-  const hostProbe = createHostEngineProbe({ artifactDir: deps.artifactDir, artifactNames: deps.artifactNames })
+  const hostProbe = createHostEngineProbe({ artifactDir: deps.artifactDir, artifactNames: deps.artifactNames, env: use.env, execFile: use.execFile })
   return {
     /** Which engines this host can run (acp-host-artifacts.ts); only a daemon with `artifactDir` answers. */
     hostEngines: deps.artifactDir ? (specs: AcpHostAdapterSpec[]) => hostProbe.probe(specs) : undefined,
     modelCatalog: (binary: string, options: { cwd?: string; env?: Record<string, string> }) =>
-      probeCodexModels(binary, { cwd: options.cwd, env: mergeAcpSpawnEnv(process.env, options.env) }),
+      probeCodexModels(binary, { cwd: options.cwd, env: mergeAcpSpawnEnv(baseEnv, options.env), spawn: use.spawn }),
     acpStart,
     acpOp,
     acpAbortTurn,

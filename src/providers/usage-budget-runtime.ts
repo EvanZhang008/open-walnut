@@ -53,6 +53,8 @@ export interface UsageBudgetRuntimeOptions {
   active?: (sid: string, engine: string, runtimeId?: string) => boolean;
   now?: () => number;
   log: (message: string, fields: Record<string, unknown>) => void;
+  /** How a usage read starts its CLI (`opencode export`): the daemon runtime's own; default node's. */
+  childProcess?: SessionCostRequest['childProcess'];
   /** Test seams. */
   scan?: (req: SessionCostRequest) => Promise<SessionCostScan>;
   tickMs?: number;
@@ -184,7 +186,8 @@ export function createUsageBudgetRuntime(options: UsageBudgetRuntimeOptions) {
     const scans: SessionCostScan[] = [];
     for (const sid of [record.sid, ...(record.alsoSids ?? [])]) {
       const s = await scan({ engine: record.engine ?? 'claude', sessionId: sid, ...(record.cwd ? { cwd: record.cwd } : {}),
-        thresholds, projectsDir: options.projectsDir, ...(options.codexHome ? { codexHome: options.codexHome } : {}), softDeadlineMs: 10_000 });
+        thresholds, projectsDir: options.projectsDir, ...(options.codexHome ? { codexHome: options.codexHome } : {}), softDeadlineMs: 10_000,
+        ...(options.childProcess ? { childProcess: options.childProcess } : {}) });
       if (s.pending) return { pending: true };
       scans.push(s);
     }

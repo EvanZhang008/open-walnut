@@ -17,6 +17,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { StringDecoder } from 'node:string_decoder'
 
 export interface SurvivePaths { fifo: string; out: string; err: string; pos: string }
@@ -38,10 +39,10 @@ export function firstRpcId(now = Date.now()): number {
  * its end; the worker then makes it 0200, as every session's stdin pipe is (daemon startup's
  * ensureOwnerOnlyStorage does the same), so nothing else can read its requests.
  */
-export async function prepareSurviveFiles(p: SurvivePaths): Promise<{ outFd: number; errFd: number; inFd: number; close: () => Promise<void> }> {
+export async function prepareSurviveFiles(p: SurvivePaths, use: ChildProcessUse<'execFile'> = {}): Promise<{ outFd: number; errFd: number; inFd: number; close: () => Promise<void> }> {
   for (const f of [p.fifo, p.pos]) { try { await fs.promises.unlink(f) } catch { /* none */ } }
   await new Promise<void>((resolve, reject) => {
-    execFile('mkfifo', ['-m', '600', p.fifo], { timeout: 5_000 }, (err) => (err ? reject(new Error(`mkfifo failed: ${err.message}`)) : resolve()))
+    (use.execFile ?? execFile)('mkfifo', ['-m', '600', p.fifo], { timeout: 5_000 }, (err) => (err ? reject(new Error(`mkfifo failed: ${err.message}`)) : resolve()))
   })
   // Read-write so the open never waits for a reader; this side never reads from it. A plain fd
   // (one open, on a worker's start only): openSurviveChannel owns and closes it.

@@ -3,7 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { spawn, execFile, execFileSync, execSync } from 'node:child_process'
 import { spawnBehindRegistry } from '../../src/providers/daemon-spawn-barrier.js'
+import { createDaemonChildSpawn } from '../../src/providers/daemon-child-spawn.js'
 
 let root: string
 let input: fs.FileHandle
@@ -68,5 +70,27 @@ describe('real process execution waits for registry commit', () => {
     expect(await gate.exited).toEqual([0, null])
     expect(await fs.readFile(path.join(root, 'stdout'), 'utf8')).toBe(text)
     await expect(fs.stat(path.join(root, 'unwanted'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('starts through the spawn its caller hands it: the daemon runtime\'s gives the CLI umask 077', async () => {
+    const forks: string[] = []
+    const runtime = createDaemonChildSpawn({
+      spawn: ((...a: Parameters<typeof spawn>) => { forks.push(String(a[0])); return spawn(...a) }) as typeof spawn,
+      execFile, execFileSync, execSync,
+      umask: (mask?: number) => (mask === undefined ? process.umask() : process.umask(mask)),
+    }, { env: { PATH: '/usr/bin:/bin' }, cwd: () => undefined, umask: 0o077 })
+    const before = process.umask()
+    const gate = spawnBehindRegistry('/bin/sh', ['-c', 'printf "%s|%s" "$(umask)" "$CLI_MARK"'], {
+      cwd: root, env: { HOME: root, PATH: '/usr/bin:/bin', CLI_MARK: 'session' },
+      stdio: [input.fd, output.fd, stderr.fd],
+    }, runtime)
+    const exited = once(gate.process, 'exit', { signal: AbortSignal.timeout(5000) })
+    active.push({ abort: gate.abort, exited })
+    expect(process.umask()).toBe(before)
+    gate.release()
+    expect(await exited).toEqual([0, null])
+    expect(forks).toEqual(['/bin/sh'])
+    // The session's own env (the caller's options) wins over the runtime's default env.
+    expect(await fs.readFile(path.join(root, 'stdout'), 'utf8')).toBe('0077|session')
   })
 })

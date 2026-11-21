@@ -379,6 +379,8 @@ describe.each([
         hostExec: { running: () => 0, holding: () => 0 },
         noteRestarting: mark.note, clearRestartMark: mark.clear,
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },
+        // The runtime's child functions and env, handed to the handover's probes (daemon-child-spawn.ts).
+        childUse: {},
         persistRegistry: (strict: boolean) => {
           expect(strict).toBe(true)
           order.push('persist')

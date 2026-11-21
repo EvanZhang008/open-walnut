@@ -3,7 +3,8 @@
  * not a script that owns the process. Two runtimes in one process, each in its own dir,
  * each running a session: they do not see each other's sessions, stopping one leaves the
  * other serving, the process's cwd, umask, env and handlers are as they were, the children
- * still start with umask 077, and once both stop nothing of them keeps the process alive.
+ * still start with umask 077 (a trigger check a module of the runtime starts too), and once both
+ * stop nothing of them keeps the process alive.
  *
  * The text check holds the rule for the runtime's body: nothing in it touches the whole
  * process (exit, cwd, umask, argv, env, signal or crash handlers, stdin), and every child
@@ -52,6 +53,8 @@ describe.skipIf(!BUN)('two daemon runtimes in one process', () => {
     expect(out.start_b).toEqual({ ok: true })
     expect(out.probes.a).toEqual([{ umask: '0077', marker: 'a' }])
     expect(out.probes.b).toEqual([{ umask: '0077', marker: 'b' }])
+    // A module the runtime imports starts its child with the runtime's spawn and env too (a trigger check).
+    expect(out.checks).toEqual({ a: '0077|a', b: '0077|b' })
 
     // start() runs once.
     expect(out.startAgain).toBe(true)

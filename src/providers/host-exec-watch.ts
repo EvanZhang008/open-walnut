@@ -201,22 +201,22 @@ function localStamp(ms: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
-function run(file: string, args: string[]): Promise<string | null> {
+function run(file: string, args: string[], exec: typeof execFile): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: 4 << 20 }, (err, stdout) => resolve(err ? null : String(stdout)))
+    exec(file, args, { timeout: PROBE_TIMEOUT_MS, maxBuffer: 4 << 20 }, (err, stdout) => resolve(err ? null : String(stdout)))
   })
 }
 
 /** The probes on a Mac: one bounded `ps`, and the unified log read through /usr/bin/log (never zsh's `log`). */
-export function macPromptProbe(now: () => number = Date.now): PromptProbe {
+export function macPromptProbe(now: () => number = Date.now, exec: typeof execFile = execFile): PromptProbe {
   return {
     snapshot: async (pgids) => {
-      const out = await run('/bin/ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'etime=', '-o', 'time=', '-o', 'comm='])
+      const out = await run('/bin/ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'etime=', '-o', 'time=', '-o', 'comm='], exec)
       return out === null ? { processes: null, securityAgentStartedAt: null } : readSnapshot(out, pgids, now())
     },
     tccPrompts: async (sinceMs) => {
       const out = await run('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(sinceMs),
-        '--predicate', 'process == "tccd" AND (eventMessage CONTAINS "AUTHREQ_PROMPTING" OR eventMessage CONTAINS "AUTHREQ_ATTRIBUTION")'])
+        '--predicate', 'process == "tccd" AND (eventMessage CONTAINS "AUTHREQ_PROMPTING" OR eventMessage CONTAINS "AUTHREQ_ATTRIBUTION")'], exec)
       return out === null ? null : out.split('\n').filter((l) => l.includes('AUTHREQ_'))
     },
   }

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Writable } from 'node:stream'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 
 const SCRIPT = 'IFS= read -r walnut_start <&3 || exit 125; [ "$walnut_start" = run ] || exit 125; exec 3<&-; exec "$@"'
 
@@ -9,6 +10,8 @@ export function spawnBehindRegistry(
   program: string,
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; stdio: [number, number, number] },
+  /** The daemon runtime passes its own spawn (umask 077); others get node's. */
+  childProcess: ChildProcessUse<'spawn'> = {},
 ): { process: ChildProcess; release(): void; abort(): void } {
   const candidates = program.includes('/') ? [path.resolve(options.cwd, program)]
     : (options.env.PATH ?? '/usr/bin:/bin').split(':').map((dir) => path.resolve(options.cwd, dir, program))
@@ -24,7 +27,7 @@ export function spawnBehindRegistry(
     }
   }
   if (!executable) throw accessError ?? Object.assign(new Error(`Executable not found: ${program}`), { code: 'ENOENT' })
-  const child = spawn('/bin/sh', ['-c', SCRIPT, 'walnut-start', executable, ...args], {
+  const child = (childProcess.spawn ?? spawn)('/bin/sh', ['-c', SCRIPT, 'walnut-start', executable, ...args], {
     ...options, detached: true, stdio: [...options.stdio, 'pipe'],
   })
   const gate = child.stdio[3] as Writable | null

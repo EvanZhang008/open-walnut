@@ -52,6 +52,7 @@ import { createScriptRunner } from './host-exec-script.js'
 import { createDetachedScripts } from './host-script-detached.js'
 import { detachedChild, exitFileOf, removeExitFile, wrapperArgv } from './detached-run.js'
 import { ROLLBACK_NOTE, processStart as psStart, settleAdoption, type DetachedKind } from './detached-registry.js'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 
 export type { JobView, RunReply, RunRequest } from './host-exec-job.js'
 
@@ -116,6 +117,11 @@ export interface HostExecDeps {
   registryDir?: string
   /** What ps names as a pid's start (default detached-registry.ts processStart): a run is adopted only while its wrapper holds its pid. */
   processStart?: (pid: number) => Promise<string | null>
+  /**
+   * How its probes start (ps, log, the matcher's ps) and the env the matcher's env is taken from:
+   * the daemon runtime's own; default node's and process.env. Runs start through `spawn` with `env`.
+   */
+  childProcess?: ChildProcessUse<'execFile'>
 }
 
 /**
@@ -144,19 +150,19 @@ export function createHostExec(deps: HostExecDeps) {
   }
   const mac = (deps.platform ?? process.platform) === 'darwin'
   const registryDir = deps.registryDir ?? path.join(deps.stateDir, 'detached')
-  const processStart = deps.processStart ?? psStart
+  const processStart = deps.processStart ?? ((pid: number) => psStart(pid, deps.childProcess))
   const pidAlive = deps.pidAlive ?? ((pid: number) => { if (pid <= 1) return false; try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' } })
   // Plugin scripts (exec.script): no job, no log (host-exec-script.ts); a detached one keeps its files (host-script-detached.ts).
   const detachedScripts = createDetachedScripts({ spawn: deps.spawn, killGroup: deps.killGroup, root: path.join(deps.stateDir, 'host-script'), registryDir, processStart, pidAlive, now })
   void detachedScripts.adoptAll().then(() => detachedScripts.prune()).catch(() => {})
   const scripts = createScriptRunner({ spawn: deps.spawn, killGroup: deps.killGroup, shell: deps.shell, bash: bashPath, home: deps.home, env: deps.env, mac, detached: detachedScripts })
   // One watcher for every job here: one `ps` and at most one log read per look, whatever the number of jobs.
-  const probe = deps.promptProbe === undefined ? (mac ? macPromptProbe(now) : null) : deps.promptProbe
+  const probe = deps.promptProbe === undefined ? (mac ? macPromptProbe(now, deps.childProcess?.execFile) : null) : deps.promptProbe
   const watcher = probe ? createPromptWatcher(probe, { everyMs: deps.promptCheckMs ?? IDLE_WINDOW_MS, now }) : null
   // A Mac's login shell PATH, asked only when the Command Line Tools are missing (host-exec-clt.ts).
   let askedPath: (() => string) | null = null
   // One matcher process for every wait_for here, started on the first output wait (host-exec-matcher.ts).
-  const matcher = deps.matcher ? createMatcher(deps.matcher, deps.spawn) : null
+  const matcher = deps.matcher ? createMatcher(deps.matcher, deps.spawn, { childProcess: deps.childProcess }) : null
   const pathOfRun = (): string => (deps.runPath ?? (askedPath ??= loginPath({
     spawn: deps.spawn, killGroup: deps.killGroup, env: deps.env, home: deps.home, now,
     plan: (line) => { const login = deps.shell || '/bin/sh'; const p = shellPlan(login, bashPath(), line); return { cmd: login, args: p.args, env: p.env } },

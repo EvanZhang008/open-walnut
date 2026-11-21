@@ -90,6 +90,15 @@ const probes = (r: typeof a) => r.frames
 while (Date.now() < deadline && (probes(a).length === 0 || probes(b).length === 0)) await new Promise((r) => setTimeout(r, 50))
 out.probes = { a: probes(a), b: probes(b) }
 
+// A trigger's check script (trigger-check-core.ts runCheckProcess, a module the runtime imports):
+// started with the runtime's spawn and env, so umask 077 and the runtime's marker, not the process's.
+const checkRun = 'printf "%s|%s" "$(umask)" "$RUNTIME_MARKER"'
+out.checks = {} as Record<string, unknown>
+for (const r of [a, b]) {
+  const res = await r.client.request('triggers.test', { check: { run: checkRun, timeoutSeconds: 10 } })
+  ;(out.checks as Record<string, unknown>)[r.name] = res.ok ? (res.result as { stdoutTail?: string }).stdoutTail : `error: ${String(res.error)}`
+}
+
 // start() runs once: a second call gets the first one's result.
 out.startAgain = (await a.runtime.start()) === a.started
 

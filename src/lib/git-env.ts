@@ -35,13 +35,13 @@ export const GIT_REPO_REDIRECT_VARS = [
 ] as const;
 
 /**
- * The env to hand a `git` child: the current environment plus `extra`, minus every
- * inherited redirect. `extra` wins over the inherited value, and an explicit
- * `extra` entry is kept even if it names a redirect — a caller that deliberately
- * sets GIT_DIR is choosing a repo, not inheriting one.
+ * The env to hand a `git` child: the current environment (`base`, default process.env; a
+ * daemon runtime passes its own) plus `extra`, minus every inherited redirect. `extra` wins
+ * over the inherited value, and an explicit `extra` entry is kept even if it names a
+ * redirect: a caller that deliberately sets GIT_DIR is choosing a repo, not inheriting one.
  */
-export function gitChildEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+export function gitChildEnv(extra?: NodeJS.ProcessEnv, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...extra };
   for (const name of GIT_REPO_REDIRECT_VARS) {
     if (extra && name in extra) continue;
     delete env[name];

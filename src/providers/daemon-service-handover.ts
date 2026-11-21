@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RegistryEntry, DaemonHooksConfig } from './daemon-core.js'
 import { daemonInstallRoot, type DaemonServicePlatform } from './daemon-service-config.js'
-import { probeCronProcess, readCronBootId } from './daemon-cron-host.js'
+import { probeCronProcess, readCronBootId, type CronHostUse } from './daemon-cron-host.js'
 import type { CronProcessIdentity } from './daemon-cron-supervision.js'
 
 interface HandoverSnapshot {
@@ -69,6 +69,8 @@ export async function prepareDaemonServiceHandover(input: HandoverLocation & {
   entries: Record<string, RegistryEntry>
   registryFile: string
   hooks: DaemonHooksConfig | null
+  /** How its probes start (ps, sysctl): the daemon runtime's own; default node's. */
+  childProcess?: CronHostUse
 }): Promise<void> {
   if (path.resolve(input.stateDir) !== daemonInstallRoot(input.platform, input.home)) {
     throw new Error('Service handover requires the default host service directory')
@@ -80,14 +82,14 @@ export async function prepareDaemonServiceHandover(input: HandoverLocation & {
   const target = path.join(input.stateDir, 'handover.json')
   if (await readPrivate(target, input.uid) !== null) throw new Error('An earlier service handover is still pending')
   const deadline = AbortSignal.timeout(45_000)
-  const bootId = await readCronBootId(input.platform, deadline)
+  const bootId = await readCronBootId(input.platform, deadline, input.childProcess)
   if (!bootId || !input.startTime) throw new Error('Service handover requires a host boot and daemon process identity')
   const entries: Record<string, RegistryEntry> = {}
   for (const [sid, entry] of Object.entries(input.entries)) {
     deadline.throwIfAborted()
     if (!entry.startTime) throw new Error('Service handover cannot prove a session process identity')
     const identity = { bootId: entry.bootId ?? bootId, pid: entry.pid, startTime: entry.startTime }
-    const probe = await probeCronProcess(identity, bootId, input.platform, deadline)
+    const probe = await probeCronProcess(identity, bootId, input.platform, deadline, input.childProcess)
     if (probe.status === 'unknown') throw new Error('Session process identity changed during service handover')
     if (probe.status === 'alive') entries[sid] = { ...entry, bootId }
   }
@@ -100,7 +102,7 @@ export async function prepareDaemonServiceHandover(input: HandoverLocation & {
   await writePrivate(target, JSON.stringify(snapshot) + '\n', true)
 }
 
-export async function consumeDaemonServiceHandover(input: HandoverLocation & { platform: DaemonServicePlatform }): Promise<void> {
+export async function consumeDaemonServiceHandover(input: HandoverLocation & { platform: DaemonServicePlatform; childProcess?: CronHostUse }): Promise<void> {
   await checkDirectory(input)
   const target = path.join(input.stateDir, 'handover.json')
   const raw = await readPrivate(target, input.uid)
@@ -116,8 +118,8 @@ export async function consumeDaemonServiceHandover(input: HandoverLocation & { p
   if (!snapshot.owner || typeof snapshot.owner.bootId !== 'string' || typeof snapshot.owner.startTime !== 'string') {
     throw new Error('Invalid daemon service handover owner')
   }
-  const bootId = await readCronBootId(input.platform, AbortSignal.timeout(5000))
-  const owner = await probeCronProcess(snapshot.owner, bootId, input.platform, AbortSignal.timeout(5000))
+  const bootId = await readCronBootId(input.platform, AbortSignal.timeout(5000), input.childProcess)
+  const owner = await probeCronProcess(snapshot.owner, bootId, input.platform, AbortSignal.timeout(5000), input.childProcess)
   if (owner.status !== 'dead') throw new Error('The previous daemon has not confirmed its exit')
   for (const entry of Object.values(snapshot.registry.sessions)) {
     if (!entry || !Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !entry.bootId || !entry.startTime

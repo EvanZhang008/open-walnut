@@ -34,6 +34,7 @@ import fsp from 'node:fs/promises'
 import net from 'node:net'
 import tls from 'node:tls'
 import { execFile } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 
 /** The environment variable every process a session's agent starts carries. */
 export const SESSION_ENV = 'WALNUT_SESSION_ID'
@@ -793,11 +794,13 @@ export async function probePort(address: string, port: number, timeoutMs: number
   return { kind: 'other' }
 }
 
-export function defaultPortScanIo(): PortScanIo {
+/** `use`: the daemon runtime's execFile (lsof, ps, ss); default node's. */
+export function defaultPortScanIo(use: ChildProcessUse<'execFile'> = {}): PortScanIo {
+  const exec = use.execFile ?? execFile
   return {
     platform: process.platform,
     run: (cmd, args, timeoutMs) => new Promise((resolve) => {
-      execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
+      exec(cmd, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
         if (!err) return resolve(stdout)
         // lsof and ps exit 1 when there is nothing to report: the output still holds.
         const code = (err as { code?: unknown }).code

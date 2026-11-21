@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { statSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { cliCronRestoreConfig } from './daemon-cron-schedule.js'
 import type { CronRestoreConfig } from './daemon-cron-transcript.js'
 import type { CronProcessIdentity } from './daemon-cron-supervision.js'
@@ -40,16 +41,19 @@ export function processStartedAtMs(pid: number | null | undefined, startTime: st
   return startTime && !/^\d+$/.test(startTime.trim()) ? sane(Date.parse(startTime)) : null
 }
 
-function run(program: string, args: string[], signal: AbortSignal): Promise<string> {
+/** `use`: the daemon runtime's execFile and env; default node's and process.env. */
+export type CronHostUse = ChildProcessUse<'execFile'>
+
+function run(program: string, args: string[], signal: AbortSignal, use: CronHostUse): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(program, args, { encoding: 'utf8', timeout: 5000, maxBuffer: 128 * 1024, signal, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } },
+    (use.execFile ?? execFile)(program, args, { encoding: 'utf8', timeout: 5000, maxBuffer: 128 * 1024, signal, env: { ...(use.env ?? process.env), LANG: 'C', LC_ALL: 'C' } },
       (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve(stdout.trim()))
   })
 }
 
-export async function readCronBootId(platform: string, signal: AbortSignal): Promise<string> {
+export async function readCronBootId(platform: string, signal: AbortSignal, use: CronHostUse = {}): Promise<string> {
   if (platform === 'linux') return (await fs.readFile('/proc/sys/kernel/random/boot_id', { encoding: 'utf8', signal })).trim()
-  if (platform === 'darwin') return run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], signal)
+  if (platform === 'darwin') return run('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], signal, use)
   throw new Error('Cron supervision requires Linux or macOS')
 }
 
@@ -58,6 +62,7 @@ export async function probeCronProcess(
   bootId: string,
   platform: string,
   signal: AbortSignal,
+  use: CronHostUse = {},
 ): Promise<CronProcessProbe> {
   if (!expected || !bootId || !Number.isSafeInteger(expected.pid) || expected.pid <= 1) return { status: 'unknown' }
   if (expected.bootId !== bootId) return { status: 'dead' }
@@ -72,7 +77,7 @@ export async function probeCronProcess(
       if (fields[0] === 'Z' || fields[0] === 'X') return { status: 'dead' }
       startTime = fields[19]
     } else if (platform === 'darwin') {
-      startTime = await run('/bin/ps', ['-p', String(pid), '-o', 'lstart='], signal)
+      startTime = await run('/bin/ps', ['-p', String(pid), '-o', 'lstart='], signal, use)
       if (!startTime) return { status: 'dead' }
     } else return { status: 'unknown' }
     // When the PID was reused, do not claim it is dead; the new process may be the same SID just adopted by another entry point.
@@ -87,8 +92,8 @@ export async function probeCronProcess(
   }
 }
 
-export async function readCronCliVersion(executable: string, signal: AbortSignal): Promise<string> {
-  const output = await run(executable, ['--version'], signal)
+export async function readCronCliVersion(executable: string, signal: AbortSignal, use: CronHostUse = {}): Promise<string> {
+  const output = await run(executable, ['--version'], signal, use)
   const match = output.match(/^(\d+\.\d+\.\d+) \(Claude Code\)$/)
   if (!match) throw new Error('Unrecognized Claude Code version')
   return match[1]

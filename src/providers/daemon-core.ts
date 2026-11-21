@@ -15,7 +15,8 @@
  * behaviour for SSH-deployed daemons.
  */
 
-import { execFileSync, execSync } from 'node:child_process'
+import { execFileSync as nodeExecFileSync, execSync as nodeExecSync } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { dirname, join as pathJoin } from 'node:path'
 import { userLineContent } from './user-line-images-core.js'
 import { networkCausedAuthError } from './network-cause-core.js'
@@ -2748,7 +2749,7 @@ export function turnRetryGiveUpText(reason: string, errorText: string | null): s
     + 'Send a message to resume this session manually.'
 }
 
-export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number): string | null {
+export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number, use: ChildProcessUse<'execSync'> = {}): string | null {
   // Linux: /proc/<pid>/stat field 22 (kernel start time in clock ticks)
   try {
     const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8')
@@ -2765,9 +2766,10 @@ export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number):
   // macOS: ps -p <pid> -o lstart= (e.g. "Thu May  6 18:59:15 2026")
   // Force LANG=C so localized day/month names don't break startTime comparisons
   // when the daemon starts under one locale but reconciles under another.
+  const execSync = use.execSync ?? nodeExecSync
   try {
     const result = (execSync(`ps -p ${pid} -o lstart=`, {
-      encoding: 'utf-8', timeout: 2000, env: { ...process.env, LANG: 'C' }, stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf-8', timeout: 2000, env: { ...(use.env ?? process.env), LANG: 'C' }, stdio: ['ignore', 'pipe', 'ignore'],
     }) as string).trim()
     return result || null
   } catch {}
@@ -2844,7 +2846,7 @@ const validPids = (pids: number[]): number[] =>
   [...new Set(pids.filter((p) => Number.isSafeInteger(p) && p > 1))]
 
 /** Batched, synchronous start-time read: one `ps` for every pid on macOS. */
-export function defaultReadStartTimes(fs: typeof import('node:fs'), pids: number[]): Map<number, string> {
+export function defaultReadStartTimes(fs: typeof import('node:fs'), pids: number[], use: ChildProcessUse<'execFileSync'> = {}): Map<number, string> {
   const out = new Map<number, string>()
   const wanted = validPids(pids)
   if (wanted.length === 0) return out
@@ -2856,8 +2858,9 @@ export function defaultReadStartTimes(fs: typeof import('node:fs'), pids: number
     return out
   }
   try {
+    const execFileSync = use.execFileSync ?? nodeExecFileSync
     return parsePsStartTimes(execFileSync('ps', PS_START_TIME_ARGS(wanted), {
-      encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' }, stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf-8', timeout: 5000, env: { ...(use.env ?? process.env), LANG: 'C' }, stdio: ['ignore', 'pipe', 'ignore'],
     }))
   } catch (err) {
     // ps exits 1 when any pid is gone but still prints the live ones.
@@ -2937,6 +2940,8 @@ type ExecFileLike = (
 export function createAsyncStartTimeReader(opts: {
   fs: typeof import('node:fs')
   execFileFn: ExecFileLike
+  /** The env ps runs with, LANG=C on top (default process.env; the daemon runtime's own). */
+  env?: NodeJS.ProcessEnv
   batchWindowMs?: number
   setTimeoutFn?: typeof setTimeout
 }): (pid: number) => Promise<string | null> {
@@ -2951,7 +2956,7 @@ export function createAsyncStartTimeReader(opts: {
     }
     // Bounded: a ps stuck in the kernel answers nothing at the deadline instead of holding every waiter.
     void boundedExecFile(opts.execFileFn, 'ps', PS_START_TIME_ARGS([...batch.keys()]), {
-      encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' },
+      encoding: 'utf-8', timeout: 5000, env: { ...(opts.env ?? process.env), LANG: 'C' },
     }).then((result) => settleAll(parsePsStartTimes(result.stdout)))
   }
   return (pid: number): Promise<string | null> => {

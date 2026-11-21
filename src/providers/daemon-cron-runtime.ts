@@ -4,7 +4,7 @@ import path from 'node:path'
 import { CronSupervisionController, DaemonSessionGate } from './daemon-cron-controller.js'
 import { CronSupervisionStore } from './daemon-cron-store.js'
 import { createCronObserver, supportsCronRestore } from './daemon-cron-observer.js'
-import { cliEnvTrue, findCronTranscript, probeCronProcess, readCronBootId, readCronCliConfig, readCronCliVersion } from './daemon-cron-host.js'
+import { cliEnvTrue, findCronTranscript, probeCronProcess, readCronBootId, readCronCliConfig, readCronCliVersion, type CronHostUse } from './daemon-cron-host.js'
 import { readCronTranscript } from './daemon-cron-transcript.js'
 import { buildCronResumeArgs, createCronSupervision, type CronLaunchSpec, type CronProcessIdentity, type CronSupervisionRecord } from './daemon-cron-supervision.js'
 
@@ -57,12 +57,15 @@ export interface CronRuntimeOptions {
   start(sid: string, launch: CronLaunchSpec, isCurrent: () => boolean): Promise<{ pid: number; startTime: string | null }>
   changed(record: CronSupervisionRecord): void
   error(error: unknown): void
+  /** How its probes (ps, sysctl, `claude --version`) start: the daemon runtime's own; default node's. */
+  childProcess?: CronHostUse
 }
 
 export async function createDaemonCronRuntime(options: CronRuntimeOptions) {
   const store = new CronSupervisionStore(path.join(options.stateDir, 'supervision'))
   await store.load()
-  const bootId = await readCronBootId(options.platform, AbortSignal.timeout(5000))
+  const use = options.childProcess ?? {}
+  const bootId = await readCronBootId(options.platform, AbortSignal.timeout(5000), use)
   if (!bootId) throw new Error('Host boot identity is unavailable')
   let stopped = false
   let pauseToken: object | null = null
@@ -74,9 +77,9 @@ export async function createDaemonCronRuntime(options: CronRuntimeOptions) {
     process: async (record, signal) => {
       const current = options.sessions().find((session) => session.sid === record.sid)
       if (current?.pid && current.pid !== record.process?.pid) return { status: 'unknown' }
-      return probeCronProcess(record.process, bootId, options.platform, signal)
+      return probeCronProcess(record.process, bootId, options.platform, signal, use)
     },
-    cliVersion: (launch, signal) => readCronCliVersion(launch.args[0], signal),
+    cliVersion: (launch, signal) => readCronCliVersion(launch.args[0], signal, use),
     config: (signal) => readCronCliConfig(options.home, options.env, signal),
     transcript: async (record, signal) => {
       const file = await findCronTranscript(record.sid, record.launch!.cwd, claudeHome, signal)
@@ -113,7 +116,7 @@ export async function createDaemonCronRuntime(options: CronRuntimeOptions) {
       if (!version || !supportsCronRestore(version)) continue
       if (!session.bootId) continue
       const identity: CronProcessIdentity = { bootId: session.bootId, pid: session.pid, startTime: session.startTime }
-      const probe = await probeCronProcess(identity, bootId, options.platform, AbortSignal.timeout(5000))
+      const probe = await probeCronProcess(identity, bootId, options.platform, AbortSignal.timeout(5000), use)
       if (probe.status === 'unknown' || stopped) continue
       const hooksHash = options.hooksHash(session.sid)
       if (hooksHash === undefined || (hooksHash === null && existing?.launch?.hooksHash)) continue

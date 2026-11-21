@@ -24,6 +24,7 @@
  * never sent, and the late answer of one in flight is dropped.
  */
 import { execFile, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import { Worker } from 'node:worker_threads'
@@ -248,7 +249,7 @@ export function matcherEnv(env: NodeJS.ProcessEnv): Record<string, string> {
  * answering (2026-11-04 review: with the pool held, this never answered, the matcher's timer
  * never fired again, and every output wait answered untested until the daemon restarted).
  */
-export async function cpuOfPid(pid: number, platform: string = process.platform): Promise<number | null> {
+export async function cpuOfPid(pid: number, platform: string = process.platform, exec: typeof execFile = execFile): Promise<number | null> {
   if (platform === 'linux') {
     try {
       const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
@@ -261,7 +262,7 @@ export async function cpuOfPid(pid: number, platform: string = process.platform)
     }
   }
   return new Promise((resolve) => {
-    execFile('ps', ['-o', 'cputime=', '-p', String(pid)], { timeout: 2_000 }, (err, out) => resolve(err ? null : psTime(String(out))))
+    exec('ps', ['-o', 'cputime=', '-p', String(pid)], { timeout: 2_000 }, (err, out) => resolve(err ? null : psTime(String(out))))
   })
 }
 
@@ -314,10 +315,14 @@ interface Running { proc: ChildProcess; ready: boolean; cpuAt: number; cpuSeen: 
  * burns it; a starved machine does not), so a loaded host does not turn an ordinary pattern into
  * a "too slow" answer; with no CPU reading at all, it is never called slow.
  */
-export function createMatcher(start: MatcherStart | (() => MatcherStart), spawn: Spawn, opts: { lineLimitMs?: number; silentMaxMs?: number; cpuOf?: (pid: number) => Promise<number | null> } = {}): Matcher {
+export function createMatcher(start: MatcherStart | (() => MatcherStart), spawn: Spawn, opts: {
+  lineLimitMs?: number; silentMaxMs?: number; cpuOf?: (pid: number) => Promise<number | null>
+  /** How `ps` starts and the env the matcher's env is taken from: the daemon runtime's own; default node's and process.env. */
+  childProcess?: ChildProcessUse<'execFile'>
+} = {}): Matcher {
   const limit = opts.lineLimitMs ?? LINE_LIMIT_MS
   const silentMax = opts.silentMaxMs ?? SILENT_MAX_MS
-  const cpuOf = opts.cpuOf ?? cpuOfPid
+  const cpuOf = opts.cpuOf ?? ((pid: number) => cpuOfPid(pid, process.platform, opts.childProcess?.execFile))
   const queue: Asked[] = []
   let current: Running | null = null
   let inFlight: { asked: Asked; id: number } | null = null
@@ -347,7 +352,7 @@ export function createMatcher(start: MatcherStart | (() => MatcherStart), spawn:
     try {
       // Asked each time: an update may have replaced the executable the daemon started from.
       const how = typeof start === 'function' ? start() : start
-      proc = spawn(how.command, how.args, { stdio: ['pipe', 'pipe', 'pipe'], env: matcherEnv(process.env) })
+      proc = spawn(how.command, how.args, { stdio: ['pipe', 'pipe', 'pipe'], env: matcherEnv(opts.childProcess?.env ?? process.env) })
     } catch (err) {
       return err instanceof Error ? err.message : String(err)
     }

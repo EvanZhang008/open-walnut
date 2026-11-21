@@ -38,6 +38,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import { spawn, execFile, execFileSync } from 'node:child_process'
 import { gitChildEnv } from '../lib/git-env.js'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 
 /** Pinned release — bump deliberately. */
 export const CODE_SERVER_VERSION = '4.98.2'
@@ -81,78 +82,6 @@ interface InstanceRecord {
   spawnedIn?: string
 }
 
-// In-flight spawn guard (within this process) + last attempt for the cooldown.
-let starting: Promise<VscodeEnsureResult> | null = null
-let lastStartAttempt = 0
-
-function homeDir(): string {
-  // A test server's isolated daemon installs and keeps code-server in its own HOME (remote-isolation.ts).
-  return process.env.WALNUT_INSTALL_HOME || process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || os.homedir()
-}
-
-/**
- * The env code-server runs with. For a test server's isolated daemon: HOME is its
- * install home and no XDG dir points into the real one, so code-server's own config
- * (~/.config/code-server/config.yaml, written when missing) and caches stay there too.
- */
-function codeServerEnv(): NodeJS.ProcessEnv {
-  const own = process.env.WALNUT_INSTALL_HOME
-  if (!own) return { ...process.env }
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: own }
-  for (const k of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'CODE_SERVER_CONFIG']) delete env[k]
-  env.CODE_SERVER_CONFIG = path.join(own, '.config', 'code-server', 'config.yaml')
-  return env
-}
-
-function libDir(): string {
-  return path.join(homeDir(), '.local', 'lib')
-}
-
-function dataDir(): string {
-  return path.join(homeDir(), '.open-walnut', 'code-server')
-}
-
-function instanceFile(): string {
-  return path.join(dataDir(), 'instance.json')
-}
-
-/** code-server touches this ~1/min while a browser is connected. */
-function heartbeatFile(): string {
-  return path.join(dataDir(), 'data', 'heartbeat')
-}
-
-async function readInstance(): Promise<InstanceRecord | null> {
-  try {
-    const raw = await fsp.readFile(instanceFile(), 'utf-8')
-    const rec = JSON.parse(raw) as InstanceRecord
-    if (typeof rec.port !== 'number' || typeof rec.pid !== 'number' || typeof rec.token !== 'string') return null
-    return rec
-  } catch {
-    return null
-  }
-}
-
-async function writeInstance(rec: InstanceRecord): Promise<void> {
-  await fsp.mkdir(dataDir(), { recursive: true })
-  await fsp.writeFile(instanceFile(), JSON.stringify(rec, null, 2))
-}
-
-/** Find an installed code-server entry point (any version, newest name wins). */
-export async function findCodeServerEntry(): Promise<{ entry: string; version: string } | null> {
-  try {
-    const entries = await fsp.readdir(libDir())
-    const dirs = entries.filter((d) => d.startsWith('code-server-')).sort().reverse()
-    for (const d of dirs) {
-      const entry = path.join(libDir(), d, 'out', 'node', 'entry.js')
-      try {
-        await fsp.access(entry)
-        return { entry, version: d.replace('code-server-', '') }
-      } catch { /* try next */ }
-    }
-  } catch { /* lib dir missing */ }
-  return null
-}
-
 function platformTarball(): { file: string; url: string } | null {
   const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'amd64' : null
   if (!arch) return null
@@ -162,69 +91,6 @@ function platformTarball(): { file: string; url: string } | null {
   return {
     file,
     url: `https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/${file}`,
-  }
-}
-
-/**
- * Download + unpack code-server into ~/.local/lib. curl/wget rather than
- * fetch: node's fetch buffers the ~100MB tarball in memory; curl streams.
- */
-async function installCodeServer(): Promise<{ ok: boolean; error?: string }> {
-  const tar = platformTarball()
-  if (!tar) return { ok: false, error: `unsupported platform ${process.platform}/${process.arch}` }
-  const tmp = path.join(os.tmpdir(), `walnut-code-server-${process.pid}-${Date.now()}`)
-  await fsp.mkdir(tmp, { recursive: true })
-  await fsp.mkdir(libDir(), { recursive: true })
-  const tarPath = path.join(tmp, tar.file)
-
-  const dl = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    const curl = spawn('curl', ['-fsSL', '--retry', '2', '-o', tarPath, tar.url], { stdio: 'ignore' })
-    curl.on('error', () => {
-      const wget = spawn('wget', ['-qO', tarPath, tar.url], { stdio: 'ignore' })
-      wget.on('error', () => resolve({ ok: false, error: 'neither curl nor wget available' }))
-      wget.on('exit', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `wget exit ${code}` }))
-    })
-    curl.on('exit', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `curl exit ${code}` }))
-  })
-  if (!dl.ok) {
-    await fsp.rm(tmp, { recursive: true, force: true })
-    return dl
-  }
-
-  const untar = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    const p = spawn('tar', ['-xzf', tarPath, '-C', tmp], { stdio: 'ignore' })
-    p.on('error', (e) => resolve({ ok: false, error: `tar: ${e.message}` }))
-    p.on('exit', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `tar exit ${code}` }))
-  })
-  if (!untar.ok) {
-    await fsp.rm(tmp, { recursive: true, force: true })
-    return untar
-  }
-
-  // Tarball unpacks as code-server-<ver>-<plat>-<arch>/ — normalize the name.
-  const unpacked = (await fsp.readdir(tmp)).find((d) => d.startsWith('code-server-') && !d.endsWith('.tar.gz'))
-  if (!unpacked) {
-    await fsp.rm(tmp, { recursive: true, force: true })
-    return { ok: false, error: 'tarball unpacked to unexpected layout' }
-  }
-  const dest = path.join(libDir(), `code-server-${CODE_SERVER_VERSION}`)
-  try {
-    await fsp.rename(path.join(tmp, unpacked), dest)
-  } catch {
-    // EXDEV (tmp on another fs) → copy fallback
-    await new Promise<void>((resolve, reject) => {
-      const p = spawn('cp', ['-R', path.join(tmp, unpacked), dest], { stdio: 'ignore' })
-      p.on('error', reject)
-      p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`cp exit ${code}`))))
-    })
-  }
-  await fsp.rm(tmp, { recursive: true, force: true })
-  const entry = path.join(dest, 'out', 'node', 'entry.js')
-  try {
-    await fsp.access(entry)
-    return { ok: true }
-  } catch {
-    return { ok: false, error: 'install finished but entry.js missing' }
   }
 }
 
@@ -255,8 +121,6 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
-// UTC: the server writes the record and the daemon checks it, and their TZ may differ.
-const PS_ENV = { ...process.env, LANG: 'C', LC_ALL: 'C', TZ: 'UTC' }
 const PS_TIMEOUT_MS = 2_000
 
 /** `ps -o lstart=` (fixed 24 chars, "Mon Oct 26 10:15:01 2026") then the command. */
@@ -266,93 +130,6 @@ export function parseProcIdentity(out: string): { startTime: string; command: st
 }
 
 const psArgs = (pid: number) => ['-ww', '-o', 'lstart=', '-o', 'command=', '-p', String(pid)]
-
-/** Daemon-side reapers only (idle scan, isolated-dir exit): never on the web server's loop. */
-function procIdentitySync(pid: number): { startTime: string; command: string } | null {
-  try {
-    return parseProcIdentity(execFileSync('ps', psArgs(pid), { encoding: 'utf-8', timeout: PS_TIMEOUT_MS, env: PS_ENV }))
-  } catch {
-    return null
-  }
-}
-
-function procIdentity(pid: number): Promise<{ startTime: string; command: string } | null> {
-  return new Promise((resolve) => {
-    execFile('ps', psArgs(pid), { encoding: 'utf-8', timeout: PS_TIMEOUT_MS, env: PS_ENV },
-      (err, out) => resolve(err ? null : parseProcIdentity(String(out))))
-  })
-}
-
-/**
- * Is the recorded pid still the code-server this record was written for?
- * instance.json outlives its process (it sits in the data dir across a reboot),
- * and macOS hands its pid to whatever starts next; killInstance signals the
- * whole group of that pid. Unknown (ps failed) = not ours: never signal.
- */
-export function isRecordedInstance(rec: { pid: number; startTime?: string }, id: { startTime: string; command: string } | null): boolean {
-  if (!id) return false
-  if (rec.startTime && id.startTime !== rec.startTime) return false
-  // Only our own spawn runs entry.js with this data dir ("vscode-server" contains "code-server").
-  return id.command.includes('/out/node/entry.js') && id.command.includes(`--user-data-dir ${path.join(dataDir(), 'data')}`)
-}
-
-/** Drop the record only while it is still the one we judged (a new spawn may have replaced it). */
-function removeRecordIf(token: string): void {
-  try {
-    const rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
-    if (rec.token === token) fs.rmSync(instanceFile())
-  } catch { /* already gone */ }
-}
-
-const ownDaemonDir = (): string => process.env.WALNUT_DAEMON_DIR ? path.resolve(process.env.WALNUT_DAEMON_DIR) : ''
-
-/** Does this binary run AND report itself as node? (bun answers `bun-x.y`; a
- *  glibc-mismatched bundled node dies before printing anything). */
-function worksAsNode(bin: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile(bin, ['-e', 'process.stdout.write(process.versions.node && !process.versions.bun ? "ok" : "no")'],
-      { timeout: 5_000, encoding: 'utf-8' },
-      (err, stdout) => resolve(!err && stdout === 'ok'))
-  })
-}
-
-let cachedNodeRuntime: string | null | undefined
-
-/**
- * Resolve a REAL Node.js binary to run code-server under. process.execPath is
- * wrong whenever the owner is the bun-compiled daemon: bun serves code-server's
- * static HTML fine but its node-compat layer breaks the workbench's WebSocket
- * path (ERR_STREAM_DESTROYED, missing net APIs) — healthz 200, blank editor.
- * code-server is a third-party Node program, so it keeps a real Node while
- * Walnut itself runs only on bun: the release it installs carries one.
- * Candidates, first that verifiably runs as node wins:
- *  1. code-server's own bundled lib/node (version-matched; dies on old-glibc hosts)
- *  2. process.execPath when the owner itself IS node (a daemon from source on a host with Node)
- *  3. `node` from PATH and well-known user install locations
- */
-async function resolveNodeRuntime(entry: string): Promise<string | null> {
-  if (cachedNodeRuntime !== undefined) return cachedNodeRuntime
-  const home = homeDir()
-  // entry = <install>/out/node/entry.js → bundled node at <install>/lib/node
-  const bundled = path.join(path.dirname(path.dirname(path.dirname(entry))), 'lib', 'node')
-  const candidates = [
-    bundled,
-    ...(path.basename(process.execPath).startsWith('node') ? [process.execPath] : []),
-    'node',
-    path.join(home, '.local', 'bin', 'node'),
-    '/usr/local/bin/node',
-    '/opt/homebrew/bin/node',
-    '/usr/bin/node',
-  ]
-  for (const cand of candidates) {
-    if (await worksAsNode(cand)) {
-      cachedNodeRuntime = cand
-      return cand
-    }
-  }
-  cachedNodeRuntime = null
-  return null
-}
 
 function killInstance(pid: number, groupOnly = false): void {
   // code-server handles SIGTERM with hot-exit (unsaved-buffer backups).
@@ -369,209 +146,455 @@ async function waitForHealthy(port: number, timeoutMs: number): Promise<boolean>
   return false
 }
 
-async function startCodeServer(entry: string, version: string): Promise<VscodeEnsureResult> {
-  // A verified REAL node — never bun (inc-1787164003087: the bun-compiled
-  // daemon spawned code-server under bun; static HTML served fine so healthz
-  // was 200, but the workbench's WebSocket path died in bun's node-compat
-  // layer and the editor rendered blank).
-  const runtime = await resolveNodeRuntime(entry)
-  if (!runtime) {
-    return {
-      ok: false, running: false, installed: true,
-      error: 'no working Node.js runtime found for code-server (bundled lib/node failed and no system node)',
-      installHint: 'install Node.js ≥18 on this host (e.g. ~/.local/bin/node)',
-    }
-  }
-
-  const port = await freePort()
-  const token = crypto.randomBytes(16).toString('hex')
-  await fsp.mkdir(dataDir(), { recursive: true })
-  const logPath = path.join(dataDir(), 'code-server.log')
-  const logFd = fs.openSync(logPath, 'a')
-
-  const child = spawn(runtime, [
-    entry,
-    '--auth', 'none',
-    '--bind-addr', `127.0.0.1:${port}`,
-    '--disable-telemetry',
-    '--disable-update-check',
-    '--disable-workspace-trust',
-    '--user-data-dir', path.join(dataDir(), 'data'),
-    '--extensions-dir', path.join(dataDir(), 'extensions'),
-  ], {
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-    env: codeServerEnv(),
-  })
-  child.unref()
-  fs.closeSync(logFd)
-
-  const pid = child.pid ?? 0
-  if (!pid) return { ok: false, running: false, installed: true, error: 'spawn returned no pid' }
-
-  const healthy = await waitForHealthy(port, SPAWN_WAIT_MS)
-  if (!healthy) {
-    // Its own group (detached spawn): a group with members keeps its id, so this never hits a stranger.
-    killInstance(pid, true)
-    return {
-      ok: false, running: false, installed: true,
-      error: `code-server did not become healthy on :${port} within ${SPAWN_WAIT_MS / 1000}s (log: ${logPath})`,
-    }
-  }
-
-  const childAlive = () => child.exitCode === null && child.signalCode === null
-  const startTime = childAlive() ? (await procIdentity(pid))?.startTime : undefined
-  if (!childAlive()) {
-    killInstance(pid, true)  // any member it left behind
-    return { ok: false, running: false, installed: true, error: `code-server exited right after becoming healthy (log: ${logPath})` }
-  }
-  await writeInstance({ port, token, pid, version, startedAt: Date.now(), runtime, spawnedIn: ownDaemonDir(), ...(startTime ? { startTime } : {}) })
-  return { ok: true, running: true, installed: true, port, token, version }
-}
+/** What the daemon runtime hands this module: its child functions and env; left out, node's own and process.env. */
+export type CodeServerUse = ChildProcessUse<'spawn' | 'execFile' | 'execFileSync'>
 
 /**
- * The single entry point. Idempotent: adopts a live instance (this process's
- * or a predecessor's, via the disk record), restarts a dead one, installs
- * when missing (unless noInstall).
+ * The code-server owner of one process or daemon runtime: where it keeps its record (under the
+ * env's HOME) and how it starts code-server, ps and git. The module's own exports are the one
+ * made with node's functions and process.env (the Walnut server's, the JS daemon's).
  */
-export async function ensureCodeServer(opts: { noInstall?: boolean } = {}): Promise<VscodeEnsureResult> {
-  // Adopt a live instance from the disk record (survives owner restarts) —
-  // but only one whose record proves a real-node spawn. A record without
-  // `runtime` predates the bun fix and may be a bun-spawned instance that
-  // answers healthz yet serves a blank workbench: kill and respawn.
-  const existing = await readInstance()
-  if (existing && pidAlive(existing.pid) && await healthz(existing.port)) {
-    if (existing.runtime) {
-      return { ok: true, running: true, installed: true, port: existing.port, token: existing.token, version: existing.version }
+export function createCodeServer(use: CodeServerUse = {}) {
+  const baseEnv = (): NodeJS.ProcessEnv => use.env ?? process.env
+  const spawnFn = use.spawn ?? spawn
+  const execFileFn = use.execFile ?? execFile
+  const execFileSyncFn = use.execFileSync ?? execFileSync
+
+  // In-flight spawn guard (within this process) + last attempt for the cooldown.
+  let starting: Promise<VscodeEnsureResult> | null = null
+  let lastStartAttempt = 0
+
+  function homeDir(): string {
+    // A test server's isolated daemon installs and keeps code-server in its own HOME (remote-isolation.ts).
+    return baseEnv().WALNUT_INSTALL_HOME || baseEnv().WALNUT_HOME_OVERRIDE || baseEnv().HOME || os.homedir()
+  }
+
+  /**
+   * The env code-server runs with. For a test server's isolated daemon: HOME is its
+   * install home and no XDG dir points into the real one, so code-server's own config
+   * (~/.config/code-server/config.yaml, written when missing) and caches stay there too.
+   */
+  function codeServerEnv(): NodeJS.ProcessEnv {
+    const base = baseEnv()
+    const own = base.WALNUT_INSTALL_HOME
+    if (!own) return { ...base }
+    const env: NodeJS.ProcessEnv = { ...base, HOME: own }
+    for (const k of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'CODE_SERVER_CONFIG']) delete env[k]
+    env.CODE_SERVER_CONFIG = path.join(own, '.config', 'code-server', 'config.yaml')
+    return env
+  }
+
+  function libDir(): string {
+    return path.join(homeDir(), '.local', 'lib')
+  }
+
+  function dataDir(): string {
+    return path.join(homeDir(), '.open-walnut', 'code-server')
+  }
+
+  function instanceFile(): string {
+    return path.join(dataDir(), 'instance.json')
+  }
+
+  /** code-server touches this ~1/min while a browser is connected. */
+  function heartbeatFile(): string {
+    return path.join(dataDir(), 'data', 'heartbeat')
+  }
+
+  async function readInstance(): Promise<InstanceRecord | null> {
+    try {
+      const raw = await fsp.readFile(instanceFile(), 'utf-8')
+      const rec = JSON.parse(raw) as InstanceRecord
+      if (typeof rec.port !== 'number' || typeof rec.pid !== 'number' || typeof rec.token !== 'string') return null
+      return rec
+    } catch {
+      return null
     }
-    if (isRecordedInstance(existing, await procIdentity(existing.pid))) killInstance(existing.pid)
-    removeRecordIf(existing.token)
   }
 
-  // A concurrent ensure in this process is already starting one — join it.
-  if (starting) return starting
-
-  // Cooldown: don't stack spawn attempts while one might still be warming.
-  if (Date.now() - lastStartAttempt < START_COOLDOWN_MS) {
-    return { ok: false, running: false, installed: true, error: 'recent start attempt still settling; retry shortly' }
+  async function writeInstance(rec: InstanceRecord): Promise<void> {
+    await fsp.mkdir(dataDir(), { recursive: true })
+    await fsp.writeFile(instanceFile(), JSON.stringify(rec, null, 2))
   }
 
-  let found = await findCodeServerEntry()
-  if (!found) {
-    if (opts.noInstall) {
-      return {
-        ok: false, running: false, installed: false,
-        installHint: `download code-server ${CODE_SERVER_VERSION} into ~/.local/lib/`,
+  /** Find an installed code-server entry point (any version, newest name wins). */
+  async function findCodeServerEntry(): Promise<{ entry: string; version: string } | null> {
+    try {
+      const entries = await fsp.readdir(libDir())
+      const dirs = entries.filter((d) => d.startsWith('code-server-')).sort().reverse()
+      for (const d of dirs) {
+        const entry = path.join(libDir(), d, 'out', 'node', 'entry.js')
+        try {
+          await fsp.access(entry)
+          return { entry, version: d.replace('code-server-', '') }
+        } catch { /* try next */ }
+      }
+    } catch { /* lib dir missing */ }
+    return null
+  }
+
+  /**
+   * Download + unpack code-server into ~/.local/lib. curl/wget rather than
+   * fetch: node's fetch buffers the ~100MB tarball in memory; curl streams.
+   */
+  async function installCodeServer(): Promise<{ ok: boolean; error?: string }> {
+    const tar = platformTarball()
+    if (!tar) return { ok: false, error: `unsupported platform ${process.platform}/${process.arch}` }
+    const tmp = path.join(os.tmpdir(), `walnut-code-server-${process.pid}-${Date.now()}`)
+    await fsp.mkdir(tmp, { recursive: true })
+    await fsp.mkdir(libDir(), { recursive: true })
+    const tarPath = path.join(tmp, tar.file)
+
+    const dl = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const curl = spawnFn('curl', ['-fsSL', '--retry', '2', '-o', tarPath, tar.url], { stdio: 'ignore' })
+      curl.on('error', () => {
+        const wget = spawnFn('wget', ['-qO', tarPath, tar.url], { stdio: 'ignore' })
+        wget.on('error', () => resolve({ ok: false, error: 'neither curl nor wget available' }))
+        wget.on('exit', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `wget exit ${code}` }))
+      })
+      curl.on('exit', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `curl exit ${code}` }))
+    })
+    if (!dl.ok) {
+      await fsp.rm(tmp, { recursive: true, force: true })
+      return dl
+    }
+
+    const untar = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const p = spawnFn('tar', ['-xzf', tarPath, '-C', tmp], { stdio: 'ignore' })
+      p.on('error', (e) => resolve({ ok: false, error: `tar: ${e.message}` }))
+      p.on('exit', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `tar exit ${code}` }))
+    })
+    if (!untar.ok) {
+      await fsp.rm(tmp, { recursive: true, force: true })
+      return untar
+    }
+
+    // Tarball unpacks as code-server-<ver>-<plat>-<arch>/ — normalize the name.
+    const unpacked = (await fsp.readdir(tmp)).find((d) => d.startsWith('code-server-') && !d.endsWith('.tar.gz'))
+    if (!unpacked) {
+      await fsp.rm(tmp, { recursive: true, force: true })
+      return { ok: false, error: 'tarball unpacked to unexpected layout' }
+    }
+    const dest = path.join(libDir(), `code-server-${CODE_SERVER_VERSION}`)
+    try {
+      await fsp.rename(path.join(tmp, unpacked), dest)
+    } catch {
+      // EXDEV (tmp on another fs) → copy fallback
+      await new Promise<void>((resolve, reject) => {
+        const p = spawnFn('cp', ['-R', path.join(tmp, unpacked), dest], { stdio: 'ignore' })
+        p.on('error', reject)
+        p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`cp exit ${code}`))))
+      })
+    }
+    await fsp.rm(tmp, { recursive: true, force: true })
+    const entry = path.join(dest, 'out', 'node', 'entry.js')
+    try {
+      await fsp.access(entry)
+      return { ok: true }
+    } catch {
+      return { ok: false, error: 'install finished but entry.js missing' }
+    }
+  }
+
+  // UTC: the server writes the record and the daemon checks it, and their TZ may differ.
+  const PS_ENV = { ...baseEnv(), LANG: 'C', LC_ALL: 'C', TZ: 'UTC' }
+
+  /** Daemon-side reapers only (idle scan, isolated-dir exit): never on the web server's loop. */
+  function procIdentitySync(pid: number): { startTime: string; command: string } | null {
+    try {
+      return parseProcIdentity(execFileSyncFn('ps', psArgs(pid), { encoding: 'utf-8', timeout: PS_TIMEOUT_MS, env: PS_ENV }))
+    } catch {
+      return null
+    }
+  }
+
+  function procIdentity(pid: number): Promise<{ startTime: string; command: string } | null> {
+    return new Promise((resolve) => {
+      execFileFn('ps', psArgs(pid), { encoding: 'utf-8', timeout: PS_TIMEOUT_MS, env: PS_ENV },
+        (err, out) => resolve(err ? null : parseProcIdentity(String(out))))
+    })
+  }
+
+  /**
+   * Is the recorded pid still the code-server this record was written for?
+   * instance.json outlives its process (it sits in the data dir across a reboot),
+   * and macOS hands its pid to whatever starts next; killInstance signals the
+   * whole group of that pid. Unknown (ps failed) = not ours: never signal.
+   */
+  function isRecordedInstance(rec: { pid: number; startTime?: string }, id: { startTime: string; command: string } | null): boolean {
+    if (!id) return false
+    if (rec.startTime && id.startTime !== rec.startTime) return false
+    // Only our own spawn runs entry.js with this data dir ("vscode-server" contains "code-server").
+    return id.command.includes('/out/node/entry.js') && id.command.includes(`--user-data-dir ${path.join(dataDir(), 'data')}`)
+  }
+
+  /** Drop the record only while it is still the one we judged (a new spawn may have replaced it). */
+  function removeRecordIf(token: string): void {
+    try {
+      const rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
+      if (rec.token === token) fs.rmSync(instanceFile())
+    } catch { /* already gone */ }
+  }
+
+  const ownDaemonDir = (): string => baseEnv().WALNUT_DAEMON_DIR ? path.resolve(baseEnv().WALNUT_DAEMON_DIR!) : ''
+
+  /** Does this binary run AND report itself as node? (bun answers `bun-x.y`; a
+   *  glibc-mismatched bundled node dies before printing anything). */
+  function worksAsNode(bin: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      execFileFn(bin, ['-e', 'process.stdout.write(process.versions.node && !process.versions.bun ? "ok" : "no")'],
+        { timeout: 5_000, encoding: 'utf-8' },
+        (err, stdout) => resolve(!err && stdout === 'ok'))
+    })
+  }
+
+  let cachedNodeRuntime: string | null | undefined
+
+  /**
+   * Resolve a REAL Node.js binary to run code-server under. process.execPath is
+   * wrong whenever the owner is the bun-compiled daemon: bun serves code-server's
+   * static HTML fine but its node-compat layer breaks the workbench's WebSocket
+   * path (ERR_STREAM_DESTROYED, missing net APIs) — healthz 200, blank editor.
+   * code-server is a third-party Node program, so it keeps a real Node while
+   * Walnut itself runs only on bun: the release it installs carries one.
+   * Candidates, first that verifiably runs as node wins:
+   *  1. code-server's own bundled lib/node (version-matched; dies on old-glibc hosts)
+   *  2. process.execPath when the owner itself IS node (a daemon from source on a host with Node)
+   *  3. `node` from PATH and well-known user install locations
+   */
+  async function resolveNodeRuntime(entry: string): Promise<string | null> {
+    if (cachedNodeRuntime !== undefined) return cachedNodeRuntime
+    const home = homeDir()
+    // entry = <install>/out/node/entry.js → bundled node at <install>/lib/node
+    const bundled = path.join(path.dirname(path.dirname(path.dirname(entry))), 'lib', 'node')
+    const candidates = [
+      bundled,
+      ...(path.basename(process.execPath).startsWith('node') ? [process.execPath] : []),
+      'node',
+      path.join(home, '.local', 'bin', 'node'),
+      '/usr/local/bin/node',
+      '/opt/homebrew/bin/node',
+      '/usr/bin/node',
+    ]
+    for (const cand of candidates) {
+      if (await worksAsNode(cand)) {
+        cachedNodeRuntime = cand
+        return cand
       }
     }
-    const inst = await installCodeServer()
-    if (!inst.ok) {
+    cachedNodeRuntime = null
+    return null
+  }
+
+  async function startCodeServer(entry: string, version: string): Promise<VscodeEnsureResult> {
+    // A verified REAL node — never bun (inc-1787164003087: the bun-compiled
+    // daemon spawned code-server under bun; static HTML served fine so healthz
+    // was 200, but the workbench's WebSocket path died in bun's node-compat
+    // layer and the editor rendered blank).
+    const runtime = await resolveNodeRuntime(entry)
+    if (!runtime) {
       return {
-        ok: false, running: false, installed: false, error: inst.error,
-        installHint: `download code-server ${CODE_SERVER_VERSION} into ~/.local/lib/`,
+        ok: false, running: false, installed: true,
+        error: 'no working Node.js runtime found for code-server (bundled lib/node failed and no system node)',
+        installHint: 'install Node.js ≥18 on this host (e.g. ~/.local/bin/node)',
       }
     }
-    found = await findCodeServerEntry()
-    if (!found) return { ok: false, running: false, installed: false, error: 'install succeeded but entry not found' }
+
+    const port = await freePort()
+    const token = crypto.randomBytes(16).toString('hex')
+    await fsp.mkdir(dataDir(), { recursive: true })
+    const logPath = path.join(dataDir(), 'code-server.log')
+    const logFd = fs.openSync(logPath, 'a')
+
+    const child = spawnFn(runtime, [
+      entry,
+      '--auth', 'none',
+      '--bind-addr', `127.0.0.1:${port}`,
+      '--disable-telemetry',
+      '--disable-update-check',
+      '--disable-workspace-trust',
+      '--user-data-dir', path.join(dataDir(), 'data'),
+      '--extensions-dir', path.join(dataDir(), 'extensions'),
+    ], {
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      env: codeServerEnv(),
+    })
+    child.unref()
+    fs.closeSync(logFd)
+
+    const pid = child.pid ?? 0
+    if (!pid) return { ok: false, running: false, installed: true, error: 'spawn returned no pid' }
+
+    const healthy = await waitForHealthy(port, SPAWN_WAIT_MS)
+    if (!healthy) {
+      // Its own group (detached spawn): a group with members keeps its id, so this never hits a stranger.
+      killInstance(pid, true)
+      return {
+        ok: false, running: false, installed: true,
+        error: `code-server did not become healthy on :${port} within ${SPAWN_WAIT_MS / 1000}s (log: ${logPath})`,
+      }
+    }
+
+    const childAlive = () => child.exitCode === null && child.signalCode === null
+    const startTime = childAlive() ? (await procIdentity(pid))?.startTime : undefined
+    if (!childAlive()) {
+      killInstance(pid, true)  // any member it left behind
+      return { ok: false, running: false, installed: true, error: `code-server exited right after becoming healthy (log: ${logPath})` }
+    }
+    await writeInstance({ port, token, pid, version, startedAt: Date.now(), runtime, spawnedIn: ownDaemonDir(), ...(startTime ? { startTime } : {}) })
+    return { ok: true, running: true, installed: true, port, token, version }
   }
 
-  lastStartAttempt = Date.now()
-  starting = startCodeServer(found.entry, found.version)
-  try {
-    return await starting
-  } finally {
-    starting = null
-  }
-}
+  /**
+   * The single entry point. Idempotent: adopts a live instance (this process's
+   * or a predecessor's, via the disk record), restarts a dead one, installs
+   * when missing (unless noInstall).
+   */
+  async function ensureCodeServer(opts: { noInstall?: boolean } = {}): Promise<VscodeEnsureResult> {
+    // Adopt a live instance from the disk record (survives owner restarts) —
+    // but only one whose record proves a real-node spawn. A record without
+    // `runtime` predates the bun fix and may be a bun-spawned instance that
+    // answers healthz yet serves a blank workbench: kill and respawn.
+    const existing = await readInstance()
+    if (existing && pidAlive(existing.pid) && await healthz(existing.port)) {
+      if (existing.runtime) {
+        return { ok: true, running: true, installed: true, port: existing.port, token: existing.token, version: existing.version }
+      }
+      if (isRecordedInstance(existing, await procIdentity(existing.pid))) killInstance(existing.pid)
+      removeRecordIf(existing.token)
+    }
 
-/** Status without side effects (for reapers and diagnostics). */
-export async function codeServerStatus(): Promise<{ running: boolean; port?: number; pid?: number }> {
-  const rec = await readInstance()
-  if (!rec || !pidAlive(rec.pid)) return { running: false }
-  return { running: true, port: rec.port, pid: rec.pid }
-}
+    // A concurrent ensure in this process is already starting one — join it.
+    if (starting) return starting
 
-/**
- * Kill the instance if no browser has been connected for VSCODE_IDLE_KILL_MS.
- * Signal = code-server's own heartbeat file (touched ~1/min per live client),
- * so an OPEN editor is never reaped, no matter how long since we spawned it.
- * Returns true if reaped.
- */
-export function reapIdleCodeServer(now: number = Date.now()): boolean {
-  let rec: InstanceRecord | null = null
-  try {
-    rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
-  } catch {
-    return false
-  }
-  if (!rec) return false
-  // A dead pid's record is dropped now: kept, it would name whoever gets that pid next.
-  if (!pidAlive(rec.pid)) { removeRecordIf(rec.token); return false }
-  let lastAlive = rec.startedAt
-  try {
-    lastAlive = Math.max(lastAlive, fs.statSync(heartbeatFile()).mtimeMs)
-  } catch { /* no heartbeat yet — judge from start time */ }
-  if (now - lastAlive < VSCODE_IDLE_KILL_MS) return false
-  const id = procIdentitySync(rec.pid)
-  if (!id) return false  // ps could not answer: ask again next scan, never guess
-  const ours = isRecordedInstance(rec, id)
-  if (ours) killInstance(rec.pid)
-  // Not ours: the record outlived its server, drop it so the next scan stops asking.
-  removeRecordIf(rec.token)
-  return ours
-}
+    // Cooldown: don't stack spawn attempts while one might still be warming.
+    if (Date.now() - lastStartAttempt < START_COOLDOWN_MS) {
+      return { ok: false, running: false, installed: true, error: 'recent start attempt still settling; retry shortly' }
+    }
 
-/** Stop the instance spawned under this daemon dir (isolated/test daemon exit —
- *  production owners let successors adopt). Anyone else's is left alone, record included. */
-export function stopCodeServer(): void {
-  let rec: InstanceRecord | null = null
-  try {
-    rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
-  } catch {
-    return
+    let found = await findCodeServerEntry()
+    if (!found) {
+      if (opts.noInstall) {
+        return {
+          ok: false, running: false, installed: false,
+          installHint: `download code-server ${CODE_SERVER_VERSION} into ~/.local/lib/`,
+        }
+      }
+      const inst = await installCodeServer()
+      if (!inst.ok) {
+        return {
+          ok: false, running: false, installed: false, error: inst.error,
+          installHint: `download code-server ${CODE_SERVER_VERSION} into ~/.local/lib/`,
+        }
+      }
+      found = await findCodeServerEntry()
+      if (!found) return { ok: false, running: false, installed: false, error: 'install succeeded but entry not found' }
+    }
+
+    lastStartAttempt = Date.now()
+    starting = startCodeServer(found.entry, found.version)
+    try {
+      return await starting
+    } finally {
+      starting = null
+    }
   }
-  if (!rec || !rec.spawnedIn || path.resolve(rec.spawnedIn) !== ownDaemonDir()) return
-  if (pidAlive(rec.pid)) {
+
+  /** Status without side effects (for reapers and diagnostics). */
+  async function codeServerStatus(): Promise<{ running: boolean; port?: number; pid?: number }> {
+    const rec = await readInstance()
+    if (!rec || !pidAlive(rec.pid)) return { running: false }
+    return { running: true, port: rec.port, pid: rec.pid }
+  }
+
+  /**
+   * Kill the instance if no browser has been connected for VSCODE_IDLE_KILL_MS.
+   * Signal = code-server's own heartbeat file (touched ~1/min per live client),
+   * so an OPEN editor is never reaped, no matter how long since we spawned it.
+   * Returns true if reaped.
+   */
+  function reapIdleCodeServer(now: number = Date.now()): boolean {
+    let rec: InstanceRecord | null = null
+    try {
+      rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
+    } catch {
+      return false
+    }
+    if (!rec) return false
+    // A dead pid's record is dropped now: kept, it would name whoever gets that pid next.
+    if (!pidAlive(rec.pid)) { removeRecordIf(rec.token); return false }
+    let lastAlive = rec.startedAt
+    try {
+      lastAlive = Math.max(lastAlive, fs.statSync(heartbeatFile()).mtimeMs)
+    } catch { /* no heartbeat yet — judge from start time */ }
+    if (now - lastAlive < VSCODE_IDLE_KILL_MS) return false
     const id = procIdentitySync(rec.pid)
-    if (!id) return  // unverifiable: keep the record for a successor to adopt or reap
-    if (isRecordedInstance(rec, id)) killInstance(rec.pid)
+    if (!id) return false  // ps could not answer: ask again next scan, never guess
+    const ours = isRecordedInstance(rec, id)
+    if (ours) killInstance(rec.pid)
+    // Not ours: the record outlived its server, drop it so the next scan stops asking.
+    removeRecordIf(rec.token)
+    return ours
   }
-  removeRecordIf(rec.token)
+
+  /** Stop the instance spawned under this daemon dir (isolated/test daemon exit —
+   *  production owners let successors adopt). Anyone else's is left alone, record included. */
+  function stopCodeServer(): void {
+    let rec: InstanceRecord | null = null
+    try {
+      rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
+    } catch {
+      return
+    }
+    if (!rec || !rec.spawnedIn || path.resolve(rec.spawnedIn) !== ownDaemonDir()) return
+    if (pidAlive(rec.pid)) {
+      const id = procIdentitySync(rec.pid)
+      if (!id) return  // unverifiable: keep the record for a successor to adopt or reap
+      if (isRecordedInstance(rec, id)) killInstance(rec.pid)
+    }
+    removeRecordIf(rec.token)
+  }
+
+  function expandHome(p: string): string {
+    if (p === '~') return homeDir()
+    if (p.startsWith('~/')) return path.join(homeDir(), p.slice(2))
+    return p
+  }
+
+  async function findGitRootLocal(cwd: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      execFileFn('git', ['-C', cwd, 'rev-parse', '--show-toplevel'],
+        { timeout: GIT_TIMEOUT_MS, encoding: 'utf-8', env: gitChildEnv(undefined, baseEnv()) },
+        (err, stdout) => resolve(err ? null : (stdout.trim() || null)))
+    })
+  }
+
+  /**
+   * Resolve what to open for a session cwd. Same target the vscode:// deep link
+   * picks (git root when inside a repo — the whole tree in the explorer beats a
+   * subdir), plus the workspace-file precedence:
+   *  1. an existing *.code-workspace directly inside the root (alphabetical first)
+   *  2. the root as a plain folder
+   * (Auto-GENERATION of workspace files is deliberately not done:
+   * Walnut sessions point at arbitrary repos; writing files uninvited is out.)
+   */
+  async function resolveOpenTarget(dir: string): Promise<{ kind: 'workspace' | 'folder'; path: string }> {
+    const expanded = expandHome(dir)
+    const root = await findGitRootLocal(expanded) ?? expanded
+    try {
+      const entries = await fsp.readdir(root, { withFileTypes: true })
+      const ws = entries
+        .filter((e) => e.isFile() && e.name.endsWith('.code-workspace'))
+        .map((e) => e.name)
+        .sort()
+      if (ws.length > 0) return { kind: 'workspace', path: path.join(root, ws[0]) }
+    } catch { /* unreadable dir → let code-server surface it */ }
+    return { kind: 'folder', path: root }
+  }
+
+  return { findCodeServerEntry, isRecordedInstance, ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget }
 }
 
-function expandHome(p: string): string {
-  if (p === '~') return homeDir()
-  if (p.startsWith('~/')) return path.join(homeDir(), p.slice(2))
-  return p
-}
-
-async function findGitRootLocal(cwd: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile('git', ['-C', cwd, 'rev-parse', '--show-toplevel'],
-      { timeout: GIT_TIMEOUT_MS, encoding: 'utf-8', env: gitChildEnv() },
-      (err, stdout) => resolve(err ? null : (stdout.trim() || null)))
-  })
-}
-
-/**
- * Resolve what to open for a session cwd. Same target the vscode:// deep link
- * picks (git root when inside a repo — the whole tree in the explorer beats a
- * subdir), plus the workspace-file precedence:
- *  1. an existing *.code-workspace directly inside the root (alphabetical first)
- *  2. the root as a plain folder
- * (Auto-GENERATION of workspace files is deliberately not done:
- * Walnut sessions point at arbitrary repos; writing files uninvited is out.)
- */
-export async function resolveOpenTarget(dir: string): Promise<{ kind: 'workspace' | 'folder'; path: string }> {
-  const expanded = expandHome(dir)
-  const root = await findGitRootLocal(expanded) ?? expanded
-  try {
-    const entries = await fsp.readdir(root, { withFileTypes: true })
-    const ws = entries
-      .filter((e) => e.isFile() && e.name.endsWith('.code-workspace'))
-      .map((e) => e.name)
-      .sort()
-    if (ws.length > 0) return { kind: 'workspace', path: path.join(root, ws[0]) }
-  } catch { /* unreadable dir → let code-server surface it */ }
-  return { kind: 'folder', path: root }
-}
+const ownProcess = createCodeServer()
+export const { findCodeServerEntry, isRecordedInstance, ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } = ownProcess

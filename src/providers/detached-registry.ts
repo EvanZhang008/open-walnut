@@ -30,6 +30,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 
 export type DetachedKind = 'host-exec' | 'host-script' | 'acp'
 
@@ -57,10 +58,11 @@ const ID_RE = /^[A-Za-z0-9_.-]{1,128}$/
  * What ps names as the start of `pid` (LC_ALL=C and TZ=UTC, so the stop script compares the same text
  * whatever the caller's time zone); null when it is gone or ps gave nothing (unknown, never "another process").
  */
-export function processStart(pid: number): Promise<string | null> {
+export function processStart(pid: number, use: ChildProcessUse<'execFile'> = {}): Promise<string | null> {
+  const run = use.execFile ?? execFile
   return new Promise((resolve) => {
     if (!Number.isInteger(pid) || pid <= 1) return resolve(null)
-    execFile('ps', ['-ww', '-o', 'lstart=', '-p', String(pid)], { timeout: 5_000, env: { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } }, (error, stdout) => {
+    run('ps', ['-ww', '-o', 'lstart=', '-p', String(pid)], { timeout: 5_000, env: { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' } }, (error, stdout) => {
       const out = String(stdout ?? '').trim()
       resolve(error || !out ? null : out)
     })

@@ -8,8 +8,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import os from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
 import type { AcpModelInfo } from './acp-worker/protocol.js'
+import type { ChildProcessUse } from './daemon-child-spawn.js'
 
-export interface CodexModelProbeOptions { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }
+/** `env` is the app-server's whole env (default process.env); `spawn` the daemon runtime's own. */
+export interface CodexModelProbeOptions extends ChildProcessUse<'spawn'> { cwd?: string; timeoutMs?: number }
 export interface CodexModelProbeResult { models: AcpModelInfo[]; currentModelId?: string }
 
 export interface CodexModelRow {
@@ -225,7 +227,7 @@ export function probeCodexModels(binary: string, options: CodexModelProbeOptions
     let child: ChildProcessWithoutNullStreams
     try {
       // Its own process group on Unix, so a descendant holding the pipes can be ended too.
-      child = spawn(binary, ['app-server', '-c', trustArg, ...providerArgs], {
+      child = (options.spawn ?? spawn)(binary, ['app-server', '-c', trustArg, ...providerArgs], {
         cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: !IS_WINDOWS,
       })
     } catch (err) {

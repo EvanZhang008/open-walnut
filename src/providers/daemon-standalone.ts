@@ -211,8 +211,8 @@ import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStale
 import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { createDaemonPorts } from './port-scan-core.js'
-import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, findNameMatch, restoreSessionAnywhere, restoreForStart, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { createDaemonPorts, defaultPortScanIo } from './port-scan-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, gitRunnerWith, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, findNameMatch, restoreSessionAnywhere, restoreForStart, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createHostExec, runWaitMatcher } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
@@ -225,7 +225,7 @@ import { createBudgetControl } from './usage-budget-control.js'
 import { createBudgetPersistence } from './usage-budget-persistence.js'
 const ensureUsageBudgetDirectory = createBudgetPersistence(fs.promises, path).ensureDirectory
 import { grepReferencesHostLocal } from './search-grep-core.js'
-import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
+import { createCodeServer } from './vscode-server-core.js'
 import {
   GATEWAY_SOCKET_FILENAME,
   demoGatewaySocketPath,
@@ -255,7 +255,7 @@ import {
   type GatewayErrorCode,
   type GatewayResponse,
 } from './gateway-core.js'
-import { createDaemonChildSpawn } from './daemon-child-spawn.js'
+import { createDaemonChildSpawn, type ChildProcessUse } from './daemon-child-spawn.js'
 import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
 import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
 import { readCronBootId } from './daemon-cron-host.js'
@@ -366,6 +366,13 @@ const execFile = childProcess.execFile
 const execFileSync = childProcess.execFileSync
 const execSync = childProcess.execSync
 const execFileCb = execFile
+/**
+ * What every module this runtime imports starts its children with: these functions and this env,
+ * never node's own and process.env (tests/providers/daemon-runtime-child-process-ratchet.test.ts).
+ */
+const childUse: ChildProcessUse = { spawn, execFile, execFileSync, execSync, env: daemonEnv }
+/** This runtime's embedded editor (capability 'vscode-v1', vscode-server-core.ts): its record under the runtime's HOME. */
+const codeServer = createCodeServer(childUse)
 /** The test hooks' and the stuck drain's hard end (a process SIGKILLs itself). */
 const dieHard = (): void => { if (options.hardExit) options.hardExit(); else options.exit(1) }
 const daemonCommands = createDaemonCommandDrain()
@@ -2487,10 +2494,11 @@ const core = createDaemonCore<SessionData>({
   fs,
   clock: () => Date.now(),
   killFn: (pid, sig) => { process.kill(pid, sig as NodeJS.Signals) },
-  readStartTimeFn: (pid) => defaultReadStartTime(fs, pid),
-  readStartTimesFn: (pids) => defaultReadStartTimes(fs, pids),
+  readStartTimeFn: (pid) => defaultReadStartTime(fs, pid, childUse),
+  readStartTimesFn: (pids) => defaultReadStartTimes(fs, pids, childUse),
   readStartTimeAsyncFn: createAsyncStartTimeReader({
     fs,
+    env: daemonEnv,
     execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
   }),
   killProcessGroupFn: killProcessGroup,
@@ -2650,6 +2658,7 @@ const ACP_ARTIFACT_DIR = (() => {
 const DETACHED_RUNS_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'detached')
 const acp = createAcpDaemon<ServerWebSocket<WsData>>({
   registryDir: DETACHED_RUNS_DIR,
+  childProcess: childUse,
   // Its idle sweep is one of this runtime's timers: stop() ends it.
   setIntervalFn: setInterval,
   maySpawn: () => !demoQuiesce.fenced,
@@ -2888,7 +2897,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
     case 'vscode.ensure': return cmdVscodeEnsure(ws, id as number, cmd)
-    case 'vscode.status': return codeServerStatus().then(
+    case 'vscode.status': return codeServer.codeServerStatus().then(
       (s) => sendOk(ws, id as number, s as unknown as Record<string, unknown>),
       (err) => sendError(ws, id as number, 'vscode.status failed: ' + (err as Error).message),
     )
@@ -3295,6 +3304,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     if (!updating) await prepareDaemonServiceHandover({
       ...location, home: HOME_DIR, platform: process.platform,
       pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: handoverHooks(),
+      childProcess: childUse,
     })
   } catch (error) {
     if (updating) {
@@ -3358,6 +3368,7 @@ const cliArgvFiles = createCliArgvFiles({
 // Mirror daemon-source.ts.
 const cliOwnerStartTime = createAsyncStartTimeReader({
   fs,
+  env: daemonEnv,
   execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
 })
 const cliOwner = createCliOwner({
@@ -3429,7 +3440,7 @@ const BUDGET_DIR = path.join(path.dirname(RESUME_RECORD_DIR), 'usage-budgets')
 type BudgetStopProof = { pid: number; startTime: string; bootId: string; members?: Array<{ pid: number; startTime: string }> }
 const budgetStopGroups = new Map<string, BudgetStopProof>()
 const budgetStopFile = path.join(BUDGET_DIR, 'stops.map')
-const budgetBoot = readCronBootId(process.platform, AbortSignal.timeout(5000)).catch(() => '')
+const budgetBoot = readCronBootId(process.platform, AbortSignal.timeout(5000), childUse).catch(() => '')
 const budgetStopsReady = (async () => {
   let text: string
   try { text = await fs.promises.readFile(budgetStopFile, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
@@ -3502,6 +3513,7 @@ const usageBudget = createUsageBudgetRuntime({
   pause: (sid, engine, runtimeId) => engine === 'claude' ? pauseBudgetSession(sid) : pauseAcpBudgetSession(runtimeId ?? sid),
   active: (sid, engine, runtimeId) => engine === 'claude' ? sessions.get(sid)?.state === 'running' : acp.hasWorker(runtimeId ?? sid),
   log: (message, fields) => logMsg('warn', message, fields),
+  childProcess: childUse,
 })
 
 /** An ACP worker (Codex, OpenCode) over its budget: stop it; its sends are refused in cmdAcpOp. */
@@ -4559,7 +4571,7 @@ const HOST_SERVER_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'host-server')
   : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-server') : path.join(DAEMON_DIR, 'host-server')
 function hostServerStartTime(pid: number): string | null {
-  if (!fs.existsSync('/proc/self/stat')) return defaultReadStartTime(fs, pid)
+  if (!fs.existsSync('/proc/self/stat')) return defaultReadStartTime(fs, pid, childUse)
   try {
     const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8')
     return raw.slice(raw.lastIndexOf(')') + 2).split(' ')[19] ?? null
@@ -6589,6 +6601,7 @@ function warnJobCallerOutside(sid: string, caller: GatewayCaller): void {
 
 const proofStartTime = createAsyncStartTimeReader({
   fs,
+  env: daemonEnv,
   execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
 })
 
@@ -7025,6 +7038,8 @@ function hostWorkNow(): HostWork[] {
   return work
 }
 const taskDirBusy = (dir: string, taskId: string) => taskDirInUse(dir, taskId, hostWorkNow())
+/** git for the task dir sweeps (task-dir-core.ts), started as every child of this runtime. */
+const taskDirGit = gitRunnerWith(childUse)
 
 /**
  * Session history archive (transcript-archive.ts, capability transcript-archive-v1).
@@ -7141,7 +7156,7 @@ async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
   const busy = taskDirBusy
   try {
-    const result = await removeTaskDirs(TASK_DIR_ROOT, ids, { busy })
+    const result = await removeTaskDirs(TASK_DIR_ROOT, ids, { busy, git: taskDirGit })
     if (result.removed.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs swept', { removed: result.removed, kept: result.kept })
     sendOk(ws, id, result)
   } catch (err) {
@@ -7161,12 +7176,12 @@ async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
     const idleBefore = typeof cmd.idleBefore === 'number' && Number.isFinite(cmd.idleBefore) ? cmd.idleBefore : Date.now()
     // `live` (the server's disk is below its floor): directories in use too, behind the open-file check.
     const openPaths = cmd.live === true ? async () => {
-      const open = await readOpenPaths(TASK_DIR_ROOT)
+      const open = await readOpenPaths(TASK_DIR_ROOT, childUse)
       return open && [...open, ...hostWorkNow().map((w) => w.cwd).filter((c): c is string => typeof c === 'string' && !!c)]
     } : undefined
     const result = buildsOnly
-      ? await pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy, idleBefore, openPaths })
-      : await pruneTaskDirs(TASK_DIR_ROOT, ids, { busy })
+      ? await pruneTaskBuilds(TASK_DIR_ROOT, ids, { busy, idleBefore, openPaths, git: taskDirGit })
+      : await pruneTaskDirs(TASK_DIR_ROOT, ids, { busy, git: taskDirGit })
     if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', buildsOnly ? 'task dir builds pruned' : 'task dirs pruned', { pruned: result.pruned, kept: result.kept })
     sendOk(ws, id, result)
   } catch (err) {
@@ -7751,7 +7766,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   try {
     // Last synchronous point before the CLI exists: a fence set during the awaits above wins.
     if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')
-    barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions) : null
+    barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions, childUse) : null
     proc = barrier?.process ?? spawn(userShell, ['-c', shellCmd], spawnOptions)
   } catch (error) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd)
@@ -8228,9 +8243,9 @@ const triggersConfigureGate = new DaemonSessionGate()
 // Check pids not closed yet (runs in flight: triggerChecksRunning): demo.quiesce alone aborts them and waits for 0. Mirror daemon-source.ts.
 const demoTriggerChecks = new AbortController()
 const demoTriggerCheckPids = new Set<number>()
-/** runCheckProcess options every check of this daemon runs with. */
-function checkRunFence(): { maySpawn: () => boolean; signal: AbortSignal; children: Set<number> } {
-  return { maySpawn: () => !demoQuiesce.fenced, signal: demoTriggerChecks.signal, children: demoTriggerCheckPids }
+/** runCheckProcess options every check of this daemon runs with: its fence, and the runtime's own spawn and env. */
+function checkRunFence(): { maySpawn: () => boolean; signal: AbortSignal; children: Set<number>; childProcess: ChildProcessUse } {
+  return { maySpawn: () => !demoQuiesce.fenced, signal: demoTriggerChecks.signal, children: demoTriggerCheckPids, childProcess: childUse }
 }
 
 /** Replay cadence for unacked fires; the env override exists for tests. */
@@ -12325,6 +12340,7 @@ async function cmdFsResolvePath(ws: ServerWebSocket<WsData>, id: number, cmd: Re
       claudeHome: CLAUDE_CONFIG_HOME,
       homeDir: HOME_DIR,
       budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
+      childProcess: childUse,
     })
     sendOk(ws, id, result as unknown as Record<string, unknown>)
   } catch (err: unknown) {
@@ -12348,6 +12364,7 @@ async function cmdFsGrep(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       symbol,
       maxMatches: typeof cmd.maxMatches === 'number' ? cmd.maxMatches : undefined,
       budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
+      childProcess: childUse,
     })
     sendOk(ws, id, result as unknown as Record<string, unknown>)
   } catch (err: unknown) {
@@ -12362,10 +12379,10 @@ async function cmdFsGrep(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
  */
 async function cmdVscodeEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   try {
-    const result = await ensureCodeServer({ noInstall: cmd.noInstall === true })
+    const result = await codeServer.ensureCodeServer({ noInstall: cmd.noInstall === true })
     let open: { kind: string; path: string } | undefined
     if (typeof cmd.cwd === 'string' && cmd.cwd) {
-      open = await resolveOpenTarget(cmd.cwd)
+      open = await codeServer.resolveOpenTarget(cmd.cwd)
     }
     if (!result.ok) {
       logMsg('warn', 'vscode.ensure failed', { error: result.error, installed: result.installed })
@@ -12793,6 +12810,7 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
       const output = await computeHostLocalChanges({
         sessionId: sid,
         cwd,
+        childProcess: childUse,
         claudeHome: CLAUDE_CONFIG_HOME,
         subCache: memo.subCache,
         gitRootByDir: memo.gitRootByDir,
@@ -13153,6 +13171,7 @@ const hostExec = createHostExec({
   env: hostExecEnv(),
   // wait_for's matcher: this program again (the stable copy once the shim made one), as --wait-matcher.
   matcher: () => ({ command: walnutCliArgv[0]!, args: [...walnutCliArgv.slice(1), '--wait-matcher'] }),
+  childProcess: childUse,
 })
 // Which kinds of listed detached work this service adopts, for the launcher (detached-registry.ts
 // `adopts`); any other kind is ended now. PARITY: daemon-source.ts.
@@ -13198,6 +13217,7 @@ const daemonPorts = createDaemonPorts({
   },
   resolveSid: (raw) => resolveCallerSid(raw, sessions, gatewaySidAliases) ?? raw,
   daemonPid: process.pid,
+  io: defaultPortScanIo(childUse),
 })
 
 // ── The host network (capability 'net-v1') ──
@@ -13832,7 +13852,7 @@ function scanIdleSessions() {
   const now = Date.now()
 
   // Embedded code-server rides the same 60s scan: 2h untouched → reap.
-  if (reapIdleCodeServer(now)) logMsg('info', 'idle scan: reaped idle code-server', {})
+  if (codeServer.reapIdleCodeServer(now)) logMsg('info', 'idle scan: reaped idle code-server', {})
 
   for (const [sid, session] of sessions) {
     const pid = session.pid
@@ -14065,7 +14085,7 @@ function cleanup() {
   // the successor adopts it via ~/.open-walnut/code-server/instance.json (same
   // philosophy as CLI session adoption). Isolated/test daemons have no
   // successor, so reap it like everything else (shouldReapOnExit below).
-  if (shouldReapOnExit()) { try { stopCodeServer() } catch {} }
+  if (shouldReapOnExit()) { try { codeServer.stopCodeServer() } catch {} }
 
   // Phase C change: preserve running sessions across a graceful daemon
   // restart. The next daemon's reconcileRegistry() will adopt them as
@@ -15046,7 +15066,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   daemonInstanceLock = lock
   if (SERVICE_MODE) {
     fs.mkdirSync(DAEMON_STATE_DIR!, { recursive: true, mode: 0o700 })
-    daemonBootId = await readCronBootId(process.platform, AbortSignal.timeout(5000))
+    daemonBootId = await readCronBootId(process.platform, AbortSignal.timeout(5000), childUse)
     if (!daemonBootId) throw new Error('Host boot identity is unavailable')
   }
   // Old versions have no kernel lock, so the handover must still yield to them; winning the new lock alone is not enough to start.
@@ -15077,7 +15097,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     }
   }
   if (SERVICE_MODE) {
-    await consumeDaemonServiceHandover({ stateDir: DAEMON_STATE_DIR!, uid: os.userInfo().uid, platform: process.platform as 'linux' | 'darwin' })
+    await consumeDaemonServiceHandover({ stateDir: DAEMON_STATE_DIR!, uid: os.userInfo().uid, platform: process.platform as 'linux' | 'darwin', childProcess: childUse })
   }
   loadDaemonHooksAtBoot()
   // Armed triggers survive a daemon restart on their own: the next
@@ -15138,6 +15158,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   if (SERVICE_MODE) {
     cronRuntime = await createDaemonCronRuntime({
       stateDir: DAEMON_STATE_DIR!, home: HOME_DIR, platform: process.platform, env: daemonEnv,
+      childProcess: childUse,
       gate: sessionStartGate,
       sessions: () => [...sessions].map(([sid, session]) => ({
         sid, pid: session.pid, startTime: session.startTime, bootId: session.bootId, cwd: session.cwd, args: session.args,

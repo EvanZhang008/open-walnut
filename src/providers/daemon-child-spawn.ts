@@ -47,6 +47,21 @@ export interface DaemonChildSpawn {
   bunSpawn: (argv: string[], opts?: Record<string, unknown>) => unknown
 }
 
+/**
+ * The child-process functions a module the runtime imports starts its children with. The
+ * runtime passes its wrapped ones (env, cwd, umask 077 filled in); any other caller leaves
+ * them out and gets node's own, so its behaviour stays as it was.
+ */
+export type ChildProcessFns = Pick<DaemonChildSpawn, 'spawn' | 'execFile' | 'execFileSync' | 'execSync'>
+
+/**
+ * What such a module is handed: the functions it uses and `env`, the env it builds a child's
+ * env from where it would read process.env. Every field left out is node's own / process.env.
+ * The runtime hands every module the same one (all four functions and its env).
+ */
+export type ChildProcessUse<K extends keyof ChildProcessFns = keyof ChildProcessFns> =
+  Partial<Pick<ChildProcessFns, K>> & { env?: NodeJS.ProcessEnv }
+
 const isObject = (v: unknown): v is Opts => !!v && typeof v === 'object' && !Array.isArray(v)
 
 export function createDaemonChildSpawn(raw: RawChildProcess, defaults: DaemonChildDefaults): DaemonChildSpawn {
