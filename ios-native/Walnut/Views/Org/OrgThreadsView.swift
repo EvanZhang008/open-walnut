@@ -889,14 +889,12 @@ struct OrgThreadCard: View {
         }
     }
 
+    /// The group's dot, as the web's GROUP_DOT (thread-badge.ts): only Needs you asks for him.
     private var stateColor: Color {
         if closed { return .secondary }
-        switch t.state {
-        case "needs": return Theme.danger
-        case "working": return Theme.success
-        case "new": return Theme.workingText
-        // An answer for him to read: the web's "take a look" blue.
-        case "answered": return Theme.workingText
+        switch OrgThreadModel.group(t, inView: inView, now: now) {
+        case .needs: return Theme.danger
+        case .working: return Theme.success
         default: return .secondary
         }
     }

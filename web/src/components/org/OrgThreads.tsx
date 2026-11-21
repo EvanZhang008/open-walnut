@@ -537,7 +537,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       <ThreadsTopicBar owner={owner} />
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {groups && all !== null && <OrgThreadsByState groups={groups} filter={filter} onFilter={setFilter} card={card} name={name} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
+      {groups && all !== null && <OrgThreadsByState groups={groups} filter={filter} onFilter={setFilter} card={card} name={name} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">

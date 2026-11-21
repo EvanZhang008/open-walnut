@@ -43,7 +43,7 @@ function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove
   );
 }
 
-export function OrgThreadsByState({ groups, filter, onFilter, card, name, onShowThread }: {
+export function OrgThreadsByState({ groups, filter, onFilter, card, name, onShowThread, epoch = 0 }: {
   groups: Record<ThreadGroup, OrgThread[]>;
   /** The chip he picked: one group, or all of them. */
   filter: ThreadFilter;
@@ -52,19 +52,25 @@ export function OrgThreadsByState({ groups, filter, onFilter, card, name, onShow
   name: string;
   /** Bring a card into view and mark it a moment (thread-focus.ts), after its chip is picked. */
   onShowThread?: (id: string) => void;
+  /** Reads that caught the pane up (useOrgThreads catchUp): no move is drawn across one. */
+  epoch?: number;
 }) {
   // Acknowledged holds cards only while ack_means_known is on: off, its chip shows only for one left from before.
   const ackOn = useExperimental('ack_means_known');
-  const { moves, dismiss } = useThreadMoves(groups, filter);
+  const { moves, dismiss } = useThreadMoves(groups, filter, epoch);
   const rootRef = useRef<HTMLDivElement>(null);
   // The focus was in these Threads (a card's button, its menu portalled out but still its child):
   // when the card it was on leaves, the focus would drop to the page; the line left there takes it.
   const hadFocus = useRef(false);
+  // Typing in a card's box when the node moves the card: the next key must not press Show (a
+  // review: a space would pick another chip), so a text field's focus goes to the chip on show.
+  const wasTyping = useRef(false);
+  const chipOnShow = () => rootRef.current?.querySelector<HTMLElement>('[data-testid="org-threads-chip"][aria-pressed="true"]');
   useEffect(() => {
     const last = moves[moves.length - 1];
     const lost = !document.activeElement || document.activeElement === document.body;
     if (!last || !hadFocus.current || !lost) return;
-    rootRef.current?.querySelector<HTMLElement>(`[data-moved-id="${CSS.escape(last.id)}"] button`)?.focus({ preventScroll: true });
+    (wasTyping.current ? chipOnShow() : rootRef.current?.querySelector<HTMLElement>(`[data-moved-id="${CSS.escape(last.id)}"] button`))?.focus({ preventScroll: true });
   }, [moves]);
   const chips = THREAD_GROUPS.filter((g) => g !== 'known' || ackOn || groups.known.length > 0 || filter === 'known');
   if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) {
@@ -75,11 +81,15 @@ export function OrgThreadsByState({ groups, filter, onFilter, card, name, onShow
     );
   }
   const shown = filter === 'all' ? ALL_SHOWS : [filter];
-  const show = (m: ThreadMove) => { dismiss(m.id); onFilter(m.to); onShowThread?.(m.id); };
+  // Show picks the card's chip and hands it the focus, so a keyboard keeps its place.
+  const show = (m: ThreadMove) => {
+    dismiss(m.id); onFilter(m.to); onShowThread?.(m.id);
+    requestAnimationFrame(() => chipOnShow()?.focus({ preventScroll: true }));
+  };
   return (
     <div
       ref={rootRef} className="org-thread-groups" data-testid="org-thread-groups" data-filter={filter}
-      onFocus={() => { hadFocus.current = true; }}
+      onFocus={(e) => { hadFocus.current = true; wasTyping.current = e.target instanceof HTMLElement && (e.target.matches('input, textarea') || e.target.isContentEditable); }}
       onBlur={(e) => { if (!e.relatedTarget || !(e.currentTarget.contains(e.relatedTarget as Node))) hadFocus.current = false; }}
     >
       <ThreadsFilterBar counts={chips.map((g) => ({ group: g, n: groups[g].length }))} all={ALL_SHOWS.reduce((n, g) => n + groups[g].length, 0)} at={filter} onPick={onFilter} />

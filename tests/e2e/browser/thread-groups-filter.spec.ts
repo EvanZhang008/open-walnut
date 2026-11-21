@@ -277,6 +277,46 @@ test('a card says its group, and a card that moves leaves a line in its place wi
   expect(pageErrors).toEqual([])
 })
 
+test('a card that moved while the Threads were away leaves no line when they open again; one that moves on screen does', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const away = await nodeThread(request, `Stack the crates ${STAMP}`, 'working')
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  await chip(page, 'all').click()
+  await expect(cardIn(page, 'working', away)).toBeVisible({ timeout: 20_000 })
+  // He leaves the Org page; the card is snoozed while he is away (the node's own move). Nothing on
+  // the page reads the lead's threads meanwhile (a surface still open, say its chat's top, would
+  // keep the copy fresh), so the copy the pane opens on is the one from before.
+  await page.getByTestId('sidebar-core-app-home').click()
+  await expect(page.getByTestId('org-page')).toHaveCount(0)
+  const reads = `**/api/v1/tasks/${ids.lead}/threads`
+  await page.route(reads, (route) => (route.request().method() === 'GET' ? route.abort() : route.continue()))
+  await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${away}`, { snooze: new Date(Date.now() + 86_400_000).toISOString() })
+  await page.waitForTimeout(1_000)
+  await page.unroute(reads)
+  // Back: the pane opens on its old copy, its first read brings the move he never saw: no line.
+  await openLead(page)
+  await expect(cardIn(page, 'waiting', away)).toBeVisible({ timeout: 20_000 })
+  await page.waitForTimeout(1_500)
+  await expect(page.getByTestId('org-thread-move-note')).toHaveCount(0)
+  // The link drops while he looks (a laptop lid, a network change); the card goes back to Working
+  // meanwhile. The read after the reconnect brings it: he never saw it move, so no line either.
+  await page.context().setOffline(true)
+  await page.waitForTimeout(1_500)
+  await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${away}`, { snooze: '' })
+  await page.context().setOffline(false)
+  await expect(cardIn(page, 'working', away)).toBeVisible({ timeout: 30_000 })
+  await page.waitForTimeout(1_500)
+  await expect(page.getByTestId('org-thread-move-note')).toHaveCount(0)
+  // While he looks, the same card moves again (snoozed): that one leaves its line.
+  await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${away}`, { snooze: new Date(Date.now() + 86_400_000).toISOString() })
+  await expect(note(page, away)).toBeVisible({ timeout: 20_000 })
+  await expect(note(page, away)).toContainText('Moved to Waiting / Snoozed')
+  expect(pageErrors).toEqual([])
+})
+
 test('in a long group the chips stay at the top of the pane while it scrolls', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))

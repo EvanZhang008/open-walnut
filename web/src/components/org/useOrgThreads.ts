@@ -22,6 +22,8 @@ export interface OrgThreadsState {
    * card he replied on stayed in Needs you; on his data a read takes seconds).
    */
   heard: (threadId: string, saved?: OrgThread, words?: string) => void;
+  /** Reads that caught this node's surfaces up (useThreadsCatchUp): a Threads pane draws no move across one. */
+  catchUp?: number;
 }
 
 /**
@@ -88,6 +90,8 @@ interface NodeThreads {
   settledAt: number;
   /** The server counts this node's threads into its status (seen once on a row). */
   counted: boolean;
+  /** Reads that caught a surface up (a mount, a reconnect): a change across one was never on screen (thread-moves.ts). */
+  catchUp: number;
   /** A read the surfaces hearing the same event (or mounting together) share, until this task ends. */
   joinable?: { why: string; p: Promise<boolean | 'stale'> };
 }
@@ -98,7 +102,7 @@ const listeners = new Set<() => void>();
 const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 function nodeOf(taskId: string): NodeThreads {
   let n = nodes.get(taskId);
-  if (!n) { n = { read: null, pending: new Map(), drawn: null, seq: 0, settledAt: 0, counted: false }; nodes.set(taskId, n); }
+  if (!n) { n = { read: null, pending: new Map(), drawn: null, seq: 0, settledAt: 0, counted: false, catchUp: 0 }; nodes.set(taskId, n); }
   return n;
 }
 /** Recompute what a node's surfaces draw, and tell them. */
@@ -113,6 +117,8 @@ function redraw(taskId: string): OrgThread[] | null {
 
 /** The reasons every surface of one node hears at the same moment: one read answers them all. */
 const SHARED_READS: ReadonlySet<string> = new Set(['open', 'changed', 'reconnect']);
+/** The reads that bring a surface up to date after it was away: what they change was never drawn as a move. */
+const CATCH_UP_READS: ReadonlySet<string> = new Set(['open', 'reconnect']);
 
 /**
  * Read a node's threads. True when the list is drawn, false when the read failed, 'stale' when a
@@ -128,6 +134,7 @@ function readNode(taskId: string, why: string): Promise<boolean | 'stale'> {
     // A later read of this node wins: an answer that comes back late is dropped.
     if (mine !== node.seq) return 'stale';
     node.read = next;
+    if (CATCH_UP_READS.has(why)) node.catchUp++;
     redraw(taskId);
     return true;
   }, (err: unknown) => {
@@ -145,6 +152,15 @@ function readNode(taskId: string, why: string): Promise<boolean | 'stale'> {
 
 /** Test seam: forget every node (a module store outlives a test's page). */
 export function resetOrgThreadsForTest(): void { nodes.clear(); listeners.clear(); }
+
+/**
+ * How many reads caught this node's surfaces up (a mount, a reconnect). A Threads pane compares its
+ * groups from one read to the next only within one of these, so a card that changed group while
+ * the pane was away or the link was down leaves no "Moved to" line (thread-moves.ts).
+ */
+export function useThreadsCatchUp(taskId: string | undefined): number {
+  return useSyncExternalStore(subscribe, () => (taskId ? nodes.get(taskId)?.catchUp ?? 0 : 0));
+}
 
 /** A node that keeps Threads before its task exists (a CEO not started): none, never "Loading…". */
 const NO_THREADS: OrgThread[] = [];
@@ -275,5 +291,6 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     void load('write');
   }, [taskId, load]);
 
-  return { threads, error: writeError ?? error, update, split, heard };
+  const catchUp = useThreadsCatchUp(enabled ? taskId : undefined);
+  return { threads, error: writeError ?? error, update, split, heard, catchUp };
 }

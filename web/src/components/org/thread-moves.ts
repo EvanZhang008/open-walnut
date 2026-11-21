@@ -6,7 +6,8 @@
  * groups are compared from one read to the next (OrgThreadsByState), never told by each action.
  * Pure but for the hook at the bottom.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ALL_SHOWS, type ThreadGroup } from '@open-walnut/thread-groups';
 import type { ThreadFilter } from './ThreadsFilterBar';
 
@@ -47,27 +48,43 @@ export function movesBetween(prev: ThreadPlaces, next: ThreadPlaces, filter: Thr
   return out;
 }
 
+/** What a pane compares the next read of its groups with. */
+export interface MoveBase { places: ThreadPlaces; filter: ThreadFilter; epoch: number }
+
+/**
+ * The lines on show after the groups are read again (useThreadMoves): none across a chip picked, the
+ * same lines across a read that caught the pane up (`epoch` moved), else the new moves added, each
+ * replacing an older line of its card, and a card back where it left taking its line away. Returns
+ * `lines` itself when nothing changed. Pure.
+ */
+export function stepMoves(was: MoveBase | null, now: MoveBase, lines: ThreadMove[]): ThreadMove[] {
+  if (!was) return lines;
+  if (was.filter !== now.filter) return lines.length ? [] : lines;
+  if (was.epoch !== now.epoch) return lines;
+  const found = movesBetween(was.places, now.places, now.filter);
+  const kept = lines.filter((m) => !found.some((f) => f.id === m.id) && now.places.get(m.id)?.group !== m.from);
+  return kept.length === lines.length && !found.length ? lines : [...kept, ...found];
+}
+
 /**
  * The lines on show: each new move replaces an older line of the same card, a card back in the
  * group it left takes its line away, and each line goes after MOVE_NOTE_MS (OrgThreadsByState
  * MoveNote). Moves are read only while the filter stays the same: a chip picked is not a move.
+ * Nor while `epoch` (useThreadsCatchUp) moves: a read that caught the pane up after it was away
+ * (its first read on opening, a reconnect) brings changes he never saw happen, so it only sets
+ * where each card stands (a review: reopening Threads showed a burst of lines for old moves).
  */
-export function useThreadMoves(groups: Readonly<Record<ThreadGroup, ReadonlyArray<{ id: string; title: string }>>>, filter: ThreadFilter): {
+export function useThreadMoves(groups: Readonly<Record<ThreadGroup, ReadonlyArray<{ id: string; title: string }>>>, filter: ThreadFilter, epoch = 0): {
   moves: ThreadMove[]; dismiss: (id: string) => void;
 } {
-  const prev = useRef<{ places: ThreadPlaces; filter: ThreadFilter } | null>(null);
+  const prev = useRef<MoveBase | null>(null);
   const [moves, setMoves] = useState<ThreadMove[]>([]);
   useEffect(() => {
-    const places = placesOf(groups);
     const was = prev.current;
-    prev.current = { places, filter };
-    if (!was || was.filter !== filter) { if (was) setMoves([]); return; }
-    const found = movesBetween(was.places, places, filter);
-    setMoves((xs) => {
-      const kept = xs.filter((m) => !found.some((f) => f.id === m.id) && places.get(m.id)?.group !== m.from);
-      return kept.length === xs.length && !found.length ? xs : [...kept, ...found];
-    });
-  }, [groups, filter]);
-  const dismiss = useCallback((id: string) => setMoves((xs) => xs.filter((m) => m.id !== id)), []);
+    const now: MoveBase = { places: placesOf(groups), filter, epoch };
+    prev.current = now;
+    setMoves((xs) => stepMoves(was, now, xs));
+  }, [groups, filter, epoch]);
+  const dismiss = useLeanCallback((id: string) => setMoves((xs) => xs.filter((m) => m.id !== id)), []);
   return { moves, dismiss };
 }

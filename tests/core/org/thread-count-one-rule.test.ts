@@ -136,6 +136,7 @@ const CALLERS: Record<string, { role: 'rule' | 'count' | 'list'; why: string }> 
   'web/src/hooks/status-prediction.ts': { role: 'count', why: 'the row\'s predicted user_status.threads after a write' },
   'web/src/components/org/top-thread-model.ts': { role: 'count', why: 'the top of the chat steps through the counted threads, its N the header\'s' },
   'web/src/components/org/OrgThreads.tsx': { role: 'list', why: 'draws the list (classic) or the groups (brief_off); counts nothing' },
+  'web/src/components/org/thread-badge.ts': { role: 'list', why: 'a card\'s word and dot are its group\'s (threadGroupOf); counts nothing' },
 }
 
 function walk(dir: string): string[] {
