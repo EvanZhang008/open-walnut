@@ -51,6 +51,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/status-check-told.json` | leader-data | no | Status mismatches already told, so each is told once |
 | `~/.open-walnut/private-tasks/` | leader-data | no | Private task approvals and the kept-task digest |
 | `~/.open-walnut/op-calls/` | leader-data | no | Op call ledger: call ids and their results, so a resend runs once |
+| `~/.open-walnut/kept-asks/` | machine | yes | Asks a person answers (sign-ins, uploads, confirmations, password requests) kept across a restart; never synced |
 | `~/.open-walnut/offline-conflicts/` | leader-data | no | Logs of offline edits merged with a conflict |
 | `~/.open-walnut/usage.sqlite` | leader-data | no | Model usage and cost records |
 | `~/.open-walnut/org/` | leader-data | no | Org tree, threads database, team notes and asks, report schedule |

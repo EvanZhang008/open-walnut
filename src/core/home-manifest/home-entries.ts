@@ -28,6 +28,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('status-check-told', 'status-check-told.json', 'file', 'Status mismatches already told, so each is told once'),
   lead('private-tasks', 'private-tasks', 'dir', 'Private task approvals and the kept-task digest'),
   lead('op-calls', 'op-calls', 'dir', 'Op call ledger: call ids and their results, so a resend runs once'),
+  mach('kept-asks', 'kept-asks', 'dir', 'Asks a person answers (sign-ins, uploads, confirmations, password requests) kept across a restart; never synced', { sensitive: true }),
   lead('offline-conflicts', 'offline-conflicts', 'dir', 'Logs of offline edits merged with a conflict'),
   lead('usage-db', 'usage.sqlite', 'sqlite', 'Model usage and cost records'),
   // Org, inbox, boards, topics.
