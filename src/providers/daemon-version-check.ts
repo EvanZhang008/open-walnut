@@ -308,6 +308,10 @@ export const DAEMON_SOURCE_FILES = [
   'src/utils/file-lock.ts',
   'src/providers/daemon-service-system.ts',
   'src/providers/daemon-service-handover.ts',
+  // The service launcher: its script, its control from walnut daemon, the service heartbeat.
+  'src/providers/service-launcher-script.ts',
+  'src/providers/service-launcher-control.ts',
+  'src/providers/service-launcher-beat.ts',
   // Host runtime discovery (daemon PATH order, claude/node spawn gate,
   // host.preflight): imported by the binary, text-injected into the source twin.
   'src/providers/host-runtime-core.ts',

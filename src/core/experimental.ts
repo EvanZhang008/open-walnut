@@ -79,6 +79,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'service_launcher',
+    name: 'A launcher keeps each host\'s daemon running',
+    description: 'Each remote host runs its session daemon under a small launcher script (systemd, launchd or cron starts it): it restarts the daemon when it exits or stops answering, tries each new version first and puts the previous one back when the new one does not start or keeps failing in its first 15 minutes. Settings shows each host\'s current version, the one it would go back to, and the last put-back. Off: hosts keep their plain service, and one that has the launcher gets the plain service back at its next update.',
+    default: false,
+  },
+  {
     id: 'follower_on_every_host',
     name: 'Walnut on every host',
     description: 'Every host you connect runs its own copy of Walnut, which keeps working there while this computer is away, unless you turn it off for that host. Walnut skips a host without enough memory or disk, or one its program cannot run on, and says why in that host\'s settings.',

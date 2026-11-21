@@ -41,6 +41,7 @@ import {
   type DaemonServiceResult,
   type DaemonServiceStatus,
 } from './daemon-service-manager.js'
+import { isLauncherScript } from './service-launcher-script.js'
 
 export interface CronServiceDeps extends Omit<DaemonServiceDeps, 'run' | 'platform'> {
   platform: 'linux' | 'darwin'
@@ -121,10 +122,13 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     return probed.code === 0 ? parseCronBootProbe(probed.stdout) : { ok: false, reason: 'could not tell whether a cron daemon starts at boot' }
   }
 
+  /** The script on disk is the launcher (service-launcher-script.ts): its crontab has the minute line too. */
+  const launcherOnDisk = async (): Promise<boolean> => isLauncherScript(await deps.readConfig(script).catch(() => null) ?? '')
+
   async function probe(seen?: { present: boolean; owned: boolean }): Promise<Probe> {
     const found = seen ?? await deps.inspectConfig(script)
     const tab = await deps.run('crontab', ['-l'])
-    const line: Probe['line'] = tab.code === 0 ? cronLineState(tab.stdout, script)
+    const line: Probe['line'] = tab.code === 0 ? cronLineState(tab.stdout, script, { everyMinute: await launcherOnDisk() })
       : isNoCrontab(tab.stderr) ? 'none' : 'unreadable'
     return {
       present: found.present,
@@ -264,7 +268,8 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
       if (updateOnly && !undo.updateStarted) return 'Restored the previous boot script without restarting the running daemon'
       const restarted = await startFromScript()
       if (restarted) return `put the previous boot script back, but ${restarted}`
-      const executable = (() => { try { return readDaemonBootExecutable(undo.previous!) } catch { return undefined } })()
+      // A launcher's EXEC is its first version, not necessarily the one it runs.
+      const executable = isLauncherScript(undo.previous) ? undefined : (() => { try { return readDaemonBootExecutable(undo.previous!) } catch { return undefined } })()
       let back = await confirm('restart', executable)
       // The supervisor gives up after 5 failures in 60 s, and a new daemon that kept failing
       // used them up: with no supervisor left nothing starts the previous one (2026-11-04).
@@ -310,7 +315,8 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     const ours = found.present && found.owned
     if (updateOnly && !ours) return fail('notInstalled', 'Only an existing owned service can be updated')
     undo.ours = ours
-    const line = cronLineState(tab.text, script)
+    // The launcher's crontab has its minute line too (service-launcher-script.ts).
+    const line = cronLineState(tab.text, script, { everyMinute: await launcherOnDisk() })
     if (line === 'foreign') return fail('foreignConfig', 'this account\'s crontab has an Open Walnut line for another boot script; remove it yourself before installing')
     const before = await probe(found)
     if (updateOnly && (!before.daemon || line !== 'ours')) {
@@ -328,6 +334,7 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
       platform: 'linux', home: deps.home, executable: prepared.executable, args: prepared.args,
       runtimeDir: deps.runtimeDir, stateDir: deps.stateDir, path: deps.path,
     }
+    if (deps.launcher) return attemptWithLauncher(undo, updateOnly, before, ours, line, tab.text, prepared, config)
     let text: string
     try {
       text = renderDaemonBootScript(config)
@@ -339,8 +346,11 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
       undo.previous = await deps.readConfig(script)
       if (undo.previous === null) return fail('hostError', 'Could not read the previous boot script; nothing was changed')
     }
+    // The launcher's script (the experiment turned off since) becomes the plain boot script again, whole,
+    // with its single @reboot line; the launcher stops its daemon and runs it at the daemon's update exit.
+    const fromLauncher = undo.previous !== null && isLauncherScript(undo.previous)
     if (updateOnly) {
-      try { text = replaceDaemonBootExecutable(undo.previous!, prepared.executable) } catch (err) { return fail('invalidConfig', errText(err)) }
+      if (!fromLauncher) try { text = replaceDaemonBootExecutable(undo.previous!, prepared.executable) } catch (err) { return fail('invalidConfig', errText(err)) }
       const latest = await probe()
       if (!latest.daemon || latest.line !== 'ours') return fail('serviceInactive', 'The service was stopped during staging; nothing was changed')
     }
@@ -350,6 +360,10 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     } catch (error) {
       undo.wrote = await deps.readConfig(script).then((current) => current === text, () => false)
       throw error
+    }
+    if (fromLauncher) {
+      const wrote = await writeCrontab(crontabWithDaemonLine(tab.text, script))
+      if (wrote) return wrote
     }
 
     if (updateOnly) {
@@ -382,6 +396,89 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     const stuck = await startFromScript()
     if (stuck) return fail('verifyFailed', `the running daemon could not be replaced: ${stuck}`)
     return confirm('install', prepared.executable)
+  }
+
+  /**
+   * The cron backend with the launcher (service-launcher-control.ts): the launcher script in the boot
+   * script's place, an @reboot line and a minute line (which brings back a launcher that died), and the
+   * switch to the new daemon is the launcher's. A plain boot script becomes the launcher on the way: its
+   * supervisor runs the new script at the daemon's update exit, as it does for any update.
+   */
+  async function attemptWithLauncher(
+    undo: Undo, updateOnly: boolean, before: Probe, ours: boolean, line: CronLineState, tabText: string,
+    prepared: { executable: string; args: string[] }, config: DaemonServiceConfig,
+  ): Promise<DaemonServiceResult> {
+    const L = deps.launcher!
+    if (ours) {
+      undo.previous = await deps.readConfig(script)
+      if (undo.previous === null) return fail('hostError', 'Could not read the previous boot script; nothing was changed')
+    }
+    const refused = await L.refuses(prepared.executable)
+    if (refused) return fail('launcherRefused', `${prepared.executable}: ${refused}; nothing was changed`)
+    const wasLauncher = undo.previous !== null && isLauncherScript(undo.previous)
+    const running = before.daemon?.executable ?? null
+    const seed = (wasLauncher ? await L.seed() : null) ?? running ?? prepared.executable
+    // A plain config ran since any launcher state on disk was written: that state names versions that do not run.
+    if (!wasLauncher) await L.reset()
+    let text: string
+    try { text = L.render(config, seed); daemonCronLine(script) } catch (err) { return fail('invalidConfig', errText(err)) }
+    if (updateOnly) {
+      const latest = await probe()
+      if (!latest.daemon || latest.line !== 'ours') return fail('serviceInactive', 'The service was stopped during staging; nothing was changed')
+    }
+    const id = running && running !== prepared.executable ? await L.request(prepared.executable, false) : null
+    let prepared_: void | 'prepared' | 'unprepared' = undefined
+    try {
+      if (undo.previous !== text) {
+        try {
+          await deps.writeConfig(script, text)
+          undo.wrote = true
+        } catch (error) {
+          undo.wrote = await deps.readConfig(script).then((current) => current === text, () => false)
+          throw error
+        }
+      }
+      await L.chmod()
+      if (line !== 'ours' || !wasLauncher) {
+        const wrote = await writeCrontab(crontabWithDaemonLine(tabText, script, { everyMinute: true }))
+        if (wrote) return wrote
+      }
+      if (updateOnly) {
+        try {
+          if (!deps.prepareUpdate) throw new DaemonServiceUpdateRefusedError('Service update preparation is unavailable')
+          prepared_ = await deps.prepareUpdate()
+          undo.updateStarted = true
+        } catch (error) {
+          undo.updateStarted = !(error instanceof DaemonServiceUpdateRefusedError)
+          throw error
+        }
+      } else undo.handedOver = await deps.handover?.() ?? false
+      if (id) await L.prepared(id)
+    } catch (error) {
+      if (id) await L.withdraw(id).catch(() => {})
+      throw error
+    }
+    // A plain supervisor runs the new script once its daemon exits: an overdue update's daemon (it did
+    // not prepare) and a first install's are stopped for it. A launcher stops its own daemon.
+    if (!wasLauncher && (prepared_ === 'unprepared' || !updateOnly)) {
+      const stuck = updateOnly ? await replaceDaemon() : await startFromScript()
+      if (stuck) return fail('verifyFailed', `the running daemon could not be replaced: ${stuck}`)
+    }
+    if (!(await deps.supervisor())) await deps.spawnDetached('/bin/sh', [script])
+    if (id) {
+      const answer = await L.wait(id)
+      if (!answer) return fail('notReady', `the launcher did not answer the switch to ${prepared.executable} in time`)
+      if (answer.outcome === 'refused') return fail('launcherRefused', `the launcher refused ${prepared.executable}: ${answer.reason}`)
+      if (answer.outcome !== 'committed') {
+        return { ok: false, failure: { code: 'launcherRolledBack', message: `the new daemon did not start: ${answer.reason}`, rollback: `the launcher put ${running} back` } }
+      }
+    }
+    const confirmed = await confirm(updateOnly ? 'update' : 'install', prepared.executable)
+    if (!confirmed.ok && id) {
+      const back = await L.rollback(prepared.executable, confirmed.failure.message).catch(() => null)
+      return { ok: false, failure: { ...confirmed.failure, rollback: back?.outcome === 'rolledback' ? `the launcher put ${running} back` : `the launcher was asked to put ${running} back (${back?.outcome ?? 'no answer'})` } }
+    }
+    return confirmed
   }
 
   async function uninstall(): Promise<DaemonServiceResult> {

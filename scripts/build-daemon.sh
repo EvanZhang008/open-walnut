@@ -224,6 +224,9 @@ SOURCES=(
   src/utils/file-lock.ts
   src/providers/daemon-service-system.ts
   src/providers/daemon-service-handover.ts
+  src/providers/service-launcher-script.ts
+  src/providers/service-launcher-control.ts
+  src/providers/service-launcher-beat.ts
   src/providers/host-runtime-core.ts
   src/providers/host-fix-core.ts
   src/providers/claude-install-core.ts

@@ -131,9 +131,16 @@ function systemdPathValue(value: string): string {
   return value.replace(/%/g, '%%')
 }
 
+/**
+ * The unit. With `launcher` (the experiment service_launcher, service-launcher-script.ts) it runs that
+ * script, which keeps the daemon running, instead of the daemon itself: always restarted, with no start
+ * limit, and the same `ExecStart="<file>" "--service"` shape, so an older Walnut can still read and
+ * rewrite it (it puts its daemon back in the launcher's place).
+ */
 export function renderDaemonSystemdUnit(
   config: DaemonServiceConfig,
   scope: 'user' | 'system',
+  opts: { launcher?: string } = {},
 ): string {
   if (scope !== 'user' && scope !== 'system') fail(`unknown systemd scope ${JSON.stringify(scope)}`)
   const checked = checkConfig(config, 'linux')
@@ -141,19 +148,21 @@ export function renderDaemonSystemdUnit(
     fail('a system-scope unit needs config.user so the daemon keeps running as the original user')
   }
 
-  const lines: string[] = ['[Unit]', 'Description=Open Walnut session daemon']
+  const launcher = opts.launcher === undefined ? null : checkAbsolutePath('launcher', opts.launcher)
+  const lines: string[] = ['[Unit]', `Description=Open Walnut session daemon${launcher ? ' (its launcher)' : ''}`]
   if (scope === 'system') lines.push('After=network.target')
-  lines.push('StartLimitIntervalSec=60', 'StartLimitBurst=5', '')
+  // The launcher never gives up on the daemon, and systemd never gives up on the launcher.
+  lines.push(...(launcher ? ['StartLimitIntervalSec=0'] : ['StartLimitIntervalSec=60', 'StartLimitBurst=5']), '')
 
   lines.push('[Service]', 'Type=simple')
   if (scope === 'system') lines.push(`User=${checked.user}`)
   lines.push(
     `WorkingDirectory=${systemdPathValue(checked.home)}`,
-    `ExecStart=${[checked.executable, ...checked.args].map((word) => systemdQuoted(word, true)).join(' ')}`,
-    'Restart=on-failure',
-    'RestartSec=5',
+    `ExecStart=${[launcher ?? checked.executable, ...checked.args].map((word) => systemdQuoted(word, true)).join(' ')}`,
+    ...(launcher ? ['Restart=always', 'RestartSec=1'] : ['Restart=on-failure', 'RestartSec=5']),
+    // The launcher alone gets the stop's SIGTERM: it stops the daemon, whose CLI sessions keep running.
     'KillMode=process',
-    'TimeoutStopSec=60',
+    `TimeoutStopSec=${launcher ? 90 : 60}`,
     'UMask=0077',
   )
   for (const [key, value] of serviceEnv(checked)) {
@@ -266,8 +275,18 @@ export function replaceDaemonServiceExecutable(platform: DaemonServicePlatform, 
   return text.slice(0, match.index!) + updated + text.slice(match.index! + match[0].length)
 }
 
-export function renderDaemonLaunchAgent(config: DaemonServiceConfig): string {
+/**
+ * The config has the launcher's shape (its restart policy), whatever it runs: an older Walnut's update
+ * puts its daemon in the launcher's place and keeps the rest, so a later plain update renders it whole.
+ */
+export function hasLauncherShape(platform: DaemonServicePlatform, text: string): boolean {
+  return platform === 'darwin' ? /<key>KeepAlive<\/key>\s*<true\/>/.test(text) : /^Description=.*\(its launcher\)$/m.test(text)
+}
+
+/** The LaunchAgent; with `launcher` it runs that script (kept alive whatever its exit), as the unit does. */
+export function renderDaemonLaunchAgent(config: DaemonServiceConfig, opts: { launcher?: string } = {}): string {
   const checked = checkConfig(config, 'darwin')
+  const launcher = opts.launcher === undefined ? null : checkAbsolutePath('launcher', opts.launcher)
 
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -279,7 +298,7 @@ export function renderDaemonLaunchAgent(config: DaemonServiceConfig): string {
     '\t<key>ProgramArguments</key>',
     '\t<array>',
   ]
-  for (const word of [checked.executable, ...checked.args]) {
+  for (const word of [launcher ?? checked.executable, ...checked.args]) {
     lines.push(`\t\t<string>${xmlText(word)}</string>`)
   }
   lines.push(
@@ -289,14 +308,11 @@ export function renderDaemonLaunchAgent(config: DaemonServiceConfig): string {
     '\t<key>RunAtLoad</key>',
     '\t<true/>',
     '\t<key>KeepAlive</key>',
-    '\t<dict>',
-    '\t\t<key>SuccessfulExit</key>',
-    '\t\t<false/>',
-    '\t</dict>',
+    ...(launcher ? ['\t<true/>'] : ['\t<dict>', '\t\t<key>SuccessfulExit</key>', '\t\t<false/>', '\t</dict>']),
     '\t<key>ThrottleInterval</key>',
-    '\t<integer>5</integer>',
+    `\t<integer>${launcher ? 1 : 5}</integer>`,
     '\t<key>ExitTimeOut</key>',
-    '\t<integer>60</integer>',
+    `\t<integer>${launcher ? 90 : 60}</integer>`,
     '\t<key>AbandonProcessGroup</key>',
     '\t<true/>',
     '\t<key>EnvironmentVariables</key>',

@@ -118,6 +118,21 @@ export function daemonCronLine(script: string): string {
   return `@reboot /bin/sh ${shq(script)} >/dev/null 2>&1 ${DAEMON_CRON_TAG}`
 }
 
+/**
+ * The launcher's second line (service-launcher-script.ts): the same script every minute, which does
+ * nothing while a launcher runs (its lock) and brings one back that died. An older Walnut reads the
+ * pair as `stale` and puts its single @reboot line back.
+ */
+export function daemonCronMinuteLine(script: string): string {
+  daemonCronLine(script)
+  return `* * * * * /bin/sh ${shq(script)} >/dev/null 2>&1 ${DAEMON_CRON_TAG}`
+}
+
+/** The lines this build writes: the @reboot line, and with the launcher the minute line after it. */
+export function daemonCronLines(script: string, o: { everyMinute?: boolean } = {}): string[] {
+  return o.everyMinute ? [daemonCronLine(script), daemonCronMinuteLine(script)] : [daemonCronLine(script)]
+}
+
 export type CronLineState = 'ours' | 'stale' | 'foreign' | 'none'
 
 /**
@@ -126,24 +141,25 @@ export type CronLineState = 'ours' | 'stale' | 'foreign' | 'none'
  * or a copy), `foreign` (our tag on a line for another script: someone else's
  * install root), `none`.
  */
-export function cronLineState(crontab: string, script: string): CronLineState {
-  const want = daemonCronLine(script)
+export function cronLineState(crontab: string, script: string, o: { everyMinute?: boolean } = {}): CronLineState {
+  const want = daemonCronLines(script, o)
   const lines = crontab.split('\n')
-  const exact = lines.filter((line) => line === want).length
-  const related = lines.filter((line) => line !== want && (line.endsWith(DAEMON_CRON_TAG) || line.includes(script)))
-  if (exact === 1 && related.length === 0) return 'ours'
+  const exact = want.map((w) => lines.filter((line) => line === w).length)
+  const related = lines.filter((line) => !want.includes(line) && (line.endsWith(DAEMON_CRON_TAG) || line.includes(script)))
+  if (exact.every((n) => n === 1) && related.length === 0) return 'ours'
   if (related.some((line) => !line.includes(script) && !line.trimStart().startsWith('#'))) return 'foreign'
-  return exact || related.length ? 'stale' : 'none'
+  return exact.some((n) => n > 0) || related.length ? 'stale' : 'none'
 }
 
 function ourLine(line: string, script: string): boolean {
-  return line === daemonCronLine(script) || (line.includes(script) && (line.endsWith(DAEMON_CRON_TAG) || /^\s*@reboot\s/.test(line)))
+  return line === daemonCronLine(script) || line === daemonCronMinuteLine(script)
+    || (line.includes(script) && (line.endsWith(DAEMON_CRON_TAG) || /^\s*@reboot\s/.test(line)))
 }
 
-/** The crontab with our line in place exactly once; every other line kept byte for byte. */
-export function crontabWithDaemonLine(crontab: string, script: string): string {
+/** The crontab with our line (and, with the launcher, its minute line) in place exactly once; every other line kept byte for byte. */
+export function crontabWithDaemonLine(crontab: string, script: string, o: { everyMinute?: boolean } = {}): string {
   const kept = crontabWithoutDaemonLine(crontab, script)
-  return `${kept}${kept && !kept.endsWith('\n') ? '\n' : ''}${daemonCronLine(script)}\n`
+  return `${kept}${kept && !kept.endsWith('\n') ? '\n' : ''}${daemonCronLines(script, o).join('\n')}\n`
 }
 
 /** The crontab without our line (or an older form of it); every other line kept. */

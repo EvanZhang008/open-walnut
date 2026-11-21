@@ -83,12 +83,56 @@ before is never taken by the next update. Copies a reboot left behind are used o
 time left, or, with no probation yet (a power loss in the middle of the update), for 7 days unless
 a daemon kept serving there for more than an hour after the update.
 
+## The launcher (experiment `service_launcher`)
+
+With the experiment on, the service config runs a small POSIX sh launcher instead of the daemon
+(`src/providers/service-launcher-script.ts`; dash and the Mac's bash 3.2 run it, and it loads no
+Walnut code). The systemd user unit runs `walnut-launcher.sh` with `Restart=always` and no start
+limit, the LaunchAgent runs it with `KeepAlive`, and the cron start keeps it in `daemon-boot.sh` with
+the @reboot line and a second line every minute (it does nothing while a launcher holds the lock).
+Its own files are in `launcher/` in the install root:
+
+| File | Written by | What |
+|---|---|---|
+| `state` | the launcher only | `current`, `good`, `phase` (committed, trial, probation), `since`, the builds |
+| `request` | `walnut daemon update` | a switch to `exe` (`prepared=0` until the old daemon prepared) or a put-back |
+| `result` | the launcher | the answer to a request: committed, rolledback, refused, failed |
+| `heartbeat` | the daemon, every 5 s | `<epoch> <busy until> <pid>` |
+| `ready` | the daemon | its pid, once its sessions are adopted and its port listens |
+| `leaving` | the daemon | its pid, just before a planned exit (it prepared for an update an older Walnut runs): no crash |
+| `rollback`, `bad` | the launcher | the last put-back and why; the versions it refuses for a day |
+
+The launcher restarts the daemon when it exits (1 s after a clean exit, then 1 to 30 s), and ends and
+restarts one whose heartbeat is over 60 s old unless the daemon said it is busy (at most an hour).
+An update stages and proves the new daemon as before, writes the request, asks the old daemon to
+prepare, and waits: the launcher writes the new version as a trial, stops the old daemon, starts the
+new one and commits it when `ready` comes. A trial that exits or is not ready in 90 s, or a second
+failure in its first 15 minutes, puts the good version back: the launcher first runs the registry's
+stop script (`detached/stop-detached.sh`, `src/providers/detached-registry.ts`) for the work the new
+version started that an older one cannot follow, refuses that version for a day (and writes
+`update-probation.failed`, which the update runner already reads), and the daemon's hello carries
+the put-back to Walnut Health and to the host's Session helper row in Settings. A trial found at
+start (the machine lost power mid-switch) is the old version again, without refusing the new one.
+
+One launcher per install root: an flock (perl's flock on a Mac, which has no flock(1)), never
+handed to the daemon. A launcher that comes back while its daemon runs (pid and start time match)
+watches it on. SIGTERM (a stop of the unit or job) stops the daemon, then the launcher.
+
+Older Walnuts keep working with it: the unit and plist keep the `"<file>" "--service"` shape and
+the cron launcher keeps the boot script's header and `EXEC` line, so an older update puts its daemon
+back in the launcher's place (the launcher follows an `EXEC` it did not write, and stops its daemon
+when its script is no launcher any more). An update that finds a plain config (an older Walnut ran
+in between) forgets the launcher state left from before (`state`, `request`, `result`, `ready`; the
+refusals and the last put-back stay), since its versions are not what runs. With the experiment off,
+the next daemon update writes the plain config again, whole, also over a launcher unit an older
+Walnut put its daemon in; a host whose daemon is current keeps its launcher until then.
+
 ## Commands on the host
 
 ```bash
 walnut daemon status                      # the installed service, its startup (boot, login, on-demand)
-walnut daemon install --yes --executable <daemon binary>
-walnut daemon update --yes --executable <daemon binary>
+walnut daemon install --yes --executable <daemon binary> [--launcher]
+walnut daemon update --yes --executable <daemon binary> [--launcher]
 walnut daemon restart --yes
 walnut daemon uninstall --yes             # removes the service; running CLI sessions keep running
 ```

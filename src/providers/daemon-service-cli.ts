@@ -23,6 +23,9 @@ import { proveDaemonBoot } from './daemon-boot-proof.js'
 import { launchdSpawnsJobs } from './daemon-service-launchd.js'
 import { handBackStandIn } from './daemon-service-handback.js'
 import { daemonReady, daemonStays } from './daemon-service-ready.js'
+import { createLauncherControl, launcherKeeps } from './service-launcher-control.js'
+import { LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
+import { readLauncherFacts } from './service-launcher-beat.js'
 
 export { daemonReady, daemonStays, SERVICE_STAY_MS } from './daemon-service-ready.js'
 
@@ -33,6 +36,8 @@ export interface DaemonServiceCliOptions {
   sudo?: boolean
   /** update: go over the daemon's own work (an overdue update, daemon-over-busy.ts). */
   overBusy?: boolean
+  /** install, update: run the daemon under the launcher (the experiment service_launcher, service-launcher-script.ts). */
+  launcher?: boolean
 }
 
 export function runDaemonServiceCommand(program: string, args: string[], input?: string, timeoutMs?: number): Promise<DaemonServiceCommandResult> {
@@ -299,6 +304,9 @@ export function servicePath(current: string | undefined, home: string): string {
   return [...new Set(parts)].join(':')
 }
 
+/** The server passes it when the experiment service_launcher is on (daemon-service-update.ts). */
+export const LAUNCHER_FLAG = '--launcher'
+
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
   const action = args[0] ?? 'status'
   const options: DaemonServiceCliOptions = {}
@@ -306,6 +314,7 @@ export async function runDaemonServiceArgs(args: string[]): Promise<number> {
     if (args[i] === '--yes') options.yes = true
     else if (args[i] === '--sudo') options.sudo = true
     else if (args[i] === OVER_BUSY_FLAG) options.overBusy = true
+    else if (args[i] === LAUNCHER_FLAG) options.launcher = true
     else if (args[i] === '--scope') {
       if (!args[i + 1]) throw new Error('--scope requires user, system or cron')
       options.scope = args[++i] as DaemonServiceScope
@@ -392,11 +401,16 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
         return stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })
       },
     }
+    const backend = scope === 'cron' ? 'cron' : platform === 'darwin' ? 'launchd' : 'systemd'
+    // The launcher runs a user unit, a LaunchAgent or the cron start; a system unit keeps the plain config.
+    const launcher = options.launcher && scope !== 'system' && (action === 'install' || action === 'update')
+      ? { launcher: createLauncherControl({ stateDir: root, backend }) } : {}
     const manager = scope === 'cron'
-      ? createCronDaemonServiceManager({ ...common, run: runDaemonServiceCommand, ...createCronServiceHost({ home, stateDir: root, runtimeDir }) })
-      : createDaemonServiceManager({ ...common, run: system?.run ?? runDaemonServiceCommand })
+      ? createCronDaemonServiceManager({ ...common, ...launcher, run: runDaemonServiceCommand, ...createCronServiceHost({ home, stateDir: root, runtimeDir }) })
+      : createDaemonServiceManager({ ...common, ...launcher, run: system?.run ?? runDaemonServiceCommand })
     if (action === 'status') {
-      process.stdout.write(JSON.stringify(await manager.status({ scope }), null, 2) + '\n')
+      const facts = await readLauncherFacts(path.join(root, LAUNCHER_DIR_NAME)).catch(() => null)
+      process.stdout.write(JSON.stringify({ ...(await manager.status({ scope })), ...(facts ? { launcher: facts } : {}) }, null, 2) + '\n')
       return 0
     }
     const configPath = manager.configPath(scope)
@@ -405,7 +419,9 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     if (result.ok && (action === 'install' || action === 'update')) {
       // Each update stages a new ~100 MB version: keep the running one and the one before it (the rollback).
       const after = await files.readConfig(configPath).catch(() => null)
+      // With the launcher, also what it runs, goes back to and was asked for (its state names them, not the config).
       const keep = [after, before].map((text) => serviceExecutableOf(platform, scope, text)).filter((exe): exe is string => !!exe)
+      keep.push(...await launcherKeeps(root, backend).catch(() => []))
       if (keep.length) {
         await pruneDaemonServiceVersions(root, keep).catch((error) => {
           process.stderr.write(`walnut daemon: old daemon versions were not pruned: ${String(error)}\n`)
@@ -419,6 +435,11 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     if (result.ok && action === 'uninstall' && !(await runtimeDaemonAlive(runtimeDir))) {
       await forgetRestartMark(runtimeDir)
       await reportMoved(await moveDaemonState(root, unmanagedStateRoot(home)).catch(() => []), 'back for the daemon Walnut starts over SSH')
+    }
+    if (result.ok && action === 'uninstall') {
+      // The launcher's own files: its script (systemd, launchd; cron's is the boot script, removed above) and its dir.
+      await fs.rm(path.join(root, LAUNCHER_SCRIPT_NAME), { force: true }).catch(() => {})
+      await fs.rm(path.join(root, LAUNCHER_DIR_NAME), { recursive: true, force: true }).catch(() => {})
     }
     if (result.ok && action === 'uninstall') {
       // Tells the server not to set it up again (remote-boot-start.ts BOOT_SETUP_MARKER); a later install wins.

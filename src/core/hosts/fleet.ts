@@ -37,6 +37,8 @@ import {
 } from './fleet-cache.js'
 import type { BootStartView } from '../../providers/remote-boot-start-keeper.js'
 import type { HostLoadView } from './placement.js'
+import type { LauncherFacts } from '../../providers/service-launcher-beat.js'
+import { fleetLauncher } from './host-launcher.js'
 
 export type { FleetHost } from './fleet-model.js'
 
@@ -96,6 +98,8 @@ export interface VitalsConn {
   readonly daemonInstanceId: string | null
   readonly remoteRuntime?: string | null
   readonly bootStart?: BootStartView | null
+  /** The host's launcher, from hello (service-launcher-beat.ts); absent without one. */
+  readonly launcher?: LauncherFacts | null
 }
 
 function fleetBootStart(b: BootStartView | null): FleetBootStart | null {
@@ -380,6 +384,7 @@ export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: 
       version: conn.daemonVersion, startedAt: conn.daemonStartedAt, startup: conn.daemonStartup,
       runtime: conn.remoteRuntime ?? null, vitals: conn.hasCapability(VITALS_CAPABILITY),
       bootStart: fleetBootStart(conn.bootStart ?? null),
+      ...(conn.launcher ? { launcher: fleetLauncher(conn.launcher) } : {}),
       ...(IS_EPHEMERAL && !e.local ? { throwaway: true } : {}),
     } : null,
     declaredCapabilities: e.declared,

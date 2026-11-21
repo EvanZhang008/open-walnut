@@ -51,6 +51,8 @@ export function judgeServiceUpdate(output: string, tail: UpdateTail | null): 'ap
     // nothing was stopped, and the build is the reason, so it is held the same day.
     const buildFailed = (f?.stopped === true && f.code !== 'launchdNotSpawning' && !String(f.message ?? '').includes(LAUNCHD_NOT_SPAWNING))
       || f?.code === 'probationFailed'
+      // The host's launcher put the build back, or refuses it (service-launcher-script.ts): the same.
+      || f?.code === 'launcherRolledBack' || f?.code === 'launcherRefused'
     throw failed(`Managed daemon update failed: ${f?.message ?? output}; ${f?.rollback ?? ''}${after}`, buildFailed, f?.stopped === true)
   }
   // Answered as the new daemon, which then did not stay (restored, down): the build's too. A

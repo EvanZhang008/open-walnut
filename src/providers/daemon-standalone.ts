@@ -253,6 +253,7 @@ import { execFile as execFileCb } from 'node:child_process'
 import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
 import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
 import { readCronBootId } from './daemon-cron-host.js'
+import { startLauncherBeat, type LauncherBeat } from './service-launcher-beat.js'
 import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
@@ -304,6 +305,8 @@ const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 const DAEMON_STATE_DIR = process.env.WALNUT_DAEMON_STATE_DIR
 const SERVICE_MODE = process.argv[2] === '--service'
+// The launcher's heartbeat and ready mark when a launcher runs this service (service-launcher-beat.ts). Keep in sync with daemon-source.ts.
+let launcherBeat: LauncherBeat | null = null
 // An isolated dir whose sessions must outlive this process anyway: the cloud
 // companion's daemon for the paired Mac (providers/cloud-tunnel-daemon.ts). A
 // companion upgrade replaces it the way prod's is replaced, and the successor
@@ -3114,6 +3117,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       cronSupervision: { managed: !!cronRuntime, startup: SERVICE_MODE ? 'service' : 'on-demand' },
       instanceId: DAEMON_INSTANCE_ID,
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
+      ...(launcherBeat?.facts() ? { launcher: launcherBeat.facts() } : {}),
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
@@ -14619,6 +14623,13 @@ if (action === '--start' || SERVICE_MODE) {
   if (SERVICE_MODE && (!DAEMON_STATE_DIR || !path.isAbsolute(DAEMON_STATE_DIR))) {
     throw new Error('--service requires an absolute WALNUT_DAEMON_STATE_DIR')
   }
+  if (SERVICE_MODE) {
+    launcherBeat = startLauncherBeat({ dir: process.env.WALNUT_LAUNCHER_DIR, warn: (message) => logMsg('warn', message) })
+    // Its own: a daemon or service started below this one must never write this launcher's marks.
+    delete process.env.WALNUT_LAUNCHER_DIR
+    // The handover and the adoption below can take long on a big registry: no stall until it serves.
+    launcherBeat?.busy(600)
+  }
   // A test server's daemon never runs as, or in the place of, the production one.
   if (ISOLATED_FOR && (IS_PROD_DAEMON_DIR || SERVICE_MODE)) {
     throw new Error('isolated daemon: refusing to start it in the production daemon dir or as a service (WALNUT_DAEMON_ISOLATED_FOR names a test server)')
@@ -14903,6 +14914,8 @@ if (action === '--start' || SERVICE_MODE) {
   fs.writeFileSync(INSTANCE_ID_FILE, DAEMON_INSTANCE_ID)
   if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID)
   else { try { fs.unlinkSync(SERVICE_FILE) } catch {} }
+  // Sessions adopted and the port listening: the launcher may commit this version.
+  if (launcherBeat) void launcherBeat.ready({ exe: process.execPath, instance: DAEMON_INSTANCE_ID }).then(() => launcherBeat?.idle())
   // The servers an earlier daemon kept running here: adopt or start them, now
   // that the port file they connect through is written.
   try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) }
@@ -15082,6 +15095,8 @@ if (action === '--start' || SERVICE_MODE) {
       if (settled === 'cap') process.kill(process.pid, 'SIGKILL')
       // PARITY: daemon-source.ts ends itself hard here (exitDaemon) when a host_exec file look is
       // stuck in node's thread pool, whose exit waits for it; bun's exit does not, so this one exits as is.
+      // Under the launcher, the update exit is no crash (service-launcher-beat.ts).
+      if (serviceUpdateRequested) launcherBeat?.leaving('prepared for a service update')
       process.exit(failed || serviceUpdateRequested ? 1 : 0)
     })().catch((error) => { logMsg('error', 'daemon shutdown failed', { error: String(error) }); process.exit(1) })
   }

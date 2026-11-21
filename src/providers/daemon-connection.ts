@@ -149,6 +149,8 @@ import { acceptHubStream } from '../core/hosts/hub-ports.js'
 // Static: the trigger push asks it on every connect, and a module load there delays the set.
 import * as sameDaemonRecord from '../core/hosts/same-daemon-record.js'
 import { TRIGGERS_DELTA_MAX } from './trigger-check-core.js'
+import { launcherFactsFrom, type LauncherFacts } from './service-launcher-beat.js'
+import { noteLauncherRollback } from '../core/hosts/host-launcher.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -845,6 +847,8 @@ export class DaemonConnection {
   private _sharedReplacing = false
   /** The file an OS service runs as this daemon (hello `serviceExecutable`, service mode only). */
   private _serviceExecutable: string | null = null
+  /** The host's launcher (hello `launcher`, service-launcher-beat.ts): its versions and last put-back. */
+  private _launcher: LauncherFacts | null = null
   private cronMetadataToken: object | null = null
   /** Cloud-bridge liveness from the last bridge.configure reply (null = unknown / disabled). */
   private _lastBridgeConnected: boolean | null = null
@@ -1598,6 +1602,7 @@ export class DaemonConnection {
   }
   get daemonStartup(): string { return this._daemonStartup }
   get serviceExecutable(): string | null { return this._serviceExecutable }
+  get launcher(): LauncherFacts | null { return this._launcher }
   /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
   get bootStart(): BootStartView | null { return this._bootStart?.state ?? null }
   /** Probe the host's boot start now, and set it up when due (the Overview's Set up button). */
@@ -5928,6 +5933,8 @@ export class DaemonConnection {
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
       const exe = res.serviceExecutable
       this._serviceExecutable = typeof exe === 'string' && exe.startsWith('/') && exe.length < 1024 && !/[\u0000-\u001f]/.test(exe) ? exe : null
+      this._launcher = launcherFactsFrom(res.launcher)
+      if (this._launcher?.rollback) void noteLauncherRollback(this.hostKey, this._launcher)
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {

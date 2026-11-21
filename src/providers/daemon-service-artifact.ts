@@ -14,6 +14,9 @@ const NOFOLLOW = typeof FS.O_NOFOLLOW === 'number' ? FS.O_NOFOLLOW : 0
 const ONLY_DIR = typeof FS.O_DIRECTORY === 'number' ? FS.O_DIRECTORY : 0
 const READ_FLAGS = FS.O_RDONLY | NOFOLLOW
 const FILE_SYNC_FLAGS = FS.O_RDWR | NOFOLLOW
+// A published version may be the one running: open it read-only to flush it (write access to a running
+// executable is ETXTBSY on Linux), which fsync allows.
+const PUBLISHED_SYNC_FLAGS = READ_FLAGS
 const DIR_SYNC_FLAGS = FS.O_RDONLY | NOFOLLOW | ONLY_DIR
 
 export type DaemonArtifactErrorCode =
@@ -202,7 +205,7 @@ export async function stageDaemonServiceArtifact(
 
   if (await lstatOrNull(versionDir, 'versionConflict')) {
     await assertPublished(versionDir, executable, facts.sha)
-    await syncPath(executable, FILE_SYNC_FLAGS)
+    await syncPath(executable, PUBLISHED_SYNC_FLAGS)
     await syncPath(versionDir, DIR_SYNC_FLAGS)
     await syncPath(versions, DIR_SYNC_FLAGS)
     return staged()
@@ -242,7 +245,7 @@ export async function stageDaemonServiceArtifact(
         fail('stageFailed', `cannot publish ${staging} as ${versionDir}`, err)
       }
       await assertPublished(versionDir, executable, facts.sha)
-      await syncPath(executable, FILE_SYNC_FLAGS)
+      await syncPath(executable, PUBLISHED_SYNC_FLAGS)
       await syncPath(versionDir, DIR_SYNC_FLAGS)
     }
     await syncPath(versions, DIR_SYNC_FLAGS)

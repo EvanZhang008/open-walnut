@@ -233,6 +233,18 @@ describe('stageDaemonServiceArtifact', () => {
     expect(await entries(versions)).toEqual([])
   })
 
+  it('stages again a version that is running now: a running executable is never opened for writing', async () => {
+    const { installRoot, source } = await fixture()
+    const stage = () => stageDaemonServiceArtifact({ sourceExecutable: source, installRoot })
+    const first = await stage()
+    // Linux refuses write access to an executable a process runs (ETXTBSY): play that for the published file.
+    const ETXTBSY = Object.assign(new Error('ETXTBSY: text file is busy'), { code: 'ETXTBSY' })
+    const writes = (flags: unknown) => typeof flags === 'number' && (flags & 3) !== 0
+    control.hooks.open = (real, ...a) => (a[0] === first.executable && writes(a[1]) ? Promise.reject(ETXTBSY) : real(...a))
+    const again = await stage()
+    expect(again.executable).toBe(first.executable)
+  })
+
   it('fails loudly when the staged copy or the versions directory cannot be flushed', async () => {
     const { installRoot, source, versions } = await fixture()
     const stage = () => stageDaemonServiceArtifact({ sourceExecutable: source, installRoot })

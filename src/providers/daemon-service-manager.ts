@@ -8,6 +8,7 @@ import {
   renderDaemonLaunchAgent,
   renderDaemonSystemdUnit,
   replaceDaemonServiceExecutable,
+  hasLauncherShape,
   readDaemonServiceExecutable,
   type DaemonServiceConfig,
   type DaemonServicePlatform,
@@ -15,6 +16,8 @@ import {
 import { performance } from 'node:perf_hooks'
 import { createLaunchAgentControl, LAUNCHD_NOT_SPAWNING, launchdLoadedFrom, parseLaunchdOverride, type LaunchdOverride, type LaunchdShortfall, type LaunchdSpawn } from './daemon-service-launchd.js'
 import { keepUnitActive } from './daemon-service-systemd.js'
+import type { LauncherControl } from './service-launcher-control.js'
+import { LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
 
 export type { LaunchdOverride } from './daemon-service-launchd.js'
 
@@ -54,6 +57,8 @@ export type DaemonServiceErrorCode =
   | 'noBootStart'
   | 'bootProof'
   | 'launchdNotSpawning'
+  | 'launcherRefused'
+  | 'launcherRolledBack'
 
 export interface DaemonServiceCommandResult {
   code: number
@@ -93,6 +98,12 @@ export interface DaemonServiceDeps {
   proveBoot?(prepared: { executable: string; args: string[] }): Promise<string | null>
   /** launchd starts jobs in this login session now (daemon-service-launchd.ts launchdSpawnsJobs): none in a dark wake; true/false are ok/none. */
   launchdSpawns?(): Promise<LaunchdSpawn | boolean>
+  /**
+   * Install or update with the launcher (the experiment service_launcher, service-launcher-control.ts):
+   * the unit or job runs the launcher script, and a switch of version is the launcher's. Absent: as before,
+   * and an installed launcher is replaced by the plain config again.
+   */
+  launcher?: LauncherControl
   /** Clock and pause for the launchd and systemd waits; tests pass virtual ones. */
   sleep?(ms: number): Promise<void>
   now?(): number
@@ -588,7 +599,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       else if (undo.previous === null) {
         rollback = 'the previous config could not be read before the write, so it was left as this install wrote it'
       } else rollback = await restorePrevious(scope, undo.previous, undo.was,
-        updateOnly ? readDaemonServiceExecutable(deps.platform, undo.previous) : undefined)
+        updateOnly ? daemonOf(undo.previous) : undefined)
     } catch (err) {
       rollback = `the rollback did not finish: ${errText(err)}`
     }
@@ -706,11 +717,10 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       path: deps.path,
       ...(deps.user.trim() ? { user: deps.user } : {}),
     }
+    if (deps.launcher) return attemptWithLauncher(scope, undo, updateOnly, before, ours, prepared, config, deps.launcher)
     let text: string
     try {
-      text = deps.platform === 'darwin'
-        ? renderDaemonLaunchAgent(config)
-        : renderDaemonSystemdUnit(config, scope === 'system' ? 'system' : 'user')
+      text = renderConfig(config, scope)
     } catch (err) {
       return fail('invalidConfig', err instanceof Error ? err.message : String(err))
     }
@@ -721,7 +731,9 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (undo.previous === null) return fail('hostError', 'Could not read the previous service config; nothing was changed')
     }
     if (updateOnly) {
-      text = replaceDaemonServiceExecutable(deps.platform, undo.previous!, prepared.executable)
+      // A launcher's unit (the experiment turned off since) becomes the plain one again, whole; so does
+      // one an older Walnut put its daemon in, which kept the launcher's restart policy.
+      if (!launcherConfig(undo.previous!) && !hasLauncherShape(deps.platform, undo.previous!)) text = replaceDaemonServiceExecutable(deps.platform, undo.previous!, prepared.executable)
       const latest = await probe(scope)
       const refusal = jobRefusal(scope, latest.present && latest.owned, latest)
       if (refusal) return { ok: false, failure: refusal }
@@ -766,6 +778,127 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     }
 
     return confirm(scope, 'install', prepared.executable, updateOnly)
+  }
+
+  function renderConfig(config: DaemonServiceConfig, scope: DaemonServiceScope, launcher?: string): string {
+    return deps.platform === 'darwin'
+      ? renderDaemonLaunchAgent(config, { launcher })
+      : renderDaemonSystemdUnit(config, scope === 'system' ? 'system' : 'user', { launcher })
+  }
+
+  /** The file a config runs is the launcher script (service-launcher-script.ts). */
+  function launcherConfig(text: string): boolean {
+    try { return path.basename(readDaemonServiceExecutable(deps.platform, text)) === LAUNCHER_SCRIPT_NAME } catch { return false }
+  }
+
+  /** The daemon a config runs, when it names one (a launcher's config names its script, not a daemon). */
+  function daemonOf(text: string): string | undefined {
+    if (launcherConfig(text)) return undefined
+    try { return readDaemonServiceExecutable(deps.platform, text) } catch { return undefined }
+  }
+
+  /**
+   * Install or update with the launcher: the unit or job runs the launcher script (written first), and
+   * the switch to the new daemon is the launcher's (a trial, committed once the daemon is ready, put back
+   * by the launcher itself when it is not). A plain config is turned into the launcher's on the way, with
+   * the daemon it ran as the launcher's first version, so a new build that fails goes back to it.
+   */
+  async function attemptWithLauncher(
+    scope: DaemonServiceScope, undo: Undo, updateOnly: boolean, before: Probe, ours: boolean,
+    prepared: { executable: string; args: string[] }, config: DaemonServiceConfig, L: LauncherControl,
+  ): Promise<DaemonServiceResult> {
+    if (ours) {
+      undo.previous = await deps.readConfig(cfgPath(scope))
+      if (undo.previous === null) return fail('hostError', 'Could not read the previous service config; nothing was changed')
+    }
+    const refused = await L.refuses(prepared.executable)
+    if (refused) return fail('launcherRefused', `${prepared.executable}: ${refused}; nothing was changed`)
+    const facts = await L.facts()
+    const wasLauncher = undo.previous !== null && launcherConfig(undo.previous)
+    // What runs now: the launcher's current version, or the daemon the plain config names.
+    const running = wasLauncher ? facts?.current ?? await L.seed() : undo.previous !== null ? daemonOf(undo.previous) ?? null : null
+    const seed = (wasLauncher ? await L.seed() : null) ?? running ?? prepared.executable
+    // A plain config ran since any launcher state on disk was written: that state names versions that do not run.
+    if (!wasLauncher) await L.reset()
+    let text: string
+    let scriptText: string
+    try {
+      scriptText = L.render(config, seed)
+      text = renderConfig(config, scope, L.script)
+    } catch (err) {
+      return fail('invalidConfig', errText(err))
+    }
+    if (updateOnly) {
+      const latest = await probe(scope)
+      const refusal = jobRefusal(scope, latest.present && latest.owned, latest)
+      if (refusal) return { ok: false, failure: refusal }
+      if (!latest.active || !latest.enabled) return fail('serviceInactive', 'The service was stopped or disabled during staging; nothing was changed')
+    }
+    const unitChanged = undo.previous !== text
+    // A switch only when a daemon runs and it is another version; else the launcher starts its seed.
+    const id = before.active && running && running !== prepared.executable ? await L.request(prepared.executable, false) : null
+    try {
+      if ((await deps.readConfig(L.script)) !== scriptText) await deps.writeConfig(L.script, scriptText)
+      await L.chmod()
+      if (unitChanged) {
+        try {
+          await deps.writeConfig(cfgPath(scope), text)
+          undo.wrote = true
+        } catch (error) {
+          undo.wrote = await deps.readConfig(cfgPath(scope)).then((current) => current === text, () => false)
+          throw error
+        }
+      }
+      if (updateOnly) {
+        try {
+          if (!deps.prepareUpdate) throw new DaemonServiceUpdateRefusedError('Service update preparation is unavailable')
+          // 'unprepared': the launcher's stop (SIGTERM) does the preparing, as a restart would.
+          await deps.prepareUpdate()
+          undo.updateStarted = true
+          undo.prepared = true
+        } catch (error) {
+          undo.updateStarted = !(error instanceof DaemonServiceUpdateRefusedError)
+          throw error
+        }
+      } else undo.handedOver = await deps.handover?.() ?? false
+      if (id) await L.prepared(id)
+    } catch (error) {
+      if (id) await L.withdraw(id).catch(() => {})
+      throw error
+    }
+    // A launcher already running this unit takes the request itself; a new or changed unit is (re)started.
+    if (unitChanged || !before.active) {
+      if (deps.platform === 'darwin') {
+        const stuck = await reloadAgent(before.registered)
+        if (stuck) return stuck
+      } else {
+        const reload = await step('systemctl', scoped(scope, ['daemon-reload']))
+        if (reload) return reload
+        if (!updateOnly) {
+          const enable = await step('systemctl', scoped(scope, ['enable', '--now', DAEMON_SERVICE_UNIT_NAME]))
+          if (enable) return enable
+        }
+        if (ours) {
+          const again = await step('systemctl', scoped(scope, ['restart', DAEMON_SERVICE_UNIT_NAME]))
+          if (again) return again
+        }
+      }
+    }
+    if (id) {
+      const answer = await L.wait(id)
+      if (!answer) return fail('notReady', `the launcher did not answer the switch to ${prepared.executable} in time`)
+      if (answer.outcome === 'refused') return fail('launcherRefused', `the launcher refused ${prepared.executable}: ${answer.reason}`)
+      if (answer.outcome !== 'committed') {
+        return { ok: false, failure: { code: 'launcherRolledBack', message: `the new daemon did not start: ${answer.reason}`, rollback: `the launcher put ${running} back` } }
+      }
+    }
+    const confirmed = await confirm(scope, 'install', prepared.executable, updateOnly)
+    // It became ready, then did not answer or stay: the launcher puts the version before it back.
+    if (!confirmed.ok && id) {
+      const back = await L.rollback(prepared.executable, confirmed.failure.message).catch(() => null)
+      return { ok: false, failure: { ...confirmed.failure, rollback: back?.outcome === 'rolledback' ? `the launcher put ${running} back` : `the launcher was asked to put ${running} back (${back?.outcome ?? 'no answer'})` } }
+    }
+    return confirmed
   }
 
   /** Bootout (when loaded) and wait for launchd to let go, then bootstrap the plist on disk. */

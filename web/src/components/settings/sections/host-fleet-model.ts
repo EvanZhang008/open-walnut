@@ -116,6 +116,28 @@ export function canDoRow(h: FleetHost): FleetRow | null {
  * numbers, a problem is its row's line or the Details' problem list, and Walnut on the host is in
  * "This host". What is left is said here.
  */
+type FleetLauncher = NonNullable<NonNullable<FleetHost['daemon']>['launcher']>;
+
+const clock = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * The launcher on the Session helper row: a switch under way in the value, and in the tooltip the version
+ * it runs, the one it goes back to, and its last put-back (in the value too while it is a day old).
+ */
+export function launcherWords(l: FleetLauncher | null | undefined, now: number): { value: string | null; title: string } {
+  if (!l) return { value: null, title: '' };
+  const r = l.lastRollback;
+  const recent = r && now - r.at < 24 * 3_600_000;
+  const phase = l.phase === 'trial' ? `trying ${l.current}`
+    : l.phase === 'probation' ? `watching ${l.current}${l.watchedUntil ? ` until ${clock(l.watchedUntil)}` : ''} (goes back to ${l.good} if it fails)` : null;
+  const value = phase ?? (recent ? `went back from ${r.from} ${span(now - r.at)} ago` : null);
+  const title = [
+    `\nKept running by its launcher: runs ${l.current}, goes back to ${l.good} if a new version fails`,
+    r ? `\nLast went back from ${r.from} on ${new Date(r.at).toLocaleString()}: ${r.reason}` : '',
+  ].join('');
+  return { value, title };
+}
+
 export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   const rows: FleetRow[] = [];
   const can = canDoRow(h);
@@ -150,10 +172,11 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     // Not starting after a reboot is a problem, said once on its row or in the problem list.
     // How it starts (crontab, a systemd user service) is the server's word: kept for the tooltip.
     const reboot = !h.local && d.startsAfterReboot ? 'starts by itself after a reboot' : null;
-    const value = [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : 'build not reported yet', reboot].filter(Boolean).join(', ');
+    const launcher = launcherWords(d.launcher, now);
+    const value = [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : 'build not reported yet', reboot, launcher.value].filter(Boolean).join(', ');
     const how = !h.local && d.startsAfterReboot && d.reboot ? `\nAfter a reboot: ${d.reboot.replace(/`/g, '')}` : '';
     // "Walnut helper Version 0123456789ab" read as jargon (2026-11-05 review): what it does, then its build.
-    rows.push({ key: 'daemon', label: 'Session helper', value: value.charAt(0).toUpperCase() + value.slice(1), title: `The small program Walnut runs on the host to start and keep its sessions${how}` });
+    rows.push({ key: 'daemon', label: 'Session helper', value: value.charAt(0).toUpperCase() + value.slice(1), title: `The small program Walnut runs on the host to start and keep its sessions${how}${launcher.title}` });
   }
   return rows;
 }

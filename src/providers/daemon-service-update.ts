@@ -14,6 +14,7 @@ import { log } from '../logging/index.js'
 import { MKTEMP_STAGING, STAGING, STAGING_PREFIX } from './daemon-update-staging.js'
 import { DELTA_BLOCK_BYTES, deltaAssemblyLines, planDeltaAgainst } from './walnut-file-delta.js'
 import { remoteSha256Command } from './upload-resume.js'
+import { serviceLauncherWanted } from './service-launcher-flag.js'
 
 // Judged and read in daemon-update-readback.ts, which tests do not replace with a double.
 export { judgeServiceUpdate, sshUpdateHost }
@@ -386,8 +387,8 @@ export async function updateRemoteDaemonService(
   let keep = false, applied = false
   try {
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
-    // An overdue update goes over the daemon's own work (daemon-update-behind.ts).
-    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}`
+    // An overdue update goes over the daemon's own work (daemon-update-behind.ts); the launcher when its experiment is on.
+    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}${await serviceLauncherWanted() ? ' --launcher' : ''}`
     const update = io.serviceUpdate ? io.serviceUpdate.bind(io) : (u: ServiceUpdateSpec) => updateOverSsh(io, u)
     const answer = await update({ command, directory, executable, scope, build: expectedVersion }).catch((error: unknown) => {
       keep = (error as { keepStaging?: unknown } | null)?.keepStaging === true
@@ -464,11 +465,12 @@ export async function installRemoteDaemonService(
     const output = (await io.run(`${executable} walnut daemon ${args} 2>/dev/null || true`, timeoutMs)).trim()
     try { return JSON.parse(output.slice(output.indexOf('{'))) as ServiceReply } catch { return null }
   }
+  const install = `install --yes --executable ${executable}${await serviceLauncherWanted() ? ' --launcher' : ''}`
   try {
-    let reply = await cli(`install --yes --executable ${executable}`, 600_000)
+    let reply = await cli(install, 600_000)
     // The old daemon may have exited after handing over: a second install finishes that handover.
     if (reply && reply.ok !== true && (reply.failure?.code === 'handoverPending' || /retry install/i.test(reply.failure?.rollback ?? ''))) {
-      reply = await cli(`install --yes --executable ${executable}`, 600_000)
+      reply = await cli(install, 600_000)
     }
     if (reply?.ok === true) {
       if (chunks) await removeVersionChunks(io, expectedVersion)

@@ -94,6 +94,8 @@ export interface FleetHost {
      * Demo user read "Walnut won't restart on demo-devbox after it reboots").
      */
     throwaway?: boolean
+    /** The host's launcher (the experiment service_launcher): absent when the daemon runs without one. */
+    launcher?: FleetLauncher | null
   } | null
   placement: {
     /**
@@ -114,6 +116,19 @@ export interface FleetHost {
   checkedAt: number
   /** The card in one line, for an agent (fleetHostLine). */
   line: string
+}
+
+/**
+ * A host's launcher (service-launcher-script.ts) as the fleet shows it: the version it runs and the one it
+ * goes back to (a build, else the start of its version dir), where a switch stands, and its last put-back.
+ */
+export interface FleetLauncher {
+  current: string
+  good: string
+  phase: 'committed' | 'trial' | 'probation'
+  /** A probation's end (epoch ms), when the phase is probation. */
+  watchedUntil: number | null
+  lastRollback: { at: number; from: string; reason: string } | null
 }
 
 /** A host's boot start as the fleet shows it (BootStartView, flattened). */

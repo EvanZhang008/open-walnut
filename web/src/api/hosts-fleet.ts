@@ -37,6 +37,14 @@ export interface FleetHost {
     reboot?: string;
     /** A test server's or the Demo's own daemon, removed when that server stops: no reboot start by design. */
     throwaway?: boolean;
+    /**
+     * The host's launcher (src/core/hosts/fleet-model.ts FleetLauncher): the version it runs, the one it
+     * goes back to, where a switch stands, its last put-back. Absent without one, and from an older server.
+     */
+    launcher?: {
+      current: string; good: string; phase: 'committed' | 'trial' | 'probation'; watchedUntil: number | null;
+      lastRollback: { at: number; from: string; reason: string } | null;
+    } | null;
   } | null;
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
   /** What the host can do (src/core/hosts/capabilities.ts); absent from a server older than it. */
