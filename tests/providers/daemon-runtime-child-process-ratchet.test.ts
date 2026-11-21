@@ -152,6 +152,11 @@ const ALLOWED: Record<string, Entry> = {
     injection: 'const childUse = { spawn, execFile, execFileSync, execSync, env: daemonEnv }',
     checks: [{ file: S, re: /const childUse: ChildProcessUse = \{ spawn, execFile, execFileSync, execSync, env: daemonEnv \}/ }],
   },
+  [`${P}spawn-pool.ts`]: {
+    reason: 'the runtime\'s own start mechanism inside another program: its thread starts the children with the umask it is given, and their env and cwd come filled in by createDaemonChildSpawn',
+    injection: 'createSpawnPool({ umask: CHILD_UMASK }) handed to createDaemonChildSpawn as `pool`',
+    checks: [{ file: S, re: /createSpawnPool\(\{ umask: CHILD_UMASK,/ }, { file: S, re: /\.\.\.\(spawnPool \? \{ pool: spawnPool \} : \{\}\)/ }],
+  },
   [`${P}daemon-spawn-barrier.ts`]: {
     reason: 'a service-mode session CLI starts behind the registry barrier',
     injection: 'spawnBehindRegistry(program, args, options, childUse)',

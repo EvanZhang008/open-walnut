@@ -782,6 +782,9 @@ describe('the worker executor', () => {
       .toEqual(['/$bunfs/root/history-ready-worker.ts', '/$bunfs/root/providers/history-ready-worker.ts']);
     expect(readyWorkerEntries('/repo/src/providers/daemon-standalone.ts', 'file:///repo/src/providers/daemon-standalone.ts'))
       .toEqual(['file:///repo/src/providers/history-ready-worker.ts']);
+    // The runtime bundle a built server runs in its own process: the built worker beside it.
+    expect(readyWorkerEntries('/repo/dist/cli.js', 'file:///repo/dist/daemon-binaries/daemon-runtime/daemon-standalone.js'))
+      .toEqual(['file:///repo/dist/daemon-binaries/daemon-runtime/history-ready-worker.js']);
   });
 });
 

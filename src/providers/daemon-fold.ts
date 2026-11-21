@@ -155,8 +155,10 @@ export function initialFoldState(baseV?: number): FoldState {
  * `lineEndV` is the absolute byte offset after this line's trailing newline.
  * Torn/unparseable/unknown lines advance `v` only (the daemon feeds whole
  * lines, so torn handling is belt-and-suspenders).
+ * `parseLine`, when given, is the line's JSON as its tailer parsed it once
+ * (session-tailer.ts parseOnce): used instead of a parse of its own.
  */
-export function foldLine(state: FoldState, rawLine: string, lineEndV: number): FoldState {
+export function foldLine(state: FoldState, rawLine: string, lineEndV: number, parseLine?: () => unknown): FoldState {
   // ── helpers (declared inside: twin-safe toString round-trip, see header) ──
   // Mirrors BG_TERMINAL.has(status) in the reference — takes `unknown` on
   // purpose so a malformed non-string status behaves the same there and here
@@ -255,7 +257,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     && rawLine.indexOf('CronCreate') === -1
     && rawLine.indexOf('CronDelete') === -1
     && rawLine.indexOf('local_command_outcome') === -1) return next
-  try { parsed = JSON.parse(rawLine) as { [k: string]: unknown } } catch { return next }
+  try { parsed = (parseLine ? parseLine() : JSON.parse(rawLine)) as { [k: string]: unknown } } catch { return next }
   if (!parsed || typeof parsed !== 'object') return next
   const type = parsed.type as string | undefined
 

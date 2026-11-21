@@ -284,6 +284,13 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-cron-metadata.ts',
   'src/providers/daemon-spawn-barrier.ts',
   'src/providers/daemon-child-spawn.ts',
+  // The runtime's tailer, clocks and in-process client (the daemon body as modules).
+  'src/providers/session-tailer.ts',
+  'src/providers/daemon-runtime-timers.ts',
+  'src/providers/daemon-in-process-client.ts',
+  'src/providers/daemon-runtime-types.ts',
+  'src/providers/loop-budget.ts',
+  'src/providers/spawn-pool.ts',
   'src/providers/daemon-service-config.ts',
   'src/providers/daemon-service-manager.ts',
   // launchd and systemd steps the manager takes (bootout settled, bootstrap retried, the unit kept active).

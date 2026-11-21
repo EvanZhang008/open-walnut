@@ -49,6 +49,8 @@ export interface OutputEvent {
    *  v exceeds the persisted watermark was NEVER processed, whatever any boolean
    *  guard claims — incident 10e7df54). Absent on old daemons. */
   v?: number
+  /** The line already parsed on its way here (RemoteSessionManager): handleStreamLine reads it instead of parsing again. */
+  parsed?: Record<string, unknown>
 }
 
 // ── Session History ──

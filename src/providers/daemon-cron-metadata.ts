@@ -291,13 +291,14 @@ export function createCronMetadataTracker(options: {
       entry.config = config
       return emit(sid, entry)
     },
-    observe(sid: string, process: CronMetadataProcess, raw: string, replay = false, offset?: number) {
+    /** `parseLine`: the line's JSON as its tailer parsed it once (session-tailer.ts), instead of a parse here. */
+    observe(sid: string, process: CronMetadataProcess, raw: string, replay = false, offset?: number, parseLine?: () => unknown) {
       const entry = ensure(sid, process)
       const relatedResult = entry.pending.size > 0 && raw.includes('tool_result')
         && [...entry.pending.keys()].some((id) => raw.includes(JSON.stringify(id)))
       if (!relatedResult && !/CronCreate|CronDelete|CronList|"init"/.test(raw)) return
       let parsed: Record<string, unknown> | null
-      try { parsed = object(JSON.parse(raw)) } catch {
+      try { parsed = object(parseLine ? parseLine() : JSON.parse(raw)) } catch {
         entry.jobs.clear()
         entry.pending.clear()
         entry.complete = false

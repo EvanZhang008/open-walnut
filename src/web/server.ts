@@ -3303,6 +3303,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       process.env.OPEN_WALNUT_API_URL = selfRoot
     }
   }
+  // Under a launcher (`walnut serve` kept by service-launcher-script.ts), its marks are the server's own.
+  {
+    const bound = httpServer.address()
+    ;(await import('./serve-launcher-beat.js')).startServeLauncherBeat(bound && typeof bound === 'object' ? bound.port : port)
+  }
 
   // -- The tunnel port and the tunnel in front of it (off unless config.yaml's expose says so) --
   if (bootPolicy('expose-runtime')) try {
@@ -7701,6 +7706,16 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // Always detach — sessions are detached child processes and must survive
   // server shutdown. Never kill session PIDs from stopServer().
   sessionRunner.destroy()
+  // Under a launcher, a planned stop is no crash (serve-launcher-beat.ts).
+  await shutdownStep('launcher leaving mark', async () => {
+    (await import('./serve-launcher-beat.js')).serveLauncherLeaving(opts.reason ?? 'server stop')
+  }, { budgetMs: 1_000 })
+  // A daemon run in this process (experiment in_process_daemon) stops as a daemon program does on
+  // SIGTERM: drained, its registry saved, its dir's lock released. The production dir's sessions
+  // keep running for the next start; an isolated dir's agents end with it.
+  await shutdownStep('in-process daemon', async () => {
+    await (await import('../providers/in-process-daemon.js')).stopInProcessDaemon(opts.reason ?? 'server stop')
+  }, { budgetMs: 4_000 })
   if (searchV2WiringHandle) {
     const wiring = searchV2WiringHandle
     await shutdownStep('search index', () => wiring.stop(), { budgetMs: 2_500 })

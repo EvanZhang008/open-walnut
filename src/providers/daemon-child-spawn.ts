@@ -13,6 +13,9 @@
  *     fork happens inside the call, so nothing else on this thread runs with it;
  *     a call that does no fork (an error before it) restores it just the same.
  * A caller's own env and cwd always win. Pure wiring: the raw functions are passed in.
+ *
+ * With a spawn pool (spawn-pool.ts: a runtime inside a server's process), execFile starts its child
+ * on the pool's thread, which gives it the umask itself; one with `shell` stays here.
  */
 import type * as cp from 'node:child_process'
 import { promisify } from 'node:util'
@@ -35,6 +38,8 @@ interface RawChildProcess {
   bunSpawn?: (...args: never[]) => unknown
   /** process.umask: injected so a test can watch it. */
   umask: (mask?: number) => number
+  /** Starts execFile's children off this thread (spawn-pool.ts), with the defaults' umask. */
+  pool?: { execFile(file: string, args: string[], options: Record<string, unknown>, callback?: (error: Error | null, stdout: unknown, stderr: unknown) => void): unknown }
 }
 
 type Opts = Record<string, unknown> & { cwd?: unknown; env?: unknown }
@@ -97,6 +102,7 @@ export function createDaemonChildSpawn(raw: RawChildProcess, defaults: DaemonChi
     if (isObject(rest[i])) opts = rest[i++] as Opts
     else if (rest[i] == null && typeof rest[i + 1] === 'function') i++
     const callback = typeof rest[i] === 'function' ? rest[i] as (...a: unknown[]) => void : undefined
+    if (raw.pool && !opts?.shell) return raw.pool.execFile(file, args, fill(opts), callback) as cp.ChildProcess
     return underUmask(() => (raw.execFile as unknown as (...a: unknown[]) => cp.ChildProcess)(
       file, args, fill(opts), ...(callback ? [callback] : []),
     ))

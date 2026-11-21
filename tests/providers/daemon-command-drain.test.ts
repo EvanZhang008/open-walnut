@@ -85,7 +85,11 @@ function noDemoQuiesce() {
 }
 
 function compileHandle(source: string, environment: Record<string, unknown>): (ws: unknown, msg: string) => void {
-  const text = extract(source, 'handleCommand')
+  // The standalone twin parses a socket's text in handleCommand and handles the frame in
+  // handleCommandFrame (a client in its own process hands the object over): both are the command path.
+  const text = source.includes('function handleCommandFrame(')
+    ? `${extract(source, 'handleCommand')}\n${extract(source, 'handleCommandFrame')}`
+    : extract(source, 'handleCommand')
   const env: Record<string, unknown> = {
     demoQuiesce: noDemoQuiesce(), sendOk: vi.fn(),
     SERVED_PUSHES: literalSet(source, 'SERVED_PUSHES'),
@@ -97,7 +101,12 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
     hostExec: { resumableJob: () => false },
     ...environment,
   }
-  expect(missingNames(text, [...Object.keys(env), 'dispatchCommand']), 'names handleCommand reads that this run lacks').toEqual([])
+  // The standalone twin answers through sendFrame (an in-process client takes the object): a
+  // socket's text is the frame's JSON, through the safeSend this run watches.
+  if (source.includes('function sendFrame(') && !('sendFrame' in env)) {
+    env.sendFrame = (ws: unknown, frame: unknown) => (env.safeSend as (ws: unknown, text: string) => void)(ws, JSON.stringify(frame))
+  }
+  expect(missingNames(text, [...Object.keys(env), 'dispatchCommand', 'handleCommandFrame']), 'names handleCommand reads that this run lacks').toEqual([])
   return compile(`${text}\n${extract(source, 'dispatchCommand')}\nreturn handleCommand;`, env)
 }
 
@@ -239,7 +248,7 @@ describe.each([
       const reconcile = compile<() => void>(`${extract(source, 'reconcileRegistry')}\nreturn reconcileRegistry;`, {
         readRegistry: () => ({ session: entry }), sessions, rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl,
         daemonBootId: 'boot', reapSession: vi.fn(), logMsg: vi.fn(), fs: { readdirSync: () => [] },
-        STREAMS_DIR: '/fixture', process: { kill: vi.fn() }, readStartTime: () => 'start',
+        STREAMS_DIR: '/fixture', process: { kill: vi.fn() }, readStartTime: () => 'start', readStartTimeAsync: async () => 'start',
         logStateTransition: vi.fn(), startOrphanPoll: vi.fn(), broadcastSessionState: vi.fn(),
         processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }),
         // Adopting a live CLI locks its stdin FIFO write-only (LIVE_FIFO_MODE); no FIFO here.
@@ -372,7 +381,7 @@ describe.each([
           close: async () => { order.push('cronClose'); await cronDrain },
         },
         process: { platform: 'linux', pid: 4242 }, os: { userInfo: () => ({ uid: 501 }) },
-        readStartTime: () => 'start', readRegistry: () => ({}), handoverHooks: () => null,
+        readStartTime: () => 'start', readStartTimeAsync: async () => 'start', readRegistry: () => ({}), handoverHooks: () => null,
         acp: { workers: new Map(), holdingWorkers: () => 0 }, sttRelayPending: new Map(), launchRelayPending: new Map(),
         controlRelayPending: new Map(), messageRelayPending: new Map(), gatewayRelayPending: new Map(), gatewayWaiting: new Set(),
         // No host_exec run here; a running one refuses the handover (daemon-service-handover-busy-twins-e2e.test.ts).

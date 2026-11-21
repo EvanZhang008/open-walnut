@@ -199,6 +199,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'in_process_daemon',
+    name: 'Sessions run inside Walnut\'s own process',
+    description: 'This computer\'s sessions, host commands and triggers are run by Walnut\'s own process instead of a separate background program: Walnut calls them directly, with nothing between. Running sessions are picked up when you turn this on or off (it applies at the next start of Walnut). Off: a separate background program runs them, as before.',
+    default: false,
+  },
+  {
     id: 'restore_drill',
     name: 'Weekly restore drill',
     description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health.',

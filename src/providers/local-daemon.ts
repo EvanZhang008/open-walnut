@@ -63,6 +63,7 @@ import { daemonLaunch, discardPending, keepPendingBinary, keepPreviousSource, ke
 import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
+import { ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, stopInProcessDaemon } from './in-process-daemon.js'
 
 /** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
 /**
@@ -264,6 +265,11 @@ export interface LocalDaemonOptions {
    * to keep an old build: a server on a new build always replaces it (daemon-shared.ts).
    */
   soleManager?: boolean
+  /**
+   * Run this daemon inside the server's own process when this says so (in-process-daemon.ts):
+   * only the default local daemon asks it; every other instance runs a daemon program.
+   */
+  inProcess?: () => Promise<boolean>
 }
 
 export class LocalDaemon {
@@ -331,6 +337,9 @@ export class LocalDaemon {
   private readonly persistent: boolean
   private readonly envOverrides: Record<string, string | undefined>
   private readonly soleManager: boolean
+  private readonly inProcess: (() => Promise<boolean>) | undefined
+  /** In-process was wanted and could not be had (a daemon this server may not stop serves the dir): this process uses that daemon. */
+  private _inProcessDeclined = false
 
   constructor(opts: LocalDaemonOptions = {}) {
     this.daemonDir = path.resolve(opts.daemonDir ?? DEFAULT_DAEMON_DIR)
@@ -343,6 +352,7 @@ export class LocalDaemon {
     this.persistent = opts.persistent === true
     this.envOverrides = opts.envOverrides ?? {}
     this.soleManager = opts.soleManager === true
+    this.inProcess = opts.inProcess
   }
 
   get port(): number | null { return this._port }
@@ -352,7 +362,13 @@ export class LocalDaemon {
   /** PID of the DAEMON, never of the session host above it: under the host the
    *  process we spawn is the supervisor, and the daemon writes its own pid file.
    *  Null if unknown. */
-  get pid(): number | null { return this._spawnedPid ?? this.readPidFile() }
+  get pid(): number | null {
+    // In process, the daemon is this server: no pid of it is anyone's to signal.
+    if (this.runsInProcess) return null
+    return this._spawnedPid ?? this.readPidFile()
+  }
+  /** The daemon runs inside this server's process (in-process-daemon.ts). */
+  get runsInProcess(): boolean { return !!this.inProcess && !this._inProcessDeclined && inProcessDaemonRunning() }
   /** The macOS bundle a daemon THIS instance spawned is attributed to. Null means
    *  "plain node/bun identity, or an adopted daemon whose identity we did not
    *  choose" — deliberately not a claim that no separation exists. */
@@ -385,7 +401,7 @@ export class LocalDaemon {
     // in 35s during one cold start). Concurrent callers share one attempt;
     // the promise clears on settle so a later call can retry after failure.
     if (this._ensureInFlight) return this._ensureInFlight
-    this._ensureInFlight = this.ensureRunningInner().then((port) => {
+    this._ensureInFlight = this.ensureRunningOrInProcess().then((port) => {
       for (const cb of this.readyListeners) {
         try { cb() } catch { /* a listener never fails the start */ }
       }
@@ -397,6 +413,38 @@ export class LocalDaemon {
   }
 
   private readonly readyListeners = new Set<() => void>()
+
+  /** The daemon in this process when the experiment says so (and it can be had), else a daemon program. */
+  private async ensureRunningOrInProcess(): Promise<number> {
+    if (this.inProcess && !this._inProcessDeclined && await this.inProcess()) {
+      const verdict = await ensureInProcessDaemon({
+        dir: this.daemonDir,
+        readPort: () => this.readPortFile(),
+        alive: async (port) => (await this.ping(port)).alive,
+        // A daemon program still serving the dir hands it over first (SIGTERM: the production dir
+        // and a persistent one keep their sessions for the registry); never two manage one dir.
+        // A daemon a service manager runs is that manager's to stop: this refuses, and the server uses it.
+        stopProgram: () => this.stopDaemon(),
+        env: async () => {
+          const env = await this.buildSpawnEnv()
+          // The server is the parent: nothing of a separate program's watchdog applies.
+          delete env.WALNUT_DAEMON_PARENT_PID
+          return env
+        },
+      })
+      if (verdict.kind === 'in-process') {
+        this._wsUrl = verdict.url
+        this._port = null
+        this._spawnedPid = null
+        this._sessionHostPid = null
+        this._sessionHostApp = null
+        return 0
+      }
+      this._inProcessDeclined = true
+      log.session.warn('in-process daemon not started; using the daemon program that serves this dir', { dir: this.daemonDir, why: verdict.why })
+    }
+    return this.ensureRunningInner()
+  }
 
   /**
    * Called after every ensureRunning() that ends with a daemon serving (adopted,
@@ -1508,6 +1556,8 @@ export class LocalDaemon {
    */
   async stopIfIsolated(): Promise<void> {
     if (isProductionDaemonDir(this.daemonDir)) return
+    // In process, the runtime's own stop ends an isolated dir's agents (its shouldReapOnExit).
+    if (this.runsInProcess) { await stopInProcessDaemon('owner stop'); return }
     if (this._upgradeRecheck) clearTimeout(this._upgradeRecheck)
     this._upgradeRecheck = null
     this._stay.clear()
@@ -1522,6 +1572,8 @@ export class LocalDaemon {
     this.assertNoServiceTakeover('stop')
     const pid = this.readPidFile()
     if (!pid) return
+    // daemon.pid naming this process: the daemon runs in it (in-process-daemon.ts). Never signal ourselves.
+    if (pid === process.pid) throw new Error('the daemon of this dir runs inside this server; it stops with the server')
     try { process.kill(pid, 'SIGTERM') } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
     }
@@ -1991,4 +2043,4 @@ export class LocalDaemon {
   }
 }
 
-export const localDaemon = new LocalDaemon()
+export const localDaemon = new LocalDaemon({ inProcess: inProcessDaemonWanted })

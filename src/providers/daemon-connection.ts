@@ -30,6 +30,8 @@ import { ACP_HOST_FILES } from './acp-host-artifacts.js'
 import { statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from '#ws'
+import { IN_PROCESS_DAEMON_URL, InProcessDaemonSocket, isInProcessDaemonSocket } from './in-process-daemon-socket.js'
+import { inProcessDaemonConnect } from './in-process-daemon.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -236,6 +238,11 @@ export interface DaemonEvent {
    *  append-only jsonl). Identical whether the line is delivered live or via replay, so the
    *  client orders + dedupes by `v` alone. Absent from old daemons — RSM falls back to uuid dedup. */
   v?: number
+  /**
+   * The line as the object it parses to, handed over by a daemon in this process (it parsed the
+   * line once for its own work): never on the wire. RSM reads it instead of parsing the line again.
+   */
+  parsed?: Record<string, unknown>
   agent?: string
   code?: number
   /** Stderr content from the process (only present on exit events with non-zero code) */
@@ -2968,9 +2975,11 @@ export class DaemonConnection {
       ? params.traceId
       : crypto.randomBytes(4).toString('hex')
     const payload = { id, cmd, ...params, traceId }
-    const message = JSON.stringify(payload)
+    // A daemon in this process takes the object itself (in-process-daemon-socket.ts): no text, no cap.
+    const inProcess = isInProcessDaemonSocket(this.ws)
+    const message = inProcess ? '' : JSON.stringify(payload)
     // A frame over the daemon's cap closes the socket for every session on the host.
-    assertFrameFits(message, `the ${cmd} command`, this.hostKey)
+    if (!inProcess) assertFrameFits(message, `the ${cmd} command`, this.hostKey)
 
     // A test server never resumes or writes into a session it did not start.
     const gateScope = { host: this.hostKey, url: this._lastWsUrl, instance: this._daemonInstanceId }
@@ -3120,7 +3129,8 @@ export class DaemonConnection {
         this.noteLinkSent(message.length)
       }
       if (ownBulk) this.bulkOwnWritten += message.length
-      sentOn.send(message)
+      if (isInProcessDaemonSocket(sentOn)) sentOn.sendFrame(payload)
+      else sentOn.send(message)
     })
   }
 
@@ -3883,6 +3893,7 @@ export class DaemonConnection {
         send: (frame) => {
           const ws = this.ws
           if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(`not connected to ${this.hostKey}`)
+          if (isInProcessDaemonSocket(ws)) { ws.sendFrame(frame as Record<string, unknown>); return }
           const message = JSON.stringify(frame)
           assertFrameFits(message, 'a stream frame', this.hostKey)
           this.mainSentByCmd.set('stream', (this.mainSentByCmd.get('stream') ?? 0) + message.length)
@@ -5844,15 +5855,19 @@ export class DaemonConnection {
       return Promise.reject(new Error(`DaemonConnection: ws not open for ${this.hostKey}`))
     }
     const id = ++this.cmdCounter
-    const message = JSON.stringify({ id, cmd, ...params })
-    try { assertFrameFits(message, `the ${cmd} command`, this.hostKey) } catch (err) { return Promise.reject(err) }
+    const frame = { id, cmd, ...params }
+    const inProcess = isInProcessDaemonSocket(this.ws)
+    const message = inProcess ? '' : JSON.stringify(frame)
+    if (!inProcess) { try { assertFrameFits(message, `the ${cmd} command`, this.hostKey) } catch (err) { return Promise.reject(err) } }
     return new Promise<DaemonCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id)
         reject(new Error(`daemon command timeout: ${cmd} (${DaemonConnection.COMMAND_TIMEOUT_MS}ms)`))
       }, DaemonConnection.COMMAND_TIMEOUT_MS)
       this.pendingCommands.set(id, { resolve, reject, timer, cmd, socket: this.ws! })
-      this.ws!.send(message)
+      const ws = this.ws!
+      if (isInProcessDaemonSocket(ws)) ws.sendFrame(frame)
+      else ws.send(message)
     })
   }
 
@@ -7822,7 +7837,11 @@ export class DaemonConnection {
       // big file reads to 1MB frames now; the largest remaining legit frame is
       // a git.diff response (git stdout capped at 64MB in cmdGitDiff), so do
       // NOT lower this without chunking git.diff first.
-      const ws = new WebSocket(url, { handshakeTimeout: timeoutMs, ...(opts.headers ? { headers: opts.headers } : {}) })
+      // The daemon in this process (in-process-daemon.ts): the same listeners, no socket.
+      const ws = url === IN_PROCESS_DAEMON_URL
+        ? inProcessSocket()
+        : new WebSocket(url, { handshakeTimeout: timeoutMs, ...(opts.headers ? { headers: opts.headers } : {}) })
+      if (!ws) { reject(new Error('the in-process daemon is not running')); return }
 
       if (opts.describeRefusal) {
         const describe = opts.describeRefusal
@@ -7906,6 +7925,11 @@ export class DaemonConnection {
         // leader-lost, trigger) act for the host key and so for its newer owner.
         if (this.hostKey === '__local__' && (this.ws !== ws || this.localDialAbandoned())) return
         this.handleMessage(typeof data === 'string' ? data : data.toString())
+      })
+      // An in-process daemon hands its frames over as objects (in-process-daemon-socket.ts).
+      ws.on('frame', (frame: Record<string, unknown>) => {
+        if (this.hostKey === '__local__' && (this.ws !== ws || this.localDialAbandoned())) return
+        void this.handleFrame(frame)
       })
 
       ws.on('pong', (data: Buffer) => {
@@ -8001,9 +8025,14 @@ export class DaemonConnection {
   }
 
   private handleMessage(raw: string): Promise<void> | void {
-    this._lastFrameAt = Date.now()
     let msg: Record<string, unknown>
-    try { msg = JSON.parse(raw) } catch { return }
+    try { msg = JSON.parse(raw) } catch { this._lastFrameAt = Date.now(); return }
+    return this.handleFrame(msg)
+  }
+
+  /** One frame from the daemon: a reply, a stream frame, or an event to fan out. */
+  private handleFrame(msg: Record<string, unknown>): Promise<void> | void {
+    this._lastFrameAt = Date.now()
 
     // Command response (has 'id' field)
     if (this.resolveCommandFrame(msg)) return
@@ -8122,6 +8151,8 @@ export class DaemonConnection {
     this.closeBulkChannel()
     const url = this._lastWsUrl
     if (!url || !this._connected || this._destroyed) return
+    // In process, nothing waits behind a big frame: there is no line to share.
+    if (url === IN_PROCESS_DAEMON_URL) return
     const seq = ++this.bulkDialSeq
     const opener = this.bulkForwardOpener()
     this.bulkOwnLink = opener !== null
@@ -11176,4 +11207,10 @@ export async function probeDaemonSessionArgs(
     })
     return null
   }
+}
+
+/** A socket to the daemon in this process, or null when none runs (in-process-daemon.ts). */
+function inProcessSocket(): WebSocket | null {
+  const connect = inProcessDaemonConnect()
+  return connect ? (new InProcessDaemonSocket(connect) as unknown as WebSocket) : null
 }

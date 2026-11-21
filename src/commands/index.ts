@@ -350,7 +350,8 @@ export function registerCommands(program: Command): void {
 
   program
     .command('web')
-    .description('Start the web server')
+    .alias('serve')
+    .description('Start the web server (`walnut serve` is the same command)')
     .option('--port <port>', 'Server port', '3456')
     .option('--dev', 'Development mode (no static file serving)')
     .option('--ephemeral', 'Start an isolated ephemeral server (temp data copy, random port)')

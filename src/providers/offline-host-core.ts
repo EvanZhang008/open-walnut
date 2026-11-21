@@ -3294,7 +3294,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * settle as "finished without replying". Lines at or before the delivery (a
    * stream re-read after a daemon restart replays old turns) never count.
    */
-  async function onResult(sid: string, line: string, v?: number): Promise<void> {
+  async function onResult(sid: string, line: string, v?: number, parseLine?: () => unknown): Promise<void> {
     for (const home of journal.homes()) {
       const j = journalOf(home)
       for (const row of Object.values(j.rows)) {
@@ -3316,7 +3316,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const owner = row.toTaskId ? tasksWithOverlay(home).find((t) => t.id === row.toTaskId) : undefined
         if (owner?.phase === 'WAITING') continue
         let parsed: { result?: unknown; is_error?: unknown } = {}
-        try { parsed = JSON.parse(line) } catch { /* the outcome still stands */ }
+        try { parsed = (parseLine ? parseLine() : JSON.parse(line)) as typeof parsed } catch { /* the outcome still stands */ }
         await notify(home, row, parsed.is_error === true ? 'error' : 'completed', typeof parsed.result === 'string' ? parsed.result : undefined)
       }
     }

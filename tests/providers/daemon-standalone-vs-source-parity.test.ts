@@ -29,6 +29,10 @@ const corePath = path.join(ROOT, 'src/providers/daemon-core.ts')
 const sourcePath = path.join(ROOT, 'src/providers/daemon-source.ts')
 
 function readFile(p: string) { return twinText(p, fs.readFileSync(p, 'utf-8')) }
+// The standalone twin's live tailer, a module of its own (ensureWatcher runs it).
+const tailerSrc = fs.readFileSync(path.join(ROOT, 'src/providers/session-tailer.ts'), 'utf-8')
+// And the files its CLI starts on (startSessionProcess runs it).
+const spawnFilesSrc = fs.readFileSync(path.join(ROOT, 'src/providers/session-spawn-files.ts'), 'utf-8')
 
 describe('L1.6 daemon-core vs daemon-source template parity', () => {
   const coreSrc = readFile(corePath)
@@ -404,11 +408,13 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
 
   it("both spawn the CLI's stdout fd in append mode (marker-clobber defense)", () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
-    for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/openSync\(jsonlPath, 'a'\)/)
-      // 'w' open of the jsonl must be gone — fresh spawn truncates explicitly instead.
-      expect(src).not.toMatch(/openSync\(jsonlPath, resume \? 'a' : 'w'\)/)
-    }
+    // The standalone twin opens them in session-spawn-files.ts (asynchronously), which its spawn runs.
+    expect(standaloneSrc).toMatch(/await prepareSpawnFiles\(/)
+    expect(spawnFilesSrc).toMatch(/await open\(req\.jsonlPath, 'a'\)/)
+    expect(spawnFilesSrc).not.toMatch(/open\(req\.jsonlPath, req\.resume \? 'a' : 'w'\)/)
+    expect(templateSrc).toMatch(/openSync\(jsonlPath, 'a'\)/)
+    // 'w' open of the jsonl must be gone — fresh spawn truncates explicitly instead.
+    expect(templateSrc).not.toMatch(/openSync\(jsonlPath, resume \? 'a' : 'w'\)/)
   })
 
   it('both bridge resume paths authorize runtime bypass mode changes', () => {
@@ -495,10 +501,11 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
   })
   it('both twins unlink+recreate the jsonl on fresh spawn (new inode → new epoch)', () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
-    for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/fs\.unlinkSync\(jsonlPath\)/)
-      expect(src).toMatch(/fs\.writeFileSync\(jsonlPath, ''\)/)
-    }
+    expect(templateSrc).toMatch(/fs\.unlinkSync\(jsonlPath\)/)
+    expect(templateSrc).toMatch(/fs\.writeFileSync\(jsonlPath, ''\)/)
+    // The standalone twin: session-spawn-files.ts, on a fresh start only.
+    expect(standaloneSrc).toMatch(/await prepareSpawnFiles\(/)
+    expect(spawnFilesSrc).toMatch(/if \(!req\.resume\) \{\s*await fs\.promises\.unlink\(req\.jsonlPath\)[\s\S]{0,120}await fs\.promises\.writeFile\(req\.jsonlPath, ''\)/)
   })
   it('both twins sweep dead-session streams after the 90-day retention window', () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
@@ -1498,7 +1505,8 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
   })
 
   it('both tailers feed EVERY complete line through foldLine with the v-monotone guard', () => {
-    const re = /if\s*\(v\s*>\s*s\.foldState\.v\)\s*s\.foldState\s*=\s*foldLine\(s\.foldState,\s*line,\s*v\)/
+    // The standalone twin hands the line's parse-once JSON along (session-tailer.ts parseOnce).
+    const re = /if\s*\(v\s*>\s*s\.foldState\.v\)\s*s\.foldState\s*=\s*foldLine\(s\.foldState,\s*line,\s*v(?:,\s*parse)?\)/
     expect(standaloneSrc).toMatch(re)
     expect(templateSrc).toMatch(re)
   })
@@ -1508,8 +1516,10 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
   // The behavioral proof lives in daemon-snapshot-wiring.test.ts ("torn
   // result line split across two polls"); these lock the shape on BOTH twins.
   it('both tailers hold a torn tail in a byte carry instead of processing it', () => {
-    for (const src of [standaloneSrc, templateSrc]) {
-      const start = src.search(/function ensureWatcher/)
+    // The standalone twin's tailer is session-tailer.ts (its line assembler), which ensureWatcher runs.
+    expect(standaloneSrc.slice(standaloneSrc.search(/function ensureWatcher/))).toMatch(/createSessionTailer\(\{/)
+    for (const [src, fn] of [[tailerSrc, 'function createLineAssembler'], [templateSrc, 'function ensureWatcher']] as const) {
+      const start = src.search(new RegExp(fn))
       expect(start).toBeGreaterThan(-1)
       const body = src.slice(start, start + 12_000)
       // Per-watcher carry (a PART LIST since C26) + its absolute complete-line
@@ -1517,7 +1527,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       // re-concatenated and re-scanned from byte 0 every tick.
       expect(body).toMatch(/let carryParts(?::\s*Buffer\[\])? = \[\]/)
       expect(body).toMatch(/let carryLen = 0/)
-      expect(body).toMatch(/let carryStartV = offset/)
+      expect(body).toMatch(src === tailerSrc ? /let boundary = startOffset/ : /let carryStartV = offset/)
       // C26 fast path: no newline in the NEW bytes ⇒ no concat, no scan.
       expect(body, 'tailer must skip the concat when the new bytes hold no newline')
         .toMatch(/if \(buf\.indexOf\(10\) === -1\)/)
@@ -1542,7 +1552,12 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       expect(src).toMatch(/TAILER_CARRY_MAX = 32 \* 1024 \* 1024/)
       // Live tailer (carryLen since C26). The overflow verdict is named because
       // the cron metadata tracker reads it too (a dropped line is an inventory gap).
-      expect(src).toMatch(/const cronMetadataGap = carryLen > TAILER_CARRY_MAX;?\s*\n\s*if \(cronMetadataGap\)/)
+      if (src === standaloneSrc) {
+        // session-tailer.ts reports it per batch (`overflowed`); the cap is the daemon's.
+        expect(tailerSrc).toMatch(/const overflowed = carryLen > carryMaxBytes/)
+        expect(src).toMatch(/carryMaxBytes: TAILER_CARRY_MAX/)
+        expect(src).toMatch(/overflowed: cronMetadataGap[\s\S]{0,200}if \(cronMetadataGap\)/)
+      } else expect(src).toMatch(/const cronMetadataGap = carryLen > TAILER_CARRY_MAX;?\s*\n\s*if \(cronMetadataGap\)/)
       expect(src).toMatch(/tailer carry overflow — dropping oversized partial line/)
       // C13: the rebuilds + the death drain reuse the SAME cap. Without it, a
       // single >32MB line (which the live tailer deliberately drops) got
@@ -1555,17 +1570,18 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       expect((src.match(/if \(carry\.length > TAILER_CARRY_MAX\)/g) ?? []).length,
         'fold rebuild + drain + task rebuild + cold getState rebuild + fold prewarm must all cap the carry').toBe(5)
       // After a drop, the rest of the oversized line must be skipped too.
-      expect((src.match(/discardThroughNextNewline = true/g) ?? []).length,
+      expect(((src === standaloneSrc ? src + tailerSrc : src).match(/discardThroughNextNewline = true/g) ?? []).length,
         'tailer + rebuilds + drain must all realign after a dropped line').toBeGreaterThanOrEqual(4)
     }
   })
 
   it('both publish the COMPLETE-line boundary as watcher.offset (never a mid-line cursor)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/if \(s\.watcher\) s\.watcher\.offset = carryStartV/)
+      const boundary = src === standaloneSrc ? 'tailer\\.boundary' : 'carryStartV'
+      expect(src).toMatch(src === standaloneSrc ? /onBoundary: \(boundary\) => \{[^}]*s\.watcher\.offset = boundary/ : /if \(s\.watcher\) s\.watcher\.offset = carryStartV/)
       // Self-heal rebuild resumes from the boundary, not the read cursor: the
       // in-memory carry dies with the watcher, so the torn region must be re-read.
-      expect(src).toMatch(/s\.offset = carryStartV/)
+      expect(src).toMatch(new RegExp(`s\\.offset = ${boundary}`))
       expect(src, 'self-heal must not persist the mid-line read cursor').not.toMatch(/s\.offset = offset/)
     }
   })
@@ -1577,7 +1593,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       expect(start).toBeGreaterThan(-1)
       const nextFunction = src.indexOf('\nfunction ', start + 1)
       const body = src.slice(start, nextFunction === -1 ? undefined : nextFunction)
-      const foldIdx = body.search(/s\.foldState\s*=\s*foldLine\(s\.foldState,\s*line,\s*v\)/)
+      const foldIdx = body.search(/s\.foldState\s*=\s*foldLine\(s\.foldState,\s*line,\s*v(?:,\s*parse)?\)/)
       const taskIdx = body.indexOf("line.includes('\"task_')")
       expect(foldIdx).toBeGreaterThan(-1)
       expect(taskIdx).toBeGreaterThan(-1)
@@ -2145,14 +2161,14 @@ describe('tailer self-heal daemon-standalone vs daemon-source parity', () => {
     }
   })
   it('both reset consecutiveErrors on every successful tick (incl. no-new-bytes)', () => {
-    for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/stat\.size\s*<=\s*offset\)\s*\{\s*consecutiveErrors\s*=\s*0;?\s*return;?\s*\}/)
-    }
+    expect(templateSrc).toMatch(/stat\.size\s*<=\s*offset\)\s*\{\s*consecutiveErrors\s*=\s*0;?\s*return;?\s*\}/)
+    // The standalone twin's tailer (session-tailer.ts), which ensureWatcher runs.
+    expect(tailerSrc).toMatch(/size\s*<=\s*lines\.cursor\)\s*\{\s*consecutiveErrors\s*=\s*0;?\s*return;?\s*\}/)
+    expect(standaloneSrc).toMatch(/createSessionTailer\(\{/)
   })
   it('both guard against healing an orphaned watcher after session replacement', () => {
-    for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/s\.watcher\.pollTimer\s*!==\s*pollTimer/)
-    }
+    expect(templateSrc).toMatch(/s\.watcher\.pollTimer\s*!==\s*pollTimer/)
+    expect(standaloneSrc).toMatch(/s\.watcher\.pollTimer\s*!==\s*tailer\.timer/)
   })
 })
 
@@ -2672,7 +2688,7 @@ describe('durable-cron invariant daemon-standalone vs daemon-source parity', () 
   it('both run the corrective stream check on CronCreate lines (bypass mode has no permission round-trip)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/line\.includes\('CronCreate'\)/)
-      expect(src).toMatch(/try \{ checkDurableCronCreate\(sid, s, line\)/)
+      expect(src).toMatch(/try \{ checkDurableCronCreate\(sid, s, line(?:, parse)?\)/)
       expect(src).toMatch(/durableCronCorrectionMessage\(undefined\)/)
       expect(src).toMatch(/durableCronNudged/)
     }
@@ -3615,7 +3631,7 @@ describe('one CLI per session id parity (cli-owner-v1)', () => {
       expect(body.indexOf('commit(pid, sessionData.startTime)')).toBeGreaterThan(body.indexOf('const sessionData'))
       expect(body).toMatch(/if \(!ownerCommitted( && ownerClaim\) ownerClaim\.release\(\)|\) ownerClaim\?\.release\(\))/)
       // The replaced process is waited out before the new one starts.
-      expect(body.indexOf('waitForStoppedProcess(stoppedPid)')).toBeLessThan(body.indexOf('mkfifo'))
+      expect(body.indexOf('waitForStoppedProcess(stoppedPid)')).toBeLessThan(Math.max(body.indexOf('mkfifo'), body.indexOf('prepareSpawnFiles(')))
     }
   })
 

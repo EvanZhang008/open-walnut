@@ -1,0 +1,67 @@
+/**
+ * `walnut serve` under a launcher (service-launcher-script.ts starts it with WALNUT_LAUNCHER_DIR):
+ * the server writes the launcher's marks itself (service-launcher-beat.ts), as the daemon service
+ * does today, so a launcher keeps the server the way it keeps that service: one command to swap.
+ *   - heartbeat: from the server's own event loop, so a stalled server writes none;
+ *   - ready: once it serves: sessions adopted (the in-process daemon, when it runs one, answers
+ *     hello as itself and status), the port listening, and one real request on that port answered
+ *     right (GET /api/config, 200 with a JSON object);
+ *   - leaving: just before a planned stop (stopServer), so the launcher counts it as no crash.
+ * The variable is the launcher's own: it is taken out of this process's env, so no daemon or
+ * session started below the server writes the launcher's marks.
+ * Nothing here throws into the server.
+ */
+import { startLauncherBeat, type LauncherBeat } from '../providers/service-launcher-beat.js'
+import { log } from '../logging/index.js'
+
+let beat: LauncherBeat | null = null
+
+const ADOPTION_BUSY_SECONDS = 600
+const REQUEST_TIMEOUT_MS = 10_000
+
+/** The server's readiness, asked again by the beat until it holds: null when it serves, else why not. */
+export async function serveReadyCheck(deps: {
+  port: number
+  fetch?: typeof globalThis.fetch
+  inProcess: { wanted(): Promise<boolean>; check(): Promise<string | null> }
+}): Promise<string | null> {
+  const fetchFn = deps.fetch ?? globalThis.fetch
+  if (await deps.inProcess.wanted()) {
+    const why = await deps.inProcess.check()
+    if (why) return `sessions: ${why}`
+  }
+  const res = await fetchFn(`http://127.0.0.1:${deps.port}/api/config`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+  if (res.status !== 200) return `GET /api/config answered ${res.status}`
+  const body = await res.json().catch(() => null) as unknown
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return 'GET /api/config answered no JSON object'
+  return null
+}
+
+/** Starts the beat when a launcher runs this server; a no-op otherwise. Call once the port listens. */
+export function startServeLauncherBeat(port: number): void {
+  if (beat) return
+  const dir = process.env.WALNUT_LAUNCHER_DIR
+  delete process.env.WALNUT_LAUNCHER_DIR
+  beat = startLauncherBeat({ dir, warn: (message) => log.web.warn(message) })
+  if (!beat) return
+  beat.busy(ADOPTION_BUSY_SECONDS)
+  const own = beat
+  void (async () => {
+    const inProcess = await import('../providers/in-process-daemon.js')
+    await own.ready({ exe: process.execPath }, () => serveReadyCheck({
+      port,
+      inProcess: { wanted: inProcess.inProcessDaemonWanted, check: inProcess.inProcessDaemonServesCheck },
+    }))
+    own.idle()
+    log.web.info('launcher: ready mark written', { port })
+  })().catch((err: unknown) => log.web.warn('launcher: ready check stopped', { error: err instanceof Error ? err.message : String(err) }))
+}
+
+/** Just before a planned stop: the launcher counts the exit as no crash. */
+export function serveLauncherLeaving(reason: string): void {
+  const own = beat
+  beat = null
+  if (!own) return
+  try { own.leaving(reason) } catch { /* never the stop's problem */ }
+  try { own.stop() } catch { /* the same */ }
+}

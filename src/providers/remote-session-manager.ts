@@ -1758,9 +1758,12 @@ export class RemoteSessionManager implements SessionManager {
   private handleDaemonEvent(event: DaemonEvent): void {
     if (!this._sid) return
     if (this.conn?.connected && this.cloudLink) this.closeCloudLink()
+    // A line is parsed once here, or not at all when the daemon in this process handed it over
+    // parsed (event.parsed), and that object goes down to the session's own parser (OutputEvent.parsed).
+    const parsedLine = event.ev === 'jsonl' && event.line ? parsedJsonlLine(event) : undefined
     if (event.ev === 'jsonl' && event.sid === this._sid && event.line) {
-      try {
-        const raw = JSON.parse(event.line) as { type?: string; request_id?: string; request?: { tool_name?: string }; response?: { request_id?: string } }
+      if (parsedLine) {
+        const raw = parsedLine as { type?: string; request_id?: string; request?: { tool_name?: string }; response?: { request_id?: string } }
         if (raw.type === 'control_request' && typeof raw.request_id === 'string') {
           this.cloudPendingRequest = { id: raw.request_id, toolName: raw.request?.tool_name ?? '' }
           this.rememberPermission(raw.request_id, raw.request?.tool_name ?? '')
@@ -1768,7 +1771,7 @@ export class RemoteSessionManager implements SessionManager {
           || (raw.type === 'control_cancel_request' && raw.request_id === this.cloudPendingRequest?.id)) {
           this.cloudPendingRequest = null
         }
-      } catch { /* the existing output parser handles malformed lines */ }
+      }
     }
 
     switch (event.ev) {
@@ -1803,8 +1806,9 @@ export class RemoteSessionManager implements SessionManager {
           // different rsmId means walnut has leaked RSM instances.
           let uuid: string | null = null
           let lineKind: string | null = null
-          try {
-            const parsed = JSON.parse(event.line) as {
+          // A malformed line passes through: the session's parser logs and skips it.
+          if (parsedLine) {
+            const parsed = parsedLine as {
               uuid?: unknown
               type?: unknown
               message?: { content?: Array<{ type?: unknown }> }
@@ -1844,9 +1848,6 @@ export class RemoteSessionManager implements SessionManager {
                 rsmId: this._rsmId, sid: this._sid, lineKind,
               })
             }
-          } catch {
-            // Non-JSON or malformed line — pass through. Downstream parser
-            // will log and skip; we don't second-guess it.
           }
 
           // Past both duplicate checks: a replayed old state must not overwrite a newer one.
@@ -1855,7 +1856,7 @@ export class RemoteSessionManager implements SessionManager {
 
           // Forward to handler, carrying the L1 byte-offset version when the
           // daemon stamped one (consumers use it as the consumed watermark).
-          this._onOutput?.({ line: event.line, v: typeof event.v === 'number' ? event.v : undefined })
+          this._onOutput?.({ line: event.line, v: typeof event.v === 'number' ? event.v : undefined, ...(parsedLine ? { parsed: parsedLine } : {}) })
         }
         break
 
@@ -2002,3 +2003,15 @@ function isDaemonConnError(err: unknown): boolean {
 
 // Re-export for convenience
 export { findLocalImagePaths, findRemoteImagePaths, findRelativeImageNames }
+
+/**
+ * A jsonl event's line as an object: the daemon's own parse when it runs in this process
+ * (event.parsed), else one JSON.parse here. Undefined for a line that is no JSON object.
+ */
+function parsedJsonlLine(event: DaemonEvent): Record<string, unknown> | undefined {
+  if (event.parsed && typeof event.parsed === 'object') return event.parsed
+  try {
+    const value = JSON.parse(event.line!) as unknown
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+  } catch { return undefined }
+}

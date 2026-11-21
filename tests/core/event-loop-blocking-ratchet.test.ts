@@ -33,22 +33,31 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 /** Files whose code never runs on the web server's event loop. */
 const EXEMPT_PATHS = [
   'src/workers/',            // separate child processes by design
-  'src/providers/daemon-standalone.ts', // daemon twin — its own process on exec hosts
   'src/providers/daemon-source.ts',     // daemon twin (JS fallback)
   'src/providers/daemon-child-spawn.ts', // the daemon's child wrapper: it only forwards the daemon's own calls, counted where daemon-standalone.ts makes them
+  // daemon-standalone.ts is NOT exempt: a server can run the daemon runtime on its own main
+  // thread (experiment in_process_daemon, src/providers/in-process-daemon.ts).
   'src/hooks/on-stop.ts',    // Claude CLI hook — runs inside the CLI process
   'src/core/cloud-setup/steps.ts', // one-shot EC2 provisioning script path
 ];
 
 /**
- * Grandfathered call-site budget per file (execSync + spawnSync occurrences).
+ * Grandfathered call-site budget per file (execSync + execFileSync + spawnSync occurrences).
  * DO NOT raise a number here — move the new call off the event loop instead
  * (child process + timeout + cached value). Lower/remove entries freely.
  */
 const BASELINE: Record<string, number> = {
   'src/integrations/git-sync.ts': 3,
   'src/utils/process.ts': 1,
-  'src/providers/daemon-core.ts': 1,
+  'src/providers/daemon-core.ts': 2,
+  // macOS only (Linux reads /proc): `ps` for the process groups still running, a pid's command
+  // line, and a stand-in's command line at an update's handback. None runs on a clock.
+  'src/providers/daemon-standalone.ts': 3,
+  'src/providers/host-runtime-core.ts': 2,
+  'src/core/search/semantic-default.ts': 2,
+  'src/providers/session-io.ts': 1,
+  'src/providers/pw-noactivate-core.ts': 1,
+  'src/core/companion-build/shim.ts': 1,
   // Pre-listen startup guard. It runs ONCE in `walnut web` before the server
   // binds a port, so there is no request path and no route to freeze, and it
   // is advisory (it logs and continues, never exits).
@@ -65,7 +74,7 @@ function countSyncCalls(): Map<string, number> {
     'git',
     // POSIX ERE (git grep) has no \b; the call-shape `execSync(`/`spawnSync(`
     // is distinctive enough on its own.
-    ['grep', '-nE', '(execSync|spawnSync) ?\\(', '--', 'src/'],
+    ['grep', '-nE', '(execSync|execFileSync|spawnSync) ?\\(', '--', 'src/'],
     { cwd: repoRoot, encoding: 'utf8' },
   );
   const counts = new Map<string, number>();
@@ -80,7 +89,7 @@ function countSyncCalls(): Map<string, number> {
 }
 
 describe('event-loop blocking ratchet', () => {
-  it('no NEW execSync/spawnSync call sites in server-reachable code', () => {
+  it('no NEW execSync/execFileSync/spawnSync call sites in server-reachable code', () => {
     const counts = countSyncCalls();
     const violations: string[] = [];
     for (const [file, count] of counts) {

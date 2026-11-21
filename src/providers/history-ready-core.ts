@@ -631,14 +631,15 @@ export function serveReadyWorker(port: { on(event: 'message', cb: (value: unknow
  * Where the worker entry sits. In a compiled file (`main` under bun's virtual root) the entry is
  * compiled in beside the main one: next to it for the daemon binary (both entries in
  * src/providers), under providers/ for the Walnut file (entries in src/binary and src/providers).
- * Run from source, it is the file beside this one.
+ * Run from source, it is the file beside this one; from the daemon's runtime bundle a server loads
+ * (scripts/build-daemon.sh, daemon-runtime/), the built worker beside that bundle.
  */
 export function readyWorkerEntries(main: string, moduleUrl: string): string[] {
   if (main.startsWith('/$bunfs/') || main.includes('~BUN')) {
     const root = main.slice(0, Math.max(main.lastIndexOf('/'), main.lastIndexOf('\\')));
     return [`${root}/history-ready-worker.ts`, `${root}/providers/history-ready-worker.ts`];
   }
-  return [new URL('./history-ready-worker.ts', moduleUrl).href];
+  return [new URL(/\.[cm]?js$/.test(new URL(moduleUrl).pathname) ? './history-ready-worker.js' : './history-ready-worker.ts', moduleUrl).href];
 }
 
 /** The request's own clock: resolve `work`, or `fallback` once `deadline` passes. */

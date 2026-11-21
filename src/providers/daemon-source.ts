@@ -8451,9 +8451,15 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
 
   // Create FIFO
   try { fs.unlinkSync(pipePath); } catch {}
-  try { execSync('mkfifo -m 600 ' + JSON.stringify(pipePath)); } catch (err) {
+  // Asynchronous: a slow disk holds this spawn, never every other session's clock.
+  try {
+    await new Promise((resolve, reject) => {
+      execFile('mkfifo', ['-m', '600', pipePath], { timeout: 10000 }, (err) => (err ? reject(err) : resolve()));
+    });
+  } catch (err) {
     throw new Error('mkfifo failed: ' + err.message);
   }
+  stopIfSuperseded();
 
   // Open files. jsonl fd MUST be O_APPEND ('a') — the daemon also appends
   // turn-start marker lines (appendUserMarker); a positional 'w' fd would

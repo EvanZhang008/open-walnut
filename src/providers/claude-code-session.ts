@@ -3443,7 +3443,7 @@ export class ClaudeCodeSession {
       ...(this.taskId ? { taskId: this.taskId } : {}),
       spillFile,
       mode: this._mode,
-      onOutput: (event) => this.handleStreamLine(event.line, event.v),
+      onOutput: (event) => this.handleStreamLine(event.line, event.v, event.parsed),
       onExit: (code, stderr) => {
         // A death reported while the send that opened this turn waits for its answer is judged after it.
         const judge = () => {
@@ -4339,7 +4339,7 @@ export class ClaudeCodeSession {
           sessionId: record.claudeSessionId,
           fromOffset,
           mode: session._mode,
-          onOutput: (event) => session.handleStreamLine(event.line, event.v),
+          onOutput: (event) => session.handleStreamLine(event.line, event.v, event.parsed),
           onExit: (code, stderr) => {
             const judge = () => {
               session._exitCode = code
@@ -7280,7 +7280,8 @@ export class ClaudeCodeSession {
     if (pendingToo) this._pendingOpenLine = undefined
   }
 
-  private handleStreamLine(line: string, v?: number): void {
+  /** `parsed`: the line already parsed on its way here (RemoteSessionManager); a line is parsed once. */
+  private handleStreamLine(line: string, v?: number, parsed?: Record<string, unknown>): void {
     // L1 versioned-event position of THIS line (byte offset at end-of-line in the
     // daemon stream file). Held for the duration of this synchronous call so the
     // result/idle handlers can compare it against the consumed watermark and
@@ -7312,7 +7313,7 @@ export class ClaudeCodeSession {
 
     let event: StreamEvent
     try {
-      event = JSON.parse(line) as StreamEvent
+      event = (parsed ?? JSON.parse(line)) as StreamEvent
     } catch {
       log.session.warn('malformed JSONL line skipped', { sessionId: this.claudeSessionId, taskId: this.taskId, linePreview: line.slice(0, 80) })
       return

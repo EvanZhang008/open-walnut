@@ -207,6 +207,12 @@ SOURCES=(
   src/providers/daemon-cron-metadata.ts
   src/providers/daemon-spawn-barrier.ts
   src/providers/daemon-child-spawn.ts
+  src/providers/session-tailer.ts
+  src/providers/daemon-runtime-timers.ts
+  src/providers/daemon-in-process-client.ts
+  src/providers/daemon-runtime-types.ts
+  src/providers/loop-budget.ts
+  src/providers/spawn-pool.ts
   src/providers/daemon-service-config.ts
   src/providers/daemon-service-manager.ts
   src/providers/daemon-service-launchd.ts
@@ -368,6 +374,16 @@ echo "$VERSION" > "$OUTDIR/daemon-linux-arm64.version"
 # for the daemon survives its updates (scripts/lib/macho-identity.mjs).
 "$BUN" scripts/lib/macho-identity.mjs stamp "$OUTDIR/daemon-darwin-arm64" daemon-darwin-arm64 --where-signable
 echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
+
+# The same daemon as a module a built server loads to run it in its own process (experiment
+# in_process_daemon, src/providers/in-process-daemon.ts): plain ESM for Bun, not compiled, with
+# its history-ready worker beside it. The compiled Walnut file carries its own and needs none.
+rm -rf "$OUTDIR/daemon-runtime"
+"$BUN" build --target=bun --format=esm --minify \
+  --define "process.env.DAEMON_VERSION='$VERSION'" \
+  --outdir "$OUTDIR/daemon-runtime" \
+  src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts
+echo "$VERSION" > "$OUTDIR/daemon-runtime/daemon-standalone.js.version"
 fi
 
 # ACP worker artifact — a plain JS bundle (NOT bun-compiled): the daemon spawns

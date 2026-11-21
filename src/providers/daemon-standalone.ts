@@ -255,6 +255,12 @@ import {
   type GatewayErrorCode,
   type GatewayResponse,
 } from './gateway-core.js'
+import type { DaemonRuntimeOptions, DaemonFrame, DaemonClient, DaemonRuntime } from './daemon-runtime-types.js'
+import { createRuntimeTimers } from './daemon-runtime-timers.js'
+import { createInProcessClient } from './daemon-in-process-client.js'
+import { createSessionTailer, type SessionTailer } from './session-tailer.js'
+import { prepareSpawnFiles } from './session-spawn-files.js'
+import { createSpawnPool } from './spawn-pool.js'
 import { createDaemonChildSpawn, type ChildProcessUse } from './daemon-child-spawn.js'
 import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
 import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
@@ -272,94 +278,37 @@ import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.j
 // Baked in at compile time via `bun build --define` (see scripts/build-daemon.sh).
 const DAEMON_VERSION = process.env.DAEMON_VERSION || 'dev'
 
-/**
- * What creates a daemon runtime. The runtime never touches what belongs to the
- * whole process (cwd, umask, env, argv, signal and crash handlers, exit): the
- * caller hands it what it needs here and does those itself. The process entry
- * (runDaemonProcess, at the end of this file) is the caller when the daemon runs
- * as a program of its own, as it always has.
- */
-export interface DaemonRuntimeOptions {
-  /**
-   * The daemon's configuration (WALNUT_DAEMON_DIR, HOME, ...) and the env its children get. The
-   * runtime edits it as the daemon always edited its own env (the PATH it computes, no
-   * WALNUT_SESSION_ID): a caller that is not a daemon process passes a copy.
-   */
-  env: NodeJS.ProcessEnv
-  /** 'service': run as this user's login service (`--service`); 'start': every other start. */
-  mode: 'start' | 'service'
-  /** The program that runs this daemon (the `walnut` shim re-runs it): its executable and script (argv[1], '' for none). */
-  program?: { script: string }
-  /** The umask every child is forked with (077 as the daemon always gave them); null leaves the process's own. */
-  childUmask?: number | null
-  /** Called once start() made the daemon dir: the process entry moves its cwd there. */
-  chdir?: (dir: string) => void
-  /** The runtime ended itself (another daemon took its dir, its parent is gone, a stop it was asked for finished): the code a process would exit with. */
-  exit: (code: number) => void
-  /** End at once, no cleanup (a drain that never finished; test hooks): the process entry SIGKILLs itself. Absent: exit(1). */
-  hardExit?: () => void
-  /** The port it listens on, as soon as it listens (the process entry prints it for its parent). */
-  onListening?: (port: number) => void
-  /** Receives the crash reporter (log + exit breadcrumb) as early as it exists. */
-  onCrashReporter?: (report: (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void) => void
-}
-
-/** A message from the daemon to an in-process client: an answer (`id`, `ok`) or an event (`ev`). */
-export type DaemonFrame = Record<string, unknown>
-
-export interface DaemonClient {
-  /** One command, answered by its reply frame (`ok`, `error`, ...). */
-  request(cmd: string, params?: Record<string, unknown>): Promise<DaemonFrame>
-  close(): void
-}
-
-export interface DaemonRuntime {
-  readonly dir: string
-  readonly version: string
-  /** Starts the daemon: lock, adopt sessions, listen. `existing`: another daemon already serves this dir. Once per runtime: a second call gets the first one's result. */
-  start(): Promise<{ kind: 'started'; port: number } | { kind: 'existing'; port: string }>
-  /** Stops it the way a SIGTERM always did (drain, save, release the lock) and ends its timers; the exit code a process would use. */
-  stop(): Promise<number>
-  /** The stop a signal asks for: stop, then options.exit. False when start() is not far enough to stop yet. */
-  requestStop(): boolean
-  /**
-   * A client inside this process: the same commands and events as a socket client, no socket.
-   * onClose runs once when the daemon closes it (another client took its place, stop()), never
-   * for its own close().
-   */
-  connect(onFrame: (frame: DaemonFrame) => void, onClose?: () => void): DaemonClient
-  /** `--stop`, `--status`, `--prewarm-folds`: what the program prints, and its exit code. */
-  cli: { stop(): Promise<number>; status(): Promise<number>; prewarmFolds(): number }
-  /** A line in the daemon's own log. */
-  log(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>): void
-}
+// The runtime's options and its surface: daemon-runtime-types.ts (a server that creates one reads them there).
+export type { DaemonRuntimeOptions, DaemonFrame, DaemonClient, DaemonRuntime } from './daemon-runtime-types.js'
 
 export async function createDaemonRuntime(options: DaemonRuntimeOptions): Promise<DaemonRuntime> {
 // The daemon's body, as it was when it was the whole program: not indented, so its lines and
 // their history stay as they were. Everything it holds lives in this closure, one per runtime.
 const daemonEnv = options.env
+/** The WebSocket door (its port, daemon.port): closed for a runtime its server calls directly (in-process-daemon.ts). */
+const LISTEN = options.listen !== false
 const PROGRAM_SCRIPT = options.program?.script ?? ''
-// Every timer this runtime starts ends with stop(): a process that only exited never needed it.
-const runtimeTimers = new Set<ReturnType<typeof globalThis.setTimeout>>()
-const setTimeout = ((fn: (...a: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-  const t = globalThis.setTimeout((...a: unknown[]) => { runtimeTimers.delete(t); fn(...a) }, ms, ...args)
-  runtimeTimers.add(t)
-  return t
-}) as unknown as typeof globalThis.setTimeout
-const setInterval = ((fn: (...a: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-  const t = globalThis.setInterval(fn, ms, ...args)
-  runtimeTimers.add(t)
-  return t
-}) as unknown as typeof globalThis.setInterval
-const clearTimeout = (t: Parameters<typeof globalThis.clearTimeout>[0]) => { runtimeTimers.delete(t as ReturnType<typeof globalThis.setTimeout>); globalThis.clearTimeout(t) }
-const clearInterval = (t: Parameters<typeof globalThis.clearInterval>[0]) => { runtimeTimers.delete(t as ReturnType<typeof globalThis.setTimeout>); globalThis.clearInterval(t) }
-const clearRuntimeTimers = () => { for (const t of runtimeTimers) globalThis.clearTimeout(t); runtimeTimers.clear() }
+// Every timer this runtime starts ends with stop(), and one that throws is logged, never the
+// host's crash (daemon-runtime-timers.ts): a process that only exited never needed either.
+const runtimeTimers = createRuntimeTimers((what, err) => {
+  try { logMsg('error', `daemon ${what} threw; the daemon goes on`, { error: err instanceof Error ? (err.stack ?? err.message) : String(err) }) } catch { /* the log itself */ }
+}, LISTEN && !daemonEnv.WALNUT_DAEMON_SLOW_CALLBACK_MS ? undefined : {
+  // Inside another program a callback that holds the loop holds that program: it is named in the log.
+  ms: Number(daemonEnv.WALNUT_DAEMON_SLOW_CALLBACK_MS) || 50,
+  report: (what, heldMs, label) => logMsg('warn', 'daemon callback held the loop', { what, heldMs: Math.round(heldMs), label }),
+})
+const { setTimeout, setInterval, setImmediate, clearTimeout, clearInterval, clearImmediate } = runtimeTimers
+const clearRuntimeTimers = () => runtimeTimers.clearAll()
 // Children get the runtime's env, its dir as cwd once started, and umask 077 (daemon-child-spawn.ts).
 let childCwd: string | undefined
+const CHILD_UMASK = options.childUmask === undefined ? 0o077 : options.childUmask
+// Inside another program, a start's block of the thread (tens of ms each, spawn-pool.ts) is that
+// program's: execFile's helpers and the sessions' CLIs start on the pool's thread instead.
+const spawnPool = LISTEN ? null : createSpawnPool({ umask: CHILD_UMASK, onError: (err) => { try { logMsg('error', 'spawn pool: a handler threw', { error: String(err) }) } catch { /* the log itself */ } } })
 const childProcess = createDaemonChildSpawn(
-  { spawn: rawSpawn, execFile: rawExecFile, execFileSync: rawExecFileSync, execSync: rawExecSync, bunSpawn: ((...a: never[]) => (Bun.spawn as (...b: never[]) => unknown)(...a)) as never, umask: (mask?: number) => (mask === undefined ? process.umask() : process.umask(mask)) },
+  { spawn: rawSpawn, execFile: rawExecFile, execFileSync: rawExecFileSync, execSync: rawExecSync, bunSpawn: ((...a: never[]) => (Bun.spawn as (...b: never[]) => unknown)(...a)) as never, umask: (mask?: number) => (mask === undefined ? process.umask() : process.umask(mask)), ...(spawnPool ? { pool: spawnPool } : {}) },
   // A dir removed under it (a temp cleanup) is no cwd: the process's own then, never a failed start.
-  { env: daemonEnv, cwd: () => (childCwd && fs.existsSync(childCwd) ? childCwd : undefined), umask: options.childUmask === undefined ? 0o077 : options.childUmask },
+  { env: daemonEnv, cwd: () => (childCwd && fs.existsSync(childCwd) ? childCwd : undefined), umask: CHILD_UMASK },
 )
 const spawn = childProcess.spawn
 const execFile = childProcess.execFile
@@ -920,7 +869,7 @@ interface SessionData {
   taskState: TaskState
   // Session-bound file tailer. Lifecycle = session process lifetime. NOT tied
   // to any WebSocket. Closed only by reapSession or daemon shutdown.
-  watcher: { pollTimer: ReturnType<typeof setInterval>; offset: number } | null
+  watcher: { pollTimer: ReturnType<typeof setInterval>; offset: number; tailer?: SessionTailer } | null
   // Clients currently receiving push events. Add on cmdAttach/cmdStart,
   // remove on ws.close. Watcher is unaffected by subscriber churn — this
   // replaces the old per-ws watcher Map that tied file-tailing to WS
@@ -1006,6 +955,8 @@ interface AgentSub {
 }
 
 interface WsData {
+  /** A client in this process (connect()): frames go to it as objects, never as JSON text. */
+  deliverFrame?: (frame: Record<string, unknown>) => void
   /** Per-socket FIFO of payloads Bun refused to send (backpressure). Flushed on drain. */
   sendQueue?: string[]
   /** Total bytes currently held in sendQueue (for the overflow guard). */
@@ -2489,6 +2440,12 @@ function pushSnapshot(sid: string, immediate: boolean): void {
 // SessionData already extends CoreSessionData (same field names). Core reaps,
 // persists, and reconciles in pure functions; we inject the Bun-specific
 // broadcast + kill + readStartTime deps.
+// The start time of a pid without holding the clock: /proc on Linux, an asynchronous `ps` on macOS.
+const readStartTimeAsync = createAsyncStartTimeReader({
+  fs,
+  env: daemonEnv,
+  execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
+})
 const core = createDaemonCore<SessionData>({
   get bootId() { return daemonBootId },
   fs,
@@ -2496,11 +2453,7 @@ const core = createDaemonCore<SessionData>({
   killFn: (pid, sig) => { process.kill(pid, sig as NodeJS.Signals) },
   readStartTimeFn: (pid) => defaultReadStartTime(fs, pid, childUse),
   readStartTimesFn: (pids) => defaultReadStartTimes(fs, pids, childUse),
-  readStartTimeAsyncFn: createAsyncStartTimeReader({
-    fs,
-    env: daemonEnv,
-    execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
-  }),
+  readStartTimeAsyncFn: (pid) => readStartTimeAsync(pid),
   killProcessGroupFn: killProcessGroup,
   streamsDir: STREAMS_DIR,
   pictureRoots: PICTURE_ROOTS,
@@ -2691,8 +2644,14 @@ function featureSocket(ws: ServerWebSocket<WsData>) {
 }
 
 function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
-  let cmd: Record<string, unknown>
+  let cmd: unknown
   try { cmd = JSON.parse(msg) } catch { return sendError(ws, null, 'invalid JSON') }
+  return handleCommandFrame(ws, cmd)
+}
+
+/** One command frame, from a socket (parsed above) or a client in this process (the object it sent). */
+function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
+  const cmd = frame as Record<string, unknown>
   // Valid JSON ≠ a command frame: "null"/"42"/"\"x\"" parse fine but the
   // destructure below would THROW on null (a poison frame that predates the
   // dispatch guard — one bad client frame killed the whole daemon).
@@ -2732,13 +2691,13 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
   // A follower (the host server) reads; the leader alone writes this host's state.
   if (ws.data?.origin === 'follower' && !FOLLOWER_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
     logMsg('warn', 'follower: refused a command only the leader sends', { cmd: cmd.cmd, id })
-    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' }))
+    return sendFrame(ws, { id, ok: false, error: 'only the leader sends ' + cmd.cmd, errorKind: 'follower_refused' })
   }
   // Owner scope (replica-reads-v1, follower-reads-core.ts): a follower reads its own Walnut only.
   if (ws.data?.origin === 'follower' && followerScope(ws, id as number, cmd)) return
   // A lane carries the leader's streams and nothing else.
   if (ws.data?.origin === 'lane' && !LANE_ALLOWED_COMMANDS.has(cmd.cmd as string)) {
-    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' }))
+    return sendFrame(ws, { id, ok: false, error: 'a stream lane carries streams only, not ' + cmd.cmd, errorKind: 'lane_refused' })
   }
 
   // One command must never kill the daemon: a throw anywhere in a handler
@@ -3160,7 +3119,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       const route = resolveAgentCommand(cmd.engine, String(cmd.cmd).slice('agent.'.length))
       if (!route.ok) {
         logMsg('error', 'command error', { id, error: route.error, errorKind: route.errorKind })
-        safeSend(ws, JSON.stringify({ id, ok: false, error: route.error, errorKind: route.errorKind }))
+        sendFrame(ws, { id, ok: false, error: route.error, errorKind: route.errorKind })
         return
       }
       return dispatchCommand(ws, id as number, { ...cmd, cmd: route.cmd })
@@ -3303,7 +3262,7 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
     persistRegistry(true)
     if (!updating) await prepareDaemonServiceHandover({
       ...location, home: HOME_DIR, platform: process.platform,
-      pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: handoverHooks(),
+      pid: process.pid, startTime: await readStartTimeAsync(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: handoverHooks(),
       childProcess: childUse,
     })
   } catch (error) {
@@ -3560,7 +3519,7 @@ async function pauseBudgetSession(sid: string): Promise<void> {
   let pgid = NaN
   try { pgid = Number(fs.readFileSync(session.pgidPath, 'utf8').trim()) } catch {}
   if (pgid !== session.pid) throw new Error('budget pause: process group ownership is not confirmed')
-  if ((SERVICE_MODE && session.bootId !== daemonBootId) || !session.startTime || readStartTime(session.pid) !== session.startTime) throw new Error('budget pause: process identity is not confirmed')
+  if ((SERVICE_MODE && session.bootId !== daemonBootId) || !session.startTime || await readStartTimeAsync(session.pid) !== session.startTime) throw new Error('budget pause: process identity is not confirmed')
   const proof = { pid, startTime: session.startTime, bootId: await budgetBoot, members: await budgetGroupMembers(pid) }
   budgetStopGroups.set(sid, proof)
   await persistBudgetStops()
@@ -3913,12 +3872,12 @@ function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   } else {
     // Carry errorKind (and a host gate's details: host, headline, hint,
     // allowOverride) through so the cloud route maps the precise 4xx. Keep in sync with daemon-source.ts.
-    safeSend(pending.ws, JSON.stringify({
+    sendFrame(pending.ws, {
       id: pending.id, ok: false,
       error: error ?? 'launch failed',
       errorKind: errorKind ?? 'internal',
       ...(details && typeof details === 'object' ? { details } : {}),
-    }))
+    })
   }
   sendOk(ws, id, {})
 }
@@ -3985,12 +3944,12 @@ function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     sendOk(pending.ws, pending.id, { result })
   } else {
     // Carry errorKind/errorCode through so the cloud route maps the precise 4xx.
-    safeSend(pending.ws, JSON.stringify({
+    sendFrame(pending.ws, {
       id: pending.id, ok: false,
       error: error ?? 'control failed',
       errorKind: errorKind ?? 'internal',
       ...(errorCode ? { errorCode } : {}),
-    }))
+    })
   }
   sendOk(ws, id, {})
 }
@@ -4093,11 +4052,11 @@ function cmdMessageResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     sendOk(pending.ws, pending.id, { result })
   } else {
     // Carry errorKind through so the cloud route maps the precise 4xx/503.
-    safeSend(pending.ws, JSON.stringify({
+    sendFrame(pending.ws, {
       id: pending.id, ok: false,
       error: error ?? 'message enqueue failed',
       errorKind: errorKind ?? 'internal',
-    }))
+    })
   }
   sendOk(ws, id, {})
 }
@@ -4719,11 +4678,11 @@ function cmdFollowerHello(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   const home = typeof cmd.home === 'string' ? cmd.home : ''
   const view = home ? followerView(home) : null
   if (!view || view.walnutId !== cmd.walnutId) {
-    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' }))
+    return sendFrame(ws, { id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' })
   }
   // Only the server this daemon started for that Walnut: no stray process takes its place.
   if (!hostServers.tokenMatches(home, cmd.token)) {
-    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'this daemon did not start that server', errorKind: 'not_started_here' }))
+    return sendFrame(ws, { id, ok: false, error: 'this daemon did not start that server', errorKind: 'not_started_here' })
   }
   if (ws.data) { ws.data.origin = 'follower'; ws.data.followerHome = home; ws.data.answersLocal = cmd.answersLocal === true; ws.data.deliversTriggers = cmd.deliversTriggers === true; ws.data.answersOnline = cmd.answersOnline === true }
   if (ws.data) ws.data.callSocket = cmd.answersLocal === true ? hostCallTokens.socketOf(cmd.callSocket) : undefined
@@ -4936,7 +4895,7 @@ function cmdStreamLane(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   const home = typeof cmd.home === 'string' ? cmd.home : ''
   const rec = home ? leaderBook.recordOf(home) : undefined
   if (!rec || rec.walnutId !== cmd.walnutId) {
-    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' }))
+    return sendFrame(ws, { id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' })
   }
   if (ws.data) { ws.data.origin = 'lane'; ws.data.laneHome = home }
   logMsg('info', 'stream lane: the leader opened a lane for its streams', { wsId: wsId(ws), home })
@@ -5168,7 +5127,7 @@ function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       return sendError(ws, id, 'leader.claim: another Walnut\'s lead', { errorKind: 'not_owner' })
     }
     const r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch)
-    if (!r.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: r.message, errorKind: r.code, epoch: r.epoch }))
+    if (!r.ok) return sendFrame(ws, { id, ok: false, error: r.message, errorKind: r.code, epoch: r.epoch })
     return sendOk(ws, id, { epoch: r.record.epoch, holder: r.record.holder })
   }
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home')
@@ -5190,19 +5149,19 @@ function cmdLeaderWitness(ws: ServerWebSocket<WsData>, id: number) {
 async function cmdLeaderDeliver(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.deliver: the cloud bridge only')
   const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
-  if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  if (!f.ok) return sendFrame(ws, { id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })
   if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, 'leader.deliver: another Walnut\'s companion', { errorKind: 'refused' })
   const delivery = cmd.delivery as LeaderDelivery | undefined
   if (!delivery || typeof delivery !== 'object') return sendError(ws, id, 'leader.deliver: missing delivery')
   const r = await offlineHost.deliverFromLeader(f.home, delivery)
   if (r.ok) return sendOk(ws, id, { result: r.result })
-  safeSend(ws, JSON.stringify({ id, ok: false, error: r.error.message, errorKind: r.error.code, detail: r.error.detail }))
+  sendFrame(ws, { id, ok: false, error: r.error.message, errorKind: r.error.code, detail: r.error.detail })
 }
 
 async function cmdLeaderSettings(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.settings: the cloud bridge only')
   const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
-  if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  if (!f.ok) return sendFrame(ws, { id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })
   if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, 'leader.settings: another Walnut\'s companion', { errorKind: 'refused' })
   const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
   if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.settings: not a session of this Walnut on this host')
@@ -5227,7 +5186,7 @@ async function cmdLeaderSettings(ws: ServerWebSocket<WsData>, id: number, cmd: R
 async function cmdLeaderControl(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin !== 'bridge') return sendError(ws, id, 'leader.control: the cloud bridge only')
   const f = leaderBook.fence(cmd.walnutId, cmd.epoch)
-  if (!f.ok) return safeSend(ws, JSON.stringify({ id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch }))
+  if (!f.ok) return sendFrame(ws, { id, ok: false, error: f.message, errorKind: f.code, epoch: f.epoch })
   if (!bridgeSpeaksFor(ws, f.home)) return sendError(ws, id, 'leader.control: another Walnut\'s companion', { errorKind: 'refused' })
   const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
   if (!sid || offlineHost.ownerOf(sid) !== f.home) return sendError(ws, id, 'leader.control: not a session of this Walnut on this host')
@@ -5852,7 +5811,7 @@ function followerScope(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   }
   if ('answer' in d) sendOk(ws, id, d.answer)
   // An ordinary not_found (the core logged it at info): no 'command error' line.
-  else if ('refuse' in d) safeSend(ws, JSON.stringify({ errorKind: 'not_found', id, ok: false, error: d.refuse }))
+  else if ('refuse' in d) sendFrame(ws, { errorKind: 'not_found', id, ok: false, error: d.refuse })
   else sendError(ws, id, d.error)
   return true
 }
@@ -6696,7 +6655,11 @@ function startGatewayListener() {
           d.chunks = []
           const respond = (resp: GatewayResponse) => reply(socket, resp)
           gatewayCallerLeft.set(respond, () => d.closed === true)
-          handleGatewayLine(line, respond, socket.fd, d.openedAt)
+          // One request's error is its own answer: inside a server's process a throw here would end the server.
+          try { handleGatewayLine(line, respond, socket.fd, d.openedAt) } catch (err) {
+            logMsg('error', 'agent gateway request threw', { error: err instanceof Error ? (err.stack ?? err.message) : String(err) })
+            try { respond(gatewayError('internal', 'the request failed in the daemon')) } catch { /* the caller went away */ }
+          }
         },
         drain(socket) { pump(socket) },
         close(socket) { if (socket.data) socket.data.closed = true },
@@ -6878,6 +6841,9 @@ function ensureShimCoreCopy(): string | null {
       version: DAEMON_VERSION,
     })
     if (!needsCopy) return fs.existsSync(dst) ? dst : null
+    // Inside another program (a server, in-process-daemon.ts) a copy of hundreds of MB must not hold
+    // its clock: it is made in the background, and the shim names the running binary until it lands.
+    if (!LISTEN) { copyShimCoreInBackground(dst, stampPath, tmp); return null }
     const startedAt = Date.now()
     fs.copyFileSync(process.execPath, tmp, fs.constants.COPYFILE_FICLONE)
     fs.chmodSync(tmp, 0o700)
@@ -6897,6 +6863,27 @@ function ensureShimCoreCopy(): string | null {
     })
     return null
   }
+}
+
+let shimCoreCopying = false
+/** ensureShimCoreCopy's copy, asynchronously; once it landed the shim is written again to name it. */
+function copyShimCoreInBackground(dst: string, stampPath: string, tmp: string): void {
+  if (shimCoreCopying) return
+  shimCoreCopying = true
+  const startedAt = Date.now()
+  void (async () => {
+    try {
+      await fs.promises.copyFile(process.execPath, tmp, fs.constants.COPYFILE_FICLONE)
+      await fs.promises.chmod(tmp, 0o700)
+      await fs.promises.rename(tmp, dst)
+      await fs.promises.writeFile(stampPath, DAEMON_VERSION)
+      logMsg('info', 'walnut shim core copied', { path: dst, version: DAEMON_VERSION, ms: Date.now() - startedAt, background: true })
+      writeWalnutShim()
+    } catch (err) {
+      await fs.promises.unlink(tmp).catch(() => {})
+      logMsg('warn', 'walnut shim core copy failed — shim will point at the running binary', { error: (err as Error).message, execPath: process.execPath })
+    } finally { shimCoreCopying = false }
+  })()
 }
 
 /**
@@ -7195,7 +7182,7 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   // A resumed session's budget learns its new worker before the worker can take a turn.
   if (isJournalSid(params.providerSessionId)) {
     try { await usageBudget.bindRuntime(params.providerSessionId, params.sid) }
-    catch (error) { return safeSend(ws, JSON.stringify({ id, ok: false, error: 'acpStart: the session budget could not record this worker; not started yet', errorKind: 'budget_checking', code: 'BUDGET_CHECKING' })) }
+    catch (error) { return sendFrame(ws, { id, ok: false, error: 'acpStart: the session budget could not record this worker; not started yet', errorKind: 'budget_checking', code: 'BUDGET_CHECKING' }) }
   }
   // Agent gateway for ACP sessions: same wiring the native `claude` spawn gets.
   // WALNUT_SESSION_ID arrives hub-side (the runtimeId; acp.hasWorker() vouches
@@ -7229,7 +7216,7 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts')
     const resp = await acp.acpStart(ws, params)
     if (resp.ok) sendOk(ws, id, resp.result ?? {})
-    else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind }))
+    else sendFrame(ws, { id, ok: false, error: resp.error, errorKind: resp.errorKind })
   })
 }
 
@@ -7247,10 +7234,10 @@ async function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       verdict = budgetGate(await usageBudget.allowRuntime(sid))
     } catch (error) { logMsg('warn', 'budget gate failed; turn held', { sid, error: String(error) }) }
     if (verdict === 'budget_paused') {
-      return safeSend(ws, JSON.stringify({ id, ok: false, error: 'Not sent: the session budget is paused. Raise or remove the limit to continue.', errorKind: 'budget_paused', code: 'BUDGET_PAUSED' }))
+      return sendFrame(ws, { id, ok: false, error: 'Not sent: the session budget is paused. Raise or remove the limit to continue.', errorKind: 'budget_paused', code: 'BUDGET_PAUSED' })
     }
     if (verdict === 'budget_checking') {
-      return safeSend(ws, JSON.stringify({ id, ok: false, error: BUDGET_CHECKING_TEXT, errorKind: 'budget_checking', code: 'BUDGET_CHECKING' }))
+      return sendFrame(ws, { id, ok: false, error: BUDGET_CHECKING_TEXT, errorKind: 'budget_checking', code: 'BUDGET_CHECKING' })
     }
   }
   delete (params as Record<string, unknown>).cmd
@@ -7258,7 +7245,7 @@ async function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   delete (params as Record<string, unknown>).traceId
   return acp.acpOp(sid, op, params as Record<string, unknown>).then((resp) => {
     if (resp.ok) sendOk(ws, id, { result: resp.result })
-    else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error?.message ?? 'acp op failed', errorKind: resp.error?.kind }))
+    else sendFrame(ws, { id, ok: false, error: resp.error?.message ?? 'acp op failed', errorKind: resp.error?.kind })
   })
 }
 
@@ -7273,7 +7260,7 @@ function cmdAcpSubscribe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   if (!sid) return sendError(ws, id, 'acpSubscribe: missing sid')
   const ok = acp.subscribe(ws, sid, typeof fromOffset === 'number' ? fromOffset : 0)
   if (ok) sendOk(ws, id, { subscribed: true })
-  else safeSend(ws, JSON.stringify({ id, ok: false, error: 'no live ACP worker for ' + sid, errorKind: 'no_worker' }))
+  else sendFrame(ws, { id, ok: false, error: 'no live ACP worker for ' + sid, errorKind: 'no_worker' })
 }
 
 function cancelledStartPath(sid: string): string {
@@ -7433,7 +7420,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
         if (isCurrent && (error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
       }
       if (oldAlive) {
-        if (isCurrent && (!existing.startTime || existing.startTime !== readStartTime(existing.pid))) {
+        if (isCurrent && (!existing.startTime || existing.startTime !== await readStartTimeAsync(existing.pid))) {
           throw new Error('start: live process identity is unknown')
         }
         // Live-adopt: the start's initial message is delivered through the FIFO
@@ -7605,40 +7592,17 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     }
   }
 
-  // Create FIFO
-  try { fs.unlinkSync(pipePath) } catch {}
-  try { execSync('mkfifo -m 600 ' + JSON.stringify(pipePath)) } catch (err: unknown) {
-    throw new Error('mkfifo failed: ' + (err as Error).message)
-  }
-
-  // Open files. The CLI's stdout fd MUST be O_APPEND ('a'): the daemon also
-  // appends turn-start marker lines (appendUserMarker) to this file, and a
-  // positional 'w' fd would overwrite them on the CLI's next write. With both
-  // writers in O_APPEND every write() lands at the true EOF. Fresh spawns
-  // truncate explicitly first ('a' alone never truncates).
-  const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR)
-  // The CLI reads the descriptor above; nothing else may read the path (a reader
-  // takes the CLI's lines). See LIVE_FIFO_MODE in daemon-core.ts.
-  if (!lockLiveFifo(fs, pipePath)) logMsg('warn', 'spawn: could not make the stdin FIFO write-only', { sid })
-  // Fresh spawn: unlink+recreate (NOT truncate-in-place) so the file gets a NEW
-  // inode → new streamEpoch. Truncation keeps the inode, and a same-sid relaunch
-  // would then reset v to 0 under an UNCHANGED epoch — walnut's stale watermark
-  // from the previous incarnation would veto every snapshot (the 019a7fe5 class).
-  if (!resume) {
-    try { fs.unlinkSync(jsonlPath) } catch {}
-    foldCheckpoint.discard(jsonlPath)
-    try { fs.writeFileSync(jsonlPath, '') } catch {}
-  }
-  const outputFd = fs.openSync(jsonlPath, 'a')
-  const cronStartOffset = fs.fstatSync(outputFd).size
+  // The FIFO, the stream and the stderr log the CLI starts on (session-spawn-files.ts): made and
+  // opened asynchronously, the stream O_APPEND (the daemon appends its marker lines too), a fresh
+  // start's stream a new inode (a new streamEpoch: the 019a7fe5 class).
+  const { pipeFd, outputFd, stderrFd, cronStartOffset, stderrStartOffset } = await prepareSpawnFiles({
+    fs,
+    execFile: (file, args, options, callback) => execFile(file, args, options, (error) => callback(error)),
+    lockFifo: (p) => lockLiveFifo(fs, p),
+    discardCheckpoint: (p) => foldCheckpoint.discard(p),
+    warn: (msg, data) => logMsg('warn', msg, data),
+  }, { sid, pipePath, jsonlPath, stderrPath, resume: !!resume, checkCurrent: stopIfSuperseded })
   const cronStartedAt = Date.now()
-  const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w')
-  const stderrStartOffset = fs.fstatSync(stderrFd).size
-
-  // Touch output file on resume so health checks see fresh mtime
-  if (resume) {
-    try { const now = new Date(); fs.utimesSync(jsonlPath, now, now) } catch {}
-  }
 
   // Spawn Claude via login shell to activate nvm/pyenv/volta shell functions.
   // This matches the proven buildRemotePreamble() approach from session-io.ts —
@@ -7767,7 +7731,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     // Last synchronous point before the CLI exists: a fence set during the awaits above wins.
     if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')
     barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions, childUse) : null
-    proc = barrier?.process ?? spawn(userShell, ['-c', shellCmd], spawnOptions)
+    proc = barrier?.process
+      // Inside another program: started on the pool's thread, its pid known once it runs (spawn-pool.ts).
+      ?? (spawnPool ? await spawnPool.spawnDetached(userShell, ['-c', shellCmd], spawnOptions) as unknown as ReturnType<typeof spawn> : spawn(userShell, ['-c', shellCmd], spawnOptions))
   } catch (error) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd)
     throw error
@@ -7864,7 +7830,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   ownerClaim?.commit(pid, sessionData.startTime)
   ownerCommitted = true
 
-  proc.on('exit', (code) => {
+  proc.on('exit', runtimeTimers.contain('session exit handler', (code: number | null) => {
     // SIGCHLD is the fastest (near-0ms) death signal for parented sessions.
     // All cleanup funnels through reapSession so the exit path, missed-exit
     // fallback, and cmdSend-ENXIO path all produce the same side effects.
@@ -7876,7 +7842,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     // sid died instantly with "proc-exit code 1").
     if (sessions.get(sid) !== sessionData) return
     reapSession(sid, code ?? 1, 'proc-exit')
-  })
+  }))
 
   // What this process writes starts here (reapSession reads only that).
   sessionData.outputStartOffset = cronStartOffset
@@ -9656,9 +9622,9 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 // set pairs this with cron.fire evict). Once per tool_use id so a re-read of
 // the same line can't nag in a loop; `durableCronNudged` is in-memory only (a
 // respawn re-nudges, which is correct — the durable task is still on disk).
-function checkDurableCronCreate(sid: string, session: SessionData, line: string) {
+function checkDurableCronCreate(sid: string, session: SessionData, line: string, parseLine?: () => unknown) {
   let parsed: Record<string, unknown>
-  try { parsed = JSON.parse(line) as Record<string, unknown> } catch { return }
+  try { parsed = (parseLine ? parseLine() : JSON.parse(line)) as Record<string, unknown> } catch { return }
   if (parsed.type !== 'assistant') return
   const content = (parsed.message as { content?: unknown })?.content
   if (!Array.isArray(content)) return
@@ -9706,12 +9672,12 @@ const TURN_RETRY_CFG = resolveTurnRetryConfig(daemonEnv)
  * alive, and as a --resume respawn when it died — reusing the exact paths a
  * human "continue" would take, so no delivery invariant is special-cased.
  */
-async function checkTurnRetry(sid: string, session: SessionData, line: string, v: number) {
+async function checkTurnRetry(sid: string, session: SessionData, line: string, v: number, parseLine?: () => unknown) {
   if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || cronRuntime?.get(sid) || session.budgetGracefulStop) return
   const checkVersion = (retryCheckVersions.get(sid) ?? 0) + 1
   retryCheckVersions.set(sid, checkVersion)
   if (await budgetAllowance(sid) !== 'ok' || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return
-  const { isTurnError, text } = parseTurnErrorLine(line)
+  const { isTurnError, text } = parseTurnErrorLine(line, parseLine)
 
   if (!isTurnError) {
     // Clean turn-over → the streak is over. Only persist when something changed.
@@ -9917,6 +9883,36 @@ function checkCronFires(sid: string, session: SessionData) {
   }
 }
 
+/**
+ * After a result: the last 4 KB of the CLI's stderr to every subscriber, so MCP failures and CLI
+ * bails are visible without a shell on the host. Read asynchronously, off the tailer's clock.
+ */
+async function pushStderrTail(sid: string, s: SessionData, stderrPath: string): Promise<void> {
+  let tail = ''
+  try {
+    const { size } = await fs.promises.stat(stderrPath)
+    if (size <= 0) return
+    const readLen = Math.min(size, 4096)
+    const handle = await fs.promises.open(stderrPath, 'r')
+    try {
+      const ebuf = Buffer.alloc(readLen)
+      const { bytesRead } = await handle.read(ebuf, 0, readLen, Math.max(0, size - readLen))
+      tail = ebuf.subarray(0, bytesRead).toString('utf-8').trim()
+    } finally { await handle.close() }
+  } catch { return }
+  if (!tail || sessions.get(sid) !== s) return
+  // DUP-DEBUG: stderr_tail is once-per-result. Always log fan-out size + recipient wsIds to
+  // confirm whether the daemon is sending to one ws or several.
+  const recipientWsIds: number[] = []
+  for (const ws of s.subscribers) {
+    if (ws.readyState === 1) {
+      recipientWsIds.push(wsId(ws))
+      try { sendEvent(ws, 'stderr_tail', { sid, tail }) } catch {}
+    }
+  }
+  logMsg('info', 'stderr_tail fan-out', { sid, subscriberCount: s.subscribers.size, recipientWsIds })
+}
+
 function ensureWatcher(sid: string) {
   const session = sessions.get(sid)
   if (!session) return
@@ -9961,439 +9957,303 @@ function ensureWatcher(sid: string) {
     }).finally(() => { if (sessions.get(sid) === session) session.cronMetadataLoading = false })
   }
 
-  let offset = session.offset || 0
   const stderrPath = session.jsonlPath + '.err'
-  // ── Torn-tail carry (contract §4 "Feed", adjudicated 2026-08-05) ──
-  // A poll can land MID-LINE: the CLI appends a >64KB whale tool_result while
-  // we read, so `stat.size` cuts the line in half. Such a fragment must NEVER
-  // be processed — not folded, not fanned out:
-  //   * fold: two unparseable fragments each advance foldState.v past the real
-  //     line end, and the `v > foldState.v` guard then skips the COMPLETE line
-  //     forever → a torn result/idle wedges the snapshot at turnActive=true.
-  //   * fan-out (pre-existing bug this also fixes): the client received half a
-  //     JSON line, failed to parse it, then received the whole line again.
-  // So the fragment waits here in `carry` (BYTES — a UTF-8 char split across
-  // polls must not be decoded twice) until its newline arrives.
-  //
-  // Offset semantics: `offset` is the READ cursor (every byte we've read, incl.
-  // the carry). `carryStartV` is the absolute offset of the carry's first byte,
-  // i.e. the last COMPLETE-line boundary, and satisfies
-  // `carryStartV + carryLen === offset` at all times. We publish
-  // `watcher.offset = carryStartV`, not the read cursor, so that
-  //   * addSubscriber replay + the attach `currentOffset` reply never hand a
-  //     client a mid-line boundary, and
-  //   * stopSessionWatcher persists a complete-line boundary — a rebuilt
-  //     watcher (self-heal, cmdRename) simply re-reads the torn region from
-  //     there, so the carry is pure memory and nothing is lost when it dies.
-  //
-  // The carry is a PART LIST, not one Buffer (C26): a whale line arrives across
-  // many polls, and concatenating (carry + new bytes) then searching for a
-  // newline from byte 0 every tick re-copied and re-scanned the same megabytes
-  // (quadratic). Instead: no newline in the NEW bytes ⇒ nothing can be
-  // completed, so just append to the list; concat once, and start the newline
-  // search at `carryLen` (the carry holds no newline by invariant), only when a
-  // newline actually appears.
-  let carryParts: Buffer[] = []
-  let carryLen = 0
-  let carryStartV = offset
-  // Set after a carry-overflow drop: the remainder of the oversized line is
-  // still coming, so skip everything up to and including its newline.
-  let discardThroughNextNewline = false
-  // Tailer self-heal state (incident 6c8428ac): a per-tick exception (e.g. EMFILE
-  // on the openSync below) swallowed by the old empty catch froze `offset` forever
-  // while the CLI kept writing — walnut showed idle for a running session. Track
-  // consecutive failures; persistent failure = stalled tailer → log + rebuild.
-  let consecutiveErrors = 0
+  // Tailer self-heal (incident 6c8428ac): a per-read error (EMFILE, ...) once froze the read
+  // cursor while the CLI kept writing, and Walnut showed idle for a running session. Sustained
+  // failure = a stalled tailer: logged (rate-limited), then rebuilt from the last complete line.
   let lastErrorLogTs = 0
   const STALL_ERRORS_BEFORE_HEAL = 50 // ~5s of 100ms ticks failing back-to-back
   const HEAL_COOLDOWN_MS = 60_000
 
-  const pollTimer = setInterval(() => {
+  // The file is read off the main thread's clock, a read at a time (session-tailer.ts); this is
+  // the per-line work, on the complete lines of each read.
+  const tailer = createSessionTailer({
+    path: session.jsonlPath,
+    startOffset: session.offset || 0,
+    maxReadBytes: TAILER_TICK_READ_MAX,
+    carryMaxBytes: TAILER_CARRY_MAX,
+    timers: { setInterval, clearInterval },
+    active: () => { const s = sessions.get(sid); return !!s && s.state === 'running' && s.watcher?.pollTimer === tailer.timer },
+    // Publish the last COMPLETE-line boundary (not the read cursor) so replay/attach never hand a
+    // client a mid-line offset.
+    onBoundary: (boundary) => { const s = sessions.get(sid); if (s?.watcher) s.watcher.offset = boundary },
+    onLines: (batch, { overflowed: cronMetadataGap, carryBytes, cursor }) => {
     const s = sessions.get(sid)
-    if (!s || s.state !== 'running') return
-    try {
-      const stat = fs.statSync(s.jsonlPath)
-      if (stat.size <= offset) { consecutiveErrors = 0; return }
+    if (!s) return
+    if (cronMetadataGap) logMsg('error', 'tailer carry overflow — dropping oversized partial line', {
+      sid, carryBytes, cap: TAILER_CARRY_MAX, offset: cursor,
+    })
+    let sawResult = false
+    // The cron tracker's view of this process, once per slice (cronProcess builds it anew each call).
+    const cronProc = cronProcess(s)
+    cronMetadata.configure(sid, cronProc, cronMetadataConfig)
+    for (const { line, v, parse } of batch) {
+      if (!line.trim()) continue
 
-      const fd = fs.openSync(s.jsonlPath, 'r')
-      const bytesToRead = Math.min(stat.size - offset, TAILER_TICK_READ_MAX)
-      const buf = Buffer.alloc(bytesToRead)
-      fs.readSync(fd, buf, 0, bytesToRead, offset)
-      fs.closeSync(fd)
-      consecutiveErrors = 0
-      // The read cursor advances past ALL read bytes, including the torn tail we
-      // are about to park in the carry (the carry is memory-only, see above).
-      offset += bytesToRead
+      // A rebuilt watcher can read a range again: dedupe on the line's true v.
+      const modeLineFresh = v > s.foldState.v
+      if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v, parse)
 
-      // Assemble COMPLETE lines only. `v` is the byte offset at the END of the
-      // line in the append-only jsonl — monotonic per session, and identical
-      // whether the line is delivered live (here) or via replay
-      // (addSubscriber), so the client orders and dedupes by `v` alone. It is
-      // computed from absolute file positions (carryStartV), so parking a
-      // fragment in the carry across polls changes no line's `v`.
-      const batch: Array<{ line: string; v: number }> = []
-      // C26 fast path: if the NEW bytes hold no newline, no line can complete —
-      // so skip the concat + full rescan entirely.
-      if (buf.indexOf(10) === -1) {
-        if (discardThroughNextNewline) {
-          // Still inside an over-cap line: these bytes can never complete a line
-          // and re-buffering them would just re-trip the cap. Drop them and keep
-          // the carryStartV + carryLen === offset invariant.
-          carryStartV = offset
-        } else {
-          carryParts.push(buf)
-          carryLen += buf.length
-        }
-      } else {
-        // A newline arrived. Concat once; the carry itself holds no newline (that
-        // is why it was carried), so the first search may start at `carryLen`.
-        const chunk = carryLen ? Buffer.concat([...carryParts, buf], carryLen + buf.length) : buf
-        let searchFrom = carryLen
-        let lineEnd = carryStartV
-        let cut = 0
-        for (;;) {
-          const nl = chunk.indexOf(10, searchFrom) // '\n'
-          if (nl === -1) break
-          lineEnd += (nl - cut) + 1
-          const line = chunk.subarray(cut, nl).toString('utf-8')
-          // A discarded whale (carry overflow below) ends at this newline: `v` is
-          // now realigned, so resume normal processing with the NEXT line.
-          if (discardThroughNextNewline) discardThroughNextNewline = false
-          else batch.push({ line, v: lineEnd })
-          cut = nl + 1
-          searchFrom = cut
-        }
-        // Copy the torn tail — `chunk` may alias `buf`, which the next tick reuses.
-        const tail = Buffer.from(chunk.subarray(cut))
-        carryParts = tail.length ? [tail] : []
-        carryLen = tail.length
-        carryStartV = lineEnd
+      if (!s.cronMetadataLoading) cronMetadata.observe(sid, cronProc, line, false, undefined, parse)
+      if (modeLineFresh && line.includes('"permissionMode"')) {
+        try { const actual = observedPermissionMode(parse() as Parameters<typeof observedPermissionMode>[0]); if (actual) s.mode = actual } catch {}
       }
-      const cronMetadataGap = carryLen > TAILER_CARRY_MAX
-      if (cronMetadataGap) {
-        // A single line larger than the cap can't be assembled. Drop it and
-        // realign on the next newline; `carryStartV` stays absolute so every
-        // later line keeps its true `v`.
-        logMsg('error', 'tailer carry overflow — dropping oversized partial line', {
-          sid, carryBytes: carryLen, cap: TAILER_CARRY_MAX, offset,
-        })
-        carryStartV = offset
-        carryParts = []
-        carryLen = 0
-        discardThroughNextNewline = true
+
+      // Evidence is observed before a result can schedule another billable turn.
+      if (line.includes('"assistant"') || line.includes('"system"') || line.includes('"result"') || line.includes('"control_response"')) {
+        try { const parsed = parse() as Parameters<typeof usageBudget.observe>[1]; usageBudget.observe(sid, parsed); budgetControl.noteResponse(sid, parsed as Parameters<typeof budgetControl.noteResponse>[1]) } catch {}
       }
-      // Publish the last COMPLETE-line boundary (not the read cursor) so
-      // replay/attach never hand a client a mid-line offset.
-      if (s.watcher) s.watcher.offset = carryStartV
 
-      let sawResult = false
-      for (const { line, v } of batch) {
-        if (!line.trim()) continue
-
-        // watcher 恢复可能重读同一范围，按完整行的真实 v 去重。
-        const modeLineFresh = v > s.foldState.v
-        if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v)
-
-        updateCronMetadata(sid, s, line)
-        if (modeLineFresh && line.includes('"permissionMode"')) {
-          try { const actual = observedPermissionMode(JSON.parse(line)); if (actual) s.mode = actual } catch {}
-        }
-
-        // Evidence is observed before a result can schedule another billable turn.
-        if (line.includes('"assistant"') || line.includes('"system"') || line.includes('"result"') || line.includes('"control_response"')) {
-          try { const parsed = JSON.parse(line); usageBudget.observe(sid, parsed); budgetControl.noteResponse(sid, parsed) } catch {}
-        }
-
-        // ── Latency instrumentation: time from CLI spawn → first init line ──
-        // Pure CLI cold-start (incl. MCP connect) as the daemon sees it, directly
-        // comparable to running `claude` by hand. Logged once per session.
-        if (!s.sawInit && line.includes('"type":"system"') && line.includes('"init"')) {
-          try {
-            const init = JSON.parse(line)
-            if (init.type === 'system' && init.subtype === 'init') appendSpawnJournal(init.session_id, s.spawnInfo ?? { kind: 'new' })
-            // A fork or an unnamed new session: its own id is known only now (cli-owner-core.ts).
-            if (init.type === 'system' && init.subtype === 'init' && typeof init.session_id === 'string' && s.pid && !namedSessionId(s.args)) {
-              void cliOwner.adopt(init.session_id, s.pid, s.startTime ?? null, s.spawnInfo?.home)
-            }
-            if (init.type === 'system' && init.subtype === 'init' && typeof init.claude_code_version === 'string') {
-              s.cliVersion = init.claude_code_version
-              if (SERVICE_MODE) persistRegistry()
-            }
-          } catch {}
-          s.sawInit = true
-          logMsg('info', 'first init line from CLI', {
-            sid, spawnToInitMs: s.spawnTs ? Date.now() - s.spawnTs : null,
-          })
-        }
-
-        // ── TTFT instrumentation (inc-1786665503510): send → first output ──
-        // Anchored by handleSendCommand (ttftSendTs). Two one-shot lines per
-        // turn: first stream_event of any kind (model started answering — the
-        // Bedrock TTFB proxy), and first text_delta (user-visible prose began).
-        // A huge sendToFirstTextMs with a normal sendToFirstLineMs = the model
-        // spent the gap thinking/tooling (upstream behavior, not a walnut bug).
-        // Substring gates keep the hot path parse-free; cleared at result.
-        if (s.ttftSendTs && line.includes('"type":"stream_event"')) {
-          if (!s.ttftSawFirstLine) {
-            s.ttftSawFirstLine = true
-            logMsg('info', 'ttft: first stream_event after send', {
-              sid, sendToFirstLineMs: Date.now() - s.ttftSendTs,
-            })
-          }
-          if (line.includes('"text_delta"')) {
-            logMsg('info', 'ttft: first text_delta after send', {
-              sid, sendToFirstTextMs: Date.now() - s.ttftSendTs,
-            })
-            s.ttftSendTs = null // one-shot: only the FIRST text of the turn
-          }
-        }
-
-        // ── Scheduled-task fire detection (see checkCronFires) ──
-        // A cron fire's ONLY stream evidence is a bare turn start: the CLI
-        // re-emits init + session_state_changed{running} with no user line.
-        // Check the on-disk scheduled_tasks.json on those lines (30s throttle
-        // inside makes this cheap; substring gate keeps the hot path free).
-        if (line.includes('"init"') || line.includes('"session_state_changed"')) {
-          try { checkCronFires(sid, s) } catch {}
-        }
-
-        // ── Durable-cron invariant, corrective half (see checkDurableCronCreate) ──
-        if (line.includes('CronCreate')) {
-          try { checkDurableCronCreate(sid, s, line) } catch {}
-        }
-
-        // ── Turn-error auto-retry (see checkTurnRetry) ──
-        // Gate on the result-line substring only; the parse + is_error check
-        // lives in the policy. Clean results come through too, because a
-        // successful turn is what clears the failure streak.
-        if (line.includes('"type":"result"')) {
-          s.ttftSendTs = null // turn over — a stale TTFT anchor must not leak into replays
-          void checkTurnRetry(sid, s, line, v).catch(err => {
-            logMsg('warn', 'turn-retry check threw', { sid, error: (err as Error).message })
-          })
-          // A reply request this host owns ends with this turn (offline-host-core.ts).
-          void offlineHost.onResult(sid, line, v).catch(() => {})
-          // The working tree as this turn left it (turn-snapshot-core.ts): returns at once.
-          try { turnSnapshots.onTurnEnd(sid, s.cwd, v) } catch { /* never the tailer's problem */ }
-        }
-
-        // ── L2: materialize daemon-authoritative task state ──
-        // Cheap substring pre-filter (task_* events are `"type":"system"` lines carrying a
-        // `task_` subtype) so we JSON.parse only the relevant ~1% of lines. The applied state
-        // is served on `getState` so Walnut can reconcile a lost-terminal event without guessing.
-        if (line.includes('"task_')) {
-          try {
-            const parsed = JSON.parse(line) as Record<string, unknown>
-            if (applyTaskEvent(s.taskState, parsed, v, Date.now())) {
-              logMsg('info', 'task transition', {
-                sid, bgTaskId: parsed.task_id, status: s.taskState.tasks[parsed.task_id as string]?.status,
-                derivedRunning: s.taskState.derivedRunning, v,
-              })
-            }
-          } catch { /* malformed line — skip */ }
-        }
-
-        // ── Permission policy intercept ──
-        if (line.includes('"control_request"') || line.includes('"control_response"')
-          || line.includes('"control_cancel_request"')) {
-          try {
-            const parsed = JSON.parse(line) as Record<string, unknown>
-            // The CLI's answer to a model or effort change this daemon wrote (leader.settings).
-            if (parsed.type === 'control_response') liveSettings.noteResponse(sid, parsed)
-            if (parsed.type === 'control_request' && parsed.request_id
-              && (parsed.request as Record<string, unknown>)?.subtype === 'can_use_tool') {
-              const req = parsed.request as Record<string, unknown>
-              const toolName = req.tool_name as string | undefined
-              // ── Hook point cron.create (see daemon-core.ts) ──
-              // Evaluated BEFORE the auto-allow check: a bypass-mode session
-              // would otherwise be waved through, and a durable job outlives
-              // this session to fire inside a stranger sharing the directory.
-              if (toolName === 'CronCreate') {
-                const actions = hookActions('cron.create', { input: req.input, mode: s.mode, sid })
-                if (actions.includes('log')) {
-                  logMsg('info', 'hook log: cron.create', { sid, input: req.input, mode: s.mode })
-                }
-                if (actions.includes('deny')) {
-                  const resp = buildControlResponse(
-                    parsed.request_id as string, req, false, durableCronDenyMessage(),
-                  )
-                  if (writeFifoRaw(s.pipePath, resp)) {
-                    s.pendingCtrl = null
-                    try { persistRegistry() } catch {}
-                    logMsg('warn', 'hook deny: durable CronCreate refused (session-scoped crons only)', {
-                      sid, mode: s.mode,
-                    })
-                    continue
-                  }
-                  // Deliberate fall-through: a failed deny write proceeds to
-                  // shouldAutoRespond (a bypass session then auto-allows the
-                  // durable cron). Blocking the turn forever would be worse —
-                  // cron.fire evict + session.reap strip still cover the row.
-                  logMsg('error', 'hook deny: response could not be written to FIFO', { sid })
-                }
-              }
-              if (shouldAutoRespond(s.mode, toolName)) {
-                // The answer is Walnut's business only when it could not be given:
-                // pending until the write lands (handleSendRawCommand clears it), and
-                // the prompt reaches Walnut late only when the write was refused (a
-                // paused budget, a dead pipe), so the human can still answer it.
-                const reqId = parsed.request_id as string
-                s.pendingCtrl = { reqId, toolName: toolName ?? 'unknown', request: req, receivedAt: Date.now() }
-                try { persistRegistry() } catch {}
-                const resp = buildControlResponse(reqId, req, true)
-                void core.handleSendRawCommand(sid, resp).then(result => {
-                  if (result.ok) {
-                    logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
-                    return
-                  }
-                  logMsg('warn', 'auto-allow not delivered; the prompt goes to Walnut', { sid, tool: toolName, mode: s.mode, result })
-                  if (s.pendingCtrl?.reqId !== reqId) return
-                  for (const ws of s.subscribers) {
-                    if (ws.readyState === 1) { try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {} }
-                  }
-                  pushSnapshot(sid, false)
-                })
-                continue
-              }
-              s.pendingCtrl = {
-                reqId: parsed.request_id as string,
-                toolName: toolName ?? 'unknown',
-                request: req,
-                receivedAt: Date.now(),
-              }
-              try { persistRegistry() } catch {}
-            } else if (parsed.type === 'control_response' && s.pendingCtrl) {
-              const resp = parsed.response as Record<string, unknown> | undefined
-              if (resp?.request_id === s.pendingCtrl.reqId) {
-                s.pendingCtrl = null
-                try { persistRegistry() } catch {}
-              }
-            } else if (parsed.type === 'control_cancel_request' && s.pendingCtrl) {
-              // CLI withdrew the request (turn aborted / restart). Without this
-              // branch pendingCtrl stays set forever → snapshot waiting=true and
-              // the UI shows a permanent Waiting badge (incident a172ce49).
-              if (parsed.request_id === s.pendingCtrl.reqId) {
-                s.pendingCtrl = null
-                try { persistRegistry() } catch {}
-                logMsg('info', 'control_cancel_request cleared pendingCtrl', { sid, requestId: parsed.request_id })
-              }
-            }
-          } catch { /* parse failed, fall through to normal push */ }
-        }
-
-        // Fan out to all current subscribers, GC dead ones opportunistically.
-        // DUP-DEBUG: only log fan-out when subscribers > 1 (the duplicate
-        // smoking gun) AND only for tool_use lines (cheap to detect via
-        // substring). High-frequency text deltas would spam the log.
-        const fanCount = s.subscribers.size
-        const isToolUseLine = fanCount > 1 && line.includes('"type":"tool_use"')
-        const recipientWsIds: number[] = []
-        for (const ws of s.subscribers) {
-          if (ws.readyState === 1) {
-            if (isToolUseLine) recipientWsIds.push(wsId(ws))
-            // `v` MUST ride every live line (same as the replay path below and
-            // daemon-source.ts): without it the client falls back to relative
-            // byte accounting, which drifts on skipped control lines → replay
-            // windows + duplicate blocks on reattach.
-            try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
-          } else {
-            logMsg('info', 'GC dead subscriber from watcher fan-out', {
-              sid, wsId: wsId(ws), readyState: ws.readyState,
-            })
-            s.subscribers.delete(ws)
-          }
-        }
-        if (isToolUseLine) {
-          logMsg('info', 'jsonl fan-out (tool_use, multi-subscriber)', {
-            sid,
-            subscriberCount: fanCount,
-            recipientWsIds,
-            lineSnippet: line.slice(0, 120),
-          })
-        }
-        if (!sawResult && line.includes('"type":"result"')) sawResult = true
-      }
-      if (cronMetadataGap) cronMetadata.replay(sid, cronProcess(s), !!s.cronMetadataLoading, true)
-      // ── C1: after each tailer batch, push the snapshot if it changed (this
-      // also covers pendingCtrl set/clear — both happen inside this loop).
-      pushSnapshot(sid, false)
-      // After a result event, push stderr tail so MCP failures / CLI bails are
-      // visible without SSH. Fan to all subscribers.
-      if (sawResult) {
+      // ── Latency instrumentation: time from CLI spawn → first init line ──
+      // Pure CLI cold-start (incl. MCP connect) as the daemon sees it, directly
+      // comparable to running `claude` by hand. Logged once per session.
+      if (!s.sawInit && line.includes('"type":"system"') && line.includes('"init"')) {
         try {
-          const errStat = fs.statSync(stderrPath)
-          if (errStat.size > 0) {
-            const readLen = Math.min(errStat.size, 4096)
-            const start = Math.max(0, errStat.size - readLen)
-            const efd = fs.openSync(stderrPath, 'r')
-            const ebuf = Buffer.alloc(readLen)
-            fs.readSync(efd, ebuf, 0, readLen, start)
-            fs.closeSync(efd)
-            const tail = ebuf.toString('utf-8').trim()
-            if (tail) {
-              // DUP-DEBUG: stderr_tail is once-per-result. Always log fan-out
-              // size + recipient wsIds to confirm whether the daemon is
-              // sending to one ws or several.
-              const recipientWsIds: number[] = []
-              for (const ws of s.subscribers) {
-                if (ws.readyState === 1) {
-                  recipientWsIds.push(wsId(ws))
-                  try { sendEvent(ws, 'stderr_tail', { sid, tail }) } catch {}
-                }
-              }
-              logMsg('info', 'stderr_tail fan-out', {
-                sid,
-                subscriberCount: s.subscribers.size,
-                recipientWsIds,
-              })
-            }
+          const init = parse() as any
+          if (init.type === 'system' && init.subtype === 'init') appendSpawnJournal(init.session_id, s.spawnInfo ?? { kind: 'new' })
+          // A fork or an unnamed new session: its own id is known only now (cli-owner-core.ts).
+          if (init.type === 'system' && init.subtype === 'init' && typeof init.session_id === 'string' && s.pid && !namedSessionId(s.args)) {
+            void cliOwner.adopt(init.session_id, s.pid, s.startTime ?? null, s.spawnInfo?.home)
+          }
+          if (init.type === 'system' && init.subtype === 'init' && typeof init.claude_code_version === 'string') {
+            s.cliVersion = init.claude_code_version
+            if (SERVICE_MODE) persistRegistry()
           }
         } catch {}
+        s.sawInit = true
+        logMsg('info', 'first init line from CLI', {
+          sid, spawnToInitMs: s.spawnTs ? Date.now() - s.spawnTs : null,
+        })
       }
-    } catch (err) {
-      // ENOENT is benign: a fresh session's jsonl doesn't exist until the CLI
-      // writes its first line (cold start can take seconds). Not a stall.
-      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') { consecutiveErrors = 0; return }
-      // NO-SILENT-FAILURES: the old empty catch here is what turned a per-tick
-      // error into a permanently frozen tailer with zero log evidence. Log
-      // (rate-limited — this fires every 100ms while the error persists) and
-      // self-heal after sustained failure.
-      consecutiveErrors++
+
+      // ── TTFT instrumentation (inc-1786665503510): send → first output ──
+      // Anchored by handleSendCommand (ttftSendTs). Two one-shot lines per
+      // turn: first stream_event of any kind (model started answering — the
+      // Bedrock TTFB proxy), and first text_delta (user-visible prose began).
+      // A huge sendToFirstTextMs with a normal sendToFirstLineMs = the model
+      // spent the gap thinking/tooling (upstream behavior, not a walnut bug).
+      // Substring gates keep the hot path parse-free; cleared at result.
+      if (s.ttftSendTs && line.includes('"type":"stream_event"')) {
+        if (!s.ttftSawFirstLine) {
+          s.ttftSawFirstLine = true
+          logMsg('info', 'ttft: first stream_event after send', {
+            sid, sendToFirstLineMs: Date.now() - s.ttftSendTs,
+          })
+        }
+        if (line.includes('"text_delta"')) {
+          logMsg('info', 'ttft: first text_delta after send', {
+            sid, sendToFirstTextMs: Date.now() - s.ttftSendTs,
+          })
+          s.ttftSendTs = null // one-shot: only the FIRST text of the turn
+        }
+      }
+
+      // ── Scheduled-task fire detection (see checkCronFires) ──
+      // A cron fire's ONLY stream evidence is a bare turn start: the CLI
+      // re-emits init + session_state_changed{running} with no user line.
+      // Check the on-disk scheduled_tasks.json on those lines (30s throttle
+      // inside makes this cheap; substring gate keeps the hot path free).
+      if (line.includes('"init"') || line.includes('"session_state_changed"')) {
+        try { checkCronFires(sid, s) } catch {}
+      }
+
+      // ── Durable-cron invariant, corrective half (see checkDurableCronCreate) ──
+      if (line.includes('CronCreate')) {
+        try { checkDurableCronCreate(sid, s, line, parse) } catch {}
+      }
+
+      // ── Turn-error auto-retry (see checkTurnRetry) ──
+      // Gate on the result-line substring only; the parse + is_error check
+      // lives in the policy. Clean results come through too, because a
+      // successful turn is what clears the failure streak.
+      if (line.includes('"type":"result"')) {
+        s.ttftSendTs = null // turn over — a stale TTFT anchor must not leak into replays
+        void checkTurnRetry(sid, s, line, v, parse).catch(err => {
+          logMsg('warn', 'turn-retry check threw', { sid, error: (err as Error).message })
+        })
+        // A reply request this host owns ends with this turn (offline-host-core.ts).
+        void offlineHost.onResult(sid, line, v, parse).catch(() => {})
+        // The working tree as this turn left it (turn-snapshot-core.ts): returns at once.
+        try { turnSnapshots.onTurnEnd(sid, s.cwd, v) } catch { /* never the tailer's problem */ }
+      }
+
+      // ── L2: materialize daemon-authoritative task state ──
+      // Cheap substring pre-filter (task_* events are `"type":"system"` lines carrying a
+      // `task_` subtype) so we JSON.parse only the relevant ~1% of lines. The applied state
+      // is served on `getState` so Walnut can reconcile a lost-terminal event without guessing.
+      if (line.includes('"task_')) {
+        try {
+          const parsed = parse() as Record<string, unknown>
+          if (applyTaskEvent(s.taskState, parsed, v, Date.now())) {
+            logMsg('info', 'task transition', {
+              sid, bgTaskId: parsed.task_id, status: s.taskState.tasks[parsed.task_id as string]?.status,
+              derivedRunning: s.taskState.derivedRunning, v,
+            })
+          }
+        } catch { /* malformed line — skip */ }
+      }
+
+      // ── Permission policy intercept ──
+      if (line.includes('"control_request"') || line.includes('"control_response"')
+        || line.includes('"control_cancel_request"')) {
+        try {
+          const parsed = parse() as Record<string, unknown>
+          // The CLI's answer to a model or effort change this daemon wrote (leader.settings).
+          if (parsed.type === 'control_response') liveSettings.noteResponse(sid, parsed)
+          if (parsed.type === 'control_request' && parsed.request_id
+            && (parsed.request as Record<string, unknown>)?.subtype === 'can_use_tool') {
+            const req = parsed.request as Record<string, unknown>
+            const toolName = req.tool_name as string | undefined
+            // ── Hook point cron.create (see daemon-core.ts) ──
+            // Evaluated BEFORE the auto-allow check: a bypass-mode session
+            // would otherwise be waved through, and a durable job outlives
+            // this session to fire inside a stranger sharing the directory.
+            if (toolName === 'CronCreate') {
+              const actions = hookActions('cron.create', { input: req.input, mode: s.mode, sid })
+              if (actions.includes('log')) {
+                logMsg('info', 'hook log: cron.create', { sid, input: req.input, mode: s.mode })
+              }
+              if (actions.includes('deny')) {
+                const resp = buildControlResponse(
+                  parsed.request_id as string, req, false, durableCronDenyMessage(),
+                )
+                if (writeFifoRaw(s.pipePath, resp)) {
+                  s.pendingCtrl = null
+                  try { persistRegistry() } catch {}
+                  logMsg('warn', 'hook deny: durable CronCreate refused (session-scoped crons only)', {
+                    sid, mode: s.mode,
+                  })
+                  continue
+                }
+                // Deliberate fall-through: a failed deny write proceeds to
+                // shouldAutoRespond (a bypass session then auto-allows the
+                // durable cron). Blocking the turn forever would be worse —
+                // cron.fire evict + session.reap strip still cover the row.
+                logMsg('error', 'hook deny: response could not be written to FIFO', { sid })
+              }
+            }
+            if (shouldAutoRespond(s.mode, toolName)) {
+              // The answer is Walnut's business only when it could not be given:
+              // pending until the write lands (handleSendRawCommand clears it), and
+              // the prompt reaches Walnut late only when the write was refused (a
+              // paused budget, a dead pipe), so the human can still answer it.
+              const reqId = parsed.request_id as string
+              s.pendingCtrl = { reqId, toolName: toolName ?? 'unknown', request: req, receivedAt: Date.now() }
+              try { persistRegistry() } catch {}
+              const resp = buildControlResponse(reqId, req, true)
+              void core.handleSendRawCommand(sid, resp).then(result => {
+                if (result.ok) {
+                  logMsg('info', 'auto-allowed control_request', { sid, tool: toolName, mode: s.mode })
+                  return
+                }
+                logMsg('warn', 'auto-allow not delivered; the prompt goes to Walnut', { sid, tool: toolName, mode: s.mode, result })
+                if (s.pendingCtrl?.reqId !== reqId) return
+                for (const ws of s.subscribers) {
+                  if (ws.readyState === 1) { try { sendEvent(ws, 'jsonl', { sid, line, v }, parsedFor(ws, parse)) } catch {} }
+                }
+                pushSnapshot(sid, false)
+              })
+              continue
+            }
+            s.pendingCtrl = {
+              reqId: parsed.request_id as string,
+              toolName: toolName ?? 'unknown',
+              request: req,
+              receivedAt: Date.now(),
+            }
+            try { persistRegistry() } catch {}
+          } else if (parsed.type === 'control_response' && s.pendingCtrl) {
+            const resp = parsed.response as Record<string, unknown> | undefined
+            if (resp?.request_id === s.pendingCtrl.reqId) {
+              s.pendingCtrl = null
+              try { persistRegistry() } catch {}
+            }
+          } else if (parsed.type === 'control_cancel_request' && s.pendingCtrl) {
+            // CLI withdrew the request (turn aborted / restart). Without this
+            // branch pendingCtrl stays set forever → snapshot waiting=true and
+            // the UI shows a permanent Waiting badge (incident a172ce49).
+            if (parsed.request_id === s.pendingCtrl.reqId) {
+              s.pendingCtrl = null
+              try { persistRegistry() } catch {}
+              logMsg('info', 'control_cancel_request cleared pendingCtrl', { sid, requestId: parsed.request_id })
+            }
+          }
+        } catch { /* parse failed, fall through to normal push */ }
+      }
+
+      // Fan out to all current subscribers, GC dead ones opportunistically.
+      // DUP-DEBUG: only log fan-out when subscribers > 1 (the duplicate
+      // smoking gun) AND only for tool_use lines (cheap to detect via
+      // substring). High-frequency text deltas would spam the log.
+      const fanCount = s.subscribers.size
+      const isToolUseLine = fanCount > 1 && line.includes('"type":"tool_use"')
+      const recipientWsIds: number[] = []
+      for (const ws of s.subscribers) {
+        if (ws.readyState === 1) {
+          if (isToolUseLine) recipientWsIds.push(wsId(ws))
+          // `v` MUST ride every live line (same as the replay path below and
+          // daemon-source.ts): without it the client falls back to relative
+          // byte accounting, which drifts on skipped control lines → replay
+          // windows + duplicate blocks on reattach.
+          try { sendEvent(ws, 'jsonl', { sid, line, v }, parsedFor(ws, parse)) } catch {}
+        } else {
+          logMsg('info', 'GC dead subscriber from watcher fan-out', {
+            sid, wsId: wsId(ws), readyState: ws.readyState,
+          })
+          s.subscribers.delete(ws)
+        }
+      }
+      if (isToolUseLine) {
+        logMsg('info', 'jsonl fan-out (tool_use, multi-subscriber)', {
+          sid,
+          subscriberCount: fanCount,
+          recipientWsIds,
+          lineSnippet: line.slice(0, 120),
+        })
+      }
+      if (!sawResult && line.includes('"type":"result"')) sawResult = true
+    }
+    if (cronMetadataGap) cronMetadata.replay(sid, cronProcess(s), !!s.cronMetadataLoading, true)
+    // ── C1: after each tailer batch, push the snapshot if it changed (this
+    // also covers pendingCtrl set/clear — both happen inside this loop).
+    pushSnapshot(sid, false)
+    // After a result event, push stderr tail so MCP failures / CLI bails are
+    // visible without SSH. Fan to all subscribers.
+    if (sawResult) void pushStderrTail(sid, s, stderrPath)
+    },
+    onError: (err, consecutiveErrors) => {
+      const s = sessions.get(sid)
+      if (!s) return
+      // NO-SILENT-FAILURES: log (rate-limited, this fires every 100ms while the error persists)
+      // and self-heal after sustained failure.
       const now = Date.now()
       if (now - lastErrorLogTs > 10_000) {
         lastErrorLogTs = now
         logMsg('error', 'watcher poll tick failed', {
-          sid, consecutiveErrors, offset,
+          sid, consecutiveErrors, offset: tailer.cursor,
           err: err instanceof Error ? `${(err as NodeJS.ErrnoException).code ?? ''} ${err.message}` : String(err),
         })
       }
       if (consecutiveErrors >= STALL_ERRORS_BEFORE_HEAL
         && now - (s.lastWatcherHealAt ?? 0) > HEAL_COOLDOWN_MS) {
-        // Generation guard: only heal if WE are still the session's watcher.
-        // If cmdStart replaced the session (new watcher), this timer is a leak —
-        // kill only ourselves and leave the replacement alone.
-        if (!s.watcher || s.watcher.pollTimer !== pollTimer) {
+        // Generation guard: only heal if this is still the session's tailer.
+        if (!s.watcher || s.watcher.pollTimer !== tailer.timer) {
           logMsg('warn', 'stalled watcher is orphaned (session replaced) — clearing self', { sid })
-          clearInterval(pollTimer)
+          tailer.stop()
           return
         }
         s.lastWatcherHealAt = now
-        logMsg('error', 'watcher stalled — forcing rebuild', { sid, offset, carryStartV, consecutiveErrors })
-        // Persist the last COMPLETE-line boundary (NOT the read cursor), tear
-        // down, recreate. The in-memory carry dies with this watcher, so the
-        // rebuilt one must re-read the torn region — resuming at `offset` would
-        // swallow the fragment's first half. If the root cause (e.g. fd
-        // exhaustion) has cleared, tailing continues from a clean line boundary
-        // — no bytes lost (append-only file), and client-side `v` dedup absorbs
-        // any overlap.
-        s.offset = carryStartV
+        logMsg('error', 'watcher stalled — forcing rebuild', { sid, offset: tailer.cursor, carryStartV: tailer.boundary, consecutiveErrors })
+        // The last COMPLETE-line boundary (NOT the read cursor): the carry dies with this tailer,
+        // so the rebuilt one re-reads the torn region (append-only file; client `v` dedup absorbs any overlap).
+        s.offset = tailer.boundary
         stopSessionWatcher(sid)
         ensureWatcher(sid)
       }
-    }
-  }, 100)
+    },
+  })
 
-  session.watcher = { pollTimer, offset }
+  session.watcher = { pollTimer: tailer.timer, offset: tailer.boundary, tailer }
 }
 
 // Stop the session-bound watcher. Only called from reapSession (session died)
@@ -10405,7 +10265,7 @@ function stopSessionWatcher(sid: string) {
   // here instead of re-streaming the entire jsonl file from byte 0. Matters
   // for cmdRename, where we intentionally tear down + re-create the watcher.
   session.offset = session.watcher.offset
-  try { clearInterval(session.watcher.pollTimer) } catch {}
+  try { if (session.watcher.tailer) session.watcher.tailer.stop(); else clearInterval(session.watcher.pollTimer) } catch {}
   session.watcher = null
 }
 
@@ -10563,7 +10423,7 @@ async function discoverSessionFromFiles(sid: string, mode: string | undefined): 
     exitReason: alive ? null : 'attach-discovered-dead',
     exitedAt: alive ? null : Date.now(),
     parented: false,  // discovered, not spawned
-    startTime: pid && alive ? readStartTime(pid) : null,
+    startTime: pid && alive ? await readStartTimeAsync(pid) : null,
     cwd: '',
     args: [],
     orphanPollTimer: null,
@@ -13677,20 +13537,44 @@ function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<str
   if (ws?.data?.origin === 'follower') data = followerReads.settle(ws, id, data) ?? data
   // The frame's id wins (a trigger's `id` never re-addresses the answer); a refusal sent here with
   // `ok: false` in its data keeps it (ARG_REFS_MISSING, session_stopped, session_dead).
-  safeSend(ws, JSON.stringify({ ok: true, ...data, id }))
+   sendFrame(ws, { ok: true, ...data, id })
 }
 
 /** `level`: an expected refusal (a job restarting) is logged below error. */
 function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>, level: 'error' | 'warn' | 'info' = 'error') {
   if (ws?.data?.origin === 'follower') followerReads.settle(ws, id)
   logMsg(level, level === 'error' ? 'command error' : 'command refused', { id, error, ...(level !== 'error' && typeof data?.errorKind === 'string' ? { errorKind: data.errorKind } : {}) })
-  safeSend(ws, JSON.stringify({ ...data, id, ok: false, error }))
+  sendFrame(ws, { ...data, id, ok: false, error })
 }
 
-function sendEvent(ws: ServerWebSocket<WsData>, ev: string, data: Record<string, unknown>) {
+/** `local`: fields only a client in this process gets (a jsonl line's parsed object), never on the wire. */
+/**
+ * What a live jsonl line carries for a client in this process: its JSON as the tailer parsed it
+ * once (`parsed`), so the server reads the object and never parses the line again. A socket client
+ * gets the text only, and the line is not parsed for it here.
+ */
+function parsedFor(ws: ServerWebSocket<WsData>, parse: () => unknown): Record<string, unknown> | undefined {
+  if (!ws.data?.deliverFrame) return undefined
+  try {
+    const parsed = parse()
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { parsed } : undefined
+  } catch { return undefined }
+}
+
+function sendEvent(ws: ServerWebSocket<WsData>, ev: string, data: Record<string, unknown>, local?: Record<string, unknown>) {
   // A lane hears its streams and nothing of the broadcasts its session link already hears.
   if (ws.data?.origin === 'lane' && !ev.startsWith('stream-')) return
-  safeSend(ws, JSON.stringify({ ev, ...data }))
+  sendFrame(ws, { ev, ...data }, local)
+}
+
+/**
+ * One frame to one client: a client in this process (connect(), daemon-in-process-client.ts)
+ * takes the object itself; a socket gets its JSON text. `local` rides only the object.
+ */
+function sendFrame(ws: ServerWebSocket<WsData>, frame: Record<string, unknown>, local?: Record<string, unknown>) {
+  const deliver = ws.data?.deliverFrame
+  if (deliver) { deliver(local ? { ...frame, ...local } : frame); return }
+  safeSend(ws, JSON.stringify(frame))
 }
 
 // ── FIFO write logger ──
@@ -14790,7 +14674,7 @@ function dialBridge(link: BridgeLink, gen: number): void {
     logMsg('info', 'bridge-conn-open', { connId, dialMs, wsClient: 'bun' })
     // hello registers this host in the cloud bridge registry (first frame).
     // `uplink: 1` tells the replica it may send bridge.peer and echo ackSeq.
-    safeSend(adapter, JSON.stringify({
+    sendFrame(adapter, {
       ev: 'hello',
       hostAlias: cfg.hostAlias,
       version: DAEMON_VERSION,
@@ -14800,7 +14684,7 @@ function dialBridge(link: BridgeLink, gen: number): void {
       uplink: 1,
       // What the companion may ask of this daemon ('bridge-stream-v1': its forward on a stream).
       capabilities: BRIDGE_CAPABILITIES,
-    }))
+    })
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter), scope: walnutScope.label(link.home) })
     // The silence watchdog: see BRIDGE_SILENT_PINGS.
     let heardAt = link.lastInbound
@@ -15183,8 +15067,8 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // Supervision must exist before recovery can disable it, including stopped sessions.
   void usageBudget.recover().catch(error => logMsg('error', 'budget recovery failed', { error: String(error) }))
 
-  // Start Bun.serve() with built-in WebSocket support
-  const server = Bun.serve<WsData>({
+  // Start Bun.serve() with built-in WebSocket support (not for a runtime its server calls directly).
+  const server = !LISTEN ? null : Bun.serve<WsData>({
     port: 0, // random port
     hostname: '127.0.0.1',
 
@@ -15269,17 +15153,25 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   }, TRUSTED_CLIENT_BEAT_MS).unref?.()
 
   listeningServer = server
-  const port = server.port
-  listeningPort = typeof port === 'number' ? port : null
-  daemonInstanceLock?.publish(port)
+  const port = server?.port ?? 0
+  listeningPort = server && typeof port === 'number' ? port : null
+  daemonInstanceLock?.publish(listeningPort)
   // daemon.pid before daemon.port: a starter that sees the port file reads the pid next
   // (2026-11-04: a test read daemon.pid in that gap, ENOENT; tests/providers/daemon-pid-before-port.test.ts).
-  fs.writeFileSync(PID_FILE, String(process.pid))
+  // A runtime with no door runs inside another program (a server, in-process-daemon.ts): its pid is
+  // that program's, never a daemon's to signal, so it writes none, and one left by a daemon program
+  // this dir had before goes. Every stopper and liveness check that reads daemon.pid then finds
+  // nothing to signal; the dir's instance lock still keeps any second daemon out.
+  if (LISTEN) fs.writeFileSync(PID_FILE, String(process.pid))
+  else { try { fs.unlinkSync(PID_FILE) } catch {} }
   // daemon.port by rename, so a reader that sees the file reads the whole port, never the empty
   // file between its creation and its write (CI 43535674084: ws://127.0.0.1:NaN).
-  const portTmp = PORT_FILE + '.' + process.pid + '.tmp'
-  fs.writeFileSync(portTmp, String(port))
-  fs.renameSync(portTmp, PORT_FILE)
+  // No door, no port file: a daemon program's left from before (the dir it took over) is no address of this one.
+  if (LISTEN) {
+    const portTmp = PORT_FILE + '.' + process.pid + '.tmp'
+    fs.writeFileSync(portTmp, String(port))
+    fs.renameSync(portTmp, PORT_FILE)
+  } else { try { fs.unlinkSync(PORT_FILE) } catch {} }
   // The host network runs once this daemon answers on its port (net-v1).
   netSupervisor.start()
   // Hub forwards listen once the links they ride can come (hub-forward-v1).
@@ -15311,11 +15203,12 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   }
   // The servers an earlier daemon kept running here: adopt or start them, now
   // that the port file they connect through is written.
-  try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) }
+  // A host server connects through the port file; a runtime with no door starts none.
+  if (LISTEN) { try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) } }
   // The plugin jobs an earlier daemon ran here (plugin-jobs-core.ts): adopt, schedule or start them.
   try { pluginJobs.boot() } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: (err as Error).message }) }
   hostVitals.start()
-  options.onListening?.(port) // the process entry prints it for its parent
+  if (LISTEN) options.onListening?.(port) // the process entry prints it for its parent
   logMsg('info', 'daemon started', {
     port,
     pid: process.pid,
@@ -15367,7 +15260,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // (keepRuntimeFiles, daemon-core.ts). Keep in sync with daemon-source.ts.
   runtimeKeepTimer = setInterval(() => {
     const files = [
-      { file: PORT_FILE, text: String(port) }, { file: PID_FILE, text: String(process.pid) },
+      ...(LISTEN ? [{ file: PORT_FILE, text: String(port) }, { file: PID_FILE, text: String(process.pid) }] : []),
       { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
       ...(SERVICE_MODE ? [{ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID }] : []),
     ]
@@ -15452,7 +15345,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // What ends this daemon once it ran: the heartbeat's own exits (endSelf) and stop.
   // Its socket closes and its timers end with it; the process entry then exits.
   function endSelf(code: number): void {
-    try { server.stop(true) } catch {}
+    try { server?.stop(true) } catch {}
     void daemonInstanceLock?.release().catch(() => {})
     clearRuntimeTimers()
     options.exit(code)
@@ -15488,7 +15381,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
       releaseGatewayRelays()
       persistRegistry()
       cleanup()
-      server.stop(true)
+      server?.stop(true)
       await daemonInstanceLock?.release()
       // Work still stuck in a file call (a FIFO no one reads) holds a pool thread, and a normal
       // exit joins those threads: it would never return (twin of daemon-source.ts). Its state is saved; end hard.
@@ -15510,67 +15403,17 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   return { kind: 'started', port }
 }
 
-/** A socket client's whole surface, for a client inside this process (connect()). */
+/** The clients inside this process (connect(), daemon-in-process-client.ts): stop() closes them. */
 const inProcessClients = new Set<{ close(): void }>()
 function inProcessClient(onFrame: (frame: DaemonFrame) => void, onClose?: () => void): DaemonClient {
-  let nextId = 0
-  let closedByClient = false
-  const waiting = new Map<number, (frame: DaemonFrame) => void>()
-  const delivered: string[] = []
-  let flushing = false
-  // Frames reach the client in order, after the command that sent them returns: as off a socket.
-  const flush = () => {
-    flushing = false
-    while (delivered.length) {
-      let frame: DaemonFrame
-      try { frame = JSON.parse(delivered.shift()!) as DaemonFrame } catch { continue }
-      // An answer carries its command's id; an event (`ev`) is never one, whatever its fields.
-      const answer = typeof frame.id === 'number' && frame.ev === undefined ? waiting.get(frame.id) : undefined
-      if (answer) { waiting.delete(frame.id as number); answer(frame) } else {
-        try { onFrame(frame) } catch (err) { logMsg('warn', 'in-process client: frame handler threw', { error: String(err) }) }
-      }
-    }
-  }
-  const ws = {
-    data: {} as WsData,
-    readyState: 1,
-    send(payload: string): number {
-      if (ws.readyState !== 1) return 0
-      delivered.push(payload)
-      if (!flushing) { flushing = true; queueMicrotask(flush) }
-      return payload.length
-    },
-    // Nothing between: a ping is answered at once (the keepalive hears it).
-    ping(): void { heardFrom(ws as unknown as ServerWebSocket<WsData>) },
-    terminate(): void { ws.close() },
-    close(): void {
-      if (ws.readyState !== 1) return
-      ws.readyState = 3
-      inProcessClients.delete(ws)
-      handleDisconnect(ws as unknown as ServerWebSocket<WsData>)
-      for (const answer of waiting.values()) answer({ ok: false, error: 'client closed' })
-      waiting.clear()
-      if (!closedByClient && onClose) {
-        try { onClose() } catch (err) { logMsg('warn', 'in-process client: close handler threw', { error: String(err) }) }
-      }
-    },
-  }
-  const socket = ws as unknown as ServerWebSocket<WsData>
-  heardFrom(socket)
-  wsClients.add(socket)
-  inProcessClients.add(ws)
-  return {
-    request(cmd, params = {}) {
-      if (ws.readyState !== 1) return Promise.resolve({ ok: false, error: 'client closed' })
-      const id = ++nextId
-      return new Promise((resolve) => {
-        waiting.set(id, resolve)
-        heardFrom(socket)
-        handleCommand(socket, JSON.stringify({ ...params, id, cmd }))
-      })
-    },
-    close: () => { closedByClient = true; ws.close() },
-  }
+  const { client } = createInProcessClient<ServerWebSocket<WsData>>({
+    handleCommandFrame: (socket, frame) => handleCommandFrame(socket, frame),
+    register: (socket) => { wsClients.add(socket); inProcessClients.add(socket) },
+    unregister: (socket) => { inProcessClients.delete(socket); handleDisconnect(socket) },
+    heardFrom: (socket) => heardFrom(socket),
+    warn: (msg, data) => logMsg('warn', msg, data),
+  }, onFrame, onClose)
+  return client
 }
 
 /** What start() made: stopped the way a SIGTERM always stopped it; before that, what creating it started. */
@@ -15602,6 +15445,7 @@ async function stopRuntime(): Promise<number> {
   try { launcherBeat?.stop() } catch {}
   launcherBeat = null
   try { historyReadyExecutor.close() } catch {}
+  try { spawnPool?.close() } catch {}
   clearRuntimeTimers()
   return code
 }
@@ -15609,6 +15453,7 @@ async function stopRuntime(): Promise<number> {
 return {
   dir: DAEMON_DIR,
   version: DAEMON_VERSION,
+  instanceId: DAEMON_INSTANCE_ID,
   start: () => {
     if (startRun) return startRun
     const run = startDaemon()

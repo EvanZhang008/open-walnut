@@ -2522,7 +2522,7 @@ export function classifyTurnError(text: string | null | undefined): TurnErrorCla
 }
 
 /** Is this stream line a turn-over `result` carrying an error? */
-export function parseTurnErrorLine(line: string): { isTurnError: boolean; text: string | null } {
+export function parseTurnErrorLine(line: string, parseLine?: () => unknown): { isTurnError: boolean; text: string | null } {
   // Substring pre-gate keeps the hot path free — the tailer sees every line.
   // NOTE: the gate CANNOT be on `subtype`: a real timeout result carries
   // `"subtype":"success"` alongside `"is_error":true` (verified in live stream
@@ -2531,7 +2531,7 @@ export function parseTurnErrorLine(line: string): { isTurnError: boolean; text: 
     return { isTurnError: false, text: null }
   }
   try {
-    const parsed = JSON.parse(line) as { type?: string; is_error?: boolean; result?: unknown; terminal_reason?: unknown }
+    const parsed = (parseLine ? parseLine() : JSON.parse(line)) as { type?: string; is_error?: boolean; result?: unknown; terminal_reason?: unknown }
     if (parsed.type !== 'result' || parsed.is_error !== true) return { isTurnError: false, text: null }
     // A stopped turn is not a failed one: the CLI's own error test excludes these reasons.
     if (parsed.terminal_reason === 'aborted_streaming' || parsed.terminal_reason === 'aborted_tools') {
