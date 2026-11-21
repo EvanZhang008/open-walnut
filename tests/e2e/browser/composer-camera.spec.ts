@@ -1,7 +1,7 @@
 /**
  * Playwright (Chromium, fake camera and microphone): the chat box's Camera
- * (experiment `camera_capture`). The + menu keeps every row it had and gains
- * Camera only with the switch on; the panel opens above the box with the live
+ * (on for everyone; it was the `camera_capture` experiment). The + menu keeps
+ * every row it had and has Camera right under Attach; the panel opens above the box with the live
  * picture, takes a photo (Retake, Add another), records a video while photos are
  * taken without stopping it, and sends the video as its file, its stills and what
  * was said; the camera and microphone are off whenever the panel is closed; a
@@ -25,8 +25,8 @@ test.describe.configure({ timeout: 240_000 })
 const SHOTS = process.env.WALNUT_TASK_DIR ? path.join(process.env.WALNUT_TASK_DIR, 'shots') : '/tmp/composer-camera'
 const SAID = 'so the request goes into the queue here and the worker retries three times'
 
-/** The camera switch as this page reads the config (never written to the fixture's config). */
-async function cameraSwitch(page: Page, on: boolean) {
+/** An old camera_capture choice in the config as this page reads it (never written to the fixture's config). */
+async function oldCameraChoice(page: Page, on: boolean) {
   await page.route('**/api/config', async (route) => {
     if (route.request().method() !== 'GET') return route.fallback()
     try {
@@ -90,32 +90,27 @@ async function answerSpeech(page: Page) {
   return () => calls
 }
 
-test('the + menu keeps every row it had; Camera is there only with the switch on', async ({ page }) => {
-  await cameraSwitch(page, false)
+test('the + menu has Camera right under Attach, with no switch, whatever an old choice says', async ({ page }) => {
   await watchStreams(page)
   await open(page)
   await openMenu(page)
-  const before = await rows(page)
-  expect(before.some((r) => r.startsWith('Camera'))).toBe(false)
-  expect(before[0]).toMatch(/^Attach files or images/)
-  expect(before).toContain('Draw')
-  await page.keyboard.press('Escape')
-
-  await page.unrouteAll({ behavior: 'ignoreErrors' })
-  await cameraSwitch(page, true)
-  await watchStreams(page)
-  await open(page)
-  await openMenu(page)
-  const after = await rows(page)
-  // Camera right under Attach; every other row as it was, in the same order.
-  expect(after[1]).toMatch(/^Camera\s*Photo or video$/)
-  expect(after.filter((r) => !r.startsWith('Camera'))).toEqual(before)
+  const rowsNow = await rows(page)
+  expect(rowsNow[0]).toMatch(/^Attach files or images/)
+  expect(rowsNow[1]).toMatch(/^Camera\s*Photo or video$/)
+  expect(rowsNow).toContain('Draw')
   // Opening the menu opened nothing.
   expect(await liveTracks(page)).toEqual([])
+  await page.keyboard.press('Escape')
+
+  // The experiment ended on: a camera_capture: false left in the config hides nothing.
+  await oldCameraChoice(page, false)
+  await watchStreams(page)
+  await open(page)
+  await openMenu(page)
+  expect(await rows(page)).toEqual(rowsNow)
 })
 
 test('a photo: the panel above the box, Retake, Add another, then Send with the typed words; the camera is off once it closes', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page)
   const h = await open(page)
   const input = composer(page).locator('.chat-input-textarea').first()
@@ -166,7 +161,6 @@ test('a photo: the panel above the box, Retake, Add another, then Send with the 
 })
 
 test('a video: photos taken while it records, then it goes as its file, its stills and what was said', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page)
   const speech = await answerSpeech(page)
   const h = await open(page)
@@ -214,7 +208,6 @@ test('a video: photos taken while it records, then it goes as its file, its stil
 })
 
 test('a sent video shows in the chat as its card, with the stills and the words the AI was given', async ({ page }) => {
-  await cameraSwitch(page, true)
   const video = `${HOST_DIR}/up-1/camera-141605.mp4`
   const text = `${FILES_LINE}\n- ${video}\n\n`
     + `[Video stills — frames of camera-141605.mp4 (0:42), time in each name; use the Read tool to view them]\n- ${HOST_DIR}/up-2/camera-141605-still-0m00s.jpg\n- ${HOST_DIR}/up-3/camera-141605-still-0m12s.jpg\n\n`
@@ -237,7 +230,6 @@ test('a sent video shows in the chat as its card, with the stills and the words 
 })
 
 test('a refused camera says what to do, and Pick a file instead opens the picker', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page, { refuse: 'NotAllowedError' })
   await open(page)
   await openMenu(page)
@@ -255,7 +247,6 @@ test('a refused camera says what to do, and Pick a file instead opens the picker
 })
 
 test('a page that cannot open the camera hands it to the phone camera app', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page, { noCamera: true })
   await open(page)
   await openMenu(page)
@@ -270,7 +261,6 @@ test('a page that cannot open the camera hands it to the phone camera app', asyn
 })
 
 test('a hidden page closes the camera', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page)
   await open(page)
   await openMenu(page)
@@ -285,7 +275,6 @@ test('a hidden page closes the camera', async ({ page }) => {
 })
 
 test('closing the panel while the browser asks for the microphone leaves nothing on, and Record waits for the answer', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page, { slowMic: true })
   await open(page)
   await openMenu(page)
@@ -307,7 +296,6 @@ test('closing the panel while the browser asks for the microphone leaves nothing
 })
 
 test('a video the box cannot take (its files are full) stays in the preview and nothing is sent', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page)
   await answerSpeech(page)
   const h = await open(page)
@@ -332,7 +320,6 @@ test('a video the box cannot take (its files are full) stays in the preview and 
 })
 
 test('a still that failed to upload is retried on its own: the video does not go up again', async ({ page }) => {
-  await cameraSwitch(page, true)
   await watchStreams(page)
   const h = await open(page)
   h.setPlan((name, attempt) => (/-still-0m00s\.jpg$/.test(name) && attempt === 1

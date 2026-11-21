@@ -17,6 +17,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-con
 import express from 'express'
 import request from 'supertest'
 import { consoleV1Router } from '../../../src/web/routes/console-v1.js'
+import { EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS } from '../../../src/core/experimental.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME, CONFIG_FILE, GLOBAL_SKILLS_DIR } from '../../../src/constants.js'
 
@@ -125,7 +126,16 @@ describe('GET /api/v1/config — allowlist projection', () => {
     await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + 'experimental:\n  project_first_start: true\n  chat_reading_split: false\n  odd_value: yes-please\n')
     const res = await request(createApp()).get('/api/v1/config')
     expect(res.status).toBe(200)
-    expect(res.body.config.experimental).toEqual({ project_first_start: true, chat_reading_split: false })
+    expect(res.body.config.experimental).toEqual({ project_first_start: true, chat_reading_split: false, camera_capture: true })
+  })
+
+  it('tells an older phone that a graduated experiment is on, whatever an old choice on disk says', async () => {
+    await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + 'experimental:\n  camera_capture: false\n')
+    const res = await request(createApp()).get('/api/v1/config')
+    expect(res.status).toBe(200)
+    for (const id of GRADUATED_EXPERIMENTS) expect(res.body.config.experimental[id]).toBe(true)
+    // A graduated id is no switch any more: it is not in the registry Settings lists.
+    for (const id of GRADUATED_EXPERIMENTS) expect(EXPERIMENTAL_FEATURES.some((f) => f.id === id)).toBe(false)
   })
 })
 

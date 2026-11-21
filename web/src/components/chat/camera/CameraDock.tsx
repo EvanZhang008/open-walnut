@@ -1,5 +1,5 @@
 /**
- * The chat camera (experiment `camera_capture`): a panel right above the chat
+ * The chat camera: a panel right above the chat
  * box, opened from the + menu. One box of one size holds every state (the live
  * picture, a recording, the preview, a refusal), so the chat moves once, when it
  * opens. The box below keeps working: type or speak while the camera is on.

@@ -1,5 +1,5 @@
 /**
- * The chat box's Camera (experiment `camera_capture`, off by default): its row
+ * The chat box's Camera (on for everyone since 2026-11-21; it was the `camera_capture` experiment): its row
  * in the + menu, its panel above the box, and, where this page may not open
  * the camera itself (a phone on plain http), the phone's own camera app through
  * a file input with `capture`. ChatInput holds one of these and stays unaware of
@@ -7,7 +7,6 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
-import { useExperimental } from '@/hooks/useExperimental';
 import type { ComposerAttachments } from '@/components/common/composer-attachments';
 import { CameraDock } from './CameraDock';
 import { liveCameraAvailable, stillsFromVideoFile } from './camera-frames';
@@ -42,7 +41,7 @@ export interface ComposerCameraState extends Deps {
 }
 
 export function useComposerCamera(deps: Deps): ComposerCameraState {
-  const enabled = useExperimental('camera_capture') && !deps.light;
+  const enabled = !deps.light;
   const [open, setOpen] = useState(false);
   const [micHeld, setMicHeld] = useState(false);
   const captureRef = useRef<HTMLInputElement | null>(null);

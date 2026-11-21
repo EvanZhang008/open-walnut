@@ -1890,7 +1890,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     fileInputRef.current?.click();
   };
 
-  // The chat's camera (experiment camera_capture): a panel above the box, or the
+  // The chat's camera: a panel above the box, or the
   // phone's own camera where this page cannot open one (plain http).
   const handleSendRef = useRef<() => void>(() => {});
   const camera = useComposerCamera({

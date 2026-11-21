@@ -30,6 +30,7 @@ import { relayControlAction, sendV1Error as sendError } from './v1-control-relay
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
 import { experimentalConfigView } from '../../core/experimental-prefs.js'
+import { GRADUATED_EXPERIMENTS } from '../../core/experimental.js'
 import { processMemoryMb } from '../../core/observability/memory-ledger.js'
 
 export const consoleV1Router = Router()
@@ -103,6 +104,8 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
 function experimentalFlagsOf(config: Parameters<typeof experimentalConfigView>[0]): Record<string, boolean> {
   const out: Record<string, boolean> = {}
   for (const [id, on] of Object.entries(experimentalConfigView(config).experimental ?? {})) if (typeof on === 'boolean') out[id] = on
+  // A switch that ended on is on for every client, whatever an old choice on disk says.
+  for (const id of GRADUATED_EXPERIMENTS) out[id] = true
   return out
 }
 
