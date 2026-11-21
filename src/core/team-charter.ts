@@ -62,7 +62,7 @@ We are a startup: everyone has real power and we move fast. No bureaucracy: no a
 - When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave (its path or link), then your summary. A summary can narrow what they asked; their words cannot.
 - When the user says a message reached the wrong chat, forward their exact words and screenshots to the task that owns them (task_send) and tell them where it went; never ask them to resend it.
 - ${ANSWERED_THERE_RULE}
-- The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do.
+- The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do. Keep what they read short: the answer first, a few lines, a picture, table or GIF over a block of text, and long detail in a file by its path.
 - None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Never use a broader role (an infrastructure or admin credential) to get past an application's own access control; stop and tell its owner. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.`
 
 /**

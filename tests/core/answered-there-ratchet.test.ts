@@ -60,3 +60,18 @@ describe('the answered-there rule', () => {
     expect(threadRecheckBody(reply, T0 + NEEDS_QUIET_MS)).not.toContain(ANSWERED_THERE_RECHECK)
   })
 })
+
+describe('what the user reads is short (2026-11-20: "no one wants to read this much ... use pictures and GIFs")', () => {
+  it('the charter says it', () => {
+    expect(TEAM_CHARTER).toMatch(/Keep what they read short: the answer first, a few lines, a picture, table or GIF over a block of text/)
+  })
+
+  it('a long thread summary with no picture gets told to cut it; a short one or one with a picture does not', async () => {
+    const { longTextHint, LONG_TEXT_CHARS } = await import('../../src/core/org/ask-clarity.js')
+    const wall = 'The deploy waited because the pipeline changed shape after a region build was added. '.repeat(20)
+    expect(wall.length).toBeGreaterThan(LONG_TEXT_CHARS)
+    expect(longTextHint(wall)).toMatch(/long for the user to read\. Cut it to the answer first/)
+    expect(longTextHint('Blocked by the pipeline shape change; I overrode it after checking it was safe.')).toBeNull()
+    expect(longTextHint(`${wall}\n![timeline](/home/user/.local/state/walnut/tasks/t4/timeline.png)`)).toBeNull()
+  })
+})

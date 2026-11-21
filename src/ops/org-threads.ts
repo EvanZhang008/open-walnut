@@ -2,6 +2,7 @@
  * Ops for an Org node's Threads (src/core/org/threads-model.ts, routes src/web/routes/org-threads-v1.ts):
  * the user's own requests to Main, a VP or a lead, one thread per subject.
  */
+import { longTextHint } from '../core/org/ask-clarity.js'
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
@@ -103,11 +104,12 @@ defineOp({
     const id = await ownTask(args, call)
     const { task: _t, id: threadId, ...patch } = args as Record<string, unknown>
     const body = await call('PATCH', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(threadId))}`, patch) as { thread: ThreadView; merged?: string }
+    const long = longTextHint(typeof patch.reply === 'string' ? patch.reply : undefined)
     return withOutcome(
       body,
       body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages).`
         : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.pinned && !body.thread.closed ? `, pinned${body.thread.pinned.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}${body.thread.ackPlaced && !body.thread.closed ? `, placed in ${body.thread.ackPlaced.to}` : ''}.`,
-      'No further action is required.',
+      long ?? 'No further action is required.',
     )
   },
   tags: { readonly: false, remote: 'allow' },
@@ -141,7 +143,8 @@ defineOp({
     const id = await ownTask(args, call)
     const { task: _t, ...open } = args as Record<string, unknown>
     const body = await call('POST', `/tasks/${encodeURIComponent(id)}/threads/open`, open) as { thread: ThreadView }
-    return withOutcome(body, `Opened thread ${body.thread.id} "${body.thread.title}".`, 'His reply to it is filed under it; keep it current with thread_update.')
+    const long = longTextHint(typeof open.reply === 'string' ? open.reply : undefined)
+    return withOutcome(body, `Opened thread ${body.thread.id} "${body.thread.title}".`, `${long ? `${long} ` : ''}His reply to it is filed under it; keep it current with thread_update.`)
   },
   tags: { readonly: false, remote: 'allow' },
 })

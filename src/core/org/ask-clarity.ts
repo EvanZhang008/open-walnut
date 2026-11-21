@@ -156,3 +156,18 @@ export function needsCardRefusal(card: { title: string; summary: string; hasSumm
   }
   return null;
 }
+
+/** A summary the user reads past this many characters is long (a card shows it whole). */
+export const LONG_TEXT_CHARS = 700;
+
+/**
+ * Text written for the user that runs long with no picture (2026-11-20, the user: "no one wants to read
+ * this much ... use pictures and GIFs, not big blocks of text"; four times in two days). Not a refusal:
+ * the op's answer tells the writer to cut it. Null when it is short or carries a picture. Pure.
+ */
+export function longTextHint(text: string | undefined): string | null {
+  const t = (text ?? '').trim();
+  if (t.length <= LONG_TEXT_CHARS || DESIGN.test(t.slice(0, SCAN_MAX))) return null;
+  return `This is ${t.length} characters, long for the user to read. Cut it to the answer first and a few lines, `
+    + 'put a picture, table or GIF in place of a block of text, and move detail to a file by its path.';
+}
