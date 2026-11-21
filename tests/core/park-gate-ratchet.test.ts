@@ -79,10 +79,16 @@ const SITES: Record<string, Site> = {
     chosen: 'a record its owner had set to waiting before 0.5.2, carried over once', chosenGates: [/migrateWaitingRecordsToPhase/],
   },
   'src/providers/offline-host-core.ts': {
-    count: 1, gate: 'a trigger created on a host while the server is away queues its park only with wait:true and no watch of the user; the queued task_update is replayed through admitSessionPark (apply-v2.ts, or the PATCH for a v1 record)',
+    count: 2, gate: 'a trigger created on a host while the server is away queues its park only with wait:true and no watch of the user (its own check, or the host\'s own server\'s: followerPark takes the park away-triggers.ts asked); the queued task_update is replayed through admitSessionPark (apply-v2.ts, or the PATCH for a v1 record)',
     mustContain: /args\.wait === true && !watches/,
     answered: 'parks only on the session\'s own trigger call with wait:true, a step it chose (its prompt: never right after answering the user)', answeredGate: /args\.wait === true && !watches/,
     chosen: 'the session\'s own wait:true (watches:"own" is a watch, so it never parks)', chosenGates: [/args\.wait === true && !watches/],
+  },
+  'src/replica/away-triggers.ts': {
+    count: 1, gate: 'a host\'s own server arms a trigger while the Mac is away and asks its park only with wait:true and no watch (watches "own" included); the daemon queues it as the task-fields record offline-host-core.ts writes (followerPark), replayed through admitSessionPark (apply-v2.ts)',
+    mustContain: /b\.wait === true && !watches/,
+    answered: 'parks only on the session\'s own trigger call with wait:true, a step it chose (its prompt: never right after answering the user)', answeredGate: /b\.wait === true && !watches/,
+    chosen: 'the session\'s own wait:true (watches:"own" is a watch, so it never parks)', chosenGates: [/b\.wait === true && !watches/],
   },
   'src/web/routes/api-v1.ts': {
     count: 1, gate: 'the phase_ignored answer for Main (no write); a session PATCH to WAITING asks admitSessionPark',

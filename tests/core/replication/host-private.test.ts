@@ -67,13 +67,18 @@ describe('which tasks a host never holds', () => {
 
   it('a change of the kept set is told within seconds of the task change that made it, and only then', async () => {
     let kept: string[] = []
+    let reads = 0
     const fired: number[] = []
-    const stop = onHostPrivacyChange(() => fired.push(Date.now()), async () => privacy(kept))
+    const stop = onHostPrivacyChange(() => fired.push(Date.now()), async () => { reads++; return privacy(kept) })
     try {
       const { bus } = await import('../../../src/core/event-bus.js')
-      await new Promise((r) => setTimeout(r, 50))
-      bus.emit('task:updated', { task: { id: 'open' } }, ['web-ui'])
-      await new Promise((r) => setTimeout(r, 2_400))
+      // The first read is the watch's baseline. Its bus subscription comes a moment later: a task
+      // change told until a second read ran is one the watch heard, and that read found nothing new.
+      await vi.waitFor(() => expect(reads).toBe(1))
+      await vi.waitFor(() => {
+        bus.emit('task:updated', { task: { id: 'open' } }, ['web-ui'])
+        expect(reads).toBeGreaterThanOrEqual(2)
+      }, { timeout: 5_000, interval: 100 })
       expect(fired, 'nothing kept changed').toEqual([])
       kept = ['kept']
       bus.emit('task:updated', { task: { id: 'kept' } }, ['web-ui'])

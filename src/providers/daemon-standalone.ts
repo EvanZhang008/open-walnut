@@ -7199,15 +7199,15 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     // '' unsets one this daemon inherited (mergeAcpSpawnEnv drops empty values).
     WALNUT_TASK_DIR: taskDir ?? '',
     WALNUT_SECRETS_DIR: SECRETS_ROOT,
+    // The page silencer, as for the native spawn (pw-silence-core.ts).
+    // An engine's env that names NODE_OPTIONS or BUN_OPTIONS (null or '' = cleared) wins over the daemon's own.
+    ...pwSilenceAcpOptions(params.env),
     // The address its Walnut named, or none ('' unsets this daemon's own): sessionWalnutApiUrl.
     OPEN_WALNUT_API_URL: sessionWalnutApiUrl(params.env) ?? '',
     // host-call-entry-v1, as for the native spawn ('' unsets): the worker's own WALNUT_SESSION_ID is the caller.
     WALNUT_CALL_SOCKET: '',
     WALNUT_CALL_TOKEN: '',
     ...hostCallTokens.envFor((cmd as { home?: unknown }).home, typeof params.env?.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
-    // The page silencer, as for the native spawn (pw-silence-core.ts).
-    // An engine's env that names NODE_OPTIONS or BUN_OPTIONS (null or '' = cleared) wins over the daemon's own.
-    ...pwSilenceAcpOptions(params.env),
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')

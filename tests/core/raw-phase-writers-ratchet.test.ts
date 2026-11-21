@@ -44,6 +44,27 @@ function callText(src: string, start: number): string {
   return src.slice(start);
 }
 
+/**
+ * The call's text without its `field_at: { ... }` objects: `field_at.phase` is when the phase field
+ * was last written (task-fields.ts), a time, never a phase change the held guard judges.
+ */
+function withoutFieldTimes(call: string): string {
+  let out = '';
+  let i = 0;
+  for (const m of call.matchAll(/\bfield_at\s*:\s*\{/g)) {
+    if (m.index! < i) continue;
+    out += call.slice(i, m.index!);
+    let depth = 0;
+    let j = m.index! + m[0].length - 1;
+    for (; j < call.length; j++) {
+      if (call[j] === '{') depth++;
+      else if (call[j] === '}' && --depth === 0) break;
+    }
+    i = j + 1;
+  }
+  return out + call.slice(i);
+}
+
 interface Writer { file: string; line: number; leaveHeld: boolean; phase: string }
 
 function rawPhaseWriters(): Writer[] {
@@ -55,7 +76,7 @@ function rawPhaseWriters(): Writer[] {
       // Skip the definition itself.
       if (/function\s+$/.test(src.slice(Math.max(0, m.index! - 12), m.index!))) continue;
       const call = callText(src, m.index! + m[0].length - 1);
-      const phase = /\bphase\s*:\s*([^,}\n]+)/.exec(call);
+      const phase = /\bphase\s*:\s*([^,}\n]+)/.exec(withoutFieldTimes(call));
       if (!phase) continue;
       const value = phase[1].trim();
       // A write that completes the task passes the held guard by design (a pull may close a wait).
@@ -84,6 +105,11 @@ describe('raw phase writers and the held-phase guard', () => {
       if (n > count) bad.push({ file, line: 0, leaveHeld: false, phase: `${n} unguarded writers, ${count} allowed` });
     }
     expect(bad.map((w) => `${w.file}:${w.line} sets phase ${w.phase} without leaveHeld: pass leaveHeld: true when this write is a wait's exit (a turn, its report, a clock), or add the file to HELD_ON_PURPOSE with why a WAITING task must stay parked`)).toEqual([]);
+  });
+
+  it('a field time is not a phase write, and a phase beside one still is', () => {
+    expect(withoutFieldTimes("(t) => ({ field_at: { ...(t.field_at ?? {}), phase: at }, applied_ops: x })")).not.toMatch(/\bphase\s*:/);
+    expect(withoutFieldTimes("{ field_at: { ...f, phase: at }, phase: 'IN_PROGRESS' }")).toMatch(/\bphase\s*:\s*'IN_PROGRESS'/);
   });
 
   it('the exemptions are still writers (the list only shrinks)', () => {

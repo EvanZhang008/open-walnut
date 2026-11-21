@@ -896,6 +896,8 @@ describe('standalone ACP command lifetime', () => {
       secretsSessionEnv: () => ({}), SECRETS_ROOT: '/fixture/secrets',
       // acpStart starts the agent with the test-browser silencer preload (pw-silence-core.ts).
       pwSilenceAcpOptions: () => ({}),
+      // acpStart hands the worker its host-call entry (host-call-entry-v1); this frame names no home.
+      hostCallTokens: { envFor: () => ({}) },
       demoQuiesce: noDemoQuiesce(),
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')

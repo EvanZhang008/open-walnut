@@ -27,7 +27,11 @@ vi.mock('../../src/core/skill-store.js', () => ({
   listAllSkills: async () => [{ dirName: 'deploy', name: 'deploy', description: 'Ship it', content: '---\nname: deploy\n---\nRun the deploy script.' }],
 }))
 let config: Record<string, unknown> = {}
-vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => config }))
+// Partial: a host's memory round reads the task store for the tasks kept local (host-private.ts), which needs the rest.
+vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/core/config-manager.js')>()),
+  getConfig: async () => config,
+}))
 
 import crypto from 'node:crypto'
 import { NOTES_DIR, MEMORY_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'

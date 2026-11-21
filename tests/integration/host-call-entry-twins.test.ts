@@ -69,6 +69,15 @@ async function waitFor(cond: () => boolean, ms: number, label: string): Promise<
     await sleep(50)
   }
 }
+/** Asks again until the answer is the one awaited or `ms` ran out; the last answer either way. */
+async function askUntil<T>(ask: () => Promise<T>, done: (answer: T) => boolean, ms: number): Promise<T> {
+  const end = Date.now() + ms
+  for (;;) {
+    const answer = await ask()
+    if (done(answer) || Date.now() > end) return answer
+    await sleep(100)
+  }
+}
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
@@ -133,6 +142,15 @@ function cmd(ws: WebSocket, body: Record<string, unknown>, timeoutMs = 30_000): 
     ws.on('message', on)
     ws.send(JSON.stringify({ id, ...body }))
   })
+}
+
+/**
+ * A follower's report, taken: it is never answered, and both twins handle one socket's frames in
+ * order and at once, so an answered command sent after it comes back once the report was taken.
+ */
+async function report(ws: WebSocket, body: Record<string, unknown>): Promise<void> {
+  ws.send(JSON.stringify({ cmd: 'follower.report', report: body }))
+  await cmd(ws, { cmd: 'follower.status' })
 }
 
 function answersAs(ws: WebSocket, who: string): Array<Record<string, any>> {
@@ -266,12 +284,10 @@ for (const twin of ['source', 'standalone'] as const) {
         // The run ends: its token ends with it, though the sid is the same.
         await r.stopJobs()
         await waitFor(() => !alive(run.pid), 30_000, 'the job run to end')
-        let after: Record<string, any> = {}
-        for (let i = 0; i < 40; i++) {
-          after = await cmd(r.follower, { cmd: 'follower.gateway', request: line, token: run.callToken, openedAt: Date.now() })
-          if (after.errorKind === 'bad_token') break
-          await sleep(100)
-        }
+        const after = await askUntil(
+          () => cmd(r.follower, { cmd: 'follower.gateway', request: line, token: run.callToken, openedAt: Date.now() }),
+          (a) => a.errorKind === 'bad_token', 4_000,
+        )
         expect(after).toMatchObject({ ok: false, errorKind: 'bad_token' })
       } finally {
         r.mac.close(); r.follower.close()
@@ -281,8 +297,7 @@ for (const twin of ['source', 'standalone'] as const) {
     it('the follower\'s report says no socket (its experiment off) or one outside the entry dir: the next run gets none, and calls over the gateway socket', async () => {
       const r = await rig(twin, `${twin.slice(0, 2)}b`)
       try {
-        r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callSocket: null } }))
-        await sleep(300)
+        await report(r.follower, { callSocket: null })
         const run = await r.startJob('worker')
         expect(run.callSocket).toBeNull()
         expect(run.callToken).toBeNull()
@@ -293,16 +308,14 @@ for (const twin of ['source', 'standalone'] as const) {
         await new Promise<void>((resolve) => straySrv.listen(stray, () => resolve()))
         fs.chmodSync(stray, 0o600)
         for (const bad of [stray, 'http://127.0.0.1:4100/api/host/call', `${r.d.dir}/host-call/../host-call/${path.basename(r.callSocket)}`]) {
-          r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callSocket: bad } }))
+          await report(r.follower, { callSocket: bad })
         }
-        await sleep(300)
         const strayRun = await r.startJob('third')
         expect(strayRun.callSocket).toBeNull()
         expect(strayRun.answer).toEqual({ who: 'mac', op: 'task_list' })
         straySrv.close()
         // And its socket again: the run after that gets it.
-        r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callSocket: r.callSocket } }))
-        await sleep(300)
+        await report(r.follower, { callSocket: r.callSocket })
         const next = await r.startJob('second')
         expect(next.callSocket).toBe(r.callSocket)
         expect(r.entryLines.map((l) => l.sid)).toEqual([next.sid])
