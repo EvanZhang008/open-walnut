@@ -27,6 +27,7 @@
  * that is set.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import net from 'node:net'
@@ -45,6 +46,16 @@ import { CLOUD_BOX_HOST_ALIAS as A } from '../../src/core/hosts/cloud-box-host.j
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
 import { getDaemonConnectState } from '../../src/providers/daemon-connection.js'
 import { exportSessionProjection, exportSessionTranscripts, _resetTranscriptSweepForTesting } from '../../src/core/session-projection.js'
+
+/**
+ * `n` characters no compression shrinks (random base64). A file this suite moves over a slow
+ * link must take its time there: a range read from another host comes gzipped
+ * (fs-read-range-gz-v1), and a repeated line packs a hundred times, so 3MB crossed the 64KB/s
+ * link in 4s and no request ever waited (CI, 2026-11-21).
+ */
+function noise(n: number): string {
+  return randomBytes(Math.ceil((n * 3) / 4)).toString('base64').slice(0, n)
+}
 
 const OUT = process.env.HOST_READ_SILENT_OUT
 const report: Record<string, unknown> = {}
@@ -363,7 +374,8 @@ describe('a real companion that goes silent while connected', () => {
     await reconnect()
     await sleep(1_000)
     const big = path.join(dir, 'big-2m.log')
-    await fsp.writeFile(big, 'a line of a large log file, 0123456789 abcdefghijklmnopqrstuvwxyz\n'.repeat(Math.ceil((2 * 1024 * 1024) / 66)))
+    // Lines no gzip packs (noise), so the bytes on the slow link are the file's own.
+    await fsp.writeFile(big, Array.from({ length: Math.ceil((2 * 1024 * 1024) / 66) }, () => `a line of a large log file ${noise(39)}\n`).join(''))
     // One queue for both sockets: the bulk socket's 700KB of base64 holds every pong behind it.
     proxy.setMode('slow', { delayMs: 20, bytesPerSec: 64 * 1024, shared: true })
     const connectedSince = getDaemonConnectState(A).connectedAt
@@ -400,7 +412,8 @@ describe('a real companion that goes silent while connected', () => {
   it('a long history on a slow link that answers: at the stream cap the request says it is still loading, and the next one joins the read and gets it', async () => {
     await reconnect()
     await sleep(1_000)
-    // The session's transcript on the box, replaced by a long one (about 3MB, its turns chained):
+    // The session's transcript on the box, replaced by a long one (about 3MB, its turns chained,
+    // its answers noise so the gzipped range reads move about as many bytes as the file holds):
     // at 64KB/s one read of it takes about 90s, longer than a request may wait (60s) and
     // shorter than two waits, so a request that joins it gets it, and one that starts
     // over (behind the first, on the same link) cannot.
@@ -413,7 +426,7 @@ describe('a real companion that goes silent while connected', () => {
     let i = 0
     for (; size < 3 * 1024 * 1024; i++) {
       const user = JSON.stringify({ type: 'user', uuid: `lh-u-${i}`, parentUuid: parent, sessionId: sid, cwd: dir, timestamp: new Date(Date.parse('2026-09-01T00:00:00Z') + i * 2000).toISOString(), message: { role: 'user', content: `long history ${i}: question` } })
-      const asst = JSON.stringify({ type: 'assistant', uuid: `lh-a-${i}`, parentUuid: `lh-u-${i}`, sessionId: sid, cwd: dir, timestamp: new Date(Date.parse('2026-09-01T00:00:01Z') + i * 2000).toISOString(), message: { id: `msg_lh_${i}`, role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: `long history ${i}: answer ${'x'.repeat(4000)}` }] } })
+      const asst = JSON.stringify({ type: 'assistant', uuid: `lh-a-${i}`, parentUuid: `lh-u-${i}`, sessionId: sid, cwd: dir, timestamp: new Date(Date.parse('2026-09-01T00:00:01Z') + i * 2000).toISOString(), message: { id: `msg_lh_${i}`, role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: `long history ${i}: answer ${noise(4000)}` }] } })
       lines.push(user, asst)
       size += user.length + asst.length + 2
       parent = `lh-a-${i}`
