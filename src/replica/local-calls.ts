@@ -32,6 +32,7 @@ import { packRelayResult, relayedCallOf, serveRelayedCall, type KeptRelay, type 
 import { gatewayHubTimeoutMs } from '../providers/gateway-core.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../providers/daemon-frame-cap.js'
 import { refreshLocalTasksHere, type LocalTasksHere } from '../core/replication/kinds/local-tasks.js'
+import { matchIdRef } from '../lib/id-ref.js'
 
 /** The route refusals that go back with their own code: the daemon's away answer, and the two a caller retries. */
 const LIFTED = ['needs_leader', 'queue_full', 'throttled'] as const
@@ -82,9 +83,7 @@ function namesKept(v: unknown, here: LocalTasksHere, depth = 0): boolean {
   if (typeof v === 'string') {
     if (here.tasks.has(v) || here.sessions.has(v)) return true
     if (v.length < ID_PREFIX_MIN || /\s/.test(v)) return false
-    for (const id of here.tasks) if (id.startsWith(v)) return true
-    for (const id of here.sessions) if (id.startsWith(v)) return true
-    return false
+    return matchIdRef(here.tasks, v, String).length > 0 || matchIdRef(here.sessions, v, String).length > 0
   }
   if (depth >= 3 || !v || typeof v !== 'object') return false
   for (const x of Array.isArray(v) ? v : Object.values(v as Record<string, unknown>)) if (namesKept(x, here, depth + 1)) return true
