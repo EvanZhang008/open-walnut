@@ -28,6 +28,7 @@ const flag = (name: string, dflt: number) => { const i = args.indexOf(`--${name}
 const GB = flag('gb', 20)
 const FILES = flag('files', 100_000)
 const BATCHES = flag('batches', 20)
+const APPEND_MS = flag('append-ms', 20)
 const home = path.join(work, 'home')
 const target = path.join(work, 'target')
 const log = (...a: unknown[]) => console.log(`[bench ${new Date().toISOString().slice(11, 19)}]`, ...a)
@@ -158,10 +159,10 @@ async function main(): Promise<void> {
   const appender = (async () => {
     while (appending) {
       await fsp.appendFile(path.join(home, 'time-tracking.jsonl'), `{"at":${Date.now()},"n":${appends++}}\n`)
-      await new Promise((r) => setTimeout(r, 20))
+      await new Promise((r) => setTimeout(r, APPEND_MS))
     }
   })()
-  result.withUngatedAppends = { ...(await run('incremental (plus an ungated append every 20 ms)')), appends }
+  result.withUngatedAppends = { ...(await run(`incremental (plus an ungated append every ${APPEND_MS} ms)`)), appendEveryMs: APPEND_MS, appends }
   appending = false
   await appender
   writing = false

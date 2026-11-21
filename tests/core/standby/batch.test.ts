@@ -287,6 +287,22 @@ describe('the names at the moment come from the moment, not from the first scan'
     expect(after.w).not.toBe(before.w)
   })
 
+  it('the hold reads the small changed files even when one large changed file is past its budget', async () => {
+    sb = await sandbox('budget')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    write(sb.home, 'big/blob.bin', Buffer.alloc(3 * 1024 * 1024, 7))
+    write(sb.home, 'user-own-folder/plan.md', 'before the moment\n')
+    await settle()
+    const out = await snapshotTo(sb.home, sb.target, {
+      holdCopyBytes: 1024 * 1024,
+      hooks: { afterHold: () => write(sb.home, 'user-own-folder/plan.md', 'after the moment\n') },
+    })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.readFileSync(copyOf('user-own-folder/plan.md'), 'utf8')).toBe('before the moment\n')
+  })
+
   it.skipIf(process.platform === 'win32')('a backslash is part of a file name on this platform, not a separator', async () => {
     sb = await sandbox('backslash')
     dbs.push(...seedHome(sb.home).dbs)

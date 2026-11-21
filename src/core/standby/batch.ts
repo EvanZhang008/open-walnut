@@ -204,11 +204,16 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       // in neither listing, so the names at the moment cannot be told.
       if (names.unsettled.length) throw new VoidBatch(`${names.unsettled.slice(0, 3).map((d) => d || '.').join(', ')}: names changed at the batch's moment`)
       ctx = { home: opts.home, momentMs: fsMoment, afterCopy: opts.hooks?.afterCopy }
-      const budget = opts.holdCopyBytes ?? 8 * 1024 * 1024
-      if (changed.reduce((n, e) => n + e.st.s, 0) <= budget) for (const e of changed) await stage(e.p, keep)
+      // Read the changed files in the hold, smallest first, as far as the budget goes: each one
+      // read now is one no write after the moment can void. The rest are read after it.
+      let room = opts.holdCopyBytes ?? 8 * 1024 * 1024
+      for (const e of [...changed].sort((a, b) => a.st.s - b.st.s)) {
+        if (e.st.s > room) break
+        room -= e.st.s
+        await stage(e.p, keep)
+      }
       // Files made since the scan that existed at the moment: read them while writes are held.
       const made = names.listed.filter((rel) => !s1.files.has(rel) && !staged.has(rel) && !DB_NAME.test(rel) && names!.existed(rel) === true)
-      let room = budget - [...staged.values()].reduce((n, e) => n + e.size, 0)
       for (const rel of made) {
         const size = await fs.lstat(path.join(opts.home, rel)).then((st) => st.size).catch(() => 0)
         if (size > room) break
