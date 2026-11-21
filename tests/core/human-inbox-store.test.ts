@@ -504,6 +504,8 @@ describe('human inbox store — bus events', () => {
       textPreview: record.textPreview,
       senderSessionId: SENDER.sessionId,
       senderTitle: SENDER.sessionTitle,
+      // The task it is about, so a focus space's quiet can let it through (focus-spaces/scope.ts).
+      senderTaskId: SENDER.taskId,
       // Who it is from, for the bell and the push (letter-origin.ts).
       originKind: 'task',
       originName: SENDER.taskTitle,

@@ -62,6 +62,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/topic-mail/` | leader-data | no | Topic mail delivery state |
 | `~/.open-walnut/notifications.json` | leader-data | no | The notification list (the bell) |
 | `~/.open-walnut/quiet.json` | leader-data | no | Quiet mode holds |
+| `~/.open-walnut/focus-spaces.json` | leader-data | no | Saved focus spaces: the projects and tasks each one shows |
 | `~/.open-walnut/drawings/` | leader-data | no | Drawing library |
 | `~/.open-walnut/memory/` | leader-data | no | Memory: MEMORY.md, USER.md, daily logs, project and agent memory |
 | `~/.open-walnut/artifacts/` | leader-data | no | The artifacts folder: notes, skills and memory folders of tasks |
@@ -198,6 +199,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/backup/run.lock` | machine | no | This machine's backup run lock |
 | `~/.open-walnut/local/ai/` | leader-data | no | In-app AI conversations and spend |
 | `~/.open-walnut/local/drafts.json` | leader-data | no | Unsent message drafts |
+| `~/.open-walnut/local/focus-active.json` | machine | no | The focus space the person is in now, and until when |
 | `~/.open-walnut/local/stt-learned-corrections.json` | leader-data | no | Voice input corrections learned from sends |
 | `~/.open-walnut/local/page-visits.json` | leader-data | no | When the user last opened each page |
 | `~/.open-walnut/local/preview-storage/` | leader-data | no | Saved state of rich previews |

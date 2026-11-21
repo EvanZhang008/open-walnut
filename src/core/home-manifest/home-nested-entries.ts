@@ -84,6 +84,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   mach('local.backup.run-lock', 'local/backup/run.lock', 'file', 'This machine\'s backup run lock'),
   lead('local.ai', 'local/ai', 'dir', 'In-app AI conversations and spend'),
   lead('local.drafts', 'local/drafts.json', 'file', 'Unsent message drafts'),
+  mach('local.focus-active', 'local/focus-active.json', 'file', 'The focus space the person is in now, and until when'),
   lead('local.stt-learned', 'local/stt-learned-corrections.json', 'file', 'Voice input corrections learned from sends'),
   lead('local.page-visits', 'local/page-visits.json', 'file', 'When the user last opened each page'),
   lead('local.preview-storage', 'local/preview-storage', 'dir', 'Saved state of rich previews'),

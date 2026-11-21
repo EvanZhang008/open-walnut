@@ -40,6 +40,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('topic-mail', 'topic-mail', 'dir', 'Topic mail delivery state'),
   lead('notifications', 'notifications.json', 'file', 'The notification list (the bell)'),
   lead('quiet', 'quiet.json', 'file', 'Quiet mode holds'),
+  lead('focus-spaces', 'focus-spaces.json', 'file', 'Saved focus spaces: the projects and tasks each one shows'),
   lead('drawings', 'drawings', 'dir', 'Drawing library'),
   // Knowledge: memory, notes, skills, artifacts.
   lead('memory', 'memory', 'dir', 'Memory: MEMORY.md, USER.md, daily logs, project and agent memory'),

@@ -12,6 +12,7 @@ import { useProjectRegistry } from '@/hooks/useProjectRegistry'
 import { taskUserState } from '@/utils/session-status'
 import { createFocusSpace, deleteFocusSpace, enterFocus, updateFocusSpace, useFocusSnapshot, type FocusAppMode, type FocusSpace } from './focus-store'
 import { focusAppMode } from '@open-walnut/focus-scope'
+import { MicInput } from '@/components/common/BoxMic'
 
 const NO_TASKS: readonly Task[] = []
 const MAX_MATCHES = 6
@@ -96,11 +97,11 @@ export function SpaceForm({ space, length, onDone }: {
       <div className="focus-panel-title">{space ? `Edit ${space.name}` : 'New focus space'}</div>
       <label className="focus-form-field">
         <span className="focus-panel-caption">Name</span>
-        <input value={name} onChange={(e) => setName(e.currentTarget.value)} placeholder="Interview prep" maxLength={60} autoFocus data-no-draft="rename" data-testid="focus-form-name" />
+        <MicInput value={name} setText={setName} placeholder="Interview prep" maxLength={60} autoFocus data-no-draft="rename" data-testid="focus-form-name" />
       </label>
       <div className="focus-panel-caption">{`Projects (${projects.length} of ${projectNames.length} picked)`}</div>
       {projectNames.length > PROJECT_FIND_AT && (
-        <input value={projectQuery} onChange={(e) => setProjectQuery(e.currentTarget.value)} placeholder="Find a project" aria-label="Find a project" data-no-draft="search" data-testid="focus-form-project-search" />
+        <MicInput value={projectQuery} setText={setProjectQuery} placeholder="Find a project" aria-label="Find a project" data-no-draft="search" data-testid="focus-form-project-search" />
       )}
       <div className="focus-form-projects" role="group" aria-label="Projects">
         <div className="ask-card">
@@ -113,7 +114,7 @@ export function SpaceForm({ space, length, onDone }: {
       </div>
       <label className="focus-form-field">
         <span className="focus-panel-caption">Tasks (their subtasks come along)</span>
-        <input value={query} onChange={(e) => setQuery(e.currentTarget.value)} placeholder="Find a task by its title" data-no-draft="search" data-testid="focus-form-task-search" />
+        <MicInput value={query} setText={setQuery} placeholder="Find a task by its title" data-no-draft="search" data-testid="focus-form-task-search" />
       </label>
       {(picked.length > 0 || matches.length > 0) && (
         <div className="ask-card"><div className="ask-card-answer focus-ticks" role="group" aria-label="Tasks">
