@@ -380,7 +380,8 @@ describe('a question for the user names which of their kinds it is', () => {
     // Moved to needs by the lead: asked; with a kind: allowed; again while waiting: not asked.
     const move = (extra: Record<string, unknown> = {}, sid: string | null = LEAD_SID) => post(`/tasks/${leadId}/threads/${id}`, sid ?? undefined, { state: 'needs', ...extra }, 'PATCH')
     expect((await move()).status).toBe(409)
-    expect((await move({ user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team' })).status).toBe(200)
+    // The mail thread above still waits on him: this is another decision (thread-supersede.ts).
+    expect((await move({ user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team', separate_reason: 'The paid plan is not the mail reply' })).status).toBe(200)
     expect((await move({ reply: 'Still waiting on the plan choice' })).status).toBe(200)
     const after = (await threads()).find((t) => t.id === id)!
     expect(after.state).toBe('needs')

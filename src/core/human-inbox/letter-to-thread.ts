@@ -170,7 +170,8 @@ export async function fileLetterAsThreadUpdate(input: SendInput, callerSid: stri
         // A new summary is news: the store shows a thread out of his sight as answered, and one
         // waiting on his decision keeps waiting (threads-model.ts updateThread).
         const reply = updateSummary(input);
-        return done(await threads.patchThread(taskId, hit.id, { reply, ...(tasks.length ? { add_tasks: tasks } : {}) }, by, source), reply);
+        // An update asks nothing new: a card waiting on him keeps its decision (thread-return.ts).
+        return done(await threads.patchThread(taskId, hit.id, { reply, ...(hit.state === 'needs' ? { decision: 'same' as const } : {}), ...(tasks.length ? { add_tasks: tasks } : {}) }, by, source), reply);
       }
       opened = await threads.openNodeThread(taskId, {
         title: subject, text: str(input.markdown) || str(input.text) || subject, from: 'node', state: 'answered',

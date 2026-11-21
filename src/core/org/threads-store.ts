@@ -235,13 +235,20 @@ async function refuseSameAskThread(taskId: string, text: string | undefined, by:
 export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
   // The needs_options check below reads the switch as it is now (one-card.ts).
   await oneCardOn();
-  if (!input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs') await refuseSameAskThread(taskId, input.title, by, input);
+  const needs = !input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs';
+  if (needs) await refuseSameAskThread(taskId, input.title, by, input);
+  // The task's other asks: named as replaced, or said to be other decisions (thread-supersede.ts).
+  const { refuseOtherOpenAsks, applySupersedes } = await import('./thread-supersede.js');
+  // The thread's own refusals come first (a missing kind, an unclear card): a dry run on the file as it is.
+  if (needs && by !== 'human') openThread(await readThreads(taskId), input, by, new Date().toISOString(), source);
+  const replaced = needs ? await refuseOtherOpenAsks(taskId, by, input) : [];
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
     const r = openThread(cur, input, by, at, source);
     return { file: r.file, out: r.thread };
   });
   emit({ taskId, kind: 'opened', threadId: thread.id });
+  await applySupersedes(taskId, replaced, thread, by);
   return thread;
 }
 
@@ -278,9 +285,15 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
       rest.add_tasks = [...(rest.add_tasks ?? []), owner.task];
     }
   }
+  let replaced: import('./thread-supersede.js').OpenAsk[] = [];
   if (by !== 'human' && !owner) {
     const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
-    if (cur && patchHandsToUser(cur, rest)) await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest);
+    if (cur && patchHandsToUser(cur, rest)) {
+      await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest);
+      // Its own refusals first (a missing kind, a return with no word on his message): a dry run.
+      updateThread(await readThreads(taskId), id, rest, by, new Date().toISOString(), source);
+      replaced = await (await import('./thread-supersede.js')).refuseOtherOpenAsks(taskId, by, rest, id);
+    }
   }
   // His Acknowledge alone (experiment ack_means_known): read the open tasks it lists before the lock.
   const ack = by === 'human' && rest.close === 'acked' && Object.keys(rest).length === 1 ? await import('./thread-ack.js') : null;
@@ -304,6 +317,7 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     return { file: { ...r.file, threads: r.file.threads.map((t) => (t.id === id ? next : t)) }, out: next };
   });
   emit({ taskId, kind: 'updated', threadId: id });
+  if (replaced.length) await (await import('./thread-supersede.js')).applySupersedes(taskId, replaced, thread, by);
   if (ack && held.reading) await ack.rideToNode(taskId, id, ack.ackLine(thread, held.reading));
   return thread;
 }

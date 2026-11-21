@@ -43,6 +43,10 @@ const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix
 interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
 
 /** Every thread op that hands a thread to the user (same-ask.ts). */
+/** Every thread op that hands a thread to the user while its task asks him something else (thread-supersede.ts). */
+const SUPERSEDES_PARAM = 'With needs, when your task still asks the user something else (another of its threads in needs, a decision letter he has not answered; 409 other_open_asks names them): the ids (th-..., lt-...) this one replaces. They leave his Needs you now: one matter is asked in one place'
+const SEPARATE_REASON_PARAM = 'With needs, after a 409 other_open_asks, when those asks are other decisions that stay open: one line (10+ characters) saying why'
+
 const SAME_ASK_REASON_PARAM = 'With needs: only after a 409 same_ask (a task in your team already asks him this; leave the ask to it and keep the thread working or pending), '
   + 'when this really is a different decision: one line (10+ characters) saying why. Never stored'
 
@@ -86,6 +90,10 @@ defineOp({
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     ask_owner: z.string().max(128).optional().describe('The id of the task in your team whose Needs you already asks him this thread\'s decision: the thread then points at that ask (read as pending with askedIn, its conversation kept) and waits on him again by itself once that task stops asking it or asks another decision. Refused (409) when that task asks him nothing now. "" takes it off'),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
+    since_you_wrote: z.string().max(600).optional().describe('Back to needs after he wrote in the thread: one line on what you did about his message (the answer to his question, what you checked). Walnut puts it first on the card under his words, then your reply as the decision; without it the write is refused (409 returned_ask)'),
+    decision: z.enum(['same', 'new']).optional().describe('Back to needs after he wrote, or new options while it waits on him, on a thread that asked before: "same" when it asks that decision again, "new" when another one. A new decision is refused here: answer him in this thread and open the new one with thread_create (supersedes naming this one)'),
+    supersedes: z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe(SUPERSEDES_PARAM),
+    separate_reason: z.string().max(300).optional().describe(SEPARATE_REASON_PARAM),
     options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
     add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
@@ -136,6 +144,8 @@ defineOp({
     user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
     design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
+    supersedes: z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe(SUPERSEDES_PARAM),
+    separate_reason: z.string().max(300).optional().describe(SEPARATE_REASON_PARAM),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
     task: TASK_ARG,
   },

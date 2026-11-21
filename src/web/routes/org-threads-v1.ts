@@ -352,6 +352,8 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'design_review') ? { design_review: str(b, 'design_review') } : {}),
     ...(str(b, 'reply') ? { reply: str(b, 'reply') } : {}),
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
+    ...(ids(b, 'supersedes') ? { supersedes: ids(b, 'supersedes') } : {}),
+    ...(str(b, 'separate_reason') ? { separate_reason: str(b, 'separate_reason') } : {}),
   }, by, source)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
   res.status(201).json({ task_id: task.id, thread: await projected(task.id, thread) })
@@ -369,12 +371,14 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const { by, source } = await callerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'user_kind_words', 'user_kind_about', 'design_review', 'same_ask_reason', 'ask_owner', 'user_words', 'place', 'place_why'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'user_kind_words', 'user_kind_about', 'design_review', 'same_ask_reason', 'ask_owner', 'user_words', 'place', 'place_why', 'since_you_wrote', 'decision', 'separate_reason'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }
   const tasks = ids(b, 'tasks')
   const addTasks = ids(b, 'add_tasks')
+  const supersedes = ids(b, 'supersedes')
+  if (supersedes) patch.supersedes = supersedes
   if (tasks) patch.tasks = tasks
   if (addTasks) patch.add_tasks = addTasks
   if (b.reopen === true) patch.reopen = true

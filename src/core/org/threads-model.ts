@@ -53,6 +53,7 @@
  */
 import { userKindVerdict, type UserKindInput } from './user-kind.js';
 import { askClarityRefusal, choiceLabels, needsCardRefusal, showsDesign } from './ask-clarity.js';
+import { returnRefusal, returnedReply, wroteSinceNeeds } from './thread-return.js';
 import type { AskOption } from '../user-status.js';
 import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
 import { oneCardNow } from './one-card.js';
@@ -308,6 +309,8 @@ export interface OrgThread {
   pinned?: ThreadPinned;
   /** When its last move into needs buzzed his phone (push/thread-push.ts): one buzz per absence. */
   needsBuzzedAt?: string;
+  /** When a node last put it in needs (thread-return.ts: his words after it bring it back only with an answer first). */
+  needsAt?: string;
   /** Walnut woke the node about the overdue stretch that began at `since` (thread-recheck.ts): once per stretch. */
   recheck?: ThreadRecheck;
   /** Closed here as `moved`: the node it went to (the open copy lives there now). */
@@ -379,7 +382,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'pinned_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -504,6 +507,7 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.closed) delete next.pinned;
   if (next.known && !(typeof next.known === 'object' && isStr(next.known.through) && messages.some((m) => m.id === next.known!.through))) delete next.known;
   if (next.reactedAt !== undefined && !(isStr(next.reactedAt) && Number.isFinite(Date.parse(next.reactedAt)))) delete next.reactedAt;
+  if (next.needsAt !== undefined && !(isStr(next.needsAt) && Number.isFinite(Date.parse(next.needsAt)))) delete next.needsAt;
   if (!validMove(next.movedTo)) delete next.movedTo;
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
@@ -776,6 +780,14 @@ export interface ThreadPatch {
   ask?: string;
   state?: ThreadState;
   reply?: string;
+  /** Back to needs after his message: what the node did about it, first on the card (thread-return.ts). */
+  since_you_wrote?: string;
+  /** Back to needs, or new choices while in needs, on a thread that asked before: the same decision or a new one. */
+  decision?: 'same' | 'new';
+  /** Asks of the writer's task this one replaces (th-..., lt-...): they leave his Needs you (thread-supersede.ts). */
+  supersedes?: string[];
+  /** Asks of the writer's task left open beside this one: why they are other decisions (thread-supersede.ts). */
+  separate_reason?: string;
   /** The tasks it went to, all of them (replaces the list). */
   tasks?: string[];
   /** Add these tasks to the list. */
@@ -851,6 +863,7 @@ function checkPatch(p: ThreadPatch): void {
   if (p.close && p.reopen) throw new ThreadError('bad_input', 400, 'close and reopen cannot go together.');
   if (p.snooze !== undefined && typeof p.snooze !== 'string') throw new ThreadError('bad_input', 400, 'snooze must be an ISO datetime, a duration like "4h", or "".');
   if (p.close && p.snooze) throw new ThreadError('bad_input', 400, 'close and snooze cannot go together.');
+  if (p.decision !== undefined && p.decision !== 'same' && p.decision !== 'new') throw new ThreadError('bad_input', 400, 'decision must be "same" or "new".');
   if (p.pin !== undefined && typeof p.pin !== 'boolean') throw new ThreadError('bad_input', 400, 'pin must be true or false.');
   if (p.pin && p.close) throw new ThreadError('bad_input', 400, 'pin and close cannot go together.');
   if (p.pin && p.snooze) throw new ThreadError('bad_input', 400, 'pin and snooze cannot go together: a pinned thread stays in his sight.');
@@ -1007,8 +1020,15 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.reopen && by !== 'human' && cur.closed?.by === 'human' && cur.closed.how === 'acked' && !cur.closed.reacted) {
     throw new ThreadError('thread_closed', 409, `Thread ${id} is closed: the user acknowledged it himself, so it stays closed. Something new about it is a new thread (thread_create); his own Follow up on it opens it again.`);
   }
+  // Back before him after his words, or a new choice while it waits: it starts from his words (thread-return.ts).
+  const handing = patchHandsToUser(cur, patch);
+  const back = returnRefusal(cur, patch, by, handing);
+  if (back) throw new ThreadError('returned_ask', 409, back);
+  if (handing && by !== 'human' && wroteSinceNeeds(cur) && isStr(patch.since_you_wrote) && patch.since_you_wrote.trim()) {
+    patch = { ...patch, reply: returnedReply(cur, patch.since_you_wrote, isStr(patch.reply) ? patch.reply : cur.reply ?? '') };
+  }
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
-  if (patchHandsToUser(cur, patch)) {
+  if (handing) {
     // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
     checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options, ...(cur.opener ? {} : { own_words: [patch.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') }) }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), cur.reply);
     if (by !== 'human') {
@@ -1049,6 +1069,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
   else if (HIDDEN_STATES.has(cur.state) && next.reply !== undefined && next.reply !== cur.reply) next.state = 'answered';
+  if (handing && by !== 'human') next.needsAt = at;
   // Real news takes a snooze off: the thread now waits on him (needs) or its result is in (answered).
   if (next.snoozed && next.state !== cur.state && (next.state === 'needs' || next.state === 'answered')) delete next.snoozed;
   if (patch.snooze !== undefined) {
@@ -1157,10 +1178,12 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   const messages = [...into.messages, ...from.messages].sort((a, b) => a.at.localeCompare(b.at));
   // The phone buzz either one gave this absence stays with the merged thread (push/thread-push.ts).
   const needsBuzzedAt = [into.needsBuzzedAt, from.needsBuzzedAt].filter((x): x is string => !!x).sort().pop();
+  const needsAt = [into.needsAt, from.needsAt].filter((x): x is string => !!x).sort().pop();
   const next: OrgThread = {
     ...into, messages, updatedAt: at, by,
     ...(pinned ? { pinned } : {}),
     ...(needsBuzzedAt ? { needsBuzzedAt } : {}),
+    ...(needsAt ? { needsAt } : {}),
     ...(from.tasks?.length || into.tasks?.length ? { tasks: taskList([...(into.tasks ?? []), ...(from.tasks ?? [])]) } : {}),
     ...(into.state === 'answered' || into.state === 'pending' ? { state: 'working' as ThreadState } : {}),
   };
@@ -1297,6 +1320,9 @@ export interface OpenThreadInput {
   text: string;
   from: ThreadSource;
   ref?: string;
+  /** Asks of the writer's task this one replaces, and why others stay open beside it (thread-supersede.ts). */
+  supersedes?: string[];
+  separate_reason?: string;
   state?: ThreadState;
   tasks?: string[];
   id?: string;
@@ -1370,6 +1396,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
       ...(s ? { sid: s.sid, ...(s.host ? { host: s.host } : {}) } : {}),
     },
     createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}), ...(options.length ? { options } : {}),
+    ...(!quiet && by !== 'human' && (input.state ?? 'needs') === 'needs' ? { needsAt: at } : {}),
   };
   if (quiet) { setReply(thread, quiet, by, source); thread.replyAt = at; }
   else if (isStr(input.reply) && input.reply.trim()) { setReply(thread, clip(input.reply, THREAD_REPLY_MAX), by, source); thread.replyAt = at; }

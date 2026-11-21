@@ -162,6 +162,8 @@ describe('the 2026-11-21 VP: a withdrawn letter, the same thread asked again, hi
     const asked = await api('PATCH', `/tasks/${ids.owner}/threads/${thread}`, {
       title: 'Same Wi-Fi browser sign-in: which settings page holds the button?', state: 'needs',
       reply: 'Two places, screenshots attached: All devices, or the Tunnel tab. Which one?',
+      // Back before him after his words: what was done about them, and the same decision (thread-return.ts).
+      since_you_wrote: 'Withdrew the unclear letter and took two screenshots of the places the button can go.', decision: 'same',
       user_kind: 'user_own', user_kind_why: 'It places a button on his own settings page',
     }, ids.ownerSid)
     expect(asked.status, JSON.stringify(asked.json)).toBe(200)

@@ -92,7 +92,9 @@ async function flag(on: boolean): Promise<void> {
 
 /** The owner asks him something (a needs thread of its own). */
 async function ask(taskId: string, title: string): Promise<OrgThread> {
-  return openNodeThread(taskId, { title, text: `${title} The orchard budget covers one of them.`, from: 'task', state: 'needs', user_kind: 'spending', user_kind_why: 'It buys orchard supplies with real money' }, `task:${taskId}`)
+  return openNodeThread(taskId, { title, text: `${title} The orchard budget covers one of them.`, from: 'task', state: 'needs', user_kind: 'spending', user_kind_why: 'It buys orchard supplies with real money',
+    // Each asks its own decision beside the task's others (thread-supersede.ts).
+    separate_reason: 'Each one is its own orchard supply decision' }, `task:${taskId}`)
 }
 
 async function messageOf(owner: string, messageId: string): Promise<ThreadMessage | undefined> {

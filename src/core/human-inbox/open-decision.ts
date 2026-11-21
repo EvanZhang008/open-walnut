@@ -41,3 +41,12 @@ export function decisionAnswered(l: DecisionLetterShape): boolean {
 export function awaitsUserDecision(l: DecisionLetterShape): boolean {
   return l.type === 'action_required' && !decisionAnswered(l) && !l.settled && !l.archived;
 }
+
+/**
+ * A decision letter whose buttons still show: no option picked, not settled or archived. Words
+ * written back leave them on his card (2026-11-21), so a task that asks him anew must name it
+ * (org/thread-supersede.ts); whether it still waits on him is awaitsUserDecision.
+ */
+export function showsDecisionButtons(l: DecisionLetterShape): boolean {
+  return l.type === 'action_required' && !l.answered && !l.settled && !l.archived;
+}
