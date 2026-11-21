@@ -34,8 +34,14 @@ export interface FollowerGatewayResponse {
   error?: { code: string; message: string; detail?: unknown; retryAfterMs?: number; api?: unknown }
 }
 
-/** Who made the call, beside its session id: a plugin job is named so its write records the job. */
-export type FollowerCaller = { kind: 'plugin-job'; plugin: string; job: string }
+/**
+ * Who made the call, beside its session id: a plugin job, named by the daemon from its own record
+ * of the run it started (plugin-jobs-core.ts callerOfRun), never from the caller's words. The same
+ * `caller` frame field goes to the leader (relayToPrimary) and to this host's own Walnut server
+ * (handOff): the leader keeps it only from the host its config runs the plugin's jobs on
+ * (core/plugin-jobs/index.ts relayedJobOf), the follower records the job as its write's maker.
+ */
+export type GatewayCaller = { kind: 'plugin-job'; plugin: string; job: string }
 
 export interface FollowerGatewayDeps<S> {
   /** The follower of `home` linked now that answers local calls, or null. */
@@ -59,7 +65,7 @@ export interface HandOff {
   capability: string
   callerSid: string
   payload: Record<string, unknown>
-  caller?: FollowerCaller
+  caller?: GatewayCaller
   deadline: number
   /** A read: with no answer in time, `fallback` answers it (nothing runs twice by reading). */
   readable?: boolean

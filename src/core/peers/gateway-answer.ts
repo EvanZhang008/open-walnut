@@ -49,7 +49,10 @@ export interface RelayedCall {
   callerSid: string;
   payload: unknown;
   busyAgain?: number;
-  /** The plugin job that made the call (a host's daemon names it to its own replica only). */
+  /**
+   * The plugin job that made the call, as the host's daemon names it (the frame's `caller`). Its own
+   * replica takes it; the leader only from the host it runs that plugin's jobs on (daemon-connection.ts).
+   */
   pluginJob?: { plugin: string; job: string };
   /** How long the daemon waits for this answer from now (a host's daemon to its own replica; after a wait, maybe little). */
   answerInMs?: number;

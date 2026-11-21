@@ -1,10 +1,11 @@
 /**
  * A plugin runs its program inside Walnut (core/sessions/plugin-run.ts), end to end, through the callers
- * the leader really sees: its job's `walnut.ops.call` online (the host daemon's anonymous caller
- * `external`, with the host it came from and no word of the plugin: daemon-connection.ts drops the job's
- * identity) creates a task with the `walnut:plugin-run` tag; its first turn ends and the task reads
- * Waiting on the program, not unread. The job's send and start keep it its run, as do a job's call on
- * its host's own replica (the plugin named, peers/capability-router.ts) and the server half's own call
+ * the leader really sees: its job's `walnut.ops.call` online as an older host daemon relays it (the
+ * anonymous caller `external`, with the host it came from and no word of the plugin) creates a task with
+ * the `walnut:plugin-run` tag; its first turn ends and the task reads Waiting on the program, not unread.
+ * The job's send and start keep it its run, as do a job's call with the plugin named (a current daemon's
+ * relay whose job the leader keeps, daemon-connection.ts; or its host's own replica's, the router
+ * passing it on: peers/capability-router.ts) and the server half's own call
  * (callPluginOp); `walnut.tasks.create` with the tag makes one too. Nobody else can create one, and an
  * unknown sid, a script naming itself, another task's session and a person each make a run a regular task.
  *

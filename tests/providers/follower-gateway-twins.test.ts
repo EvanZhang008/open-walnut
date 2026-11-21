@@ -40,8 +40,10 @@ describe('follower gateway twin wiring', () => {
       // A session's call: the follower first, its hand-back runs the same function again, marked.
       expect(src).toMatch(/!plan\.ownServerAsked && followerGateway\.answers\(home\)/)
       expect(src).toContain('ownServerAsked: true')
-      // A plugin job's call: handed over with its job named, no fallback.
-      expect(src).toMatch(/pluginJobs\.jobOfRun\(req\.sid\)/)
+      // A plugin job's call: handed over with its job named, no fallback. One builder of that name
+      // (plugin-jobs-core.ts callerOfRun) for the follower and the leader alike.
+      expect(src).toMatch(/pluginJobs\.callerOfRun\(req\.sid\)/)
+      expect(src).not.toMatch(/kind: 'plugin-job', plugin: job\.plugin/)
       expect(src).toMatch(/followerGateway\.routeJob\(\{ home(: home)?, capability(: capability)?, callerSid: EXTERNAL_CALLER_SID, payload(: payload)?, caller(: caller)?, deadline(: deadline)? \}/)
       // Its answer is taken only from that follower socket.
       expect(src).toContain('followerGateway.settle(ws, relayId, followerGateway.responseOf(')
@@ -50,7 +52,8 @@ describe('follower gateway twin wiring', () => {
       expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerMayWrite\(home\)/)
       // A plugin job's call in the window waits for its leader or the follower, within its own deadline.
       expect(src).toContain('followerGateway.routeJob(')
-      expect(src).toMatch(/relayToPrimary\(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline\)/)
+      // To the leader it names the same job, in the same `caller` frame field, on every attempt.
+      expect(src).toMatch(/relayToPrimary\(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline, caller\)/)
     }
   })
 

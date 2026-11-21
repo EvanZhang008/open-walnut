@@ -103,7 +103,7 @@ import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
-import { createFollowerGateway, type FollowerCaller, type FollowerGatewayResponse } from './follower-gateway-core.js'
+import { createFollowerGateway, type FollowerGatewayResponse, type GatewayCaller } from './follower-gateway-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobDoor } from './plugin-job-door.js'
@@ -4124,6 +4124,8 @@ type GatewayRelayCall = {
   busyAgain?: number
   /** Its Walnut identifies itself here (walnutPinned): only a socket of that Walnut answers it. */
   pinned?: boolean
+  /** The plugin job that made it (pluginJobs.callerOfRun), named on every attempt as the follower hears it. */
+  caller?: GatewayCaller
 }
 const gatewayRelayPending = new Map<number, {
   respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined
@@ -5950,14 +5952,15 @@ function relayToPrimary(
   respond: (resp: GatewayResponse) => void,
   readable: boolean,
   deadline: number = Date.now() + gatewayHubTimeoutMs(),
+  caller?: GatewayCaller,
 ) {
   // A cold daemon asks for one catalog per Walnut at a time; the rest go once it is held.
-  const resume = () => relayToPrimary(gatewayTargetFor(home) ?? target, home, capability, callerSid, payload, respond, readable, deadline)
+  const resume = () => relayToPrimary(gatewayTargetFor(home) ?? target, home, capability, callerSid, payload, respond, readable, deadline, caller)
   if (heldCatalogs.wait(home, capability, payload, resume)) return
   const relayId = ++gatewayRelayCounter
   // A schemas tools.list names the catalogs held for its Walnut (held-catalogs-core.ts).
   payload = heldCatalogs.ask(home, capability, payload)
-  const call: GatewayRelayCall = { home, capability, callerSid, payload, readable, deadline, sentOn: null, attempts: 0, pinned: walnutPinned(home) }
+  const call: GatewayRelayCall = { home, capability, callerSid, payload, readable, deadline, sentOn: null, attempts: 0, pinned: walnutPinned(home), ...(caller ? { caller } : {}) }
   gatewayRelayPending.set(relayId, { respond, timer: undefined, call })
   sendRelayAttempt(relayId, target)
 }
@@ -5983,9 +5986,11 @@ function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): voi
   })
   // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
   // `busyAgain`: this host asks a busy call again; it paid its write at its first ask (capability-router.ts).
+  // `caller`: the plugin job that made it, the field the follower gets (follower-gateway-core.ts GatewayCaller).
   sendEvent(target, 'gateway-request', {
     relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload,
     ...(call.busyAgain ? { busyAgain: call.busyAgain } : {}),
+    ...(call.caller ? { caller: call.caller } : {}),
   })
 }
 
@@ -6103,6 +6108,14 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   sendOk(ws, id, {})
 }
 
+/** `call` as a NEW relay with nothing sent yet: its Walnut, op, caller and deadline kept. Keep in sync with daemon-source.ts. */
+function relayAgainOf(call: GatewayRelayCall, change: Partial<GatewayRelayCall>): GatewayRelayCall {
+  return {
+    home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline,
+    sentOn: null, attempts: 0, pinned: call.pinned, ...(call.caller ? { caller: call.caller } : {}), ...change,
+  }
+}
+
 /**
  * The server named a catalog this host no longer holds (dropped for a newer one, or this
  * daemon restarted): the same call goes again as a NEW relay without `have`, to its Walnut's
@@ -6117,7 +6130,7 @@ function heldCatalogAskAgain(relayId: number, call: GatewayRelayCall, payload: R
   logMsg('info', 'gateway: tool catalog not held here; asking for it in full', { relayId, next, callerSid: call.callerSid })
   gatewayRelayPending.set(next, {
     respond, timer: undefined,
-    call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload, readable: call.readable, deadline: call.deadline, sentOn: null, attempts: 0, pinned: call.pinned },
+    call: relayAgainOf(call, { payload }),
   })
   sendRelayAttempt(next, target)
 }
@@ -6150,7 +6163,7 @@ function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: G
     })
     gatewayRelayPending.set(next, {
       respond, timer: undefined,
-      call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline, sentOn: null, attempts: 0, busyAgain: attempt, pinned: call.pinned },
+      call: relayAgainOf(call, { busyAgain: attempt }),
     })
     sendRelayAttempt(next, target)
   }
@@ -6159,10 +6172,12 @@ function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: G
 
 /**
  * A plugin job's call (plugin-jobs-core.ts): to the server of the Walnut that runs the
- * job and no other, as `external` (no session: what the user's own terminal may do).
+ * job and no other, as `external` (no session: what the user's own terminal may do) with
+ * `caller` naming the job, from this daemon's record of the run (callerOfRun): the leader
+ * keeps it only from the host its config runs the plugin's jobs on (daemon-connection.ts).
  * While that server is away the job is told so at once and tries again later.
  */
-function sendPluginJobGatewayRequest(home: string, capability: string, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void, caller?: FollowerCaller, deadline = Date.now() + gatewayHubTimeoutMs(), waited = false) {
+function sendPluginJobGatewayRequest(home: string, capability: string, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void, caller?: GatewayCaller, deadline = Date.now() + gatewayHubTimeoutMs(), waited = false) {
   let target: ServerWebSocket<WsData> | null = null
   for (const client of wsClients) {
     if (!isServerClient(client) || isQuietTrustedClient(client)) continue
@@ -6187,7 +6202,7 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
       ? 'the Walnut that runs this job went quiet; this call waited for it to answer again, or for this host\'s own Walnut server to take over, and neither happened in time. Nothing was done; try again later'
       : 'the Walnut that runs this job is not connected now; try again later'))
   }
-  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline)
+  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline, caller)
 }
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
@@ -6217,8 +6232,7 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)
     if (!home) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'))
-    const job = pluginJobs.jobOfRun(req.sid)
-    return sendPluginJobGatewayRequest(home, req.op, req.args, respond, job ? { kind: 'plugin-job', plugin: job.plugin, job: job.job } : undefined)
+    return sendPluginJobGatewayRequest(home, req.op, req.args, respond, pluginJobs.callerOfRun(req.sid) ?? undefined)
   }
   // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
   // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.

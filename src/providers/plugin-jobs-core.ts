@@ -47,6 +47,7 @@
  * `__CREATE_PLUGIN_JOBS__`. So the factory body references NOTHING at module
  * scope; every side effect arrives through deps.
  */
+import type { GatewayCaller } from './follower-gateway-core.js'
 
 export type PluginJobKind = 'every' | 'long-running'
 
@@ -1083,14 +1084,19 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     return null
   }
 
-  /** The job a live run id belongs to (`plugin`, `job`), or null: who a call made by that run acts as. */
-  function jobOfRun(sid: unknown): { plugin: string; job: string } | null {
+  /**
+   * Who a call made by a live run acts as: the `caller` frame field (follower-gateway-core.ts
+   * GatewayCaller) its relays carry, to the leader and to this host's own Walnut server alike, or
+   * null when no live run holds the id. Read from this supervisor's own record of the run it
+   * started, so a caller can claim a job only by holding that run's secret id.
+   */
+  function callerOfRun(sid: unknown): GatewayCaller | null {
     if (typeof sid !== 'string' || !sid.startsWith(RUN_SID_PREFIX)) return null
     for (const m of homes.values()) {
-      for (const e of m.values()) if (e.proc && e.proc.sid === sid) return { plugin: e.spec.plugin, job: e.spec.job }
+      for (const e of m.values()) if (e.proc && e.proc.sid === sid) return { kind: 'plugin-job', plugin: e.spec.plugin, job: e.spec.job }
     }
     for (const list of draining.values()) {
-      for (const d of list) if (d.proc.sid === sid) { const i = d.key.indexOf('/'); return i > 0 ? { plugin: d.key.slice(0, i), job: d.key.slice(i + 1) } : null }
+      for (const d of list) if (d.proc.sid === sid) { const i = d.key.indexOf('/'); return i > 0 ? { kind: 'plugin-job', plugin: d.key.slice(0, i), job: d.key.slice(i + 1) } : null }
     }
     return null
   }
@@ -1103,7 +1109,7 @@ export function createPluginJobSupervisor(deps: PluginJobDeps) {
     http,
     prune,
     homeOfRun,
-    jobOfRun,
+    callerOfRun,
     quiesce,
     pending,
     /** Whether a gateway caller id is a plugin job's (live or not). */

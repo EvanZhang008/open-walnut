@@ -11,6 +11,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { EXTERNAL_CALLER_SID } from '../../providers/gateway-core.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
 import { isSecretKey } from '../config-secret-shape.js'
@@ -214,6 +215,33 @@ export async function forwardPluginJobRoute(request: JobRouteRequest): Promise<J
     throw new JobRouteError(`this plugin's routes come from its job, and ${off ?? 'plugin jobs are still starting'}`, 503, off ? undefined : 2)
   }
   return forwardJobRoute({ home: WALNUT_HOME, serveTarget: (id) => m.serveTarget(id) }, request)
+}
+
+/**
+ * The plugin job a host's daemon names on a call it relays to this server (the `gateway-request`
+ * frame's own `caller`, follower-gateway-core.ts GatewayCaller), kept only when it can be that
+ * host's job: an anonymous call (`external`: a job's calls carry no session) whose plugin this
+ * server's config runs on the very host that relayed it (`plugin_jobs.<plugin>.run_on`, under any
+ * name of its daemon), else undefined and the call stays plain `external`. The daemon names it
+ * from its own record of the run it started (plugin-jobs-core.ts callerOfRun), never from the
+ * caller's words, which ride in the payload and are never read as it. `hostKey` is the host whose
+ * link carried the frame (daemon-connection.ts), never one the frame names.
+ */
+export async function relayedJobOf(
+  call: { callerSid: string; pluginJob?: { plugin: string; job: string } }, hostKey: string,
+): Promise<{ plugin: string; job: string } | undefined> {
+  const job = call.pluginJob
+  if (!job || call.callerSid !== EXTERNAL_CALLER_SID || !hostKey) return undefined
+  const { getConfig } = await import('../config-manager.js')
+  const config = await getConfig().catch(() => null)
+  if (!config) return undefined
+  const runOn = config.plugin_jobs?.[job.plugin]?.run_on?.trim() || LOCAL_HOST
+  const { oneHost } = await import('../hosts/session-host-origin.js')
+  if (await oneHost(hostKey, runOn)) return job
+  log.session.warn('plugin jobs: a host named a job its plugin does not run there; the call stays anonymous', {
+    host: hostKey, plugin: job.plugin, job: job.job, runOn,
+  })
+  return undefined
 }
 
 export function pluginJobsDisconnected(hostKey: string): void {

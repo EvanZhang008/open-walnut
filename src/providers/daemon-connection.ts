@@ -3505,8 +3505,14 @@ export class DaemonConnection {
     const receivedAt = Date.now()
     const call = relayedCallOf(event as unknown as Record<string, unknown>)
     if (!call) return
-    // A plugin job's identity is told to its host's own replica only (core/peers/gateway-answer.ts).
-    delete call.pluginJob
+    // A plugin job's identity: the host's daemon names it in the frame's own `caller`, from its record
+    // of the run it started; a caller's words ride in the payload and never become it. Kept only for an
+    // anonymous call whose plugin this server's config runs on this very host (relayedJobOf), so a host
+    // vouches for its own jobs alone; else the call is plain `external`, as from an older daemon.
+    const { relayedJobOf } = await import('../core/plugin-jobs/index.js')
+    const job = await relayedJobOf(call, this.hostKey).catch(() => undefined)
+    if (job) call.pluginJob = job
+    else delete call.pluginJob
     const { gatewayHubTimeoutMs } = await import('./gateway-core.js')
     await serveRelayedCall(call, {
       hostKey: this.hostKey,

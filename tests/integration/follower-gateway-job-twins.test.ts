@@ -14,6 +14,10 @@
  *   - the Mac pings again first: to the Mac, the follower asked nothing
  *   - the job's call leaves (its socket closes) while it waits: asked of no one, even once the
  *     Mac answers again (its next run would retry it: applied twice)
+ * Either way the call names its job in the frame's `caller`, built from the daemon's own record
+ * of the run (plugin-jobs-core.ts callerOfRun): to the Mac and to the follower alike. What a
+ * caller writes (a `caller` or `pluginJob` in its request, its payload or its arguments) never
+ * names one, and a run id no live run holds is refused before anyone is asked.
  *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid
  * it wrote into its own dir, the fake host server and the job run by the pids they logged.
@@ -169,6 +173,19 @@ function startGatewayCall(sock: string, sid: string, name: string): { sent: Prom
 
 const gatewayCall = (sock: string, sid: string, name: string) => startGatewayCall(sock, sid, name).done
 
+/** One raw request line on the agent gateway socket (any fields a caller may write), and the daemon's answer. */
+function rawGatewayCall(sock: string, request: Record<string, unknown>): Promise<Record<string, any>> {
+  return new Promise((resolve, reject) => {
+    const c = net.connect(sock)
+    let buf = ''
+    c.on('connect', () => c.write(JSON.stringify(request) + '\n'))
+    c.on('data', (d) => { buf += d.toString(); if (buf.includes('\n')) { c.destroy(); resolve(JSON.parse(buf.slice(0, buf.indexOf('\n')))) } })
+    c.on('error', reject)
+  })
+}
+
+const JOB = { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }
+
 interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>; jobSid: string; awake: (on: boolean) => void }
 
 async function rig(twin: Twin, name: string): Promise<Rig> {
@@ -245,6 +262,8 @@ for (const twin of ['source', 'standalone'] as const) {
         const { reply } = await gatewayCall(r.d.sock, r.jobSid, 'task_list')
         expect(reply).toMatchObject({ ok: true, result: { who: 'mac' } })
         expect(r.followerAsked).toEqual([])
+        // The Mac hears the job too, in the same field the follower gets, from the daemon's own run record.
+        expect(r.macAsked[0]).toMatchObject({ callerSid: 'external', caller: JOB })
 
         // The Mac falls silent: past three beats the gateway passes over it, and the follower
         // may write only once the whole quiet window has passed. A call in between waits.
@@ -257,6 +276,34 @@ for (const twin of ['source', 'standalone'] as const) {
         expect(r.followerAsked).toHaveLength(1)
         expect(r.followerAsked[0]).toMatchObject({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' } })
         expect(r.macAsked.map((m) => m.payload?.name)).toEqual(['task_list'])
+        expect(r.followerAsked[0]!.caller).toEqual(r.macAsked[0]!.caller)
+      } finally {
+        r.awake(false)
+        r.mac.close(); r.follower.close()
+      }
+    }, 120_000)
+
+    it('awake: what a caller writes never names a job; the frame names only the run\'s own', async () => {
+      const r = await rig(twin, `${twin.slice(0, 2)}f`)
+      try {
+        const words = { caller: { kind: 'plugin-job', plugin: 'evil', job: 'x' }, pluginJob: { plugin: 'evil', job: 'x' } }
+        // An outside caller (no session) writing the fields everywhere it can: plain external.
+        const outside = await rawGatewayCall(r.d.sock, { v: 1, op: 'tools.call', sid: 'external', ...words, args: { name: 'task_list', args: { ...words }, ...words } })
+        expect(outside, JSON.stringify(outside)).toMatchObject({ ok: true, result: { who: 'mac' } })
+        expect(r.macAsked).toHaveLength(1)
+        expect(r.macAsked[0]!.callerSid).toBe('external')
+        expect(r.macAsked[0]).not.toHaveProperty('caller')
+        expect(r.macAsked[0]).not.toHaveProperty('pluginJob')
+        // The job itself claiming another job in its words: the frame still names its own run's.
+        const job = await rawGatewayCall(r.d.sock, { v: 1, op: 'tools.call', sid: r.jobSid, ...words, args: { name: 'task_list', args: {}, ...words } })
+        expect(job, JSON.stringify(job)).toMatchObject({ ok: true, result: { who: 'mac' } })
+        expect(r.macAsked).toHaveLength(2)
+        expect(r.macAsked[1]).toMatchObject({ callerSid: 'external', caller: JOB })
+        // A run id no live run holds: refused here, nobody asked.
+        const guessed = await rawGatewayCall(r.d.sock, { v: 1, op: 'tools.call', sid: 'plugin-job:0123456789abcdef', args: { name: 'task_list', args: {} } })
+        expect(guessed, JSON.stringify(guessed)).toMatchObject({ ok: false, error: { code: 'unknown_caller' } })
+        expect(r.macAsked).toHaveLength(2)
+        expect(r.followerAsked).toEqual([])
       } finally {
         r.awake(false)
         r.mac.close(); r.follower.close()

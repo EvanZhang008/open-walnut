@@ -5,6 +5,8 @@
  * job, which the Mac bundles and places on the host (`plugin_jobs.acme-sync.run_on: devbox`,
  * WALNUT_PLUGIN_JOBS_IN_TEST=1) and the host daemon runs as its own `walnut plugin-job`.
  *
+ *   while the Mac answers, the job's create reaches it as the job (the host's daemon names it in the
+ *   relay's `caller`, and the Mac keeps it: the plugin runs there), so the task is kept to the plugin
  *   the Mac sleeps (SIGSTOP); the JOB, told by a file in its own state dir, calls:
  *     task_create with a start   journaled with the job as its actor, its session started on
  *                                the host (the project's default host) as the task's own
@@ -33,6 +35,7 @@ import { hostJournal, hostStream, macSessions, macTasks, replicaKnowsDefaultHost
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 const TITLE = 'Import the venue rows'
+const ONLINE_TITLE = 'Check the venue feed'
 const JOB = { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }
 
 /**
@@ -156,6 +159,20 @@ describe.each(TWINS)('a plugin job\'s walnut calls on its host while the Mac is 
   }, 900_000)
 
   afterAll(async () => { await c?.stop() }, 120_000)
+
+  it('while the Mac answers: the job\'s call reaches it as the job, so its task is kept to the plugin', async () => {
+    keepLogs()
+    const made = await jobCall(dir, 'task_create', { title: ONLINE_TITLE, project: 'Acme', record_only: true })
+    expect(made.ok, JSON.stringify(made)).toBe(true)
+    const id = String(made.result.id ?? made.result.task?.id ?? '')
+    expect(id).not.toBe('')
+    // The host's daemon named the job and the Mac kept it (the plugin runs there): the create is the
+    // plugin's, kept to its view, as the same create is on the host while the Mac is away. A Mac that
+    // heard only `external` made it a board task (2026-11-21, before the daemon named the job).
+    const row = await c.mac('GET', `/api/tasks/${id}`)
+    expect(row.status, JSON.stringify(row.json)).toBe(200)
+    expect((row.json as { task?: Record<string, unknown> }).task).toMatchObject({ id, plugin_only: 'acme-sync' })
+  }, 120_000)
 
   it('while the Mac sleeps: the job makes a task that starts on the host, tags it and sends it a message', async () => {
     keepLogs()

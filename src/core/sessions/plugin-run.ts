@@ -7,10 +7,12 @@
  *
  * The program is a program's call with no session and no person behind it (isProgramCall):
  *   - a call that names its plugin: its server half's (server-api.ts callPluginOp: `plugin:<id>`) or a
- *     job's on its host's own replica (an outside caller with `x-walnut-plugin-id`);
- *   - the daemon gateway's anonymous caller, the literal sid `external` with no sender label. Online, a
- *     job's `walnut.ops.call` reaches the leader only as that: the host's daemon tells the job's identity
- *     to its own replica alone (daemon-connection.ts handleGatewayRequest, journal-actor.ts).
+ *     job's (an outside caller with `x-walnut-plugin-id`), on the leader and on its host's own replica
+ *     alike. The host's daemon names the job from its own record of the run (the relay's `caller`); its
+ *     replica takes it (journal-actor.ts), the leader only for an anonymous call from the host its
+ *     config runs that plugin's jobs on (daemon-connection.ts handleGatewayRequest, plugin-jobs relayedJobOf);
+ *   - the daemon gateway's anonymous caller, the literal sid `external` with no sender label: a job's
+ *     call from a daemon older than that, or one the leader did not keep the job of.
  * Not the program: an unknown sid or a session an engine switch replaced (they resolve to an outside
  * caller, under a sid of their own), a script on the Mac that names itself (messages-v1.ts callerLabel),
  * a session, a person.
@@ -25,13 +27,13 @@
  *
  * No tag write can put the marker on or take it off (types.ts keepPluginRunMarker).
  *
- * Known edges, until a host's daemon tells the leader who made a call: a `walnut` typed in a host's
- * terminal and a trigger's check reach the leader as the same anonymous `external`, so their message
- * into a program run is the program's too (it never adopts, and into an imported program run it takes
- * it over); any plugin's own call counts, so one plugin's message into another plugin's run does not
- * adopt it either; and a host's replayed delivery with no sender into a plugin's run counts as the
- * program's (programRunDelivery), so a person's message from the phone while the Mac was away does not
- * adopt it.
+ * Known edges: a host's daemon names only a plugin job's calls to the leader, so a `walnut` typed in a
+ * host's terminal and a trigger's check still reach it as the same anonymous `external`, and their
+ * message into a program run is the program's too (it never adopts, and into an imported program run
+ * it takes it over); any plugin's own call counts, so one plugin's message into another plugin's run
+ * does not adopt it either; and a host's replayed delivery with no sender into a plugin's run counts as
+ * the program's (programRunDelivery), so a person's message from the phone while the Mac was away does
+ * not adopt it.
  */
 import { log } from '../../logging/index.js'
 import { PLUGIN_RUN_TAG, isPluginRunTask, isProgramRunTask, type Task } from '../types.js'

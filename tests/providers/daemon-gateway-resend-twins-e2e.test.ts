@@ -346,7 +346,8 @@ describe('every relay of a walnut call has an end (both twins, read from the sou
     it(`${name}: every relayToPrimary call names its deadline`, () => {
       const calls = src().split('\n').filter((l) => /\brelayToPrimary\(/.test(l) && !/function relayToPrimary\(/.test(l))
       expect(calls.length).toBeGreaterThanOrEqual(4)
-      for (const line of calls) expect(line, line.trim()).toMatch(/, (deadline|Date\.now\(\) \+ (gatewayHubTimeoutMs\(\)|GATEWAY_HUB_TIMEOUT_MS))\);?\s*$/)
+      // A plugin job's relay names its job after the deadline (`caller`, follower-gateway-core.ts GatewayCaller).
+      for (const line of calls) expect(line, line.trim()).toMatch(/, (deadline|Date\.now\(\) \+ (gatewayHubTimeoutMs\(\)|GATEWAY_HUB_TIMEOUT_MS))(, caller)?\);?\s*$/)
     })
   }
 })
