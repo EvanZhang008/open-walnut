@@ -40,7 +40,7 @@ import { DaemonFileReader } from '../../src/core/daemon-file-reader.js'
 import { ReadProgress, runWithReadProgress } from '../../src/core/hosts/read-progress.js'
 
 const CHUNK_SIZE = (DaemonFileReader as unknown as { CHUNK_SIZE: number }).CHUNK_SIZE
-const PATH = '~/.claude/projects/-p/s.jsonl'
+const TRANSCRIPT = '~/.claude/projects/-p/s.jsonl'
 
 /** Let the next fs.readRange answer, once it has been asked. */
 async function releaseChunk(): Promise<void> {
@@ -61,10 +61,10 @@ describe('DaemonFileReader: a joiner counts the shared transfer', () => {
     const at = { mtimeMs: 1, size: wire.file.length, epoch: 'e:1:1' }
     const starter = new ReadProgress()
     const joiner = new ReadProgress()
-    const a = runWithReadProgress(starter, () => new DaemonFileReader('__local__').readFileRangeBuffer(PATH, 0, at))
+    const a = runWithReadProgress(starter, () => new DaemonFileReader('__local__').readFileRangeBuffer(TRANSCRIPT, 0, at))
     // Let the starter put its transfer in flight before the second reader asks.
     await new Promise((r) => setTimeout(r, 5))
-    const b = runWithReadProgress(joiner, () => new DaemonFileReader('__local__').readFileRangeBuffer(PATH, 0, at))
+    const b = runWithReadProgress(joiner, () => new DaemonFileReader('__local__').readFileRangeBuffer(TRANSCRIPT, 0, at))
 
     const seen: number[] = []
     for (let i = 0; i < 4; i++) {
@@ -83,15 +83,15 @@ describe('DaemonFileReader: a joiner counts the shared transfer', () => {
     const at = { mtimeMs: 2, size: wire.file.length, epoch: 'e:1:2' }
     const starter = new ReadProgress()
     const joiner = new ReadProgress()
-    const a = runWithReadProgress(starter, () => new DaemonFileReader('__local__').readFileRangeBuffer(PATH, 0, at))
+    const a = runWithReadProgress(starter, () => new DaemonFileReader('__local__').readFileRangeBuffer(TRANSCRIPT, 0, at))
     await new Promise((r) => setTimeout(r, 5))
-    const b = runWithReadProgress(joiner, () => new DaemonFileReader('__local__').readFileRangeBuffer(PATH, 0, at))
+    const b = runWithReadProgress(joiner, () => new DaemonFileReader('__local__').readFileRangeBuffer(TRANSCRIPT, 0, at))
     for (let i = 0; i < 4; i++) await releaseChunk()
     await Promise.all([a, b])
     expect(joiner.bytes()).toBe(wire.file.length)
 
     const later = new ReadProgress()
-    const c = runWithReadProgress(later, () => new DaemonFileReader('__local__').readFileRangeBuffer(PATH, 0, at))
+    const c = runWithReadProgress(later, () => new DaemonFileReader('__local__').readFileRangeBuffer(TRANSCRIPT, 0, at))
     await releaseChunk()
     expect(later.bytes()).toBe(CHUNK_SIZE)
     expect(joiner.bytes(), 'a settled transfer counts nothing more for its joiner').toBe(wire.file.length)
