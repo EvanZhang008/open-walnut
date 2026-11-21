@@ -19,6 +19,7 @@ import type { SessionRequest } from '../core/session-requests.js'
 import type { OfflineRequestRow } from '../providers/offline-host-core.js'
 import { requestOfRow } from '../core/offline-merge/request-row.js'
 import { forwardRequest } from '../core/replication/kinds/requests.js'
+import type { Overlay } from './overlay.js'
 
 /** A journal record as the overlay holds it (overlay.ts OverlayEntry), as far as this reads it. */
 export interface RequestRecordEntry { kind: string; seq: number; at: number; record: Record<string, unknown> }
@@ -55,4 +56,19 @@ export function foldAwayRequests(copy: readonly SessionRequest[], entries: reado
   }
   for (const [id, { row }] of rows) if (!seen.has(id)) out.push(requestOfRow(row))
   return out
+}
+
+/**
+ * The request readers' fold (session-requests.ts installAwayRequests), only while the Mac is
+ * away: with it, the requests copy is its word, nothing is folded and the daemon is not asked.
+ * Away, the overlay is asked first (forced: a request the daemon opened for a call it answered
+ * itself is in no earlier answer; away request reads are few), within `waitMs`.
+ */
+export function awayRequestReader(deps: { macAnswers(): boolean; overlay: Pick<Overlay, 'refresh' | 'entries'>; waitMs?: number }): (rows: SessionRequest[]) => Promise<SessionRequest[]> {
+  const waitMs = deps.waitMs ?? 1_500
+  return async (rows) => {
+    if (deps.macAnswers()) return rows
+    await Promise.race([deps.overlay.refresh(0), new Promise<void>((r) => { const t = setTimeout(r, waitMs); t.unref?.() })])
+    return foldAwayRequests(rows, deps.overlay.entries())
+  }
 }

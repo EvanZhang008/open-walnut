@@ -245,9 +245,14 @@ export async function removeMemoryFolder(taskId: string): Promise<void> {
   await fsp.rm(memoryCopyOf(taskId.trim()), { force: true }).catch(() => {})
 }
 
-/** A node's own note: written whole; `content: ""` removes it. Walnut's file names are refused. */
-export async function writeOwnNote(taskId: string, name: string, content: string): Promise<{ name: string; bytes: number; removed: boolean; count: number }> {
-  if (isFollower()) throw new MemoryFolderError('not_supported_cloud', 501, 'Memory folder files are written on the primary box')
+/**
+ * The checks of a node's own note that need no folder: a task's folder (`taskId`, an id or the
+ * name a caller gave; never the shared one), a note name, not one of Walnut's files, not too long. Returns the name as written. A follower that
+ * holds such a note for the leader runs them first (replica/away-calls.ts); the count of notes
+ * needs the folder, which only the primary has, so it is checked when the note is written.
+ */
+export function checkOwnNote(taskId: string | null, name: string, content: string): string {
+  if (!taskId || taskId === SHARED_FOLDER) throw new MemoryFolderError('bad_request', 400, 'The shared folder holds only Walnut\'s own files: write a note to a task\'s folder.')
   const n = checkName(name)
   if (walnutFolderBlock(n)) {
     throw new MemoryFolderError('walnut_file', 409, `"${n}" is Walnut's own file (the rest of a prompt section); pick another name for your note.`)
@@ -255,13 +260,21 @@ export async function writeOwnNote(taskId: string, name: string, content: string
   if (content.length > OWN_NOTE_MAX_CHARS) {
     throw new MemoryFolderError('note_too_long', 413, `This note would be ${content.length} characters, over the ${OWN_NOTE_MAX_CHARS} limit. Nothing was written: split it or write it shorter.`)
   }
-  const dir = memoryFolderOf(taskId)
+  return n
+}
+
+/** A node's own note: written whole; `content: ""` removes it. Walnut's file names are refused. */
+export async function writeOwnNote(taskId: string | null, name: string, content: string): Promise<{ name: string; bytes: number; removed: boolean; count: number }> {
+  if (isFollower()) throw new MemoryFolderError('not_supported_cloud', 501, 'Memory folder files are written on the primary box')
+  const n = checkOwnNote(taskId, name, content)
+  const id = taskId!
+  const dir = memoryFolderOf(id)
   const file = path.join(dir, n)
   // Under the folder's lock: two writes at once must not both pass the count and leave one note too many.
   await fsp.mkdir(path.dirname(dir), { recursive: true })
   const { notesLockOf, takeLegacyNotesLocked } = await import('../artifacts/migrate.js')
-  return withFileLock(notesLockOf(taskId), async () => {
-    await takeLegacyNotesLocked(taskId)
+  return withFileLock(notesLockOf(id), async () => {
+    await takeLegacyNotesLocked(id)
     if (!content.trim()) {
       await fsp.rm(file, { force: true })
       return { name: n, bytes: 0, removed: true, count: (await listDir(dir, false)).filter((f) => !f.walnut).length }

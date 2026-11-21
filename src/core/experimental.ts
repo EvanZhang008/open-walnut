@@ -92,8 +92,8 @@ export const EXPERIMENTAL_FEATURES = [
   },
   {
     id: 'host_call_entry',
-    name: 'Host sessions call their own host\'s Walnut',
-    description: 'On a host that runs its own copy of Walnut, a session or plugin job started there from now on sends its Walnut calls to that copy over the host\'s own network port, whether or not this computer is there, instead of through the host\'s daemon socket. Sessions already running keep the socket, and a call falls back to it whenever the host\'s copy cannot be reached. The answers are the same either way.',
+    name: 'A host\'s calls go through its own Walnut, also while this computer answers',
+    description: 'On a host that runs its own copy of Walnut, a session or plugin job started there from now on sends its Walnut calls straight to that copy, whether or not this computer is there, instead of through the host\'s daemon socket; and a message between two sessions on that host is delivered by that copy while this computer answers too, in place of the daemon. Sessions already running keep the socket, and a call falls back to it (and a message to this computer) whenever the host\'s copy cannot take it. The answers are the same either way.',
     default: false,
   },
   {

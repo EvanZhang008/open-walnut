@@ -91,7 +91,8 @@ export interface HandOff {
   fallback?: () => void
   /**
    * A same-host send while the leader answers: no write gate (its records are `online`), and with
-   * no answer in time `fallback` relays it to the leader (the payload's message id makes it once).
+   * no answer in time `fallback` ends it (the twins' endOnline: relayed to the leader unless the
+   * follower's follower.peer already claimed its message id and wrote it; offline-host-core.ts).
    */
   online?: boolean
 }
@@ -197,6 +198,15 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     deps.log('info', 'gateway: daemon offline answer used', { op: name, why, ...(callerSid ? { callerSid } : {}), total: own.total })
   }
 
+  /**
+   * A call the daemon answers with its own away code (offlineHost.handle): counted when this host's
+   * follower was there for it, handed back by it or linked and allowed to write. One rule for both twins.
+   */
+  function noteOwnOffline(home: string, capability: string, callerSid: string, payload: Record<string, unknown>, handedBack?: boolean): void {
+    const why = handedBack ? 'handed_back' : answers(home) ? 'follower_linked' : null
+    if (why) noteOwnAnswer(capability === 'tools.call' ? payload.name : capability, why, callerSid)
+  }
+
   /** What noteOwnAnswer counted since this daemon started. */
   function ownAnswers(): { total: number; byOp: Record<string, number>; byWhy: Record<string, number>; last: null | { op: string; why: string; at: number } } {
     return { total: own.total, byOp: { ...own.byOp }, byWhy: { ...own.byWhy }, last: own.last ? { ...own.last } : null }
@@ -244,5 +254,5 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     return { ok: false, error }
   }
 
-  return { answers, answersOnline, handOff, routeJob, holds, settle, dropSocket, responseOf, noteOwnAnswer, ownAnswers, pendingCount: () => pending.size }
+  return { answers, answersOnline, handOff, routeJob, holds, settle, dropSocket, responseOf, noteOwnAnswer, noteOwnOffline, ownAnswers, pendingCount: () => pending.size }
 }

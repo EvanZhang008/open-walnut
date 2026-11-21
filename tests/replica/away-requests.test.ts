@@ -14,7 +14,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-away-requests'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { foldAwayRequests } from '../../src/replica/away-requests.js'
+import { awayRequestReader, foldAwayRequests } from '../../src/replica/away-requests.js'
 import { createOverlay, keyOfRecord } from '../../src/replica/overlay.js'
 import {
   getSessionRequest, installAwayRequests, pendingRequestsForTarget, pendingRequestsFromSession, type SessionRequest,
@@ -96,5 +96,23 @@ describe('the request readers on a host replica', () => {
     // A fold that fails answers the store as it is.
     installAwayRequests(async () => { throw new Error('daemon gone') })
     expect((await pendingRequestsFromSession(ASKER)).map((r) => r.id)).toEqual(['rq-aaaaaa000001'])
+  })
+})
+
+describe('the request fold runs only while the Mac is away (away-wiring.ts installs awayRequestReader)', () => {
+  it('with the Mac answering, the copy is the answer and the daemon is not asked; away, the journal is folded after a forced look', async () => {
+    let answers = true
+    const refreshed: Array<number | undefined> = []
+    const overlay = {
+      refresh: async (age?: number) => { refreshed.push(age) },
+      entries: () => [entry(rowRecord(5, 'rq-bbbbbb000001'))],
+    }
+    const read = awayRequestReader({ macAnswers: () => answers, overlay: overlay as never })
+    const copy = [copyRow('rq-aaaaaa000001')]
+    expect(await read(copy)).toBe(copy)
+    expect(refreshed).toEqual([])
+    answers = false
+    expect((await read(copy)).map((r) => r.id)).toEqual(['rq-aaaaaa000001', 'rq-bbbbbb000001'])
+    expect(refreshed).toEqual([0])
   })
 })

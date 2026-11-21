@@ -8,7 +8,9 @@
  *   - a `run: 'task'` session refused, or given up after its retries, has its CLI ended through
  *     the daemon that owns it, and the letter names the session and the host;
  *   - a refused ask leaves its task as it was (no `walnut_agent` stamp);
- *   - a redrain of a session the Mac already linked looks at its CLI again (the rescue).
+ *   - a redrain of a session the Mac already linked looks at its CLI again (the rescue);
+ *   - a refused run's start phase is taken back through the phase API (told and pushed like the
+ *     forward write), also when an earlier drain wrote it and was cut before the record.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest'
 import fs from 'node:fs'
@@ -31,7 +33,8 @@ vi.mock('../../../src/core/task-manager.js', async (importOriginal) => {
 })
 
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
-import { getTask, linkSession } from '../../../src/core/task-manager.js'
+import { getTask, linkSession, updateTaskRaw } from '../../../src/core/task-manager.js'
+import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { createSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import { closeDb } from '../../../src/core/task-db.js'
 import { _resetHostClocksForTesting } from '../../../src/core/offline-merge/host-clock.js'
@@ -194,6 +197,54 @@ describe('a session record this Mac does not take', () => {
     expect((await getTask(id)).walnut_agent).toBeFalsy()
     // An ask is no run started alone: nothing is asked to end.
     expect(stops.filter((x) => x.sid === s)).toEqual([])
+  })
+
+  it('a refused run\'s start phase is taken back, told to the web as the forward write was', async () => {
+    const id = await hostTask('Quay pilots')
+    await macSession(id)
+    expect((await getTask(id)).phase).toBe('TODO')
+    const phases: string[] = []
+    bus.subscribe('test-undo-phase', (e) => {
+      const t = (e.data as { task?: { id?: string; phase?: string } } | undefined)?.task
+      if (e.name === EventNames.TASK_UPDATED && t?.id === id && t.phase) phases.push(t.phase)
+    }, { global: true })
+    try {
+      const rec = runRec(sid(), id)
+      await runOfflineHandover(journal([rec]).conn as never)
+      expect(entriesOf(rec.opId).map((e) => e.kind)).toEqual(['refused'])
+      expect((await getTask(id)).phase).toBe('TODO')
+      await vi.waitFor(() => expect(phases.at(-1)).toBe('TODO'))
+      expect(phases).toContain('IN_PROGRESS')
+    } finally {
+      bus.unsubscribe('test-undo-phase')
+    }
+  })
+
+  it('a start phase an earlier drain wrote before it was cut (no session record yet) is taken back when the retry is refused', async () => {
+    const id = await hostTask('Quay moorings')
+    const s = sid()
+    const rec = runRec(s, id)
+    // What the cut drain left: the start's phase, with the start's own field time (startPhase), and no record.
+    await updateTaskRaw(id, { phase: 'IN_PROGRESS' }, { source: 'offline-handover' })
+    await updateTaskRaw(id, (t) => ({ field_at: { ...(t.field_at ?? {}), phase: new Date(rec.at).toISOString() } }), { source: 'offline-handover' })
+    expect((await getTask(id)).field_at?.phase).toBe(new Date(rec.at).toISOString())
+    expect(await getSessionByClaudeId(s)).toBeNull()
+    // Meanwhile this Mac started its own session of the task: the retry's record is refused.
+    await macSession(id)
+    await runOfflineHandover(journal([rec]).conn as never)
+    expect(entriesOf(rec.opId).map((e) => e.kind)).toEqual(['refused'])
+    expect((await getTask(id)).phase).toBe('TODO')
+  })
+
+  it('a phase someone else set is not taken back by a refused run', async () => {
+    const id = await hostTask('Quay fenders')
+    // A person's In Progress, long after the start: not the start's phase.
+    await updateTaskRaw(id, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    await macSession(id)
+    const rec = runRec(sid(), id, { at: Date.now() - 3_600_000, startedAt: Date.now() - 3_600_000 })
+    await runOfflineHandover(journal([rec]).conn as never)
+    expect(entriesOf(rec.opId).map((e) => e.kind)).toEqual(['refused'])
+    expect((await getTask(id)).phase).toBe('IN_PROGRESS')
   })
 
   it('a redrain of a session already linked (the drain cut before its rescue) looks at its CLI again', async () => {

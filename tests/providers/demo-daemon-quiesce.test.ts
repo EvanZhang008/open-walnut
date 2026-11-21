@@ -482,7 +482,7 @@ describe('demo.quiesce background wiring in both twins', () => {
         sites++
       }
     }
-    // runTrigger, runTriggerTest (checks), deliverUnclaimedFires (delivery), startUnclaimedRun (routine), offlineSweepTick.
+    // runTrigger, runTriggerTest (checks), deliverFireOwn (delivery: deliverUnclaimedFires hands the fire to it, through the follower core), startUnclaimedRun (routine), offlineSweepTick.
     expect(sites).toBe(5)
   })
 

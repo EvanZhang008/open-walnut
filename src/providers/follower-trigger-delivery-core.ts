@@ -32,6 +32,12 @@
  * is the daemon's own, counted as a daemon offline answer (`ownAnswerUsed`: the twins'
  * followerGateway.noteOwnAnswer, op `trigger_delivery`, which logs it). A follower's
  * `declined` is an answer, not a failure (the daemon's own copy would decline it too).
+ *
+ * That follower then sits out (BACKOFF_MS, its home's every trigger): the daemon delivers
+ * each fire itself, so a server whose loop hangs with its socket open does not cost every
+ * fire three timeouts again. After the backoff the next fire is offered once: an answer
+ * ends the backoff, one more failure starts it again, twice as long (at most an hour). A
+ * new follower socket (a restart, a new hello) starts with none.
  */
 
 export const FOLLOWER_TRIGGER_DELIVERY_CAPABILITY = 'follower-trigger-delivery-v1'
@@ -68,6 +74,9 @@ export interface FollowerTriggerDeliveryDeps<S> {
   fallbackAfter?: number
   /** The daemon delivers a fire itself although a follower was linked to: the offline answer count. */
   ownAnswerUsed?(fire: TriggerFire, failures: number): void
+  /** How long a follower that kept failing sits out (default 10 minutes); doubles on each failed try after, up to an hour. */
+  backoffMs?: number
+  now?(): number
   setTimer(fn: () => void, ms: number): unknown
   clearTimer(t: unknown): void
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -83,9 +92,31 @@ export function createFollowerTriggerDelivery<S>(deps: FollowerTriggerDeliveryDe
   const pending = new Map<string, Attempt>()
   /** Follower failures in a row, by home and trigger id. */
   const failures = new Map<string, number>()
+  const BACKOFF_MS = typeof deps.backoffMs === 'number' && deps.backoffMs > 0 ? deps.backoffMs : 10 * 60_000
+  const BACKOFF_MAX_MS = 60 * 60_000
+  /** A follower sitting out after it kept failing, by home: until when, and how long the last time. */
+  const benched = new Map<string, { ws: S; until: number; ms: number }>()
+  const now = (): number => (deps.now ? deps.now() : Date.now())
 
   const keyOf = (fire: TriggerFire): string => fire.home + '\n' + fire.triggerId
-  const failed = (key: string): void => { failures.set(key, (failures.get(key) || 0) + 1) }
+  /** Its bench, for this socket only (a new follower socket starts with none). */
+  const benchOf = (home: string, ws: S) => {
+    const b = benched.get(home)
+    if (b && b.ws !== ws) { benched.delete(home); return undefined }
+    return b
+  }
+  const failed = (key: string, home: string, ws: S): void => {
+    failures.set(key, (failures.get(key) || 0) + 1)
+    // The one try after a backoff failed too: it sits out again, twice as long.
+    const b = benchOf(home, ws)
+    if (b && now() >= b.until) {
+      b.ms = Math.min(BACKOFF_MAX_MS, b.ms * 2)
+      b.until = now() + b.ms
+      deps.log('warn', 'trigger: this host\'s Walnut server still fails, it sits out again', { home, backoffMs: b.ms })
+    }
+  }
+  /** It answered: no backoff, no failures of that trigger. */
+  const answered = (key: string, home: string): void => { failures.delete(key); benched.delete(home) }
   const tags = (fire: TriggerFire): Record<string, unknown> => ({ home: fire.home, triggerId: fire.triggerId, taskId: fire.taskId, messageId: fire.messageId })
 
   /** One delivery attempt of `fire`: the follower's pick when one answers, else the daemon's own. */
@@ -94,10 +125,16 @@ export function createFollowerTriggerDelivery<S>(deps: FollowerTriggerDeliveryDe
     if (ws === null || !deps.mayWrite(fire.home)) return deps.own(fire)
     const key = keyOf(fire)
     const inRow = failures.get(key) || 0
-    if (inRow >= FALLBACK_AFTER) {
-      // The follower gets the next one again: a server that recovered takes over at once.
+    const bench = benchOf(fire.home, ws)
+    if (bench && now() < bench.until) {
+      if (deps.ownAnswerUsed) deps.ownAnswerUsed(fire, inRow)
+      return deps.own(fire)
+    }
+    if (!bench && inRow >= FALLBACK_AFTER) {
+      // It sits out a while; after that one fire is offered to it again (a server that recovered takes over).
       failures.delete(key)
-      deps.log('warn', 'trigger: this host\'s Walnut server kept failing, this daemon delivers the fire itself', { failures: inRow, ...tags(fire) })
+      benched.set(fire.home, { ws, until: now() + BACKOFF_MS, ms: BACKOFF_MS })
+      deps.log('warn', 'trigger: this host\'s Walnut server kept failing, this daemon delivers the fire itself', { failures: inRow, backoffMs: BACKOFF_MS, ...tags(fire) })
       if (deps.ownAnswerUsed) deps.ownAnswerUsed(fire, inRow)
       return deps.own(fire)
     }
@@ -110,7 +147,7 @@ export function createFollowerTriggerDelivery<S>(deps: FollowerTriggerDeliveryDe
       })
       if (!sent) {
         pending.delete(deliveryId)
-        failed(key)
+        failed(key, fire.home, ws)
         resolve({ ok: false, reason: 'this host\'s Walnut server could not be told of the fire' })
         return
       }
@@ -124,7 +161,7 @@ export function createFollowerTriggerDelivery<S>(deps: FollowerTriggerDeliveryDe
     if (!a) return
     pending.delete(deliveryId)
     deps.clearTimer(a.timer)
-    failed(a.key)
+    failed(a.key, a.fire.home, a.ws)
     deps.log('warn', 'trigger: this host\'s Walnut server did not pick the session', { deliveryId, why, failures: failures.get(a.key), ...tags(a.fire) })
     a.resolve({ ok: false, reason: why === 'timeout' ? 'this host\'s Walnut server did not answer the fire in time' : 'the link to this host\'s Walnut server closed' })
   }
@@ -142,14 +179,14 @@ export function createFollowerTriggerDelivery<S>(deps: FollowerTriggerDeliveryDe
     pending.delete(deliveryId)
     deps.clearTimer(a.timer)
     if (typeof cmd.declined === 'string') {
-      failures.delete(a.key)
+      answered(a.key, a.fire.home)
       deps.log('info', 'trigger: this host\'s Walnut server left the fire to the leader', { deliveryId, reason: cmd.declined, ...tags(a.fire) })
       a.resolve({ ok: false, reason: cmd.declined })
       return { ok: true, result: { delivered: false, declined: true } }
     }
     const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
     if (!sid) {
-      failed(a.key)
+      failed(a.key, a.fire.home, a.ws)
       const reason = typeof cmd.error === 'string' && cmd.error ? cmd.error : 'this host\'s Walnut server named no session'
       deps.log('warn', 'trigger: this host\'s Walnut server could not pick the session', { deliveryId, reason, ...tags(a.fire) })
       a.resolve({ ok: false, reason })
@@ -161,8 +198,8 @@ export function createFollowerTriggerDelivery<S>(deps: FollowerTriggerDeliveryDe
     } catch (err) {
       r = { ok: false, reason: err instanceof Error ? err.message : String(err) }
     }
-    if (r.ok) failures.delete(a.key)
-    else failed(a.key)
+    if (r.ok) answered(a.key, a.fire.home)
+    else failed(a.key, a.fire.home, a.ws)
     a.resolve(r)
     return { ok: true, result: r.ok ? { delivered: true, sid: r.sid, ...(r.resumed ? { resumed: true } : {}) } : { delivered: false, reason: r.reason } }
   }

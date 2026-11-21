@@ -69,6 +69,31 @@ describe('withHostSessions', () => {
   })
 })
 
+describe('session_list status= after the fold', () => {
+  it('status=running answers the sessions running now, and `you` reads what it does now too', () => {
+    const body = { ...copy, you: { id: IDLE, host: 'devbox', process_status: 'running' } }
+    const out = withHostSessions(body, live, { overlay, hostKey: 'devbox' }, 'running') as typeof body
+    // IDLE stopped here although the copy says running: out. HERE runs: in. ELSEWHERE keeps the copy's running.
+    expect(out.sessions.map((s) => s.id)).toEqual([HERE, ELSEWHERE])
+    expect(out.you).toMatchObject({ id: IDLE, process_status: 'stopped' })
+    const stopped = withHostSessions({ ...copy, sessions: copy.sessions.map((s) => s.id === HERE ? { ...s, process_status: 'stopped' } : s) }, live, { overlay, hostKey: 'devbox' }, 'stopped') as typeof copy
+    // The copy says HERE stopped, it works here now: not stopped. IDLE stopped here: in.
+    expect(stopped.sessions.map((s) => s.id)).toEqual([IDLE])
+  })
+
+  it('the route never sees the status (it would filter the copy\'s stale states); the fold applies it', async () => {
+    const handler = awayReads({ overlay, answeredAway: () => true, hostKey: 'devbox', hostSessions: async () => live })
+    const req = { method: 'GET', path: '/v1/sessions', query: { status: 'running', scope: 'all' }, get: () => undefined } as unknown as Request
+    let routeQuery: unknown
+    const body = await new Promise<typeof copy>((resolve) => {
+      const res = { statusCode: 200, headersSent: false, json(b: unknown) { resolve(b as typeof copy); return this } } as unknown as Response
+      handler(req, res, () => { routeQuery = req.query; (res as unknown as { json(b: unknown): unknown }).json(copy) })
+    })
+    expect(routeQuery).toEqual({ scope: 'all' })
+    expect(body.sessions.map((s) => s.id)).toEqual([HERE, ELSEWHERE])
+  })
+})
+
 describe('withTasksMadeHere', () => {
   const made = {
     createdTaskIds: () => [MADE, 'mtaskmade-0002', 'mtaskmade-0003'],
@@ -87,6 +112,30 @@ describe('withTasksMadeHere', () => {
     expect(out.results[0]).toMatchObject({ type: 'task', title: 'Import the venue rows', matchField: 'title', snippet: 'From the marina export' })
     // A word only in its description still finds it.
     expect((withTasksMadeHere(answer, { q: 'marina' }, made) as typeof answer).results[0]).toMatchObject({ taskId: MADE, matchField: 'description' })
+  })
+
+  it('keeps the route\'s limit after the merge (20 when not asked)', () => {
+    const many = { results: Array.from({ length: 25 }, (_, i) => ({ type: 'task', title: `Venue ${i}`, taskId: `mtask-mac-${i}`, score: 2 })) }
+    const five = withTasksMadeHere({ results: many.results.slice(0, 5) }, { q: 'venue', limit: '5' }, made) as typeof answer
+    expect(five.results).toHaveLength(5)
+    expect(five.results[0]!.taskId).toBe(MADE)
+    expect((withTasksMadeHere({ results: many.results.slice(0, 20) }, { q: 'venue' }, made) as typeof answer).results).toHaveLength(20)
+  })
+
+  it('with tasks=1 the tasks list holds the made task, and only the tasks the kept rows name', () => {
+    const phone = {
+      results: [
+        { type: 'task', title: 'Venue sync', taskId: 'mtask-mac', score: 3 },
+        { type: 'session', title: 'Venue run', sessionId: 's1', taskId: 'mtask-cut', score: 2 },
+      ],
+      tasks: [{ id: 'mtask-mac', title: 'Venue sync' }, { id: 'mtask-cut', title: 'Cut by the limit' }],
+    }
+    const out = withTasksMadeHere(phone, { q: 'venue', limit: '2', tasks: '1' }, made) as { results: Array<{ taskId: string }>; tasks: Array<Record<string, unknown>> }
+    expect(out.results.map((r) => r.taskId)).toEqual([MADE, 'mtask-mac'])
+    expect(out.tasks.map((t) => t.id)).toEqual([MADE, 'mtask-mac'])
+    expect(out.tasks[0]).toMatchObject({ id: MADE, title: 'Import the venue rows' })
+    // Without tasks asked, no tasks list appears.
+    expect((withTasksMadeHere(answer, { q: 'venue' }, made) as Record<string, unknown>).tasks).toBeUndefined()
   })
 
   it('leaves the answer as it is for a search of other kinds, a task already found, or no match', () => {

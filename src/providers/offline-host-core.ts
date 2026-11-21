@@ -1568,10 +1568,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     // Written into its live CLI: the target has the ask (a silent target's notice reads it).
     if (row) { row.messageId = p.messageId; row.reachedAt = new Date(deps.now()).toISOString() }
     if (row) append(home, { kind: 'row', row: { ...row } }, p.online)
-    append(home, {
-      kind: 'delivery', fromSessionId: p.fromSessionId, toSessionId: p.toSessionId, ...(p.toTaskId ? { toTaskId: p.toTaskId } : {}),
-      messageId: p.messageId, ...(row ? { requestId: row.id } : {}),
-    }, p.online, p.opId ? { opId: p.opId } : {})
+    append(home, { kind: 'delivery', fromSessionId: p.fromSessionId, toSessionId: p.toSessionId, ...(p.toTaskId ? { toTaskId: p.toTaskId } : {}), messageId: p.messageId, ...(row ? { requestId: row.id } : {}) }, p.online, p.opId ? { opId: p.opId } : {})
     return delivered
   }
 
@@ -1993,6 +1990,65 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   const peerInFlight = new Map<string, Promise<GatewayResult>>()
 
+  // ── a same-host send handed over while the server answers, written once ──
+  // The gateway hands it to this host's Walnut server (openOnline) and relays it to the server when
+  // that one leaves it or does not answer in time (endOnline); both carry the one qm- message id the
+  // gateway set, and only one side writes it: a `follower.peer` claims the id before its write and is
+  // refused once the hand-off ended, and a hand-off that ends while the claim writes waits for that
+  // write and answers from it, never relaying it. Kept 10 minutes, so a late `follower.peer` finds it ended.
+  type OnlineClaim = { state: 'open' | 'writing' | 'written' | 'relayed'; at: number; wrote?: Promise<void>; answer?: GatewayResult }
+  const onlineClaims = new Map<string, OnlineClaim>()
+  const ONLINE_CLAIM_MS = 10 * 60_000
+  const ONLINE_CLAIMS_MAX = 5_000
+
+  function onlineKeyOf(home: string, payload: Record<string, unknown>): string | null {
+    const args = payload.args && typeof payload.args === 'object' && !Array.isArray(payload.args) ? payload.args as Record<string, unknown> : null
+    const mid = args && typeof args.messageId === 'string' ? args.messageId : ''
+    return /^qm-[A-Za-z0-9-]{1,64}$/.test(mid) ? `${home}\n${mid}` : null
+  }
+
+  /** Before a same-host send goes to this host's Walnut server: false when it went to the server once already (relay it again). */
+  function openOnline(home: string, payload: Record<string, unknown>): boolean {
+    const key = onlineKeyOf(home, payload)
+    if (!key) return false
+    const now = deps.now()
+    for (const [k, c] of onlineClaims) if (c.state !== 'writing' && now - c.at > ONLINE_CLAIM_MS) onlineClaims.delete(k)
+    while (onlineClaims.size >= ONLINE_CLAIMS_MAX) onlineClaims.delete(onlineClaims.keys().next().value as string)
+    const c = onlineClaims.get(key)
+    if (c?.state === 'relayed') return false
+    if (!c) onlineClaims.set(key, { state: 'open', at: now })
+    return true
+  }
+
+  /**
+   * The hand-off ended with no delivery answer (left to the server, no answer in time, the socket
+   * gone): null = the gateway relays it (nothing was written here, and nothing will be now); else
+   * the answer of the write a `follower.peer` made of it.
+   */
+  async function endOnline(home: string, payload: Record<string, unknown>): Promise<GatewayResult | null> {
+    const key = onlineKeyOf(home, payload)
+    if (!key) return null
+    let c = onlineClaims.get(key)
+    if (c?.state === 'writing' && c.wrote) { await c.wrote; c = onlineClaims.get(key) }
+    if (c?.state === 'written' && c.answer) return c.answer
+    onlineClaims.set(key, { state: 'relayed', at: deps.now() })
+    return null
+  }
+
+  /** A follower.peer's claim of an open hand-off's message (null: none open, it ended), released after its write. */
+  function claimOnline(home: string, mid: string): { written(answer: GatewayResult): void; release(): void } | null {
+    const c = onlineClaims.get(`${home}\n${mid}`)
+    if (!c || c.state !== 'open') return null
+    let done: () => void = () => {}
+    c.state = 'writing'
+    c.at = deps.now()
+    c.wrote = new Promise<void>((r) => { done = r })
+    return {
+      written(answer) { c.state = 'written'; c.answer = answer },
+      release() { if (c.state === 'writing') c.state = 'open'; c.wrote = undefined; done() },
+    }
+  }
+
   /** What a saved peer message answers its retry (its delivery record, keyed by the follower's op id). */
   function peerAnswerOf(first: Record<string, unknown>): Record<string, unknown> {
     const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
@@ -2042,7 +2098,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (online) return fail('bad_request', 'follower.peer: a message is held only while the server is away')
       const args = req.args && typeof req.args === 'object' && !Array.isArray(req.args) ? req.args as Record<string, unknown> : null
       if (!args) return fail('bad_request', 'follower.peer: a held message needs its arguments')
-      const held = holdWrite(home, from, 'tools.call', { name: 'task_send', args, ...(typeof req.callId === 'string' ? { callId: req.callId } : {}) })
+      const held = holdWrite(home, from, 'tools.call', { name: 'task_send', args, ...(typeof req.callId === 'string' ? { callId: req.callId } : {}) }, opId)
       return held ?? fail('needs_leader', 'this host cannot hold that message for the server', { detail: { why: 'not_held' } })
     }
     const to = str(req.toSessionId)
@@ -2054,6 +2110,19 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!sessionOf(home, from)) return fail('bad_request', 'the sender is not a session of that Walnut on this host')
     if (!sessionOf(home, to) || !liveHere(home, to)) return fail('needs_leader', 'that session of this Walnut is not running on this host', { detail: { why: 'not_running_here' } })
     if (online && deps.pendingPrompt?.(to)) return leave('the session waits on a permission prompt')
+    if (req.kind !== 'send' && req.kind !== 'reply') return fail('bad_request', 'follower.peer: kind is send or reply')
+    // Online: only the hand-off still open may write it (the relay to the server may not have it too).
+    const claim = online ? claimOnline(home, mid) : null
+    if (online && !claim) return leave('the hand-off of this message ended')
+    try { return await followerWrite(home, req, opId, { online, from, to, text, mid, leave, claim }) } finally { claim?.release() }
+  }
+
+  async function followerWrite(
+    home: string, req: Record<string, unknown>, opId: string,
+    p: { online: boolean; from: string; to: string; text: string; mid: string; leave(why: string): GatewayResult; claim: { written(answer: GatewayResult): void } | null },
+  ): Promise<GatewayResult> {
+    const str = (v: unknown) => (typeof v === 'string' ? v : '')
+    const { online, from, to, text, mid, leave } = p
     if (req.kind === 'send') {
       const ask = req.ask && typeof req.ask === 'object' && !Array.isArray(req.ask) ? req.ask as Record<string, unknown> : null
       const rqId = ask ? str(ask.id) : ''
@@ -2068,6 +2137,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const delivered = await deliverPeer(home, { fromSessionId: from, toSessionId: to, toTaskId, envelope: text, messageId: mid, row, online, opId })
       if (!delivered.ok) return online ? leave(`this host could not write it (${delivered.reason})`) : fail('internal', `delivery failed: ${delivered.reason}`)
       deps.log('info', 'offline host: a follower\'s message delivered', { home, from, to, requestId: row?.id, messageId: mid, online })
+      p.claim?.written(sentResult(home, { sid: to, taskId: toTaskId, title: sessionOf(home, to)?.title }, { requestId: row?.id, messageId: mid }))
       return ok({ delivered: true, targetSessionId: to, ...(toTaskId ? { targetTaskId: toTaskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
     }
     if (req.kind === 'reply') {
@@ -2086,6 +2156,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const also = Array.isArray(req.alsoSettle) ? req.alsoSettle.filter((x): x is string => typeof x === 'string' && /^rq-[a-f0-9]{6,}$/.test(x)) : []
       for (const id of also) settleHere(home, id, journalOf(home).rows[id], str(req.replierTaskId) || undefined, req.score, online)
       deps.log('info', 'offline host: a follower\'s reply delivered', { home, requestId, from, to, messageId: mid, online })
+      const asker = sessionOf(home, to)
+      p.claim?.written(sentResult(home, { sid: to, taskId: asker?.taskId, title: asker?.title }, { repliedTo: requestId, messageId: mid }))
       return ok({ delivered: true, targetSessionId: to, messageId: mid, repliedTo: requestId, ...(also.length ? { alsoSettled: also } : {}) })
     }
     return fail('bad_request', 'follower.peer: kind is send or reply')
@@ -2634,7 +2706,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * ledger), as the session that made it. Only for a Mac that drains `held-op` (MAC_DRAINS); never a
    * call outside a known session, nor one whose arguments ride in a file. Null: not held.
    */
-  function holdWrite(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): GatewayResult | null {
+  /** `opIdWithoutCall`: the record's op id when the call has no call id (a follower's own op id: its retry is held once). */
+  function holdWrite(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>, opIdWithoutCall?: string): GatewayResult | null {
     try {
       const name = typeof payload.name === 'string' ? payload.name : ''
       if (capability !== 'tools.call' || HELD_OPS.indexOf(name) === -1 || typeof payload.argsFile === 'string') return null
@@ -2651,7 +2724,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           args.task = me.taskId
         }
       }
-      return appendHeld(home, callerSid, name, args, payload.callId)
+      return appendHeld(home, callerSid, name, args, payload.callId, opIdWithoutCall)
     } catch (err) {
       deps.log('warn', 'offline host: a write could not be held', { home, error: (err as Error).message })
       return null
@@ -3376,21 +3449,13 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const offset = deps.streamOffset(targetSid)
         if (typeof offset === 'number') row.afterV = offset
       }
-      let envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
+      const envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
         title: typeof from.title === 'string' ? from.title : '', shortId: from.sid.slice(0, 8), sessionId: from.sid,
         taskId: fromTaskId, host: from.host, ...(row ? { requestId: row.id } : {}),
       }, { title: typeof d.title === 'string' ? d.title : undefined })
-      if (row) envelope = `${envelope}\n${replyTrailer(home, row)}`
       const mid = messageId(d.messageId)
-      if (row) journalOf(home).rows[row.id] = row
-      const delivered = await deliverWithTaskRouting(home, targetSid, envelope, mid)
-      if (!delivered.ok) {
-        if (row) { delete journalOf(home).rows[row.id]; persistJournal(home) }
-        return fail('internal', `delivery failed: ${delivered.reason}`)
-      }
-      if (row) { row.messageId = mid; row.reachedAt = new Date(deps.now()).toISOString() }
-      if (row) append(home, { kind: 'row', row: { ...row } })
-      append(home, { kind: 'delivery', fromSessionId: from.sid, toSessionId: targetSid, ...(target.taskId ? { toTaskId: target.taskId } : {}), messageId: mid, ...(row ? { requestId: row.id } : {}) })
+      const delivered = await deliverPeer(home, { fromSessionId: from.sid, toSessionId: targetSid, toTaskId: target.taskId, envelope, messageId: mid, row, online: false })
+      if (!delivered.ok) return fail('internal', `delivery failed: ${delivered.reason}`)
       deps.log('info', 'offline host: leader delivered a peer message', { home, from: from.sid, fromHost: from.host, to: targetSid, requestId: row?.id, messageId: mid })
       return ok({
         delivery: 'queued', targetSessionId: targetSid, targetTitle: target.title ?? null,
@@ -3751,6 +3816,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     localCandidate: (home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): boolean => localCall(home, rawCallerSid, capability, payload) !== null,
     /** A follower's peer message (`follower.peer`): the write into the live CLI and its records. */
     handleFollowerPeer,
+    /** A same-host send handed to this host's Walnut server while the server answers: written once, by it or by the relay. */
+    openOnline, endOnline,
     /** handleFollower, waiting out another process's journal lock (whenUnlocked): the twins' follower.op. */
     handleFollowerWaiting: (home: string, req: Parameters<typeof handleFollower>[1]) => whenUnlocked(home, String(req.op ?? ''), () => handleFollower(home, req)),
     /** noteSession, waiting out another process's journal lock (whenUnlocked): the twins' host ask. */

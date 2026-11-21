@@ -10,16 +10,21 @@
  *                 it, framed as a peer note; the server's refusals first (a complete parent, a
  *                 lead that handed over, the caller itself, a COMPLETE task without force and a
  *                 reason). A reply is asked for unless expect_reply is false, or omitted on a note
- *                 up the org (reply-direction.ts goesUp), or wake is false: its row is the
+ *                 up the org (reply-direction.ts goesUpIn, over the copy with this host's journal
+ *                 folded in, so a task made here reports up too), or wake is false: its row is the
  *                 daemon's, as its own offline answer opens one (the "target ended without
  *                 replying" watch there takes it). A target not running here is held for the
  *                 Mac (the daemon's held op), for a Mac that drains `held-op`.
  *     a reply     in_reply_to (one id or up to 20): the request from this host's journal or the
  *                 copy, the asker running here, written into its session and settled here
  *                 (away-replies.ts)
- *   online (the Mac answers): only what the daemon's handleLocal takes, judged the same way;
- *     anything else answers `needs_leader {why: 'server_delivers'}` and the daemon relays it to
- *     the Mac, carrying the message id it set
+ *   online (the Mac answers, `host_call_entry` on): only what the daemon's handleLocal takes,
+ *     judged the same way; anything else (a quiet wake:false note the Mac holds, too) answers
+ *     `needs_leader {why: 'server_delivers'}` and the daemon relays it to the Mac, carrying the
+ *     message id it set. Any failure of this server's is the Mac's too (local-calls.ts onlineReply).
+ *
+ * The rules shared with the Mac (the reply default, the deadline and its kind, the refusals'
+ * words) are its own, from core/sessions/send-rules.ts and session-requests.ts: one copy each.
  *
  * The daemon writes it (`follower.peer`, 'follower-peer-v1'): the row's turn and stream facts,
  * the reply line, the live CLI's FIFO and the journal records, the same records its own answer
@@ -33,9 +38,13 @@ import type { ReplicaWrite } from './dispatch.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer, type TaskRow, type WriteActor, type WritePort } from './write-port.js'
 import { escapeSenderWords } from '../providers/offline-host-core.js'
 import { messageIdOfCall, writeOpId } from '../lib/op-call-id.js'
+import { refNamesId } from '../lib/id-ref.js'
 import { kit, replyTo, serverDelivers, type ReplyContext } from './away-replies.js'
 import { frameAsCaller, taskSessions } from './away-starts.js'
 import { leaderAnswers } from '../core/server-role.js'
+import { admitRetiredLeadRule, asksReply, directionDecides, holdsQuietly, parentCompleteRefusal, replyKindOf, wakeFalseConflict, type RetiredLeadFacts, type SendRuleInput } from '../core/sessions/send-rules.js'
+import { clampReplyTimeoutSecs } from '../core/session-requests.js'
+import type { Overlay } from './overlay.js'
 import { log } from '../logging/index.js'
 
 /** The daemon capability `follower.peer` rides on. */
@@ -46,9 +55,6 @@ const SESSIONS_TIMEOUT_MS = 3_000
  * again under the same op id, and the daemon answers it from the first (handleFollowerPeer).
  */
 const PEER_TIMEOUT_MS = 5_000
-/** The reply deadlines the daemon's own answer uses (offline-host-core.ts clampSecs). */
-const ASKED_SECS = 3_600
-const IMPLICIT_SECS = 6 * 3_600
 /** A plugin job's message takes only these inputs (anything else needs the Mac). */
 const JOB_SEND_KEYS = new Set(['to', 'text', 'title', 'wake', 'expect_reply'])
 
@@ -66,10 +72,10 @@ export interface AwaySendsDeps {
   session(sid: string): Promise<{ title?: string; taskId?: string; acp?: boolean } | null>
   /** A reply request as the copy holds it, or null. */
   requestCopy(id: string): Promise<Record<string, unknown> | null>
-  /** `to` is above `from` in the org (core/sessions/reply-direction.ts goesUp). */
+  /** `to` is above `from` in the org (core/sessions/reply-direction.ts goesUpIn, over the tasks as this replica shows them). */
   goesUp(fromTaskId: string | undefined, toTaskId: string | undefined): Promise<boolean>
-  /** A lead that handed its project over, as the Mac refuses a message to it (org/retired-lead.ts), or null. */
-  retiredLead(callerTaskId: string | undefined, targetTaskId: string): Promise<{ message: string; detail: Record<string, string>; leadPhase?: string } | null>
+  /** A lead that handed its project over, as the Mac refuses a message to it (org/retired-lead.ts retiredLeadRefusal), or null. */
+  retiredLead(callerTaskId: string | undefined, targetTaskId: string): Promise<RetiredLeadFacts | null>
   hostKey: string | null
   capabilities(): readonly string[] | null
   /** A follower link request (`follower.sessions`, `follower.pending`). */
@@ -87,6 +93,35 @@ export interface AwaySendsDeps {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/** The route body's fields as the shared send rules read them (send-rules.ts). */
+export function ruleInputOf(b: Record<string, unknown>): SendRuleInput {
+  return {
+    ...(typeof b.expect_reply === 'boolean' ? { expectReply: b.expect_reply } : {}),
+    ...(b.hands_on !== undefined ? { handsOn: b.hands_on } : {}),
+    ...(typeof b.wake === 'boolean' ? { wake: b.wake } : {}),
+    ...(b.force === true ? { force: true } : {}),
+    ...(typeof b.reason === 'string' ? { reason: b.reason } : {}),
+  }
+}
+
+/** Every task as this replica shows it: the copy's rows with this host's journal folded in, and the tasks made here. */
+export function tasksWithOverlay<T extends { id: string }>(rows: readonly T[], overlay: Pick<Overlay, 'task' | 'createdTaskIds'>): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const r of rows) {
+    if (!r || typeof r.id !== 'string') continue
+    seen.add(r.id)
+    const folded = overlay.task(r.id, r as unknown as Record<string, unknown>) as T | null
+    if (folded) out.push(folded)
+  }
+  for (const id of overlay.createdTaskIds()) {
+    if (seen.has(id)) continue
+    const made = overlay.task(id, null) as T | null
+    if (made) { out.push(made); seen.add(id) }
+  }
+  return out
+}
 
 /** The call id a self-call's op id was made from (op-call-id.ts writeOpId of POST /messages), or null. */
 export function callIdOfOpId(opId: string): string | null {
@@ -130,11 +165,11 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
   async function parentComplete(ownTaskId: string | undefined, targetTaskId: string | undefined): Promise<PortAnswer | null> {
     if (!ownTaskId || !targetTaskId) return null
     const parentRef = str((await deps.task(ownTaskId))?.parent_task_id)
-    if (!parentRef || !(targetTaskId === parentRef || (!(await deps.task(parentRef)) && targetTaskId.startsWith(parentRef)))) return null
+    if (!parentRef || !refNamesId(parentRef, targetTaskId, (await deps.task(parentRef)) != null, ownTaskId)) return null
     const parent = await deps.task(targetTaskId)
     if (parent?.phase !== 'COMPLETE') return null
-    return refusalAnswer('parent_complete', `"${str(parent.title)}" (${parent.id}) is your task's parent and it is complete: it no longer takes messages `
-      + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear from you again, the user reopens it.')
+    const r = parentCompleteRefusal({ id: parent.id, title: str(parent.title) })
+    return refusalAnswer(r.code, r.message)
   }
 
   /** The server's rule for a COMPLETE target (envelope-kit.ts checkCompleteTarget): the text to deliver, or the refusal. */
@@ -149,12 +184,8 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
   async function retired(callerTaskId: string | undefined, targetTaskId: string | undefined, b: Record<string, unknown>, text: string): Promise<{ text: string } | { error: PortAnswer }> {
     const r = targetTaskId ? await deps.retiredLead(callerTaskId, targetTaskId) : null
     if (!r) return { text }
-    if (b.force !== true) return { error: refusalAnswer('lead_handed_over', `${r.message} If the old lead itself must act, pass force:true with reason:"<why it, not the lead that took over>".`) }
-    const reason = str(b.reason).replace(/\s+/g, ' ')
-    if (reason.length < 10) {
-      return { error: refusalAnswer('bad_request', `force:true needs a reason (at least 10 characters) saying why the lead of ${r.detail.taskId}, which no longer leads ${r.detail.project}, must act rather than the lead that took over.`) }
-    }
-    return { text: r.leadPhase === 'COMPLETE' ? text : `This comes to you although you no longer lead ${r.detail.project}. Why: ${reason.slice(0, 300)}\n\n${text}` }
+    const admitted = admitRetiredLeadRule(r, ruleInputOf(b), text)
+    return 'error' in admitted ? { error: refusalAnswer(admitted.error.code, admitted.error.message) } : admitted
   }
 
   const liveIn = (view: { sessions: HostSession[] }, taskId: string) => view.sessions.filter((s) => s.taskId === taskId && (s.state === 'working' || s.state === 'idle'))
@@ -220,7 +251,11 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
     if (online && (b.hands_on !== undefined || b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined || b.score !== undefined || !text)) {
       return serverDelivers('Your Mac delivers this one.')
     }
-    if (b.wake === false && (b.expect_reply === true || b.hands_on)) return refusalAnswer('bad_request', 'wake=false is a note that asks nothing: it cannot also ask for a reply or hand on a request')
+    const rules = ruleInputOf(b)
+    const conflict = wakeFalseConflict(rules)
+    if (conflict) return refusalAnswer(conflict.code, conflict.message)
+    // The Mac holds a quiet note for the target's next message (quiet-notes.ts): this host cannot, so it is the Mac's.
+    if (online && holdsQuietly(rules)) return serverDelivers('A note that asks nothing waits for its target\'s next message on your Mac.')
     const view = await hostView()
     if (!view?.host) return needsLeaderAnswer('sessions_unread', 'This host could not read its sessions just now; nothing was sent.')
     const me = await callerOf(sid, view)
@@ -252,11 +287,14 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
     if (target.sid === sid) return refusalAnswer('self_send', 'target resolves to the calling session itself')
     const admitted = await admitComplete(target.taskId, b, lead.text, 'send')
     if ('error' in admitted) return admitted.error
-    // The server's default: a session asking another wants the answer, except a note up to its own
-    // leaders (a report), and away a note that asks nothing (wake false; online, as handleLocal).
-    const implicit = b.expect_reply === undefined
-    const asks = b.expect_reply !== false && (online || b.wake !== false) && !(implicit && !b.hands_on && await deps.goesUp(me.taskId, target.taskId).catch(() => false))
-    const secs = typeof b.reply_timeout === 'number' && Number.isFinite(b.reply_timeout) ? Math.min(86_400, Math.max(60, Math.floor(b.reply_timeout))) : implicit ? IMPLICIT_SECS : ASKED_SECS
+    // The server's default (send-rules.ts asksReply): a session asking another wants the answer, except
+    // a note up to its own leaders (a report); away, a note that asks nothing (wake false) opens none,
+    // as the daemon's own away answer (online such a note went to the Mac above, unless forced).
+    const reportsUp = directionDecides(rules) && await deps.goesUp(me.taskId, target.taskId).catch(() => false)
+    const asks = asksReply(rules, reportsUp) && (online || b.wake !== false)
+    // The Mac's deadline: by kind (a lead or Main answers for its teams), longer when the default asked.
+    const kind = replyKindOf(target.taskId ? (await deps.task(target.taskId))?.org_role : undefined)
+    const secs = clampReplyTimeoutSecs(typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined, b.expect_reply === undefined, kind)
     const ask = asks ? { id: `rq-${hex(6)}`, preview: kit.requestPreview(text), secs } : undefined
     const envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
       title: me.title, shortId: sid.slice(0, 8), sessionId: sid, ...(me.taskId ? { taskId: me.taskId } : {}),
@@ -324,7 +362,7 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
 
 /** The real dependencies on a host replica (server.ts mounts the handler before away.writes). */
 export function wireAwaySends(o: {
-  away: { port: WritePort; actorOf(req: Request): WriteActor | null; task(id: string): Promise<TaskRow | null> }
+  away: { port: WritePort; actorOf(req: Request): WriteActor | null; task(id: string): Promise<TaskRow | null>; overlay: Pick<Overlay, 'refresh' | 'task' | 'createdTaskIds'> }
   hostKey: string | null
   continued?: AwaySendsDeps['continued']
   capabilities(): readonly string[] | null
@@ -353,11 +391,14 @@ export function wireAwaySends(o: {
       return { ...(rec.title ? { title: rec.title } : {}), ...(rec.taskId ? { taskId: rec.taskId } : {}), ...(engineCaps(rec.engine).runtimeKind === 'native' ? {} : { acp: true }) }
     },
     requestCopy: async (id) => ((await (await import('../core/session-requests.js')).getSessionRequest(id).catch(() => undefined)) ?? null) as Record<string, unknown> | null,
-    goesUp: async (from, to) => (await import('../core/sessions/reply-direction.js')).goesUp(from, to),
-    retiredLead: async (callerTaskId, targetTaskId) => {
-      const r = await (await import('../core/org/retired-lead.js')).retiredLeadRefusal(callerTaskId, targetTaskId)
-      return r ? { message: r.message, detail: r.detail, ...(r.retired.lead.phase ? { leadPhase: String(r.retired.lead.phase) } : {}) } : null
+    // Over the tasks as this replica shows them: a task made on this host (only in its journal) is in the walk.
+    goesUp: async (from, to) => {
+      if (!from || !to || from === to) return false
+      await o.away.overlay.refresh(500)
+      const [{ goesUpIn }, { listTasks }] = await Promise.all([import('../core/sessions/reply-direction.js'), import('../core/task-manager.js')])
+      return goesUpIn(tasksWithOverlay(await listTasks(), o.away.overlay), from, to)
     },
+    retiredLead: async (callerTaskId, targetTaskId) => (await import('../core/org/retired-lead.js')).retiredLeadRefusal(callerTaskId, targetTaskId),
     hostKey: o.hostKey,
     capabilities: o.capabilities,
     request: o.request,

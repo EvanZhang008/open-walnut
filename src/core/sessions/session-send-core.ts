@@ -55,6 +55,7 @@ import { frameForSource } from './send-frame.js';
 import { isPersonSource } from './send-sent-by.js';
 import { noteRequestDelivering } from './undelivered-requests.js';
 import { isSupersededSession } from './engine-switch-marker.js';
+import { admitRetiredLeadRule, asksReply, directionDecides, holdsQuietly, parentCompleteRefusal, replyKindOf, wakeFalseConflict, type SendRuleRefusal } from './send-rules.js';
 
 const kit = createEnvelopeKit();
 
@@ -633,10 +634,12 @@ async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: 
   if (!refNamesId(parentRef, targetTaskId, exact, own?.id)) return;
   const target = await getTask(targetTaskId).catch(() => undefined);
   if (!target || !refNamesId(parentRef, target.id, exact, own?.id) || target.phase !== 'COMPLETE') return;
-  throw new SendError('parent_complete',
-    `"${target.title}" (${target.id}) is your task's parent and it is complete: it no longer takes messages `
-    + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear '
-    + 'from you again, the user reopens it.', 409, { parentTaskId: target.id });
+  throw sendErrorOf(parentCompleteRefusal(target));
+}
+
+/** A shared rule's refusal (send-rules.ts) as the leader's SendError. */
+function sendErrorOf(r: SendRuleRefusal): SendError {
+  return new SendError(r.code as SendError['code'], r.message, r.status, r.detail);
 }
 
 /**
@@ -667,22 +670,10 @@ async function admitRetiredLead(caller: CallerIdentity, targetTaskId: string | u
   const { retiredLeadRefusal } = await import('../org/retired-lead.js');
   const refusal = await retiredLeadRefusal(caller.record.taskId, targetTaskId);
   if (!refusal) return text;
-  if (input.force !== true) {
-    throw new SendError('lead_handed_over',
-      `${refusal.message} If the old lead itself must act, pass force:true with reason:"<why it, not the lead that took over>".`,
-      409, refusal.detail);
-  }
-  const reason = (input.reason ?? '').replace(/\s+/g, ' ').trim();
-  if (reason.length < RETIRED_LEAD_REASON_MIN) {
-    throw new SendError('bad_request',
-      `force:true needs a reason (at least ${RETIRED_LEAD_REASON_MIN} characters) saying why "${refusal.retired.lead.title}" `
-      + `(${refusal.retired.lead.id}), which no longer leads ${refusal.detail.project}, must act rather than the lead that took over.`, 400);
-  }
-  if (refusal.retired.lead.phase === 'COMPLETE') return text;
-  return `This comes to you although you no longer lead ${refusal.detail.project}. Why: ${reason.slice(0, 300)}\n\n${text}`;
+  const admitted = admitRetiredLeadRule(refusal, input, text);
+  if ('error' in admitted) throw sendErrorOf(admitted.error);
+  return admitted.text;
 }
-
-const RETIRED_LEAD_REASON_MIN = 10;
 
 /**
  * A session's message to a COMPLETE task (envelope-kit.ts checkCompleteTarget):
@@ -748,11 +739,11 @@ async function isTaskId(ref: string): Promise<boolean> {
   return (await getTask(ref).catch(() => undefined))?.id === ref;
 }
 
-/** Whether a task is an org node (a lead or Main). Unknown counts as not. */
-async function targetIsLead(taskId: string | undefined): Promise<boolean> {
-  if (!taskId) return false;
+/** A request's kind by its target (send-rules.ts replyKindOf: a lead or Main). Unknown counts as not. */
+async function replyKindOfTask(taskId: string | undefined): Promise<'lead' | 'send'> {
+  if (!taskId) return 'send';
   const { getTask } = await import('../task-manager.js');
-  return !!(await getTask(taskId).catch(() => undefined))?.org_role;
+  return replyKindOf((await getTask(taskId).catch(() => undefined))?.org_role);
 }
 
 /** The answers being delivered now, by asker, words and replier (performReply's single flight). */
@@ -1018,10 +1009,9 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
 
   // A note that asks nothing starts no turn: it waits for the target's next message, folded with
   // the same sender's other such notes (sessions/quiet-notes.ts, 2026-11-12).
-  if (input.wake === false && (input.expectReply === true || input.handsOn)) {
-    throw new SendError('bad_request', 'wake=false is a note that asks nothing: it cannot also ask for a reply or hand on a request');
-  }
-  if (input.wake === false && fenced && !input.force) {
+  const conflict = wakeFalseConflict(input);
+  if (conflict) throw sendErrorOf(conflict);
+  if (holdsQuietly(input) && fenced) {
     const { holdQuietNote } = await import('./quiet-notes.js');
     const label = caller.kind === 'session'
       ? sessionHandle(await senderTitleOf(caller.record), caller.record.claudeSessionId)
@@ -1061,9 +1051,9 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   const rowId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
   // A note up the org (to its own leader, its VP, or Main) reports: no request unless asked for one
   // (reply-direction.ts). A hand-off keeps its asker's request.
-  const reportsUp = input.expectReply === undefined && !input.handsOn && caller.kind === 'session'
+  const reportsUp = directionDecides(input) && caller.kind === 'session'
     && await (await import('./reply-direction.js')).goesUp(caller.record.taskId, target.taskId ?? target.session.taskId).catch(() => false);
-  if (input.expectReply !== false && !reportsUp) {
+  if (asksReply(input, reportsUp)) {
     if (caller.kind !== 'session') {
       if (input.handsOn) throw new SendError('bad_request', 'hands_on needs a session caller: only a session owes a request');
       if (input.expectReply === true) {
@@ -1082,7 +1072,7 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
         // routine session→session notes don't each become a "no reply" notice.
         implicit: input.expectReply === undefined,
         // A lead's or Main's answer waits on its teams: a longer default deadline.
-        kind: input.replyKind ?? (await targetIsLead(target.taskId ?? target.session.taskId) ? 'lead' : 'send'),
+        kind: input.replyKind ?? await replyKindOfTask(target.taskId ?? target.session.taskId),
         ...(input.handsOn ? { handsOn: [input.handsOn] } : {}),
         messageId: rowId,
       });

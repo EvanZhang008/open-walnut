@@ -84,6 +84,9 @@ async function hostEntry(hostKey: string) {
       enabled: settings.enabled,
       // Whose the switch is: the person's (stored), or the default's (never set).
       chosenBy: followerChosenBy(host.server),
+      // On only because the experiment runs one on every host: not the person's switch, and not
+      // this Walnut's tunnel (withThisWalnutTunnel drops it there).
+      ...(settings.byDefault ? { byDefault: true } : {}),
       ...(settings.carriesTunnel ? { carriesTunnel: true } : {}),
       expose: { ...expose, options: maskSecretShapes(expose.options) },
       // Which kinds the Mac copies to this host's replica (WP4), defaults filled in.

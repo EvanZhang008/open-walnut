@@ -136,19 +136,29 @@ describe('long-running jobs', () => {
   it('a run gets the host call entry for its own run id when the daemon has one, and none otherwise', () => {
     const asked: Array<{ home: string; sid: string }> = []
     const sup = createPluginJobSupervisor(deps({
-      callEnv: (home, sid) => { asked.push({ home, sid }); return home === '/h' ? { WALNUT_CALL_URL: 'http://127.0.0.1:4100/api/host/call', WALNUT_CALL_TOKEN: 'a'.repeat(64) } : {} },
+      callEnv: (home, sid) => { asked.push({ home, sid }); return home === '/h' ? { WALNUT_CALL_SOCKET: '/d/host-call/0123456789abcdef.sock', WALNUT_CALL_TOKEN: 'a'.repeat(64) } : {} },
     }))
     sup.configure('/h', spec([job()]))
     const info = JSON.parse(spawned[0]!.env.WALNUT_PLUGIN_JOB!)
     expect(asked).toEqual([{ home: '/h', sid: info.sid }])
-    expect(spawned[0]!.env.WALNUT_CALL_URL).toBe('http://127.0.0.1:4100/api/host/call')
+    expect(spawned[0]!.env.WALNUT_CALL_SOCKET).toBe('/d/host-call/0123456789abcdef.sock')
     expect(spawned[0]!.env.WALNUT_CALL_TOKEN).toBe('a'.repeat(64))
     // The socket stays beside it, the way the call falls back to.
     expect(spawned[0]!.env.WALNUT_AGENT_SOCKET).toBe('/tmp/d/agent-gateway.sock')
     sup.configure('/other', { ...spec([job({ job: 'other' })]), home: '/other' })
     expect(spawned).toHaveLength(2)
-    expect(spawned[1]!.env.WALNUT_CALL_URL).toBeUndefined()
+    expect(spawned[1]!.env.WALNUT_CALL_SOCKET).toBeUndefined()
     expect(spawned[1]!.env.WALNUT_CALL_TOKEN).toBeUndefined()
+  })
+
+  it('a run\'s entry token ends with the run (callEnvEnd), once, whether it exits or fails to start', () => {
+    const ended: string[] = []
+    const sup = createPluginJobSupervisor(deps({ callEnv: () => ({}), callEnvEnd: (sid) => { ended.push(sid) } }))
+    sup.configure('/h', spec([job()]))
+    const sid = JSON.parse(spawned[0]!.env.WALNUT_PLUGIN_JOB!).sid as string
+    expect(ended).toEqual([])
+    exit(children[0]!, 1)
+    expect(ended).toEqual([sid])
   })
 
   it('starts a crashed job again after 5 s, doubling to 5 min, and a steady run resets the count', () => {

@@ -1224,13 +1224,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // server manager turns on the replica's `host-local-calls` capability only with it.
   'follower-gateway-v1',
   // 'host-call-entry-v1' (host-call-token-core.ts, replica/host-call-entry.ts): a follower that
-  // answers local calls may say its call entry's address (`callUrl` at follower.hello and in its
-  // report); a session, ACP worker or plugin job this daemon starts then gets WALNUT_CALL_URL and
-  // WALNUT_CALL_TOKEN (HMAC-SHA256 of its caller sid under a key in the daemon dir) beside
-  // WALNUT_AGENT_SOCKET, and posts its request lines there. The follower hands each back with
-  // `follower.gateway {request, token, openedAt, peerPid?}`: the token is checked for the line's
-  // sid, then the line runs as a socket line does (handleGatewayLine). Both twins. Optional: the
-  // follower answers `entry_unavailable` without it, and the caller uses the socket.
+  // answers local calls may say its call entry's unix socket (`callSocket` at follower.hello and in
+  // its report; only `<daemon dir>/host-call/<16 hex>.sock`, a private socket of this uid); a
+  // session, ACP worker or plugin job this daemon starts then gets WALNUT_CALL_SOCKET and
+  // WALNUT_CALL_TOKEN (HMAC-SHA256 of its caller sid and a nonce of that run, under a key in the
+  // daemon dir) beside WALNUT_AGENT_SOCKET, and posts its request lines there. The follower hands
+  // each back with `follower.gateway {request, token, openedAt}`: the token is checked against the
+  // sid's current run, then the line runs as a socket line does (handleGatewayLine). Both twins.
+  // Optional: the follower answers `entry_unavailable` without it, and the caller uses the socket.
   'host-call-entry-v1',
   // 'follower-peer-v1' (offline-host-core.ts handleFollowerPeer, replica/away-sends.ts): a message
   // between two of this Walnut's sessions here, or an answer to a request, that the host's own

@@ -95,12 +95,14 @@ describe('ratchet: every host delivery of an ask stamps its request reached', ()
       // A delivery record that carries a new ask's request: `...(row ? { requestId: row.id } : {})`.
       if (/kind: 'delivery'/.test(line) && /\(row \? \{ requestId: row\.id \} : \{\}\)/.test(line)) sites.push(i)
     })
-    // localSend, the offline send and the leader's peer delivery (2026-11-08).
-    expect(sites.length).toBeGreaterThanOrEqual(3)
+    // One shared tail, deliverPeer (2026-11-21), journals every new ask's delivery: localSend, the
+    // offline send, the follower's peer message and the leader's peer delivery (2026-11-08) call it.
+    expect(sites.length).toBeGreaterThanOrEqual(1)
     for (const i of sites) {
       const before = src.slice(Math.max(0, i - 4), i).join('\n')
       expect(before, `offline-host-core.ts:${i + 1}`).toMatch(/row\.reachedAt = /)
     }
+    expect(src.filter((line) => /\bawait deliverPeer\(home, /.test(line)).length).toBeGreaterThanOrEqual(4)
   })
 
   it('the server stamps through the delivered event itself, so every emitter is covered', () => {

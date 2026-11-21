@@ -33,6 +33,9 @@ function host(o: { slice?: HostSlice; drains?: string[]; gate?: Promise<void>; f
   return { host, journal: h.journal, delivered, prompts }
 }
 
+/** The gateway's online hand-off of this message (offline-host-core.ts openOnline): only then may an online follower.peer write it. */
+const handedOver = (h: ReturnType<typeof host>, messageId: string) => expect(h.host.openOnline(JHOME, { name: 'task_send', args: { messageId } })).toBe(true)
+
 const SEND = { kind: 'send', fromSessionId: SID_A, toSessionId: SID_B, toTaskId: TASK_B, text: '<walnut-message kind="peer-note">hi</walnut-message>', dupText: 'hi', messageId: 'qm-host-call1', ask: { id: 'rq-0a0a0a0a0a0a', preview: 'hi', secs: 3600 } }
 
 describe('follower.peer: a send', () => {
@@ -67,6 +70,7 @@ describe('follower.peer: a send', () => {
   it('a failed write leaves no row: away it fails, online it is the server\'s', async () => {
     const h = host({ fail: 'fifo_closed' })
     expect(await h.host.handleFollowerPeer(JHOME, { ...SEND, opId: 'op-send-3' })).toMatchObject({ ok: false, error: { code: 'internal' } })
+    handedOver(h, SEND.messageId)
     expect(await h.host.handleFollowerPeer(JHOME, { ...SEND, online: true, opId: 'op-send-4' })).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'server_delivers' } } })
     expect(h.journal.records(JHOME)).toEqual([])
     expect(h.host.journal.state(JHOME)).toMatchObject({ rows: {} })
@@ -77,6 +81,7 @@ describe('follower.peer: a send', () => {
     h.prompts.set(SID_B, 'Bash')
     expect(await h.host.handleFollowerPeer(JHOME, { ...SEND, online: true, opId: 'op-send-5' })).toMatchObject({ ok: false, error: { code: 'needs_leader' } })
     h.prompts.clear()
+    handedOver(h, SEND.messageId)
     expect(await h.host.handleFollowerPeer(JHOME, { ...SEND, online: true, opId: 'op-send-6' })).toMatchObject({ ok: true })
     expect((h.journal.records(JHOME) as unknown as Array<{ online?: boolean; row?: { online?: boolean } }>).every((x) => x.online === true)).toBe(true)
     expect((h.journal.records(JHOME) as unknown as Array<{ row?: { online?: boolean } }>)[0]!.row!.online).toBe(true)
@@ -112,7 +117,8 @@ describe('follower.peer: a reply', () => {
       expect.objectContaining({ kind: 'settle', requestId: copy.id, status: 'replied', score: expect.objectContaining({ function: 9, taskId: TASK_B }) }),
       expect.objectContaining({ kind: 'delivery', reply: true, requestId: copy.id, opId: 'op-reply-1' }),
     ])
-    expect(await h.host.handleFollowerPeer(JHOME, { ...REPLY, online: true, opId: 'op-reply-2' })).toMatchObject({ ok: false, error: { code: 'needs_leader' } })
+    handedOver(h, REPLY.messageId)
+    expect(await h.host.handleFollowerPeer(JHOME, { ...REPLY, online: true, opId: 'op-reply-2' })).toMatchObject({ ok: false, error: { code: 'needs_leader', message: expect.stringContaining('answered that request once') } })
     expect(h.delivered).toHaveLength(1)
   })
 
@@ -135,6 +141,14 @@ describe('follower.peer: a held message', () => {
     expect(await h.host.handleFollowerPeer(JHOME, { ...HOLD, opId: 'op-hold-1' })).toMatchObject({ ok: true, result: { held: true, op: 'task_send' } })
     expect(await h.host.handleFollowerPeer(JHOME, { ...HOLD, opId: 'op-hold-2' })).toMatchObject({ ok: true, result: { held: true } })
     expect(h.journal.records(JHOME)).toEqual([expect.objectContaining({ kind: 'op', op: 'task_send', opId: 'held-call9call9call9', callId: 'oc-call9call9call9', callerSid: SID_A })])
+  })
+
+  it('a call without a call id is held under the follower\'s op id: its retry is held once', async () => {
+    const h = host()
+    const { callId: _none, ...noCall } = HOLD
+    expect(await h.host.handleFollowerPeer(JHOME, { ...noCall, opId: 'op-hold-5' })).toMatchObject({ ok: true })
+    expect(await h.host.handleFollowerPeer(JHOME, { ...noCall, opId: 'op-hold-5' })).toMatchObject({ ok: true, result: { duplicate: true } })
+    expect(h.journal.records(JHOME)).toEqual([expect.objectContaining({ kind: 'op', op: 'task_send', opId: 'op-hold-5' })])
   })
 
   it('an older Mac that drains no held-op: needs the Mac, nothing journaled', async () => {

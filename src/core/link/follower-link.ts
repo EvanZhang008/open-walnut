@@ -28,8 +28,8 @@ export interface FollowerLinkOptions {
   answersLocal?: boolean
   /** This server picks the session for the host's unclaimed trigger fires while its leader is away (daemon-link.ts). */
   deliversTriggers?: boolean
-  /** This server takes a same-host message while its leader answers too (daemon-link.ts). */
-  answersOnline?: boolean
+  /** This server takes a same-host message while its leader answers too, read at each hello (daemon-link.ts). */
+  answersOnline?: () => boolean
   /** More of follower.hello, read at each hello (daemon-link.ts). */
   helloExtra?: () => Record<string, unknown>
   /** A daemon event on the link (a `gateway-request`, a `trigger-delivery`). */
@@ -61,7 +61,7 @@ export function createFollowerLink(opts: FollowerLinkOptions): FollowerLink {
     accept: opts.accept,
     ...(opts.answersLocal ? { answersLocal: true } : {}),
     ...(opts.deliversTriggers ? { deliversTriggers: true } : {}),
-    ...(opts.answersOnline ? { answersOnline: true } : {}),
+    ...(opts.answersOnline ? { answersOnline: opts.answersOnline } : {}),
     ...(opts.helloExtra ? { helloExtra: opts.helloExtra } : {}),
     ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
     openTimeoutMs: opts.openTimeoutMs,

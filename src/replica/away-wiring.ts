@@ -34,6 +34,7 @@ import { wsWrites } from './ws-writes.js'
 import { writeActorOf } from './write-actor.js'
 import type { SessionRecord } from '../core/types.js'
 import type { AwayStart } from '../core/offline-merge/task-row-fold.js'
+import type { AskLaunch } from './ask-launch.js'
 
 /** The daemon capability note writes away ride on (WP11). */
 const NOTE_JOURNAL_CAP = 'note-journal-v1'
@@ -60,8 +61,8 @@ export interface AwayWiring {
   task(id: string): Promise<TaskRow | null>
   /** Whether a session runs on this host. */
   sessionHere(sid: string): Promise<boolean>
-  /** How a reader gets the live state of the sessions this host started alone (ask-launch.ts fresh), once they exist. */
-  setSessionsFresh(fn: (() => Promise<void>) | null): void
+  /** The one reader of this host's live sessions (ask-launch.ts look): task and session reads, the session list. */
+  setSessionLooks(looks: Pick<AskLaunch, 'fresh' | 'hostSessions'> | null): void
   stop(): void
 }
 
@@ -111,7 +112,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
 
   // The sessions this host started alone, as the overlay folds them into their tasks' rows.
   const { awaySessionsOfTask, isAwaySession } = await import('../core/session-tracker.js')
-  let sessionsFresh: (() => Promise<void>) | null = null
+  let looks: Pick<AskLaunch, 'fresh' | 'hostSessions'> | null = null
   const overlay: Overlay = createOverlay({
     awayStarts: (taskId) => awaySessionsOfTask(taskId).map(awayStartOf),
     fetchPending: async () => {
@@ -145,13 +146,8 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   const { installJournalOverlay } = await import('./journal-overlay.js')
   installJournalOverlay(overlay)
   // The reply requests this host opened or answered alone, over the requests copy (away-requests.ts).
-  const [{ installAwayRequests }, { foldAwayRequests }] = await Promise.all([import('../core/session-requests.js'), import('./away-requests.js')])
-  // Forced (maxAgeMs 0): a request the daemon opened for a call it answered itself is in no
-  // earlier answer, and request reads are few (request_get, open_items, the overdue sweep).
-  installAwayRequests(async (rows) => {
-    await Promise.race([overlay.refresh(0), new Promise<void>((r) => { const t = setTimeout(r, 1_500); t.unref?.() })])
-    return foldAwayRequests(rows, overlay.entries())
-  })
+  const [{ installAwayRequests }, { awayRequestReader }] = await Promise.all([import('../core/session-requests.js'), import('./away-requests.js')])
+  installAwayRequests(awayRequestReader({ macAnswers: () => opts.macAnswers?.() === true, overlay }))
 
   // The row every write reads (the write port's bases, the away routes' checks): the journal's
   // values only, never the session a reader is shown (overlay.ts taskForReaders).
@@ -192,7 +188,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     },
     // What task_get reads right after: the session this host started for it, with its live state.
     forReaders: async (row) => {
-      await Promise.race([sessionsFresh?.().catch(() => {}), new Promise<void>((r) => { const t = setTimeout(r, 1_000); t.unref?.() })])
+      await Promise.race([looks?.fresh().catch(() => {}), new Promise<void>((r) => { const t = setTimeout(r, 1_000); t.unref?.() })])
       const folded = (overlay.taskForReaders(row.id, row) ?? row) as TaskRow
       const { enrichTasksWithSessionStatus } = await import('../web/routes/tasks.js')
       const [enriched] = await enrichTasksWithSessionStatus([folded] as never) as unknown as TaskRow[]
@@ -227,22 +223,12 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     actorOf, log: (level, msg, data) => log.web[level](msg, data),
     capable: () => { const caps = link.capabilities(); return caps === null ? null : caps.includes(NOTE_JOURNAL_CAP) },
   })
-  // This host's sessions as the daemon sees them now (the session list's live state), asked at most once a second.
-  let hostLive: { at: number; map: Map<string, { state: string; lastActiveAt?: string }> } | null = null
-  const hostSessions = async () => {
-    if (hostLive && Date.now() - hostLive.at < 1_000) return hostLive.map
-    if (!linked()) return null
-    const r = await link.request('follower.sessions', {}, 2_000)
-    const map = new Map<string, { state: string; lastActiveAt?: string }>()
-    for (const x of Array.isArray(r.sessions) ? r.sessions as Array<Record<string, unknown>> : []) {
-      if (typeof x.sid === 'string') map.set(x.sid, { state: String(x.state ?? 'stopped'), ...(typeof x.lastActiveAt === 'string' ? { lastActiveAt: x.lastActiveAt } : {}) })
-    }
-    hostLive = { at: Date.now(), map }
-    return map
-  }
+  // This host's sessions as the daemon sees them now (the session list's live state): ask-launch's
+  // look, shared with every other reader (one follower.sessions at a time, at most once a second).
+  const hostSessions = async () => (linked() && looks ? looks.hostSessions() : null)
   const reads = awayReads({
     overlay, answeredAway: (res: Response) => res.getHeader(ANSWERED_VIA_HEADER) === 'replica', hostKey: opts.hostKey, hostSessions,
-    fresh: () => sessionsFresh?.() ?? Promise.resolve(),
+    fresh: () => looks?.fresh() ?? Promise.resolve(),
     awayHere: (kind, id) => (kind === 'session' ? isAwaySession(id) : awaySessionsOfTask(id).length > 0),
     enrich: async (rows) => {
       const { enrichTasksWithSessionStatus } = await import('../web/routes/tasks.js')
@@ -273,7 +259,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   log.web.info('replica: away writes wired', { hostKey: opts.hostKey, home: WALNUT_HOME })
   return {
     overlay, port, reads, writes, notes, actorOf, task: shownTask, sessionHere,
-    setSessionsFresh(fn) { sessionsFresh = fn },
+    setSessionLooks(l) { looks = l },
     stop() {
       clearInterval(watch)
       setCopyWatcher(null)

@@ -1,7 +1,7 @@
 /**
  * "Walnut on this host" says when its switch only follows the default (the experiment
  * follower_on_every_host turns a never-set host on: GET /api/host-servers answers
- * `settings.chosenBy: 'default'`). The words come from hostServerSwitchWords
+ * `settings.byDefault: true`, never for the host carrying this Walnut's tunnel). The words come from hostServerSwitchWords
  * (host-servers-status.ts) and sit beside the switch in HostServerPart (HostServersGroup.tsx);
  * a host the person set, a host that is off and an older server's answer show none.
  */
@@ -23,7 +23,7 @@ vi.mock('../../web/src/components/settings/sections/host-settings-data', () => (
 }))
 
 const SECTIONS = '../../web/src/components/settings/sections'
-const { hostServerSwitchWords } = await import(`${SECTIONS}/host-servers-status`)
+const { hostServerSwitchWords, HOST_SERVER_BY_DEFAULT_TITLE } = await import(`${SECTIONS}/host-servers-status`)
 const { HostServerPart } = await import(`${SECTIONS}/HostServersGroup`)
 
 const entry = (hostKey: string, settings: Partial<HostServerEntry['settings']>): HostServerEntry => ({
@@ -33,10 +33,24 @@ const entry = (hostKey: string, settings: Partial<HostServerEntry['settings']>):
 })
 
 describe('hostServerSwitchWords', () => {
-  it('a host on only by default says so; the person\'s on, an off host and an older server say nothing', () => {
-    expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default' }))).toBe('On (default)')
+  it('a host on only by the experiment\'s default says so', () => {
+    expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default', byDefault: true }))).toBe('On (default)')
+  })
+  it('the person\'s own on says nothing', () => {
     expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'user' }))).toBeNull()
+  })
+  it('an off host says nothing', () => {
     expect(hostServerSwitchWords(entry('devbox', { enabled: false, chosenBy: 'default' }))).toBeNull()
+  })
+  it('the host on for carrying this Walnut\'s tunnel, the experiment off, says nothing', () => {
+    // Never set (chosenBy default), on only because the tunnel runs there: the server sends no byDefault.
+    expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default', carriesTunnel: true }))).toBeNull()
+  })
+  it('the host carrying the tunnel says nothing even if a server also sent byDefault', () => {
+    expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default', byDefault: true, carriesTunnel: true }))).toBeNull()
+  })
+  it('an older server (no byDefault) says nothing', () => {
+    expect(hostServerSwitchWords(entry('devbox', { chosenBy: 'default' }))).toBeNull()
     expect(hostServerSwitchWords(entry('devbox', {}))).toBeNull()
   })
 })
@@ -64,17 +78,21 @@ afterEach(async () => {
 
 describe('HostServerPart: the switch of a host on by default', () => {
   it('reads on and says it follows the default, beside the switch; a host the person turned on does not', async () => {
-    ctx.hosts = [entry('devbox', { chosenBy: 'default' }), entry('buildbox', { chosenBy: 'user' })]
+    ctx.hosts = [entry('devbox', { chosenBy: 'default', byDefault: true }), entry('buildbox', { chosenBy: 'user' }), entry('tunnelbox', { chosenBy: 'default', carriesTunnel: true })]
     await act(async () => {
       root!.render(createElement('div', null,
         createElement(HostServerPart, { hostKey: 'devbox' }),
-        createElement(HostServerPart, { hostKey: 'buildbox' })))
+        createElement(HostServerPart, { hostKey: 'buildbox' }),
+        createElement(HostServerPart, { hostKey: 'tunnelbox' })))
     })
     const words = el.querySelector('[data-testid="host-server-by-default-devbox"]')
     expect(words?.textContent).toBe('On (default)')
+    expect(words?.getAttribute('title')).toBe(HOST_SERVER_BY_DEFAULT_TITLE)
     // It sits with the switch, in the row's control.
     expect(words?.parentElement?.querySelector('[data-testid="host-server-enabled-devbox"]')).not.toBeNull()
     expect(el.querySelector('[data-testid="host-server-by-default-buildbox"]')).toBeNull()
     expect(el.querySelector('[data-testid="host-server-enabled-buildbox"]')).not.toBeNull()
+    // On for carrying this Walnut's tunnel, not by default: no words, no tooltip.
+    expect(el.querySelector('[data-testid="host-server-by-default-tunnelbox"]')).toBeNull()
   })
 })

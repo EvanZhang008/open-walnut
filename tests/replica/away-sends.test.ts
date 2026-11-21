@@ -89,6 +89,27 @@ describe('a message from this host, the follower\'s own rules', () => {
     expect((await h.post({ to: 'tc', text: 'x', wake: false, expect_reply: true })).body.error).toMatchObject({ code: 'bad_request' })
   })
 
+  it('the deadline is the Mac\'s, by kind: a lead or Main gets 12 h by default and 2 h when asked (session-requests.ts)', async () => {
+    const rows: Record<string, Record<string, unknown>> = { tb: { id: 'tb', title: 'Worker', parent_task_id: 'ta' }, tc: { id: 'tc', title: 'Other lead', org_role: 'lead' } }
+    const h = harness({ task: async (id) => (rows[id] ? { ...rows[id] } as never : null) })
+    await h.post({ to: 'tc', text: 'take this' })
+    await h.post({ to: 'tc', text: 'take this', expect_reply: true })
+    await h.post({ to: 'tc', text: 'take this', expect_reply: true, reply_timeout: 90 })
+    expect(h.calls.map((c) => (c.ask as { secs: number }).secs)).toEqual([12 * 3600, 2 * 3600, 90])
+    // A worker's deadline stays the send kind's.
+    const w = harness()
+    await w.post({ to: 'tc', text: 'take this', expect_reply: true })
+    expect((w.calls[0]!.ask as { secs: number }).secs).toBe(3600)
+  })
+
+  it('while the Mac answers, a quiet note (wake false) is the Mac\'s to hold; forced, it goes as a send', async () => {
+    const h = harness({ leaderAnswers: () => true })
+    expect((await h.post({ to: 'tc', text: 'fyi', wake: false })).body.error).toMatchObject({ code: 'needs_leader', why: 'server_delivers' })
+    expect(h.calls).toEqual([])
+    expect((await h.post({ to: 'tc', text: 'fyi', wake: false, force: true })).status).toBe(202)
+    expect(h.calls).toEqual([expect.objectContaining({ kind: 'send', online: true, toSessionId: C, ask: expect.objectContaining({ secs: 6 * 3600 }) })])
+  })
+
   it('an ambiguous prefix is refused; an answer for the user is the Mac\'s', async () => {
     const h = harness()
     expect((await h.post({ to: 'tamb', text: 'x' })).body.error).toMatchObject({ code: 'ambiguous_peer' })

@@ -95,10 +95,22 @@ export function awayCalls(deps: AwayCallsDeps): RequestHandler {
     }
     // A memory folder note is held for its op, which only a session's call can be (holdWrite).
     if (file && actor.kind !== 'session') return needsLeaderAnswer('memory_file_changes_need_mac', 'A memory folder note from a plugin job needs your Mac; nothing was saved.')
+    // The leader's own checks of the note first (memory-folder.ts checkOwnNote): a note it would
+    // refuse is never held. Its count of notes needs the folder, which only the Mac has.
+    if (file) {
+      const { checkOwnNote, MemoryFolderError, SHARED_FOLDER } = await import('../core/sessions/memory-folder.js')
+      try {
+        checkOwnNote(ref === SHARED_FOLDER ? null : ref, file, b.content)
+      } catch (err) {
+        if (err instanceof MemoryFolderError) return { ...refusalAnswer(err.code, err.message), status: err.status } as PortAnswer
+        throw err
+      }
+    }
     const named = await taskNamed(deps, ref)
     if ('error' in named) return named.error
     const task = named.row
-    if (task && task.phase === 'COMPLETE') {
+    // MEMORY.md of a complete task is kept as it was (agent-memory-v1.ts); its folder notes are not (the leader writes them).
+    if (!file && task && task.phase === 'COMPLETE') {
       return refusalAnswer('task_complete', `"${String(task.title ?? task.id)}" is complete: its MEMORY.md is kept as it was. Reopen the task to change it.`)
     }
     // Not in this copy: an id is taken as it is (the Mac checks it at replay); any other name is

@@ -67,9 +67,10 @@ export interface DaemonLinkOptions {
   deliversTriggers?: boolean
   /**
    * Said at follower.hello: this server also takes a same-host message while its leader answers
-   * ('follower-peer-v1', replica/away-sends.ts), in place of the daemon's own handleLocal.
+   * ('follower-peer-v1', replica/away-sends.ts), in place of the daemon's own handleLocal. Read at
+   * each hello (an experiment's switch: front.ts says it again in each report).
    */
-  answersOnline?: boolean
+  answersOnline?: () => boolean
   /** More of follower.hello, read at each hello (the host call entry's address, host-call-entry.ts). */
   helloExtra?: () => Record<string, unknown>
   /** A daemon event on the link (`{ev, ...}`, never an answer): a `gateway-request`, say. */
@@ -270,7 +271,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     })
     socket.on('open', () => {
       void (async () => {
-        const hello: Record<string, unknown> = await call(socket, 'follower.hello', { ...helloExtra(), walnutId: opts.walnutId, home: opts.home, token: opts.token, ...(opts.answersLocal ? { answersLocal: true } : {}), ...(opts.deliversTriggers ? { deliversTriggers: true } : {}), ...(opts.answersOnline ? { answersOnline: true } : {}) })
+        const hello: Record<string, unknown> = await call(socket, 'follower.hello', { ...helloExtra(), walnutId: opts.walnutId, home: opts.home, token: opts.token, ...(opts.answersLocal ? { answersLocal: true } : {}), ...(opts.deliversTriggers ? { deliversTriggers: true } : {}), ...(opts.answersOnline?.() ? { answersOnline: true } : {}) })
           .catch((err: Error) => ({ ok: false, error: err.message }))
         if (ws !== socket) return
         if (hello.ok !== true) {

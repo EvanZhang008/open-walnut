@@ -118,6 +118,24 @@ describe('agent_memory_write here', () => {
   })
 
   it.each([
+    ['a note name that is not one', '/v1/tasks/mtask-lead-0001/memory-files/notes.txt', { content: 'x' }, 400, 'bad_request'],
+    ['one of Walnut\'s own files', '/v1/tasks/mtask-lead-0001/memory-files/fleet.md', { content: 'x' }, 409, 'walnut_file'],
+    ['a note too long', '/v1/tasks/mtask-lead-0001/memory-files/long.md', { content: 'x'.repeat(20_001) }, 413, 'note_too_long'],
+    ['a note to the shared folder', '/v1/tasks/_shared/memory-files/team.md', { content: 'x' }, 400, 'bad_request'],
+  ])('a memory folder note the Mac would refuse (memory-folder.ts checkOwnNote) is refused here: %s', async (_label, p, body, status, code) => {
+    const sent: Sent[] = []
+    const r = await run(calls(), { method: 'PUT', path: p, body, replicaWrite: write('op-n', sent) })
+    expect(r).toMatchObject({ status, body: { error: { code } } })
+    expect(sent).toEqual([])
+  })
+
+  it('a memory folder note to a complete task is held, as the Mac writes it (only MEMORY.md is kept as it was)', async () => {
+    const sent: Sent[] = []
+    await run(calls(), { method: 'PUT', path: '/v1/tasks/mtask-done-0002/memory-files/wrap-up.md', body: { content: '# Done' }, replicaWrite: write('op-c', sent) })
+    expect(sent.map((x) => x.args)).toEqual([{ task: 'mtask-done-0002', content: '# Done', file: 'wrap-up.md' }])
+  })
+
+  it.each([
     ['a replace (this host does not hold the file)', '/v1/tasks/mtask-lead-0001/agent-memory', { content: 'all', mode: 'replace' }, 503, 'needs_leader'],
     ['a completed task', '/v1/tasks/mtask-done-0002/agent-memory', { content: 'late' }, 409, 'task_complete'],
     ['an ambiguous prefix', '/v1/tasks/mtask/agent-memory', { content: 'x' }, 400, 'bad_request'],

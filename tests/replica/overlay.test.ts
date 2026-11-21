@@ -289,4 +289,18 @@ describe('overlay: the watch (away-wiring.ts)', () => {
     expect(watchMaxAgeMs([{ state: 'pending' }], true)).toBe(0)
     expect(watchMaxAgeMs([{ state: 'pending' }, { state: 'awaiting' }], false)).toBe(0)
   })
+
+  it('a request\'s records keep no watch while the Mac answers, and an acked one none at all (it leaves by its copy or its time)', () => {
+    const row = { kind: 'row', row: { id: 'rq-aaaaaa000001' } }
+    const settle = { kind: 'settle', requestId: 'rq-aaaaaa000001' }
+    // The Mac answers: a same-host request journaled online is no reason to ask each second.
+    expect(watchMaxAgeMs([{ state: 'pending', record: row }, { state: 'awaiting', record: settle }], true)).toBeNull()
+    // Away: a pending one is watched slowly; an acked one is not.
+    expect(watchMaxAgeMs([{ state: 'pending', record: row }], false)).toBe(SLOW_WATCH_MS)
+    expect(watchMaxAgeMs([{ state: 'awaiting', record: settle }], false)).toBeNull()
+    // Beside a task write, the task write decides.
+    const task = { kind: 'task-fields', taskId: 'mtask-a' }
+    expect(watchMaxAgeMs([{ state: 'pending', record: row }, { state: 'pending', record: task }], true)).toBe(0)
+    expect(watchMaxAgeMs([{ state: 'awaiting', record: settle }, { state: 'awaiting', record: task }], false)).toBe(0)
+  })
 })

@@ -137,9 +137,10 @@ agentMemoryV1Router.get('/tasks/:id/memory-files/:name', route(async (req, res) 
 agentMemoryV1Router.put('/tasks/:id/memory-files/:name', route(async (req, res) => {
   if (role() === 'replica') throw new RouteError(501, 'not_supported_cloud', 'Memory folder files are written on the primary box')
   const { id, title } = await folderTask(param(req.params.id))
-  if (!id) throw new RouteError(400, 'bad_request', 'The shared folder holds only Walnut\'s own files: write a note to a task\'s folder.')
   const b = body(req)
   if (typeof b.content !== 'string') throw new RouteError(400, 'bad_request', 'content (string) is required')
+  // The shared folder, the name, Walnut's files and the length: checkOwnNote, which a follower
+  // holding a note for this route runs too (replica/away-calls.ts).
   const out = await writeOwnNote(id, param(req.params.name), b.content)
   const sid = header(req, 'x-walnut-caller-sid')
   log.task.info('memory folder note written', { taskId: id, name: out.name, bytes: out.bytes, removed: out.removed, callerSid: sid ?? null })

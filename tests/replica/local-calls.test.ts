@@ -87,6 +87,42 @@ describe('local calls', () => {
     expect(s.sent.slice(1)).toEqual([expect.objectContaining({ relayId: 8, errorCode: 'needs_leader' }), expect.objectContaining({ relayId: 9, errorCode: 'needs_leader' })])
   })
 
+  it('while the Mac answers, a same-host send this server does not deliver goes to the Mac: an error, a give-up, too little time', async () => {
+    const send = { name: 'task_send', args: { to: 't2', text: 'hi', messageId: 'qm-host-x' } }
+    const outcomes: Array<Record<string, unknown>> = [
+      { ok: false, error: { code: 'internal', message: 'This host could not do it.', api: { status: 500, code: 'internal' } }, opStatus: 500 },
+      { ok: false, error: { code: 'internal', message: 'the journal could not be written', api: { status: 503, code: 'journal_unwritable' } }, opStatus: 503 },
+      { ok: false, error: { code: 'internal', message: 'target resolves to the calling session itself', api: { status: 409, code: 'self_send' } }, opStatus: 409 },
+    ]
+    for (const outcome of outcomes) {
+      resetRelayedCallsForTest()
+      router.outcome = outcome
+      const s = setup({ leader: true })
+      s.handle(event({ online: true, payload: send }))
+      await s.settled()
+      expect(s.sent[0]).toMatchObject({ cmd: 'gateway-result', relayId: 7, errorCode: 'needs_leader', detail: { why: 'server_delivers' } })
+    }
+    // Too little time left: refused before it runs, and the Mac's too.
+    resetRelayedCallsForTest()
+    const late = setup({ leader: true })
+    late.handle(event({ online: true, payload: send, answerInMs: CALL_LEFT_MS }))
+    await late.settled()
+    expect(late.sent[0]).toMatchObject({ relayId: 7, errorCode: 'needs_leader', detail: { why: 'server_delivers' } })
+    // The daemon's brake is final, as handleLocal answered it; away, a failure stays what it is.
+    resetRelayedCallsForTest()
+    router.outcome = { ok: false, error: { code: 'internal', message: 'peer send throttled', api: { status: 429, code: 'throttled' }, retryAfterMs: 5_000 }, opStatus: 429 }
+    const brake = setup({ leader: true })
+    brake.handle(event({ online: true, payload: send }))
+    await brake.settled()
+    expect(brake.sent[0]).toMatchObject({ errorCode: 'throttled' })
+    resetRelayedCallsForTest()
+    router.outcome = outcomes[0]!
+    const away = setup()
+    away.handle(event({ payload: send }))
+    await away.settled()
+    expect(away.sent[0]).toMatchObject({ errorCode: 'internal' })
+  })
+
   it('while the Mac answers nothing runs: needs_leader', async () => {
     const s = setup({ leader: true })
     s.handle(event())

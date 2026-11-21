@@ -72,9 +72,9 @@ import { rpcAway } from './ws-rpc-table.js'
 import { replicaRefusal, verifyReplicaToken } from './auth.js'
 import { localCallerOf } from './write-actor.js'
 import { copiesAsOf } from '../core/replication/kind-follower.js'
-import { createHostCallEntry, type HostCallEntry } from './host-call-entry.js'
+import { createHostCallEntry, listenHostCallEntry, type HostCallEntry, type HostCallListener } from './host-call-entry.js'
 import { HOST_CALL_PATH } from '../providers/host-call-client-core.js'
-import { getSelfApiRoot } from '../lib/self-api-root.js'
+import { hostCallSocketPath } from '../providers/host-call-token-core.js'
 import { experimentalEnabled } from '../core/experimental.js'
 
 /** The /_alone/ path the alone page of the plain host server polls (host-server/alone-api.ts). */
@@ -174,19 +174,27 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   let localCallHandler: ((event: Record<string, unknown>) => void) | null = null
   let triggerDeliveryHandler: ((event: Record<string, unknown>) => void) | null = null
   // The host call entry (host-call-entry.ts), behind the `host_call_entry` experiment read from
-  // this server's copy of the settings: off, the daemon is told no address and gives sessions none.
+  // this server's copy of the settings: off, the daemon is told no socket and gives sessions none.
+  // Its own unix socket, opened the first time the experiment is on; never this public listener.
   let callEntryOn = false
+  let callListener: HostCallListener | null = null
+  let callListening: Promise<void> | null = null
+  let stopped = false
   const refreshCallEntry = (): void => {
     if (!opts.localCalls) return
     void import('../core/config-manager.js').then((m) => m.getConfig()).then((c) => {
       callEntryOn = experimentalEnabled(c.experimental, 'host_call_entry')
+      if (callEntryOn && hostCall && !callListening && !stopped) {
+        callListening = listenHostCallEntry(hostCall, {
+          socketPath: hostCallSocketPath(path, crypto, env.daemonDir, env.walnutId),
+          uid: typeof process.getuid === 'function' ? process.getuid() : null,
+          log: (level, msg, data) => log.web[level](msg, { host: env.label, ...data }),
+        }).then((l) => { if (stopped) void l?.close(); else callListener = l })
+      }
     }, () => { /* the next tick reads it again */ })
   }
-  /** The entry's address the daemon gives new sessions and plugin jobs, or null. */
-  const callUrl = (): string | null => {
-    const root = getSelfApiRoot()
-    return opts.localCalls && callEntryOn && root ? root + HOST_CALL_PATH : null
-  }
+  /** The entry's socket the daemon gives new sessions and plugin jobs, or null. */
+  const callSocket = (): string | null => (opts.localCalls && callEntryOn && callListener ? callListener.socketPath : null)
 
   const expose: HostExpose = createHostExpose({
     port: env.publicPort,
@@ -204,13 +212,14 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       answersLocal: true,
       // The host's unclaimed trigger fires too (away-trigger-delivery.ts): the same capability.
       deliversTriggers: true,
-      // A same-host message while the leader answers too (away-sends.ts): the same capability.
-      answersOnline: true,
+      // A same-host message while the leader answers too (away-sends.ts): only with the
+      // `host_call_entry` experiment on (each report says it again), else the daemon's handleLocal as before.
+      answersOnline: () => callEntryOn,
       onEvent: (event: Record<string, unknown>) => {
         if (event.ev === 'gateway-request') localCallHandler?.(event)
         else if (event.ev === 'trigger-delivery') triggerDeliveryHandler?.(event)
       },
-      helloExtra: (): Record<string, unknown> => { const u = callUrl(); return u ? { callUrl: u } : {} },
+      helloExtra: (): Record<string, unknown> => { const u = callSocket(); return u ? { callSocket: u } : {} },
     } : {}),
     log: (level, msg, data) => log.web[level](msg, data),
   })
@@ -332,13 +341,6 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     capabilities: () => link.capabilities(),
     linked: () => link.linkState() === 'following',
     enabled: () => callEntryOn,
-    // An approval's caller proof: the one process holding this connection's client end, as the Mac finds an HTTP caller's.
-    peerPid: async (req) => {
-      const s = req.socket
-      const { clientPidsOf } = await import('../core/approvals/caller-proof.js')
-      const pids = await clientPidsOf({ remoteAddress: s.remoteAddress ?? '', remotePort: s.remotePort ?? 0, localAddress: s.localAddress ?? '', localPort: s.localPort ?? 0 })
-      return pids && pids.length === 1 && pids[0] !== process.pid ? pids[0] : undefined
-    },
     log: (level, msg, data) => log.web[level](msg, { host: env.label, ...data }),
   }) : null
 
@@ -367,8 +369,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       forwards: dispatcher.counts(),
       // The host's journal as its daemon says it (follower.status): the Mac's /api/replicas/status shows it.
       journal: (view?.view as { journal?: unknown } | undefined)?.journal ?? null,
-      // This host's call entry: the daemon reads the address from here too (a change of the experiment).
-      ...(opts.localCalls ? { callUrl: callUrl(), offlineAnswers: view?.view.offlineAnswers ?? null } : {}),
+      // This host's call entry: the daemon reads the socket from here too (a change of the experiment).
+      ...(opts.localCalls ? { answersOnline: callEntryOn } : {}),
+      ...(opts.localCalls ? { callSocket: callSocket(), offlineAnswers: view?.view.offlineAnswers ?? null } : {}),
     }
   }
 
@@ -384,8 +387,9 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     middleware(req, res, next) {
       // Which machine its tunnel reaches: answered here, never spliced to the Mac (core/expose/probe.ts).
       if (answerTunnelProbe(req, res, expose.probeToken)) return
-      // This host's own sessions' `walnut` calls (host-call-entry.ts): answered here, whoever leads.
-      if (hostCall?.takes(req)) { void hostCall.handle(req, res); return }
+      // The host call entry lives on its own unix socket only: here it is 404, never forwarded to
+      // the leader, so a token posted to this listener (which the tunnel reaches) stays on this host.
+      if ((req.url ?? '').split('?')[0] === HOST_CALL_PATH) { req.resume(); res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return }
       // No alone page here (WP7): away, a page is the console, served from this
       // replica's copies; the alone page stays the plain host server's. One left
       // open from before the host switched program polls /_alone/state forever
@@ -427,6 +431,10 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     async stop() {
       clearInterval(reportTimer)
       clearInterval(tick)
+      stopped = true
+      await callListening?.catch(() => {})
+      await callListener?.close()
+      callListener = null
       link.stop()
       clearSelfHost()
       await expose.stop()

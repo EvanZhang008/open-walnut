@@ -13,7 +13,15 @@ import type { Task } from '../types.js';
 export async function goesUp(fromTaskId: string | undefined, toTaskId: string | undefined): Promise<boolean> {
   if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return false;
   const { listTasks } = await import('../task-manager.js');
-  const tasks = await listTasks();
+  return goesUpIn(await listTasks(), fromTaskId, toTaskId);
+}
+
+/**
+ * The same rule over a task list the caller read: a host's own Walnut server passes its copy with
+ * this host's journal folded in (replica/away-sends.ts), so a task made there walks up too.
+ */
+export async function goesUpIn(tasks: readonly Task[], fromTaskId: string | undefined, toTaskId: string | undefined): Promise<boolean> {
+  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return false;
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const from = byId.get(fromTaskId);
   const to = byId.get(toTaskId);

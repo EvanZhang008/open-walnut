@@ -77,7 +77,7 @@ export interface PluginJobHarnessDeps {
   door?: Pick<PluginJobDoor, 'serve'>
   /**
    * This host's call entry (host-call-client-core.ts, host-call-entry-v1): a run its daemon gave
-   * WALNUT_CALL_URL and WALNUT_CALL_TOKEN posts its calls there first, the socket when it is not taken.
+   * WALNUT_CALL_SOCKET and WALNUT_CALL_TOKEN posts its calls there first, the socket when it is not taken.
    */
   hostCall?: Pick<HostCallClient, 'post'>
   home: string

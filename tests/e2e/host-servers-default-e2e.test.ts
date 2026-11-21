@@ -67,15 +67,17 @@ describe('a host\'s follower, on by default', () => {
     const body = await list()
     expect(body.followerByDefault).toBe(true)
     const byKey = Object.fromEntries(body.hosts.map((h) => [h.hostKey, h.settings]))
-    expect(byKey.devbox).toMatchObject({ enabled: true, chosenBy: 'default' })
+    expect(byKey.devbox).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
     expect(byKey.quietbox).toMatchObject({ enabled: false, chosenBy: 'user' })
     expect(byKey.oldbox).toMatchObject({ enabled: true, chosenBy: 'user' })
     expect(byKey.offbox).toMatchObject({ enabled: false, chosenBy: 'default' })
+    // Only a host on by the experiment's default says so (the label "On (default)" reads it).
+    for (const k of ['quietbox', 'oldbox', 'offbox']) expect(byKey[k].byDefault).toBeUndefined()
     // The fields older clients read keep their meaning: no tunnel placed, no second alias.
     for (const h of body.hosts) {
       expect(h.settings.carriesTunnel).toBeUndefined()
       expect(h.knownAs).toBeUndefined()
-      expect(Object.keys(h.settings).sort()).toEqual(['chosenBy', 'copies', 'enabled', 'expose'])
+      expect(Object.keys(h.settings).filter((k) => k !== 'byDefault').sort()).toEqual(['chosenBy', 'copies', 'enabled', 'expose'])
     }
     // Nothing is written for the default: the stored rows are as the person left them.
     const stored = (await getConfig()).hosts!
@@ -107,9 +109,10 @@ describe('a host\'s follower, on by default', () => {
     expect(body.followerByDefault).toBe(false)
     const byKey = Object.fromEntries(body.hosts.map((h) => [h.hostKey, h.settings]))
     expect(byKey.newbox).toMatchObject({ enabled: false, chosenBy: 'default' })
+    expect(byKey.newbox.byDefault).toBeUndefined()
     expect(byKey.devbox).toMatchObject({ enabled: true, chosenBy: 'user' })
     expect(byKey.oldbox).toMatchObject({ enabled: true, chosenBy: 'user' })
     await updateConfig({ experimental: { follower_on_every_host: true } })
-    expect(((await entry('newbox')).settings)).toMatchObject({ enabled: true, chosenBy: 'default' })
+    expect(((await entry('newbox')).settings)).toMatchObject({ enabled: true, chosenBy: 'default', byDefault: true })
   })
 })

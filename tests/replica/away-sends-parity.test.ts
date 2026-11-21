@@ -244,7 +244,8 @@ describe('a same-host message while the Mac answers: the follower takes what han
     setup?.(a); setup?.(b)
     const own = await a.host.handleLocal(JHOME, sid, 'tools.call', { name: 'task_send', args: { ...args }, callId: CALL })
     const payload: Record<string, unknown> = { name: 'task_send', args: { ...args }, callId: CALL }
-    const candidate = b.host.localCandidate(JHOME, sid, 'tools.call', payload)
+    // As the twins hand it over: a candidate, its hand-off opened (offline-host-core.ts openOnline).
+    const candidate = b.host.localCandidate(JHOME, sid, 'tools.call', payload) && b.host.openOnline(JHOME, payload)
     const fol = candidate ? await follower(b, s, { online: true }).post(sid, payload.args as Record<string, unknown>) : null
     return { a, b, own, candidate, fol }
   }

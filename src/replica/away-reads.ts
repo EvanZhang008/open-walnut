@@ -51,6 +51,7 @@ import type { Overlay } from './overlay.js'
 import { createdRow } from './write-port.js'
 import { NEEDS_LEADER_HEADERS, needsLeaderBody } from '../core/replication/needs-leader.js'
 import { awayStatus, withHostSessions, withTasksMadeHere } from './away-read-folds.js'
+import type { HostSessionsNow } from './ask-launch.js'
 
 export const SYNC_FIELD = 'replica_sync'
 
@@ -71,7 +72,7 @@ export interface AwayReadsDeps {
   /** The Mac's name for this host: walnut_status says who answers, the session list whose live state is read here. */
   hostKey?: string | null
   /** The live state of every session of this Walnut on this host (follower.sessions), by id; null: not known now. */
-  hostSessions?(): Promise<ReadonlyMap<string, { state: string; lastActiveAt?: string }> | null>
+  hostSessions?(): Promise<HostSessionsNow | null>
 }
 
 type Row = Record<string, unknown> & { id: string }
@@ -337,11 +338,17 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
     }
     // The session list (session_list, the phone's list): this host's sessions say what they do now.
     if (path === SESSIONS_LIST_PATH && deps.hostSessions) {
+      // The route would filter `status` on the copy's states, before the fold: the fold applies it.
+      const status = typeof req.query?.status === 'string' && req.query.status ? req.query.status : undefined
+      if (status) {
+        const { status: _status, ...rest } = req.query
+        Object.defineProperty(req, 'query', { value: rest, configurable: true, enumerable: true, writable: true })
+      }
       const t = new Promise<null>((r) => { const h = setTimeout(() => r(null), waitMs); h.unref?.() })
       const live = deps.hostSessions().catch(() => null)
       void Promise.race([Promise.all([live, deps.overlay.refresh(1_000)]).then(([m]) => m), t]).then((m) => {
         const json = res.json.bind(res)
-        res.json = ((b: unknown) => json(res.statusCode < 300 ? withHostSessions(b, m, deps) : b)) as Response['json']
+        res.json = ((b: unknown) => json(res.statusCode < 300 ? withHostSessions(b, m, deps, status) : b)) as Response['json']
         next()
       }, () => next())
       return

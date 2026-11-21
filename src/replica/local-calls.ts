@@ -11,7 +11,8 @@
  *
  *   the Mac answers again   `needs_leader` before anything runs: the daemon relays it there,
  *                           except a same-host send the daemon handed over marked `online`
- *                           (follower-peer-v1): away-sends.ts takes it as handleLocal would
+ *                           (follower-peer-v1): away-sends.ts takes it as handleLocal would, and
+ *                           whatever it does not deliver goes to the Mac (onlineReply)
  *   a route that needs the Mac   its 503 `needs_leader` goes back with that code, so a
  *                                session's call gets the daemon's own away answer instead
  *   a full journal, the brake    `queue_full` / `throttled` with the route's wait: retryable
@@ -49,6 +50,22 @@ const ONLINE_OPS = ['task_send', 'session_send']
 export function isOnlineSend(event: Record<string, unknown>, call: RelayedCall): boolean {
   const p = call.payload as { name?: unknown } | null
   return event.online === true && call.capability === 'tools.call' && !!p && typeof p.name === 'string' && ONLINE_OPS.includes(p.name)
+}
+
+/** What a same-host send's answer is final with while the Mac answers: the daemon's own brakes, as its handleLocal answered them. */
+const ONLINE_FINAL = ['throttled', 'queue_full']
+
+/**
+ * A same-host send's answer while the Mac answers: only a delivery made here (or the daemon's brake)
+ * is final. Anything else this server could not finish (an error, a give-up, too little time left, a
+ * refusal) goes to the Mac as handleLocal left it: `needs_leader`, the daemon relays it, and the
+ * daemon's claim of the message id keeps it written once (offline-host-core.ts endOnline).
+ */
+export function onlineReply(reply: Record<string, unknown>): Record<string, unknown> {
+  if (reply.result && typeof reply.result === 'object' && !reply.error) return reply
+  if (typeof reply.errorCode === 'string' && (reply.errorCode === 'needs_leader' || ONLINE_FINAL.includes(reply.errorCode))) return reply
+  const why = typeof reply.error === 'string' ? reply.error.slice(0, 300) : 'this host could not deliver it'
+  return { relayId: reply.relayId, errorCode: 'needs_leader', error: `${why}; your Mac delivers it`, detail: { why: 'server_delivers' } }
 }
 
 /** How long the daemon may take to ack a result on the loopback link. */
@@ -112,7 +129,7 @@ export function createLocalCalls(deps: LocalCallsDeps): (event: Record<string, u
                 detail: { why: 'too_little_time', retryAfterMs: 1_000 },
               }
             : null,
-      send: (reply, kept) => send(reply, kept),
+      send: (reply, kept) => send(online ? onlineReply(reply) : reply, kept),
     })
   }
 }

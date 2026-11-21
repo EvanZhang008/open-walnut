@@ -1,10 +1,12 @@
 /**
  * The host call entry ('host-call-entry-v1') and the count of the daemon's own away answers are
- * wired the same way in both daemon twins: the follower's address kept from its hello and report,
- * new sessions, ACP workers and plugin jobs given the entry beside the socket, `follower.gateway`
- * checked for the caller's token and run through the socket's own handleGatewayLine (never
- * serialized), and every own away answer given while a follower was there counted. The counter
- * itself runs here as imported and as the inlined text.
+ * wired the same way in both daemon twins: the follower's entry socket kept from its hello and
+ * report (through the shared core's socketOf), new sessions, ACP workers and plugin jobs given the
+ * entry beside the socket (the core's envFor, a job's run retired when it ends), `follower.gateway`
+ * checked for the caller's run token and run through the socket's own handleGatewayLine (never
+ * serialized, never with a socket peer), and every own away answer given while a follower was
+ * there counted (the gateway core's noteOwnOffline, one copy). The counter itself runs here as
+ * imported and as the inlined text.
  */
 import { describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
@@ -44,14 +46,14 @@ describe('host call entry twin wiring', () => {
     expect(line).not.toContain('daemonCommands.run')
   })
 
-  it.each(TWINS)('%s: the entry address comes from the hello and the report, only for a follower that answers local calls', (_n, src) => {
-    expect(fnBody(src, 'cmdFollowerHello')).toMatch(/callUrl = cmd\.answersLocal === true \? hostCallUrlOf\(cmd\.callUrl\) : undefined/)
+  it.each(TWINS)('%s: the entry socket comes from the hello and the report, only for a follower that answers local calls, checked by the shared core', (_n, src) => {
+    expect(fnBody(src, 'cmdFollowerHello')).toMatch(/callSocket = cmd\.answersLocal === true \? hostCallTokens\.socketOf\(cmd\.callSocket\) : undefined/)
     const report = fnBody(src, 'cmdFollowerReport')
-    expect(report).toMatch(/answersLocal === true \? hostCallUrlOf\(report\.callUrl\) : undefined/)
-    const env = fnBody(src, 'hostCallEnv')
-    expect(env).toMatch(/answersLocal === true/)
-    expect(env).toContain('hostCallTokens.tokenFor(sid)')
-    expect(env).toContain('WALNUT_CALL_URL: url, WALNUT_CALL_TOKEN: token')
+    expect(report).toMatch(/answersLocal === true \? hostCallTokens\.socketOf\(report\.callSocket\) : undefined/)
+    // The core is given the follower's socket of a home, only for one that answers local calls.
+    expect(src).toMatch(/socketFor: (\(home\) => \{|function \(home\) \{) (const|var) ws = followerSockets\.get\(home\); return ws(\?\.data\?\.| && ws\.)answersLocal === true \? ws(\.data)?\.callSocket : undefined/)
+    // No twin copy of the socket check or the env any more.
+    for (const gone of ['function hostCallUrlOf(', 'function hostCallEnv(', 'function noteOwnOfflineAnswer(', 'WALNUT_CALL_URL']) expect(src, gone).not.toContain(gone)
   })
 
   it.each(TWINS)('%s: follower.gateway checks the token for the line\'s sid, then runs the socket\'s handleGatewayLine', (_n, src) => {
@@ -63,28 +65,30 @@ describe('host call entry twin wiring', () => {
     expect(fn).toMatch(/gatewayCallerLeft\.set\(respond/)
   })
 
-  it('the bun twin proves an approval\'s caller from the pid the entry found, as from a socket peer', () => {
-    expect(fnBody(standalone, 'handleGatewayLine')).toContain('const peer = fd !== undefined ? socketPeerPid(fd) : peerPid')
-    expect(fnBody(standalone, 'cmdFollowerGateway')).toContain('handleGatewayLine(line, respond, undefined, openedAt, peerPid)')
+  it('the bun twin proves an approval\'s caller only from its gateway socket\'s kernel peer, never a pid a follower names', () => {
+    expect(fnBody(standalone, 'handleGatewayLine')).toContain('gatewayCallerProof(socketPeerPid(fd), callerSid, openedAt)')
+    const gw = fnBody(standalone, 'cmdFollowerGateway')
+    expect(gw).toContain('handleGatewayLine(line, respond, undefined, openedAt)')
+    expect(gw).not.toContain('peerPid')
   })
 
   it.each(TWINS)('%s: a new session, an ACP worker and a plugin job get the entry beside the socket, and never an inherited one', (_n, src) => {
-    // Native spawn: cleared first, then this session's own.
-    expect(src).toMatch(/WALNUT_CALL_URL: undefined,\n\s+WALNUT_CALL_TOKEN: undefined,\n\s+\.\.\.hostCallEnv\(spawnInfo\.home (\?\?|\|\|) \(?resumeRec/)
+    // Native spawn: cleared first, then this run's own.
+    expect(src).toMatch(/WALNUT_CALL_SOCKET: undefined,\n\s+WALNUT_CALL_TOKEN: undefined,\n\s+\.\.\.hostCallTokens\.envFor\(spawnInfo\.home (\?\?|\|\|) \(?resumeRec/)
     // ACP worker: '' unsets, then the worker's own WALNUT_SESSION_ID.
-    expect(src).toMatch(/WALNUT_CALL_URL: '',\n\s+WALNUT_CALL_TOKEN: '',/)
-    expect(src).toMatch(/hostCallEnv\(\(?cmd(?: as \{ home\?: unknown \}\))?\.home, /)
-    // Plugin jobs: the run id's own token.
-    expect(src).toMatch(/callEnv: (\(home, sid\) => |function \(home, sid\) \{ return )hostCallEnv\(home, sid\)/)
+    expect(src).toMatch(/WALNUT_CALL_SOCKET: '',\n\s+WALNUT_CALL_TOKEN: '',/)
+    expect(src).toMatch(/hostCallTokens\.envFor\(\(?cmd(?: as \{ home\?: unknown \}\))?\.home, /)
+    // Plugin jobs: the run id's own token, ended with the run.
+    expect(src).toMatch(/callEnv: (\(home, sid\) => |function \(home, sid\) \{ return )hostCallTokens\.envFor\(home, sid\)/)
+    expect(src).toMatch(/callEnvEnd: (\(sid\) => |function \(sid\) \{ )hostCallTokens\.retire\(sid\)/)
   })
 
   it.each(TWINS)('%s: every own away answer is counted where it is given, and shown in follower.status and server.status', (_n, src) => {
     const send = fnBody(src, 'sendGatewayRequest')
     const handles = send.split('offlineHost.handle(home, callerSid, capability, payload)').length - 1
-    const notes = send.split('noteOwnOfflineAnswer(home, capability, callerSid, payload, plan.ownServerAsked)').length - 1
+    const notes = send.split('followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)').length - 1
     expect(handles).toBeGreaterThanOrEqual(2)
     expect(notes).toBe(handles)
-    expect(fnBody(src, 'noteOwnOfflineAnswer')).toMatch(/handedBack \? 'handed_back' : followerGateway\.answers\(home\) \? 'follower_linked' : null/)
     // The own same-host delivery (handleLocal) too, while a follower that takes those is linked; an
     // online hand-back relayed to the leader is never counted (its fallback is relayToPrimary).
     expect(send).toContain("if (followerGateway.answersOnline(home)) followerGateway.noteOwnAnswer(payload.name, 'follower_linked', callerSid)")
@@ -126,6 +130,21 @@ describe.each([['imported', createFollowerGateway], ['inlined', inlined]] as con
     expect(g.settle(sock, 5, g.responseOf({ error: 'needs the Mac', errorCode: 'needs_leader' }))).toBe('ok')
     expect(fellBack).toBe(1)
     expect(g.ownAnswers()).toMatchObject({ total: 1, byOp: { agent_memory_write: 1 }, byWhy: { handed_back: 1 } })
+  })
+
+  it('noteOwnOffline counts a hand-back, or a call while a follower may write, and nothing with no follower', () => {
+    let linked = false
+    const g = make<object>({
+      follower: () => (linked ? {} : null), mayWrite: () => true, now: () => 0, send: () => true, nextRelayId: () => 1, instanceId: 'i',
+      attemptMs: () => 1_000, setTimer: () => 0, clearTimer: () => {}, log: () => {},
+    })
+    g.noteOwnOffline('/h', 'tools.call', 's', { name: 'task_list' })
+    expect(g.ownAnswers().total).toBe(0)
+    g.noteOwnOffline('/h', 'tools.call', 's', { name: 'task_list' }, true)
+    linked = true
+    g.noteOwnOffline('/h', 'tools.call', 's', { name: 'search' })
+    g.noteOwnOffline('/h', 'sessions.list', 's', {})
+    expect(g.ownAnswers()).toMatchObject({ total: 3, byOp: { task_list: 1, search: 1, 'sessions.list': 1 }, byWhy: { handed_back: 1, follower_linked: 2 } })
   })
 
   it('op names past the cap share one row, so the snapshot stays small', () => {

@@ -19,7 +19,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { apiPost } from '@/api/client';
 import { describeExpose, optionFits } from './cloud/browser-access-status';
-import { copiesSummary, describeHostServer, hostServerSwitchWords } from './host-servers-status';
+import { copiesSummary, describeHostServer, HOST_SERVER_BY_DEFAULT_TITLE, hostServerSwitchWords } from './host-servers-status';
 import { ReplicaCopyRows } from './ReplicaCopyRows';
 import { useHostSettings } from './host-settings-data';
 import '@/styles/browser-access.css';
@@ -111,7 +111,7 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
               </SettingsButton>
             )}
             {byDefault && (
-              <span className="settings-addons-muted" data-testid={`host-server-by-default-${host.hostKey}`} title="Every host runs one by default; turning it off keeps it off.">
+              <span className="settings-addons-muted" data-testid={`host-server-by-default-${host.hostKey}`} title={HOST_SERVER_BY_DEFAULT_TITLE}>
                 {byDefault}
               </span>
             )}

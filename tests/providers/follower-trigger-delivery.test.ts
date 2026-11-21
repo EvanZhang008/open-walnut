@@ -17,7 +17,7 @@ const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const FIRE: TriggerFire = { home: '/h', triggerId: 'job-1', taskId: 'task-1', text: 'ENVELOPE', messageId: 'qm-trigger-abc' }
 
-function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; own?: TriggerDeliveryResult; mechanics?: TriggerDeliveryResult; make?: typeof createFollowerTriggerDelivery } = {}) {
+function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; own?: TriggerDeliveryResult; mechanics?: TriggerDeliveryResult; make?: typeof createFollowerTriggerDelivery; clock?: { t: number } } = {}) {
   const sock = { id: 1 }
   const other = { id: 2 }
   const sent: Array<{ ev: string; data: Record<string, unknown> }> = []
@@ -41,6 +41,7 @@ function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; ow
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
     clearTimer: (t) => { (t as { cleared: boolean }).cleared = true },
     log: (_level, msg, data) => { logs.push({ msg, data }) },
+    ...(o.clock ? { now: () => o.clock!.t } : {}),
   })
   const fireTimer = () => { const t = timers.find((x) => !x.cleared); t!.cleared = true; t!.fn() }
   return { d, sock, other, sent, own, mechanics, timers, logs, ownAnswers, fireTimer }
@@ -119,7 +120,7 @@ describe('the daemon offers a due fire to its host server', () => {
     expect(h.d.counts().pending).toBe(0)
   })
 
-  it('three failures in a row (timeout, error, unsendable, failed write): the next attempt is the daemon\'s own, logged and counted, then the server again', async () => {
+  it('three failures in a row (timeout, error, unsendable, failed write): the next attempt is the daemon\'s own, logged and counted', async () => {
     const h = harness({ mechanics: { ok: false, reason: 'FIFO write failed' } })
     const timeout = h.d.deliver(FIRE)
     h.fireTimer()
@@ -135,9 +136,6 @@ describe('the daemon offers a due fire to its host server', () => {
     expect(h.own).toEqual([FIRE])
     expect(h.ownAnswers).toEqual([{ fire: FIRE, failures: 3 }])
     expect(h.logs.find((l) => l.msg.includes('kept failing'))?.data).toMatchObject({ failures: 3, triggerId: 'job-1', messageId: 'qm-trigger-abc' })
-    // The server is offered the next one again.
-    void h.d.deliver(FIRE)
-    expect(h.sent.at(-1)!.data.deliveryId).toBe('td-4')
     // A fire that cannot even be sent counts as a failure too.
     const dead = harness({ send: false })
     for (let i = 0; i < 3; i++) expect(await dead.d.deliver(FIRE)).toMatchObject({ ok: false, reason: expect.stringContaining('could not be told') })
@@ -155,6 +153,72 @@ describe('the daemon offers a due fire to its host server', () => {
     }
     expect(h.own).toEqual([])
     expect(h.ownAnswers).toEqual([])
+  })
+})
+
+describe('a host server that kept failing sits out (no three timeouts before every fire)', () => {
+  const MIN = 60_000
+  async function failThree(h: ReturnType<typeof harness>, fire = FIRE) {
+    for (let i = 0; i < 3; i++) { const a = h.d.deliver(fire); h.fireTimer(); await a }
+  }
+
+  it('after the fallback every fire of that host, any trigger, is the daemon\'s own until the backoff ends; no offer, no timeout', async () => {
+    const clock = { t: 0 }
+    const h = harness({ clock })
+    await failThree(h)
+    const offered = h.sent.length
+    expect(await h.d.deliver(FIRE)).toEqual({ ok: true, sid: 's-own' })
+    clock.t += 5 * MIN
+    expect(await h.d.deliver(FIRE)).toEqual({ ok: true, sid: 's-own' })
+    expect(await h.d.deliver({ ...FIRE, triggerId: 'job-2' })).toEqual({ ok: true, sid: 's-own' })
+    expect(h.sent.length).toBe(offered)
+    expect(h.own.length).toBe(3)
+    expect(h.ownAnswers.length).toBe(3)
+  })
+
+  it('after the backoff one fire is offered: one more failure sits it out again, twice as long; an answer ends it', async () => {
+    const clock = { t: 0 }
+    const h = harness({ clock })
+    await failThree(h)
+    expect(await h.d.deliver(FIRE)).toMatchObject({ ok: true, sid: 's-own' })
+    clock.t += 10 * MIN
+    // The one try: a timeout, and it sits out again for 20 minutes.
+    const probe = h.d.deliver(FIRE); h.fireTimer(); await probe
+    expect(h.logs.some((l) => l.msg.includes('sits out again'))).toBe(true)
+    const offered = h.sent.length
+    clock.t += 15 * MIN
+    expect(await h.d.deliver(FIRE)).toMatchObject({ ok: true, sid: 's-own' })
+    expect(h.sent.length).toBe(offered)
+    clock.t += 6 * MIN
+    // The next try answers: the server takes the fires again, at once.
+    const ok = h.d.deliver(FIRE)
+    await h.d.answer(h.sock, { deliveryId: h.sent.at(-1)!.data.deliveryId, sid: 's-live' })
+    expect(await ok).toEqual({ ok: true, sid: 's-live' })
+    const next = h.d.deliver({ ...FIRE, triggerId: 'job-2' })
+    expect(h.sent.at(-1)!.data.triggerId).toBe('job-2')
+    await h.d.answer(h.sock, { deliveryId: h.sent.at(-1)!.data.deliveryId, declined: 'no session here' })
+    expect(await next).toMatchObject({ ok: false })
+  })
+
+  it('a new follower socket (a restart, a new hello) starts with no backoff', async () => {
+    const clock = { t: 0 }
+    let current: { id: number } | null = null
+    const restarted = { id: 3 }
+    const sent: Array<Record<string, unknown>> = []
+    const d = createFollowerTriggerDelivery<{ id: number }>({
+      follower: () => current, mayWrite: () => true,
+      send: (_ws, _ev, data) => { sent.push(data); return true },
+      liveSids: () => [], own: async () => ({ ok: true, sid: 's-own' }), deliverTo: async (_f, t) => ({ ok: true, sid: t.sid }),
+      nextId: (() => { let n = 0; return () => `td-${++n}` })(), answerMs: 15_000,
+      setTimer: (fn) => ({ fn }), clearTimer: () => {}, log: () => {}, now: () => clock.t,
+    })
+    const old = { id: 1 }
+    current = old
+    for (let i = 0; i < 3; i++) { const a = d.deliver(FIRE); d.dropSocket(old); await a }
+    expect(await d.deliver(FIRE)).toEqual({ ok: true, sid: 's-own' })
+    current = restarted
+    void d.deliver(FIRE)
+    expect(sent.length).toBe(4)
   })
 })
 

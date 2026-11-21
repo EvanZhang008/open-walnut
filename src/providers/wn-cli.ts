@@ -482,7 +482,7 @@ const ENTRY_LOST = 'ENTRY_LOST'
 
 /**
  * One request line to this host's Walnut: the host call entry first when the daemon gave this
- * process one (WALNUT_CALL_URL + WALNUT_CALL_TOKEN, host-call-client-core.ts), else, or when the
+ * process one (WALNUT_CALL_SOCKET + WALNUT_CALL_TOKEN, host-call-client-core.ts), else, or when the
  * entry did not take it (nothing ran), the gateway socket with the very same line (same call id).
  * A line the entry took whose answer was lost fails as a socket call whose answer was lost does
  * (a timeout, or a link that broke after the line left), never sent again. Same answers either way.

@@ -11,12 +11,12 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import type { AddressInfo } from 'node:net'
 import { callHostDaemonTool } from '../../src/providers/wn-cli.js'
-import { HOST_CALL_ANSWER_HEADER, HOST_CALL_PATH } from '../../src/providers/host-call-client-core.js'
+import { HOST_CALL_ANSWER_HEADER } from '../../src/providers/host-call-client-core.js'
 
 const TOKEN = 'd'.repeat(64)
 let dir = ''
+let n = 0
 let socketLines: Array<Record<string, any>> = []
 const closers: Array<() => Promise<void>> = []
 
@@ -49,14 +49,15 @@ async function entry(handler: http.RequestListener): Promise<{ url: string; seen
     req.on('data', (c) => { b += c })
     req.on('end', () => { seen.push(JSON.parse(b)); handler(req, res) })
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const sock = path.join(dir, `entry${n++}.sock`)
+  await new Promise<void>((resolve) => server.listen(sock, () => resolve()))
   closers.push(() => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()) }))
-  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}${HOST_CALL_PATH}`, seen }
+  return { url: sock, seen }
 }
 
 const env = (url?: string): NodeJS.ProcessEnv => ({
   WALNUT_AGENT_SOCKET: path.join(dir, 'gw.sock'), WALNUT_SESSION_ID: 'sid-1',
-  ...(url ? { WALNUT_CALL_URL: url, WALNUT_CALL_TOKEN: TOKEN } : {}),
+  ...(url ? { WALNUT_CALL_SOCKET: url, WALNUT_CALL_TOKEN: TOKEN } : {}),
 })
 
 describe('the host walnut with a host call entry', () => {

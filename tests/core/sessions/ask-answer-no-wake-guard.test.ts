@@ -64,6 +64,14 @@ describe('every path that takes an answers_ask keeps the rule', () => {
       expect(c).toContain('if (args.answers_ask !== undefined) return null')
       expect(c).toMatch(/if \(args\.answers_ask === true\) return needsServer\(/)
     },
+    // The host's own service (follower) never delivers one either: an answer, and online any use of
+    // the flag, is handed to the leader before anything is written.
+    'src/replica/away-sends.ts': (c) => {
+      expect(c).toMatch(/if \(b\.answers_ask === true \|\| \(online && \(b\.answers_ask !== undefined \|\| b\.withdraw_ask !== undefined\)\)\) return serverDelivers\(/)
+      const send = c.slice(c.indexOf('async function send('))
+      expect(send.indexOf('return serverDelivers(\'Answering')).toBeGreaterThan(0)
+      expect(send.indexOf('return serverDelivers(\'Answering')).toBeLessThan(send.indexOf('await hostView()'))
+    },
     // The checks and the gate itself (its refusals name the flag).
     'src/core/sessions/ask-answer.ts': (c) => { expect(c).toContain('export function answerReach(') },
     // Prompt text only (the default org instructions name the flag).

@@ -26,6 +26,9 @@ const leader = (why: string, by?: string): AwayOpDecision => ({ answer: 'leader'
 /** A write route with no away row: route-table.ts answers needs_leader. */
 const macWrite = (what: string): AwayOpDecision => leader(`${what} is the leader's to write; its route has no away row (needs_leader)`)
 
+/** An op only a session on the Mac may run: the follower answers it as the leader does, with the refusal. */
+const LOCAL_ONLY = 'refused for a session off the Mac, here as on the leader (the op is localHostGateway: ops/executor.ts originRefusal)'
+
 const CALLS = 'src/replica/away-calls.ts'
 const TRIGGERS = 'src/replica/away-triggers.ts'
 const SENDS = 'src/replica/away-sends.ts'
@@ -110,7 +113,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   project_metadata_get: read(),
   project_metadata_update: macWrite('Project settings'),
   project_tracking_get: read(),
-  project_tracking_ensure: macWrite('A project\'s tracking settings'),
+  project_tracking_ensure: host('a project whose tracking note is recorded: its note is read here, or written as a note record (note-write) when missing; one with no recorded note needs the leader to record it (project metadata: project_writes_need_mac)'),
   project_make_local: macWrite('Making a project local'),
   folder_list: read(),
   folder_create: leader('a new folder needs the leader: task_writes_need_mac'),
@@ -151,7 +154,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   topic_members: macWrite('Topic members'),
   topic_close: macWrite('Closing a topic'),
   topic_mail: macWrite('A topic mail'),
-  router_context: read(),
+  router_context: leader('routing is kept on the leader: its route answers not_supported_cloud on every follower', 'src/web/routes/router-v1.ts'),
   router_create: macWrite('A router'),
   router_update: macWrite('A router'),
   router_list_self: macWrite('A router\'s links'),
@@ -182,22 +185,22 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   trigger_template_check: macWrite('A template check'),
 
   // ── health, places, time ──
-  health_status: read('a read on this replica (the route default); not checked that it holds the health data'),
-  health_sleep: read('a read on this replica (the route default); not checked that it holds the health data'),
-  health_daily: read('a read on this replica (the route default); not checked that it holds the health data'),
-  health_series: read('a read on this replica (the route default); not checked that it holds the health data'),
-  health_samples: read('a read on this replica (the route default); not checked that it holds the health data'),
-  health_recordings: read('a read on this replica (the route default); not checked that it holds the health data'),
-  day_review: read('built from reads this replica answers (the route default); not checked against the leader\'s'),
-  health_monitor: read(),
+  health_status: host(LOCAL_ONLY),
+  health_sleep: host(LOCAL_ONLY),
+  health_daily: host(LOCAL_ONLY),
+  health_series: host(LOCAL_ONLY),
+  health_samples: host(LOCAL_ONLY),
+  health_recordings: host(LOCAL_ONLY),
+  day_review: host(LOCAL_ONLY),
+  health_monitor: leader('the health monitor runs on the leader only: its route answers not_running on every follower', 'src/web/routes/health-monitor-v1.ts'),
   health_alarm_set: macWrite('A health alarm'),
   health_monitor_settings: macWrite('Health monitor settings'),
-  places_status: read('a read on this replica (the route default); not checked that it holds the places data'),
-  places_visits: read('a read on this replica (the route default); not checked that it holds the places data'),
+  places_status: host(LOCAL_ONLY),
+  places_visits: host(LOCAL_ONLY),
   places_label_set: macWrite('A place label'),
-  time_summary: read('a read on this replica (the route default); not checked that it holds the time data'),
-  time_report: read('a read on this replica (the route default); not checked that it holds the time data'),
-  time_timeline: read('a read on this replica (the route default); not checked that it holds the time data'),
+  time_summary: leader('time tracking is the leader\'s: its route answers not_supported_cloud on every follower', 'src/web/routes/time.ts'),
+  time_report: leader('time tracking is the leader\'s: its route answers not_supported_cloud on every follower', 'src/web/routes/time-report.ts'),
+  time_timeline: host(LOCAL_ONLY),
   time_work_hours_set: macWrite('Work hours'),
   time_meeting_attendance_set: macWrite('Meeting attendance'),
   time_meetings_ignore_set: macWrite('Ignored meetings'),
@@ -226,9 +229,9 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   host_exec_list: leader('a command on a host goes through the leader: host_exec_needs_mac'),
   host_exec_stop: leader('a command on a host goes through the leader: host_exec_needs_mac'),
   host_exec_pinned: macWrite('A pinned host command'),
-  host_mcp_list: read('a read on this replica (the route default); not checked against the leader\'s view of that host'),
-  host_mcp_tools: read('a read on this replica (the route default); not checked against the leader\'s view of that host'),
-  host_mcp_result: read('a read on this replica (the route default); not checked against the leader\'s view of that host'),
+  host_mcp_list: leader('MCP on a host goes through the leader: its route answers leader_only on every follower', 'src/web/routes/host-exec-v1.ts'),
+  host_mcp_tools: leader('MCP on a host goes through the leader: its route answers leader_only on every follower', 'src/web/routes/host-exec-v1.ts'),
+  host_mcp_result: leader('MCP on a host goes through the leader: its route answers leader_only on every follower', 'src/web/routes/host-exec-v1.ts'),
   host_mcp_call: macWrite('An MCP call on a host'),
   host_http: macWrite('An HTTP call through a host'),
   host_copy: leader('a copy between hosts goes through the leader: host_copy_needs_mac'),
@@ -237,24 +240,24 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
 
   // ── secrets, approvals, vault, browser ──
   secret_list: leader('secrets are the leader\'s: secrets_need_mac'),
-  approval_list: read(),
+  approval_list: leader('approvals are kept on the leader: its route answers leader_only on every follower', 'src/web/routes/approvals-v1.ts'),
   approval_request: macWrite('An approval request'),
   approval_wait: macWrite('Waiting on an approval'),
   approval_consume: macWrite('Using an approval'),
   approval_cancel: macWrite('Cancelling an approval'),
-  password_list: read('a read on this replica (the route default); the vault itself is the leader\'s'),
+  password_list: leader('the vault is the leader\'s: its route answers vault_not_here on every follower', 'src/web/routes/vault-agent-v1.ts'),
   password_use: macWrite('Using a password'),
   password_wait: macWrite('Waiting on a password'),
   password_cancel: macWrite('Cancelling a password use'),
   password_sync_bitwarden: macWrite('A vault sync'),
   browser: macWrite('A browser action'),
   browser_status: read(),
-  security_alert_check: read(),
+  security_alert_check: leader('the browser runs on the leader: its route answers unavailable (503) on every follower', 'src/web/routes/browser-v1.ts'),
 
   // ── subagents ──
   subagent_run: macWrite('A subagent run'),
   subagent_send: macWrite('A message to a subagent'),
-  subagent_read: read(),
+  subagent_read: leader('subagents run through the leader: its route answers leader_only on every follower', 'src/web/routes/subagents-v1.ts'),
   subagent_stop: macWrite('Stopping a subagent'),
   op_card_record: macWrite('An op card record (deprecated)'),
 }

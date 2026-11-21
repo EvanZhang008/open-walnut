@@ -45,10 +45,16 @@ export const SLOW_WATCH_MS = 20_000
  * watch; 0 (ask now) while an acked write waits for its copy or the Mac answers (a drain
  * may be acking right now); else SLOW_WATCH_MS, so a long sleep of the Mac does not cost
  * the daemon a read of every pending record each second.
+ *
+ * A request's records (`requests`: row, settle) are read only while the Mac is away
+ * (away-wiring.ts installAwayRequests), and an acked one leaves only by its copy round or its
+ * time, never by a read: so they are watched only while pending and the Mac is away, slowly.
  */
-export function watchMaxAgeMs(entries: ReadonlyArray<Pick<OverlayEntry, 'state'>>, macAnswers: boolean): number | null {
-  if (!entries.length) return null
-  return macAnswers || entries.some((e) => e.state === 'awaiting') ? 0 : SLOW_WATCH_MS
+export function watchMaxAgeMs(entries: ReadonlyArray<Pick<OverlayEntry, 'state'> & { record?: Record<string, unknown> }>, macAnswers: boolean): number | null {
+  const watched = entries.filter((e) => !e.record || keyOfRecord(e.record)?.kind !== 'requests' || (!macAnswers && e.state === 'pending'))
+  if (!watched.length) return null
+  const fast = watched.some((e) => e.state === 'awaiting' && (!e.record || keyOfRecord(e.record)?.kind !== 'requests'))
+  return (macAnswers || fast) ? 0 : SLOW_WATCH_MS
 }
 
 export type SyncMark = 'pending' | 'awaiting'

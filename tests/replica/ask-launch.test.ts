@@ -199,8 +199,11 @@ describe('a new ask while the Mac is away', () => {
       const launch = createAskLaunch(h.deps)
       await send(h, launch, '/sessions/quick-start', ASK)
       expect(launch.rows()[0]).toMatchObject({ messageCount: 1 })
-      // The first look finds the start's turn already over.
+      // The first look finds the start's turn already over (a write after the start): counted
+      // once the next look still sees it so.
       h.sessions.push({ sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:00:00.000Z' })
+      await vi.advanceTimersByTimeAsync(1_100)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 1 })
       await vi.advanceTimersByTimeAsync(1_100)
       expect(launch.rows()[0]).toMatchObject({ messageCount: 2 })
       // Nothing new: the count stands.
@@ -214,13 +217,77 @@ describe('a new ask while the Mac is away', () => {
       h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:02:00.000Z' }
       await vi.advanceTimersByTimeAsync(1_100)
       expect(launch.rows()[0]).toMatchObject({ messageCount: 3 })
+      // A write while idle with no message sent (a hook's line) counts nothing.
+      h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:03:00.000Z' }
+      await vi.advanceTimersByTimeAsync(2_200)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 3 })
+      launch.watch(SID)
       h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:05:00.000Z' }
-      await vi.advanceTimersByTimeAsync(1_100)
+      await vi.advanceTimersByTimeAsync(2_200)
       expect(launch.rows()[0]).toMatchObject({ messageCount: 4 })
       launch.stop()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('a look before a message\'s turn begins, or while its transcript is still being folded, counts the turn once', async () => {
+    vi.useFakeTimers()
+    try {
+      let t = Date.parse('2026-10-17T07:00:00.000Z')
+      const h = harness({ now: () => t })
+      const launch = createAskLaunch(h.deps)
+      await send(h, launch, '/sessions/quick-start', ASK)
+      h.sessions.push({ sid: SID, state: 'working', lastActiveAt: '2026-10-17T07:00:01.000Z' })
+      await launch.fresh(0)
+      h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:00:30.000Z' }
+      await launch.fresh(0)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 2 })
+      // A message is sent; a reader looks before the daemon sees its turn: idle, the old write.
+      t = Date.parse('2026-10-17T07:01:00.000Z')
+      launch.watch(SID)
+      await launch.fresh(0)
+      await launch.fresh(0)
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 2 })
+      // Its first line lands before the daemon folds it (idle, a new write), then the turn runs and ends.
+      h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:01:00.500Z' }
+      await launch.fresh(0)
+      h.sessions[0] = { sid: SID, state: 'working', lastActiveAt: '2026-10-17T07:01:01.000Z' }
+      await launch.fresh(0)
+      h.sessions[0] = { sid: SID, state: 'idle', lastActiveAt: '2026-10-17T07:01:20.000Z' }
+      await launch.fresh(0)
+      await launch.fresh(0)
+      // One message, one turn: counted once, as the Mac counts it.
+      expect(launch.rows()[0]).toMatchObject({ messageCount: 3 })
+      launch.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the session list reads every session of this host through the same look: one read for readers at once, none again within a second', async () => {
+    let t = 1_760_000_000_000
+    let asked = 0
+    let fail = false
+    const h = harness({
+      now: () => t,
+      request: async () => { asked++; if (fail) throw new Error('daemon gone'); return { sessions: [{ sid: 'other-sid', state: 'working', lastActiveAt: '2026-10-17T07:00:00.000Z' }] } },
+    })
+    const launch = createAskLaunch(h.deps)
+    // No ask started here: the list still reads the host's sessions.
+    const [a, b] = await Promise.all([launch.hostSessions(), launch.hostSessions()])
+    expect(asked).toBe(1)
+    expect(a).toBe(b)
+    expect(a?.get('other-sid')).toEqual({ state: 'working', lastActiveAt: '2026-10-17T07:00:00.000Z' })
+    await launch.hostSessions()
+    expect(asked).toBe(1)
+    // A daemon that does not answer: null, and asked again only after a second.
+    t += 1_500
+    fail = true
+    expect(await launch.hostSessions()).toBeNull()
+    expect(await launch.hostSessions()).toBeNull()
+    expect(asked).toBe(2)
+    launch.stop()
   })
 
   it('the caller\'s project is kept, as the Mac keeps it (askLaunchProject)', async () => {

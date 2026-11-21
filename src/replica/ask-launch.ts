@@ -122,8 +122,18 @@ export interface AskLaunch {
    * keeps the last known state.
    */
   fresh(maxAgeMs?: number): Promise<void>
+  /**
+   * Every session of this host as its daemon read it at a look no older than `maxAgeMs` (the
+   * same `follower.sessions` read as `fresh`, shared with it and the poll): its state and last
+   * write, for the session list (away-read-folds.ts withHostSessions). null when the last look
+   * failed.
+   */
+  hostSessions(maxAgeMs?: number): Promise<HostSessionsNow | null>
   stop(): void
 }
+
+/** This host's sessions as its daemon reads them now (`follower.sessions`), by session id. */
+export type HostSessionsNow = ReadonlyMap<string, { state: string; lastActiveAt?: string }>
 
 /**
  * A session's process status from the state this host's daemon reports for it
@@ -183,6 +193,20 @@ function pathMatches(method: string, path: string): { v1: boolean } | null {
   return null
 }
 
+type Turns = { seen?: string; at?: string; asked?: string; settling?: string }
+
+/** One look's step of a session's turn count (createAskLaunch `turns`): `count` when a turn ended. */
+function turnCounted(prev: Turns, state: string, at: string | undefined, count: () => void): Turns {
+  const lastAt = at ?? prev.at
+  if (state === 'working') return { ...prev, seen: state, at: lastAt, settling: undefined }
+  if (prev.seen === 'working') { count(); return { seen: state, at: lastAt } }
+  if (prev.asked && at && at > prev.asked) {
+    if (prev.settling === at) { count(); return { seen: state, at } }
+    return { ...prev, seen: state, at, settling: at }
+  }
+  return { ...prev, seen: state, at: lastAt, settling: undefined }
+}
+
 export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   const now = deps.now ?? Date.now
   const uuid = deps.randomUUID ?? (() => crypto.randomUUID())
@@ -196,8 +220,18 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   let lookedAt = 0
   /** The last look failed (its warn is said once per outage). */
   let lookFailing = false
-  /** Each started session's state and last write at the last look: a turn that ended since counts a message. */
-  const turns = new Map<string, { state?: string; at?: string }>()
+  /** Every session the last answered look listed (hostSessions). */
+  let live: Map<string, { state: string; lastActiveAt?: string }> = new Map()
+  /**
+   * Each started session's turns, for its message count (the Mac counts one per turn result kept):
+   *   seen     the state the last look saw (only a look sets it: a message does not make it working)
+   *   at       the last write the last look saw
+   *   asked    when a message was sent that no counted turn has answered yet (ISO), set by watch()
+   *   settling a write past `asked` a look saw with the session not working: counted when the
+   *            next look still sees it so (the daemon folds the transcript after its write lands,
+   *            so a turn can read idle for a moment after its first line)
+   */
+  const turns = new Map<string, Turns>()
 
   function startPoll(): void {
     if (timer) return
@@ -207,8 +241,11 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
 
   /** A person started a turn of `sid` (its launch, a message): its end is told even when the first look already finds it over. */
   function watch(sid: string): void {
-    // A message starts a turn: its end counts, whether a look sees it working or not.
-    if (started.has(sid)) turns.set(sid, { ...turns.get(sid), state: 'working' })
+    // A message starts a turn: its end counts once, whether a look sees it working or not.
+    if (started.has(sid)) {
+      const t = turns.get(sid) ?? {}
+      turns.set(sid, { ...t, asked: t.asked ?? new Date(now()).toISOString() })
+    }
     const w = watched.get(sid)
     watched.set(sid, { ...(w ?? {}), state: 'working', until: now() + WATCH_IDLE_MS })
     startPoll()
@@ -240,6 +277,11 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
       const r = await deps.request('follower.sessions', {}, POLL_TIMEOUT_MS)
       lookFailing = false
       const list = Array.isArray(r.sessions) ? r.sessions as Array<{ sid?: unknown; state?: unknown; lastActiveAt?: unknown; prompt?: unknown }> : []
+      const all = new Map<string, { state: string; lastActiveAt?: string }>()
+      for (const x of list) {
+        if (typeof x.sid === 'string') all.set(x.sid, { state: typeof x.state === 'string' ? x.state : 'stopped', ...(typeof x.lastActiveAt === 'string' ? { lastActiveAt: x.lastActiveAt } : {}) })
+      }
+      live = all
       for (const s of list) {
         const sid = typeof s.sid === 'string' ? s.sid : ''
         const row = sid ? started.get(sid) : undefined
@@ -249,11 +291,11 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
         const at = typeof s.lastActiveAt === 'string' ? s.lastActiveAt : undefined
         if (row) {
           // The Mac counts one more message each time a turn's result is kept (session-tracker.ts
-          // persistSessionRecord): a turn that ended since the last look, seen working then or
-          // with a later write now, counts here the same way.
-          const prev = turns.get(sid)
-          if (prev && state !== 'working' && (prev.state === 'working' || (!!at && !!prev.at && at !== prev.at))) row.messageCount = (row.messageCount ?? 1) + 1
-          turns.set(sid, { state, at: at ?? prev?.at })
+          // persistSessionRecord): a turn a look saw working that is over now counts, and so does
+          // a turn of a message that fell between two looks (a write after the message, seen twice
+          // with the session not working). Anything else (a write while idle, a look before the
+          // message's turn began) counts nothing.
+          turns.set(sid, turnCounted(turns.get(sid) ?? {}, state, at, () => { row.messageCount = (row.messageCount ?? 1) + 1 }))
           row.process_status = hostSessionStatus(state)
           if (at) row.lastActiveAt = at
           // A permission prompt waiting for a person: the Mac's record shape (its enrichment reads the tool).
@@ -289,6 +331,12 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     if (looking) return looking
     if (now() - lookedAt < maxAgeMs) return
     await look()
+  }
+
+  async function hostSessions(maxAgeMs = POLL_MS): Promise<HostSessionsNow | null> {
+    if (looking) await looking
+    else if (now() - lookedAt >= maxAgeMs) await look()
+    return lookFailing || !lookedAt ? null : live
   }
 
   function rows(): SessionRecord[] {
@@ -407,13 +455,13 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
   function noteStarted(o: { sid: string; taskId: string; cwd: string; mode: string; title: string; project: string }): void {
     started.set(o.sid, rowOf({ ...o, at: now(), status: 'running' }))
     // Its first turn runs now (the start's message): its end is its second message, as on the Mac.
-    turns.set(o.sid, { state: 'working' })
+    turns.delete(o.sid)
     watch(o.sid)
     deps.broadcast('session:status-changed', { sessionId: o.sid, status: 'running', process_status: 'running', taskId: o.taskId })
   }
 
   return {
-    handler, rows, watch, noteStarted, fresh,
+    handler, rows, watch, noteStarted, fresh, hostSessions,
     stop() { if (timer) clearInterval(timer); timer = null; watched.clear() },
   }
 }

@@ -1,22 +1,23 @@
 /**
  * The client half of a host's local call entry ('host-call-entry-v1'): a session or plugin job
- * whose daemon gave it WALNUT_CALL_URL and WALNUT_CALL_TOKEN posts its gateway request line to its
- * own Walnut server there (replica/host-call-entry.ts), which hands it to the daemon, which runs
- * it exactly as a line on the gateway socket. The socket stays the way when the entry is not there.
+ * whose daemon gave it WALNUT_CALL_SOCKET and WALNUT_CALL_TOKEN posts its gateway request line to
+ * its own Walnut server on that private unix socket (replica/host-call-entry.ts), which hands it to
+ * the daemon, which runs it exactly as a line on the gateway socket. The gateway socket stays the
+ * way when the entry is not there.
  *
  *   answer      the entry's answer (its header says so): the call's answer, as the socket's
- *   not_taken   nothing ran: no entry listening, a server that is not the entry (an older one,
- *               or another program on that port), the token refused, the entry unavailable.
- *               The caller sends the same line (same call id) on the socket.
+ *   not_taken   nothing ran: nothing listening, a server that is not the entry, the token refused,
+ *               the entry unavailable. The caller sends the same line (same call id) on the socket.
  *   lost        the line was sent and no answer came: it may have run. Never sent again blindly;
  *               the caller answers as for a socket call whose answer was lost (lostCallLines).
  *
+ * Over node:http with `socketPath`, which node and bun both take (fetch's unix support differs).
  * Used by wn-cli.ts (the host's `walnut`, its MCP server) and plugin-job-harness.ts; the source
  * daemon twin inlines it by `toString()` for its plugin job runs: self-contained, no imports at
  * runtime, nothing at module scope that the factory references.
  */
 
-/** The entry's path on a host's Walnut server. */
+/** The entry's path on the entry socket. */
 export const HOST_CALL_PATH = '/api/host/call'
 /** Every answer of the entry carries it: an answer without it is not the entry's. */
 export const HOST_CALL_ANSWER_HEADER = 'x-walnut-host-call'
@@ -36,22 +37,22 @@ export type HostCallOutcome =
 export function createHostCallClient(deps: HostCallClientDeps) {
   // Same value as HOST_CALL_ANSWER_HEADER (tests pin it): the factory may not read module scope.
   const ANSWER_HEADER = 'x-walnut-host-call'
+  const PATH = '/api/host/call'
   /** A connect that takes longer than this is no entry: the socket is asked instead, nothing sent. */
   const CONNECT_MS = 3_000
-  const NOT_SENT = ['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'EADDRNOTAVAIL', 'EAI_AGAIN']
+  /** Errors that say the connection never opened (a missing, stale or foreign socket): nothing was sent. */
+  const NOT_SENT = ['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK', 'ENOTDIR', 'EINVAL']
+  const SOCKET_MAX = 103
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>))
 
-  /** The entry this process was given, or null: an http URL on this machine's loopback and a token. */
-  function entry(): { url: URL; token: string } | null {
-    const raw = (deps.env.WALNUT_CALL_URL ?? '').trim()
+  /** The entry this process was given, or null: an absolute unix socket path and a token. */
+  function entry(): { socketPath: string; token: string } | null {
+    const socketPath = (deps.env.WALNUT_CALL_SOCKET ?? '').trim()
     const token = (deps.env.WALNUT_CALL_TOKEN ?? '').trim()
-    if (!raw || !/^[0-9a-f]{64}$/.test(token)) return null
-    let url: URL
-    try { url = new URL(raw) } catch { return null }
-    const host = url.hostname.replace(/^\[|\]$/g, '')
-    if (url.protocol !== 'http:' || (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1')) return null
-    return { url, token }
+    if (!socketPath || !/^[0-9a-f]{64}$/.test(token)) return null
+    if (socketPath.charAt(0) !== '/' || !/\.sock$/.test(socketPath) || socketPath.length > SOCKET_MAX) return null
+    return { socketPath, token }
   }
 
   /** Post one request line to the entry. Never throws. */
@@ -73,7 +74,7 @@ export function createHostCallClient(deps: HostCallClientDeps) {
         resolve(o)
       }
       const r = deps.http.request({
-        hostname: e.url.hostname.replace(/^\[|\]$/g, ''), port: e.url.port || 80, path: e.url.pathname + e.url.search, method: 'POST',
+        socketPath: e.socketPath, path: PATH, method: 'POST',
         // A socket of its own: whether the line left is told by this connection's connect.
         agent: false,
         headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), authorization: 'Bearer ' + e.token },
@@ -84,7 +85,7 @@ export function createHostCallClient(deps: HostCallClientDeps) {
         res.on('end', () => {
           if (!res.headers[ANSWER_HEADER]) {
             // Not the entry (an older server, or another program on the port): nothing of the call ran there.
-            finish({ kind: 'not_taken', why: 'no entry at ' + e.url.origin + ' (HTTP ' + res.statusCode + ')' })
+            finish({ kind: 'not_taken', why: 'no entry at ' + e.socketPath + ' (HTTP ' + res.statusCode + ')' })
             return
           }
           let parsed: { ok?: unknown; error?: { code?: unknown } | string; code?: unknown } | null = null
@@ -94,8 +95,9 @@ export function createHostCallClient(deps: HostCallClientDeps) {
             finish({ kind: 'answer', resp: parsed as Extract<HostCallOutcome, { kind: 'answer' }>['resp'] })
             return
           }
-          // The entry refused before anything ran: a token it did not take, or no daemon to hand it to.
-          if (status === 401 || status === 429 || (parsed && parsed.code === 'entry_unavailable')) {
+          // The entry refused before anything ran: a token it did not take, a forwarded request, or
+          // no daemon to hand it to.
+          if (status === 401 || status === 403 || status === 429 || (parsed && parsed.code === 'entry_unavailable')) {
             finish({ kind: 'not_taken', why: 'the entry did not take it (HTTP ' + status + ')' })
             return
           }

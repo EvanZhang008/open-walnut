@@ -3,17 +3,18 @@
  *
  *   test as the Mac ==trusted WS==> daemon     leader.configure, server.configure, jobs.configure;
  *                                               answers every relayed call as `mac`
- *   test as the host's Walnut server ==follower WS==> follower.hello {answersLocal, callUrl}
- *     and the entry itself (replica/host-call-entry.ts) on a real HTTP port, handing lines to
- *     the daemon with follower.gateway
+ *   test as the host's Walnut server ==follower WS==> follower.hello {answersLocal, callSocket}
+ *     and the entry itself (replica/host-call-entry.ts) on its real unix socket in the daemon dir,
+ *     handing lines to the daemon with follower.gateway
  *   a real job run (the daemon's own `walnut plugin-job`): its first walnut.ops.call
  *
- * Proven: a run started after the follower said its address gets WALNUT_CALL_URL and its own
- * WALNUT_CALL_TOKEN beside the socket; its call goes over HTTP to the entry, through the daemon's
- * gateway rules (a plugin job's call: to the server of its Walnut) and back, the same answer a
- * socket line gets; a token for another sid, or none, is refused and runs nothing; once the
- * follower's report says no address (its experiment off), the next run gets none. The daemon's
- * own away answers are counted in follower.status and server.status.
+ * Proven: a run started after the follower said its socket gets WALNUT_CALL_SOCKET and its own
+ * WALNUT_CALL_TOKEN beside the gateway socket; its call goes over HTTP on the entry socket, through
+ * the daemon's gateway rules (a plugin job's call: to the server of its Walnut) and back, the same
+ * answer a socket line gets; a token for another sid, or none, or of a run that ended, is refused
+ * and runs nothing; a socket outside the daemon dir's entry dir (an old http address too) is never
+ * given; once the follower's report says no socket (its experiment off), the next run gets none.
+ * The daemon's own away answers are counted in follower.status and server.status.
  *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid it
  * wrote into its own dir, the fake host server and the job runs by the pids they logged.
@@ -23,14 +24,12 @@ import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import type { AddressInfo } from 'node:net'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { createHostCallEntry } from '../../src/replica/host-call-entry.js'
-import { HOST_CALL_PATH } from '../../src/providers/host-call-client-core.js'
+import { createHostCallEntry, listenHostCallEntry, type HostCallListener } from '../../src/replica/host-call-entry.js'
+import { hostCallSocketPath } from '../../src/providers/host-call-token-core.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
@@ -52,11 +51,11 @@ import fs from 'node:fs'
 const run = async (walnut, signal) => {
     const info = JSON.parse(process.env.WALNUT_PLUGIN_JOB)
     const out = (o) => fs.appendFileSync(process.env.JOB_OUT, JSON.stringify({ pid: process.pid, job: info.job, ...o }) + '\\n')
-    out({ sid: info.sid, callUrl: process.env.WALNUT_CALL_URL ?? null, callToken: process.env.WALNUT_CALL_TOKEN ?? null, socket: process.env.WALNUT_AGENT_SOCKET ?? null })
+    out({ sid: info.sid, callSocket: process.env.WALNUT_CALL_SOCKET ?? null, callToken: process.env.WALNUT_CALL_TOKEN ?? null, socket: process.env.WALNUT_AGENT_SOCKET ?? null })
     try { out({ answer: await walnut.ops.call('task_list', { limit: 1 }) }) } catch (e) { out({ error: String(e && e.message), code: e && e.code }) }
     await new Promise((resolve) => signal.addEventListener('abort', resolve))
 }
-export const jobs = { worker: run, second: run }
+export const jobs = { worker: run, second: run, third: run }
 `
 
 type Twin = 'source' | 'standalone'
@@ -79,7 +78,7 @@ function lines(file: string): Array<Record<string, any>> {
 
 let base = ''
 const started: number[] = []
-const servers: http.Server[] = []
+const listeners: HostCallListener[] = []
 
 async function spawnDaemon(name: string, twin: Twin, jobOut: string): Promise<Daemon> {
   const dir = path.join(base, name)
@@ -96,7 +95,7 @@ async function spawnDaemon(name: string, twin: Twin, jobOut: string): Promise<Da
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
   delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
-  delete env.WALNUT_CALL_URL; delete env.WALNUT_CALL_TOKEN
+  delete env.WALNUT_CALL_SOCKET; delete env.WALNUT_CALL_TOKEN
   const stderr = process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'
   let proc: ChildProcess
   if (twin === 'standalone') {
@@ -158,7 +157,7 @@ function socketCall(sock: string, sid: string, name: string): Promise<Record<str
   })
 }
 
-interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; callUrl: string; jobOut: string; startJob: (job: string) => Promise<Record<string, any>> }
+interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; entryLines: Array<Record<string, any>>; callSocket: string; jobOut: string; startJob: (job: string) => Promise<Record<string, any>>; stopJobs: () => Promise<void> }
 
 async function rig(twin: Twin, name: string): Promise<Rig> {
   const jobOut = path.join(base, `${name}-job.jsonl`)
@@ -175,20 +174,21 @@ async function rig(twin: Twin, name: string): Promise<Rig> {
   const follower = await connectWs(d.port)
   // The entry, as the follower serves it, handing each line to this daemon.
   const caps = ((await cmd(follower, { cmd: 'hello' })).capabilities ?? []) as string[]
+  const entryLines: Array<Record<string, any>> = []
   const entry = createHostCallEntry({
-    request: (c, params, timeoutMs) => cmd(follower, { cmd: c, ...params }, timeoutMs),
+    request: (c, params, timeoutMs) => { entryLines.push(params.request as Record<string, any>); return cmd(follower, { cmd: c, ...params }, timeoutMs) },
     capabilities: () => caps,
     linked: () => true,
     enabled: () => true,
     log: () => {},
   })
-  const server = http.createServer((req, res) => { if (entry.takes(req)) void entry.handle(req, res); else { res.writeHead(404); res.end() } })
-  servers.push(server)
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
-  const callUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}${HOST_CALL_PATH}`
+  const listener = await listenHostCallEntry(entry, { socketPath: hostCallSocketPath(path, crypto, d.dir, WALNUT), uid: process.getuid?.() ?? null, log: () => {} })
+  expect(listener).not.toBeNull()
+  listeners.push(listener!)
+  const callSocket = listener!.socketPath
   let hello: Record<string, any> = {}
   for (let attempt = 0; attempt < 40 && hello.ok !== true; attempt++) {
-    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token: lines(fakeOut).at(-1)!.token, answersLocal: true, callUrl })
+    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token: lines(fakeOut).at(-1)!.token, answersLocal: true, callSocket })
     if (hello.ok !== true) await sleep(250)
   }
   expect(hello.ok, JSON.stringify(hello)).toBe(true)
@@ -204,13 +204,17 @@ async function rig(twin: Twin, name: string): Promise<Rig> {
     const said = lines(jobOut).filter((l) => l.job === job)
     return { ...said.find((l) => typeof l.sid === 'string')!, ...said.find((l) => 'answer' in l || 'error' in l)! }
   }
-  return { d, mac, follower, macAsked, callUrl, jobOut, startJob }
+  const stopJobs = async () => {
+    jobs.length = 0
+    expect((await cmd(mac, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs } })).ok).toBe(true)
+  }
+  return { d, mac, follower, macAsked, entryLines, callSocket, jobOut, startJob, stopJobs }
 }
 
 beforeAll(() => { base = fs.mkdtempSync(path.join(os.tmpdir(), 'hce-')) })
 
 afterAll(async () => {
-  await Promise.all(servers.splice(0).map((s) => new Promise((r) => { s.closeAllConnections?.(); s.close(() => r(null)) })))
+  await Promise.all(listeners.splice(0).map((l) => l.close()))
   for (const f of fs.existsSync(base) ? fs.readdirSync(base).filter((n) => n.endsWith('.jsonl')) : []) {
     for (const l of lines(path.join(base, f))) if (typeof l.pid === 'number' && l.pid > 1 && alive(l.pid)) { try { process.kill(l.pid, 'SIGKILL') } catch { /* gone */ } }
   }
@@ -220,14 +224,17 @@ afterAll(async () => {
 
 for (const twin of ['source', 'standalone'] as const) {
   describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: the host call entry`, () => {
-    it('a job run gets the entry and its own token, its call goes over HTTP and back with the socket\'s answer, and a wrong token runs nothing', async () => {
+    it('a job run gets the entry socket and its own token, its call goes through the entry and back with the socket\'s answer, and a wrong or ended run\'s token runs nothing', async () => {
       const r = await rig(twin, `${twin.slice(0, 2)}a`)
       try {
         const run = await r.startJob('worker')
-        expect(run.callUrl).toBe(r.callUrl)
+        expect(run.callSocket).toBe(r.callSocket)
+        expect(fs.statSync(r.callSocket).mode & 0o777).toBe(0o600)
         expect(run.callToken).toMatch(/^[0-9a-f]{64}$/)
         expect(run.socket).toBe(r.d.sock)
-        // Its call went the gateway's way for a plugin job (the server of its Walnut), and came back.
+        // Its call went through the entry (not the socket fallback), the gateway's way for a plugin
+        // job (the server of its Walnut), and came back.
+        expect(r.entryLines.map((l) => [l.sid, l.args?.name])).toEqual([[run.sid, 'task_list']])
         expect(run.answer).toEqual({ who: 'mac', op: 'task_list' })
         expect(r.macAsked).toHaveLength(1)
         expect(r.macAsked[0]).toMatchObject({ callerSid: 'external', payload: { name: 'task_list' } })
@@ -248,31 +255,57 @@ for (const twin of ['source', 'standalone'] as const) {
         expect(await cmd(r.mac, { cmd: 'follower.gateway', request: line, token: run.callToken })).toMatchObject({ ok: false })
         expect(r.macAsked.length).toBe(asked)
 
-        // The key is the daemon dir's own private file.
+        // The key and the runs are the daemon dir's own private files.
         expect(fs.statSync(path.join(r.d.dir, 'host-call.key')).mode & 0o777).toBe(0o600)
+        expect(fs.statSync(path.join(r.d.dir, 'host-call-runs.json')).mode & 0o777).toBe(0o600)
 
         // The count of own away answers is there to read, zero here (the Mac answered every call).
         expect((await cmd(r.follower, { cmd: 'follower.status' })).offlineAnswers).toMatchObject({ total: 0 })
         expect((await cmd(r.follower, { cmd: 'server.status' })).offlineAnswers).toMatchObject({ total: 0 })
+
+        // The run ends: its token ends with it, though the sid is the same.
+        await r.stopJobs()
+        await waitFor(() => !alive(run.pid), 30_000, 'the job run to end')
+        let after: Record<string, any> = {}
+        for (let i = 0; i < 40; i++) {
+          after = await cmd(r.follower, { cmd: 'follower.gateway', request: line, token: run.callToken, openedAt: Date.now() })
+          if (after.errorKind === 'bad_token') break
+          await sleep(100)
+        }
+        expect(after).toMatchObject({ ok: false, errorKind: 'bad_token' })
       } finally {
         r.mac.close(); r.follower.close()
       }
     }, 180_000)
 
-    it('the follower\'s report says no address (its experiment off): the next run gets none, and calls over the socket', async () => {
+    it('the follower\'s report says no socket (its experiment off) or one outside the entry dir: the next run gets none, and calls over the gateway socket', async () => {
       const r = await rig(twin, `${twin.slice(0, 2)}b`)
       try {
-        r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callUrl: null } }))
+        r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callSocket: null } }))
         await sleep(300)
         const run = await r.startJob('worker')
-        expect(run.callUrl).toBeNull()
+        expect(run.callSocket).toBeNull()
         expect(run.callToken).toBeNull()
         expect(run.answer).toEqual({ who: 'mac', op: 'task_list' })
-        // And an address again: the run after that gets it.
-        r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callUrl: r.callUrl } }))
+        // A socket outside this daemon dir's entry dir, or an old http address: never given.
+        const stray = path.join(base, 'stray.sock')
+        const straySrv = net.createServer()
+        await new Promise<void>((resolve) => straySrv.listen(stray, () => resolve()))
+        fs.chmodSync(stray, 0o600)
+        for (const bad of [stray, 'http://127.0.0.1:4100/api/host/call', `${r.d.dir}/host-call/../host-call/${path.basename(r.callSocket)}`]) {
+          r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callSocket: bad } }))
+        }
+        await sleep(300)
+        const strayRun = await r.startJob('third')
+        expect(strayRun.callSocket).toBeNull()
+        expect(strayRun.answer).toEqual({ who: 'mac', op: 'task_list' })
+        straySrv.close()
+        // And its socket again: the run after that gets it.
+        r.follower.send(JSON.stringify({ cmd: 'follower.report', report: { callSocket: r.callSocket } }))
         await sleep(300)
         const next = await r.startJob('second')
-        expect(next.callUrl).toBe(r.callUrl)
+        expect(next.callSocket).toBe(r.callSocket)
+        expect(r.entryLines.map((l) => l.sid)).toEqual([next.sid])
         expect(next.answer).toEqual({ who: 'mac', op: 'task_list' })
       } finally {
         r.mac.close(); r.follower.close()

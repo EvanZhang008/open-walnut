@@ -12,10 +12,12 @@
  */
 import type { Overlay } from './overlay.js'
 import { opsAnsweredHere } from './away-op-decisions.js'
-import { hostSessionStatus } from './ask-launch.js'
+import { hostSessionStatus, type HostSessionsNow } from './ask-launch.js'
+import { projectTask } from '../core/task-projection.js'
+import type { Task } from '../core/types.js'
 
 type Row = Record<string, unknown> & { id: string }
-type LiveSessions = ReadonlyMap<string, { state: string; lastActiveAt?: string }>
+type LiveSessions = HostSessionsNow
 
 /** What walnut_status adds for this host's own call while the leader is away. */
 export function awayStatus(deps: { overlay: Pick<Overlay, 'entries'>; hostKey?: string | null }): Record<string, unknown> {
@@ -33,12 +35,13 @@ export function awayStatus(deps: { overlay: Pick<Overlay, 'entries'>; hostKey?: 
  * The session list with this host's sessions as they are now: the process status the daemon reads
  * (the copy holds the Mac's last word, which may be minutes old), the newer last write, and the
  * task title of a task made here (the task copy does not hold it). A session the copy says ended
- * in an error keeps it.
+ * in an error keeps it. The caller's own `you` row is folded the same way. `status` (the query's,
+ * which away-reads.ts kept from the route so it filters the copy's stale states) is applied here,
+ * after the fold, as the route applies it.
  */
-export function withHostSessions(body: unknown, live: LiveSessions | null, deps: { overlay: Pick<Overlay, 'taskForReaders'>; hostKey?: string | null }): unknown {
+export function withHostSessions(body: unknown, live: LiveSessions | null, deps: { overlay: Pick<Overlay, 'taskForReaders'>; hostKey?: string | null }, status?: string): unknown {
   if (!body || typeof body !== 'object' || !Array.isArray((body as { sessions?: unknown }).sessions)) return body
-  const rows = (body as { sessions: Array<Record<string, unknown>> }).sessions
-  const sessions = rows.map((r) => {
+  const fold = (r: Record<string, unknown>): Record<string, unknown> => {
     if (!r || typeof r !== 'object') return r
     let out = r
     const now = deps.hostKey && r.host === deps.hostKey && typeof r.id === 'string' ? live?.get(r.id) : undefined
@@ -51,14 +54,25 @@ export function withHostSessions(body: unknown, live: LiveSessions | null, deps:
       if (made && typeof made.title === 'string' && made.title) out = { ...out, task_title: made.title }
     }
     return out
-  })
-  return { ...(body as Record<string, unknown>), sessions }
+  }
+  const b = body as { sessions: Array<Record<string, unknown>>; you?: unknown }
+  let sessions = b.sessions.map(fold)
+  if (status) sessions = sessions.filter((r) => r?.process_status === status)
+  const you = b.you && typeof b.you === 'object' ? { you: fold(b.you as Record<string, unknown>) } : {}
+  return { ...(body as Record<string, unknown>), sessions, ...you }
+}
+
+/** The route's limit (search-memory-v1.ts GET /search): 1 to 100, 20 when not asked. */
+function searchLimit(raw: unknown): number {
+  return raw ? Math.max(1, Math.min(100, Number(raw) || 20)) : 20
 }
 
 /**
  * A search answer with the tasks made here whose title or description holds every word asked
  * (as the daemon's keyword search matched them), first, unless the answer has them already or
- * the search asked for no tasks.
+ * the search asked for no tasks. The merge keeps the route's `limit`; with `tasks=1` (the
+ * phone's, core/search-hit-tasks.ts) the answer's `tasks` are those its kept rows name, in order,
+ * the made ones projected as GET /api/v1/tasks projects them.
  */
 export function withTasksMadeHere(body: unknown, query: Record<string, unknown>, overlay: Pick<Overlay, 'createdTaskIds' | 'taskForReaders'>): unknown {
   if (!body || typeof body !== 'object' || !Array.isArray((body as { results?: unknown }).results)) return body
@@ -71,6 +85,7 @@ export function withTasksMadeHere(body: unknown, query: Record<string, unknown>,
   // Only a task result counts: a session result of the same task (its session is in the copy) is not it.
   const have = new Set(results.filter((r) => r?.type === 'task').map((r) => r.taskId).filter((id): id is string => typeof id === 'string'))
   const made: Array<Record<string, unknown>> = []
+  const madeRows = new Map<string, Row>()
   for (const id of overlay.createdTaskIds()) {
     if (have.has(id)) continue
     const row = overlay.taskForReaders(id, null) as Row | null
@@ -80,11 +95,31 @@ export function withTasksMadeHere(body: unknown, query: Record<string, unknown>,
     const text = `${title}\n${description}`.toLowerCase()
     if (!words.every((w) => text.includes(w))) continue
     const inTitle = words.every((w) => title.toLowerCase().includes(w))
+    madeRows.set(id, row)
     made.push({
       type: 'task', title, taskId: id, score: 1, matchField: inTitle ? 'title' : 'description',
       snippet: (inTitle ? description || title : description).slice(0, 200),
       ...(typeof row.parent_task_id === 'string' && row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     })
   }
-  return made.length ? { ...(body as Record<string, unknown>), results: [...made, ...results] } : body
+  if (!made.length) return body
+  const kept = [...made, ...results].slice(0, searchLimit(query.limit))
+  const out: Record<string, unknown> = { ...(body as Record<string, unknown>), results: kept }
+  const tasks = (body as { tasks?: unknown }).tasks
+  if (Array.isArray(tasks)) {
+    const byId = new Map<string, unknown>()
+    for (const t of tasks) if (t && typeof (t as { id?: unknown }).id === 'string') byId.set((t as { id: string }).id, t)
+    for (const [id, row] of madeRows) byId.set(id, projectTask(row as unknown as Task))
+    const named: unknown[] = []
+    const seen = new Set<string>()
+    for (const r of kept) {
+      const id = r?.type !== 'memory' && typeof r?.taskId === 'string' ? r.taskId : null
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      const t = byId.get(id)
+      if (t) named.push(t)
+    }
+    out.tasks = named
+  }
+  return out
 }

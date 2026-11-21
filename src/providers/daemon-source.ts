@@ -5975,8 +5975,8 @@ var followerTriggers = (__CREATE_FOLLOWER_TRIGGER_DELIVERY__)({
   mayWrite: function (home) { return followerMayWrite(home); },
   send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
   liveSids: function (home) { return offlineHost.liveSessionsOf(home); },
-  own: function (fire) { return offlineHost.deliverTrigger(fire.home, fire.taskId, fire.text, fire.messageId); },
-  deliverTo: function (fire, target) { return offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId); },
+  own: function (fire) { return deliverFireOwn(fire); },
+  deliverTo: function (fire, target) { return deliverFireTo(fire, target); },
   nextId: function () { return 'td-' + DAEMON_INSTANCE_ID + '-' + (++followerTriggerCounter); },
   answerMs: FOLLOWER_TRIGGER_ANSWER_MS,
   // Counted with the gateway's own answers (the count task B drives to zero).
@@ -5985,6 +5985,18 @@ var followerTriggers = (__CREATE_FOLLOWER_TRIGGER_DELIVERY__)({
   clearTimer: function (t) { clearTimeout(t); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
+
+// The daemon's own delivery of a fire (own): a stopping Demo delivers nothing. Twin of daemon-standalone.ts.
+function deliverFireOwn(fire) {
+  if (demoQuiesce.fenced) return Promise.resolve({ ok: false, reason: 'demo_stopping' });
+  return offlineHost.deliverTrigger(fire.home, fire.taskId, fire.text, fire.messageId);
+}
+
+// The mechanics for the follower's pick (deliverTo): a write or a resume, so the fence comes first too.
+function deliverFireTo(fire, target) {
+  if (demoQuiesce.fenced) return Promise.resolve({ ok: false, reason: 'demo_stopping' });
+  return offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId);
+}
 
 // What a follower of home is told about its leader. Twin of daemon-standalone.ts.
 function followerView(home) {
@@ -6010,7 +6022,7 @@ function followerView(home) {
     bridge: { connected: !!(link && link.adapter), companion: companion },
     settings: hostServers.settingsOf(home),
     ...followerJournalView(home),
-    // The calls this daemon still answered itself while the follower was there (noteOwnOfflineAnswer).
+    // The calls this daemon still answered itself while the follower was there (followerGateway.noteOwnOffline).
     offlineAnswers: followerGateway.ownAnswers(),
   };
 }
@@ -6039,7 +6051,7 @@ function cmdFollowerHello(ws, id, cmd) {
   ws.answersLocal = cmd.answersLocal === true;
   ws.deliversTriggers = cmd.deliversTriggers === true;
   ws.answersOnline = cmd.answersOnline === true;
-  ws.callUrl = cmd.answersLocal === true ? hostCallUrlOf(cmd.callUrl) : undefined;
+  ws.callSocket = cmd.answersLocal === true ? hostCallTokens.socketOf(cmd.callSocket) : undefined;
   followerSockets.set(home, ws);
   logMsg('info', 'follower: a server on this host follows its leader', { home: home, answersLocal: cmd.answersLocal === true, deliversTriggers: cmd.deliversTriggers === true });
   sendOk(ws, id, view);
@@ -6049,39 +6061,27 @@ function cmdFollowerReport(ws, cmd) {
   var home = ws.followerHome;
   if (!home || followerSockets.get(home) !== ws) return;
   hostServers.report(home, cmd.report);
-  // The entry's address as the follower says it now (its experiment turned on or off).
+  // Whether it takes a same-host send while the leader answers (its host_call_entry experiment, on or off).
+  if (cmd.report && typeof cmd.report === 'object' && 'answersOnline' in cmd.report) ws.answersOnline = cmd.report.answersOnline === true;
+  // The entry's socket as the follower says it now (its experiment turned on or off).
   var report = cmd.report;
-  if (report && typeof report === 'object' && 'callUrl' in report) {
-    var next = ws.answersLocal === true ? hostCallUrlOf(report.callUrl) : undefined;
-    if (next !== ws.callUrl) logMsg('info', 'host call entry: follower address', { home: home, callUrl: next || null });
-    ws.callUrl = next;
+  if (report && typeof report === 'object' && 'callSocket' in report) {
+    var next = ws.answersLocal === true ? hostCallTokens.socketOf(report.callSocket) : undefined;
+    if (next !== ws.callSocket) logMsg('info', 'host call entry: follower socket', { home: home, callSocket: next || null });
+    ws.callSocket = next;
   }
 }
 
-// The host call entry ('host-call-entry-v1', host-call-token-core.ts, inlined). Twin of daemon-standalone.ts.
+// The host call entry ('host-call-entry-v1', host-call-token-core.ts, inlined): the socket check,
+// the runs and the env are the core's. Twin of daemon-standalone.ts.
 var hostCallTokens = (__CREATE_HOST_CALL_TOKENS__)({
   fs: fs, path: path, crypto: crypto, dir: DAEMON_DIR,
   uid: typeof process.getuid === 'function' ? process.getuid() : null,
+  socketFor: function (home) { var ws = followerSockets.get(home); return ws && ws.answersLocal === true ? ws.callSocket : undefined; },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 
-function hostCallUrlOf(raw) {
-  if (typeof raw !== 'string' || !raw || raw.length > 200) return undefined;
-  try {
-    var u = new URL(raw);
-    return u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && !u.username && !u.password ? u.href : undefined;
-  } catch (e) { return undefined; }
-}
-
-function hostCallEnv(home, sid) {
-  if (typeof home !== 'string' || !home || typeof sid !== 'string' || !sid) return {};
-  var ws = followerSockets.get(home);
-  var url = ws && ws.answersLocal === true ? ws.callUrl : undefined;
-  var token = url ? hostCallTokens.tokenFor(sid) : null;
-  return url && token ? { WALNUT_CALL_URL: url, WALNUT_CALL_TOKEN: token } : {};
-}
-
-// follower.gateway {request, token, openedAt, peerPid?}: this twin reads no caller proof (as on its socket).
+// follower.gateway {request, token, openedAt}: this twin reads no caller proof (as on its socket).
 function cmdFollowerGateway(ws, id, cmd) {
   var home = ws.origin === 'follower' ? ws.followerHome : undefined;
   if (!home || followerSockets.get(home) !== ws) return sendError(ws, id, 'follower.gateway: send follower.hello first');
@@ -6431,8 +6431,9 @@ var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
   program: function () { return { command: walnutCliArgv[0], args: walnutCliArgv.slice(1).concat(['walnut', 'plugin-job']) }; },
   baseEnv: pluginJobBaseEnv,
   gatewaySocket: function () { return GATEWAY_SOCK_PATH; },
-  // host-call-entry-v1: the job's run id gets a token of its own (hostCallEnv).
-  callEnv: function (home, sid) { return hostCallEnv(home, sid); },
+  // host-call-entry-v1: the job's run id gets a token of its own, ended with the run.
+  callEnv: function (home, sid) { return hostCallTokens.envFor(home, sid); },
+  callEnvEnd: function (sid) { hostCallTokens.retire(sid); },
   sha256File: function (file) { try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (e) { return null; } },
   maxLogBytes: Number(process.env.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
   // A test knob: never on the production daemon dir.
@@ -7241,13 +7242,6 @@ function gatewayOwnerHome(callerSid) {
   return offlineHost.ownerOf(callerSid) || sessionHomeOf(callerSid) || undefined;
 }
 
-// A call this daemon answers with its own away code while this host's follower was there for it
-// (follower-gateway-core.ts noteOwnAnswer). Twin of daemon-standalone.ts.
-function noteOwnOfflineAnswer(home, capability, callerSid, payload, handedBack) {
-  var why = handedBack ? 'handed_back' : followerGateway.answers(home) ? 'follower_linked' : null;
-  if (why) followerGateway.noteOwnAnswer(capability === 'tools.call' ? payload.name : capability, why, callerSid);
-}
-
 function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
   if (!plan) plan = gatewayCallPlan(undefined, GATEWAY_HUB_TIMEOUT_MS, Date.now());
   var deadline = plan.deadline;
@@ -7276,7 +7270,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     // A search goes to the companion first while it leads (twin of daemon-standalone.ts).
     if (!target && capability === 'tools.call' && payload.name === 'search') {
       var here = function () {
-        noteOwnOfflineAnswer(home, capability, callerSid, payload, plan.ownServerAsked);
+        followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked);
         offlineHost.handle(home, callerSid, capability, payload).then(function (r) { respond(r); });
       };
       if (forwardToBackup(home, capability, callerSid, payload, function (resp) { if (resp.ok) respond(resp); else here(); })) return;
@@ -7288,7 +7282,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     // Nothing could take it: a message or a memory write is held here for the server (holdWrite).
     var unreachable = function (r) { return !r.ok && r.error.code === 'hub_unreachable' && !target; };
     var heldOr = function (r) { respond(unreachable(r) ? offlineHost.holdWrite(home, callerSid, capability, payload) || r : r); };
-    noteOwnOfflineAnswer(home, capability, callerSid, payload, plan.ownServerAsked);
+    followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked);
     offlineHost.handle(home, callerSid, capability, payload).then(function (r) {
       // What this host cannot answer itself goes to the companion while it leads.
       if (unreachable(r)
@@ -7313,9 +7307,13 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     var primary = target;
     // This host's own Walnut server takes it when it answers same-host sends, with the message
     // id set here; whatever it leaves goes to the server, never to handleLocal.
+    // One side writes it (openOnline/endOnline): a relay never follows a follower.peer write of it.
     if (followerGateway.answersOnline(home) && offlineHost.localCandidate(home, callerSid, capability, payload)) {
       var relay = function () { relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline); };
-      if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, online: true, fallback: relay }, function (r) { respond(r); })) return;
+      if (!offlineHost.openOnline(home, payload)) return relay();
+      var ended = function () { offlineHost.endOnline(home, payload).then(function (r) { if (r) respond(r); else relay(); }); };
+      if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, online: true, fallback: ended }, function (r) { respond(r); })) return;
+      return ended();
     }
     offlineHost.handleLocal(home, callerSid, capability, payload).then(function (r) {
       if (r) {
@@ -8060,9 +8058,9 @@ async function cmdAcpStart(ws, id, cmd) {
     // The address its Walnut named, or none ('' unsets this daemon's own). Keep in sync with the twin.
     OPEN_WALNUT_API_URL: sessionWalnutApiUrl(params.env) || '',
     // host-call-entry-v1, as for the native spawn ('' unsets). Keep in sync with the twin.
-    WALNUT_CALL_URL: '',
+    WALNUT_CALL_SOCKET: '',
     WALNUT_CALL_TOKEN: '',
-  }, hostCallEnv(cmd.home, params.env && typeof params.env.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
+  }, hostCallTokens.envFor(cmd.home, params.env && typeof params.env.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
   { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', ...pwSilenceAcpOptions(params.env) });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
@@ -8532,11 +8530,11 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Keep in sync with daemon-standalone.ts.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
       WALNUT_SESSION_ID: sid,
-      // host-call-entry-v1: this host's call entry and this session's token when its follower said
-      // an address (hostCallEnv); unset otherwise. Keep in sync with daemon-standalone.ts.
-      WALNUT_CALL_URL: undefined,
+      // host-call-entry-v1: this host's call entry socket and this run's token when its follower said
+      // a socket (hostCallTokens.envFor); unset otherwise. Keep in sync with daemon-standalone.ts.
+      WALNUT_CALL_SOCKET: undefined,
       WALNUT_CALL_TOKEN: undefined,
-      ...hostCallEnv(spawnInfo.home || (resumeRec && resumeRec.home), sid),
+      ...hostCallTokens.envFor(spawnInfo.home || (resumeRec && resumeRec.home), sid),
       // Unset when the task has none, so an inherited value never names another
       // task's directory. Keep in sync with daemon-standalone.ts.
       WALNUT_TASK_DIR: taskDir || undefined,

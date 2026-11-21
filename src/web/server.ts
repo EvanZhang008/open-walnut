@@ -1997,7 +1997,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       installAwaySessions(() => asks.rows())
       // A read of a task or a session started here sees its live state (away-reads.ts).
-      away.setSessionsFresh(() => asks.fresh())
+      away.setSessionLooks(asks)
       app.use('/api', asks.handler)
       // A task's start and a message to a task from this host's own calls (away-starts.ts).
       if (hasCapability('host-local-calls')) {

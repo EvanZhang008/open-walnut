@@ -237,7 +237,9 @@ async function adoptRun(
   // BEFORE the session record, so the reconnect's look at the CLI (the rescue) hands a turn that
   // already ended back exactly as online (session-snapshot-apply.ts: a phase set after the record's
   // status would read as a person's later choice and be kept).
-  const started = routine ? null : await startPhase(taskId, sid, ctx.at);
+  // A drain cut between that phase and the record (a crash) left the phase written: this drain's
+  // retry takes it as its own (ownStartPhase), so a refusal now still takes it back.
+  const started = routine ? null : await startPhase(taskId, sid, ctx.at) ?? await ownStartPhase(taskId, sid, ctx.at);
   try {
     await adoptOutsideRecord({ claudeSessionId: sid, taskId }, () => createSessionRecord(sid, taskId, task.project ?? '', cwd, {
       host: ctx.hostKey,
@@ -283,11 +285,30 @@ async function startPhase(taskId: string, sid: string, startedAt: number): Promi
   return written;
 }
 
-/** The start's phase taken back, only while nothing moved it since. */
+/** How far a start's field time may be from the record's time on a later drain (its clock offset is measured again). */
+const START_FIELD_SLACK_MS = 60_000
+
+/**
+ * The phase an earlier drain of this same start wrote (startPhase) and then did not live to give
+ * a session (the record is drained again): the task In Progress, this session not linked to it,
+ * and the phase's field time the start's own. Returns its `phase_changed_at`, or null.
+ */
+async function ownStartPhase(taskId: string, sid: string, startedAt: number): Promise<string | null> {
+  const { getTask } = await import('../task-manager.js');
+  const t = await getTask(taskId).catch(() => null);
+  if (!t || t.phase !== 'IN_PROGRESS' || (t.session_ids ?? []).includes(sid) || !t.phase_changed_at) return null;
+  const fieldAt = Date.parse(t.field_at?.phase ?? '');
+  return Number.isFinite(fieldAt) && Math.abs(fieldAt - startedAt) <= START_FIELD_SLACK_MS ? t.phase_changed_at : null;
+}
+
+/**
+ * The start's phase taken back, only while nothing moved it since: through the phase API, so it
+ * is pushed and told as the forward write was (the task's status, its parent's notice).
+ */
 async function undoStartPhase(taskId: string, writtenAt: string): Promise<void> {
-  const { updateTaskRaw } = await import('../task-manager.js');
-  await updateTaskRaw(taskId, { phase: 'TODO' }, {
-    source: 'offline-handover', shouldUpdate: (current) => current.phase === 'IN_PROGRESS' && current.phase_changed_at === writtenAt,
+  const { applySessionPhase } = await import('../phase.js');
+  await applySessionPhase(taskId, 'reconciler', 'offline-handover', {
+    newPhase: 'TODO', shouldApply: (current) => current.phase === 'IN_PROGRESS' && current.phase_changed_at === writtenAt,
   }).catch((err: unknown) => log.session.warn('offline handover: a refused run\'s start phase was not taken back', { taskId, error: err instanceof Error ? err.message : String(err) }));
 }
 
