@@ -55,6 +55,9 @@ must live under one of these top-level categories instead of directly under
 - [Where Walnut keeps its data](reference/data-locations.md): every place the server keeps
   state, in the data home and outside it, and whether it moves with the leader, stays on its
   machine, or is rebuilt; written from the manifest in `src/core/home-manifest/`.
+- [Standby copy of the data folder](reference/standby-copy.md): whole-folder batches of one
+  moment to a standby folder (experiment `switchable_leader`), complete batches only, and how
+  a direct edit of the copy is found, saved and repaired.
 - [Releasing](reference/releasing.md): the stable and nightly channels, `bun run release`,
   the GitHub Actions publish through npm trusted publishing, and how installs learn about and
   apply updates.

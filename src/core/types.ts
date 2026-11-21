@@ -2043,6 +2043,13 @@ export interface Config {
   triage?: import('./triage/types.js').TriageConfig;
   /** S3 backup of the data dir — see src/core/backup/. Primary box only. */
   backup?: import('./backup/types.js').BackupConfig;
+  /** The standby copy of this Walnut's data folder (experiment `switchable_leader`): src/core/standby/. */
+  standby?: {
+    /** The target folder on this machine. Required: with none set, nothing runs. */
+    dir?: string;
+    /** Seconds between batches (default 30, at least 5). */
+    interval_seconds?: number;
+  };
   /** Keep the Mac awake (lid closed included) while local sessions run.
    *  Advanced, opt-in, macOS console only — see src/core/keep-awake.ts. */
   keep_awake?: import('./keep-awake.js').KeepAwakeConfig;

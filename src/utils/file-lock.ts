@@ -40,6 +40,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { gated } from './write-gate.js';
 
 const STALE_AGE_MS = 30_000;  // Age-based fallback: an unclaimed lock older than 30s is stale
 const TIMEOUT_MS = 10_000;    // Give up (throw) after 10s
@@ -529,10 +530,19 @@ async function release(lock: string, token: string): Promise<void> {
  * TIMEOUT_MS). A caller that can come back later passes a short one rather than wait on a holder
  * that may be waiting on it. At least one attempt is always made, however short the wait.
  */
-export async function withFileLock<T>(
+export function withFileLock<T>(
   filePath: string,
   fn: () => Promise<T>,
   opts: { timeoutMs?: number } = {},
+): Promise<T> {
+  // The standby copy's write gate (write-gate.ts): off, this calls straight through.
+  return gated(() => withFileLockNow(filePath, fn, opts));
+}
+
+async function withFileLockNow<T>(
+  filePath: string,
+  fn: () => Promise<T>,
+  opts: { timeoutMs?: number },
 ): Promise<T> {
   const lock = lockDir(filePath);
   const token = newToken();

@@ -30,7 +30,7 @@ function configKeysFromSource(): Map<string, string> {
 const MERGED = [
   'experimental', 'user', 'org', 'approvals', 'outbound', 'passwords', 'defaults', 'provider', 'usage', 'agent',
   'private_tasks', 'calendar', 'favorites', 'ordering', 'session_server', 'net', 'hosts_warmup',
-  'hosts_found', 'first_run', 'health_monitor', 'external_session_import', 'session', 'triage', 'backup',
+  'hosts_found', 'first_run', 'health_monitor', 'external_session_import', 'session', 'triage', 'backup', 'standby',
   'keep_awake', 'time', 'search', 'session_hooks', 'hooks', 'self_repair', 'updates', 'ui',
   'pull_requests', 'workspaces', 'audio', 'stt', 'jev', 'push', 'cloud_bridge', 'expose', 'cloud', 'sync',
 ]

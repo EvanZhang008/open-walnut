@@ -102,6 +102,7 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   session: 'merge',
   triage: 'merge',
   backup: 'merge',
+  standby: 'merge',
   keep_awake: 'merge',
   time: 'merge',
   search: 'merge',

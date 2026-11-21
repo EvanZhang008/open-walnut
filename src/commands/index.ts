@@ -188,6 +188,28 @@ export function registerCommands(program: Command): void {
       await runBackupDrill(options).catch(plainFailure('Drill'));
     });
 
+  const standby = program
+    .command('standby')
+    .description('A standby copy of the data folder in another local folder: batches of one moment, checked for direct edits');
+  standby.command('snapshot').description('Take one batch into a target folder')
+    .requiredOption('--to <dir>', 'Target folder (made on first use)')
+    .option('--home <dir>', 'Home to copy (default: this Walnut\'s)')
+    .action(async (options: Record<string, unknown>) => {
+      const { runStandbySnapshot } = await import('./standby.js');
+      await runStandbySnapshot(options);
+    });
+  standby.command('verify <dir>').description('Find, save and repair files changed directly in a standby copy')
+    .option('--deep', 'Hash every file, not only those whose stat moved')
+    .action(async (dir: string, options: Record<string, unknown>) => {
+      const { runStandbyVerify } = await import('./standby.js');
+      await runStandbyVerify(dir, options);
+    });
+  standby.command('status <dir>').description('The current batch of a standby copy: age, files, bytes')
+    .action(async (dir: string) => {
+      const { runStandbyStatus } = await import('./standby.js');
+      await runStandbyStatus(dir);
+    });
+
   program
     .command('sync')
     .description('Sync ~/.open-walnut via git and/or Microsoft To-Do')

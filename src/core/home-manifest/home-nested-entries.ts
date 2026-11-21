@@ -140,6 +140,7 @@ const TMP_ENTRIES: readonly HomeEntry[] = [
   mach('tmp.trigger-state', 'tmp/trigger-state', 'dir', 'What each trigger on this machine\'s daemon already saw and reported'),
   mach('tmp.host-exec', 'tmp/host-exec', 'dir', 'Commands run on this machine and their output'),
   mach('tmp.host-vitals', 'tmp/host-vitals', 'dir', 'This machine\'s load and memory samples'),
+  mach('tmp.standby-staging', 'tmp/standby-staging', 'dir', 'A standby batch being staged on this machine, emptied after each batch'),
   mach('tmp.ephemeral-slots', 'tmp/ephemeral-slots', 'dir', 'Slots of the throwaway servers running here'),
   mach('tmp.ephemeral-registry', 'tmp/ephemeral-registry.json', 'file', 'The throwaway servers running here'),
   // Rebuilt or fetched again.

@@ -745,6 +745,7 @@ let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let threadAnswersHandle: { stop: () => void } | null = null
 let topicsHandle: { stop: () => void } | null = null
+let standbyHandle: { stop: () => void } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -3859,6 +3860,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // dev:ephemeral can try the feature; its mail bridge sends nothing unless
   // WALNUT_TOPICS_MAIL_IN_TEST=1 (its copy of the data holds the user's real accounts and people).
   topicsHandle = (await import('../core/topics/topics-runtime.js')).startTopicsRuntime()
+
+  // The standby copy of the data folder (core/standby/), only while the experiment
+  // switchable_leader is on and standby.dir is set; started and stopped with it. Never on an
+  // ephemeral server (its home is a copy of the user's data, and its config names the user's
+  // target), unless a test of the standby asks for it.
+  if (!isEphemeral || process.env.WALNUT_EPHEMERAL_STANDBY === '1') {
+    const { startStandbyRunner, defaultStandbyDeps } = await import('../core/standby/runner.js')
+    standbyHandle = startStandbyRunner({
+      ...(await defaultStandbyDeps()),
+      notify: (n) => publishErrorNotification(n),
+      onRecovered: () => { void publishRecovery(['standby']) },
+    })
+  }
 
   if (!isEphemeral) {
     if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit(compactionRecovered)
@@ -7737,6 +7751,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (topicsHandle) {
     topicsHandle.stop()
     topicsHandle = null
+  }
+  if (standbyHandle) {
+    standbyHandle.stop()
+    standbyHandle = null
   }
   if (sessionProjectionHandle) {
     sessionProjectionHandle.stop()

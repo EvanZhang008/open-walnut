@@ -198,6 +198,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health.',
     default: false,
   },
+  {
+    id: 'switchable_leader',
+    name: 'Standby copy of this Walnut',
+    description: 'Every 30 seconds this Walnut copies its whole data folder, as it was at one moment, to the folder set as standby.dir in config.yaml (on this machine), keeps only complete copies there, and repairs and reports any file changed there directly. Off: nothing is copied and nothing runs.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

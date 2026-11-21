@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { log } from '../logging/index.js';
 import { withFileLock } from './file-lock.js';
+import { gated } from './write-gate.js';
 import { selfHealDataDirJson } from './json-conflict-recovery.js';
 
 /**
@@ -26,10 +27,19 @@ export async function writeJsonFile(
  * writeJsonFile. The tmp name is `.open-walnut-<hex>.tmp`, which the data hub's .gitignore leaves
  * out, so a crash mid-write never syncs a half file.
  */
-export async function writeTextFile(
+export function writeTextFile(
   filePath: string,
   text: string,
   options: { mode?: number; durable?: boolean } = {},
+): Promise<void> {
+  // The standby copy's write gate (write-gate.ts): off, this calls straight through.
+  return gated(() => writeTextFileNow(filePath, text, options));
+}
+
+async function writeTextFileNow(
+  filePath: string,
+  text: string,
+  options: { mode?: number; durable?: boolean },
 ): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
