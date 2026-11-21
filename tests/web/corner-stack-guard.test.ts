@@ -21,10 +21,25 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const ROOT = path.resolve(__dirname, '../..');
-const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
-const listed = (globs: string[]) =>
-  execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', ...globs], { cwd: ROOT, encoding: 'utf8' })
-    .split('\n').filter(Boolean).filter((f) => fs.existsSync(path.join(ROOT, f)));
+// Each file is read once and each file list asked of git once: the scans below go over most of
+// web/src several times, and reading it afresh each time took a single test near its 15 s limit.
+const texts = new Map<string, string>();
+const read = (rel: string) => {
+  let text = texts.get(rel);
+  if (text === undefined) texts.set(rel, text = fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+  return text;
+};
+const lists = new Map<string, string[]>();
+const listed = (globs: string[]) => {
+  const key = globs.join('\0');
+  let files = lists.get(key);
+  if (!files) {
+    files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', ...globs], { cwd: ROOT, encoding: 'utf8' })
+      .split('\n').filter(Boolean).filter((f) => fs.existsSync(path.join(ROOT, f)));
+    lists.set(key, files);
+  }
+  return files;
+};
 
 /** Fixed to a window corner, and why that is not a notice (or is the stack itself). */
 const CORNER_ALLOWED: Record<string, string> = {
@@ -60,14 +75,23 @@ const NOTICE_NAME = /(toast|toaster|snackbar|notice|undo-bar|approval-stack|remi
 
 interface Rule { file: string; line: number; selector: string; body: string }
 
+const ruleCache = new Map<string, Rule[]>();
 function cssRules(file: string): Rule[] {
+  const cached = ruleCache.get(file);
+  if (cached) return cached;
   const src = read(file).replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
   const out: Rule[] = [];
   const re = /([^{}]+)\{([^{}]*)\}/g;
   let m: RegExpExecArray | null;
+  // The line is counted on from the last rule, never from the top again (that was quadratic).
+  let line = 1;
+  let at = 0;
   while ((m = re.exec(src))) {
-    out.push({ file, line: src.slice(0, m.index).split('\n').length, selector: m[1]!.trim().replace(/\s+/g, ' '), body: m[2]! });
+    for (let i = src.indexOf('\n', at); i !== -1 && i < m.index; i = src.indexOf('\n', i + 1)) line++;
+    at = m.index;
+    out.push({ file, line, selector: m[1]!.trim().replace(/\s+/g, ' '), body: m[2]! });
   }
+  ruleCache.set(file, out);
   return out;
 }
 
