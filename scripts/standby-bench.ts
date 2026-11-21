@@ -89,6 +89,10 @@ async function build(): Promise<void> {
   log('home built')
 }
 
+/** Bytes this process has caused to be written to storage so far (Linux /proc/self/io), or null. */
+const diskWrites = (): number | null => {
+  try { return Number(/write_bytes: (\d+)/.exec(fs.readFileSync('/proc/self/io', 'utf8'))![1]) } catch { return null }
+}
 const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))]) }
 
 async function main(): Promise<void> {
@@ -129,16 +133,24 @@ async function main(): Promise<void> {
     const totals: number[] = []
     const scansInc: number[] = []
     const sent: number[] = []
+    const handWritten: number[] = []
+    const disk: number[] = []
+    let patched = 0
     let voids = 0
     const reasons: string[] = []
     for (let b = 0; b < BATCHES; b++) {
+      const w0 = diskWrites()
       const out = await snapshotTo(home, target)
+      const w1 = diskWrites()
       holds.push(out.stats.holdMs)
       names.push(out.stats.namesMs ?? 0)
       scansInc.push(out.stats.scanMs)
       if (!out.ok) { voids++; reasons.push(out.reason.slice(0, 120)); continue }
       totals.push(out.stats.totalMs)
       sent.push(out.stats.sentBytes)
+      handWritten.push(out.commit.bytesWritten ?? 0)
+      patched += out.commit.patched ?? 0
+      if (w0 !== null && w1 !== null) disk.push(w1 - w0)
     }
     const r = {
       batches: BATCHES, void: voids, voidReasons: [...new Set(reasons)].slice(0, 5), writesDuring: writes,
@@ -147,6 +159,9 @@ async function main(): Promise<void> {
       scanMs: { p50: q(scansInc, 0.5), max: Math.round(Math.max(...scansInc)) },
       totalMs: totals.length ? { p50: q(totals, 0.5), p95: q(totals, 0.95), max: Math.round(Math.max(...totals)) } : null,
       sentMB: sent.length ? { p50: +(q(sent, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...sent) / 1024 ** 2).toFixed(1) } : null,
+      patchedFiles: patched,
+      copyWrittenMB: handWritten.length ? { p50: +(q(handWritten, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...handWritten) / 1024 ** 2).toFixed(1) } : null,
+      diskWrittenMB: disk.length ? { p50: +(q(disk, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...disk) / 1024 ** 2).toFixed(1) } : null,
     }
     log(label, r)
     return r

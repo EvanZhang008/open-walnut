@@ -21,7 +21,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { withFileLock } from '../../utils/file-lock.js'
 import { log } from '../../logging/index.js'
-import { hashFile, sha256 } from './chunks.js'
+import { CHUNK_BYTES, hashFile, sha256 } from './chunks.js'
 import { DriftRecorder } from './drift.js'
 import { limiter } from './scan.js'
 import {
@@ -30,6 +30,9 @@ import {
   type TargetPaths,
 } from './target-files.js'
 import { chunkIds, type BatchFile, type BatchManifest, type CommitResult, type StandbyState } from './types.js'
+
+/** A file of at least this many chunks is made from the last batch's copy, its changed chunks written. */
+const PATCH_MIN_CHUNKS = 2
 
 interface JournalStep {
   p: string
@@ -45,7 +48,7 @@ interface Journal {
 
 export interface CommitHooks {
   /** Called at each named point of a commit (tests stop the process there). */
-  point?: (name: 'files-built' | 'journal-written' | 'half-step' | 'mid-swap' | 'swapped' | 'state-written') => Promise<void> | void
+  point?: (name: 'cloned' | 'files-built' | 'journal-written' | 'half-step' | 'mid-swap' | 'swapped' | 'state-written') => Promise<void> | void
 }
 
 export class StandbyTarget {
@@ -121,6 +124,41 @@ export class StandbyTarget {
     return data
   }
 
+  /**
+   * Build `f` at `dest` from the last batch's file `old` in the copy (`src`): clone it (APFS and
+   * reflink filesystems share the blocks; elsewhere the kernel copies them), write only the
+   * chunks that differ, cut it to size, then check the whole file against its hash. Only for a
+   * copy file still as commit wrote it (copy-stat), so the chunks it keeps are the batch's.
+   * Returns the bytes written by hand.
+   */
+  async buildPatched(f: BatchFile, old: BatchFile, src: string, dest: string, hooks: CommitHooks = {}): Promise<number> {
+    await fs.mkdir(path.dirname(dest), { recursive: true, mode: 0o700 })
+    await fs.rm(dest, { force: true })
+    await fs.copyFile(src, dest, fs.constants.COPYFILE_FICLONE)
+    await fs.chmod(dest, 0o600)
+    await hooks.point?.('cloned')
+    const was = chunkIds(old)
+    const now = chunkIds(f)
+    let written = 0
+    const fh = await fs.open(dest, 'r+')
+    try {
+      for (let i = 0; i < now.length; i++) {
+        if (was[i] === now[i]) continue
+        const data = await this.readChunk(now[i])
+        await fh.write(data, 0, data.length, i * CHUNK_BYTES)
+        written += data.length
+      }
+      await fh.truncate(f.size)
+      await fh.sync()
+    } finally {
+      await fh.close()
+    }
+    const { h, size } = await hashFile(dest)
+    if (size !== f.size || h !== f.h) throw new Error(`${f.p} does not match its batch's hash`)
+    await fs.chmod(dest, f.x ? EXEC_MODE : FILE_MODE)
+    return written
+  }
+
   /** Build `f` at `dest` from its chunks, checked; mode read-only. */
   async build(f: BatchFile, dest: string): Promise<void> {
     await fs.mkdir(path.dirname(dest), { recursive: true, mode: 0o700 })
@@ -169,8 +207,26 @@ export class StandbyTarget {
     await removeTree(this.t.apply)
     await fs.mkdir(this.t.applyNew, { recursive: true, mode: 0o700 })
     const slot = limiter(16)
+    const copyStats = await readCopyStats(this.t)
+    let patched = 0
+    let bytesWritten = 0
     try {
-      await Promise.all(puts.map((f) => slot(() => this.build(f, path.join(this.t.applyNew, f.p)))))
+      await Promise.all(puts.map((f) => slot(async () => {
+        const dest = path.join(this.t.applyNew, f.p)
+        const old = before.get(f.p)
+        if (old && chunkIds(old).length >= PATCH_MIN_CHUNKS && chunkIds(f).length >= PATCH_MIN_CHUNKS) {
+          const src = path.join(this.t.copy, f.p)
+          const st = await fs.lstat(src).catch(() => null)
+          const was = copyStats[f.p]
+          if (st?.isFile() && was && copyStatOf(st).every((v, i) => v === was[i])) {
+            bytesWritten += await this.buildPatched(f, old, src, dest, hooks)
+            patched++
+            return
+          }
+        }
+        await this.build(f, dest)
+        bytesWritten += f.size
+      })))
     } catch (err) {
       await removeTree(this.t.apply)
       throw err
@@ -223,7 +279,7 @@ export class StandbyTarget {
     await hooks.point?.('state-written')
     // The batch is current: a cleanup that fails is finished by the next caller's recovery.
     await this.finish(journal, before, next).catch((err) => log.session.warn('standby: cleanup after commit failed', { error: String(err) }))
-    return { batch: manifest.batch, written: puts.length, deleted: dels.length, unchanged: false }
+    return { batch: manifest.batch, written: puts.length, deleted: dels.length, unchanged: false, patched, bytesWritten }
   }
 
   /** Save what was changed directly at each path the swap is about to replace or remove. */

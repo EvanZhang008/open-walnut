@@ -77,6 +77,10 @@ export interface CommitResult {
   deleted: number
   /** True when the batch changed nothing: only the position moved. */
   unchanged: boolean
+  /** Of the written files, how many were made from the last batch's copy with only their changed chunks written. */
+  patched?: number
+  /** Bytes written into new files (a patched file counts its changed chunks only; a clone that the filesystem cannot share copies the rest in the kernel). */
+  bytesWritten?: number
 }
 
 /**
