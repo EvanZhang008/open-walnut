@@ -72,6 +72,7 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/org/thread-card-text.tsx': 'hook',
   // A task's thread listed above it (threads_pop_up): AgentText opens the summary's paths from its writer.
   'components/org/PoppedThreadCard.tsx': 'renderer',
+  'components/org/ThreadKnown.tsx': 'renderer', // what a task waits on, drawn through AgentText from the session that wrote it
   'components/triage/TriagePanel.tsx': 'hook',
   'components/inbox/LetterView.tsx': 'hook',
   'components/inbox/LetterCardBody.tsx': 'hook',

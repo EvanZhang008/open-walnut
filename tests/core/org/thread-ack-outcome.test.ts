@@ -57,8 +57,8 @@ describe('his Acknowledge sends the card where its work stands', () => {
 
   it('working outranks waiting; his reply on its way or a live letter waits; a COMPLETE or missing task holds nothing', () => {
     const t = card('Oven timer: fixed', ['t-a', 't-b', 't-gone'])
-    const a: AckTask = { id: 't-a', title: 'Oven timer board', phase: 'WAITING' }
-    const b: AckTask = { id: 't-b', title: 'Oven timer test', phase: 'IN_PROGRESS' }
+    const a: AckTask = { id: 't-a', title: 'Oven timer board', phase: 'WAITING', user_status: { state: 'waiting' } }
+    const b: AckTask = { id: 't-b', title: 'Oven timer test', phase: 'IN_PROGRESS', user_status: { state: 'working' } }
     expect(ackOutcome(t, byId(a, b)).outcome).toBe('working')
     expect(ackOutcome(t, byId(a)).outcome).toBe('waiting')
     expect(ackOutcome(t, byId({ ...b, phase: 'COMPLETE' })).outcome).toBe('closed')
@@ -68,16 +68,20 @@ describe('his Acknowledge sends the card where its work stands', () => {
     expect(ackOutcome({ ...t, letter: { id: 'lt-1', task: 'lead-1', options: [] } }, new Map()).outcome).toBe('waiting')
   })
 
-  it('what a task says of itself: its status first, its phase when it has none', () => {
+  it('what a task says of itself: its stored status, never its phase; an open task with none is in work', () => {
     expect(taskStands({ id: 'x', title: 'x', phase: 'IN_PROGRESS', user_status: { state: 'waiting' } })).toBe('waiting')
     expect(taskStands({ id: 'x', title: 'x', phase: 'IN_PROGRESS', user_status: { state: 'needs' } })).toBe('waiting')
     expect(taskStands({ id: 'x', title: 'x', phase: 'IN_PROGRESS', user_status: { state: 'read' } })).toBeNull()
-    // Not started yet: it waits.
-    expect(taskStands({ id: 'x', title: 'x', phase: 'TODO' })).toBe('waiting')
+    // Not started yet: its status says it waits.
+    expect(taskStands({ id: 'x', title: 'x', phase: 'TODO', user_status: { state: 'waiting' } })).toBe('waiting')
+    // No stored status (an older row): open, so in work, whatever its phase.
+    expect(taskStands({ id: 'x', title: 'x', phase: 'TODO' })).toBe('working')
+    expect(taskStands({ id: 'x', title: 'x', phase: 'WAITING' })).toBe('working')
     // A To read an older server stored as Waiting with toRead: its result is in.
     expect(taskStands({ id: 'x', title: 'x', phase: 'NEED_ACTION', user_status: { state: 'waiting', toRead: true } })).toBeNull()
     expect(taskStands({ id: 'x', title: 'x', phase: 'WAITING', user_status: { state: 'waiting', toRead: true, snoozed: true } })).toBe('waiting')
-    expect(taskStands({ id: 'x', title: 'x', phase: 'NEED_ACTION' })).toBeNull()
+    expect(taskStands({ id: 'x', title: 'x', phase: 'NEED_ACTION', user_status: { state: 'read' } })).toBeNull()
+    expect(taskStands({ id: 'x', title: 'x', phase: 'COMPLETE' })).toBeNull()
     expect(taskStands({ id: 'x', title: 'x', phase: 'COMPLETE', user_status: { state: 'working' } })).toBeNull()
   })
 
@@ -106,7 +110,7 @@ describe('his Acknowledge sends the card where its work stands', () => {
     expect(threadGroupOf(t, false, Date.parse(AT))).toBe('known')
     expect(ackWhy(ackOutcome(held, byId({ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'IN_PROGRESS' }))))
       .toBe('\u201cAgent avatars on web and phone\u201d still at work on it')
-    expect(ackWhy(ackOutcome(held, byId({ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'WAITING' }))))
+    expect(ackWhy(ackOutcome(held, byId({ id: 't-avatars', title: 'Agent avatars on web and phone', phase: 'WAITING', user_status: { state: 'waiting' } }))))
       .toBe('waits on \u201cAgent avatars on web and phone\u201d')
     expect(ackWhy(ackOutcome(held, new Map()))).toBe('nothing on it was still open')
   })

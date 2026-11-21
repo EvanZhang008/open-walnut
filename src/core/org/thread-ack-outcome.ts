@@ -82,7 +82,7 @@ export function onSubject(t: Pick<OrgThread, 'title' | 'ask'>, task: AckTask): b
 /**
  * What a task says of its own work: still working, waiting on someone or something (not started
  * yet included), or nothing open. Its stored status first (read as every reader does:
- * storedUserState), its phase when it has none. Pure.
+ * storedUserState); an open task with none is still in work. Pure.
  */
 export function taskStands(task: AckTask): 'working' | 'waiting' | null {
   if (task.phase === 'COMPLETE') return null;
@@ -91,9 +91,9 @@ export function taskStands(task: AckTask): 'working' | 'waiting' | null {
   if (us === 'working') return 'working';
   if (us === 'waiting' || us === 'needs') return 'waiting';
   if (us === 'read' || us === 'done') return null;
-  if (task.phase === 'IN_PROGRESS') return 'working';
-  if (task.phase === 'WAITING' || task.phase === 'TODO') return 'waiting';
-  return null;
+  // No stored status (an older row): its work is open, never read off the phase as a state
+  // (tests/core/task-state-ratchet.test.ts: the status decides needs and waiting).
+  return 'working';
 }
 
 /**

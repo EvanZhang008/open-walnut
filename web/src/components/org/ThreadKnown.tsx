@@ -10,6 +10,7 @@ import type { Task } from '@open-walnut/core';
 import type { OrgThread } from '@/api/org-threads';
 import { placedSinceAck } from '@open-walnut/thread-groups';
 import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
 import { TaskChip } from './ThreadTaskChips';
 
 /** "Nov 21, 9:00 AM": when a wait ends. */
@@ -34,8 +35,8 @@ export function KnownBlock({ t, tasks, name }: { t: OrgThread; tasks: readonly T
         <div key={x.id} className="org-thread-known-wait" data-testid="org-thread-known-wait" data-task-id={x.id}>
           <p>
             {working ? 'Still in work: ' : 'Waiting on '}<TaskChip id={x.id} task={byId.get(x.id)} fallback={x.title} />
-            {/* What it waits on is the task's own words: they open from its session. */}
-            {x.waitingOn && <>{': '}<AgentText text={x.waitingOn} inline task={byId.get(x.id) ?? null} testId="org-thread-known-on" /></>}
+            {/* What it waits on is the task's own words: they open from the session that wrote them. */}
+            {x.waitingOn && <>{': '}<AgentText text={x.waitingOn} inline {...taskTextSource(byId.get(x.id), 'waiting')} testId="org-thread-known-on" /></>}
             {x.until ? `, until ${untilWords(x.until)}` : ''}
           </p>
           {x.what && <p className="org-thread-known-what" data-testid="org-thread-known-what">{x.what}</p>}

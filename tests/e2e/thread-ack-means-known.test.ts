@@ -44,6 +44,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { addTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js'
+import { settleUserStatusSync } from '../../src/core/user-status-sync.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
@@ -254,11 +255,13 @@ describe('his Acknowledge means he knows', () => {
   it('nobody decided in 10 minutes (fake clock): nothing stays in Acknowledged; the rule places each, with why', async () => {
     sendApns.mockClear()
     const proving = await newTask('Proof the rye dough')
-    // Its session at work on it (the status sync may derive it again: wait until it reads working).
-    await updateTaskRaw(proving, { status_report: { state: 'working', now: 'Kneading', at: new Date().toISOString() }, user_status: { state: 'working' } } as never, { emitEvent: true })
-    await vi.waitFor(async () => expect((await listTasks()).find((x) => x.id === proving)?.user_status?.state).toBe('working'), { timeout: 5_000 })
     const cooling = await newTask('Cool the rye loaves')
-    await updateTaskRaw(cooling, { phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'the loaves to cool', until: new Date(Date.now() + 3_600_000).toISOString() } } as never, { emitEvent: true })
+    // The statuses their sessions would have (at work, waiting on a time), written once the status
+    // sync is done with the new tasks and without an event, so no later pass derives them again
+    // from this test's facts (no session runs them here: it would read "not started").
+    await settleUserStatusSync()
+    await updateTaskRaw(proving, { status_report: { state: 'working', now: 'Kneading', at: new Date().toISOString() }, user_status: { state: 'working' } } as never, { emitEvent: false })
+    await updateTaskRaw(cooling, { phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'the loaves to cool', until: new Date(Date.now() + 3_600_000).toISOString() } } as never, { emitEvent: false })
     const ids = {
       working: await runningThread('Proof the rye dough today', [proving]),
       waiting: await runningThread('Cool the rye loaves tonight', [cooling]),
