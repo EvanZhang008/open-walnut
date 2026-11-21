@@ -278,7 +278,9 @@ permission prompts still name Walnut.
   is never forwarded.
 - **A session that the follower cannot serve keeps today's answer.** If the follower is not linked, is late,
   or says the leader is needed, a session's call falls back to the daemon's old offline answers. A plugin
-  job's answer is final.
+  job's answer is final. Every such fallback is counted (`offlineAnswers` in the daemon's status, and the
+  log line `gateway: daemon offline answer used`), so a run can show that none happened while a follower was
+  there; step D deletes that code once the count stays at zero.
 - **Starts made alone** (`src/replica/away-starts.ts`): only for a task this host's journal made, with a
   session id derived from the op id so a retry starts nothing twice, one start of a task at a time (a second
   hears the leader's 409 `session_exists`), and at most as many live sessions as this machine's memory allows.
@@ -344,21 +346,36 @@ permission prompts still name Walnut.
   tries end after the 60 minute one until a newer build, a reconnect or Retry. Hosts on by default install
   one at a time; a host the person turned on never waits behind them. Switching the experiment off stops the
   followers that ran only by default and leaves their files on the host.
-- **Not yet.** The host's Settings switch reads on for a host on by default and does not yet say that it
-  follows the default (the fleet view carries `byDefault` for it).
-- **Not yet.** A task started alone whose turn ended still reads TODO on the leader after the drain until
-  its next turn (the drain adopts the session, it does not replay the start's phase).
-- **Not yet, small.** Seen in the real run of 2026-11-20: the answer of a write made alone (`task_update`)
-  carries the journal's row, so its `execution` reads `unknown` until the next read; a console list read by
-  ids counts its `total` before the host's own rows are added; and a session started alone keeps the message
-  count of its start.
+- **Calls the follower answers alone since step B** (`src/replica/away-*.ts`). With the daemon's own records
+  and op ids, so the leader's drain applies each one once: a message that asks for a reply (a request row the
+  leader opens with the same deadline rules, `away-sends.ts`, rules shared with the leader in
+  `core/sessions/send-rules.ts`) and a reply to one (`away-replies.ts`); `agent_memory_write` (held with the
+  leader's own note checks) and `human_inbox_send` (`away-calls.ts`); every trigger op but `trigger_update`
+  (`away-triggers.ts`), and the delivery of a trigger's fire to a session on the host
+  (`away-trigger-delivery.ts`, the daemon still delivers when the follower is down or keeps failing). Reads
+  (`session_list`, `request_get`, `search`, `open_items`, `walnut_status`, `tools.list`) fold the host's own
+  records in; every op has a row in `src/replica/away-op-decisions.ts`, which a ratchet holds.
+- **Same-host messages while the leader answers** (experiment `host_call_entry`, off by default). A message
+  from one session to another on the same host is delivered by the host's follower and told to the leader;
+  the message id is claimed first, so a hand-off that times out and is relayed to the leader never delivers
+  it twice. With the experiment off, the leader delivers it as before.
+- **One entry for new sessions and plugin jobs** (experiment `host_call_entry`). A session or job started by
+  a daemon that has `host-call-entry-v1` gets `WALNUT_CALL_SOCKET` (a 0600 unix socket of the follower's,
+  never the listener the tunnel reaches) and a token bound to that session's run. The follower hands each
+  call to the daemon, which checks the token and routes it exactly as a call on the old gateway socket, so
+  both doors share one auth and routing rule. Old sessions keep the socket; a call the entry cannot take
+  (flag off, link down, older daemon) goes to the socket with the same call id.
+- **A task kept local stays off the host** (`sync_hold`, `core/replication/host-private.ts`). Its row and the
+  data that belongs to it are not copied to host followers (the companion still gets them); a copy a host
+  already holds is removed on the next round. Its own session's calls are relayed to the leader while it
+  answers and answer `needs_leader` (`task_kept_local`) while it is away.
 - **Turned down: starting a task made on the leader alone.** Where such a task starts needs the leader's whole
   placement rule: the caller, the task's ancestors, its workspaces and the folders on the leader's disks. A
   second copy of that rule on the follower was wrong twice in review, so such a start keeps answering
   `needs_leader` (`task_made_on_mac`).
-- **Not yet: a message that asks for a reply, sent alone.** Today the follower answers `needs_leader`
-  (`reply_needs_mac`, nothing sent) and a session's call falls back to the daemon's own offline code, which
-  sends it. The follower takes this over before that code is deleted (step B).
+- **Not yet.** `trigger_update` alone answers `needs_leader` (its partial update needs the leader's whole
+  trigger row). The watcher that ends a session's turn stays in the daemon until step C. A prompt that asks
+  the person for an approval goes through the old socket.
 
 ## Compatibility
 
