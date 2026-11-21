@@ -20,6 +20,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { holdWrites } from '../../utils/write-gate.js'
+import { isAppendOnlyHomePath } from '../home-manifest/index.js'
+import { markAppendOnly, stagePrefix, type AppendMark } from './append-only.js'
 import type { ChunkSink, FileDigest } from './chunks.js'
 import { DB_NAME, scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
 import { namesAtMoment, type MomentNames } from './moment-names.js'
@@ -67,6 +69,8 @@ export interface BatchStats {
   pinAttempts: number
   /** Time the hold spent on the dirs' names at the moment. */
   namesMs: number
+  /** Append-only files that had not only grown, so the general rule placed them. */
+  appendFallbacks: number
 }
 
 export type BatchOutcome =
@@ -125,7 +129,7 @@ async function fsClock(stagingDir: string, home: string): Promise<number> {
 
 export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
   const started = performance.now()
-  const stats: BatchStats = { scanMs: 0, rescanMs: 0, holdMs: 0, drainMs: 0, totalMs: 0, files: 0, databases: 0, stagedFiles: 0, stagedBytes: 0, sentChunks: 0, sentBytes: 0, pinAttempts: 0, namesMs: 0 }
+  const stats: BatchStats = { scanMs: 0, rescanMs: 0, holdMs: 0, drainMs: 0, totalMs: 0, files: 0, databases: 0, stagedFiles: 0, stagedBytes: 0, sentChunks: 0, sentBytes: 0, pinAttempts: 0, namesMs: 0, appendFallbacks: 0 }
   const settleMs = opts.settleMs ?? 15
   const stagingDir = path.join(opts.stagingDir, `batch-${process.pid}-${Date.now()}`)
   let worker: PinWorker | null = null
@@ -142,7 +146,11 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     await opts.hooks?.afterScan?.()
     const dbs = [...s1.files.values()].filter((e) => e.db).sort((a, b) => a.p.localeCompare(b.p))
     const plain = [...s1.files.values()].filter((e) => !e.db)
-    const changed = plain.filter((e) => !sameStat(e.st, prev.get(e.p)?.src) || prev.get(e.p)?.db)
+    // Append-only files are taken up to their size when marked in the hold (append-only.ts).
+    const appendOnly = plain.filter((e) => isAppendOnlyHomePath(e.p)).map((e) => e.p)
+    const appendSet = new Set(appendOnly)
+    const marks = new Map<string, AppendMark>()
+    const changed = plain.filter((e) => !appendSet.has(e.p) && (!sameStat(e.st, prev.get(e.p)?.src) || prev.get(e.p)?.db))
     stats.databases = dbs.length
 
     // 2. hold
@@ -187,6 +195,11 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       const timeLeft = () => performance.now() - holdStart < (opts.holdReadMs ?? 200)
       // Gated writes that ended just now should land in an earlier tick than the moment.
       await new Promise((r) => setTimeout(r, settleMs))
+      // Just before the moment: what each append-only file holds then is the batch's.
+      for (const rel of appendOnly) {
+        const mark = await markAppendOnly(path.join(opts.home, rel))
+        if (mark) marks.set(rel, mark)
+      }
       fsMoment = await fsClock(stagingDir, opts.home)
       try {
         for (const [p, st] of await dbStatAll()) dbStats.set(p, st)
@@ -255,11 +268,26 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       const now = s2.files.get(rel)
       if (dbPaths.has(rel)) continue // pinned: copied below
       if (then?.db || now?.db) throw new VoidBatch(`database ${rel} appeared around the batch's moment`)
+      const mark = marks.get(rel)
+      if (mark) {
+        const last = prev.get(rel)
+        if (last && !last.db && sameStat(last.src, mark.st)) { out.set(rel, last); continue }
+        const got = await stagePrefix(opts.home, rel, mark, last, send)
+        if (got.ok) {
+          stats.stagedFiles++
+          stats.stagedBytes += got.size
+          out.set(rel, fileEntry(rel, got.size, got.h, got.chunks, got.x, got.st, false))
+          continue
+        }
+        // It did not only grow: the general rule below decides (taken when it was quiet since
+        // before the moment, else the batch is void), so one rewrite cannot void every batch after.
+        stats.appendFallbacks++
+      }
       const st = staged.get(rel)
       if (st) { out.set(rel, fileEntry(rel, st.size, st.h, st.chunks, st.x, st.st, false)); continue }
       const last = prev.get(rel)
       // Unchanged from the last batch through both scans: its content at the moment is the last batch's.
-      if (then && now && last && sameStat(then.st, now.st)) { out.set(rel, last); continue }
+      if (then && now && last && sameStat(then.st, last.src) && sameStat(then.st, now.st)) { out.set(rel, last); continue }
       // Unchanged from the last batch to the scan, and from the scan to the hold (its stat read
       // there): the last batch's too, however it changed after the moment.
       const held = atMoment.heldStats.get(rel)

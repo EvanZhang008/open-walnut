@@ -168,12 +168,12 @@ async function main(): Promise<void> {
   }
   result.incremental = await run('incremental (gated writes)')
 
-  // A writer the gate does not hold: appends, as the time-tracking and audit logs do.
+  // A writer the gate does not hold, appending to a file the manifest marks append-only (the session audit log).
   let appending = true
   let appends = 0
   const appender = (async () => {
     while (appending) {
-      await fsp.appendFile(path.join(home, 'time-tracking.jsonl'), `{"at":${Date.now()},"n":${appends++}}\n`)
+      await fsp.appendFile(path.join(home, 'session-audit.jsonl'), `{"at":${Date.now()},"n":${appends++}}\n`)
       await new Promise((r) => setTimeout(r, APPEND_MS))
     }
   })()

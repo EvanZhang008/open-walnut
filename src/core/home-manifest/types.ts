@@ -44,6 +44,12 @@ export interface HomeEntry extends EntryBase {
    * files the code does not name.
    */
   listsChildren?: true
+  /**
+   * A file that only ever grows: written by appending, never cut, rewritten or replaced in
+   * place. The standby copy takes such a file up to its size at the batch's moment
+   * (src/core/standby/append-only.ts). Set only after reading every writer of it.
+   */
+  appendOnly?: true
 }
 
 /**

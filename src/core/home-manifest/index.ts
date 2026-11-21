@@ -90,6 +90,14 @@ export function classifyHomePath(relPath: string): HomeEntry | undefined {
   return classifyIn(HOME_ENTRIES, relPath)
 }
 
+const APPEND_ONLY = HOME_ENTRIES.filter((e) => e.appendOnly)
+
+/** Whether the manifest marks `relPath` as a file that only grows (HomeEntry.appendOnly). Cheap for every other path. */
+export function isAppendOnlyHomePath(relPath: string): boolean {
+  if (!APPEND_ONLY.some((e) => e.path === relPath || e.match?.test(relPath))) return false
+  return classifyHomePath(relPath)?.appendOnly === true
+}
+
 /** The class of `relPath`, with the unknown default for a name no entry knows. */
 export function homePathClass(relPath: string): DataClass {
   return classifyHomePath(relPath)?.class ?? UNKNOWN_HOME_PATH_CLASS

@@ -73,6 +73,22 @@ ctime); tested on Linux ext4, not yet on APFS.
 that keeps the size and the mtime is still seen. Not seen: a change while the system clock
 was set back to the exact nanosecond of the old ctime.
 
+**Append-only files.** A file the manifest marks `appendOnly` (logs Walnut and other processes
+append to, outside the write gate: the session audit log, time samples, replay step logs, the
+voice vocabulary; `src/core/home-manifest/`) changes after the moment almost every time. Its
+size, inode and the hash of its last 4 KiB are noted in the hold just before the moment, and
+the batch takes its first that many bytes (`append-only.ts`), checked: the same inode and at
+least that size before and after the read, the noted tail unchanged, and, when the last batch
+holds the same inode, its first (last batch's size) bytes still the last batch's content. A
+file replaced by a compacted copy (a new inode) is taken as the new file. One that did not only
+grow (cut, rewritten in place) goes to the general rule: taken if it was quiet since before the
+moment, else the batch is void, so one rewrite never voids every batch after it. Not caught: a
+rewrite in place, after the mark, of bytes between the last batch's end and the noted tail.
+An entry is marked only after reading every writer of it (2026-11-21: `session-audit.jsonl`,
+`time-tracking/` day logs, `browser/replays/*/index.jsonl`, `offline-conflicts/*.ndjson`,
+`config/share/stt-vocab.txt`, `cache/suggest-accuracy.jsonl`); files people edit (notes, the
+daily log) are not marked, since an editor may write in place.
+
 **A void batch** commits nothing, the target's position does not move, and the runner tries
 again two seconds later (three times), then at the next period. Void when: a file or
 database cannot be read; a database cannot be pinned or copied (a damaged one, one that went
@@ -102,6 +118,13 @@ then write `standby.json`. Every caller (commit, verify) runs recovery first: wi
 and no state write, every path goes back to the previous batch; with the state write done,
 only the cleanup is left. A batch with no change writes no chunk, no file and no manifest:
 only the position (`batch`, `takenAt`) moves.
+
+A changed file of two chunks or more whose copy is still as commit wrote it (copy-stat) is made
+from that copy (`buildPatched`): cloned (shared blocks on APFS and reflink filesystems; on
+ext4 the kernel copies it, which still writes the whole file but never through the process),
+its changed chunks written, cut to size, and its whole hash checked. A copy edited directly is
+not cloned: the file is built from its chunks and the edit saved to drift. A kill between the
+clone and the patch leaves `.apply/new/` only, which recovery removes.
 
 Before the swap, each path the batch replaces or removes is compared with what the last commit
 wrote (`copy-stat.json`): a file edited in the copy is saved to `drift/<time>-commit/` first,
@@ -181,9 +204,8 @@ void; every 200 ms, 2 of 10 void. The real server test (`tests/e2e/standby-real-
 gives 0 of 8 void, hold p50 28 ms, p95 61 ms.
 
 **Writes the gate does not hold** void a batch when they land on a file between the moment
-and its read. Walnut still has about forty such appenders (`appendFile` in time tracking,
-session audit, the daily log, health records and others). At one append every 20 ms every
-batch was void; the runner's retries cover a slow appender, not a fast one.
+and its read, unless the file is marked append-only (above). Before the marks, one append
+every 20 ms to the session audit log voided every batch.
 
 ## Not done yet
 
@@ -192,12 +214,10 @@ batch was void; the runner's retries cover a slow appender, not a fast one.
   boot (`src/core/backup/restore-switch.ts`) and making it writable is phase B.
 - No change log ("about to change" / "done" lines): the scan is fast enough every 30 s.
 - A changed database is copied whole into the pin worker's memory each batch it changed (its
-  size in memory for a moment, then hashed; only changed chunks travel), and its file in the
-  copy is built again whole: about 28 s and 1.5 GB written per batch for the bench's databases.
-  Before this is on for real, the copy should clone the old file and write only the changed
-  chunks (APFS clones are free).
-- Walnut's own appenders do not pass the write gate yet; a frequent one voids batches (above).
-  Routing them through one gated append helper is the fix.
+  size in memory for a moment, then hashed; only changed chunks travel). On ext4 its file in
+  the copy is still copied whole by the kernel each batch (no reflink); APFS shares the blocks.
+- An appended file not marked append-only (one a person may edit, a file outside the manifest's
+  marks) still voids a batch when it changes between the moment and its read.
 - The target needs up to twice the home's size (the copy, and its chunks, which dedupe repeated content).
 - A rollback-journal (not WAL) database holds its writers while it is copied.
 - Debounced writes that are still in memory are not in a batch (the same as at a crash);

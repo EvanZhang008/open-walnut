@@ -261,6 +261,13 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/artifacts/.unify-stage/` | rebuildable | no | Half-built shadow of the artifacts folder during a move |
 | `~/.open-walnut/code-server/instance.json` | machine | no | The in-app editor running here: port, pid, instance id |
 | `~/.open-walnut/time-tracking/outside/` | leader-data | no | App and site samples (git sync keeps them out) |
+| `~/.open-walnut/time-tracking/2026-01-01.jsonl` (and names matching `^time-tracking\/\d{4}-\d{2}-\d{2}\.jsonl$`) | leader-data | no | A day of time samples |
+| `~/.open-walnut/time-tracking/outside/2026-01-01.jsonl` (and names matching `^time-tracking\/outside\/\d{4}-\d{2}-\d{2}\.jsonl$`) | leader-data | no | A day of app and site samples |
+| `~/.open-walnut/time-tracking/outside/detail/2026-01-01.jsonl` (and names matching `^time-tracking\/outside\/detail\/[^/]+\.jsonl$`) | leader-data | no | A day of app and site sample details |
+| `~/.open-walnut/time-tracking/outside/calls/2026-01-01.jsonl` (and names matching `^time-tracking\/outside\/calls\/[^/]+\.jsonl$`) | leader-data | no | A day of calls |
+| `~/.open-walnut/browser/replays/task/index.jsonl` (and names matching `^browser\/replays\/[^/]+\/index\.jsonl$`) | leader-data | no | The steps of a task's browser replays |
+| `~/.open-walnut/offline-conflicts/drain.ndjson` (and names matching `^offline-conflicts\/[^/]+\.ndjson$`) | leader-data | no | One offline drain's merge conflicts (a failed append is cut back to where it began) |
+| `~/.open-walnut/config/share/stt-vocab.txt` | leader-data | no | Voice input vocabulary, one word added at a time |
 | `~/.open-walnut/vault/vault.json` | leader-data | yes | The encrypted vault |
 | `~/.open-walnut/vault/machine.json` (and names matching `^vault\/machine-[^/]+\.json$`) | machine | yes | This machine's key that opens the vault, and the retired keys of earlier vaults |
 | `~/.open-walnut/vault/sessions.json` | machine | yes | Vault unlock sessions |

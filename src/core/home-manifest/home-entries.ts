@@ -18,7 +18,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('session-queue', 'session-message-queue.json', 'file', 'Messages queued for sessions that were not ready to take them'),
   lead('session-requests', 'session-requests.json', 'file', 'Reply requests between sessions and their deadlines'),
   lead('hint-registry-since', 'hint-registry-since.json', 'file', 'When this home first ran the hint registry (older session rows predate it)'),
-  lead('session-audit', 'session-audit.jsonl', 'file', 'Audit log of session actions'),
+  lead('session-audit', 'session-audit.jsonl', 'file', 'Audit log of session actions', { appendOnly: true }),
   lead('user-asks', 'user-asks', 'dir', 'The user\'s unanswered messages, one file per task'),
   lead('side-questions', 'side-questions', 'dir', 'Side questions asked beside a session'),
   lead('subagent-runs', 'subagent-runs.json', 'file', 'Subagent runs a restart left behind, to tell their callers'),

@@ -6,6 +6,7 @@ export interface EntryOptions {
   match?: RegExp
   listsChildren?: true
   legacy?: true
+  appendOnly?: true
 }
 
 function homeAt(cls: DataClass) {
@@ -14,6 +15,7 @@ function homeAt(cls: DataClass) {
     ...(o.match ? { match: o.match } : {}),
     ...(o.listsChildren ? { listsChildren: true as const } : {}),
     ...(o.legacy ? { legacy: true as const } : {}),
+    ...(o.appendOnly ? { appendOnly: true as const } : {}),
   })
 }
 

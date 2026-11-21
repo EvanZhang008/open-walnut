@@ -242,6 +242,7 @@ describe('the manifest against the backup\'s excluded dirs (src/core/backup/scan
     'stt-debug-legacy': 'the same recordings at their older place',
     'data-repo': 'the backup leaves git sync\'s history out; without a data remote it is the only history',
     'browser-replays': 'replays are large; the backup leaves them out, a standby keeps them',
+    'browser-replays.index': 'the replays\' step logs, inside browser/ (the same choice as browser-replays)',
     'config-history': 'the backup keeps its own dated history of config.yaml',
   }
 
