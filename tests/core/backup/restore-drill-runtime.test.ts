@@ -12,8 +12,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
-import { startRestoreDrillRuntime, DRILL_EVERY_MS, DRILL_NOTICE_SCOPE, type DrillRuntime } from '../../../src/core/backup/restore-drill-runtime.js';
-import { readDrillRecord, type DrillResult } from '../../../src/core/backup/restore-drill.js';
+import { startRestoreDrillRuntime, DRILL_EVERY_MS, DRILL_RETRY_MS, DRILL_NOTICE_SCOPE, type DrillRuntime } from '../../../src/core/backup/restore-drill-runtime.js';
+import { readDrillRecord, writeDrillRecord, type DrillResult } from '../../../src/core/backup/restore-drill.js';
 import { audienceOf } from '../../../src/core/notifications/audience.js';
 import { EXPERIMENTAL_FEATURES } from '../../../src/core/experimental.js';
 import type { BackupConfig } from '../../../src/core/backup/types.js';
@@ -37,7 +37,7 @@ describe('restore drill schedule', () => {
 
   it('flag off: no timer, and a check runs nothing', async () => {
     const run = vi.fn();
-    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => false, backupConfig: async () => cfg, run, notify: vi.fn(), subscribe: false });
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => false, backupConfig: async () => cfg, run, notify: vi.fn(), subscribe: false, tmpRoot: home });
     await runtime.reconcile();
     expect(runtime.armed()).toBe(false);
     expect(await runtime.check()).toBeNull();
@@ -46,7 +46,7 @@ describe('restore drill schedule', () => {
 
   it('turned on it arms a timer, turned off again it clears it', async () => {
     let on = true;
-    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => on, backupConfig: async () => cfg, run: vi.fn(), notify: vi.fn(), subscribe: false });
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => on, backupConfig: async () => cfg, run: vi.fn(), notify: vi.fn(), subscribe: false, tmpRoot: home });
     await runtime.reconcile();
     expect(runtime.armed()).toBe(true);
     on = false;
@@ -60,7 +60,7 @@ describe('restore drill schedule', () => {
     const run = vi.fn(async () => result(outcomes.shift()!, now));
     const notify = vi.fn(async () => true);
     const onRecovered = vi.fn();
-    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, onRecovered, now: () => now, subscribe: false, firstCheckMs: 3_600_000 });
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, onRecovered, now: () => now, subscribe: false, tmpRoot: home, firstCheckMs: 3_600_000 });
 
     expect((await runtime.check())?.ok).toBe(false);
     expect(notify).toHaveBeenCalledTimes(1);
@@ -83,9 +83,44 @@ describe('restore drill schedule', () => {
     expect((await readDrillRecord(home))?.ok).toBe(true);
   });
 
+  it('a drill that could not run is tried again after a day, and said so', async () => {
+    let now = Date.parse('2026-11-21T10:00:00Z');
+    const run = vi.fn(async () => ({ ...result(false, now), checks: [], error: 'The destination did not answer.' }));
+    const notify = vi.fn(async () => true);
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, now: () => now, subscribe: false, tmpRoot: home });
+    await runtime.check();
+    expect(notify.mock.calls[0][0]).toMatchObject({ title: 'Restore drill could not run' });
+    now += DRILL_RETRY_MS - 60_000;
+    expect(await runtime.check()).toBeNull();
+    now += 120_000;
+    await runtime.check();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('a pass from the CLI retires the failure card at the next check, once', async () => {
+    const now = Date.parse('2026-11-21T10:00:00Z');
+    await writeDrillRecord(home, result(true, now - 3_600_000));
+    const onRecovered = vi.fn();
+    const run = vi.fn();
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify: vi.fn(), onRecovered, now: () => now, subscribe: false, tmpRoot: home });
+    await runtime.check();
+    await runtime.check();
+    expect(onRecovered).toHaveBeenCalledTimes(1);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('removes a killed drill\'s folder at start, flag on or off', async () => {
+    const left = path.join(home, 'walnut-restore-drill-aaaaaa');
+    await fsp.mkdir(left);
+    await fsp.writeFile(path.join(left, 'drill-owner.json'), JSON.stringify({ pid: 999_999_999 }));
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => false, backupConfig: async () => cfg, run: vi.fn(), notify: vi.fn(), subscribe: false, tmpRoot: home });
+    for (let i = 0; i < 50 && (await fsp.stat(left).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 20));
+    await expect(fsp.stat(left)).rejects.toThrow();
+  });
+
   it('backups not set up: nothing runs', async () => {
     const run = vi.fn();
-    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => ({ ...cfg, enabled: false }), run, notify: vi.fn(), subscribe: false });
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => ({ ...cfg, enabled: false }), run, notify: vi.fn(), subscribe: false, tmpRoot: home });
     expect(await runtime.check()).toBeNull();
     expect(run).not.toHaveBeenCalled();
   });

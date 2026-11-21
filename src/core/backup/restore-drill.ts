@@ -10,8 +10,8 @@
  * is removed by the next drill.
  *
  * Read-only on both sides: the destination is wrapped so a write throws, the data home
- * is only walked, and no backup lock is taken (that lock is a file in the data home).
- * The caller keeps the result (writeDrillRecord); the drill itself writes nothing there.
+ * is only walked. The caller keeps the result (writeDrillRecord) and holds the backup
+ * lock (runRestoreDrillLocked); the drill itself writes nothing there.
  *
  * Starting a server on the restored folder is not part of it: no boot mode exists with
  * plugins, the session daemon, schedules and outward sends all off (the ephemeral
@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { pidAlive } from '../self-update/install-lock.js';
+import { machineIdPath, withBackupLock } from './local-state.js';
 import { atomicWriteSameDir } from '../bounded-memory-backup.js';
 import { describeDestination, makeStore } from './destination.js';
 import { readRecoveryKey } from './recovery-key.js';
@@ -86,7 +87,8 @@ const MAX_AGE_MS = 24 * 3_600_000;
 
 const BOOT_NOT_RUN =
   'Not run: Walnut has no boot mode with plugins, the session daemon, schedules and outward sends all off ' +
-  '(the ephemeral server pauses schedules but loads plugins and starts its own session daemon). ' +
+  '(the ephemeral server pauses schedules but loads plugins and starts its own session daemon; plugin safe mode ' +
+  'turns off only plugins that are not built in; a replica needs a leader to follow). ' +
   'The drill reads a task and a note straight from the restored stores instead (read-back).';
 
 /** A store that refuses every write: the drill only reads the destination. */
@@ -124,6 +126,11 @@ function inside(child: string, parent: string): boolean {
 }
 
 interface Picked { repo: Repository; store: BackupStore; snapshot: Snapshot; encrypted: boolean; raw: Buffer | null }
+
+/** This machine's backup writer id, read only (localWriter would make one). */
+async function machineWriterId(dataDir: string): Promise<string | null> {
+  return (await fs.readFile(machineIdPath(dataDir), 'utf8').catch(() => '')).trim() || null;
+}
 
 /** The repository holding the backup to drill, and that backup. */
 async function pick(base: BackupStore, opts: DrillOptions): Promise<Picked> {
@@ -221,12 +228,18 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
     const db = await checkDatabases(target, tree);
     result.checks.push(db.check);
     result.databases = db.databases;
-    result.checks.push(await checkMustHave(opts.dataDir, tree, snapshot.createdAt, opts.mustHaveSlackMs));
+    // Backups another computer writes hold that computer's data home, not this one: nothing here to compare.
+    if (repo.config.writer?.id !== await machineWriterId(opts.dataDir)) {
+      result.checks.push({ id: 'must-have', ok: null, detail: `Not compared: these backups are written by another computer (${repo.writerName()}), so this data home is not what they hold` });
+    } else {
+      result.checks.push(await checkMustHave(opts.dataDir, tree, snapshot.createdAt, opts.mustHaveSlackMs));
+    }
 
     const note = await readBackNote(target, tree);
     const readBack: string[] = [];
     const problems: string[] = [];
     if (db.task) readBack.push(`task "${db.task.title}" (${db.task.id})`);
+    else if (db.taskError) problems.push(`tasks/tasks.sqlite: reading a task failed: ${db.taskError}`);
     else if (db.databases.some((d) => d.path === 'tasks/tasks.sqlite')) problems.push('tasks/tasks.sqlite holds no task to read');
     if (note && 'path' in note) readBack.push(`note ${note.path}`);
     else if (note) problems.push(note.error);
@@ -243,6 +256,16 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
       log.session.warn('backup: restore drill folder not removed (the next drill removes it)', { dir, error: message(err) });
     });
   }
+}
+
+/**
+ * The drill as the CLI and the schedule run it: holding this data home's backup lock
+ * (local/backup/run.lock, a machine file no backup takes), as a restore does, so a
+ * backup's prune never deletes packs while the drill reads them. Throws
+ * BackupLockedError while a backup or restore of another process runs.
+ */
+export function runRestoreDrillLocked(opts: DrillOptions): Promise<DrillResult> {
+  return withBackupLock(opts.dataDir, () => runRestoreDrill(opts));
 }
 
 // ── The record Settings and the schedule read ───────────────────────────────

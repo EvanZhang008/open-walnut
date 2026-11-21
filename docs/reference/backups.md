@@ -217,12 +217,15 @@ It restores the backup into a new folder under the OS temp dir (never the data f
 - **must-have**: every file of the data folder that the data-location manifest
   (`src/core/home-manifest/`) classes leader-data and the backup's rules take, and that existed
   6 hours before the backup finished, must be in it. This catches a backup whose own list
-  missed something, which the files check cannot;
+  missed something, which the files check cannot. A missing file whose inode changed since
+  then (a rename keeps the birth time: an old note moved to a new folder) counts as changed,
+  not missing; backups another computer writes are not compared with this data folder;
 - **read-back**: the newest task of `tasks/tasks.sqlite` and a note are read from the
   restored folder;
 - **boot**: not run. Walnut has no boot mode with plugins, the session daemon, schedules and
   outward sends all off (the ephemeral server pauses schedules but loads plugins and starts its
-  own daemon), so the drill says so instead of starting one.
+  own daemon; plugin safe mode turns off only plugins that are not built in; a replica needs a
+  leader to follow), so the drill says so instead of starting one.
 
 It also lists what backups leave out by design, read from the code: the leader-data places the
 backup's rules skip (everything under `cache/`, the applied-ops ledger included, `browser/`,
@@ -230,14 +233,18 @@ backup's rules skip (everything under `cache/`, the applied-ops ledger included,
 machine that collected them (`health/`, `places/`), and every leader-data place outside the
 data folder (the password vault, the fleet secrets). The list is reported, nothing changes.
 
-The drill only reads: the destination is opened through a store that refuses every write, the
-data folder is only walked, and no backup lock is taken (that lock is a file in the data folder;
-a scheduled drill waits instead while a backup runs). On Google Drive, reading may refresh the
-stored sign-in, as listing backups in Settings does. The folder is removed at the end, also
-after a failure; one a killed drill left behind is removed by the next drill. The result (when,
+The drill only reads: the destination is opened through a store that refuses every write and
+the data folder is only walked. Like a restore, the command and the schedule hold the backup
+lock (`local/backup/run.lock`, a machine file no backup takes) so a backup's prune never deletes
+packs the drill reads; a drill asked while a backup runs in another process is refused, and the
+schedule tries at its next check. On Google Drive, reading may refresh the stored sign-in, as
+listing backups in Settings does. The folder is removed at the end, also after a failure; one a
+killed drill left behind is removed when the server starts and by the next drill. The result (when,
 which backup, each check, the not-in-backups list, how long) is kept in
 `local/restore-drill.json` and returned by `GET /api/backup/status` as `restoreDrill`. A
-scheduled drill that fails is a Walnut Health notice, retired by the next one that passes.
+scheduled drill that fails is a Walnut Health notice, retired by the next one that passes (from
+the command too); a drill that could not run at all (the destination did not answer, no key) is
+tried again after a day instead of a week.
 
 ## Earlier versions of config.yaml
 

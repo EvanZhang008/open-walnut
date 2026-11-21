@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { inspectSqliteOffThread } from '../../lib/sqlite-inspect.js';
 import { classifyHomePath, homeEntries, homePathClass, outsideHomeEntries, type DataClass } from '../home-manifest/index.js';
 import { EXCLUDED_DIRS, backupTakes } from './scan.js';
 import { AVG_CHUNK, MAX_CHUNK, MIN_CHUNK, SMALL_FILE_BYTES, chunkStream } from './repo/chunker.js';
@@ -54,8 +54,8 @@ export function capProblems(all: string[]): string[] {
 }
 
 /** Every regular file under `root`, '/'-separated relative paths (symlinks skipped, as the backup does). */
-async function walkFiles(root: string, skipTop: (name: string) => boolean = () => false): Promise<Map<string, { size: number; bornMs: number }>> {
-  const out = new Map<string, { size: number; bornMs: number }>();
+async function walkFiles(root: string, skipTop: (name: string) => boolean = () => false): Promise<Map<string, { size: number; bornMs: number; ctimeMs: number }>> {
+  const out = new Map<string, { size: number; bornMs: number; ctimeMs: number }>();
   let sinceYield = 0;
   const walk = async (rel: string): Promise<void> => {
     let entries;
@@ -72,7 +72,7 @@ async function walkFiles(root: string, skipTop: (name: string) => boolean = () =
         try {
           const st = await fs.stat(path.join(root, childRel));
           // Birth time where the file system keeps one; else the last change, which never claims a file is older than it is.
-          out.set(childRel, { size: st.size, bornMs: st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs });
+          out.set(childRel, { size: st.size, bornMs: st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs, ctimeMs: st.ctimeMs });
         } catch { /* gone between readdir and stat */ }
       }
       if (++sinceYield >= 500) { sinceYield = 0; await new Promise((r) => setImmediate(r)); }
@@ -171,9 +171,12 @@ export const MUST_HAVE_SLACK_MS = 6 * 3_600_000;
 /**
  * The must-have list against the backup: every file of the data home that the manifest
  * classes leader-data and the backup's rules take, and that existed well before the
- * backup (MUST_HAVE_SLACK_MS), must be in its list. It catches a backup whose own list
- * missed something, which the files check (restored tree against that list) cannot.
- * Folders the backup skips whole are not walked: they are in the not-in-backups list.
+ * backup (`slackMs`), must be in its list. It catches a backup whose own list missed
+ * something, which the files check (restored tree against that list) cannot.
+ * A file missing from the backup whose inode changed after `before` (ctime: a rename
+ * keeps the birth time, and moves an old note to a path the backup never saw) is counted
+ * as changed since the backup, not as missing. Folders the backup skips whole are not
+ * walked: they are in the not-in-backups list.
  */
 export async function checkMustHave(dataDir: string, tree: TreeEntry[], snapshotCreatedAt: string, slackMs = MUST_HAVE_SLACK_MS): Promise<DrillCheck> {
   const before = Date.parse(snapshotCreatedAt) - slackMs;
@@ -181,10 +184,13 @@ export async function checkMustHave(dataDir: string, tree: TreeEntry[], snapshot
   const live = await walkFiles(dataDir, (name) => EXCLUDED_DIRS.has(name));
   const missing = new Map<string, string[]>();
   let expected = 0;
+  let found = 0;
+  let changedSince = 0;
   for (const [rel, st] of live) {
     if (st.bornMs >= before || backupTakes(rel) === null || homePathClass(rel) !== 'leader-data') continue;
     expected++;
-    if (inBackup.has(rel)) continue;
+    if (inBackup.has(rel)) { found++; continue; }
+    if (st.ctimeMs >= before) { changedSince++; continue; }
     const id = classifyHomePath(rel)?.id ?? `unlisted:${rel.split('/')[0]}`;
     missing.set(id, [...(missing.get(id) ?? []), rel]);
   }
@@ -193,79 +199,25 @@ export async function checkMustHave(dataDir: string, tree: TreeEntry[], snapshot
   return {
     id: 'must-have',
     ok: problems.length === 0,
-    detail: `${expected} leader-data files of the data home predate the backup by ${Math.round(slackMs / 60_000)} min or more; ${expected - [...missing.values()].reduce((n, f) => n + f.length, 0)} are in it`,
+    detail: `${expected} leader-data files of the data home predate the backup by ${Math.round(slackMs / 60_000)} min or more; ${found} are in it` +
+      (changedSince ? `, ${changedSince} were moved or changed since it (not required)` : ''),
     ...(problems.length ? { problems: capProblems(problems) } : {}),
   };
 }
 
-/**
- * Open a restored database read-only on a worker thread: integrity_check, its tables and
- * rows, and (`readTask`) the newest task row. bun:sqlite is the server's own SQLite.
- */
-const DB_WORKER = String.raw`
-const { parentPort, workerData } = require('node:worker_threads')
-let db
-try {
-  const { Database } = require('bun:sqlite')
-  db = new Database(workerData.file, { readonly: true })
-  const integrity = db.query('PRAGMA integrity_check').all().map((r) => Object.values(r)[0])
-  const ok = integrity.length === 1 && integrity[0] === 'ok'
-  const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name)
-  let rows = 0
-  for (const t of tables) {
-    try { rows += db.query('SELECT COUNT(*) AS n FROM "' + t.replace(/"/g, '""') + '"').get().n } catch { /* a virtual table without its module */ }
-  }
-  let task = null
-  if (workerData.readTask && tables.includes('tasks')) {
-    task = db.query('SELECT id, title FROM tasks ORDER BY updated_at DESC LIMIT 1').get() || null
-  }
-  parentPort.postMessage({ ok, detail: ok ? undefined : integrity.slice(0, 3).join('; '), tables: tables.length, rows, task })
-} catch (error) {
-  parentPort.postMessage({ ok: false, detail: error && error.message ? error.message : String(error) })
-} finally {
-  try { db && db.close() } catch {}
-}
-`;
-
-const DB_CHECK_TIMEOUT_MS = 10 * 60_000;
-
-export interface DbWorkerResult {
-  ok: boolean;
-  detail?: string;
-  tables?: number;
-  rows?: number;
-  task?: { id: string; title: string } | null;
-}
-
-export function checkDatabaseOffThread(file: string, readTask = false): Promise<DbWorkerResult> {
-  return new Promise((resolve) => {
-    const worker = new Worker(DB_WORKER, { eval: true, workerData: { file, readTask } });
-    let settled = false;
-    const settle = (r: DbWorkerResult): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      void worker.terminate();
-      resolve(r);
-    };
-    const timer = setTimeout(() => settle({ ok: false, detail: `the check took over ${DB_CHECK_TIMEOUT_MS / 60_000} minutes` }), DB_CHECK_TIMEOUT_MS);
-    timer.unref?.();
-    worker.once('message', (m: DbWorkerResult) => settle(m));
-    worker.once('error', (err) => settle({ ok: false, detail: err instanceof Error ? err.message : String(err) }));
-    worker.once('exit', (code) => settle({ ok: false, detail: `the check's worker exited with code ${code}` }));
-  });
-}
-
 export const TASKS_DB = 'tasks/tasks.sqlite';
+const TASK_QUERY = 'SELECT id, title FROM tasks ORDER BY updated_at DESC LIMIT 1';
 
 /** Every restored database (the backup's sqlite snapshots) through integrity_check. */
-export async function checkDatabases(target: string, tree: TreeEntry[]): Promise<{ check: DrillCheck; databases: DatabaseReport[]; task: { id: string; title: string } | null }> {
+export async function checkDatabases(target: string, tree: TreeEntry[]): Promise<{ check: DrillCheck; databases: DatabaseReport[]; task: { id: string; title: string } | null; taskError?: string }> {
   const dbs = tree.map((e) => restorePathOf(e.p)).filter((p) => p.endsWith('.sqlite')).sort();
   const databases: DatabaseReport[] = [];
   let task: { id: string; title: string } | null = null;
+  let taskError: string | undefined;
   for (const rel of dbs) {
-    const r = await checkDatabaseOffThread(path.join(target, rel), rel === TASKS_DB);
-    if (rel === TASKS_DB && r.task) task = r.task;
+    const r = await inspectSqliteOffThread(path.join(target, rel), rel === TASKS_DB ? { query: TASK_QUERY } : {});
+    if (rel === TASKS_DB && r.row && typeof r.row.id === 'string') task = { id: r.row.id, title: String(r.row.title ?? '') };
+    if (rel === TASKS_DB && r.rowError) taskError = r.rowError;
     databases.push({ path: rel, ok: r.ok, ...(r.detail ? { detail: r.detail } : {}), ...(r.tables !== undefined ? { tables: r.tables, rows: r.rows } : {}) });
   }
   const bad = databases.filter((d) => !d.ok).map((d) => `${d.path}: ${d.detail ?? 'integrity check failed'}`);
@@ -279,6 +231,7 @@ export async function checkDatabases(target: string, tree: TreeEntry[]): Promise
     },
     databases,
     task,
+    ...(taskError ? { taskError } : {}),
   };
 }
 

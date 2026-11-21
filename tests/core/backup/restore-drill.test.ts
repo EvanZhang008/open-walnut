@@ -25,7 +25,13 @@ import {
   type DrillResult,
 } from '../../../src/core/backup/restore-drill.js';
 import type { BackupConfig } from '../../../src/core/backup/types.js';
-import { chmodTree, listing, makeFullHome, write, writeAlteredSnapshot } from './restore-drill-helpers.js';
+import { chmodTree, listing, makeDb, makeFullHome, write, writeAlteredSnapshot } from './restore-drill-helpers.js';
+import { runRestoreDrillLocked } from '../../../src/core/backup/restore-drill.js';
+import { checkRestoredFiles } from '../../../src/core/backup/restore-drill-checks.js';
+import { restoreRepoSnapshot } from '../../../src/core/backup/repo/restore.js';
+import { Repository, PackCache } from '../../../src/core/backup/repo/repository.js';
+import { loadLiveIndex } from '../../../src/core/backup/repo/backup-run.js';
+import { runLockPath } from '../../../src/core/backup/local-state.js';
 
 let root: string;
 let home: string;
@@ -86,6 +92,7 @@ describe.each([
     expect(check(r, 'read-back').detail).toContain('Plan the garden');
     expect(check(r, 'read-back').detail).toContain('artifacts/notes/journal/2026-11-20.md');
     expect(check(r, 'files').detail).toMatch(/hashed back/);
+    expect(Number(/(\d+) hashed back/.exec(check(r, 'files').detail)![1])).toBe(r.snapshot!.fileCount);
     expect(check(r, 'databases').detail).toMatch(/no row counts/);
     expect(r.databases.map((d) => d.path)).toEqual(['org/threads.sqlite', 'sessions.sqlite', 'tasks/tasks.sqlite']);
     expect(r.databases.find((d) => d.path === 'tasks/tasks.sqlite')).toMatchObject({ ok: true, tables: 1, rows: 2 });
@@ -178,6 +185,75 @@ describe('a damaged backup fails the drill and names the cause', () => {
     const noKey = await drill(encCfg);
     expect(noKey).toMatchObject({ ok: false, error: expect.stringMatching(/no recovery key/) });
     expect(noKey.notInBackups.length).toBeGreaterThan(0);
+  }, 60_000);
+});
+
+describe('no false failure where the backup is fine', () => {
+  it('an old note moved to another folder after the backup is not called missing', async () => {
+    await write(home, 'artifacts/notes/old/moveme.md', 'an old note\n');
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    await new Promise((r) => setTimeout(r, 30));
+    await fsp.mkdir(path.join(home, 'artifacts/notes/new'), { recursive: true });
+    await fsp.rename(path.join(home, 'artifacts/notes/old/moveme.md'), path.join(home, 'artifacts/notes/new/moved.md'));
+    const r = await drill(plainCfg);
+    expect(check(r, 'must-have').ok, JSON.stringify(check(r, 'must-have'))).toBe(true);
+    expect(check(r, 'must-have').detail).toMatch(/1 were moved or changed since it/);
+  }, 60_000);
+
+  it('backups another computer writes: must-have is not compared with this home', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    await write(home, 'local/backup/machine-id', 'e'.repeat(32));
+    await write(home, 'memory/only-here.md', 'never in those backups');
+    const r = await drill(plainCfg);
+    expect(r.ok).toBe(true);
+    expect(check(r, 'must-have')).toMatchObject({ ok: null, detail: expect.stringMatching(/another computer/) });
+  }, 60_000);
+
+  it('a task read that fails is a read-back problem, not a broken database', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const other = path.join(root, 'odd-tasks.sqlite');
+    makeDb(other, ['CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT)', "INSERT INTO tasks VALUES ('t-9', 'no updated_at here')"]);
+    await writeAlteredSnapshot(repoStore(store, false), null, { replace: { '.sqlite-snapshots/tasks/tasks.sqlite': await fsp.readFile(other) } });
+    const r = await drill(plainCfg);
+    expect(check(r, 'databases').ok).toBe(true);
+    expect(check(r, 'read-back')).toMatchObject({ ok: false });
+    expect(check(r, 'read-back').problems![0]).toMatch(/reading a task failed/);
+  }, 60_000);
+});
+
+describe('the files check sees what landed on disk', () => {
+  it('one byte changed in a restored large file fails it, naming the file', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const plain = repoStore(store, false);
+    const repo = await Repository.open(plain, null);
+    const snap = (await repo.listSnapshots()).snapshots[0];
+    const tree = await repo.readTree(snap, (await loadLiveIndex(repo)).index, new PackCache(plain));
+    const target = path.join(root, 'restored');
+    await restoreRepoSnapshot(plain, null, target, { snapshotId: snap.id });
+    expect((await checkRestoredFiles(target, tree, repo, snap)).ok).toBe(true);
+    const wav = path.join(target, 'voice-archive', 'talk.wav');
+    const body = await fsp.readFile(wav);
+    body[2 * 1024 * 1024] ^= 0x01;
+    await fsp.writeFile(wav, body);
+    await fsp.writeFile(path.join(target, 'stray.txt'), 'x');
+    const bad = await checkRestoredFiles(target, tree, repo, snap);
+    expect(bad.ok).toBe(false);
+    expect(bad.problems).toEqual(expect.arrayContaining([
+      'voice-archive/talk.wav: its content does not hash to what the backup recorded',
+      'stray.txt: restored but not in the backup\'s list',
+    ]));
+  }, 60_000);
+});
+
+describe('the drill the CLI and the schedule run holds the backup lock', () => {
+  it('waits for no one: refused while another live process holds the lock, and the lock is gone after', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    await fsp.writeFile(runLockPath(home), `${process.ppid} someone\n`);
+    await expect(runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot })).rejects.toThrow(/backing up or restoring/);
+    await fsp.rm(runLockPath(home));
+    const r = await runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: {} });
+    expect(r.ok).toBe(true);
+    await expect(fsp.stat(runLockPath(home))).rejects.toThrow();
   }, 60_000);
 });
 

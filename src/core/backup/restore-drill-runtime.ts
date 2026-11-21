@@ -18,12 +18,15 @@ import { getConfig } from '../config-manager.js';
 import { experimentalEnabled } from '../experimental.js';
 import { isBackupConfigured } from './backup-scheduler.js';
 import { currentBackupJob, runBackupJob } from './jobs.js';
+import os from 'node:os';
 import { backupLockHeld } from './local-state.js';
-import { readDrillRecord, runRestoreDrill, writeDrillRecord, type DrillResult } from './restore-drill.js';
+import { readDrillRecord, removeLeftoverDrills, runRestoreDrillLocked, writeDrillRecord, type DrillResult } from './restore-drill.js';
 import type { BackupConfig } from './types.js';
 
 const SUBSCRIBER = 'restore-drill-runtime';
 export const DRILL_EVERY_MS = 7 * 24 * 3_600_000;
+/** A drill that could not run at all (the destination unreachable, no key) is tried again sooner. */
+export const DRILL_RETRY_MS = 24 * 3_600_000;
 const CHECK_EVERY_MS = 3_600_000;
 /** The first check after a start waits this long: a drill never adds to a boot's load. */
 const FIRST_CHECK_MS = 10 * 60_000;
@@ -33,7 +36,10 @@ export interface DrillRuntimeDeps {
   /** The flag is on (Settings, Experimental). */
   isOn?: () => Promise<boolean>;
   backupConfig?: () => Promise<BackupConfig | undefined>;
+  /** Runs one drill holding the backup lock (it throws BackupLockedError when another process holds it). */
   run?: (cfg: BackupConfig, dataDir: string) => Promise<DrillResult>;
+  /** Where drill folders go (removeLeftoverDrills at start); default the OS temp dir. */
+  tmpRoot?: string;
   notify: (n: { title: string; body: string; dedupScope: string; recoveryKey: string }) => Promise<boolean>;
   onRecovered?: () => void;
   now?: () => number;
@@ -66,7 +72,9 @@ export function startRestoreDrillRuntime(deps: DrillRuntimeDeps): DrillRuntime {
   const now = deps.now ?? Date.now;
   const isOn = deps.isOn ?? (async () => experimentalEnabled((await getConfig()).experimental, 'restore_drill'));
   const backupConfig = deps.backupConfig ?? (async () => (await getConfig()).backup);
-  const run = deps.run ?? ((cfg: BackupConfig, dir: string) => runRestoreDrill({ cfg, dataDir: dir }));
+  const run = deps.run ?? ((cfg: BackupConfig, dir: string) => runRestoreDrillLocked({ cfg, dataDir: dir, ...(deps.tmpRoot ? { tmpRoot: deps.tmpRoot } : {}) }));
+  /** The passing record a recovery was last sent for: a pass from the CLI retires the card too. */
+  let recoveredFor: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let chain: Promise<void> = Promise.resolve();
@@ -78,27 +86,43 @@ export function startRestoreDrillRuntime(deps: DrillRuntimeDeps): DrillRuntime {
   };
   let armedWanted = false;
 
+  const recoverFrom = (r: DrillResult | null): void => {
+    // publishRecovery is idempotent: once per passing record, whoever ran it (here or the CLI).
+    if (r?.ok && recoveredFor !== r.at) { recoveredFor = r.at; deps.onRecovered?.(); }
+  };
+
   const check = async (): Promise<DrillResult | null> => {
     try {
       if (!(await isOn())) return null;
       const cfg = await backupConfig();
       if (!cfg?.destination?.type || !(await isBackupConfigured(cfg, dataDir))) return null;
       const last = await readDrillRecord(dataDir);
-      if (last && now() - Date.parse(last.at) < DRILL_EVERY_MS) return null;
+      recoverFrom(last);
+      if (last && now() - Date.parse(last.at) < (last.error ? DRILL_RETRY_MS : DRILL_EVERY_MS)) return null;
       // A backup or restore runs (here or in a terminal): its prune must not race the drill's reads.
       if (currentBackupJob() !== null || (await backupLockHeld(dataDir))) return null;
-      const result = await runBackupJob('restore', () => run(cfg, dataDir));
+      let result: DrillResult;
+      try {
+        result = await runBackupJob('restore', () => run(cfg, dataDir));
+      } catch (err) {
+        if (err instanceof Error && (err.name === 'BackupLockedError' || err.name === 'BackupBusyError')) return null;
+        throw err;
+      }
       await writeDrillRecord(dataDir, result);
       if (!result.ok) {
-        await deps.notify({
+        await deps.notify(result.error ? {
+          title: 'Restore drill could not run',
+          body: `The weekly restore drill could not check the newest backup: ${result.error} It tries again in a day.`,
+          dedupScope: DRILL_NOTICE_SCOPE,
+          recoveryKey: DRILL_RECOVERY_KEY,
+        } : {
           title: 'Restore drill failed',
           body: `The newest backup did not pass its restore drill: ${failureSummary(result)}`,
           dedupScope: DRILL_NOTICE_SCOPE,
           recoveryKey: DRILL_RECOVERY_KEY,
         });
-      } else if (last && !last.ok) {
-        deps.onRecovered?.();
       }
+      recoverFrom(result);
       return result;
     } catch (err) {
       log.session.warn('backup: restore drill check failed', { error: err instanceof Error ? err.message : String(err) });
@@ -124,6 +148,8 @@ export function startRestoreDrillRuntime(deps: DrillRuntimeDeps): DrillRuntime {
     return chain;
   };
 
+  // A drill killed by a restart left the user's data in the clear in the temp dir: gone at once, not at the next drill.
+  void removeLeftoverDrills(deps.tmpRoot ?? os.tmpdir()).catch(() => 0);
   void reconcile();
   if (deps.subscribe !== false) {
     void import('../event-bus.js').then(({ bus }) => {

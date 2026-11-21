@@ -5,6 +5,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import Database from '../../../src/lib/sqlite.js';
 import { PackCache, PackWriter, Repository, treeChunks } from '../../../src/core/backup/repo/repository.js';
 import { loadLiveIndex } from '../../../src/core/backup/repo/backup-run.js';
@@ -17,7 +18,7 @@ export async function write(home: string, rel: string, body: string | Buffer): P
   await fsp.writeFile(p, body);
 }
 
-function makeDb(file: string, sql: string[]): void {
+export function makeDb(file: string, sql: string[]): void {
   const db = new Database(file);
   try {
     db.pragma('journal_mode = WAL');
@@ -48,6 +49,9 @@ export async function makeFullHome(home: string): Promise<void> {
   await write(home, 'auth.json', JSON.stringify({ instance: 'x' }));
   await write(home, 'secrets/plugins/mail.json', JSON.stringify({ password: 'fixture-only' }));
   await write(home, 'cron-jobs.json', '[]');
+  // Over 1 MB: cut into chunks by content (the chunkStream path), one random, one text.
+  await write(home, 'voice-archive/talk.wav', randomBytes(3 * 1024 * 1024 + 17));
+  await write(home, 'artifacts/notes/long.md', Buffer.from('a line of a long note\n'.repeat(120_000)));
   // A folder of the user's own notes beside Walnut's (an unknown top-level name: leader-data).
   await write(home, 'Recipes/bread.md', 'flour, water, salt\n');
   // What backups leave out by design.

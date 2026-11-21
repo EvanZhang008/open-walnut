@@ -257,9 +257,9 @@ export async function runBackupDrill(options: Record<string, unknown>): Promise<
   if (!cfg?.destination?.type) {
     throw new Error('No backup service is set up (Settings, Backup). The restore drill works on those backups; the older S3 copy has none.');
   }
-  const { runRestoreDrill, writeDrillRecord } = await import('../core/backup/restore-drill.js');
+  const { runRestoreDrillLocked, writeDrillRecord } = await import('../core/backup/restore-drill.js');
   if (options.json !== true) console.log('Restoring the backup into a temporary folder to check it ...');
-  const r = await runRestoreDrill({
+  const r = await runRestoreDrillLocked({
     cfg, dataDir: WALNUT_HOME,
     ...(typeof options.snapshot === 'string' ? { snapshotId: options.snapshot } : {}),
     ...(keyOf(options) ? { recoveryKey: keyOf(options) } : {}),
