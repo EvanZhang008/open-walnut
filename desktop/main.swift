@@ -121,6 +121,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// (AppLink.swift); handed over once a page finishes loading.
     var pendingAppLinks: [URL] = []
     var consolePageLoaded = false
+    /// The server port the page in `webView` was built for (its bridges hold that port).
+    var webViewPort: Int?
     /// The `walnut` command check runs once per launch (CommandLineTool.swift).
     var commandLineToolChecked = false
 
@@ -1626,10 +1628,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Builds the web view and loads the console. `url` defaults to the server
     /// root; a recycle passes the page the user was on so the swap lands them
-    /// back where they were.
-    func loadWebUI(url initialURL: URL? = nil) {
+    /// back where they were. Only `newProcess` (a recycle) replaces a page that is
+    /// already there for this port; a server found again only loads that page again.
+    func loadWebUI(url initialURL: URL? = nil, newProcess: Bool = false) {
         guard let port = serverPort else { return }
         let url = initialURL ?? URL(string: "http://localhost:\(port)")!
+        // A server found again on the port the page already talks to (a restart, every deploy):
+        // the page loads again in its own process. Ending that process instead left the graphics
+        // it held charged to kernel_task until the app quit (2026-11-21: +107 MB on one deploy).
+        if !newProcess, let page = webView, webViewPort == port {
+            page.stopLoading()
+            consolePageLoaded = false
+            window.contentView = page
+            window.title = "Walnut — localhost:\(port)"
+            webContentWatchdog?.attach(webView: page, window: window)
+            DesktopLogger.shared.log("webview_reused", fields: ["port": String(port)])
+            page.load(URLRequest(url: url))
+            return
+        }
         // A page already in the window (a recycle, a server found again after a restart) is
         // torn down here and ended once the new one has loaded: it did not always exit on its own.
         let replaced = webView
@@ -1739,6 +1755,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.contentView = webView
         window.title = "Walnut — localhost:\(port)"
+        webViewPort = port
         webContentWatchdog?.attach(webView: webView, window: window)
 
         let request = URLRequest(url: url)
@@ -1757,7 +1774,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "reason": reason,
             "path": current.path + (current.query.map { "?\($0)" } ?? ""),
         ])
-        loadWebUI(url: current)
+        loadWebUI(url: current, newProcess: true)
     }
 
     /// View → Restart Page Process: the manual path for the same swap the

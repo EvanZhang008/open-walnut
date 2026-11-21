@@ -114,3 +114,52 @@ describe('a web view the Mac app lets go of is closed first', () => {
     expect(letGo().filter((s) => !s.ok).map((s) => s.at), 'close the web view with WebContentProcess.close before dropping it').toEqual([])
   })
 })
+
+describe('a page process is ended only by a deliberate swap', () => {
+  // 2026-11-21: every page process the app ended while it ran left the graphics it held charged to
+  // kernel_task until the app quit, even closed and released first; a page loaded again in its own
+  // process was measured flat. So the app swaps processes only where a new process is the point,
+  // and everything else (a deploy, memory before a reload was seen not to help, a server found
+  // again after a restart) loads the page again in the process it has.
+  const stripped = (file: string) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  /** Functions that end a live page process, each with why a new process is the point. */
+  const SWAPS: Record<string, string> = {
+    'desktop/main.swift:loadWebUI': 'the swap itself, reached with newProcess: true (recycleWebContent) or for a page built for another port',
+    'desktop/main.swift:recyclePopout': 'a popout window\'s watchdog swap, asked by WebContentPolicy.replacesProcess like the main window\'s',
+    'desktop/DemoApp.swift:run': 'the separate demo app starting or resetting its demo: a new demo server, never a deploy of the person\'s',
+    'desktop/DemoApp.swift:webView': 'the demo app\'s page whose demo server is gone (failed provisional navigation)',
+  }
+
+  function enders(): string[] {
+    const out: string[] = []
+    for (const file of swiftFiles) {
+      if (file === 'desktop/WebContentProcess.swift' || file === 'desktop/WebContentWatchdog.swift') continue
+      const src = stripped(file)
+      const fns = [...src.matchAll(/\bfunc\s+(\w+)/g)].map((m) => ({ name: m[1], at: m.index! }))
+      fns.forEach((f, i) => {
+        const body = src.slice(f.at, fns[i + 1]?.at ?? src.length)
+        if (/\bretireReplacedPage\(/.test(body)) out.push(`${file}:${f.name}`)
+      })
+    }
+    return out
+  }
+
+  it('every function that ends a page process is a listed swap', () => {
+    expect(enders().filter((n) => !(n in SWAPS)), 'reload the page in its process instead, or list the swap with why a new process is the point').toEqual([])
+    expect(Object.keys(SWAPS).filter((n) => !enders().includes(n)), 'the list names only functions that end a page process').toEqual([])
+  })
+
+  it('only a recycle asks loadWebUI for a new process; a server found again reuses the page', () => {
+    const src = stripped('desktop/main.swift')
+    const calls = [...src.matchAll(/loadWebUI\(([^)]*)\)/g)]
+    const withNew = calls.filter((m) => /newProcess:\s*true/.test(m[1]))
+    expect(withNew).toHaveLength(1)
+    const fnOf = (at: number) => [...src.slice(0, at).matchAll(/\bfunc\s+(\w+)/g)].pop()?.[1]
+    expect(fnOf(withNew[0].index!)).toBe('recycleWebContent')
+    const load = src.slice(src.indexOf('func loadWebUI('), src.indexOf('func recycleWebContent('))
+    const reuse = load.indexOf('if !newProcess, let page = webView, webViewPort == port')
+    expect(reuse, 'loadWebUI loads an existing page for this port again').toBeGreaterThan(-1)
+    expect(reuse).toBeLessThan(load.indexOf('let replaced = webView'))
+    expect(load).toContain('webViewPort = port')
+  })
+})
