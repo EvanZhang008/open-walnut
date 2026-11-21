@@ -8,6 +8,7 @@
  */
 import { ask as askBackground } from './ext'
 import { unlockRefusal } from './unlock-send'
+import { carryTyped } from './popup-view'
 import { avatar, h, icon } from './dom'
 import { fromB64u, toB64u } from './passkey-wire'
 
@@ -90,7 +91,7 @@ function render(): void {
   }
 
   if (d.locked) {
-    const pw = h('input', { class: 'input', type: 'password', placeholder: 'Master password', autocomplete: 'current-password', 'data-testid': 'passkey-unlock-password', 'aria-label': 'Master password' }) as HTMLInputElement
+    const pw = h('input', { class: 'input', id: 'pk-unlock-pw', type: 'password', placeholder: 'Master password', autocomplete: 'current-password', 'data-testid': 'passkey-unlock-password', 'aria-label': 'Master password' }) as HTMLInputElement
     const go = h('button', { class: 'btn btn-primary pk-main', type: 'button', 'data-testid': 'passkey-unlock' }, 'Unlock') as HTMLButtonElement
     const run = () => void step(async () => {
       const r = await ask<Data>({ type: 'passkey-unlock', password: pw.value })
@@ -111,7 +112,7 @@ function render(): void {
     other.onclick = () => { usePassword = true; error = ''; render() }
     parts.push(h('p', { class: 'pk-sub' }, 'Your browser asks for Touch ID or your computer password.'), go, other)
   } else {
-    const pw = h('input', { class: 'input', type: 'password', placeholder: 'Master password', autocomplete: 'current-password', 'data-testid': 'passkey-password', 'aria-label': 'Master password' }) as HTMLInputElement
+    const pw = h('input', { class: 'input', id: 'pk-pw', type: 'password', placeholder: 'Master password', autocomplete: 'current-password', 'data-testid': 'passkey-password', 'aria-label': 'Master password' }) as HTMLInputElement
     const remember = platformOk && !d.confirmKey
       ? h('input', { type: 'checkbox', id: 'pk-touch', 'data-testid': 'passkey-enroll', checked: true }) as HTMLInputElement
       : null
@@ -131,7 +132,10 @@ function render(): void {
   const cancel = h('button', { class: 'btn btn-quiet', type: 'button', 'data-testid': 'passkey-cancel' }, 'Cancel') as HTMLButtonElement
   cancel.onclick = () => void ask({ type: 'passkey-cancel' }).then(() => window.close())
   parts.push(h('div', { class: 'pk-foot' }, another, cancel))
-  root.replaceChildren(h('div', { class: `pk${busy ? ' busy' : ''}` }, ...parts.filter(Boolean) as HTMLElement[]))
+  // A redraw (busy, an error, a ping) keeps what the person typed, as the popup does.
+  const view = h('div', { class: `pk${busy ? ' busy' : ''}` }, ...parts.filter(Boolean) as HTMLElement[])
+  carryTyped(root, view)
+  root.replaceChildren(view)
   for (const b of root.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) b.disabled = busy
   if (busy) { const main = root.querySelector<HTMLElement>('.pk-main'); if (main) main.textContent = 'Checking\u2026' }
   // The picked account keeps the keyboard focus across a redraw.

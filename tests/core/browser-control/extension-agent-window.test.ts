@@ -204,6 +204,11 @@ describe('the agent window', () => {
       ['panel-ask.ts: if (o.status === \'rejected\' && win.id !== undefined) await ext.windows.create({ url: ext.runtime.getURL(`sidepanel.html?window=${win.id}`), type: \'popup\', width: 420, height: 760 })', 'Ask, the person\'s click'],
       ['popup.ts: if (ext.sidePanel && windowId !== undefined) void ext.sidePanel.open({ windowId }).catch(() => undefined)', 'popup button'],
       ['popup.ts: else if (windowId !== undefined) void ext.windows.create({ url: ext.runtime.getURL(`sidepanel.html?window=${windowId}`), type: \'popup\', width: 420, height: 760 })', 'popup button'],
+      // A site's passkey request (bg-passkey.ts): only a page in the person's focused tab may ask,
+      // so its window is in front for them, and a leave gives the focus back to that tab.
+      ['bg-passkey.ts: const WINDOW = { type: \'popup\', width: 420, height: 480, focused: true } as const', 'passkey window: the request of the person\'s own focused tab'],
+      ['bg-passkey.ts: void ext.windows.create({ url: ext.runtime.getURL(`passkey.html?k=${encodeURIComponent(key)}`), ...WINDOW }).then(', 'passkey window: the request of the person\'s own focused tab'],
+      ['bg-passkey.ts: p.tabWindowId !== undefined ? w.update?.(p.tabWindowId, { focused: true })?.catch(() => undefined) : undefined,', 'passkey leave: the focus back to the person\'s tab that asked'],
       // "Show it live" in a task's Browser view (grant-open.ts): the person's own click brings the
       // grant page up in their window; anyone else's opens it there in the background.
       ['grant-open.ts: const tab = await ext.tabs.create({ url, windowId, active: person })', 'Show it live: in front only for the person\'s click, never in the agent window'],

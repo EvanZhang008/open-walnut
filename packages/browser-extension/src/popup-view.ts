@@ -40,7 +40,7 @@ export type ViewKind = 'home' | 'sub'
  * the server address, the save bar's password. tests/core/browser-control/extension-popup-keep-typed.test.ts
  * fails on a password field of the extension whose id is missing here.
  */
-export const KEEP_TYPED = ['pw', 'sk', 'server', 'key-pw', 'key-sk', 'password'] as const
+export const KEEP_TYPED = ['pw', 'sk', 'server', 'key-pw', 'key-sk', 'password', 'pk-unlock-pw', 'pk-pw'] as const
 
 /**
  * A redraw (the vault watch, a page follow, a state answer) builds a new view from scratch: what
