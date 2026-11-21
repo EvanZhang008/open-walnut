@@ -17,7 +17,8 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DB_NAME, dirMayHoldLeaderData, limiter, makeFileClass, type ScanResult } from './scan.js'
+import { DB_NAME, dirMayHoldLeaderData, limiter, makeFileClass, toSourceStat, type ScanResult } from './scan.js'
+import type { SourceStat } from './types.js'
 
 interface DirAtMoment {
   /** Names in the dir at the moment (leader-data files and the subdirs the walk enters). */
@@ -29,6 +30,12 @@ export interface MomentNames {
   existed(rel: string): boolean | null
   /** Every file named by a dir listed again (a changed dir), relative: the moment's new names among them. */
   listed: string[]
+  /**
+   * Each listed file's stat, read in the hold: one equal to the first scan's proves the file did
+   * not change from the scan to the moment, whatever happens to it after (a dir changes when a
+   * file in it is replaced, so a file another writer replaces is in one of these dirs).
+   */
+  heldStats: Map<string, SourceStat>
   /** Dirs listed again (changed since the scan, or changed in its tick). */
   changedDirs: number
   /** Dirs that changed at or after the moment too: the batch is void. */
@@ -61,6 +68,7 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
   const fromScan = scanNames(s1)
   const changed = new Map<string, DirAtMoment | 'gone'>()
   const listed: string[] = []
+  const heldStats = new Map<string, SourceStat>()
   const unsettled: string[] = []
 
   const list = async (rel: string): Promise<void> => {
@@ -94,6 +102,10 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
     if (!after || after.ctimeMs >= momentMs) unsettled.push(rel)
     changed.set(rel, { names })
     listed.push(...files)
+    await Promise.all(files.map((f) => slot(async () => {
+      const st = await fs.lstat(path.join(home, f)).catch(() => null)
+      if (st?.isFile()) heldStats.set(f, toSourceStat(st))
+    })))
     await Promise.all(fresh.map((d) => list(d)))
   }
 
@@ -126,5 +138,5 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
     }
     return known
   }
-  return { existed, listed, changedDirs: moved.length, unsettled, ms: performance.now() - start }
+  return { existed, listed, heldStats, changedDirs: moved.length, unsettled, ms: performance.now() - start }
 }

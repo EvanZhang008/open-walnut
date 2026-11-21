@@ -313,6 +313,24 @@ describe('the names at the moment come from the moment, not from the first scan'
     expect(out.ok, out.ok ? '' : out.reason).toBe(true)
   })
 
+  it('a file unchanged since the last batch and replaced right after the hold keeps the last batch\'s content', async () => {
+    sb = await sandbox('replaced-after-hold')
+    dbs.push(...seedHome(sb.home).dbs)
+    write(sb.home, 'memory/other.md', 'other\n')
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    await settle()
+    const out = await batch({
+      // Another writer replaces a file in the same dir (the dir changes), then this file is
+      // replaced after the moment, before the re-scan.
+      afterScan: () => rewrite('memory/other.md', 'other v2\n'),
+      afterHold: () => rewrite('memory/MEMORY.md', 'after the moment\n'),
+    })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.readFileSync(copyOf('memory/MEMORY.md'), 'utf8')).toBe('# Memory\n')
+    expect(fs.readFileSync(copyOf('memory/other.md'), 'utf8')).toBe('other v2\n')
+  })
+
   it.skipIf(process.platform === 'win32')('a backslash is part of a file name on this platform, not a separator', async () => {
     sb = await sandbox('backslash')
     dbs.push(...seedHome(sb.home).dbs)

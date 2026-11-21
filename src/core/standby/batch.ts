@@ -256,6 +256,10 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       const last = prev.get(rel)
       // Unchanged from the last batch through both scans: its content at the moment is the last batch's.
       if (then && now && last && sameStat(then.st, now.st)) { out.set(rel, last); continue }
+      // Unchanged from the last batch to the scan, and from the scan to the hold (its stat read
+      // there): the last batch's too, however it changed after the moment.
+      const held = atMoment.heldStats.get(rel)
+      if (then && last && held && sameStat(then.st, last.src) && sameStat(held, then.st)) { out.set(rel, last); continue }
       // Changed or made since the first scan, last changed before the moment: read it now.
       if (now && now.st.c < fsMoment) {
         await stage(rel, send)
