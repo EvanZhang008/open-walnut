@@ -83,6 +83,27 @@ export async function findSmallText(page: Page, min = 12, root = 'body'): Promis
   }, { minPx: min, rootSel: root })
 }
 
+/**
+ * What sticks out past a scroller's right edge, for a failure message: each element whose box ends
+ * past it with no clipping parent in between, by tag, class, test id and its first words.
+ */
+export async function pastRightEdge(page: Page, root: string): Promise<string[]> {
+  return page.locator(root).first().evaluate((pane) => {
+    const right = pane.getBoundingClientRect().right
+    const out: string[] = []
+    for (const el of Array.from(pane.querySelectorAll('*'))) {
+      const box = el.getBoundingClientRect()
+      if (box.width === 0 || box.right <= right + 0.5) continue
+      let p = el.parentElement
+      while (p && p !== pane && getComputedStyle(p).overflowX === 'visible') p = p.parentElement
+      if (p !== pane) continue
+      const id = el.getAttribute('data-testid')
+      out.push(`+${Math.round(box.right - right)} ${el.tagName.toLowerCase()}.${String(el.className).slice(0, 50)}${id ? ` [${id}]` : ''} "${(el.textContent ?? '').trim().slice(0, 50)}"`)
+    }
+    return out.slice(0, 12)
+  })
+}
+
 export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const m = await page.evaluate(() => ({
     scroll: document.scrollingElement?.scrollWidth ?? document.documentElement.scrollWidth,

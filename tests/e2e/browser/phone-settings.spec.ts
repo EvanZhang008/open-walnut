@@ -15,7 +15,7 @@
  */
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { backToDevices, openWay } from './devices-ways-helpers'
-import { findSmallTargets, findSmallText } from './phone-helpers'
+import { findSmallTargets, findSmallText, pastRightEdge } from './phone-helpers'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { endServerTunnel, mintBrowserCode, settleSignedIn, signInWithCode, startServerTunnel } from './sign-in-state'
@@ -152,7 +152,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
       expect(stacked.length).toBeGreaterThan(0)
       expect(stacked.filter((r) => !r.below || r.cut)).toEqual([])
       const overflow = await page.locator('.settings-pane').evaluate((el) => el.scrollWidth - el.clientWidth)
-      expect(overflow, `${name} scrolls sideways`).toBeLessThanOrEqual(0)
+      expect(overflow, `${name} scrolls sideways: ${overflow > 0 ? (await pastRightEdge(page, '.settings-pane')).join('; ') : ''}`).toBeLessThanOrEqual(0)
       const page_ = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)
       expect(page_).toBeLessThanOrEqual(0)
       const small = await findSmallTargets(page, '.settings-pane')
@@ -189,7 +189,8 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
       for (let top = 0; top < height; top += size.height - 120) {
         await pane.evaluate((el, y) => { el.scrollTop = y }, top)
         await page.waitForTimeout(150)
-        expect(await pane.evaluate((el) => el.scrollWidth - el.clientWidth), `sideways at ${top}`).toBeLessThanOrEqual(0)
+        const sideways = await pane.evaluate((el) => el.scrollWidth - el.clientWidth)
+        expect(sideways, `sideways at ${top}: ${sideways > 0 ? (await pastRightEdge(page, '.settings-pane')).join('; ') : ''}`).toBeLessThanOrEqual(0)
         expect(await findSmallTargets(page, '.settings-pane'), `targets at ${top}`).toEqual([])
         expect(await findSmallText(page, 12, '.settings-pane'), `text at ${top}`).toEqual([])
       }

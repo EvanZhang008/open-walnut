@@ -54,8 +54,8 @@ async function openWifiTab(page: Page) {
 }
 
 /** How many browsers the server lists as signed in. */
-const browserCount = async (request: APIRequestContext) =>
-  ((await (await request.get('/api/devices')).json()) as { devices: Array<{ role?: string }> }).devices.filter((d) => d.role === 'browser').length
+const browserNames = async (request: APIRequestContext) =>
+  ((await (await request.get('/api/devices')).json()) as { devices: Array<{ role?: string, name: string }> }).devices.filter((d) => d.role === 'browser').map((d) => d.name)
 
 const shot = (page: Page, name: string) => (mkdirSync(SHOTS, { recursive: true }),
   page.locator('.settings-pane').screenshot({ path: `${SHOTS}/${name}.png`, scale: 'css' }))
@@ -111,7 +111,8 @@ test('1. a browser on this Wi-Fi signs in with the code, no tunnel', async ({ pa
   const other = await browser.newContext()
   try {
     const phone = await other.newPage()
-    const before = await browserCount(page.request)
+    // Other specs on this fixture sign browsers in and out meanwhile: follow this one by its name.
+    const before = new Set(await browserNames(page.request))
     // The link's code, opened where this fixture answers (see the header).
     await phone.goto(`${baseURL!.replace(/\/+$/, '')}/#pair=${new URL(link).hash.slice('#pair='.length)}`)
     // The page reloads once it traded the code: a read during that reload is no answer yet.
@@ -121,15 +122,17 @@ test('1. a browser on this Wi-Fi signs in with the code, no tunnel', async ({ pa
     await expect(section.getByTestId('devices-wifi-signed-in')).toContainText('A browser just signed in', { timeout: 30_000 })
     await expect(row.getByTestId('devices-wifi-code-value')).toHaveCount(0)
     await expect(row.getByTestId('devices-wifi-get-code')).toHaveText('Get sign-in code')
+    let added = ''
+    await expect.poll(async () => (added = (await browserNames(page.request)).find((n) => !before.has(n)) ?? ''), { timeout: 30_000 }).not.toBe('')
     const browsers = section.getByTestId('devices-browsers-group')
-    await expect.poll(async () => browsers.locator('.devices-row').count(), { timeout: 30_000 }).toBe(before + 1)
+    await expect(browsers.locator(`.devices-row[data-device-name="${added}"]`)).toHaveCount(1, { timeout: 60_000 })
     const order = await section.locator('[data-testid="devices-wifi-browser"], [data-testid="devices-browsers-group"], [data-testid="way-devices-wifi"]')
       .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
     expect(order).toEqual(['devices-wifi-browser', 'way-devices-wifi', 'devices-browsers-group'])
     await shot(page, '1-signed-in')
     // All devices lists it too.
     const all = await backToDevices(page)
-    await expect.poll(async () => all.getByTestId('devices-browsers-group').locator('.devices-row').count(), { timeout: 30_000 }).toBe(before + 1)
+    await expect(all.getByTestId('devices-browsers-group').locator(`.devices-row[data-device-name="${added}"]`)).toHaveCount(1, { timeout: 30_000 })
   } finally {
     await other.close()
   }
