@@ -1,0 +1,136 @@
+/**
+ * The top level of WALNUT_HOME, one entry per name the code writes there (and a few
+ * that older versions, git sync or the notes app leave). Nested places with a class
+ * of their own are in home-nested-entries.ts. Read the code before changing a class:
+ * each line says what the place holds, and the source ratchet
+ * (tests/core/home-manifest/home-manifest-sources.test.ts) fails on a path the code
+ * writes that no entry names.
+ */
+import { lead, mach, rebuild } from './build.js'
+import type { HomeEntry } from './types.js'
+
+export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
+  // Tasks, sessions and their stores.
+  lead('tasks', 'tasks', 'dir', 'Tasks: the task database, its JSON form and the archive'),
+  lead('sessions-db', 'sessions.sqlite', 'sqlite', 'Sessions: every session record and its history index'),
+  lead('sessions-json', 'sessions.json', 'file', 'The pre-SQLite session store, still read by its migration', { legacy: true }),
+  rebuild('sessions-dir', 'sessions', 'dir', 'Older session projection and transcript-tail copies, rebuilt from the session store'),
+  lead('session-queue', 'session-message-queue.json', 'file', 'Messages queued for sessions that were not ready to take them'),
+  lead('session-requests', 'session-requests.json', 'file', 'Reply requests between sessions and their deadlines'),
+  lead('hint-registry-since', 'hint-registry-since.json', 'file', 'When this home first ran the hint registry (older session rows predate it)'),
+  lead('session-audit', 'session-audit.jsonl', 'file', 'Audit log of session actions'),
+  lead('user-asks', 'user-asks', 'dir', 'The user\'s unanswered messages, one file per task'),
+  lead('side-questions', 'side-questions', 'dir', 'Side questions asked beside a session'),
+  lead('subagent-runs', 'subagent-runs.json', 'file', 'Subagent runs a restart left behind, to tell their callers'),
+  lead('subagents-open', 'subagents-open.json', 'file', 'Subagent runs still open'),
+  lead('subtask-notices', 'subtask-notices-held.json', 'file', 'Subtask completion notices held for a batch'),
+  lead('source-task-claims', 'source-task-claims.json', 'file', 'Which task claimed which external source item'),
+  lead('status-check-told', 'status-check-told.json', 'file', 'Status mismatches already told, so each is told once'),
+  lead('private-tasks', 'private-tasks', 'dir', 'Private task approvals and the kept-task digest'),
+  lead('op-calls', 'op-calls', 'dir', 'Op call ledger: call ids and their results, so a resend runs once'),
+  lead('offline-conflicts', 'offline-conflicts', 'dir', 'Logs of offline edits merged with a conflict'),
+  lead('usage-db', 'usage.sqlite', 'sqlite', 'Model usage and cost records'),
+  // Org, inbox, boards, topics.
+  lead('org', 'org', 'dir', 'Org tree, threads database, team notes and asks, report schedule'),
+  lead('org-reflection', 'org-reflection', 'dir', 'Reflection duty state per org node'),
+  lead('human-inbox', 'human-inbox', 'dir', 'The user\'s inbox: letters, their ledger and staged bodies'),
+  lead('boards', 'boards', 'dir', 'Team boards'),
+  lead('topics', 'topics', 'dir', 'Topics and their posts'),
+  lead('topic-mail', 'topic-mail', 'dir', 'Topic mail delivery state'),
+  lead('notifications', 'notifications.json', 'file', 'The notification list (the bell)'),
+  lead('quiet', 'quiet.json', 'file', 'Quiet mode holds'),
+  lead('drawings', 'drawings', 'dir', 'Drawing library'),
+  // Knowledge: memory, notes, skills, artifacts.
+  lead('memory', 'memory', 'dir', 'Memory: MEMORY.md, USER.md, daily logs, project and agent memory'),
+  lead('memory-legacy', 'MEMORY.md', 'file', 'Pinned memory at its pre-2026-07 place, read by its migration', { legacy: true }),
+  lead('artifacts', 'artifacts', 'dir', 'The artifacts folder: notes, skills and memory folders of tasks'),
+  lead('notes', 'notes', 'dir', 'The notes vault at its place before the artifacts folder'),
+  lead('global-notes-legacy', 'global-notes.md', 'file', 'Single-file notes from before the notes vault, read by its migration', { legacy: true }),
+  lead('knowledge-legacy', 'knowledge', 'dir', 'Artifacts at their place before the artifacts folder', { legacy: true }),
+  lead('agent-memory-legacy', 'agent-memory', 'dir', 'Task memory folders before the artifacts folder', { legacy: true }),
+  lead('agent-skills-legacy', 'agent-skills', 'dir', 'Task skills before the artifacts folder', { legacy: true }),
+  lead('skills', 'skills', 'dir', 'Skills, including repository knowledge'),
+  lead('claude-md', 'CLAUDE.md', 'file', 'Instructions for sessions that run in the home (a retired managed copy is removed)'),
+  lead('commands', 'commands', 'dir', 'The user\'s slash commands'),
+  lead('actions', 'actions', 'dir', 'The user\'s own actions'),
+  lead('repositories', 'repositories', 'dir', 'Repository descriptions the user keeps'),
+  lead('obsidian-config', '.obsidian', 'dir', 'The notes app\'s own settings for this vault (its plugins may keep credentials)', { sensitive: true }),
+  lead('voice-archive', 'voice-archive', 'dir', 'Original voice recordings and their transcripts'),
+  // Conversations with the Personal AI.
+  lead('conversations', 'conversations', 'dir', 'Personal AI conversations, one folder per agent'),
+  lead('chat-history', 'chat-history.json', 'file', 'The Personal AI\'s main chat history', { match: /^chat-history-[^/]+\.json$/ }),
+  rebuild('conversation-bodies', 'conversation-bodies', 'dir', 'A follower\'s copy of conversation bodies'),
+  lead('ask-walnut-launch', 'ask-walnut-launch.json', 'file', 'Model and effort last picked for an Ask Walnut session'),
+  // Routines.
+  lead('cron-jobs', 'cron-jobs.json', 'file', 'Schedules and triggers: their definitions'),
+  lead('cron-state', 'cron-state.json', 'file', 'Schedules and triggers: next run times and last results'),
+  lead('routine-state', 'routine-state', 'dir', 'What each watcher already saw and acted on'),
+  lead('triage-state', 'triage-state.json', 'file', 'Inbox Triage\'s pending buffer and claim'),
+  lead('triggers', 'triggers', 'dir', 'Check scripts agents write for their triggers'),
+  lead('hooks', 'hooks', 'dir', 'Daemon hook rules'),
+  // Settings and credentials.
+  lead('config-yaml', 'config.yaml', 'file', 'Settings, including provider keys and host settings', { sensitive: true }),
+  lead('config-history', 'config.yaml.history', 'dir', 'Older copies of config.yaml', { sensitive: true }),
+  lead('config-dir', 'config', 'dir', 'Settings shared across devices (config/share)'),
+  lead('stt-vocab-legacy', 'stt-vocab.txt', 'file', 'Voice input vocabulary at its pre-config/share place', { legacy: true }),
+  lead('ui-prefs-legacy', 'ui-prefs.json', 'file', 'Layout state at its pre-2026-08 place, moved by its migration', { legacy: true }),
+  lead('auth', 'auth.json', 'file', 'Paired device token hashes, and this Walnut\'s instance id: it moves with the leader on purpose, and a standby keeps the copy but never serves from it before it is promoted', { sensitive: true }),
+  lead('secrets', 'secrets', 'dir', 'Credentials: plugin secrets, provider keys, sign-in tokens', { sensitive: true }),
+  lead('vault-in-home', 'vault', 'dir', 'Password vault of a throwaway or fake-HOME server (the real one is outside the home)', { sensitive: true }),
+  lead('router', 'router', 'dir', 'Router areas, routing ledgers, approval tokens and frozen incoming content', { sensitive: true }),
+  lead('approvals', 'approvals', 'dir', 'Approval requests, signing keys and the approvals switch', { sensitive: true }),
+  lead('host-exec-grants', 'host-exec-grants.json', 'file', 'The user\'s grants for running commands on hosts'),
+  lead('browser-control', 'browser-control.json', 'file', 'Sites the user approved for agents in the browser'),
+  lead('workspaces', 'workspaces', 'dir', 'Which workspace scripts the user trusts'),
+  lead('sync', 'sync', 'dir', 'Sync state (children with another class are listed)', { sensitive: true, listsChildren: true }),
+  lead('triage', 'triage', 'dir', 'Inbox Triage\'s standing routing rules'),
+  // Plugins.
+  lead('plugins', 'plugins', 'dir', 'Installed plugins'),
+  lead('plugin-data', 'plugin-data', 'dir', 'Each plugin\'s private state', { sensitive: true }),
+  lead('plugin-registry', 'plugin-registry.json', 'file', 'A plugin catalog the user added'),
+  lead('plugin-files', 'plugin-files', 'dir', 'Files plugins keep in their synced file area'),
+  rebuild('plugin-stores', 'plugin-stores', 'dir', 'Git clones of plugin source repositories, cloned again on demand'),
+  // Hosts.
+  lead('hosts', 'hosts', 'dir', 'Host profiles'),
+  lead('frequent-dirs', 'frequent-directories.json', 'file', 'Folders sessions ran in, for the folder picker'),
+  lead('mention-dirs', 'mention-directories.json', 'file', 'Folders browsed in the @ file picker'),
+  mach('host-servers', 'host-servers.json', 'file', 'Host servers this server started, with their ports'),
+  mach('host-expose', 'host-expose.json', 'file', 'A host server\'s own public port state'),
+  rebuild('distributed-skills', 'distributed-skills', 'dir', 'Skills the leader sends to this host\'s daemon, sent again on connect'),
+  mach('cloud-setup-job', 'cloud-setup-job.json', 'file', 'An in-flight cloud setup run, with its pairing code', { sensitive: true }),
+  mach('code-server', 'code-server', 'dir', 'The in-app editor: its data and the instance running here'),
+  // Time, health, places.
+  lead('time-tracking', 'time-tracking', 'dir', 'Time records: work hours, calls, app and site samples'),
+  mach('health', 'health', 'dir', 'Health data: it follows the existing rule that this data stays on the machine that collected it (git sync and backups leave it out)'),
+  mach('places', 'places', 'dir', 'Place visits from the phone: they follow the existing rule that this data stays on the machine that collected it'),
+  lead('browser-replays', 'browser', 'dir', 'Replays of what agents did in the browser, per task'),
+  // This machine.
+  mach('local', 'local', 'dir', 'Per-machine records (children with another class are listed)', { listsChildren: true }),
+  mach('server-lock', 'server.lock.json', 'file', 'The running server\'s singleton lock: pid and port'),
+  mach('locks', 'locks', 'dir', 'Lock files for paths outside the home'),
+  mach('browser-extension', 'browser-extension', 'dir', 'Browser extension install of a throwaway server'),
+  mach('demo-terminal-stop', 'demo-terminal-stop.json', 'file', 'Terminal processes a demo server is still stopping'),
+  rebuild('replica-devices', 'replica', 'dir', 'A host server\'s copy of the signed-in devices', { sensitive: true }),
+  // Caches, indexes, scratch.
+  rebuild('cache', 'cache', 'dir', 'Caches, follower copies and queues (children with another class are listed)', { listsChildren: true }),
+  rebuild('tmp', 'tmp', 'dir', 'Scratch: daemon streams, build output (children with another class are listed)', { listsChildren: true }),
+  rebuild('search-index', 'search.sqlite', 'sqlite', 'The hybrid search index, rebuilt from the stores'),
+  rebuild('notes-index', 'notes-index.sqlite', 'sqlite', 'The notes structure index, rebuilt from the notes'),
+  rebuild('models', 'models', 'dir', 'Search embedding model at its older place, downloaded again'),
+  rebuild('components', 'components', 'dir', 'Downloaded platform components, fetched again on demand'),
+  rebuild('obsidian-search', '.walnut-obsidian-search', 'dir', 'Semantic index of the notes, rebuilt from the notes'),
+  rebuild('smart-env', '.smart-env', 'dir', 'A notes app plugin\'s embeddings, rebuilt by it'),
+  lead('data-repo', '.git', 'dir', 'Git sync\'s history of the synced files: the only history when no data remote is configured'),
+  rebuild('data-repo-ignore', '.gitignore', 'file', 'Git sync\'s ignore list, written again from its template'),
+  rebuild('logs', 'logs', 'dir', 'Log files left in the home'),
+  rebuild('hook-errors', 'hook-errors.log', 'file', 'Hook error log'),
+  // Older versions' places (no doc names them): the user's recordings move with the leader as at their new place.
+  lead('stt-debug-legacy', 'stt-debug', 'dir', 'Voice recordings at their pre-tmp place', { legacy: true }),
+  lead('recordings-legacy', 'recordings', 'dir', 'Audio capture chunks at their pre-tmp place', { legacy: true }),
+  mach('recording-state-legacy', 'recording-state.json', 'file', 'Audio capture state at its pre-tmp place', { legacy: true }),
+  rebuild('bin-legacy', 'bin', 'dir', 'A prebuilt helper binary at its pre-tmp place', { legacy: true }),
+  rebuild('last-compaction-legacy', '.last-compaction', 'file', 'History compaction watermark of an older version', { legacy: true }),
+  // The two names git sync's template ignores at the top level; any other top-level x.db is the user's.
+  rebuild('sessions-db-legacy', 'sessions.db', 'file', 'An empty session store from before SQLite', { legacy: true }),
+  rebuild('tasks-db-legacy', 'tasks.db', 'file', 'An empty task store from before SQLite', { legacy: true }),
+]

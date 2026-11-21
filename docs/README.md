@@ -52,6 +52,9 @@ must live under one of these top-level categories instead of directly under
 - [Backups](reference/backups.md): encrypted, deduplicated backups to Cloudflare R2, Google
   Drive or S3; the format and why, what each service costs, the recovery key (where it is
   kept, how a new computer uses it), history kept, restore, and the older S3 copy.
+- [Where Walnut keeps its data](reference/data-locations.md): every place the server keeps
+  state, in the data home and outside it, and whether it moves with the leader, stays on its
+  machine, or is rebuilt; written from the manifest in `src/core/home-manifest/`.
 - [Releasing](reference/releasing.md): the stable and nightly channels, `bun run release`,
   the GitHub Actions publish through npm trusted publishing, and how installs learn about and
   apply updates.
