@@ -43,6 +43,9 @@ export interface WorkspacePendingStart {
   /** The client-owned session id of a draft launch (quick-start only). */
   session_id?: string
   caller_sid?: string
+  /** The plugin job `caller_sid: external` was, vouched for by its host when the start was asked
+   *  (plugin-jobs/job-caller.ts): the replay's mode ceiling. An older Walnut ignores it and caps the replay. */
+  caller_job?: { plugin: string; job: string; host: string }
   /** The user's words a deferred task-start was asked with (subtask-limits.ts). */
   user_request?: string
   expect_reply?: boolean

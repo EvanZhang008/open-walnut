@@ -23,6 +23,7 @@ import { findProvider, validateInputs } from './registry.js'
 import { belongsToWorkspace, insideRoot, isLaunchReady, needsCreation, setupBlocksLaunch, setupHoldsLaunch } from './decisions.js'
 import { deferStart, managerDeps, recordRequestFailure, requestWorkspace } from './manager.js'
 import { role } from '../server-role.js'
+import type { VouchedJob } from '../plugin-jobs/job-caller.js'
 
 function normHost(host: string | undefined | null): string {
   return !host || host === 'local' ? '__local__' : host
@@ -61,7 +62,7 @@ export interface DeferredTaskStart { taskId: string; title: string; started: fal
 /** What a task-start hands a workspace to replay once it is ready. */
 interface TaskStartAsk {
   message?: string; model?: string; mode?: string; effort?: string; engine?: string; cwd?: string
-  requestedAt?: string; callerSid?: string; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; handsOn?: string; source: string
+  requestedAt?: string; callerSid?: string; callerJob?: VouchedJob; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; handsOn?: string; source: string
 }
 
 function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingStart {
@@ -73,6 +74,7 @@ function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingSta
     ...(params.effort ? { effort: params.effort } : {}),
     ...(params.engine ? { engine: params.engine } : {}),
     ...(params.callerSid ? { caller_sid: params.callerSid } : {}),
+    ...(params.callerSid && params.callerJob ? { caller_job: { plugin: params.callerJob.plugin, job: params.callerJob.job, host: params.callerJob.host } } : {}),
     ...(params.userRequest ? { user_request: params.userRequest } : {}),
     ...(params.expectReply !== undefined ? { expect_reply: params.expectReply } : {}),
     ...(params.replyTimeoutSecs !== undefined ? { reply_timeout_secs: params.replyTimeoutSecs } : {}),

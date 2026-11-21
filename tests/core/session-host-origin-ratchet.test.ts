@@ -24,6 +24,8 @@ const ALLOWED: Record<string, string> = {
   'core/routines/check-host-policy.ts:checkHostRefusal': 'pure table, overridden by fromHost in assertCheckHostAllowed',
   // A relay's proof names the link it came over, which is the call's origin by construction.
   'web/routes/approvals-v1.ts:held.host': 'relay proof: the relay link, not the session host',
+  // A relayed plugin job names the link it came over, which is its self-call's origin by construction.
+  'core/plugin-jobs/job-caller.ts:held.host': 'relayed plugin job: the relay link, not a session host',
 }
 
 function files(dir: string): string[] {
@@ -57,7 +59,7 @@ describe('session host against call origin: one check', () => {
 
   it('a module that holds the host a call was relayed over compares it only through oneHost', () => {
     const holders = files(ROOT).filter((f) => /export function holdRelay\w*\(/.test(fs.readFileSync(f, 'utf8')))
-    expect(holders.map((f) => path.relative(ROOT, f)).sort()).toEqual(expect.arrayContaining(['core/approvals/relay-proof.ts', 'core/hosts/trigger-caller.ts']))
+    expect(holders.map((f) => path.relative(ROOT, f)).sort()).toEqual(expect.arrayContaining(['core/approvals/relay-proof.ts', 'core/hosts/trigger-caller.ts', 'core/plugin-jobs/job-caller.ts']))
     const found: string[] = []
     for (const f of holders) {
       fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {

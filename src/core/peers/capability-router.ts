@@ -33,10 +33,13 @@ export interface GatewayRelayMeta {
   /** The daemon asks a busy call again (gateway-core.ts busyRelayAgainMs): the how-manyth time. */
   busyAgain?: number;
   /**
-   * The plugin job that made the call: a host's daemon names it only to its own replica
-   * (a follower that answers local calls), whose write port records the job as the maker.
+   * The plugin job that made the call, as the host's daemon names it: its own replica (a follower
+   * that answers local calls) takes it and its write port records the job as the maker; the leader
+   * keeps it only from a host it gives that job now (plugin-jobs relayedJobOf).
+   * `vouched` (only ever `true`): the daemon saw the call's process inside that job's run; only
+   * then is the call the job's for the start-mode ceiling (plugin-jobs/job-caller.ts).
    */
-  pluginJob?: { plugin: string; job: string };
+  pluginJob?: { plugin: string; job: string; vouched?: true };
 }
 
 export interface CapabilityRouterDeps {
@@ -350,6 +353,12 @@ async function handleToolsCall(
   const { isTaskHostOpPath } = await import('../../lib/task-host-ops.js');
   const { holdRelayTrigger } = await import('../hosts/trigger-caller.js');
   const triggerToken = isTaskHostOpPath(op.bind?.path) ? holdRelayTrigger(payload.triggerCaller, host) : undefined;
+  // The plugin job the host's daemon vouched made the call (plugin-jobs/job-caller.ts), only for the
+  // anonymous gateway caller daemon-connection.ts kept it for: the start routes read who it is.
+  // Only for a job the daemon vouched for (`vouched === true`, its process tree checked) and an op that
+  // can start a task (opStartsTask): an unvouched job's call keeps its labels below and stays capped.
+  const { holdRelayJob, opStartsTask } = await import('../plugin-jobs/job-caller.js');
+  const jobToken = meta.pluginJob?.vouched === true && isExternalCallerSid(callerSid) && opStartsTask(op) ? holdRelayJob(meta.pluginJob, host) : undefined;
   // The call's id, chosen by the caller's client (src/lib/op-call-id.ts): a resend of the
   // same call runs it at most once, and op_result reads what it did.
   const { isCallId } = await import('../../lib/op-call-id.js');
@@ -357,6 +366,7 @@ async function handleToolsCall(
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
   callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
   ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
+  ...(jobToken ? { callerJob: jobToken } : {}),
 }));
   // The server's own call to its API went out and got no answer: the caller hears the answer
   // was lost (hub_timeout), so its client names the call id and the read, never a bare error.

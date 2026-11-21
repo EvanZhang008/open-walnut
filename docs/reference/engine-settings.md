@@ -424,7 +424,19 @@ Walnut. New sessions preapprove specific Walnut coordination operations through
 Claude Code's session-only allow rules, including `task_create` and `task_send`
 through both the CLI and MCP. A task started by a restrictive session inherits
 that session's mode and cannot request a looser one. The engine's explicit deny and ask rules still
-apply. Host commands, credentials, external MCP calls and browser actions receive
+apply.
+
+That ceiling is one rule on every start path and every mode change
+(`src/core/sessions/delegated-mode.ts`: `startModeCeiling` and `applyStartModeCeiling` are its pure
+form, `capStartMode` resolves the caller and applies it; `tests/core/sessions/start-mode-ceiling-guard.test.ts`
+lists every call site). A session starts or sets work at most as loose as its own mode. The person
+(no caller), an installed plugin's server half (caller `plugin:<id>`) and that plugin's job vouched for
+by its host's daemon (`src/core/plugin-jobs/job-caller.ts`: the daemon marks the call `vouched: true`
+only after checking the calling process belongs to that job's run, and the relaying server then gives its
+self-calls a credential only it holds; the plugin id and job headers alone are never enough) are not capped. Anything else, the anonymous `external` caller of
+a host's daemon included, is capped at Default: a looser mode it asks for is refused with "A default
+session cannot start a task in bypass mode. Change the caller's mode first.", and a looser mode it only
+carries over (a project's default) comes down to Default. Host commands, credentials, external MCP calls and browser actions receive
 no general allow rule. Slim application profiles keep their own restrictions.
 
 Claude Code's classifier refusal text is saved with the session and shown in a notice.

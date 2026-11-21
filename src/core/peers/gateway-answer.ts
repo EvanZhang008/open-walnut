@@ -51,9 +51,12 @@ export interface RelayedCall {
   busyAgain?: number;
   /**
    * The plugin job that made the call, as the host's daemon names it (the frame's `caller`). Its own
-   * replica takes it; the leader only from the host it runs that plugin's jobs on (daemon-connection.ts).
+   * replica takes it; the leader only from a host it gives that job now (daemon-connection.ts,
+   * plugin-jobs relayedJobOf).
+   * `vouched`: the daemon saw the call's process inside that job's run, only ever the literal `true`;
+   * only then is the call the job's for the start-mode ceiling (plugin-jobs/job-caller.ts).
    */
-  pluginJob?: { plugin: string; job: string };
+  pluginJob?: { plugin: string; job: string; vouched?: true };
   /** How long the daemon waits for this answer from now (a host's daemon to its own replica; after a wait, maybe little). */
   answerInMs?: number;
 }
@@ -62,9 +65,9 @@ export interface RelayedCall {
 export function relayedCallOf(event: Record<string, unknown>): RelayedCall | null {
   const { relayId, capability, callerSid, instanceId, busyAgain, caller, answerInMs } = event as Record<string, unknown>;
   if (typeof relayId !== 'number' || typeof capability !== 'string' || typeof callerSid !== 'string') return null;
-  const c = caller as { kind?: unknown; plugin?: unknown; job?: unknown } | undefined;
+  const c = caller as { kind?: unknown; plugin?: unknown; job?: unknown; vouched?: unknown } | undefined;
   const pluginJob = c && c.kind === 'plugin-job' && typeof c.plugin === 'string' && c.plugin && typeof c.job === 'string' && c.job
-    ? { plugin: c.plugin.slice(0, 120), job: c.job.slice(0, 120) } : undefined;
+    ? { plugin: c.plugin.slice(0, 120), job: c.job.slice(0, 120), ...(c.vouched === true ? { vouched: true as const } : {}) } : undefined;
   return {
     relayId, capability, callerSid, payload: event.payload,
     ...(typeof instanceId === 'string' && instanceId ? { instanceId } : {}),

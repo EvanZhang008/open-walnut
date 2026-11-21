@@ -1,4 +1,5 @@
 import { SESSION_MODE_IDS, type SessionMode } from '../types.js';
+import type { VouchedJob } from '../plugin-jobs/job-caller.js';
 
 /** A preapproved task_create cannot launch work with greater trust than its caller. */
 export function delegatedMode(caller: SessionMode, requested?: string): SessionMode | undefined {
@@ -15,23 +16,79 @@ function looserThan(mode: string, ceiling: SessionMode): boolean {
 }
 
 /**
- * The one ceiling every start path applies (tests/core/sessions/start-mode-ceiling-guard.test.ts):
- * a session (or a sid that names none) starts work at most as loose as its own mode. The person's
- * own CLI (no caller) and an installed plugin's own call are not capped.
+ * Who asks to start or set work, for the start-mode ceiling (startModeCeiling).
+ *   person      no caller sid: the user's own CLI or UI
+ *   plugin      an installed plugin's server half (caller sid `plugin:<id>`)
+ *   plugin-job  that plugin's job, vouched for by its host's daemon (plugin-jobs/job-caller.ts)
+ *   session     a session, bounded by its own mode
+ *   external    anonymous or unknown (the gateway's `external`, a sid that names no session)
+ */
+export type StartCaller =
+  | { kind: 'person' }
+  | { kind: 'plugin' }
+  | { kind: 'plugin-job'; plugin: string; job: string; host: string }
+  | { kind: 'session'; mode: SessionMode | undefined }
+  | { kind: 'external' };
+
+/** The loosest mode this caller may start or set work in; null = no ceiling. Pure. */
+export function startModeCeiling(caller: StartCaller): SessionMode | null {
+  switch (caller.kind) {
+    case 'person':
+    case 'plugin':
+    case 'plugin-job':
+      return null;
+    case 'session':
+      return caller.mode && SESSION_MODE_IDS.includes(caller.mode) ? caller.mode : 'default';
+    default:
+      return 'default';
+  }
+}
+
+/**
+ * Apply it: the mode to use; an asked-for looser mode throws, an implied one (a project default)
+ * comes down. Pure.
  *
  * `implied`: the mode was not asked for but carried over (an engine switch keeping the task's
- * mode, a project's default); a looser one comes down to the caller's instead of refusing.
- * A looser mode the caller asked for is refused with a 403 QuickStartError.
+ * mode, a project's default); a looser one comes down to the ceiling instead of refusing.
+ * Under a ceiling, a start that names no mode takes the caller's own (delegatedMode).
  */
-export async function capStartMode(callerSid: string | undefined, requested?: string, opts: { implied?: boolean } = {}): Promise<SessionMode | undefined> {
-  if (!callerSid?.trim()) return requested as SessionMode | undefined;
+export function applyStartModeCeiling(caller: StartCaller, requested: string | undefined, opts: { implied?: boolean } = {}): SessionMode | undefined {
+  const ceiling = startModeCeiling(caller);
+  if (ceiling === null) return requested as SessionMode | undefined;
+  if (opts.implied) return requested && ceiling !== 'bypass' && looserThan(requested, ceiling) ? ceiling : requested as SessionMode | undefined;
+  return delegatedMode(ceiling, requested);
+}
+
+/**
+ * The StartCaller a caller sid names. `job`: the plugin job a request's credential vouched for
+ * (plugin-jobs/job-caller.ts vouchedPluginJob); it counts only for an outside caller, never for a
+ * session's sid, a plugin's server half or a person.
+ */
+export async function startCallerOf(callerSid: string | undefined, job?: VouchedJob | null): Promise<StartCaller> {
+  if (!callerSid?.trim()) return { kind: 'person' };
   const { resolveCaller } = await import('./session-send-core.js');
   const caller = await resolveCaller(callerSid);
-  if (caller.kind === 'human' || (caller.kind === 'external' && !!caller.app)) return requested as SessionMode | undefined;
-  let ceiling: SessionMode = caller.kind === 'session' ? caller.record.mode ?? 'default' : 'default';
-  if (!SESSION_MODE_IDS.includes(ceiling)) ceiling = 'default';
-  if (opts.implied) return requested && ceiling !== 'bypass' && looserThan(requested, ceiling) ? ceiling : requested as SessionMode | undefined;
-  try { return delegatedMode(ceiling, requested); }
+  if (caller.kind === 'human') return { kind: 'person' };
+  if (caller.kind === 'session') return { kind: 'session', mode: caller.record.mode };
+  if (caller.app) return { kind: 'plugin' };
+  return job ? { kind: 'plugin-job', plugin: job.plugin, job: job.job, host: job.host } : { kind: 'external' };
+}
+
+/**
+ * The one ceiling every start path applies (tests/core/sessions/start-mode-ceiling-guard.test.ts):
+ * a session (or a sid that names none) starts work at most as loose as its own mode. The person's
+ * own CLI (no caller), an installed plugin's own call and its job vouched for by its host
+ * (`opts.job`) are not capped.
+ *
+ * A looser mode the caller asked for is refused with a 403 QuickStartError; an implied one comes
+ * down (applyStartModeCeiling).
+ */
+export async function capStartMode(
+  callerSid: string | undefined, requested?: string, opts: { implied?: boolean; job?: VouchedJob | null } = {},
+): Promise<SessionMode | undefined> {
+  if (!callerSid?.trim()) return requested as SessionMode | undefined;
+  const caller = await startCallerOf(callerSid, opts.job);
+  try { return applyStartModeCeiling(caller, requested, opts); }
   catch (err) {
     const { QuickStartError } = await import('./quick-start.js');
     throw new QuickStartError(err instanceof Error ? err.message : String(err), 403);

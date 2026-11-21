@@ -11,6 +11,7 @@ import { stableJson } from '../task-create-idempotency.js';
 import type { Task, EngineFallbackNote, SessionEffort, SessionEngine, SessionMode, SessionProfile, SessionRecord } from '../types.js';
 import type { FallbackDecision } from '../agents/fallback-engine.js';
 import type { RouterArea } from '../router/areas.js';
+import type { VouchedJob } from '../plugin-jobs/job-caller.js';
 import { isRouterAreaSession, routerAreaProfile, runsAreaProfile } from '../router/session-policy.js';
 import { inheritedEnginePick, projectLaunchDefaultsOf, type LaunchSourceRecord, type LaunchValueSource, type ProjectLaunchDefaults } from './project-launch-defaults.js';
 import { engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
@@ -52,6 +53,8 @@ export interface SessionStartParams {
   /** rq-… id of a request the caller owes and hands to this task (session-requests.ts linkHandoffs). */
   handsOn?: string;
   callerSid?: string;
+  /** The plugin job a caller `external` is, as its host's daemon vouched (plugin-jobs/job-caller.ts): the mode ceiling's caller. */
+  callerJob?: VouchedJob;
   startAttemptId?: string;
   source: string;
   /** Answer only once the session really started or failed (an engine switch must know the new id). */
@@ -341,7 +344,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
 async function startOrWait(params: SessionStartParams): Promise<SessionStartResult> {
   if (params.callerSid) {
     const { capStartMode } = await import('./delegated-mode.js');
-    params = { ...params, mode: await capStartMode(params.callerSid, params.mode) };
+    params = { ...params, mode: await capStartMode(params.callerSid, params.mode, { job: params.callerJob }) };
   }
   let result: SessionStartResult;
   const picked: { split?: { key: string; engine: SessionEngine; model?: string } } = {};

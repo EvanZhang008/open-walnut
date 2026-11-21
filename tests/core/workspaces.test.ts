@@ -571,6 +571,16 @@ describe('start paths', () => {
     expect(await deferTaskStart(addTask(f, { id: 's4' }), { source: 'x' })).toBeNull()
   })
 
+  it('a deferred start keeps the plugin job its caller was (its replay\'s mode ceiling), only with a caller sid', async () => {
+    const f = fake()
+    const job = { plugin: 'ticket-investigator', job: 'poll', host: 'devbox' }
+    const failed = { ...gitWs, state: 'failed' as const, error: 'x', root: undefined, cwd: undefined }
+    await deferTaskStart(addTask(f, { id: 'j1', workspace: failed }), { message: 'look', mode: 'bypass', callerSid: 'external', callerJob: job, source: 'api-v1' })
+    expect(f.tasks.get('j1')!.workspace!.pending_start).toMatchObject({ caller_sid: 'external', caller_job: job, mode: 'bypass' })
+    await deferTaskStart(addTask(f, { id: 'j2', workspace: failed }), { message: 'look', callerJob: job, source: 'api-v1' })
+    expect(f.tasks.get('j2')!.workspace!.pending_start!.caller_job).toBeUndefined()
+  })
+
   it('the quick-start plan refuses bad requests before any task exists, and defers a good one', async () => {
     fake()
     expect(await workspaceLaunchPlan({}, { cwd: '/r/repo', isWalnutAgent: false })).toBeNull()

@@ -48,7 +48,7 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   validateLaunchChoices(params);
   if (params.callerSid) {
     const { capStartMode } = await import('./delegated-mode.js');
-    params = { ...params, mode: await capStartMode(params.callerSid, params.mode) };
+    params = { ...params, mode: await capStartMode(params.callerSid, params.mode, { job: params.callerJob }) };
   }
   const model = params.model && params.model !== 'default' ? resolveModelSwitchValue(params.model) ?? undefined : undefined;
   const metadata = await getProjectMetadata(task.project || '');

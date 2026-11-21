@@ -6,6 +6,13 @@
  * a session's mode: each one hands the asking session on (`callerSid: <value>` in the call) or
  * caps the mode itself (`capStartMode` / `modeChangeRefusal` in or right above the call), or is
  * listed below with why no session's mode bounds it. A new one fails until it is one of those.
+ *
+ * A plugin's job vouched for by its host's daemon (src/core/plugin-jobs/job-caller.ts) starts work
+ * in the mode it asks for, but only where the vouched job is handed on beside the caller: every
+ * start call that hands on the caller also hands on `callerJob`, and every capStartMode call
+ * passes `job`, or is listed with why a job's call stays capped there (it does not reach it, or
+ * a job does not need it). So a new start entry that drops the job fails here, as one that drops
+ * the caller does.
  */
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -48,6 +55,31 @@ const SESSION_START_EMITS: Record<string, { count: number; why: string }> = {
   'src/core/sessions/cloud-chat-lane.ts': { count: 1, why: 'the companion\'s chat lane, in its fixed mode' },
   'src/core/ai/ai-agent.ts': { count: 1, why: 'the Personal AI agent\'s own start' },
   'src/core/subagents/on-host.ts': { count: 1, why: 'a Walnut subagent (Claude Code, or an ACP engine that names its own session): subagentMode never runs above its caller (bypass only for a full-access caller)' },
+}
+
+/** file -> why its start calls hand on the caller but not the vouched job (a job stays capped at default there). */
+const HANDS_CALLER_NOT_JOB: Record<string, { count: number; why: string }> = {
+  'src/commands/direct-commands.ts': { count: 1, why: 'a CLI command typed on this machine: no host relays a job\'s call here' },
+  'src/web/routes/sessions.ts': { count: 1, why: 'the web quick start: a job reaches it only through the generic api op, and stays capped' },
+  'src/web/routes/engine-switch-v1.ts': { count: 1, why: 'task_switch_engine: a job does not need to loosen a switch, so it stays capped' },
+  'src/web/routes/task-move-v1.ts': { count: 2, why: 'task_move\'s engine switch: a job does not need to loosen it, so it stays capped' },
+  'src/web/routes/quick-input-v1.ts': { count: 2, why: 'the quick input box of the UI and phone: a job never starts work through it, capped' },
+  'src/web/routes/session-launch-v1.ts': { count: 2, why: 'the phone\'s launch routes: a job never starts work through them, capped' },
+  'src/core/sessions/mobile-launch.ts': { count: 1, why: 'the phone\'s launch: a job never starts work through it, capped' },
+  'src/core/sessions/engine-switch.ts': { count: 1, why: 'an engine switch\'s first start runs the mode the switch capped, a job\'s included' },
+  'src/core/sessions/task-start.ts': { count: 1, why: 'the move off a lost host names no mode: the conversation keeps its own' },
+  'src/core/sessions/start-queue.ts': { count: 2, why: 'only a session\'s automatic start waits for a slot (waitForHostSlot refuses an outside caller)' },
+  'src/core/transfer/transfer.ts': { count: 1, why: 'task_transfer: a job does not need to loosen a transfer, so it stays capped' },
+  'src/core/workspaces/manager.ts': { count: 1, why: 'a quick start\'s replay: only a task_start\'s pending start keeps its job (launch.ts taskStartPending)' },
+}
+
+/** file -> why its capStartMode calls pass no vouched job. */
+const CAPS_WITHOUT_JOB: Record<string, { count: number; why: string }> = {
+  'src/core/sessions/delegated-mode.ts': { count: 1, why: 'modeChangeRefusal: a job does not change a live session\'s mode, so it stays capped' },
+  'src/core/sessions/quick-start.ts': { count: 2, why: 'the quick start: a job reaches it only through the generic api op, and stays capped' },
+  'src/web/routes/sessions.ts': { count: 4, why: 'the web quick start and a plan\'s execution: no job starts work through them, capped' },
+  'src/core/sessions/engine-switch.ts': { count: 1, why: 'an engine switch\'s mode: a job does not need to loosen it, so it stays capped' },
+  'src/core/transfer/transfer.ts': { count: 1, why: 'a transfer\'s mode: a job does not need to loosen it, so it stays capped' },
 }
 
 /** Routes (src/web/routes) whose mode changes are not a session's request. */
@@ -131,7 +163,33 @@ describe('launch-mode ceiling on every start path', () => {
     expect(unchecked).toEqual(Object.fromEntries(Object.entries(MODE_CHANGE_ROUTES_EXEMPT).map(([f, v]) => [f, v.count])))
   })
 
+  it('every start call that hands on the caller hands on the vouched job too, or is listed with why a job stays capped', () => {
+    const dropped: Record<string, number> = {}
+    for (const { file, src } of files) {
+      const n = callsIn(src, START_FUNCTIONS).filter(({ call }) => handsOnCaller(call) && !/\bcallerJob/.test(call)).length
+      if (n) dropped[file] = n
+    }
+    expect(dropped).toEqual(Object.fromEntries(Object.entries(HANDS_CALLER_NOT_JOB).map(([f, v]) => [f, v.count])))
+  })
+
+  it('every capStartMode call passes the vouched job, or is listed with why a job stays capped', () => {
+    const bare: Record<string, number> = {}
+    for (const { file, src } of files) {
+      const n = callsIn(src, ['capStartMode'], 0).filter(({ call }) => !/\bjob\s*:\s*(?!undefined\b)[\w.]/.test(call)).length
+      if (n) bare[file] = n
+    }
+    expect(bare).toEqual(Object.fromEntries(Object.entries(CAPS_WITHOUT_JOB).map(([f, v]) => [f, v.count])))
+  })
+
+  it('the routes a job\'s task_create and task_start reach read the vouched job', () => {
+    const route = files.find(f => f.file === 'src/web/routes/task-v1.ts')!.src
+    expect(route).toMatch(/vouchedPluginJob\(req\)/)
+    const start = callsIn(route, ['startSessionForTask']).map(c => c.call)
+    expect(start.length).toBe(1)
+    expect(start[0]).toMatch(/\bcallerJob\b/)
+  })
+
   it('every listed reason says something', () => {
-    for (const { why } of [...Object.values(NOT_A_SESSIONS_START), ...Object.values(SESSION_START_EMITS)]) expect(why.length).toBeGreaterThan(20)
+    for (const { why } of [...Object.values(NOT_A_SESSIONS_START), ...Object.values(SESSION_START_EMITS), ...Object.values(HANDS_CALLER_NOT_JOB), ...Object.values(CAPS_WITHOUT_JOB)]) expect(why.length).toBeGreaterThan(20)
   })
 })

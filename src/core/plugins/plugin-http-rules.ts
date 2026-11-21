@@ -16,9 +16,15 @@ export const MAX_PLUGIN_HTTP_BODY_BYTES = 2 * 1024 * 1024
 export const MAX_PLUGIN_JOB_REQUEST_BODY_BYTES = 256 * 1024
 export const MAX_PLUGIN_HTTP_HEADERS_BYTES = 64 * 1024
 
-/** Never relayed: the caller's credentials (Authorization, Cookie) and hop-by-hop headers. */
+/**
+ * Never relayed: the caller's credentials (Authorization, Cookie, and the tokens a relayed call's
+ * self-calls carry, which name a word only this process holds: lib/relay-hold.ts) and hop-by-hop headers.
+ */
 const HOP_BY_HOP_HEADERS = new Set([
   'authorization',
+  'x-walnut-caller-proof',
+  'x-walnut-caller-trigger',
+  'x-walnut-caller-job',
   'connection',
   'content-length',
   'cookie',

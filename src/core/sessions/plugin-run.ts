@@ -53,6 +53,8 @@ export interface CallOrigin { sid?: string; pluginId?: string; label?: string }
  * A program's call with no session and no person behind it (see the head of this file): an outside
  * caller that names its plugin (`plugin:<id>`, caller.app; or `x-walnut-plugin-id`), or the daemon
  * gateway's anonymous caller (the literal EXTERNAL_CALLER_SID) that names no sender.
+ * The anonymous branch serves a daemon that names no job, and a job the leader did not keep; a job
+ * its host's daemon vouched for (plugin-jobs/job-caller.ts vouchedPluginJob) is the exact form of that call.
  */
 export function isProgramCall(caller: CallerIdentity, from: CallOrigin): boolean {
   if (caller.kind !== 'external') return false

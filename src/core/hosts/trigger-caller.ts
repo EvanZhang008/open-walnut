@@ -32,12 +32,10 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { log } from '../../logging/index.js'
 import { HostExecError, normHost, type Caller } from './host-exec-target.js'
 import { oneHost } from './session-host-origin.js'
+import { createRelayHold, RELAY_TOKEN_RE } from '../../lib/relay-hold.js'
 
 export const CALLER_TRIGGER_HEADER = 'x-walnut-caller-trigger'
 
-/** A relayed call's self-calls land within a few seconds; a minute covers a slow one. */
-const HOLD_TTL_MS = 60_000
-const HOLD_MAX = 500
 /** Two tries of the longest check (trigger-api.ts sendTestRun sends once more on a dropped link), plus margin. */
 const TEST_RUN_MAX_MS = 2 * 300_000 + 120_000
 const TEST_RUN_MAX = 200
@@ -45,10 +43,11 @@ const TEST_RUN_RE = /^tt-[A-Za-z0-9_-]{8,64}$/
 const ID_RE = /^[A-Za-z0-9_.:-]{1,200}$/
 
 interface TriggerRef { kind: 'armed' | 'test'; id: string }
-interface Held { ref: TriggerRef; host: string; until: number }
+interface Held { ref: TriggerRef; host: string }
 interface TestRun { taskId: string; host: string; until: number }
 
-const held = new Map<string, Held>()
+/** A relayed call's self-calls land within a few seconds; a minute covers a slow one (relay-hold.ts). */
+const held = createRelayHold<Held>({ ttlMs: 60_000, max: 500 })
 const testRuns = new Map<string, TestRun>()
 const scope = new AsyncLocalStorage<string | undefined>()
 
@@ -68,18 +67,8 @@ function refOf(raw: unknown): TriggerRef | null {
 export function holdRelayTrigger(raw: unknown, host: string, now = Date.now()): string | undefined {
   const ref = refOf(raw)
   if (!ref || !host) return undefined
-  for (const [k, v] of held) if (v.until <= now) held.delete(k)
-  // Full of live ones: hold none rather than drop one a call still needs (the call stays external).
-  if (held.size >= HOLD_MAX) return undefined
-  const token = crypto.randomBytes(24).toString('hex')
-  held.set(token, { ref, host: normHost(host), until: now + HOLD_TTL_MS })
-  return token
-}
-
-function heldOf(token: string | undefined, now = Date.now()): Held | undefined {
-  if (!token) return undefined
-  const h = held.get(token)
-  return h && h.until > now ? h : undefined
+  // Full of live ones, it holds none and the call stays external (relay-hold.ts).
+  return held.hold({ ref, host: normHost(host) }, now)
 }
 
 /**
@@ -99,7 +88,7 @@ export function noteTestRun(taskId: string, host: string, limitSeconds: number, 
 /** Run a host route's work with the request's trigger token in scope (callerOf reads it). */
 export function withTriggerCaller<T>(header: unknown, work: () => Promise<T>): Promise<T> {
   const raw = Array.isArray(header) ? header[0] : header
-  const token = typeof raw === 'string' && /^[0-9a-f]{48}$/.test(raw.trim()) ? raw.trim() : undefined
+  const token = typeof raw === 'string' && RELAY_TOKEN_RE.test(raw.trim()) ? raw.trim() : undefined
   return scope.run(token, work)
 }
 
@@ -114,7 +103,7 @@ function refused(message: string, code: string, data: Record<string, unknown> = 
  * trigger cannot act for a task.
  */
 export async function triggerCallerInScope(now = Date.now()): Promise<Caller | null> {
-  const h = heldOf(scope.getStore(), now)
+  const h = held.get(scope.getStore(), now)
   if (!h) return null
   const { getTask } = await import('../task-manager.js')
   // The caller is on the host its check runs on, under that host's own alias, whichever alias's

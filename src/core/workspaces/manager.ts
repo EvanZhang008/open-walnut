@@ -25,6 +25,7 @@ import { cleanupDecision, isLaunchReady, keptReason, workspaceName, isBusy, setu
 import { log } from '../../logging/index.js'
 import { role } from '../server-role.js'
 import { missingIsNull } from '../../lib/id-ref.js'
+import { storedVouchedJob } from '../plugin-jobs/job-caller.js'
 
 const POLL_MS = 1_500
 export const START_RPC_MS = 30_000
@@ -76,6 +77,12 @@ export interface WorkspaceManagerDeps {
   jobId(): string
 }
 
+/** The plugin job a replayed task-start was asked by (its mode ceiling's caller), when it was one. */
+function callerJobOf(pending: WorkspacePendingStart): { callerJob?: NonNullable<ReturnType<typeof storedVouchedJob>> } {
+  const job = pending.caller_sid ? storedVouchedJob(pending.caller_job) : null
+  return job ? { callerJob: job } : {}
+}
+
 /** Keys with a `later` timer set (realDeps.later). */
 const laterKeys = new Set<string>()
 
@@ -105,7 +112,7 @@ const realDeps: WorkspaceManagerDeps = {
       await startSessionForTask({
         taskIdPrefix: task.id, requestedAt: pending.at, message: pending.message, model: pending.model, mode: pending.mode,
         ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
-        engine: pending.engine as never, callerSid: pending.caller_sid,
+        engine: pending.engine as never, callerSid: pending.caller_sid, ...callerJobOf(pending),
         ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
         replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
       ...(pending.hands_on ? { handsOn: pending.hands_on } : {}),
@@ -138,7 +145,7 @@ const realDeps: WorkspaceManagerDeps = {
     await startSessionForTask({
       taskIdPrefix: task.id, requestedAt: pending.at, message: `${pending.message}\n\n${note}`, model: pending.model, mode: pending.mode,
       ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
-      engine: pending.engine as never, callerSid: pending.caller_sid,
+      engine: pending.engine as never, callerSid: pending.caller_sid, ...callerJobOf(pending),
       ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
       replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
       ...(pending.hands_on ? { handsOn: pending.hands_on } : {}),

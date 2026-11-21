@@ -555,6 +555,9 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const rawPlugin = req.headers['x-walnut-plugin-id']
     const { programStartSource } = await import('../../core/sessions/plugin-run.js')
     const programSource = await programStartSource({ sid: callerSid, pluginId: (Array.isArray(rawPlugin) ? rawPlugin[0] : rawPlugin)?.trim() || undefined }, id)
+    // A plugin job its host's daemon vouched for (core/plugin-jobs/job-caller.ts): the mode ceiling's caller.
+    const { vouchedPluginJob } = await import('../../core/plugin-jobs/job-caller.js')
+    const callerJob = vouchedPluginJob(req) ?? undefined
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
     const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
@@ -582,6 +585,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         replyTimeoutSecs: typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined,
         handsOn: str('hands_on'),
         callerSid,
+        ...(callerJob ? { callerJob } : {}),
         startAttemptId: str('start_attempt_id'),
         source: programSource ?? startRouteSource('api-v1', req.headers),
         // An agent's start answers once its session is up or the start failed (a sync call,
