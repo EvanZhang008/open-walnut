@@ -36,6 +36,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, seedColumns } from './draft-helpers'
 import { backToDevices, openWay } from './devices-ways-helpers'
 import { goToSessionFolder } from './todo-panel-helpers'
+import { noise } from '../../helpers/incompressible'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -256,14 +257,13 @@ function longTranscript(sid: string, cwd: string, bytes: number): { text: string
   const lines: string[] = []
   let size = 0
   let parent: string | null = null
-  const pad = 'x'.repeat(4000)
   const t0 = Date.parse('2026-09-01T00:00:00Z')
   let i = 0
   for (; size < bytes; i++) {
     const u = `slow-u-${i}`
     const a = `slow-a-${i}`
     const user = JSON.stringify({ type: 'user', uuid: u, parentUuid: parent, sessionId: sid, cwd, timestamp: new Date(t0 + i * 2000).toISOString(), message: { role: 'user', content: `slow history ${i}: question` } })
-    const asst = JSON.stringify({ type: 'assistant', uuid: a, parentUuid: u, sessionId: sid, cwd, timestamp: new Date(t0 + i * 2000 + 1000).toISOString(), message: { id: `msg_slow_${i}`, role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: `slow history ${i}: answer ${pad}` }] } })
+    const asst = JSON.stringify({ type: 'assistant', uuid: a, parentUuid: u, sessionId: sid, cwd, timestamp: new Date(t0 + i * 2000 + 1000).toISOString(), message: { id: `msg_slow_${i}`, role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: `slow history ${i}: answer ${noise(4000)}` }] } })
     lines.push(user, asst)
     size += user.length + asst.length + 2
     parent = a
@@ -290,7 +290,8 @@ test('a long history on a slow link that answers: the column keeps what it shows
   const file = boxTranscript(fx, sid)
   expect(file, 'the session transcript on the box').toBeTruthy()
   const firstLine = JSON.parse(fs.readFileSync(file!, 'utf-8').split('\n')[0] || '{}') as { cwd?: string }
-  // About 5MB: the cold tail (4MB) takes longer than the 60s a request may wait at 64KB/s.
+  // About 5MB: the cold tail (4MB) takes longer than the 60s a request may wait at 64KB/s. Its
+  // answers are noise: the range reads come gzipped, and a repeated pad crossed the link in seconds.
   const long = longTranscript(sid, firstLine.cwd ?? fx.projects, 5 * 1024 * 1024)
   fs.writeFileSync(file!, long.text)
   // From a connected link: the test before left the companion unreachable, and
@@ -347,8 +348,9 @@ test('a file still arriving on a slow link: the viewer says it is loading from C
   await setLink('pass')
   // In the session's folder on the box: its first 512KB take longer than 60s at 8KB/s.
   const name = `slow-600k-${browserName}.log`
-  const line = 'slow file line 0123456789 abcdefghijklmnopqrstuvwxyz\n'
-  fs.writeFileSync(path.join(fx.projects, 'alpha', name), line.repeat(Math.ceil((600 * 1024) / line.length)))
+  // Noise after the words it looks for: the range reads come gzipped, and a repeated line packs a hundred times.
+  const line = () => `slow file line 0123456789 ${noise(40)}\n`
+  fs.writeFileSync(path.join(fx.projects, 'alpha', name), Array.from({ length: Math.ceil((600 * 1024) / line().length) }, line).join(''))
   await seedColumns(page, [sid])
   await loadHome(page)
   const column = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)

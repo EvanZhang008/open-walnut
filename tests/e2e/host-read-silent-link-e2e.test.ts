@@ -27,7 +27,6 @@
  * that is set.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import net from 'node:net'
@@ -37,6 +36,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../helpers/cloud-box-replica.js'
 import { startSilentLinkProxy, type SilentLinkProxy } from '../helpers/silent-link-proxy.js'
 import { isolateFromRealSsh, type SshIsolation } from '../helpers/isolate-ssh.js'
+import { noise } from '../helpers/incompressible.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-read-silent-link'))
 
@@ -46,16 +46,6 @@ import { CLOUD_BOX_HOST_ALIAS as A } from '../../src/core/hosts/cloud-box-host.j
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
 import { getDaemonConnectState } from '../../src/providers/daemon-connection.js'
 import { exportSessionProjection, exportSessionTranscripts, _resetTranscriptSweepForTesting } from '../../src/core/session-projection.js'
-
-/**
- * `n` characters no compression shrinks (random base64). A file this suite moves over a slow
- * link must take its time there: a range read from another host comes gzipped
- * (fs-read-range-gz-v1), and a repeated line packs a hundred times, so 3MB crossed the 64KB/s
- * link in 4s and no request ever waited (CI, 2026-11-21).
- */
-function noise(n: number): string {
-  return randomBytes(Math.ceil((n * 3) / 4)).toString('base64').slice(0, n)
-}
 
 const OUT = process.env.HOST_READ_SILENT_OUT
 const report: Record<string, unknown> = {}
