@@ -22,6 +22,7 @@
 import { sha12 } from '../kind.js'
 import type { SessionModelCatalogEntry } from '../../types.js'
 import type { CopyKind } from './copy-kind.js'
+import { taskFree } from '../host-private.js'
 import { createFileCopy } from './file-copy.js'
 
 export const MODEL_CATALOGS_SCHEMA_VERSION = 1
@@ -67,6 +68,7 @@ export const MODEL_CATALOGS_KIND: CopyKind<ModelCatalogRow> = {
   ordered: false,
   digest: false,
   choice: 'sessions',
+  owners: taskFree('each host\'s list of models: no task\'s own rows'),
   rows: leaderRows,
   watch: (soon) => {
     let stop: (() => void) | null = null

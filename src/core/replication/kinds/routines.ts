@@ -110,6 +110,11 @@ function hashOf(row: RoutineRow): string {
 }
 
 
+/** A task id field as a ref (anything else: none). */
+function taskRef(v: unknown): string | undefined {
+  return typeof v === 'string' && v ? `task:${v}` : undefined
+}
+
 export const ROUTINES_KIND: CopyKind<RoutineRow> = {
   kind: 'routines',
   schemaVersion: ROUTINES_SCHEMA_VERSION,
@@ -118,6 +123,8 @@ export const ROUTINES_KIND: CopyKind<RoutineRow> = {
   ordered: true,
   digest: false,
   choice: 'routines',
+  // The task it delivers into, tells first and acts for.
+  owners: (r) => [taskRef((r.job.executor?.config as { target?: unknown } | undefined)?.target), taskRef(r.job.ownerTaskId), taskRef(r.job.checkActsFor)],
   rows: () => readRoutineRows(),
   // The store's one write point, not the bus: its writers tell the browser sockets only (store-writes.ts).
   watch: (soon) => onStoreWrite('routines', soon),

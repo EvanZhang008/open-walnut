@@ -23,6 +23,7 @@ import { log } from '../../../logging/index.js'
 import { configCopyRows, configRowAdmissible, type ConfigCopyRow } from '../config-allowlist.js'
 import { sha12 } from '../kind.js'
 import type { CopyKind } from './copy-kind.js'
+import { taskFree } from '../host-private.js'
 import { createFileCopy } from './file-copy.js'
 
 export const CONFIG_SCHEMA_VERSION = 1
@@ -83,6 +84,7 @@ export const CONFIG_KIND: CopyKind<ConfigCopyRow> = {
   ordered: false,
   digest: false,
   choice: 'config',
+  owners: taskFree('the allowlisted settings: no task\'s own rows'),
   rows: leaderRows,
   watch: (soon) => {
     let stop: (() => void) | null = null

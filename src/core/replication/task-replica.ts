@@ -18,6 +18,9 @@
  * kept against the row object itself: the store keeps an unchanged row's object
  * between writes, so a round hashes only what changed.
  *
+ * A host target takes the tasks without the ones Walnut keeps local
+ * (host-private.ts): a row turned local leaves its copy at the next round.
+ *
  * Over POST /bridge/replica on every target of replica-targets.ts (the
  * companion through cloud-ingest.ts postToCloudReplica, a host over its
  * daemon's stream), one target after another. A companion without the route
@@ -37,6 +40,7 @@ import { noteManifestTaken, runDeltaRound, type DeltaKind } from './kind-delta.j
 import { _resetReplicaStatusForTesting, confirmWaiting, dropTargetsNotIn, forgetKindManifests, kindState, peekKindState } from './replica-status.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import { answeredBy, noteRefusalEnded, noteRoundFailure } from './round-outage.js'
+import { hostManifest, hostPrivacyNow, leavesOutPrivate, taskFree, type HostPrivacy } from './host-private.js'
 
 const DEBOUNCE_MS = 3_000
 const SWEEP_MS = 5 * 60_000
@@ -61,6 +65,7 @@ function hashOf(row: Task): string {
  */
 export const TASKS_KIND: DeltaKind<Task> = {
   kind: 'tasks',
+  owners: (t) => [`task:${t.id}`],
   schemaVersion: TASKS_SCHEMA_VERSION,
   key: (t) => t.id,
   hash: hashOf,
@@ -71,6 +76,7 @@ export const TASKS_KIND: DeltaKind<Task> = {
 /** The `registry` kind: projects, folders and custom tiers as one document. */
 export const REGISTRY_KIND: LeaderKind<TaskReplicaRegistry> = {
   kind: 'registry',
+  owners: taskFree('projects, folders and focus tiers: no task\'s own rows'),
   schemaVersion: REGISTRY_SCHEMA_VERSION,
   key: () => 'registry',
   hash: (r) => sha12(JSON.stringify(r)),
@@ -86,6 +92,8 @@ export interface TaskReplicaDeps {
   available?: () => Promise<boolean>
   /** Every follower (replica-targets.ts): the companion and each host server or host replica. */
   targets?: () => ReplicaTarget[]
+  /** What hosts never hold, from this round's rows (host-private.ts hostPrivacyNow). */
+  privacy?: (tasks: readonly Task[]) => Promise<HostPrivacy>
 }
 
 async function defaultDeps(): Promise<TaskReplicaDeps> {
@@ -156,7 +164,23 @@ export async function syncTaskReplica(deps?: TaskReplicaDeps): Promise<TaskRepli
         tasks: await buildKindManifest(TASKS_KIND, [...view.tasks]),
         registry: await buildKindManifest(REGISTRY_KIND, [view.registry]),
       }
-      for (const s of ready) await serveTarget(s, manifests, asOf, results)
+      // A host takes the tasks without the ones kept local; worked out once per round, for a host only.
+      let hostTasks: Promise<KindManifest<Task>> | null = null
+      const tasksFor = (s: Served): Promise<KindManifest<Task>> => (!leavesOutPrivate(s.target)
+        ? Promise.resolve(manifests.tasks)
+        : (hostTasks ??= (d.privacy ?? hostPrivacyNow)(view.tasks).then((p) => hostManifest(TASKS_KIND, manifests.tasks, p))))
+      for (const s of ready) {
+        let tasks: KindManifest<Task>
+        try {
+          tasks = await tasksFor(s)
+        } catch (err) {
+          // Never the whole store instead: this host takes nothing this round.
+          const error = err instanceof Error ? err.message : String(err)
+          results.push(named(s, { kind: 'tasks', action: 'failed', error }))
+          continue
+        }
+        await serveTarget(s, { ...manifests, tasks }, asOf, results)
+      }
     } while (me.rerun)
   } finally {
     running = null

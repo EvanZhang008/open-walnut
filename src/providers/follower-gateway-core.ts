@@ -12,7 +12,9 @@
  *   a session's call   the follower first; it not linked, or answering `needs_leader` or
  *                      an unsupported code, the daemon's own away answer as before
  *                      (offlineHost.handle). A read with no answer in time goes there too;
- *                      a write with none is `hub_timeout` (it may have run: never twice)
+ *                      a write with none is `hub_timeout` (it may have run: never twice).
+ *                      A refusal the follower marks `detail.final` (a task the Mac keeps
+ *                      local, which this host holds none of) is the caller's answer
  *   a plugin job's     the follower's answer is final; no follower: `hub_unreachable`
  *   a same-host send   while the leader answers (`online`, 'follower-peer-v1'): handed to a
  *                      follower that said `answersOnline`, in place of the daemon's own
@@ -224,7 +226,10 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     pending.delete(relayId)
     deps.clearTimer(e.timer)
     const code = !resp.ok && resp.error ? resp.error.code : ''
-    if (e.call.fallback && FALLS_BACK.indexOf(code) !== -1) {
+    // `final`: the follower's word stands (a same-host send while the leader answers still goes on).
+    const detail = !resp.ok && resp.error ? resp.error.detail as { final?: unknown } | undefined : undefined
+    const final = !e.call.online && !!detail && typeof detail === 'object' && detail.final === true
+    if (e.call.fallback && FALLS_BACK.indexOf(code) !== -1 && !final) {
       deps.log('info', 'gateway: this host\'s Walnut server handed the call back', { relayId, code, op: e.call.payload.name })
       e.call.fallback()
       return 'ok'

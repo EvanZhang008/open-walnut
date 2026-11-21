@@ -20,6 +20,11 @@
  *              answers with its own away code ("gateway: daemon offline answer used").
  *   wake       the Mac holds each exactly once; B answers rq2 with the Mac awake; asleep and awake
  *              again, nothing changes.
+ *   local      (core/replication/host-private.ts) in a project that syncs to a fixture service of
+ *              the Mac: a task created Local never reaches the replica's copy, one made local
+ *              after it was copied leaves it at the next round, and a host session's call about
+ *              either while the Mac sleeps is `needs_leader {why:'task_kept_local'}`, by both doors,
+ *              with no daemon away answer.
  *
  * Twins: as tests/e2e/replica-cluster-e2e.test.ts (REPLICA_CLUSTER_TWINS picks).
  */
@@ -31,7 +36,7 @@ import type { HostCallOutcome } from '../../src/providers/host-call-client-core.
 import { BUN, sleep, startReplicaCluster, waitFor, WINDOWS, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
 import {
   callEnvOf, entryCall, entryGiven, gatewayCall, hostDaemonLog, hostJournal as journal, hostStream, keepLogsOnFailure, macSessions, macTasks,
-  replicaKnowsDefaultHost, sessionCliEnv,
+  replicaKnowsDefaultHost, replicaRows, sessionCliEnv,
 } from '../helpers/replica-cluster-reads.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
@@ -42,6 +47,27 @@ const T = {
   letter: 'Venue booking review', fire: 'The venue watch fired: look at e1.',
 } as const
 const OFFLINE_LINE = 'gateway: daemon offline answer used'
+/** A fixture task service of the Mac (a no-op sync): a project that syncs to it is where a task is kept local. */
+const SERVICE = 'acmesync'
+const SERVICE_CONFIG = ['plugins:', `  ${SERVICE}:`, '    enabled: true', 'private_tasks:', '  providers:', `    ${SERVICE}:`, '      check: false']
+function seedService({ macData }: { macData: string }): void {
+  const dir = path.join(macData, 'plugins', SERVICE)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: SERVICE, name: 'Acme sync', version: '1.0.0', external: true }))
+  const noops = ['deleteTask', 'updateTitle', 'updateDescription', 'updateSummary', 'updateNote', 'updateConversationLog', 'updatePriority', 'updatePhase',
+    'updateDueDate', 'updateProject', 'updateDependencies', 'associateSubtask', 'disassociateSubtask', 'syncPoll']
+  fs.writeFileSync(path.join(dir, 'index.mjs'), `const noop = async () => {};
+export default function register(api) {
+  api.registerSync({ createTask: async () => null, pushTask: async () => ({ serverTimestamp: new Date().toISOString() }), ${noops.map((n) => `${n}: noop`).join(', ')} });
+}
+`)
+}
+/** The replica's copy of the tasks, by id. */
+const replicaTaskIds = (c: ReplicaCluster): string[] => replicaRows(c, 'SELECT id FROM tasks', path.join('tasks', 'tasks.sqlite')).map((r) => String(r.id))
+/** The ids the replica's copy says the Mac keeps local (kinds/local-tasks.ts). */
+function replicaLocalTasks(c: ReplicaCluster): string[] {
+  try { return Object.keys((JSON.parse(fs.readFileSync(path.join(c.replicaData, 'cache', 'replica', 'local-tasks.json'), 'utf8')) as { rows?: Record<string, unknown> }).rows ?? {}) } catch { return [] }
+}
 const HANDED = 'gateway: handed to this host\'s Walnut server'
 
 /** Lines of the daemon log written since `from` (ms). */
@@ -103,7 +129,7 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
   }
 
   beforeAll(async () => {
-    c = await startReplicaCluster({ twin, macConfigExtra: ['experimental:', '  host_call_entry: true'] })
+    c = await startReplicaCluster({ twin, seedMac: seedService, macConfigExtra: ['experimental:', '  host_call_entry: true', ...SERVICE_CONFIG] })
     process.stdout.write(`replica-cluster-host-calls-e2e: ${twin} cluster at ${c.base}\n`)
     hostCwd = fs.realpathSync(path.join(c.base, 'hh', 'work'))
     gate1 = path.join(hostCwd, 'gate-rq1')
@@ -304,6 +330,53 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     await c.waitBack(token)
     await sleep(5_000)
     expect({ ...(await macHolds()), reply2: deliveries(c, a.sid, T.reply2) }).toEqual(before)
+  }, 600_000)
+
+  it('a task kept local never reaches the host\'s copy, one made local leaves it, and a call about it while the Mac sleeps is needs_leader task_kept_local', async () => {
+    keepLogsOnFailure(() => c, `host-calls-${twin}`)
+    const project = await c.mac('POST', '/api/v1/projects', { name: 'Vault', source: SERVICE })
+    expect(project.status, JSON.stringify(project.json)).toBeLessThan(300)
+    // Created Local: the Mac holds it, the copy never does.
+    const born = await c.mac('POST', '/api/v1/tasks', { title: 'Appraisal notes for the review', project: 'Vault', local: true })
+    expect(born.status, JSON.stringify(born.json)).toBe(201)
+    const bornLocal = String(born.json.task.id)
+    expect(born.json.task.sync_hold?.state, JSON.stringify(born.json.task)).toBe('chosen')
+    const later = await c.mac('POST', '/api/v1/tasks', { title: 'Vault inventory', project: 'Vault' })
+    expect(later.status, JSON.stringify(later.json)).toBe(201)
+    const madeLocal = String(later.json.task.id)
+    expect(later.json.task.sync_hold, 'a task of the service, not held').toBeUndefined()
+    await waitFor(() => (replicaTaskIds(c).includes(madeLocal) ? true : null), 120_000, 'the synced task to reach the copy')
+    expect(replicaTaskIds(c), 'the Local task never reached the copy').not.toContain(bornLocal)
+    await waitFor(() => (replicaLocalTasks(c).includes(bornLocal) ? true : null), 120_000, 'the copy to name the Local task kept on the Mac')
+    // Made local after it was copied: it leaves the copy at the next round.
+    const ml = await c.mac('POST', `/api/v1/tasks/${madeLocal}/make-local`, {})
+    expect(ml.status, JSON.stringify(ml.json)).toBe(200)
+    await waitFor(() => (!replicaTaskIds(c).includes(madeLocal) && replicaLocalTasks(c).includes(madeLocal) ? true : null), 120_000, 'the task made local to leave the copy')
+    expect(replicaTaskIds(c)).not.toContain(bornLocal)
+    expect(macTasks(c).map((t) => t.id)).toEqual(expect.arrayContaining([bornLocal, madeLocal]))
+
+    // The Mac sleeps: a host session's call about either is the follower's needs_leader, by both doors.
+    const slept = c.sleepMac()
+    await c.waitAway(token)
+    const quietAt = slept.after + WINDOWS.quietMs + 1_000
+    if (Date.now() < quietAt) await sleep(quietAt - Date.now())
+    const refusals = {
+      read: answerOf(await entryCall(entry, a.sid, 'task_get', { id: madeLocal }), 'task_get'),
+      write: answerOf(await entryCall(entry, a.sid, 'task_update', { id: bornLocal, tags: ['vault'] }), 'task_update'),
+      send: await gatewayCall(c, b.sid, 'task_send', { to: bornLocal, text: 'please look at the appraisal', expect_reply: false }),
+      short: await gatewayCall(c, b.sid, 'task_get', { id: madeLocal.slice(0, 8) }),
+    }
+    show('kept local refusals', refusals)
+    for (const [name, r] of Object.entries(refusals)) {
+      expect(r.ok, `${name}: ${JSON.stringify(r).slice(0, 1500)}`).toBe(false)
+      expect(r.error?.code, `${name}: ${JSON.stringify(r).slice(0, 1500)}`).toBe('needs_leader')
+      expect(r.error?.detail?.why, `${name}: ${JSON.stringify(r).slice(0, 1500)}`).toBe('task_kept_local')
+    }
+    // Another task still answers from the copy.
+    okOf(answerOf(await entryCall(entry, a.sid, 'task_get', { id: b.task }), 'task_get open'))
+    expect(logSince(c, slept.after).filter((l) => l.msg === OFFLINE_LINE).map((l) => `${l.op}:${l.why}`)).toEqual([])
+    c.wakeMac()
+    await c.waitBack(token)
   }, 600_000)
 
 })

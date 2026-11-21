@@ -31,6 +31,7 @@ export const NOTIFICATIONS_KIND: CopyKind<NotificationRecord> = {
   ordered: false,
   digest: false,
   choice: 'inbox',
+  owners: (n) => [n.taskId && `task:${n.taskId}`, n.sessionId && `session:${n.sessionId}`],
   rows: async () => (await listNotifications()).feed.filter(cardOk),
   watch: (soon) => onNotificationStoreWritten(soon),
 }

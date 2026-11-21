@@ -60,7 +60,7 @@ const NOUNS: Record<string, string> = {
   boards: 'boards', inbox: 'letters', 'inbox-bodies': 'letter bodies', notes: 'notes', memory: 'memory entries',
   skills: 'skills', attachments: 'attachments', conversations: 'chats', 'conversation-bodies': 'chat messages',
   routines: 'routines', notifications: 'notification cards', personas: 'agents', 'model-catalogs': 'model lists',
-  'stt-vocab': 'vocabulary words', devices: 'devices', config: 'settings', prefs: 'layout settings',
+  'stt-vocab': 'vocabulary words', devices: 'devices', config: 'settings', prefs: 'layout settings', 'local-tasks': 'local task ids',
 };
 
 /** What a kind's rows are called in a sentence, in the words the person knows them by. */

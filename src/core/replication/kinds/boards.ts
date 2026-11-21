@@ -101,6 +101,7 @@ export const BOARDS_KIND: CopyKind<BoardFile> = {
   ordered: false,
   digest: false,
   choice: 'boards',
+  owners: (b) => [`task:${b.task_id}`],
   rows: () => leaderBoards(),
   keep: (rows) => unreadableOf.get(rows) ?? [],
   watch: (soon) => {

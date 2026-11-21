@@ -32,6 +32,7 @@ import { redactSensitiveText } from '../../../logging/redact.js'
 import { sha12 } from '../kind.js'
 import { onStoreWrite } from '../store-writes.js'
 import type { CopyKind } from './copy-kind.js'
+import { taskFree } from '../host-private.js'
 import { agentSegmentOk, conversationIdOk, conversationRowKey, readConversationRows } from './conversations.js'
 
 export const CONVERSATION_BODIES_SCHEMA_VERSION = 1
@@ -258,6 +259,9 @@ export const CONVERSATION_BODIES_KIND: CopyKind<ConversationBodyRow> = {
   ordered: false,
   digest: false,
   choice: 'conversation_bodies',
+  // A chat's messages are its list row's: an ask of a kept task leaves both out.
+  owners: (r) => [`conversations:${conversationRowKey(r.agent, r.id)}`],
+  derivedFrom: 'conversations',
   rows: () => leaderConversationBodies(),
   keep: (rows) => unreadOf.get(rows) ?? [],
   // An index write is a turn (or a list change); the sweep reads the active ones again.

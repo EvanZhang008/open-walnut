@@ -17,6 +17,7 @@ import {
   UNSUPPORTED_REST_MS, manifestHashOf, manifestKeysHashOf, type ConfirmFor, type ManifestEntry,
 } from './kind.js'
 import { kindState, type KindState } from './replica-status.js'
+import type { RowOwners } from './host-private.js'
 
 export interface LeaderKind<Row> {
   kind: string
@@ -39,6 +40,10 @@ export interface LeaderKind<Row> {
    * the same rows as the manifest. Undefined: the sync names none.
    */
   window?(rows: readonly Row[]): Record<string, unknown> | undefined
+  /** Whose each row is, or why it is no one's (host-private.ts): a host never takes a kept task's rows. */
+  owners?: RowOwners<Row>
+  /** The kind whose rows `owners` names as `<kind>:<key>` (host-private.ts). */
+  derivedFrom?: string
 }
 
 /** The row a put sends for `k` (kind.loadRow when the kind has one). */

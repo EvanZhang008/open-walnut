@@ -38,6 +38,7 @@ import { replicaKey, refOfReplicaKey } from '../../src/core/search/replica-refs.
 import { companionSearchReady } from '../../src/core/search/companion-ready.js'
 import { drainBackfill, paragraphs, vecRows } from '../lib/text-embed-index.js'
 import type { CompanionSearchMode } from '../../src/core/replication/search-replica-wire.js'
+import { hostPrivacyOf } from '../../src/core/replication/host-private.js'
 
 const MAC_HOME = '/Users/someone/.open-walnut'
 const TEXT_WORKER = new URL('../lib/fixtures/text-embed-worker.cjs', import.meta.url).pathname
@@ -196,6 +197,26 @@ describe('the companion copy of the search index', () => {
     expect(await syncSearchReplica(keeping)).toEqual([expect.objectContaining({ action: 'synced', inSync: true })])
     expect(copyDoc('note', lantern)?.title).toBe('Lantern notes, edited')
     expect(copyDoc('memory', memoryDoc)).toBeDefined()
+  })
+
+  it('a host never holds the docs of a task kept local and of its sessions; one it held goes at the next round', async () => {
+    let kept: string[] = []
+    const host: ReplicaTarget = { ...companion, id: 'host:devbox', kind: 'host', label: 'devbox' }
+    targets = [host]
+    const hosting: SearchReplicaDeps = { ...deps, privacy: async () => hostPrivacyOf([{ id: 't-1', ...(kept.includes('t-1') ? { sync_hold: { target: 'acme', state: 'chosen', at: 'x' } } : {}) }], [{ claudeSessionId: 's-1', taskId: 't-1' }]) }
+    kept = ['t-1']
+    expect(await syncSearchReplica(hosting)).toEqual([expect.objectContaining({ target: 'host:devbox', action: 'synced', need: 2, inSync: true })])
+    expect(copyDoc('task', 't-1')).toBeUndefined()
+    expect(copyDoc('session', 's-1')).toBeUndefined()
+    expect(copyDoc('memory', path.join(WALNUT_HOME, 'memory', 'MEMORY.md'))).toBeDefined()
+    // Released: both come; kept again: both go, as a choice's docs do.
+    kept = []
+    await syncSearchReplica(hosting)
+    expect(copyDoc('task', 't-1')).toBeDefined()
+    kept = ['t-1']
+    expect(await syncSearchReplica(hosting)).toEqual([expect.objectContaining({ action: 'synced', removed: 2, inSync: true })])
+    expect(copyDoc('task', 't-1')).toBeUndefined()
+    expect(copyDoc('session', 's-1')).toBeUndefined()
   })
 
   it('leaving out most of a large copy is the user\'s choice: applied, never refused as an emptied index (4f)', async () => {

@@ -61,6 +61,9 @@ export const INBOX_KIND: CopyKind<LetterRecord> = {
   ordered: true,
   digest: true,
   choice: 'inbox',
+  // The sending task and session, the absence thread's node, and every task the letter cites.
+  owners: (l) => [l.sender.taskId && `task:${l.sender.taskId}`, l.sender.sessionId && `session:${l.sender.sessionId}`,
+    l.awayThread?.taskId && `task:${l.awayThread.taskId}`, ...(l.taskRefs ?? []).map((id) => `task:${id}`)],
   // An index this leader failed to read throws (no round), never answers an empty inbox.
   rows: async () => (await import('../../human-inbox/store.js')).readLetterIndexForReplica({ readErrors: 'throw' }),
   watch: (soon) => watchLetters(soon),
@@ -140,6 +143,9 @@ export const INBOX_BODIES_KIND: CopyKind<LetterBodyRow> = {
   ordered: false,
   digest: false,
   choice: 'inbox_bodies',
+  // A body is its letter's (`<letter id>[.rN].html|md`): a letter left out leaves its bodies out.
+  owners: (b) => [`inbox:${b.name.split('.')[0]}`],
+  derivedFrom: 'inbox',
   rows: () => leaderBodies(),
   keep: (rows) => unreadableBodiesOf.get(rows) ?? [],
   watch: (soon) => watchLetters(soon),

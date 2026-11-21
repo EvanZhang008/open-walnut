@@ -33,12 +33,14 @@ import { MODEL_CATALOGS_KIND, modelCatalogsFollower } from './model-catalogs.js'
 import { STT_VOCAB_KIND, sttVocabFollower } from './stt-vocab.js'
 // Stage 4d: the Mac's notification feed, for the box's feeds while the Mac is away.
 import { NOTIFICATIONS_KIND, notificationsFollower } from './notifications.js'
+// What hosts never hold (host-private.ts): the ids of the tasks kept local, for the host's own answers.
+import { LOCAL_TASKS_KIND, localTasksFollower } from './local-tasks.js'
 
 /** The leader's copy kinds, in the order a round serves them. */
 export function copyKinds(): CopyKind<any>[] {
   return [SESSIONS_KIND, REQUESTS_KIND, BOARDS_KIND, INBOX_KIND, INBOX_BODIES_KIND,
     ROUTINES_KIND, CONVERSATIONS_KIND, PREFS_KIND, CONFIG_KIND, PERSONAS_KIND, CONVERSATION_BODIES_KIND, MODEL_CATALOGS_KIND,
-    STT_VOCAB_KIND, NOTIFICATIONS_KIND]
+    STT_VOCAB_KIND, NOTIFICATIONS_KIND, LOCAL_TASKS_KIND]
 }
 
 /**
@@ -62,7 +64,7 @@ export function copyKeepersOnly(h: FollowerKindHandler): FollowerKindHandler {
 export function registerCopyFollowerKinds(): () => void {
   const off = [sessionsFollower(), requestsFollower(), boardsFollower(), inboxFollower(), inboxBodiesFollower(),
     routinesFollower(), conversationsFollower(), prefsFollower(), configFollower(), personasFollower(),
-    conversationBodiesFollower(), modelCatalogsFollower(), sttVocabFollower(), notificationsFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
+    conversationBodiesFollower(), modelCatalogsFollower(), sttVocabFollower(), notificationsFollower(), localTasksFollower()].map((h) => registerFollowerKind(copyKeepersOnly(h)))
   return () => { for (const u of off) u() }
 }
 

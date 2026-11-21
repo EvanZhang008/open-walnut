@@ -65,6 +65,9 @@ export const REQUESTS_KIND: CopyKind<SessionRequest> = {
   ordered: false,
   digest: false,
   choice: 'requests',
+  // The asker's and the target's: a request of a kept task, either end, stays on the Mac.
+  owners: (r) => [r.toTaskId && `task:${r.toTaskId}`, `session:${r.fromSessionId}`, r.toSessionId && `session:${r.toSessionId}`,
+    ...(r.carriedBy ?? []).map((c) => c.taskId && `task:${c.taskId}`)],
   rows: async () => (await import('../../session-requests.js')).listAllSessionRequests(),
   window: requestsWindowOf,
   watch: (soon) => {

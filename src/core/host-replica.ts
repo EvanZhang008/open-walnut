@@ -47,6 +47,7 @@ import { daemonKeeperAlias, daemonTwinGroups, type NetSwitch, type TwinRows } fr
 import { HOST_REPLICA_MOVES, mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovePair } from './replication/manifest-moves.js'
 import { noteMoves } from './notes/note-path-moves.js'
 import { walnutOwnedNote } from './notes/vault-files.js'
+import { artifactsByProject, artifactsDir } from './artifacts/paths.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
@@ -506,6 +507,23 @@ export async function confirmHostReplicaRemoval(hostKey: string, kind: ReplicaKi
   return true
 }
 
+/** The vault holds the tasks' own folders (the one tree by task id, whose vault is the artifacts folder). */
+function vaultHoldsTaskFolders(): boolean {
+  if (artifactsByProject()) return false
+  const rel = path.relative(notesRoot(), path.join(artifactsDir(), 'nodes'))
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+/**
+ * The folders of the tasks kept local, which a host's notes copy leaves out as it leaves out the
+ * user's own choices (replication/host-private.ts): their notes, their pictures, and what the host
+ * is told it lacks. None for the companion, which holds every task.
+ */
+async function keptFoldersFor(target: ReplicaTarget): Promise<string[]> {
+  if (target.companion || !vaultHoldsTaskFolders()) return []
+  return (await import('./replication/host-private.js')).keptVaultFolders(notesRoot())
+}
+
 async function searchExclude(config: Config): Promise<string[]> {
   return cleanKeepEntries((config as { search?: { excluded_folders?: unknown } }).search?.excluded_folders)
 }
@@ -525,8 +543,12 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   let entries: ReplicaEntry[]
   let bodies: Map<string, string> | null = null
   let extras: Extras | null = null
+  let kept: string[] = []
   if (kind === 'notes') {
+    // The walk first: hosts that start a round together share it.
     entries = await noteEntries(keep.notesExclude)
+    kept = await keptFoldersFor(target)
+    if (kept.length > 0) entries = entries.filter((e) => !leftOut(e.k, kept))
   } else {
     bodies = await jsonBodies(kind)
     entries = [...bodies].map(([k, body]) => ({ k, h: sha12(body), n: Buffer.byteLength(body) }))
@@ -536,7 +558,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     entries.push(...extras.entries)
   }
   const opts = kind === 'notes'
-    ? { searchExclude: await searchExclude(config), keepExclude: keep.notesExclude, tooBig: notesTooBig() }
+    ? { searchExclude: await searchExclude(config), keepExclude: [...keep.notesExclude, ...kept], tooBig: notesTooBig() }
     : undefined
   const manifestHash = sha12(JSON.stringify([entries, opts ?? null]))
   if (lastManifest.get(memoKey) === manifestHash) {
@@ -723,7 +745,7 @@ export async function syncHostReplica(target: ReplicaTarget): Promise<ReplicaRou
 }
 
 async function attachmentsRound(target: ReplicaTarget, keep: HostKeep): Promise<void> {
-  const r = await syncAttachments(target, { on: keep.attachments, exclude: keep.notesExclude })
+  const r = await syncAttachments(target, { on: keep.attachments, exclude: [...keep.notesExclude, ...(await keptFoldersFor(target))] })
   if (r.action === 'failed') noteRoundFailure(log.session, 'host replica attachments', target.hostKey, r.error ?? 'failed', { kind: 'attachments' }, { message: 'host replica: attachments round failed' })
   // `skipped` sent nothing (a refusal held back, an older host); anything else leaves the host holding the pictures' list.
   else if (r.action !== 'skipped') noteRefusalEnded(log.session, 'host replica attachments', target.hostKey, 'attachments')

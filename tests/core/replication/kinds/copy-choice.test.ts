@@ -51,8 +51,11 @@ describe('the copied kinds choice', () => {
     expect(hostServerSettingsFrom({ enabled: true, copies: { inbox: false, boards: 'x' } }).copies).toEqual({ inbox: false })
   })
 
-  it('names a choice for every copy kind', () => {
-    for (const k of copyKinds()) expect(Object.keys(DEFAULT_COPY_CHOICE)).toContain(k.choice)
-    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications'])
+  it('names a choice for every copy kind but the list of local tasks, which goes with the tasks', () => {
+    for (const k of copyKinds()) {
+      if (k.kind === 'local-tasks') expect(k.choice).toBeUndefined()
+      else expect(Object.keys(DEFAULT_COPY_CHOICE)).toContain(k.choice)
+    }
+    expect(copyKinds().map((k) => k.kind)).toEqual(['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications', 'local-tasks'])
   })
 })

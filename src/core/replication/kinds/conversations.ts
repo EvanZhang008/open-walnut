@@ -164,6 +164,7 @@ export const CONVERSATIONS_KIND: CopyKind<ConversationRow> = {
   ordered: false,
   digest: false,
   choice: 'conversations',
+  owners: (r) => [r.meta.askTaskId && `task:${r.meta.askTaskId}`],
   rows: () => readConversationRows(),
   keep: (rows) => unreadableOf.get(rows) ?? [],
   // The store's one write point, not the bus: its writers tell the browser sockets only (store-writes.ts).

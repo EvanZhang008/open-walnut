@@ -125,6 +125,7 @@ export const SESSIONS_KIND: CopyKind<SessionRecord> = {
   ordered: false,
   digest: true,
   choice: 'sessions',
+  owners: (s) => [`task:${s.taskId}`, s.legacyTaskId && `task:${s.legacyTaskId}`, `session:${s.claudeSessionId}`],
   rows: async () => {
     const all = await (await import('../../session-tracker.js')).sessionRowsForReplica()
     // Projected in slices: after a full rescan of the store every row is a new object.

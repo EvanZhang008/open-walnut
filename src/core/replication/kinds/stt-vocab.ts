@@ -23,6 +23,7 @@ import { onSttVocabWritten, vocabWords } from '../../stt/vocab.js'
 import { secretShapedValue } from '../config-allowlist.js'
 import { sha12 } from '../kind.js'
 import type { CopyKind } from './copy-kind.js'
+import { taskFree } from '../host-private.js'
 import { createFileCopy } from './file-copy.js'
 import { copyKindAsOf, keepsCopies } from './gate.js'
 
@@ -59,6 +60,7 @@ export const STT_VOCAB_KIND: CopyKind<SttVocabRow> = {
   ordered: false,
   digest: false,
   choice: 'config',
+  owners: taskFree('the speech vocabulary\'s words: no task\'s own rows'),
   rows: leaderRows,
   watch: (soon) => onSttVocabWritten(soon),
 }

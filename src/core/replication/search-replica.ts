@@ -38,6 +38,7 @@ import { DigestMap } from './search-digest.js'
 import { noteRoundFailure, noteRoundReached } from './round-outage.js'
 import { companionKeepOf } from './companion-keep.js'
 import { keepsAllSearch, searchKeyKept, searchNoteKeyPrefix, type SearchKeep } from './search-replica-keep.js'
+import { hostPrivacyNow, leavesOutPrivate, searchKeyKeptFromHosts, type HostPrivacy } from './host-private.js'
 import {
   companionSearchMode, manifestValue, type CompanionSearchMode, type CompanionSearchReason, type WireDoc,
 } from './search-replica-wire.js'
@@ -73,6 +74,8 @@ export interface SearchReplicaDeps {
   keep?: (target: ReplicaTarget) => Promise<SearchKeep | null>
   /** Where note keys start, for the notes a follower leaves out (search-replica-keep.ts). */
   notePrefix?: string | null
+  /** What a host never holds (host-private.ts): the docs of a task kept local. Absent: hostPrivacyNow. */
+  privacy?: () => Promise<HostPrivacy>
   /**
    * The least time between two synced rounds of one follower (0 or absent: every round).
    * A host follower rests HOST_REST_MS: its copy answers searches only while the Mac is
@@ -346,13 +349,15 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget, urgent = fa
     const keep = deps.keep ? await deps.keep(target) : null
     const filter = keepsAllSearch(keep) ? null : keep
     const notePrefix = deps.notePrefix ?? null
+    // A host never holds a kept-local task's docs (host-private.ts); they go as the choice's do.
+    const privacy = leavesOutPrivate(target) ? await (deps.privacy ?? (() => hostPrivacyNow()))() : null
     const snapshot = new Map<string, string>()
     const dropped = new Set<string>()
     for (const e of map.entries()) {
-      if (searchKeyKept(e.key, filter, notePrefix)) snapshot.set(e.key, e.value)
+      if (searchKeyKept(e.key, filter, notePrefix) && !(privacy && searchKeyKeptFromHosts(e.key, privacy))) snapshot.set(e.key, e.value)
       else dropped.add(e.key)
     }
-    const manifestDigest = filter ? map.digestWhere((k) => snapshot.has(k)) : map.digest
+    const manifestDigest = filter || dropped.size > 0 ? map.digestWhere((k) => snapshot.has(k)) : map.digest
     const reply = await step(target, { op: 'status', mode, model, digest: manifestDigest })
     noteRoundReached(log.memory, 'search replica', target.id)
     const info = {

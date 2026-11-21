@@ -358,6 +358,8 @@ describe('every replication round reports its failures through round-outage', ()
       'host replica: the manifests the hosts took could not be kept on disk',
       'device replica: the pairings could not be read, nothing sent this round',
       'copies: could not read the leader rows of a kind',
+      // The leader could not read which tasks it keeps local (host-private.ts): that host takes nothing of the kind.
+      'copies: could not work out what a host leaves out, the kind waits',
       'copies: the user confirmed a removal of most rows',
       'copies: scheduler round failed',
       'search replica: round crashed',

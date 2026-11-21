@@ -18,6 +18,7 @@ import { log } from '../../../logging/index.js'
 import { secretShapedValue } from '../config-allowlist.js'
 import { sha12 } from '../kind.js'
 import type { CopyKind } from './copy-kind.js'
+import { taskFree } from '../host-private.js'
 import { createFileCopy } from './file-copy.js'
 
 export const PERSONAS_SCHEMA_VERSION = 1
@@ -95,6 +96,7 @@ export const PERSONAS_KIND: CopyKind<PersonaRow> = {
   ordered: false,
   digest: false,
   choice: 'personas',
+  owners: taskFree('the Ask agents\' personas: no task\'s own rows'),
   rows: leaderRows,
   watch: (soon) => {
     const stops: Array<() => void> = []

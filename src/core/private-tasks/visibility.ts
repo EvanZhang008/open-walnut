@@ -13,11 +13,17 @@ import type { ProjectRecord, Task } from '../types.js';
 
 type ProjectSources = Record<string, Pick<ProjectRecord, 'source'>>;
 
+/** A task Walnut keeps local (any `sync_hold`): no outside service reads it, and no host's copy
+ *  holds it (core/replication/host-private.ts). */
+export function keptLocal(task: { sync_hold?: unknown }): boolean {
+  return !!task.sync_hold;
+}
+
 export function keptFromProviders(
   task: Pick<Task, 'source' | 'project'> & { sync_hold?: unknown },
   projects: ProjectSources,
 ): boolean {
-  if (task.sync_hold) return true;
+  if (keptLocal(task)) return true;
   if (task.source && task.source !== 'local') return false;
   // The Inbox is local by definition: no service ever claims it.
   if (isInboxProject(task.project)) return false;

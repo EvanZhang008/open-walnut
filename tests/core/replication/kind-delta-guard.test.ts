@@ -82,7 +82,7 @@ describe('every manifest round of a kind of many rows tries the delta first', ()
       for (let i = 0; i < n; i++) noDigest.push(path.basename(rel, '.ts'))
     }
     expect(noDigest.sort()).toEqual([
-      'boards', 'config', 'conversation-bodies', 'conversations', 'inbox', 'model-catalogs',
+      'boards', 'config', 'conversation-bodies', 'conversations', 'inbox', 'local-tasks', 'model-catalogs',
       'notifications', 'personas', 'prefs', 'requests', 'routines', 'stt-vocab',
     ])
   })

@@ -18,6 +18,8 @@
  *     the companion's is cloud_bridge.copies, replica-targets.ts).
  *     A kind turned off gets one `purge` step: the host drops that kind's store
  *     (kinds/gate.ts) and answers it `needs_leader` while the Mac is away;
+ *   - what a host never holds (host-private.ts): each host target takes the
+ *     kind's manifest without the rows of a task kept local (`owners`);
  *   - the scheduler: a round a few seconds after the kind's own store wrote,
  *     one more after rows a follower held, and the sweep every 5 minutes.
  *     Targets one after another, never in parallel.
@@ -31,6 +33,7 @@ import { forgetTaken, noteManifestTaken, runDeltaRound } from '../kind-delta.js'
 import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
 import { COMPANION_COPY_KINDS } from './gate.js'
+import { hostManifest, hostPrivacyNow, isTaskFree, leavesOutPrivate, type HostPrivacy, type ParentKind, type RowOwners } from '../host-private.js'
 import { answeredBy, noteRefusalEnded, noteRoundFailure } from '../round-outage.js'
 
 export const COPY_DEBOUNCE_MS = 3_000
@@ -74,8 +77,10 @@ export interface CopyKind<Row> extends LeaderKind<Row> {
   rows(): Promise<readonly Row[]>
   ordered: boolean
   digest: boolean
-  /** The choice that turns this kind on for a host (inbox: 'inbox'). */
-  choice: keyof CopyChoice
+  /** The choice that turns this kind on for a host (inbox: 'inbox'); none: copied wherever the kind is kept. */
+  choice?: keyof CopyChoice
+  /** Whose each row is, or why it is no one's (host-private.ts): a host never takes a kept task's rows. */
+  owners: RowOwners<Row>
   /** Calls `soon` whenever the kind's store wrote. Returns the stop. */
   watch(soon: () => void): () => void
   /**
@@ -145,6 +150,13 @@ export interface CopyKindsDeps {
   /** Every follower (replica-targets.ts); each takes the kinds it keeps (keepsCopiesTarget). */
   targets?: () => CopyTarget[]
   now?: () => number
+  /** What hosts never hold this round (host-private.ts hostPrivacyNow). */
+  privacy?: () => Promise<HostPrivacy>
+}
+
+/** The kind is on in `choice` (a kind with no choice of its own always is). */
+function chosen(choice: CopyChoice, kind: CopyKind<unknown>): boolean {
+  return kind.choice === undefined || choice[kind.choice]
 }
 
 async function defaultTargets(): Promise<() => CopyTarget[]> {
@@ -173,7 +185,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
   const asOf = now()
   const manifests = new Map<string, KindManifest<unknown>>()
   for (const kind of kinds) {
-    if (!ready.some((r) => r.choice[kind.choice] && keepsCopiesTarget(r.target, kind.kind))) continue
+    if (!ready.some((r) => chosen(r.choice, kind) && keepsCopiesTarget(r.target, kind.kind))) continue
     try {
       manifests.set(kind.kind, await buildCopyManifest(kind))
     } catch (err) {
@@ -181,6 +193,12 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       log.session.warn('copies: could not read the leader rows of a kind', { kind: kind.kind, error: err instanceof Error ? err.message : String(err) })
     }
   }
+  // Read once per round, and only for a host target (host-private.ts).
+  let privacy: Promise<HostPrivacy> | null = null
+  const privacyNow = (): Promise<HostPrivacy> => (privacy ??= (deps.privacy ?? (() => hostPrivacyNow()))())
+  const resolve = async (name: string): Promise<ParentKind | undefined> => (
+    kinds.find((k) => k.kind === name) ?? (await import('./index.js')).copyKinds().find((k) => k.kind === name)
+  )
   for (const { target: listed, choice } of ready) {
     const target = answeredBy(log.session, 'copies', listed)
     /** The target was not reachable this round: its other kinds wait for the next round, untried. */
@@ -189,7 +207,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       if (!keepsCopiesTarget(target, kind.kind)) continue
       const manifest = manifests.get(kind.kind)
       const st = kindState(target, kind.kind)
-      if (!choice[kind.choice]) {
+      if (!chosen(choice, kind)) {
         // Turned off for this host: it drops what it holds of the kind (once), and its state says so.
         // A host that is away takes the purge in a later round (it stays unpurged until then).
         let removed: number | undefined
@@ -205,7 +223,19 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       }
       purged.delete(st)
       if (!manifest) continue
-      if (away !== null && st.manifest !== manifest.hash) {
+      let taken: KindManifest<unknown>
+      try {
+        // Only a kind of owned rows reads the privacy (a task-free kind is the same for every target).
+        taken = leavesOutPrivate(target) && kind.owners && !isTaskFree(kind.owners)
+          ? await hostManifest(kind, manifest, await privacyNow(), resolve) : manifest
+      } catch (err) {
+        // Never the whole manifest instead: a host that cannot be told what to leave out gets nothing this round.
+        const error = err instanceof Error ? err.message : String(err)
+        log.session.warn('copies: could not work out what a host leaves out, the kind waits', { target: target.id, kind: kind.kind, error })
+        results.push({ target: target.id, kind: kind.kind, action: 'failed', error })
+        continue
+      }
+      if (away !== null && st.manifest !== taken.hash) {
         // The same as a failed step: the kind's copy is not held now, and its manifest goes again.
         Object.assign(st, { manifest: null, action: 'failed', error: away })
         results.push({ target: target.id, kind: kind.kind, action: 'failed', error: away })
@@ -213,7 +243,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
       }
       const startedAt = now()
       try {
-        const r = await runCopyRound(kind, manifest, target, { asOf, now })
+        const r = await runCopyRound(kind, taken, target, { asOf, now })
         results.push({ target: target.id, ...r })
         // `unchanged` here is always a manifest the target holds (the memo, or equal digests).
         if (r.action === 'synced' || r.action === 'unchanged') noteRefusalEnded(log.session, 'copies', target.id, kind.kind)
@@ -264,7 +294,7 @@ const copySoons = new Set<(kind?: string) => void>()
 const copySoon = (kind?: string): void => { for (const soon of copySoons) soon(kind) }
 
 /** Every copy kind's name (web/routes/replicas-status.ts accepts a confirm for these). */
-export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications'] as const
+export const COPY_KIND_NAMES = ['sessions', 'requests', 'boards', 'inbox', 'inbox-bodies', 'routines', 'conversations', 'prefs', 'config', 'personas', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications', 'local-tasks'] as const
 
 /**
  * The user confirmed a removal the half rule refused three rounds in a row (the

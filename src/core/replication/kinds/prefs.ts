@@ -17,6 +17,7 @@ import { readJsonFile } from '../../../utils/fs.js'
 import { secretShapedValue } from '../config-allowlist.js'
 import { sha12 } from '../kind.js'
 import type { CopyKind } from './copy-kind.js'
+import { taskFree } from '../host-private.js'
 import { createFileCopy } from './file-copy.js'
 
 export const PREFS_SCHEMA_VERSION = 1
@@ -80,6 +81,7 @@ export const PREFS_KIND: CopyKind<PrefsRow> = {
   ordered: false,
   digest: false,
   choice: 'prefs',
+  owners: taskFree('layout preferences and favorite projects and notes: no task\'s own rows'),
   rows: leaderRows,
   watch: (soon) => {
     const stops: Array<() => void> = []

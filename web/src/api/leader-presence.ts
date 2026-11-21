@@ -356,6 +356,8 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   companion_leads: 'The cloud companion leads now and routes this message.',
   // A read of a task made on this host while the Mac is away that only the Mac's store answers (away-reads.ts).
   task_made_here_needs_mac: 'This task was made here while your Mac is away; this part of it shows once your Mac has it.',
+  // A task kept local (core/replication/host-private.ts, replica/local-calls.ts): no host keeps a copy of it.
+  task_kept_local: 'This task is kept local on your Mac, so this host keeps no copy of it; it is answered once your Mac is back.',
 }
 
 const GENERIC_REASON = 'Your Mac is not answering right now.'

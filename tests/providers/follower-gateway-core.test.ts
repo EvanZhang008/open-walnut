@@ -87,6 +87,27 @@ describe('follower gateway', () => {
     expect(respond).toHaveBeenCalledWith(refused)
   })
 
+  it('a needs_leader the follower marks final (a task kept local) is the caller\'s answer; a same-host send of it still goes to the leader', () => {
+    const s = setup()
+    const respond = vi.fn()
+    const fallback = vi.fn()
+    s.g.handOff(call({ fallback }), respond)
+    const kept: FollowerGatewayResponse = { ok: false, error: { code: 'needs_leader', message: 'kept local', detail: { why: 'task_kept_local', final: true } } }
+    s.g.settle(s.sock, 101, kept)
+    expect(fallback).not.toHaveBeenCalled()
+    expect(respond).toHaveBeenCalledWith(kept)
+    // `final` only as a boolean true.
+    s.g.handOff(call({ fallback }), respond)
+    s.g.settle(s.sock, 102, { ok: false, error: { code: 'needs_leader', message: 'no', detail: { final: 'yes' } } })
+    expect(fallback).toHaveBeenCalledOnce()
+    // Online, the leader still takes it.
+    s.sock.answersOnline = true
+    const relay = vi.fn()
+    s.g.handOff(call({ payload: { name: 'task_send', args: { to: 't2', text: 'hi' } }, online: true, fallback: relay }), vi.fn())
+    s.g.settle(s.sock, 103, kept)
+    expect(relay).toHaveBeenCalledOnce()
+  })
+
   it('an error that is no hand-back goes to the caller as it is, never to the daemon\'s path', () => {
     const s = setup()
     const respond = vi.fn()
