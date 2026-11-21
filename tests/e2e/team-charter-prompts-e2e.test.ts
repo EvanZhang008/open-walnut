@@ -157,11 +157,15 @@ describe('the prompt each role is spawned with (Claude Code)', () => {
     keep('claude-ask-new.txt', `${system ? `--system-prompt:\n${system}\n\n` : ''}--append-system-prompt:\n${append ?? ''}`)
   }, 60_000)
 
-  it('a session spawned before the charter resumes with its own prompt, unchanged', async () => {
-    // Stand in for a pre-charter spawn: the record holds the prompt without it.
+  it('a session spawned before a charter rule resumes with its own prompt, unchanged', async () => {
+    // Stand in for a spawn before the charter's last rule: the record holds the prompt without it.
+    // One rule, not the whole charter: past 8 KB (MIN_REFRESH_DEBT_BYTES, which the charter outgrew
+    // on 2026-11-21) a warm resume runs on the current prompt by design (prompt-refresh.ts).
     const full = promptsOf(worker.args).append!
-    const old = full.replace(`\n\n${TEAM_CHARTER}`, '')
+    const lastRule = TEAM_CHARTER.slice(TEAM_CHARTER.lastIndexOf('\n- '))
+    const old = full.replace(lastRule, '')
     expect(old).not.toContain(TEAM_CHARTER)
+    expect(old).not.toBe(full)
     // The runner stores the spawn prompt in the background: wait for it, so the
     // stand-in below is not overwritten by that write.
     await waitFor(async () => (await getSessionByClaudeId(worker.sid))?.appliedAppendSystemPrompt === full, 'stored spawn prompt')

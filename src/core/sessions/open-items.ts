@@ -265,8 +265,13 @@ export async function collectOpenItems(
       // His recent words, answered ones too, right after: the summary of a summary keeps less of
       // them each time (user-asks-model.ts recentWordsReadback).
       const recent = await (await import('./user-asks.js')).recentWordsReadbackFor(task, now);
+      // What the task was set to do, word for word: a summary that narrowed the goal never stands alone
+      // (scope-kept.ts). Only in the room the head leaves, so the rest of the restatement keeps its place.
+      const sk = await import('../scope-kept.js');
+      const headLen = [owed, recent, lead].filter(Boolean).join('\n\n').length;
+      const request = sk.userRequestReadback(task, HOOK_CONTEXT_MAX - headLen - sk.REQUEST_READBACK_RESERVE);
       // His unanswered messages stay first, ahead of the role's rules too (a cut never takes them).
-      const head = (text: string) => [owed, recent, lead, text].filter(Boolean).join('\n\n');
+      const head = (text: string) => [owed, recent, request, lead, text].filter(Boolean).join('\n\n');
       if (changed && opts.parts && !opts.full) {
         // The session has hooks of the instructions' own: they carry them, whole, right now.
         const split = instructionRestatementParts(caller.record, task, HOOK_CONTEXT_MAX);

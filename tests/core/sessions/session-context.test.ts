@@ -401,7 +401,9 @@ describe('buildSessionContext (identity note)', () => {
     // 13000 → 13600 (2026-11-21) for its sentences on a question that reads on its own and a design
     // reviewed on another model before he sees it (ask-clarity.ts).
     // 13600 → 13900 (2026-11-21) for a needs card that carries its summary and buttons.
-    expect(systemPrompt.length).toBeLessThan(13900)
+    // 13900 → 14500 (2026-11-21) for the charter's scope rule (scope-kept.ts): a cut of what the user set is
+    // his, no answer is not a yes, a summary keeps the User Request verbatim, not_done names each part left. 14,343.
+    expect(systemPrompt.length).toBeLessThan(14500)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

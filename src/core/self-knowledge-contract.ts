@@ -83,7 +83,9 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // whatever the Approvals switch says (a VP signed him up for a colleague's office hour in his name).
 // Raised to 12,800 on 2026-11-20 for the charter's ask-once rule (answered-there.ts), and to 13,700 on
 // 2026-11-21 for its sentences on a question that reads on its own, a reviewed design and a card with its summary (ask-clarity.ts).
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 13_700;
+// Raised to 14,300 on 2026-11-21 for the charter's scope rule (scope-kept.ts): a cut of what the user set is his,
+// silence is not a yes, a summary keeps the User Request verbatim, and what is left goes in not_done by name.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 14_300;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

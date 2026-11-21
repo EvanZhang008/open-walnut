@@ -40,7 +40,7 @@ export const USER_KIND_WORDS: Readonly<Record<UserKind, string>> = {
   cloud_delete: 'deleting cloud resources or data',
   irreversible: 'a choice that is hard to reverse and no existing rule covers',
   user_info: 'a fact, preference or access only the user has and nothing readable shows',
-  user_own: 'the user\'s own matter: their mail, calendar or people, or something they asked to decide or follow',
+  user_own: 'the user\'s own matter: their mail, calendar or people, something they asked to decide or follow, or doing less than they asked (a part of the scope they set left out)',
 };
 
 

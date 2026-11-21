@@ -108,8 +108,8 @@ describe('every block of a composed prompt is within its cap, every prompt withi
   it('is far below the prompts measured before the caps', async () => {
     const [main, ask] = await Promise.all([composeRolePrompt('main'), composeRolePrompt('ask')])
     // +3,000: the charter grew by its rules (2026-11-17 the user's own yes, 2026-11-20 ask once and
-    // read where the answer would be); the per-role budgets (PROMPT_BUDGETS) stay the ceiling.
-    expect(main.chars).toBeLessThan(90_745 / 2 + 3_900)
+    // read where the answer would be, 2026-11-21 the scope rule); the per-role budgets (PROMPT_BUDGETS) stay the ceiling.
+    expect(main.chars).toBeLessThan(90_745 / 2 + 4_500)
     expect(ask.chars).toBeLessThan(66_030 / 2)
   })
 })

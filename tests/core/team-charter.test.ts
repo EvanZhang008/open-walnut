@@ -66,7 +66,7 @@ describe('the charter itself', () => {
     expect(MESSAGE_TEXT_HINT).toMatch(/undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs: decide it and say what you chose/)
     expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, your summary after\./)
     expect(TEAM_CHARTER).toMatch(/None of this permits an outward step, a public push, a destructive action or a way around a safety limit/)
-    expect(TEAM_CHARTER).toMatch(/Before you report done or complete a task, re-read its description and every request you hold and check each item; anything not done goes in not_done\./)
+    expect(TEAM_CHARTER).toMatch(/Before you report done or complete a task, re-read its description and every request you hold and check each item; anything not done goes in not_done, each phase or part left by name, never only in the text of your report\./)
     // 2026-11-16: a look that found a bill handed the payment decision to its lead and closed.
     expect(TEAM_CHARTER).toMatch(/A look that turned into work changed the goal: write it in your note's User Request as a pivot\. Done means it happened, not that it was handed on/)
     expect(TEAM_CHARTER).toMatch(/Never use a broader role \(an infrastructure or admin credential\) to get past an application's own access control; stop and tell its owner\./)
