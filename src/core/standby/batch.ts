@@ -5,9 +5,9 @@
  *   1. scan       walk the home (scan.ts), diff against the target's current batch
  *   2. hold       hold Walnut's gated writes (src/utils/write-gate.ts) and let the ones under way
  *                 end; note the stat of every database; pin every database at one moment
- *                 (sqlite-pin.ts): that is the batch's moment; copy the changed plain files
- *                 into staging if they are small; let writes go
- *   3. stage      copy each changed database as pinned, and the changed files not yet copied
+ *                 (sqlite-pin.ts), the moment read on the filesystem's clock (fsClock); read the
+ *                 changed plain files into memory if they are small; let writes go
+ *   3. stage      copy each changed database as pinned, and read the changed files not yet read
  *   4. re-scan    walk again: a file that moved since step 1 is taken now if its last change
  *                 came before the moment, and voids the batch if it changed after the moment
  *                 without a copy of it from before (its content at the moment is unknown)
@@ -29,7 +29,7 @@ import { STANDBY_FORMAT, STANDBY_VERSION, chunkIds, type BatchFile, type BatchMa
 export interface BatchOptions {
   home: string
   transport: StandbyTransport
-  /** Where this machine stages a batch (emptied after it). */
+  /** A dir of this machine on the home's filesystem, for the clock probe (emptied after each batch). */
   stagingDir: string
   /**
    * How long the hold waits after the writes under way ended, so their ctimes fall in an

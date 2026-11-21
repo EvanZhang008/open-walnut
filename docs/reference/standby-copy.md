@@ -27,25 +27,33 @@ A batch runs in five steps (`batch.ts`):
    stat with the last batch: size, mtime, **ctime** and inode.
 2. **Hold.** Hold Walnut's own gated writes for an instant (`src/utils/write-gate.ts`: every
    `withFileLock` section and every `writeTextFile`/`writeJsonFile`), wait for the ones under
-   way, let one margin (20 ms) pass, then pin every database at once (`sqlite-pin.ts`: a
-   worker thread opens each read-only and starts a read transaction; a commit that lands
-   between the first pin and the last makes it pin again). The wall clock just before the
-   pins is the batch's **moment**. Changed plain files up to 8 MB in total are copied while
-   the hold is on. Then writes go on.
+   way, let 15 ms pass, read the filesystem's clock (the ctime of a probe file in
+   `tmp/standby-staging/`: that is the batch's **moment**), then pin every database at once
+   (`sqlite-pin.ts`: a worker thread holds a read-only connection to each and starts a read
+   transaction on all of them; a commit that lands between the first pin and the last makes
+   it pin again). Changed plain files up to 8 MB in total are read into memory (the staging
+   area) while the hold is on. Then writes go on.
 3. **Stage.** Copy each changed database as pinned (`sqlite3_serialize` inside its read
-   transaction: page for page, so the next copy shares most chunks) and the changed files the
-   hold did not copy.
+   transaction, in the worker's memory: page for page, so only the chunks whose pages changed
+   are new) and read the changed files the hold did not.
 4. **Re-scan.** Walk again and place every move since step 1: a file whose last change came
    before the moment is taken now; a file born after the moment is the next batch's; anything
    else (changed after the moment with no copy from before it, removed around the moment)
    voids the batch.
-5. **Send.** Content-defined chunks (the backup's own chunker), named by sha256; only the
-   chunks the target lacks are sent. Then commit.
+5. **Send.** Fixed 1 MiB chunks named by their sha256 (`chunks.ts`), sent as they are read,
+   only those the target lacks. Then commit. Fixed, not content-defined like the backup's
+   chunker: cutting by content is a JavaScript pass over every byte, and made one batch of a
+   1.2 GB database take about 100 s; a home's large files (databases, appended logs,
+   recordings) change in place or at the end, where fixed chunks dedupe as well.
 
-**The rule every copy follows** (`stage.ts`): before the copy, the file's ctime must be older
-than the moment minus the margin; after it, its size, mtime, ctime and inode are unchanged
-and its content hashes to what was copied. No program can set a ctime, so this proves nothing
-touched the file from before the moment until the copy ended. The hold makes a void batch
+**The rule every read follows** (`stage.ts`): before the read, the file's ctime must be below
+the moment; after it, its size, mtime, ctime and inode are unchanged and as many bytes were
+read as its size. No program can set a ctime, so this proves nothing touched the file from
+before the moment until the read ended. The moment is read on the filesystem's own clock
+because a ctime comes from a coarse kernel clock: on clouddev a write's ctime lagged the wall
+clock by 10 ms, enough to place a write made after a wall-clock moment before it (seen in a
+test, 2026-11-21). The content is hashed once, while it is read; a second hash after the read
+would cost a second full read and prove nothing the unchanged ctime does not. The hold makes a void batch
 rarer; this rule makes a wrong batch impossible, whatever the writer: the notes app, a
 plugin's process, a person.
 
@@ -65,11 +73,14 @@ moment; the writes under way did not end within 300 ms.
 <target>/standby.json       which batch is current: written last, the one step
 <target>/batches/<n>.json   the current batch's manifest (path, size, sha256, chunks, stat)
 <target>/chunks/<aa>/<id>   chunks, checked against their sha256 when they arrive and when read
-<target>/copy/              the copy of the home: files 0444 (0555 executable), dirs 0555
+                            (a damaged one is removed, so the next batch sends it again)
+<target>/copy/              the copy of the home: files 0400 (0500 executable), dirs 0500
 <target>/copy-stat.json     each copied file's stat as written: a cheap verify compares it
 <target>/.apply/            a batch being made current: journal.json, new/, old/
 <target>/drift/<time>/      what a verify pass found changed in copy/, and report.json
 ```
+
+The whole target is its owner's only (0700): it holds the home's credentials.
 
 **Commit** (`target.ts`): build every new or changed file in `.apply/new/` from its chunks
 (each chunk and the whole file checked against their hashes), write the manifest and a
@@ -133,8 +144,8 @@ outside it.
   `types.ts` is the interface a remote one implements). No promotion: swapping the copy in at
   boot (`src/core/backup/restore-switch.ts`) and making it writable is phase B.
 - No change log ("about to change" / "done" lines): the scan is fast enough every 30 s.
-- A changed database is copied whole into memory and staging each batch it changed (its
-  size in memory for a moment, then chunked; only changed chunks travel).
+- A changed database is copied whole into the pin worker's memory each batch it changed (its
+  size in memory for a moment, then hashed; only changed chunks travel).
 - A rollback-journal (not WAL) database holds its writers while it is copied.
 - Debounced writes that are still in memory are not in a batch (the same as at a crash);
   a manual switch must flush first (phase B).
