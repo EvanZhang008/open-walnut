@@ -278,6 +278,7 @@ final class TimelineCollectionController: UIViewController {
         guard !userScrollActive else { return }
         if holdsRow, let anchor {
             restoreAnchor(anchor)
+            revealOpened()
             // Reading the card they opened, no longer the bottom: the next apply
             // must not pin it away. Scrolling back down repins as usual.
             if isPinned() && distanceFromBottom() > Self.repinThreshold { setPinned(false) }
@@ -309,8 +310,32 @@ final class TimelineCollectionController: UIViewController {
         }
         guard new.revision != rows[old].revision || new.height != rows[old].height else { return nil }
         pendingToggle = nil
+        let opened = TimelineOpenReveal.openedCount(rowID: pending.rowID, old: rows.map(\.id),
+                                                    new: snapshot.rows.map(\.id))
+        pendingReveal = opened > 0 ? (pending.rowID, opened) : nil
         guard let cv = collectionView, let minY = layout.rowMinY(old) else { return nil }
         return ViewportAnchor(candidates: [.init(rowID: pending.rowID, offsetDelta: cv.contentOffset.y - minY)])
+    }
+
+    /// The row just opened and how many rows it laid out under it, for `revealOpened`.
+    private var pendingReveal: (rowID: String, count: Int)?
+
+    /// Bring what the tapped row opened into view (`TimelineOpenReveal`).
+    private func revealOpened() {
+        guard let reveal = pendingReveal else { return }
+        pendingReveal = nil
+        guard let cv = collectionView, let at = rows.firstIndex(where: { $0.id == reveal.rowID }),
+              at + reveal.count < rows.count,
+              let top = layout.rowMinY(at), let lastTop = layout.rowMinY(at + reveal.count) else { return }
+        let inset = cv.adjustedContentInset
+        let target = TimelineOpenReveal.offset(
+            current: cv.contentOffset.y, viewportHeight: cv.bounds.height, topInset: inset.top,
+            bottomInset: inset.bottom, blockMinY: top, blockMaxY: lastTop + rows[at + reveal.count].height,
+            maxOffset: max(-inset.top, cv.contentSize.height + inset.bottom - cv.bounds.height))
+        guard target != cv.contentOffset.y else { return }
+        UIView.animate(withDuration: 0.25) {
+            cv.setContentOffset(CGPoint(x: cv.contentOffset.x, y: target), animated: false)
+        }
     }
 
     private func distanceFromBottom() -> CGFloat {
