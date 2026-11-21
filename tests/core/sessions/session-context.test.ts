@@ -395,7 +395,10 @@ describe('buildSessionContext (identity note)', () => {
     // the Approvals switch says (a lead signed him up for a colleague's office hour in his name).
     // 12050 → 12300 (2026-11-18) for the ack line's limit: a turn with work left or waiting on the
     // session's own job ends in words, never the ack line (40 of 108 overnight acks followed work). 12,240.
-    expect(systemPrompt.length).toBeLessThan(12300)
+    // 12300 → 13000 (2026-11-20) for the charter's ask-once bullet (answered-there.ts): finish what the
+    // user agreed to, his words cover only what they were about, and read where the answer would be (his
+    // own messages included) before asking (a task asked him for two hours what he had answered in the DM). 12,910.
+    expect(systemPrompt.length).toBeLessThan(13000)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
