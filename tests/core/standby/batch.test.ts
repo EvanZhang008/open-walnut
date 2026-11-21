@@ -9,7 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homePathClass } from '../../../src/core/home-manifest/index.js'
 import { snapshotTo, standbyStatus, verifyStandby } from '../../../src/core/standby/index.js'
-import { chunkCount, leaderPlainFiles, openCopiedDb, sandbox, seedHome, sha, walk, write, type Sandbox } from './helpers.js'
+import { databaseStat } from '../../../src/core/standby/batch.js'
+import { chunkCount, leaderPlainFiles, makeDb, openCopiedDb, sandbox, seedHome, sha, walk, write, type Sandbox } from './helpers.js'
 
 let sb: Sandbox
 const dbs: Array<{ close: () => unknown }> = []
@@ -230,6 +231,60 @@ describe('the names at the moment come from the moment, not from the first scan'
     await settle()
     expect((await batch()).ok).toBe(true)
     expect(fs.readFileSync(copyOf('user-own-folder/later.md'), 'utf8')).toBe('after\n')
+  })
+
+  it('a name added in the same clock tick as the scan listed its dir is still seen', async () => {
+    // A dir's ctime is coarse: a second change in the tick the scan read it leaves it unmoved.
+    sb = await sandbox('same-tick')
+    write(sb.home, 'user-own-folder/keep.md', 'k\n')
+    fs.mkdirSync(path.join(sb.home, 'tmp'), { recursive: true })
+    expect((await batch()).ok).toBe(true)
+    let committed = 0
+    for (let i = 0; i < 15; i++) {
+      await settle()
+      write(sb.home, `tmp/x${i}`, `n${i} existed at the moment\n`)
+      write(sb.home, `user-own-folder/a${i}.md`, 'a\n')
+      const out = await batch({ afterScan: () => fs.renameSync(path.join(sb.home, `tmp/x${i}`), path.join(sb.home, `user-own-folder/n${i}.md`)) })
+      if (!out.ok) continue
+      committed++
+      expect(fs.existsSync(copyOf(`user-own-folder/n${i}.md`)), `batch ${i} lost n${i}.md`).toBe(true)
+    }
+    expect(committed).toBeGreaterThan(10)
+  })
+
+  it('a database replaced between the scan and the pins voids the batch', async () => {
+    sb = await sandbox('db-replaced')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    const out = await batch({
+      afterScan: () => {
+        const other = makeDb(sb.home, 'tasks/rebuilt.sqlite', 3)
+        other.pragma('wal_checkpoint(TRUNCATE)')
+        other.close()
+        fs.renameSync(path.join(sb.home, 'tasks/rebuilt.sqlite'), path.join(sb.home, 'tasks/tasks.sqlite'))
+      },
+    })
+    expect(out.ok).toBe(false)
+    expect(!out.ok && out.reason).toMatch(/tasks\/tasks\.sqlite was replaced/)
+  })
+
+  it('a WAL restart that keeps the -wal size still changes the database\'s stat', async () => {
+    sb = await sandbox('wal-restart')
+    const db = makeDb(sb.home, 'w.sqlite', 0)
+    dbs.push(db)
+    db.pragma('wal_autocheckpoint = 0')
+    const ins = db.prepare('INSERT INTO t (body) VALUES (?)')
+    for (let i = 0; i < 20; i++) ins.run(`first ${i}`)
+    db.pragma('wal_checkpoint(PASSIVE)')
+    const before = await databaseStat(path.join(sb.home, 'w.sqlite'))
+    // Every frame is checkpointed and nobody reads: the next writer restarts the WAL from frame 1.
+    for (let i = 0; i < 20; i++) ins.run(`again ${i}`)
+    const after = await databaseStat(path.join(sb.home, 'w.sqlite'))
+    const walSize = (p: string) => fs.statSync(`${p}-wal`).size
+    expect(walSize(path.join(sb.home, 'w.sqlite'))).toBeGreaterThan(0)
+    expect(after.w).toBeDefined()
+    expect(after.w).not.toBe(before.w)
   })
 
   it.skipIf(process.platform === 'win32')('a backslash is part of a file name on this platform, not a separator', async () => {

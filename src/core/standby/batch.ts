@@ -79,7 +79,7 @@ export class VoidBatch extends Error {
 }
 
 /** A database's change detector: its own stat, moved on by its -wal's (size, times and head). */
-async function databaseStat(abs: string): Promise<SourceStat> {
+export async function databaseStat(abs: string): Promise<SourceStat> {
   const db = await fs.lstat(abs)
   const wal = await fs.lstat(`${abs}-wal`).catch(() => null)
   let w: string | undefined
@@ -131,7 +131,9 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     const { state, files: prevFiles } = await opts.transport.current()
     const prev = new Map(prevFiles.map((f) => [f.p, f]))
 
-    // 1. scan
+    // 1. scan. The clock before it: a dir whose ctime is at or past this may have gained a
+    // name in the same tick the scan listed it (a tick is coarse), so the hold lists it again.
+    const scanClock = await fsClock(stagingDir, opts.home)
     const s1 = await scanHome(opts.home)
     stats.scanMs = s1.ms
     if (s1.unreadable.length) throw new VoidBatch(`cannot read ${s1.unreadable.slice(0, 5).join(', ')}`)
@@ -197,7 +199,10 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       for (const [p, st] of await dbStatAll().catch(() => [] as Array<readonly [string, SourceStat]>)) {
         if (sameStat(st, dbStats.get(p))) steady.add(p)
       }
-      names = await namesAtMoment(opts.home, s1, fsMoment)
+      names = await namesAtMoment(opts.home, s1, fsMoment, scanClock)
+      // A dir that also changed after the moment: a name made and removed around the moment is
+      // in neither listing, so the names at the moment cannot be told.
+      if (names.unsettled.length) throw new VoidBatch(`${names.unsettled.slice(0, 3).map((d) => d || '.').join(', ')}: names changed at the batch's moment`)
       ctx = { home: opts.home, momentMs: fsMoment, afterCopy: opts.hooks?.afterCopy }
       const budget = opts.holdCopyBytes ?? 8 * 1024 * 1024
       if (changed.reduce((n, e) => n + e.st.s, 0) <= budget) for (const e of changed) await stage(e.p, keep)

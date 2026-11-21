@@ -196,7 +196,7 @@ describe('drift a commit or verify meets on its way', () => {
     expect((await verifyStandby(sb.target)).drift).toEqual([])
   })
 
-  it('a file and a dir nobody can read: verify still repairs everything, and an added empty dir is found', async () => {
+  it('a file and a dir nobody can read: verify still repairs everything, and an added empty dir is removed', async () => {
     sb = await sandbox('unreadable')
     await oneBatch()
     open('memory/MEMORY.md')
@@ -209,7 +209,8 @@ describe('drift a commit or verify meets on its way', () => {
     fs.mkdirSync(copy('empty-added'))
     const v = await verifyStandby(sb.target)
     const kinds = Object.fromEntries(v.drift.map((d) => [d.p, d.kind]))
-    expect(kinds).toEqual({ 'memory/MEMORY.md': 'mode', 'config.yaml': 'modified', 'empty-added/': 'added' })
+    // An empty dir holds nothing to save: removed, not reported.
+    expect(kinds).toEqual({ 'memory/MEMORY.md': 'mode', 'config.yaml': 'modified' })
     expect(fs.readFileSync(copy('memory/MEMORY.md'), 'utf8')).toBe('# Memory\n')
     expect(fs.readFileSync(copy('config.yaml'), 'utf8')).toBe('theme: dark\n')
     expect(fs.readFileSync(copy('artifacts/notes/deep/a/b/c.md'), 'utf8')).toBe('deep\n')

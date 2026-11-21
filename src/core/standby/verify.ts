@@ -5,7 +5,8 @@
  * Order matters, so nothing is ever written through an entry someone put there:
  *   1. every entry that is neither a file nor a dir (a link, a socket), every dir where a file
  *      of the batch belongs, and every dir no file of the batch lies under is moved to
- *      drift/<time>/files/ as it is (a link is moved, never followed);
+ *      drift/<time>/files/ as it is (a link is moved, never followed); such a dir holding no
+ *      file is removed quietly, as is a repair's temp file a crash left;
  *   2. every other file the batch does not have is moved there too;
  *   3. each file of the batch is compared with what commit wrote: its stat first (an edit, a
  *      chmod or a replace moves the ctime or the inode), then, when the stat moved or `deep` is
@@ -24,7 +25,7 @@ import { limiter } from './scan.js'
 import { StandbyTarget } from './target.js'
 import {
   DIR_MODE, EXEC_MODE, FILE_MODE, chunkPath, closeDirs, copyStatOf, currentFiles, listTree, openDirs, readCopyStats,
-  readState, targetPaths, writeCopyStats, writeState, type CopyStat,
+  readState, removeTree, targetPaths, writeCopyStats, writeState, type CopyStat,
 } from './target-files.js'
 import { chunkIds, type BatchFile } from './types.js'
 
@@ -75,13 +76,26 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
     const movedDirs: string[] = []
     const under = (rel: string) => movedDirs.some((d) => rel.startsWith(`${d}/`))
     for (const rel of tree.others.sort()) await moveAside(rel, { p: rel, kind: 'added', detail: 'not a file or dir' })
+    const holdsEntries = (dir: string) => tree.files.some((p) => p.startsWith(`${dir}/`)) || tree.others.some((p) => p.startsWith(`${dir}/`))
     for (const d of [...tree.dirs].sort((a, b) => (a.rel < b.rel ? -1 : 1))) {
       if (under(d.rel) || needed.has(d.rel)) continue
       movedDirs.push(d.rel)
+      if (!known.has(d.rel) && !holdsEntries(d.rel)) {
+        // Empty (a crash between a dir's making and its file's swap leaves one): nothing to save.
+        await openDirs(t.copy, d.rel, opened).then(() => removeTree(path.join(t.copy, d.rel))).catch(() => {})
+        continue
+      }
       await moveAside(d.rel, known.has(d.rel) ? { p: d.rel, kind: 'modified', detail: 'a dir where the file belongs' } : { p: `${d.rel}/`, kind: 'added' })
     }
-    // 2. Files the batch does not have.
-    for (const rel of tree.files.filter((p) => !known.has(p) && !under(p)).sort()) await moveAside(rel, { p: rel, kind: 'added' })
+    // 2. Files the batch does not have (a repair's temp file a crash left is removed quietly).
+    for (const rel of tree.files.filter((p) => !known.has(p) && !under(p)).sort()) {
+      const m = /^(.*\/)?\.(.+)\.standby-repair$/.exec(rel)
+      if (m && known.has(`${m[1] ?? ''}${m[2]}`)) {
+        await openDirs(t.copy, rel, opened).then(() => fs.rm(path.join(t.copy, rel), { force: true })).catch(() => {})
+        continue
+      }
+      await moveAside(rel, { p: rel, kind: 'added' })
+    }
     // A dir's mode is put back quietly: opening a dir is how anyone edits a file in it, and the
     // edit itself is what is reported.
     for (const d of wrongModeDirs) if (!under(d.rel) && !movedDirs.includes(d.rel)) opened.add(path.join(t.copy, d.rel))
