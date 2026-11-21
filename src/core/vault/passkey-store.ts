@@ -21,6 +21,7 @@ export interface PasskeyMatch {
   userName?: string
   userDisplayName?: string
   rpId: string
+  createdAt?: string
 }
 
 function needRp(origin: unknown, rpId: unknown): { origin: string; rpId: string } {
@@ -54,7 +55,12 @@ export async function matchPasskeys(p: { origin: unknown; rpId?: unknown; allow?
       if (allow.size && !allow.has(id)) continue
       // A sign-in that names no credential uses a discoverable one only.
       if (!allow.size && pk.discoverable === 'false') continue
-      out.push({ itemId: it.id, title: it.title, credentialId: id, rpId, ...(str(pk.userName) ? { userName: str(pk.userName) } : {}), ...(str(pk.userDisplayName) ? { userDisplayName: str(pk.userDisplayName) } : {}) })
+      out.push({
+        itemId: it.id, title: it.title, credentialId: id, rpId,
+        ...(str(pk.userName) ? { userName: str(pk.userName) } : {}),
+        ...(str(pk.userDisplayName) ? { userDisplayName: str(pk.userDisplayName) } : {}),
+        ...(str(pk.creationDate) ? { createdAt: str(pk.creationDate) } : {}),
+      })
     }
   }
   return out.sort((a, b) => (a.userName ?? a.title).localeCompare(b.userName ?? b.title))
@@ -93,7 +99,22 @@ function homeFor(items: VaultItem[], rpId: string, userName: string | undefined,
   return items.find((x) => live(x) && x.username === userName && !!matchItem(x.urls, page))
 }
 
-export async function createPasskey(r: CreateRequest): Promise<Created> {
+/** What the person is asked to approve (passkey-approval.ts): the site, the account, the login it goes on. */
+export interface RequestSummary {
+  rpId: string
+  origin: string
+  userName?: string
+  userDisplayName?: string
+  rpName?: string
+  /** The login it goes on (create), or the one it signs in as (get). */
+  itemId?: string
+  itemTitle?: string
+  credentialId?: string
+}
+
+interface CheckedCreate { origin: string; rpId: string; userHandle: Buffer; userName?: string; userDisplayName?: string; rpName?: string; items: VaultItem[]; home?: VaultItem }
+
+async function checkedCreate(r: CreateRequest): Promise<CheckedCreate> {
   const { origin, rpId } = needRp(r.origin, r.rpId)
   readClientData(r.clientDataJSON, 'webauthn.create', origin)
   const userHandle = typeof r.user?.id === 'string' ? fromB64u(r.user.id) : Buffer.alloc(0)
@@ -112,6 +133,41 @@ export async function createPasskey(r: CreateRequest): Promise<Created> {
       }
     }
   }
+  return { origin, rpId, userHandle, userName, userDisplayName, rpName, items, home: homeFor(items, rpId, userName, r.itemId) }
+}
+
+/** A registration checked as createPasskey checks it, nothing written: what the person is asked. */
+export async function checkCreate(r: CreateRequest): Promise<RequestSummary> {
+  const c = await checkedCreate(r)
+  return {
+    rpId: c.rpId, origin: c.origin,
+    ...(c.userName ? { userName: c.userName } : {}), ...(c.userDisplayName ? { userDisplayName: c.userDisplayName } : {}),
+    ...(c.rpName ? { rpName: c.rpName } : {}),
+    ...(c.home ? { itemId: c.home.id, itemTitle: c.home.title } : {}),
+  }
+}
+
+/** Only the fields a request may carry, as plain data (kept by passkey-approval.ts until the yes). */
+export function cleanRequest(op: 'create' | 'get', raw: unknown): CreateRequest | AssertRequest {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const s = (v: unknown) => (typeof v === 'string' ? v.slice(0, 20_000) : undefined)
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 200) : undefined)
+  if (op === 'get') return { origin: s(r.origin), rpId: s(r.rpId), credentialId: s(r.credentialId), clientDataJSON: s(r.clientDataJSON) }
+  const u = (r.user && typeof r.user === 'object' ? r.user : {}) as Record<string, unknown>
+  return {
+    origin: s(r.origin), rpId: s(r.rpId), rpName: s(r.rpName), clientDataJSON: s(r.clientDataJSON),
+    user: { id: s(u.id), name: s(u.name), displayName: s(u.displayName) },
+    exclude: list(r.exclude), itemId: s(r.itemId),
+  }
+}
+
+/**
+ * Make a passkey. Only passkey-approval.ts calls it, after the person's yes for this very request.
+ * A site registering the same account again gets a new passkey beside the old one: Walnut cannot
+ * see whether the site took the new one, so dropping the old here could leave none that works.
+ */
+export async function createPasskey(r: CreateRequest): Promise<Created> {
+  const { origin, rpId, userHandle, userName, userDisplayName, rpName, home } = await checkedCreate(r)
   const key = newKey()
   const idBytes = crypto.randomBytes(16)
   const stored: StoredPasskey = {
@@ -122,13 +178,12 @@ export async function createPasskey(r: CreateRequest): Promise<Created> {
     userHandle: b64u(userHandle),
     ...(userName ? { userName } : {}), ...(userDisplayName ? { userDisplayName } : {}),
     counter: '0', discoverable: 'true', creationDate: new Date().toISOString(),
+    // Bitwarden never has it, so a sync from Bitwarden keeps it (sources/bitwarden/sync.ts).
+    madeBy: 'walnut',
   }
-  // A site registering the same account again replaces the passkey it had for it here.
-  const sameUser = (pk: StoredPasskey) => passkeyFor(pk, rpId) && pk.userHandle !== undefined && fromB64u(String(pk.userHandle)).equals(userHandle)
-  const home = homeFor(items, rpId, userName, r.itemId)
   let itemId: string
   if (home) {
-    const saved = await patchItem(home.id, (it) => ({ ...it, passkeys: [...(it.passkeys ?? []).filter((pk) => !sameUser(pk)), stored], updatedAt: new Date().toISOString() }))
+    const saved = await patchItem(home.id, (it) => ({ ...it, passkeys: [...(it.passkeys ?? []), stored], updatedAt: new Date().toISOString() }))
     itemId = saved!.id
   } else {
     const [made] = await createItems([{ type: 'login', title: rpName || rpId, ...(userName ? { username: userName } : {}), urls: [origin], passkeys: [stored] }])
@@ -160,7 +215,7 @@ export interface Asserted {
   userHandle?: string
 }
 
-export async function signInWithPasskey(r: AssertRequest): Promise<Asserted> {
+async function checkedAssert(r: AssertRequest): Promise<{ origin: string; rpId: string; json: Buffer; want: Buffer; found: { item: VaultItem; pk: StoredPasskey } }> {
   const { origin, rpId } = needRp(r.origin, r.rpId)
   const { json } = readClientData(r.clientDataJSON, 'webauthn.get', origin)
   const want = typeof r.credentialId === 'string' && r.credentialId ? fromB64u(r.credentialId) : null
@@ -171,7 +226,24 @@ export async function signInWithPasskey(r: AssertRequest): Promise<Asserted> {
     const pk = (item.passkeys ?? []).find((x) => passkeyFor(x, rpId) && credentialIdBytes(x.credentialId)?.equals(want))
     if (pk) { found = { item, pk }; break }
   }
-  if (!found) throw new PasskeyError('Walnut keeps no such passkey for this site', 404, 'no_passkey')
+  if (!found || !usable(found.pk)) throw new PasskeyError('Walnut keeps no such passkey for this site', 404, 'no_passkey')
+  return { origin, rpId, json, want, found }
+}
+
+/** A sign-in checked as signInWithPasskey checks it, nothing signed: what the person is asked. */
+export async function checkAssert(r: AssertRequest): Promise<RequestSummary> {
+  const { origin, rpId, want, found } = await checkedAssert(r)
+  return {
+    rpId, origin, itemId: found.item.id, itemTitle: found.item.title, credentialId: b64u(want),
+    ...(str(found.pk.userName) ? { userName: str(found.pk.userName) } : {}),
+    ...(str(found.pk.userDisplayName) ? { userDisplayName: str(found.pk.userDisplayName) } : {}),
+    ...(str(found.pk.rpName) ? { rpName: str(found.pk.rpName) } : {}),
+  }
+}
+
+/** Sign a sign-in. Only passkey-approval.ts calls it, after the person's yes for this very request. */
+export async function signInWithPasskey(r: AssertRequest): Promise<Asserted> {
+  const { rpId, json, want, found } = await checkedAssert(r)
   const counter = nextCounter(found.pk)
   const auth = authData(rpId, counter)
   const signature = sign(found.pk, auth, json)

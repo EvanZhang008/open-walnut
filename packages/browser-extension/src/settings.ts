@@ -40,6 +40,12 @@ export interface Settings {
   pageFill: boolean
   /** After a login with a one-time code is filled, its code goes on the clipboard (as Bitwarden does). */
   copyTotp: boolean
+  /**
+   * Walnut answers a site's passkey requests (save one, sign in with one) from the vault, each with
+   * the person's yes (bg-passkey.ts). On by default (the person's own choice, 2026-11-21); while
+   * off no script of it runs in any page. Only an explicit off is kept.
+   */
+  passkeys: boolean
   /** How an agent's cursor looks in a page (cursor-looks.ts); page-cursor.ts reads it from storage itself. */
   cursorStyle: CursorStyle
   /** The person picked `cursorStyle` here (an older extension saved its default with every setting). */
@@ -51,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoLock: 'walnut',
   pageFill: true,
   copyTotp: true,
+  passkeys: true,
   cursorStyle: DEFAULT_CURSOR_STYLE,
   generator: { kind: 'random', random: DEFAULT_PASSWORD, words: DEFAULT_PASSPHRASE },
 }
@@ -66,6 +73,7 @@ export async function getSettings(): Promise<Settings> {
     ...(s.autoLockChosen === true ? { autoLockChosen: true } : {}),
     pageFill: typeof s.pageFill === 'boolean' ? s.pageFill : DEFAULT_SETTINGS.pageFill,
     copyTotp: typeof s.copyTotp === 'boolean' ? s.copyTotp : DEFAULT_SETTINGS.copyTotp,
+    passkeys: s.passkeys !== false,
     cursorStyle: storedCursorStyle(s),
     ...(s.cursorStyleChosen === true ? { cursorStyleChosen: true } : {}),
     generator: {

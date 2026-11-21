@@ -60,7 +60,8 @@ export interface SyncReport {
   error?: string
 }
 
-interface Link { itemId: string; hash: string; revisionDate?: string; type: string; walnutAt: string }
+/** `passkeys`: the credential ids Bitwarden had on the item at the last sync (absent on a link an older Walnut wrote). */
+interface Link { itemId: string; hash: string; revisionDate?: string; type: string; walnutAt: string; passkeys?: string[] }
 interface SyncState { links: Record<string, Link>; last?: SyncReport }
 
 const zero = (): SyncCounts => ({ added: 0, updated: 0, trashed: 0, conflicts: 0, unchanged: 0, ambiguous: 0 })
@@ -108,11 +109,11 @@ function fresh(input: VaultItemInput, now: string): VaultItem {
   return { ...input, id: crypto.randomUUID(), createdAt: now, updatedAt: now }
 }
 
-function merged(prev: VaultItem, bw: VaultItemInput, now: string): VaultItem {
+function merged(prev: VaultItem, bw: VaultItemInput, now: string, known?: string[]): VaultItem {
   let history = prev.passwordHistory ?? []
   if (prev.password && prev.password !== bw.password) history = [{ password: prev.password, replacedAt: now }, ...history].slice(0, PASSWORD_HISTORY_MAX)
   const { passkeys: bwPasskeys, ...rest } = bw
-  const passkeys = prev.passkeys?.length ? prev.passkeys : bwPasskeys
+  const passkeys = mergedPasskeys(prev.passkeys, bwPasskeys, known)
   return {
     ...rest, id: prev.id, createdAt: prev.createdAt, updatedAt: now,
     ...(prev.agentAccess ? { agentAccess: prev.agentAccess } : {}),
@@ -123,6 +124,37 @@ function merged(prev: VaultItem, bw: VaultItemInput, now: string): VaultItem {
     ...(prev.usedAt ? { usedAt: prev.usedAt } : {}),
   }
 }
+
+type Passkeys = VaultItem['passkeys']
+const pkId = (p: Record<string, unknown>) => String(p.credentialId ?? '')
+
+/**
+ * The passkeys a login keeps after a sync, by credential id. `known` is what Bitwarden had at the
+ * last sync (the link keeps it): against it, a change is Bitwarden's or Walnut's.
+ *   - in both now: Bitwarden's copy, with the higher counter (a sign-in in Walnut counts up here only);
+ *   - in Walnut only: kept, unless Bitwarden had it last time (Bitwarden deleted it);
+ *   - in Bitwarden only: added, unless Bitwarden had it last time (the person deleted it in Walnut).
+ * With no `known` (a link an older Walnut wrote), nothing is dropped and Bitwarden's are added.
+ * A passkey made in Walnut (`madeBy: "walnut"`) is never in Bitwarden, so it always stays.
+ */
+export function mergedPasskeys(prev: Passkeys, bw: Passkeys, known?: string[]): Passkeys {
+  const before = known ? new Set(known) : null
+  const fromBw = new Map((bw ?? []).map((p) => [pkId(p), p]))
+  const here = new Set((prev ?? []).map(pkId))
+  const out: NonNullable<Passkeys> = []
+  for (const p of prev ?? []) {
+    const b = fromBw.get(pkId(p))
+    if (b) out.push(Number(p.counter ?? 0) > Number(b.counter ?? 0) ? { ...b, counter: p.counter } : b)
+    else if (!before?.has(pkId(p))) out.push(p)
+  }
+  for (const [id, b] of fromBw) if (!here.has(id) && !before?.has(id)) out.push(b)
+  return out.length ? out : undefined
+}
+
+/** The credential ids of an export's item, kept on its link for the next sync. */
+const bwIds = (input: VaultItemInput) => (input.passkeys ?? []).map(pkId).filter(Boolean)
+
+const samePasskeys = (a: Passkeys, b: Passkeys) => JSON.stringify((a ?? []).map((p) => [pkId(p), p.counter ?? ''])) === JSON.stringify((b ?? []).map((p) => [pkId(p), p.counter ?? '']))
 
 /** An adopted item is the person's own: Bitwarden never sets its agent access or sensitive mark. */
 function adopted(own: VaultItem, next: VaultItem): VaultItem {
@@ -215,31 +247,57 @@ export async function syncFromBitwarden(text: string, trigger: SyncTrigger, opts
         const ambiguous = cands.length > 1 || (cands.length === 1 && (newByKey.get(k) ?? 0) > 1)
         const hit = !ambiguous ? cands.shift() : undefined
         if (hit) {
-          if (hashOf(hit) === w.hash) { bump(type, 'unchanged'); links[w.id] = { itemId: hit.id, hash: w.hash, type, walnutAt: hit.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }; continue }
+          if (hashOf(hit) === w.hash) {
+            // The same fields, but passkeys are not in the hash: Bitwarden's come across before the
+            // link records them as known (else a later sync reads them as deleted in Walnut).
+            const pks = mergedPasskeys(hit.passkeys, w.input.passkeys)
+            let at = hit.updatedAt
+            if (!samePasskeys(pks, hit.passkeys)) {
+              const { passkeys: _p, ...base } = hit
+              const next = { ...base, ...(pks?.length ? { passkeys: pks } : {}), updatedAt: now }
+              await put(next)
+              at = next.updatedAt
+              bump(type, 'updated')
+            } else bump(type, 'unchanged')
+            links[w.id] = { itemId: hit.id, hash: w.hash, type, passkeys: bwIds(w.input), walnutAt: at, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+            continue
+          }
           const next = adopted(hit, merged(hit, w.input, now))
           await put(next)
           bump(type, 'updated')
-          links[w.id] = { itemId: next.id, hash: w.hash, type, walnutAt: next.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+          links[w.id] = { itemId: next.id, hash: w.hash, type, passkeys: bwIds(w.input), walnutAt: next.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
           continue
         }
         const made = fresh(w.input, now)
         await put(made)
         bump(type, ambiguous ? 'ambiguous' : 'added')
-        links[w.id] = { itemId: made.id, hash: w.hash, type, walnutAt: made.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+        links[w.id] = { itemId: made.id, hash: w.hash, type, passkeys: bwIds(w.input), walnutAt: made.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
         continue
       }
       const bwChanged = link.hash !== w.hash
       const walnutChanged = !!cur.trashedAt || hashOf(cur) !== link.hash
       if (!bwChanged) {
+        // Passkeys are not in the hash (an older Walnut's links have none): a passkey Bitwarden
+        // added or deleted on an item otherwise the same still comes across.
+        const pks = mergedPasskeys(cur.passkeys, w.input.passkeys, link.passkeys)
+        if (!cur.trashedAt && !samePasskeys(pks, cur.passkeys)) {
+          const { passkeys: _p, ...base } = cur
+          const next = { ...base, ...(pks?.length ? { passkeys: pks } : {}), updatedAt: now }
+          await put(next)
+          bump(type, 'updated')
+          links[w.id] = { ...link, walnutAt: next.updatedAt, passkeys: bwIds(w.input), ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+          continue
+        }
         bump(type, 'unchanged')
-        links[w.id] = { ...link, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+        // A login in the trash merged nothing: what Bitwarden had stays unknown until it is restored.
+        links[w.id] = { ...link, ...(cur.trashedAt ? {} : { passkeys: bwIds(w.input) }), ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
         continue
       }
       if (!walnutChanged) {
-        const next = merged(cur, w.input, now)
+        const next = merged(cur, w.input, now, link.passkeys)
         await put(next)
         bump(type, 'updated')
-        links[w.id] = { itemId: next.id, hash: w.hash, type, walnutAt: next.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+        links[w.id] = { itemId: next.id, hash: w.hash, type, passkeys: bwIds(w.input), walnutAt: next.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
         continue
       }
       // Both sides changed: keep both. The Walnut copy is tagged and no longer synced; Bitwarden's comes in new.
@@ -247,7 +305,7 @@ export async function syncFromBitwarden(text: string, trigger: SyncTrigger, opts
       const made = fresh(w.input, now)
       await put(made)
       bump(type, 'conflicts')
-      links[w.id] = { itemId: made.id, hash: w.hash, type, walnutAt: made.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
+      links[w.id] = { itemId: made.id, hash: w.hash, type, passkeys: bwIds(w.input), walnutAt: made.updatedAt, ...(w.revisionDate ? { revisionDate: w.revisionDate } : {}) }
     }
 
     // Still in Bitwarden but not read this time (skipped): the link stays as it was.

@@ -37,6 +37,7 @@ import { getSettings, pageFillOn } from './settings'
 import { BROWSER_KEY_MESSAGE, handBrowserKey, handPanelBrowserKey, initHandBrowserKey } from './hand-browser-key'
 import { migrateRealInput } from './trusted-switch'
 import { revealForPerson } from './agent-window'
+import { passkeyPageCancel, passkeyRequest, passkeyTabChanged, passkeyTabGone, passkeyWindow, passkeyWindowClosed, syncPasskeyScripts } from './bg-passkey'
 
 const { pendingSave, pendingPrev, seenUsername, connecting, menus, frames, generated, lastLogin } = stores
 
@@ -102,7 +103,7 @@ async function badgeFor(tabId: number, url: string | undefined): Promise<void> {
 
 // ── who may send what ──
 
-type SenderKind = 'popup' | 'menu' | 'savebar' | 'content' | 'sidepanel'
+type SenderKind = 'popup' | 'menu' | 'savebar' | 'content' | 'sidepanel' | 'passkey'
 
 function senderKind(sender: Sender): SenderKind | null {
   const url = String(sender.url ?? '')
@@ -110,7 +111,7 @@ function senderKind(sender: Sender): SenderKind | null {
   if (url.startsWith(own)) {
     const page = url.slice(own.length).split(/[?#]/)[0]
     // popup-ask.html is the toolbar popup on Ask: the side panel's own page in its popup form.
-    return page === 'popup.html' ? 'popup' : page === 'menu.html' ? 'menu' : page === 'savebar.html' ? 'savebar' : page === 'sidepanel.html' || page === 'popup-ask.html' ? 'sidepanel' : null
+    return page === 'popup.html' ? 'popup' : page === 'menu.html' ? 'menu' : page === 'savebar.html' ? 'savebar' : page === 'sidepanel.html' || page === 'popup-ask.html' ? 'sidepanel' : page === 'passkey.html' ? 'passkey' : null
   }
   return sender.tab?.id !== undefined && /^https?:/.test(url) ? 'content' : null
 }
@@ -144,6 +145,10 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   [BROWSER_KEY_MESSAGE]: 'content',
   // The panel's own Walnut frame shares the extension's unlock (hand-browser-key.ts handPanelBrowserKey).
   'panel-browser-key': 'sidepanel',
+  // Passkeys (bg-passkey.ts): a page's request through its bridge, and Walnut's own window that asks the person.
+  'passkey-request': 'content', 'passkey-page-cancel': 'content',
+  'passkey-ping': 'passkey', 'passkey-data': 'passkey', 'passkey-unlock': 'passkey', 'passkey-begin': 'passkey', 'passkey-approve': 'passkey',
+  'passkey-enroll-begin': 'passkey', 'passkey-enroll': 'passkey', 'passkey-leave': 'passkey', 'passkey-cancel': 'passkey',
 }
 
 /**
@@ -164,7 +169,7 @@ function takeOnce<T>(key: 'panelAsk' | 'panelHand', windowId: unknown): Promise<
   return p
 }
 /** What a person does with Walnut (not a page loading by itself): it keeps the auto-lock away. */
-const USE = new Set(['unlock', 'site-items', 'search', 'item-detail', 'copy-secret', 'fill-tab', 'totp-code', 'wallet-items', 'open-menu', 'menu-fill', 'menu-generate', 'savebar-action'])
+const USE = new Set(['passkey-begin', 'passkey-approve', 'passkey-unlock', 'unlock', 'site-items', 'search', 'item-detail', 'copy-secret', 'fill-tab', 'totp-code', 'wallet-items', 'open-menu', 'menu-fill', 'menu-generate', 'savebar-action'])
 
 // ── the message router ──
 
@@ -177,6 +182,9 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
   // The chosen time passed with no use: locked before anything is answered.
   await lockIfIdle(lockNow).catch(() => false)
   if (USE.has(msg.type)) void touch()
+  if (msg.type === 'passkey-request') return passkeyRequest(msg, sender)
+  if (msg.type === 'passkey-page-cancel') return passkeyPageCancel(msg, sender)
+  if (kind === 'passkey') return passkeyWindow(msg, sender)
   if (msg.type === BROWSER_KEY_MESSAGE) return handBrowserKey(msg, sender)
   if (msg.type === 'panel-browser-key') return handPanelBrowserKey(msg)
   if (kind === 'menu' || msg.type === 'open-menu' || msg.type === 'menu-focus') return handleMenu(msg, sender)
@@ -447,6 +455,13 @@ ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handle(msg, sender).then(sendResponse, (err) => sendResponse(fail(err)))
   return true
 })
+
+ext.tabs.onRemoved.addListener((tabId) => passkeyTabGone(tabId))
+ext.tabs.onUpdated.addListener((tabId, change) => passkeyTabChanged(tabId, change))
+ext.windows.onRemoved.addListener((windowId) => passkeyWindowClosed(windowId))
+// The passkey scripts follow their setting, at every start of the background too.
+void syncPasskeyScripts().catch(() => undefined)
+ext.storage.onChanged.addListener((changes, area) => { if (area === 'local' && 'settings' in changes) void syncPasskeyScripts().catch(() => undefined) })
 
 ext.tabs.onRemoved.addListener((tabId) => {
   for (const s of [menus, pendingSave, pendingPrev, seenUsername, connecting, frames, generated, lastLogin]) void s.delete(tabId)

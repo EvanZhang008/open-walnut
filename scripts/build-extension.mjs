@@ -33,7 +33,9 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 // A browser takes 1 to 4 dot-separated numbers only.
 const version = String(pkg.version).split(/[-+]/)[0].split('.').slice(0, 4).map((n) => String(Number(n) || 0)).join('.')
 
-const ENTRIES = ['background', 'content', 'page-open-early', 'popup', 'menu', 'savebar', 'sidepanel', 'grant']
+// passkey-page and passkey-bridge are not in the manifest: the background registers them only while
+// "Save and use passkeys" is on (bg-passkey.ts). passkey is the window that asks the person.
+const ENTRIES = ['background', 'content', 'page-open-early', 'popup', 'menu', 'savebar', 'sidepanel', 'grant', 'passkey-page', 'passkey-bridge', 'passkey']
 /**
  * Each page: its body class, its html class, and the script it runs (its own name's by default).
  * popup-ask.html is the toolbar popup on Ask: the side panel's page in its popup form (sidepanel.ts),
@@ -48,6 +50,8 @@ const PAGES = {
   // "Show it live" from a task's Browser view (grant-open.ts, grant.ts): the debugger asked for in
   // its one click, for a copy that lacks the permission.
   grant: { body: 'grant' },
+  // A site's passkey request: Walnut's own window that asks the person (passkey.ts).
+  passkey: { body: 'passkey' },
 }
 const SITES = ['http://*/*', 'https://*/*']
 /**

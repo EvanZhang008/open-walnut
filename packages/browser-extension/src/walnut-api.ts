@@ -43,6 +43,10 @@ export interface VaultStatus {
 /** A vault refusal that means "locked here": the view shows the lock screen with its password field. */
 export const LOCKED_CODES: ReadonlySet<string> = new Set(['vault_session_needed', 'vault_locked'])
 
+export interface PasskeyMatch { itemId: string; title: string; credentialId: string; userName?: string; userDisplayName?: string; rpId: string; createdAt?: string }
+export interface PasskeySummary { rpId: string; origin: string; userName?: string; userDisplayName?: string; rpName?: string; itemId?: string; itemTitle?: string; credentialId?: string }
+export interface PasskeyBegun { id: string; challenge: string; expiresAt: string; summary: PasskeySummary }
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string, readonly waitMs?: number) { super(message) }
 }
@@ -280,4 +284,20 @@ export const api = {
   update: (id: string, item: VaultItemInput, expectedUpdatedAt?: string) =>
     call<{ item: VaultItem }>('PUT', `/vault/items/${encodeURIComponent(id)}`, { item, expectedUpdatedAt }).then((r) => r.item),
   used: (id: string) => call('POST', `/vault/items/${encodeURIComponent(id)}/used`, {}).catch(() => undefined),
+
+  // Passkeys (src/web/routes/vault-passkeys-v1.ts): nothing is made or signed without the person's yes (begin, then approve).
+  passkeyMatch: (b: { origin: string; rpId?: string; allow?: string[] }) => call<{ passkeys: PasskeyMatch[] }>('POST', '/vault/passkeys/match', b, { quiet: true }).then((r) => r.passkeys),
+  passkeyBegin: (op: 'create' | 'get', request: Record<string, unknown>) => call<PasskeyBegun>('POST', '/vault/passkeys/begin', { op, request }),
+  passkeyApprove: (id: string, proof: { assertion: Record<string, string> } | { passwordKey: string }) => call<Record<string, unknown>>('POST', '/vault/passkeys/approve', { id, ...proof }, { timeoutMs: 60_000 }),
+  passkeyCancel: (id: string) => call('POST', '/vault/passkeys/cancel', { id }).catch(() => undefined),
+  confirmKeys: () => call<{ keys: Array<{ id: string; name: string; createdAt: string }> }>('GET', '/vault/passkeys/confirm-keys', undefined, { quiet: true }).then((r) => r.keys),
+  confirmEnrollBegin: () => call<{ id: string; challenge: string; userId: string }>('POST', '/vault/passkeys/confirm-keys/begin', {}),
+  confirmEnroll: (b: Record<string, string>) => call<{ key: { id: string } }>('POST', '/vault/passkeys/confirm-keys', b, { timeoutMs: 60_000 }),
+  /** The master password as the key Walnut checks (the same derivation as an unlock). */
+  async passwordKey(password: string): Promise<string> {
+    const st = await api.status()
+    if (!st.kdf) throw new ApiError('Walnut did not say how to derive the key.', 500)
+    checkKdf(st.kdf)
+    return toB64(await derivePasswordKey(password, st.kdf))
+  },
 }

@@ -8,6 +8,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 import { displayHost } from '../../../../src/core/vault/url-match'
 import { passwordStrength } from '../../../../src/core/vault/strength'
 import { ago, siteTile, typeLabel } from './passwords-model'
+import { PasskeyList } from './PasskeyList'
 import { CopyIcon, EyeIcon, EyeOffIcon, LinkIcon, StarIcon, EditIcon, TrashIcon, RestoreIcon, CheckIcon, RobotIcon } from './pw-icons'
 
 export const AGENT_ACCESS_TEXT = {
@@ -185,9 +186,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
         </details>
       )}
 
-      {!!item.passkeys?.length && (
-        <div className="pw-card"><div className="pw-f-label">Passkeys</div><div className="pw-f-value">{item.passkeys.length} kept from your import (signing in with them comes in a later version)</div></div>
-      )}
+      <PasskeyList item={item} onChanged={onChanged} />
 
       <div className="pw-meta">
         {item.tags?.length ? <div className="pw-tags">{item.tags.map((t) => <span key={t} className="pw-tag">{t}</span>)}</div> : null}

@@ -25,13 +25,19 @@ add '{"type":"login","title":"Café Wi-Fi","username":"guest","password":"Fake-W
 add '{"type":"note","title":"Apartment door code","notes":"Front door: 4821#\nMailbox: 17"}'
 add '{"type":"card","title":"Visa (test card)","card":{"holder":"Jordan Lee","number":"4242424242424242","expMonth":"08","expYear":"2029","code":"123","brand":"Visa"}}'
 add '{"type":"api_key","title":"OpenAI test key","envName":"OPENAI_API_KEY","password":"sk-test-not-a-real-key-000000"}'
+# A passkey saved the extension's way: begin, then the person's yes (the master password again).
+passkey() {
+  local ID
+  ID=$(curl -sf -X POST $B/vault/passkeys/begin -H 'content-type: application/json' -H "x-walnut-vault-session: $SESSION" -d "{\"op\":\"create\",\"request\":$1}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])') || return 1
+  curl -sf -X POST $B/vault/passkeys/approve -H 'content-type: application/json' -H "x-walnut-vault-session: $SESSION" -d "{\"id\":\"$ID\",\"password\":\"$MASTER\"}"
+}
 # A passkey for webauthn.io, made by the server as an authenticator would (fake client data).
 CD=$(python3 -c 'import json,base64;print(base64.urlsafe_b64encode(json.dumps({"type":"webauthn.create","challenge":"ZmFrZS1jaGFsbGVuZ2U","origin":"https://webauthn.io"}).encode()).decode().rstrip("="))')
-curl -sf -X POST $B/vault/passkeys/create -H 'content-type: application/json' -H "x-walnut-vault-session: $SESSION" -d "{\"origin\":\"https://webauthn.io\",\"rpId\":\"webauthn.io\",\"rpName\":\"WebAuthn.io\",\"user\":{\"id\":\"ZGVtby11c2Vy\",\"name\":\"walnut-demo\",\"displayName\":\"Walnut Demo\"},\"clientDataJSON\":\"$CD\"}" >/dev/null && echo passkey ok || echo passkey failed
+passkey "{\"origin\":\"https://webauthn.io\",\"rpId\":\"webauthn.io\",\"rpName\":\"WebAuthn.io\",\"user\":{\"id\":\"ZGVtby11c2Vy\",\"name\":\"walnut-demo\",\"displayName\":\"Walnut Demo\"},\"clientDataJSON\":\"$CD\"}" >/dev/null && echo passkey ok || echo passkey failed
 # A passkey for the local test site (rpId localhost) on its login, for flow 07-passkey.
 LOCAL_ID=$(curl -sf $B/vault/items -H "x-walnut-vault-session: $SESSION" | python3 -c 'import json,sys;print([i["id"] for i in json.load(sys.stdin)["items"] if i.get("title")=="Local test site"][0])')
 CD=$(python3 -c 'import json,base64;print(base64.urlsafe_b64encode(json.dumps({"type":"webauthn.create","challenge":"ZmFrZS1jaGFsbGVuZ2U","origin":"http://localhost:8765"}).encode()).decode().rstrip("="))')
-curl -sf -X POST $B/vault/passkeys/create -H 'content-type: application/json' -H "x-walnut-vault-session: $SESSION" -d "{\"origin\":\"http://localhost:8765\",\"rpId\":\"localhost\",\"rpName\":\"Acme\",\"itemId\":\"$LOCAL_ID\",\"user\":{\"id\":\"dGVzdGVyQGV4YW1wbGUudGVzdA\",\"name\":\"tester@example.test\",\"displayName\":\"Tester\"},\"clientDataJSON\":\"$CD\"}" \
+passkey "{\"origin\":\"http://localhost:8765\",\"rpId\":\"localhost\",\"rpName\":\"Acme\",\"itemId\":\"$LOCAL_ID\",\"user\":{\"id\":\"dGVzdGVyQGV4YW1wbGUudGVzdA\",\"name\":\"tester@example.test\",\"displayName\":\"Tester\"},\"clientDataJSON\":\"$CD\"}" \
   | python3 -c 'import json,sys;d=json.load(sys.stdin);print("WALNUT_E2E_PASSKEY_PK", (d.get("passkey") or d).get("publicKey") or d.get("publicKey"))' || echo "localhost passkey failed"
 curl -sf $B/vault/items -H "x-walnut-vault-session: $SESSION" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["items"]),"items")'
 curl -sf -X POST $B/vault/lock -H 'content-type: application/json' -H "x-walnut-vault-session: $SESSION" -d '{}' >/dev/null

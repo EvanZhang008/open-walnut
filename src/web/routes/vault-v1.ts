@@ -15,9 +15,7 @@
  *   POST   /api/v1/vault/items/:id/{trash,restore,favorite,used}                (session)
  *   DELETE /api/v1/vault/items/:id                 (session; only from the trash)
  *   GET    /api/v1/vault/items/:id/totp            → { code, period, remaining } (session)
- *   POST   /api/v1/vault/passkeys/match            { origin, rpId?, allow? } → { passkeys }        (session, quiet)
- *   POST   /api/v1/vault/passkeys/create           { origin, rpId?, rpName?, user, clientDataJSON, exclude?, itemId? } (session)
- *   POST   /api/v1/vault/passkeys/assert           { origin, rpId?, credentialId, clientDataJSON } → signature (session)
+ *   /api/v1/vault/passkeys/*                     routes/vault-passkeys-v1.ts
  *   POST   /api/v1/vault/import                    { text, format?, fileName?, dryRun } (session)
  *   GET    /api/v1/vault/report                    → security report            (session)
  *   POST   /api/v1/vault/settings                  { agentsWhileAway, passwordKey | password } → status + recoveryKit? (session)
@@ -53,7 +51,7 @@ export const vaultV1Router = Router()
 /** A Walnut window's browser key (core/vault/browser-keys.ts BROWSER_HEADER; kept here so the route loads no vault module at start). */
 const BROWSER_HEADER = 'x-walnut-vault-browser'
 
-function header(req: Request, name: string): string | undefined {
+export function header(req: Request, name: string): string | undefined {
   const raw = req.headers[name]
   const v = Array.isArray(raw) ? raw[0] : raw
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
@@ -109,12 +107,12 @@ onCredentialsRevoked((names) => {
   void import('../../core/vault/sessions.js').then((s) => { for (const n of names) s.endDeviceSessions(n) }).catch(() => undefined)
 })
 
-async function store() {
+export async function store() {
   return import('../../core/vault/store.js')
 }
 
 /** The person's vault session for this request, or a 401 answered. */
-async function needSession(req: Request, res: Response, touch = true): Promise<boolean> {
+export async function needSession(req: Request, res: Response, touch = true): Promise<boolean> {
   const s = await sessions()
   // `x-walnut-vault-quiet: 1`: a read a client makes by itself (the browser extension looking up
   // a page's logins as the person browses) never keeps the vault unlocked.
@@ -149,9 +147,9 @@ async function shown(item: VaultItem | null): Promise<VaultItem | null> {
 }
 
 /** A route that already answered (a brake's refusal) returns this, and run() sends nothing more. */
-const SENT = Symbol('sent')
+export const SENT = Symbol('sent')
 
-async function run(res: Response, next: NextFunction, work: () => Promise<unknown>): Promise<void> {
+export async function run(res: Response, next: NextFunction, work: () => Promise<unknown>): Promise<void> {
   try {
     const out = await work()
     if (out === SENT || res.headersSent) return
@@ -171,7 +169,7 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
  * The client's password key, or the server derives it from a typed password: a browser
  * on plain http (not a secure context) has no WebCrypto, so it sends the password itself.
  */
-async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; password?: unknown }, kdf: KdfParams | undefined): Promise<string> {
+export async function passwordKeyOf(req: Request, body: { passwordKey?: unknown; password?: unknown }, kdf: KdfParams | undefined): Promise<string> {
   const { VaultError, checkKdf } = await store()
   // A derived key replays as the password wherever this Mac holds the Secret Key: it crosses
   // only the same private links a typed password does.
@@ -256,7 +254,7 @@ function keyLink(req: Request): boolean {
  * `work` does everything a guess costs (deriving a typed password included), so a burst of
  * guesses is refused before any of that work. Null: the refusal was answered.
  */
-async function attempt<T>(res: Response, work: () => Promise<T>): Promise<{ value: T } | null> {
+export async function attempt<T>(res: Response, work: () => Promise<T>): Promise<{ value: T } | null> {
   const s = await sessions()
   const { VaultError } = await store()
   const busy = s.beginAttempt()
@@ -639,33 +637,7 @@ vaultV1Router.get('/vault/items/:id/totp', async (req, res, next) => {
   })
 })
 
-// ── passkeys (core/vault/passkey-store.ts): the browser extension signs in and registers with them ──
-
-vaultV1Router.post('/vault/passkeys/match', async (req, res, next) => {
-  // Looked up as the person browses (a site asking for a passkey): quiet, like the logins of a page.
-  if (!gate(req, res) || !(await needSession(req, res, false))) return
-  await run(res, next, async () => {
-    const b = (req.body ?? {}) as Record<string, unknown>
-    const { matchPasskeys } = await import('../../core/vault/passkey-store.js')
-    return { passkeys: await matchPasskeys({ origin: b.origin, rpId: b.rpId, allow: b.allow }) }
-  })
-})
-
-vaultV1Router.post('/vault/passkeys/create', async (req, res, next) => {
-  if (!gate(req, res) || !(await needSession(req, res))) return
-  await run(res, next, async () => {
-    const { createPasskey } = await import('../../core/vault/passkey-store.js')
-    return createPasskey((req.body ?? {}) as Parameters<typeof createPasskey>[0])
-  })
-})
-
-vaultV1Router.post('/vault/passkeys/assert', async (req, res, next) => {
-  if (!gate(req, res) || !(await needSession(req, res))) return
-  await run(res, next, async () => {
-    const { signInWithPasskey } = await import('../../core/vault/passkey-store.js')
-    return signInWithPasskey((req.body ?? {}) as Parameters<typeof signInWithPasskey>[0])
-  })
-})
+// Passkeys: routes/vault-passkeys-v1.ts.
 
 vaultV1Router.post('/vault/import', async (req, res, next) => {
   if (!gate(req, res) || !(await needSession(req, res))) return

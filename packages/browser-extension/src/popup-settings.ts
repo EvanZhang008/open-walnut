@@ -144,7 +144,10 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
         switchRow('pagefill', 'Fill and save on web pages', 'Turn off while another password manager fills this browser; the popup still fills on a click.', settings.pageFill,
           (on) => void setSettings({ pageFill: on }), 'popup-pagefill'),
         switchRow('copytotp', 'Copy the one-time code after filling', 'Its code is then on the clipboard for the next page.', settings.copyTotp,
-          (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
+          (on) => void setSettings({ copyTotp: on }), 'popup-copytotp'),
+        // On by default; while off, no passkey script runs in any page (bg-passkey.ts).
+        switchRow('passkeys', 'Save and use passkeys', 'When a site offers a passkey, Walnut can keep it in your vault and sign in with it, each time after you confirm. If another password manager in this browser also saves passkeys, turn that off there. Open pages need a reload.', settings.passkeys,
+          (on) => void setSettings({ passkeys: on }), 'popup-passkeys')),
       h('p', { class: 'group-note', 'data-testid': 'popup-shortcut-note' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page. In a field, the arrow keys open the menu.'),
       agentsBox,
       h('div', { class: 'group' }, cursorPick.row),
@@ -167,7 +170,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
     if (!isCurrent(g)) return
     if (document.activeElement !== lock && lock.value !== now.autoLock) { lock.value = now.autoLock; lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt) }
     cursorPick.sync(now.cursorStyle)
-    for (const [id, on] of [['pagefill', now.pageFill], ['copytotp', now.copyTotp]] as const) {
+    for (const [id, on] of [['pagefill', now.pageFill], ['copytotp', now.copyTotp], ['passkeys', now.passkeys]] as const) {
       const box = root.querySelector<HTMLInputElement>(`#${id}`)
       if (box && box.checked !== on) box.checked = on
     }

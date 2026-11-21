@@ -537,3 +537,26 @@ body.grant { margin: 0; min-height: 100vh; box-sizing: border-box; padding: 72px
 .grant-page .grant-note { color: var(--muted); }
 .grant-page .grant-line:empty { display: none; }
 .grant-page .grant-line { margin: 12px 0 0; }
+
+/* The passkey window (passkey.ts): one request, its site and account, and the person's yes. */
+body.passkey { margin: 0; background: var(--bg); }
+.pk { display: flex; flex-direction: column; gap: 10px; padding: 18px 20px 16px; box-sizing: border-box; }
+.pk .row-sub { color: var(--fg2); }
+.pk.busy { cursor: progress; }
+.pk.busy .pk-main:disabled { opacity: 1; color: #fff; }
+.pk-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-weight: 600; }
+.pk-title { margin: 6px 0 2px; font-size: 18px; line-height: 1.3; font-weight: 650; color: var(--fg); overflow-wrap: anywhere; }
+.pk-account { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
+.pk-note { margin: 0; color: var(--fg2); font-size: 13px; }
+.pk-sub { margin: 0; color: var(--fg2); font-size: 12px; }
+.pk-list { display: flex; flex-direction: column; }
+.pk-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.pk-row input { margin: 0; accent-color: var(--accent); }
+.pk-row.on { background: var(--accent-soft); }
+.pk-main { height: 38px; font-size: 14px; }
+.pk-link { align-self: flex-start; color: var(--accent); border-color: transparent; padding: 0 4px; }
+.pk-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg2); }
+.pk-check input { accent-color: var(--accent); }
+.pk-foot { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.pk-foot .btn { color: var(--fg2); }
+.pk-done { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; font-size: 14px; color: var(--fg); }

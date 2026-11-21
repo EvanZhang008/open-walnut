@@ -32,7 +32,7 @@ export const VAULT_FORMAT = 'walnut-vault'
 export const VAULT_VERSION = 1
 const BACKUPS_KEPT = 14
 /** Files beside vault.json sealed with the vault key; a key change reseals each. */
-export const SIDE_FILES = ['agent-log.json', 'policy.json', 'agent-grants.json', 'bitwarden-sync.json', 'browsers.json'] as const
+export const SIDE_FILES = ['agent-log.json', 'policy.json', 'agent-grants.json', 'bitwarden-sync.json', 'browsers.json', 'passkey-confirm-keys.json'] as const
 export type SideFile = typeof SIDE_FILES[number]
 
 export interface StoredItem { key: Sealed; data: Sealed; updatedAt: string }

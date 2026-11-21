@@ -546,6 +546,81 @@ sites on `*.example.test`, the attacks above included), `tests/e2e/browser/exten
 
 **Agents in the browser.** The same extension can let Walnut agents work in tabs of their own, on sites the person approves; the connect page asks once (a checkbox, on by default), and the extension's Settings change it later. See [Agents in your browser](browser-control.md).
 
+## Passkeys in the browser
+
+Code: `packages/browser-extension/src/` (`passkey-page.ts` in the page's own world, `passkey-bridge.ts`,
+`bg-passkey.ts`, `passkey-wire.ts`, the window `passkey.ts`), `src/web/routes/vault-passkeys-v1.ts`,
+`src/core/vault/passkey-approval.ts`, `passkey-confirm-keys.ts`, `passkey-store.ts`, `passkey.ts`.
+On by default (the user's choice, 2026-11-21: no switch to find first): the extension's Settings,
+"Save and use passkeys", turns it off; only an explicit off is kept. While off, no script of it runs in
+any page and sites get the browser's own passkey dialog, as before.
+
+**What it does.** On, the background registers two scripts for top frames: one wraps
+`navigator.credentials.create` and `.get` in the page's world, the other passes a request to the
+background. Walnut takes a request only when it can answer it honestly: ES256, not a security key
+(`authenticatorAttachment: cross-platform` or a `security-key`/`hybrid` hint), not an enterprise
+attestation, no `prf` or `largeBlob` it would have to fake, not the username-field form
+(`mediation: conditional`, a later version), and a sign-in only for a site the vault keeps a passkey
+for. Everything else goes to the browser's own function untouched, before any window. "direct"
+attestation is answered with "none", as every passkey manager without its own attestation does.
+`credProps` is answered (`rk: true`); other extensions are left unanswered, as the spec allows.
+
+**The origin is the browser's.** The background takes the asking frame's origin from the browser
+(the message's sender), never from the page; it builds the client data itself from that origin and
+the page's challenge; the server checks again that the relying party id is that origin's host or a
+parent of it that is not a public suffix (`passkey.ts rpIdFor`). Iframes are not taken, nor a page
+with an opaque origin (a sandboxed page, whose URL's origin is not its own): the bridge sends its
+world's own `self.origin`, and the background refuses `"null"` or one that differs from the sender's.
+A request ends when its tab closes, reloads or goes to another page. As with the browser's own
+dialog, a tab in the background gets no window, and while one is open for a tab a newer request
+from it is refused; a conditional create (the silent passkey offer after a password sign-in) goes
+to the browser. "Use the browser instead" gives the site's window the focus back before the browser asks.
+
+**Every make and sign needs the person's yes.** An unlocked vault session alone makes and signs
+nothing: `POST /vault/passkeys/begin` checks the request as the final step would and keeps it in
+memory, bound to that vault session, with a 32-byte challenge, for 2 minutes; `POST
+/vault/passkeys/approve` runs the kept request once, only with proof: the master password again
+(checked and slowed like an export's), or a confirm key's signature. The caller cannot change the
+site, account or credential between the two. A second approve of the same id, another session, a
+cancel, a restart: refused (`410 passkey_approval_gone`). There is no one-step route.
+
+**Confirm keys (Touch ID).** The window offers "Next time, confirm with Touch ID" where the browser
+has a user-verifying platform authenticator. It asks the browser's own WebAuthn, in the extension's
+page, for a credential of the extension itself (its rp id is the extension's, never a site's; Chrome
+122+, Firefox 150+); the browser keeps that key (on a Mac, behind Touch ID). Walnut keeps only its
+public key in `passkey-confirm-keys.json`, a side file sealed with the vault key, added with the
+master password and a server challenge; the enrollment must be made in an extension origin with the
+user-verified flag. A yes is that key's signature over the approval's challenge, in the origin and
+for the rp id it was made for, with user present and user verified. What this proves is exactly
+that: the enrolled key signed this challenge after the authenticator verified the user (Touch ID, or
+the Mac's password if the person picks that in the browser's sheet). The extension remembers its key
+id in its local storage and forgets it when Walnut no longer lists it.
+
+**The window.** One per request (`passkey.html`): the site and account, a pick when several passkeys
+fit, "Unlock Walnut" when locked, the yes, "Use the browser instead" (the request goes to the browser's own
+dialog) and Cancel (the site hears `NotAllowedError`, as when it closes the browser's own; closing
+the window, the page aborting or closing do the same). A new request from the same tab replaces the
+open one.
+
+**What is stored.** A new passkey goes on the site's login of that user name, else on a new login,
+in Bitwarden's `fido2Credentials` shape with `madeBy: "walnut"` (so a Bitwarden sync keeps it). A
+second registration of the same account keeps the old passkey beside the new one (Walnut cannot see
+whether the site took the new one); the Passwords app lists each passkey with Delete, which removes
+it from Walnut only. Flags: user present and user verified (the person said yes), backup eligible and
+backed up (the vault is backed up daily and opens on every device of the person). The counter of a
+Walnut passkey stays 0. The private key never leaves the server: no read gives it, no passkey module
+logs (`tests/core/browser-control/extension-passkey-wire.test.ts`), and only the person's own full
+export (master password again) carries it, which is how to put Walnut's passkeys into Bitwarden too.
+The iPhone app opens the same vault and signs with passkeys of this format.
+
+**Another password manager.** Two extensions that both take passkeys race for the same request, and
+Walnut cannot choose who wins: the setting's help says to turn passkeys off in the other one.
+
+Tests: `tests/e2e/vault-passkeys.test.ts`, `tests/e2e/vault-passkey-approval.test.ts` (the routes, the
+yes, confirm keys with a software authenticator), `tests/core/vault/passkey-sync-merge.test.ts`,
+`tests/e2e/browser/extension-passkeys.spec.ts` (the extension against a local site that checks every
+answer, `passkey-rp-site.ts`; the browser's virtual authenticator stands in for Touch ID).
+
 ## iPhone
 
 The iPhone app is a password app iOS offers everywhere (Settings, General, AutoFill & Passwords,
@@ -599,7 +674,7 @@ that never counted, as synced ones do, else one more than the stored count, whic
 write back)
 and one-time codes (iOS 18+) are all used. New passkeys are not made on the phone: the vault's
 writes stay on the Mac, so a passkey registration iOS sends to Walnut gets a screen saying to save
-it elsewhere. Saving or changing a password from the phone is not there either; the browser
+it elsewhere. A passkey the browser extension saves is in the same vault and format the phone signs with. Saving or changing a password from the phone is not there either; the browser
 extension and the Mac do it, and the phone shows the change.
 
 Site matching for the sheet's "Suggested" section is the same host or a parent and child of it,
@@ -746,6 +821,11 @@ favorite). Per item:
   new and counted `ambiguous`.
 - **Changed in Bitwarden:** updated, keeping what only Walnut has (agent access, env var name,
   sensitive, passkeys made in Walnut, when it was used); the old password goes into its history.
+  Passkeys merge by credential id on every sync, a login otherwise unchanged included, against the
+  ids Bitwarden had at the last sync (kept on the link): one Bitwarden added comes, one it deleted
+  goes, one deleted in Walnut stays deleted, each keeps the higher counter, and every other one
+  (made in Walnut, from another import) stays. A link an older Walnut wrote has no ids: nothing is
+  dropped on its first sync.
 - **Changed on both sides** (the Walnut copy's Bitwarden-owned fields differ from the last sync,
   or it was moved to the trash): both kept, the Walnut copy tagged `conflict` and no longer
   synced, Bitwarden's added as a new item. A Walnut-only setting is no change.
