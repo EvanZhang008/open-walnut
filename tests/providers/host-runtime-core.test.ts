@@ -25,6 +25,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
+import { daemonStatements, twinText } from '../helpers/standalone-twin-text.js'
 
 /** A plain Linux PATH for a fake host (fakeHost runs nothing for real). */
 const usrBinEnv = (extra: Record<string, string> = {}) => ({ HOME, PATH: '/usr/bin', ...extra })
@@ -443,7 +444,7 @@ describe('injection into the source daemon twin', () => {
     expect(generated).not.toContain('__CREATE_HOST_RUNTIME__')
     expect(generated).not.toContain('__CREATE_CLAUDE_CHECK__')
     const root = path.resolve(__dirname, '../..')
-    const standalone = fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    const standalone = twinText('daemon-standalone.ts', fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8'))
     const template = fs.readFileSync(path.join(root, 'src/providers/daemon-source.ts'), 'utf-8')
     for (const [label, src] of [['standalone', standalone], ['template', template]] as const) {
       expect(src, label).toMatch(/process\.env\.PATH = bootPath\.path/)
@@ -457,7 +458,7 @@ describe('injection into the source daemon twin', () => {
       // Inspect the actual cmdStart, not an earlier budget helper or a whole-file text match.
       const actual = label === 'template' ? generated : src
       const parsed = ts.createSourceFile('daemon.ts', actual, ts.ScriptTarget.Latest, true)
-      const start = parsed.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'cmdStart')
+      const start = daemonStatements(ts, parsed).find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'cmdStart')
       expect(start, `${label}: actual cmdStart missing`).toBeDefined()
       const body = start!.getText(parsed)
       // The original runtime failure and its exact error kind still reach the client.

@@ -18,9 +18,10 @@ import { createHostServerSupervisor } from '../../src/providers/host-server-core
 import { createStreamRelay } from '../../src/providers/stream-relay-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { createFollowerReads } from '../../src/providers/follower-reads-core.js'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 const root = path.join(import.meta.dirname, '..', '..')
-const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf-8')
+const read = (f: string) => twinText(f, fs.readFileSync(path.join(root, f), 'utf-8'))
 const twins = { standalone: read('src/providers/daemon-standalone.ts'), source: read('src/providers/daemon-source.ts') }
 
 /** The allowlist's entries, comments stripped (they name commands that are NOT allowed). */

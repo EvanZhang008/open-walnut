@@ -84,15 +84,24 @@ describe.skipIf(!BUN)('a trial daemon ends by itself after its lifetime', () => 
 // 2026-11-04 review: the lifetime was armed only once startup was done, so a trial that hung on
 // its way up (before it served) stayed for good. Both twins now arm it at load, before startup.
 describe('the trial lifetime is armed before startup in both twins', () => {
-  it.each([
-    ['source twin', () => getDaemonSource()],
-    ['standalone twin', () => fs.readFileSync(STANDALONE, 'utf8')],
-  ] as const)('%s', (_name, text) => {
-    const source = text()
+  it('source twin', () => {
+    const source = getDaemonSource()
     const armed = source.indexOf('trial lifetime reached')
     expect(armed).toBeGreaterThan(0)
     expect(armed).toBeLessThan(source.search(/\nconst action = process\.argv\[2\]/))
     expect(armed).toBeLessThan(source.search(/\n(\} else )?if \(action === '--start' \|\| SERVICE_MODE\)/))
+    expect(source.split('trial lifetime reached')).toHaveLength(2)
+  })
+  // The standalone twin is a runtime its process entry creates (runDaemonProcess): the entry
+  // arms the lifetime before it creates the runtime, so before anything of the start runs.
+  it('standalone twin', () => {
+    const source = fs.readFileSync(STANDALONE, 'utf8')
+    const entry = source.indexOf('export async function runDaemonProcess(')
+    const armed = source.indexOf('trial lifetime reached')
+    expect(entry).toBeGreaterThan(0)
+    expect(armed).toBeGreaterThan(entry)
+    expect(armed).toBeLessThan(source.indexOf('runtime = await createDaemonRuntime(', entry))
+    expect(armed).toBeLessThan(source.indexOf('await runtime.start()', entry))
     expect(source.split('trial lifetime reached')).toHaveLength(2)
   })
 })

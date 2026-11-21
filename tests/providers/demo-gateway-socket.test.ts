@@ -7,6 +7,7 @@ import { demoGatewaySocketPath, GATEWAY_SOCKET_FILENAME } from '../../src/provid
 import { RESTART_MARK_NAME } from '../../src/providers/daemon-restart-mark.js'
 import { demoTerminalDir } from '../../src/lib/demo-terminal-dir.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = '/fixture/share/open-walnut-demo'
 const GEN = 'gen-1'
@@ -128,7 +129,7 @@ describe('demoGatewaySocketPath', () => {
 })
 
 describe('demo gateway socket wiring in both twins', () => {
-  const standalone = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  const standalone = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
   const source = getDaemonSource()
 
   it('only a Demo daemon asks for the short path; every other daemon keeps <daemon dir>/agent-gateway.sock', () => {
@@ -144,7 +145,7 @@ describe('demo gateway socket wiring in both twins', () => {
 
 // Execute the twins' path definitions against stub fs, without opening sockets.
 describe('gateway socket, shim dir and restart mark share one dir in both twins', () => {
-  const standalone = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  const standalone = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
   const source = getDaemonSource()
   const twins = [{ name: 'standalone', text: standalone }, { name: 'source', text: source }]
   const DAEMON = '/fixture/share/open-walnut-demo/d/gen-1'

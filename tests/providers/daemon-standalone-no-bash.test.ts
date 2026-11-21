@@ -151,8 +151,9 @@ function loadSessionShell(): (fsImpl: unknown, env: Record<string, string | unde
     else if (src[i] === '}' && --depth === 0) { end = i + 1; break }
   }
   const js = transformSync(src.slice(start, end), { loader: 'ts' }).code
-  const factory = new Function('fs', 'path', 'process', `${js}\nreturn sessionShell`)
-  return (fsImpl, env) => factory(fsImpl, path, { env })()
+  // The runtime reads its env as daemonEnv (createDaemonRuntime's options.env).
+  const factory = new Function('fs', 'path', 'process', 'daemonEnv', `${js}\nreturn sessionShell`)
+  return (fsImpl, env) => factory(fsImpl, path, { env }, env)()
 }
 
 function fakeFs(runnable: string[], dirs: string[] = []) {

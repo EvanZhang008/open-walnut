@@ -19,6 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createReplicaLogs } from '../../src/providers/replica-logs-core.js'
 import { createHostServerSupervisor, type HostServerDeps } from '../../src/providers/host-server-core.js'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/marina-home'
@@ -204,7 +205,7 @@ describe('the supervisor caps a running server\'s stdout log by size', () => {
 describe('logs.tail and the log cap are in both twins, behind replica-logs-v1', async () => {
   const { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } = await import('../../src/providers/daemon-capabilities.js')
   const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-  const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+  const read = (rel: string) => twinText(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'))
   const standalone = read('src/providers/daemon-standalone.ts')
   const source = read('src/providers/daemon-source.ts')
 

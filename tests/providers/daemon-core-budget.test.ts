@@ -5,6 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { budgetControlExempt, createDaemonCore, type BudgetGate, type CoreSessionData, type DaemonCoreDeps } from '../../src/providers/daemon-core.js'
+import { daemonStatements } from '../helpers/standalone-twin-text.js'
 
 function fixture(allow: () => Promise<BudgetGate>) {
   const writes: string[] = []
@@ -101,7 +102,7 @@ function budgetStopSinkTwin(twin: 'standalone' | 'source') {
   }
   const source = ts.createSourceFile('daemon.ts', body, ts.ScriptTarget.Latest, true)
   const functions = new Map<string, ts.FunctionDeclaration>()
-  for (const node of source.statements) if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node)
+  for (const node of daemonStatements(ts, source)) if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node)
   const pause = functions.get('pauseBudgetSession')
   const protocolNames = twin === 'standalone' ? ['enqueueForDrain', 'safeSend', 'sendOk', 'sendError'] : ['sendOk', 'sendError']
   if (!pause) throw new Error('Actual budget pause function not found')

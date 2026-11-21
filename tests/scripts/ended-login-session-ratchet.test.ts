@@ -125,7 +125,8 @@ describe('no server starts in a directory that may be deleted', () => {
     for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
       const src = read(twin)
       expect(src, twin).toMatch(/function healDaemonCwd\(\)/)
-      expect(src, twin).toMatch(/\nhealDaemonCwd\(\);?\n/)
+      // The standalone twin heals in its process entry (runDaemonProcess), the source twin at load.
+      expect(src, twin).toMatch(/\n\s*healDaemonCwd\(\);?\n/)
       expect(src, twin).toMatch(/setInterval\(healDaemonCwd, 60_?000\)/)
     }
     // The Mac app is started by LaunchServices in "/", and names the server's directory (below).

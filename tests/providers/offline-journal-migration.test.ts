@@ -11,6 +11,7 @@ import path from 'node:path'
 import { JHOME, SID_A, TASK_A, journalTmpDir, cleanupJournalDirs, journalStore, journalHost, jslice, keyOf, type Clock } from '../helpers/offline-journal-harness.js'
 import { JOURNAL_V2_DRAINS, createJournalMigration, type OfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createLeaderBook } from '../../src/providers/leader-core.js'
+import { twinText as standaloneAsTwin } from '../helpers/standalone-twin-text.js'
 
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const ROOT = path.resolve(__dirname, '../..')
@@ -459,7 +460,7 @@ describe('the offline host adopts a journal another process wrote after it was b
   })
 })
 
-const twinText = (file: string) => fs.readFileSync(path.join(ROOT, 'src/providers', file), 'utf8')
+const twinText = (file: string) => standaloneAsTwin(file, fs.readFileSync(path.join(ROOT, 'src/providers', file), 'utf8'))
 const ruleBlock = (file: string, from: RegExp, to: RegExp) => {
   const text = twinText(file)
   const start = text.search(from)

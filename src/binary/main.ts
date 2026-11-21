@@ -69,7 +69,7 @@ if (first === '__selftest') {
   // `--status`), which a compiled Mac fills with the host's own walnut file. `--version`
   // stays the CLI's; the daemon's own is `walnut __daemon --version`.
   if (first === '__daemon') process.argv.splice(2, 1)
-  await import('../providers/daemon-standalone.js')
+  await (await import('../providers/daemon-standalone.js')).runDaemonProcess()
 } else if (first === 'walnut' || first === 'wn') {
   // The daemon copies this file as its shim core and its PATH shim runs `<copy> walnut <args>`.
   const { runWalnutCli } = await import('../providers/wn-cli.js')

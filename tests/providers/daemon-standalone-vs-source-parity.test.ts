@@ -22,12 +22,13 @@ import path from 'node:path'
 import { BRIDGE_WATCHDOG } from '../../src/providers/daemon-core.js'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 import crypto from 'node:crypto'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const corePath = path.join(ROOT, 'src/providers/daemon-core.ts')
 const sourcePath = path.join(ROOT, 'src/providers/daemon-source.ts')
 
-function readFile(p: string) { return fs.readFileSync(p, 'utf-8') }
+function readFile(p: string) { return twinText(p, fs.readFileSync(p, 'utf-8')) }
 
 describe('L1.6 daemon-core vs daemon-source template parity', () => {
   const coreSrc = readFile(corePath)
@@ -2981,15 +2982,21 @@ describe('silent-death guards daemon-standalone vs daemon-source parity', () => 
   const templateSrc = readFile(sourcePath)
 
   it('both register uncaughtException + unhandledRejection funnels into daemonCrash', () => {
+    // The source twin: the handlers call daemonCrash, which logs, breadcrumbs and EXITS 1.
+    expect(templateSrc).toMatch(/process\.on\('uncaughtException',[\s\S]{0,80}daemonCrash\('uncaughtException'/)
+    expect(templateSrc).toMatch(/process\.on\('unhandledRejection',[\s\S]{0,80}daemonCrash\('unhandledRejection'/)
+    // The standalone twin: its process entry registers them, they call the runtime's daemonCrash
+    // (handed over through onCrashReporter) and then exit 1 (supervisor respawns clean).
+    expect(standaloneSrc).toMatch(/options\.onCrashReporter\?\.\(daemonCrash\)/)
+    expect(standaloneSrc).toMatch(/const onCrashReporter = \(report: /)
+    expect(standaloneSrc).toMatch(/process\.on\('uncaughtException', \(err\) => \{ report\('uncaughtException', err\); process\.exit\(1\) \}\)/)
+    expect(standaloneSrc).toMatch(/process\.on\('unhandledRejection', \(reason\) => \{ report\('unhandledRejection', reason\); process\.exit\(1\) \}\)/)
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/process\.on\('uncaughtException',[\s\S]{0,80}daemonCrash\('uncaughtException'/)
-      expect(src).toMatch(/process\.on\('unhandledRejection',[\s\S]{0,80}daemonCrash\('unhandledRejection'/)
-      // The funnel logs, breadcrumbs, and EXITS 1 (supervisor respawns clean).
       const body = src.slice(src.indexOf('function daemonCrash'))
       const crash = body.slice(0, body.indexOf('\n}'))
       expect(crash).toMatch(/FATAL: ' \+ kind \+ ' — daemon exiting/)
       expect(crash).toMatch(/writeExitBreadcrumb\(kind, err\)/)
-      expect(crash).toMatch(/process\.exit\(1\)/)
+      if (src === templateSrc) expect(crash).toMatch(/process\.exit\(1\)/)
     }
   })
 

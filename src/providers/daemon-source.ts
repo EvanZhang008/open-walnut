@@ -8235,7 +8235,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
 
   // Create FIFO
   try { fs.unlinkSync(pipePath); } catch {}
-  try { execSync('mkfifo ' + JSON.stringify(pipePath)); } catch (err) {
+  try { execSync('mkfifo -m 600 ' + JSON.stringify(pipePath)); } catch (err) {
     throw new Error('mkfifo failed: ' + err.message);
   }
 

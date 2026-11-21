@@ -14,9 +14,10 @@ import * as vm from 'node:vm'
 import { createHostVitals, type HostVitalsDeps } from '../../src/providers/host-vitals-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
-const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+const read = (rel: string) => twinText(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'))
 const standalone = read('src/providers/daemon-standalone.ts')
 const source = read('src/providers/daemon-source.ts')
 const CORE = 'src/providers/host-vitals-core.ts'
@@ -32,7 +33,7 @@ describe('host vitals twin wiring', () => {
   it('both twins dispatch host.vitals, start the ledger at boot and keep it under HOME', () => {
     for (const src of [standalone, source]) {
       expect(src).toContain("case 'host.vitals':")
-      expect(src).toMatch(/hostVitals\.start\(\);?\n\s+console\.log\(port\)/)
+      expect(src).toMatch(/hostVitals\.start\(\);?\n\s+(console\.log\(port\)|options\.onListening\?\.\(port\))/)
       expect(src).toContain("path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals')")
       expect(src).toContain("path.join(DAEMON_DIR, 'host-vitals')")
     }

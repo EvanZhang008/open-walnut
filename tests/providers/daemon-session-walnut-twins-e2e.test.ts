@@ -25,6 +25,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 let scriptPath = ''
 let cliPath = ''
@@ -205,7 +206,7 @@ describe('every use of the shim dir in a twin is a known one', () => {
     { rel: 'src/providers/daemon-source.ts', rule: 1, preamble: 0 },
   ]
   it.each(twins)('$rel', ({ rel, rule, preamble }) => {
-    const lines = fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8').split('\n')
+    const lines = twinText(rel, fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')).split('\n')
       .map((l) => l.trim())
       .filter((l) => /\bGATEWAY_SHIM_DIR\b/.test(l) && !l.startsWith('//') && !l.startsWith('*'))
     const kinds = lines.map((l) => KNOWN.find(([re]) => re.test(l))?.[1] ?? `unknown: ${l}`)
@@ -215,7 +216,7 @@ describe('every use of the shim dir in a twin is a known one', () => {
     expect(kinds.filter((k) => k === 'plugin job')).toHaveLength(1)
   })
   it('both spawn paths of the standalone twin ask the rule', () => {
-    const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    const text = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
     expect(text).toMatch(/buildSpawnPreamble\(launch\.nodeDir, walnutThroughGateway\(settingsEnvOf\(launch\.args\)\)\)/)
     expect(text).toMatch(/PATH: sessionPathWithShim\(process\.env\.PATH \|\| '', throughGateway\),/)
   })

@@ -205,6 +205,7 @@ SOURCES=(
   src/providers/daemon-cron-runtime.ts
   src/providers/daemon-cron-metadata.ts
   src/providers/daemon-spawn-barrier.ts
+  src/providers/daemon-child-spawn.ts
   src/providers/daemon-service-config.ts
   src/providers/daemon-service-manager.ts
   src/providers/daemon-service-launchd.ts

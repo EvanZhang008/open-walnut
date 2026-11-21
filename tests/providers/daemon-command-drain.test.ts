@@ -107,13 +107,20 @@ const idleHostExec = () => ({ stuck: () => false, endForUpdate: vi.fn(), untilEn
 
 /**
  * stopDaemon as its source runs it: the template ends through exitDaemon (a host_exec file look
- * still in flight gets its grace first), the standalone through process.exit.
+ * still in flight gets its grace first). The standalone's stopDaemon resolves to the exit code and
+ * its caller exits (requestDaemonShutdown: options.exit); past the drain limit it ends hard first
+ * (options.hardExit). A daemon process passes process.exit and a SIGKILL of itself as those two,
+ * so the compiled standalone gets them as runDaemonProcess wires them, over the injected process.
  */
+const STANDALONE_SHUTDOWN = 'requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => options.exit(code)) }'
 const stopDaemonSource = (source: string) => {
-  const exit = /function exitDaemon\(/.test(source)
-    ? `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
-    : ''
-  return `let shutdown = null; ${exit}const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`
+  if (/function exitDaemon\(/.test(source)) {
+    const exit = `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
+    return `let shutdown = null; ${exit}const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`
+  }
+  if (!source.includes(STANDALONE_SHUTDOWN)) throw new Error('standalone: requestDaemonShutdown no longer exits with stopDaemon\'s code')
+  const options = "const options = { exit: (code) => process.exit(code), hardExit: () => process.kill(process.pid, 'SIGKILL') };"
+  return `${options} const daemonEnv = process.env; let shutdown = null; let requestDaemonShutdown = null; let exitAsked = false; const stopDaemon = ${extract(source, 'stopDaemon')}; ${STANDALONE_SHUTDOWN}; return requestDaemonShutdown;`
 }
 const template = getDaemonSource()
 const templateDrain = compile<typeof createDaemonCommandDrain>(

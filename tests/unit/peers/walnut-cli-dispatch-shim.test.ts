@@ -65,8 +65,10 @@ describe('daemon CLI dispatch keyword', () => {
   it('the bun twin keeps CLI argv out of the --version fast path for both keywords', () => {
     // `walnut tools call session_send '{"text":"… --version …"}'` must not print
     // the daemon version and exit 0.
+    // In its process entry (runDaemonProcess): argv is process.argv, action is argv[2].
+    expect(standaloneSrc).toMatch(/const action = argv\[2\]/);
     expect(standaloneSrc).toMatch(
-      /if \(process\.argv\.includes\('--version'\) && !isDaemonCliKeyword\(process\.argv\[2\]\)\) \{/,
+      /if \(argv\.includes\('--version'\) && !isDaemonCliKeyword\(action\)\) \{/,
     );
   });
 

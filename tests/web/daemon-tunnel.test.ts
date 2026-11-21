@@ -25,6 +25,7 @@ import {
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
 import { TUNNEL_PROBE_HEADER, TUNNEL_REFUSAL_HEADER } from '../../src/core/hosts/cloud-box-host.js'
 import { notifyRevoked } from '../../src/core/device-auth.js'
+import { twinText } from '../helpers/standalone-twin-text.js'
 
 const PRIMARY: TunnelCredential = { name: 'bridge-local', kind: 'machine' }
 const OTHER_MACHINE: TunnelCredential = { name: 'bridge-devbox', kind: 'machine' }
@@ -174,7 +175,7 @@ describe('the tunnel daemon keeps the Mac sessions when it is replaced', () => {
   // a binary falls back to. Either one reaping its CLIs on exit would end the
   // Mac's sessions on every companion deploy.
   it.each(['daemon-standalone.ts', 'daemon-source.ts'])('%s never reaps its CLIs on exit when told to keep them', (file) => {
-    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', file), 'utf-8')
+    const src = twinText(file, fs.readFileSync(path.join(process.cwd(), 'src', 'providers', file), 'utf-8'))
     expect(src).toMatch(/const KEEP_SESSIONS_ON_EXIT = process\.env\.WALNUT_DAEMON_KEEP_SESSIONS === '1'/)
     expect(src).toMatch(/function shouldReapOnExit\(\)[^{]*\{[\s\S]{0,400}&& !KEEP_SESSIONS_ON_EXIT/)
   })

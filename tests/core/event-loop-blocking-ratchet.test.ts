@@ -35,6 +35,7 @@ const EXEMPT_PATHS = [
   'src/workers/',            // separate child processes by design
   'src/providers/daemon-standalone.ts', // daemon twin — its own process on exec hosts
   'src/providers/daemon-source.ts',     // daemon twin (JS fallback)
+  'src/providers/daemon-child-spawn.ts', // the daemon's child wrapper: it only forwards the daemon's own calls, counted where daemon-standalone.ts makes them
   'src/hooks/on-stop.ts',    // Claude CLI hook — runs inside the CLI process
   'src/core/cloud-setup/steps.ts', // one-shot EC2 provisioning script path
 ];
