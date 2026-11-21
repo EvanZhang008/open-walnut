@@ -37,6 +37,7 @@ import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { isHiddenFromTaskLists, orgDisplayTitle } from '@open-walnut/org-tree';
+import { priorityRank } from '@open-walnut/task-query';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import { useRecentOpenedTasks } from './useRecentOpenedTasks';
@@ -627,14 +628,6 @@ function tierDisplayLabel(tier: string, customTiers?: CustomTierDef[]): string {
 }
 
 // Action icons: imported from shared Icons.tsx via ICONS.*
-
-/** Normalize legacy priority values to current 4-tier system. */
-function effectivePriority(p: string): string {
-  if (p === 'high') return 'immediate';
-  if (p === 'medium') return 'important';
-  if (p === 'low') return 'backlog';
-  return p;
-}
 
 // ── LocalStorage persistence helpers ──
 
@@ -1713,8 +1706,6 @@ function orderedSort(items: string[], orderList: string[]): string[] {
 
 // SortBy and GroupBy types imported from ViewDropdown
 
-const PRIORITY_RANK: Record<string, number> = { immediate: 0, important: 1, backlog: 2, none: 3 };
-
 function readSortBy(): SortBy {
   try {
     const v = localStorage.getItem(LS_SORT_KEY);
@@ -1765,8 +1756,10 @@ const TASK_COMPARATORS: Record<Exclude<SortBy, 'manual'>, (a: Task, b: Task) => 
 
 /** Sort tasks by priority (Immediate → Important → Backlog → None), then by created_at descending within same priority */
 function comparePriority(a: Task, b: Task): number {
-  const pa = PRIORITY_RANK[effectivePriority(a.priority)] ?? 3;
-  const pb = PRIORITY_RANK[effectivePriority(b.priority)] ?? 3;
+  // Walnut's one native order (task-query's priorityRank); unknown values share none's place.
+  const none = priorityRank('none');
+  const pa = Math.min(priorityRank(a.priority), none);
+  const pb = Math.min(priorityRank(b.priority), none);
   if (pa !== pb) return pa - pb;
   // Same priority: newest first
   return compareDate(a, b);

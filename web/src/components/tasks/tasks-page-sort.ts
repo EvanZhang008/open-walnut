@@ -4,6 +4,7 @@
  * rules without mounting the component.
  */
 import type { Task } from '@open-walnut/core';
+import { priorityRank as nativePriorityRank } from '@open-walnut/task-query';
 
 export type TpSortKey =
   | 'title' | 'priority' | 'due' | 'start' | 'session' | 'project'
@@ -11,11 +12,11 @@ export type TpSortKey =
 export type TpSortDir = 'asc' | 'desc';
 export interface TpSort { key: TpSortKey; dir: TpSortDir }
 
-/** Missing values always sink to the bottom regardless of direction. */
-const PRIORITY_RANK: Record<string, number> = { immediate: 0, important: 1, backlog: 2 };
+/** Walnut's native priority order; "none" and anything unknown share the last place (NO_PRIORITY). */
+const NO_PRIORITY = nativePriorityRank('none');
 
 function priorityRank(t: Task): number {
-  return PRIORITY_RANK[t.priority] ?? 3;
+  return Math.min(nativePriorityRank(t.priority), NO_PRIORITY);
 }
 
 /** Lifecycle order — the same left-to-right the phase machine walks. */
@@ -53,9 +54,9 @@ export function compareTasks(a: Task, b: Task, sort: TpSort): number {
       return sign * a.title.localeCompare(b.title);
     case 'priority': {
       const d = priorityRank(a) - priorityRank(b);
-      // "none" (rank 3) stays last in BOTH directions — flipping the sign would
+      // "none" (NO_PRIORITY) stays last in BOTH directions — flipping the sign would
       // surface the priority-less pile above real priorities on desc.
-      if (priorityRank(a) === 3 || priorityRank(b) === 3) return d;
+      if (priorityRank(a) === NO_PRIORITY || priorityRank(b) === NO_PRIORITY) return d;
       return sign * d;
     }
     case 'due':

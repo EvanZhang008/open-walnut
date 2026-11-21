@@ -149,7 +149,7 @@ export const LEGACY_PRIORITY: Readonly<Record<string, TaskPriority>> = {
 /**
  * Canonicalize a stored priority. A value that is neither canonical nor legacy
  * (absent, garbage) passes through UNCHANGED rather than becoming 'none': it
- * then misses both the priorities filter and PRIORITY_RANK, which is what keeps
+ * then misses both the priorities filter and priorityRank, which is what keeps
  * such a row sorting below a real 'none'.
  */
 export function normalizeTaskPriority(priority: TaskPriority | undefined): TaskPriority | undefined {
@@ -486,12 +486,18 @@ function compareTimestampDesc(a: string | undefined, b: string | undefined): num
   return bMs - aMs;
 }
 
-const PRIORITY_RANK: Readonly<Record<TaskPriority, number>> = {
-  immediate: 4,
-  important: 3,
-  backlog: 2,
-  none: 1,
-};
+/**
+ * A priority's place in Walnut's native order, VALID_PRIORITIES (immediate,
+ * important, backlog, none): 0 first. Legacy values fold first (high ->
+ * immediate); anything else (absent, garbage) comes after none. This is THE
+ * order every task list draws a priority sort in: the query sort below, the
+ * /tasks table and the Tasks panel. Never keep a second rank table
+ * (tests/core/priority-order-guard.test.ts fails on one).
+ */
+export function priorityRank(priority: string | undefined): number {
+  const rank = TASK_PRIORITIES.indexOf(normalizeTaskPriority(priority as TaskPriority) as TaskPriority);
+  return rank < 0 ? TASK_PRIORITIES.length : rank;
+}
 
 /** Compare tasks by a query sort key, always ending with id ascending. */
 export function compareTasksForQuery(a: Task, b: Task, sort: TaskQuerySort): number {
@@ -500,8 +506,7 @@ export function compareTasksForQuery(a: Task, b: Task, sort: TaskQuerySort): num
   else if (sort === 'created_desc') result = compareTimestampDesc(a.created_at, b.created_at);
   else if (sort === 'completed_desc') result = compareTimestampDesc(a.completed_at, b.completed_at);
   else if (sort === 'priority') {
-    const rank = (task: Task): number => PRIORITY_RANK[normalizeTaskPriority(task.priority)!] ?? 0;
-    result = rank(b) - rank(a);
+    result = priorityRank(a.priority) - priorityRank(b.priority);
     if (result === 0) result = compareTimestampDesc(a.created_at, b.created_at);
   } else if (sort === 'title_asc') {
     result = a.title.localeCompare(b.title);
