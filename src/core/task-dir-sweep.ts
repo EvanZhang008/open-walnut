@@ -141,7 +141,7 @@ export async function sweepAlarmRinging(isRinging?: (alarmId: string) => boolean
 /**
  * This machine's disk is low: free space under the floor new work already moves away at,
  * the watermark says so, or an alarm whose auto-fix is this sweep rings. The disk alarm's
- * line (30 GB) sits above the floor (20 GB): read alone, the floor left the sweep calm while
+ * line (30 GB) sits above the sweep's own floor (20 GB, taskDirLowDiskFloorBytes): read alone, the floor left the sweep calm while
  * the alarm rang, so its auto-fix freed nothing (2026-11-18, 29 GB free, 0.0 GB freed).
  */
 export async function localDiskLow(

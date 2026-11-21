@@ -1868,6 +1868,9 @@ export interface Config {
    *  25 less often, 0 never (as `hosts[x].place: false`). Keys: 'local' (this Mac) or a
    *  host alias. */
   placement_weights?: Record<string, number>;
+  /** Free disk (GB) under which a host takes no new work (core/hosts/placement.ts
+   *  placeMinDiskBytes). Default 3; 0 turns the floor off. */
+  placement_min_disk_gb?: number;
   external_session_import?: {
     excluded_cwds?: Record<string, string[]>;
     /** Days an imported session may sit idle before its task is auto-completed

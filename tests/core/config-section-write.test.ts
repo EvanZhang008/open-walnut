@@ -42,7 +42,7 @@ const REPLACED_MAPS = [
 /** Not objects at all: stored as sent whatever the mode. */
 const NOT_OBJECTS = [
   'version', 'plugin_sources', 'local_capabilities', 'ssh_login_files', 'ssh_login_hint', 'ssh_cert_letter',
-  'api_keys', 'push_tokens',
+  'api_keys', 'push_tokens', 'placement_min_disk_gb',
 ]
 
 describe('every top-level config section is classified', () => {

@@ -116,6 +116,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   health_monitor: 'the health monitor runs on the Mac, which files its fix tasks',
   triage: 'inbox triage runs on the Mac',
   placement_weights: 'placement by load decides on the Mac',
+  placement_min_disk_gb: 'placement by load decides on the Mac',
   backup: 'backup targets of the Mac',
   search: 'embedding endpoints and keys; the search copy carries its own',
   session_hooks: 'hook actions run on the Mac',

@@ -15,7 +15,7 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => {
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { MAX_HOST_SLOTS, __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placementCaps, placementWeight, CLOUD_BOX_MOVE_NOTE } from '../../../src/core/hosts/placement.js';
+import { DEFAULT_PLACE_MIN_DISK_GB, MAX_HOST_SLOTS, __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placeMinDiskBytes, placementCaps, placementWeight, CLOUD_BOX_MOVE_NOTE } from '../../../src/core/hosts/placement.js';
 import os from 'node:os';
 import { HostsFullError, __resetHostAdmissionForTesting, __setWaitStepForTesting, admitHostStart, holdSlotFor, isAutomaticStart, slotHoldersOn } from '../../../src/core/sessions/host-admission.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
@@ -49,13 +49,13 @@ afterEach(() => { __setHostLoadProberForTesting(null); });
 describe('judgeHost', () => {
   const caps = placementCaps({});
   it('names every cap a host is over, in plain words', () => {
-    // 2026-10-31 on the Mac: load 600 on 14 CPUs, 20 GB free, 14 sessions.
-    const v = judgeHost('__local__', 'this Mac', load({ load1: 600, diskFreeBytes: 19 * GB, cpuBusy: 0.97, memAvailBytes: 1 * GB }), 14, 7, caps);
+    // 2026-10-31 on the Mac: load 600 on 14 CPUs, 14 sessions (here with 2 GB of disk free).
+    const v = judgeHost('__local__', 'this Mac', load({ load1: 600, diskFreeBytes: 2 * GB, cpuBusy: 0.97, memAvailBytes: 1 * GB }), 14, 7, caps);
     expect(v.busy).toBe(true);
     expect(v.score).toBe(0);
     expect(v.reasons).toEqual([
       'load 600 on 14 CPUs (42.86 per CPU, cap 3)', 'CPU 97% busy', '2% memory available',
-      '19.0 GB disk free (floor 20 GB)', '14 sessions in a turn (limit 7)',
+      '2.0 GB disk free (floor 3 GB)', '14 sessions in a turn (limit 7)',
     ]);
   });
   it('a host under every cap has room, more for more idle cores', () => {
@@ -91,6 +91,29 @@ describe('judgeHost', () => {
   });
   it('the caps follow the env', () => {
     expect(placementCaps({ WALNUT_PLACE_MAX_LOAD_PER_CPU: '10', WALNUT_PLACE_MIN_DISK_GB: '5' })).toMatchObject({ loadPerCpu: 10, diskFreeBytes: 5 * GB });
+  });
+  it('new work stops only under 3 GB of free disk by default (2026-11-21: "20gb is too aggressive, like 3gb is good")', () => {
+    expect(DEFAULT_PLACE_MIN_DISK_GB).toBe(3);
+    expect(placementCaps({}).diskFreeBytes).toBe(3 * GB);
+    // The Mac at 13 GB free while its tasks build: room, no disk reason.
+    expect(judgeHost('__local__', 'this Mac', load({ diskFreeBytes: 13 * GB }), 0, 7, placementCaps({})).reasons).toEqual([]);
+    expect(judgeHost('__local__', 'this Mac', load({ diskFreeBytes: 2.9 * GB }), 0, 7, placementCaps({})).reasons).toEqual(['2.9 GB disk free (floor 3 GB)']);
+  });
+  it('the floor is a setting: config placement_min_disk_gb, an env override first, 0 turns it off', () => {
+    expect(placeMinDiskBytes({ placement_min_disk_gb: 8 }, {})).toBe(8 * GB);
+    expect(placementCaps({}, { placement_min_disk_gb: 8 }).diskFreeBytes).toBe(8 * GB);
+    expect(placeMinDiskBytes({ placement_min_disk_gb: 8 }, { WALNUT_PLACE_MIN_DISK_GB: '1' })).toBe(1 * GB);
+    expect(placeMinDiskBytes({ placement_min_disk_gb: 0 }, {})).toBe(0);
+    // Nonsense falls back to the default.
+    expect(placeMinDiskBytes({ placement_min_disk_gb: -1 }, { WALNUT_PLACE_MIN_DISK_GB: 'x' })).toBe(3 * GB);
+    // An empty key in config.yaml loads as null: the default, never off.
+    expect(placeMinDiskBytes({ placement_min_disk_gb: null as unknown as number }, {})).toBe(3 * GB);
+  });
+  it('only placement.ts reads the floor: no other place in src keeps its own copy', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const hits = execFileSync('git', ['grep', '-l', '-E', 'WALNUT_PLACE_MIN_DISK_GB|placement_min_disk_gb', '--', 'src'], { encoding: 'utf8' }).trim().split('\n').sort();
+    // types.ts declares the key; the two registries classify it; placement.ts reads it.
+    expect(hits).toEqual(['src/core/config-section-write.ts', 'src/core/hosts/placement.ts', 'src/core/replication/config-allowlist.ts', 'src/core/types.ts']);
   });
 });
 

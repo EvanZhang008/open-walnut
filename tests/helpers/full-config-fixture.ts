@@ -71,6 +71,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     health_monitor: { fix_tasks: 'record' },
     session_limits: { devbox: 4 },
     placement_weights: { local: 25, devbox: 100 },
+    placement_min_disk_gb: 5,
     external_session_import: { auto_complete_after_days: 7, excluded_cwds: { devbox: ['/Users/marina/scratch'] } },
     session: { cron_policy: 'session-only', idle_timeout_minutes: 120, turn_retry: { enabled: true, max_attempts: 3 } },
     triage: { enabled: true, imap_password: triagePass },

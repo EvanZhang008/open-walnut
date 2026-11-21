@@ -14,7 +14,7 @@
  * Caps (each env-tunable): load average per CPU 3 (the macOS load also counts threads
  * stalled on memory, which CPU use alone misses; over the cap, only our own processes' share
  * of it counts, hosts/own-load.ts), CPU busy 95%, memory available 5%,
- * free disk 20 GB, and the host's slots (hostSlots: sessions in a turn at once). A host's
+ * free disk 3 GB (placeMinDiskBytes: config placement_min_disk_gb), and the host's slots (hostSlots: sessions in a turn at once). A host's
  * numbers come from its daemon (`host.load`, 'host-load-v1'), the Mac's from this
  * process; one older than 15 s is asked again, and a host that does not answer in 4 s
  * is unknown and never chosen. A placed task keeps its host (no rebalancing), and
@@ -64,12 +64,31 @@ function num(env: string | undefined, dflt: number): number {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
-export function placementCaps(env: NodeJS.ProcessEnv = process.env) {
+/**
+ * Free disk under which a host takes no new work (GB), unless config `placement_min_disk_gb`
+ * says otherwise. 2026-11-21, the user: "20gb is too aggressive, like 3gb is good": at 20 GB
+ * the Mac, which hovers between 15 and 30 GB while its tasks build, turned work away all day.
+ */
+export const DEFAULT_PLACE_MIN_DISK_GB = 3;
+
+/**
+ * The one reading of that floor, in bytes: env WALNUT_PLACE_MIN_DISK_GB (an operator's
+ * override), else config `placement_min_disk_gb`, else DEFAULT_PLACE_MIN_DISK_GB. 0 turns it off.
+ */
+export function placeMinDiskBytes(config?: { placement_min_disk_gb?: number }, env: NodeJS.ProcessEnv = process.env): number {
+  const fromEnv = env.WALNUT_PLACE_MIN_DISK_GB === undefined || env.WALNUT_PLACE_MIN_DISK_GB === '' ? NaN : Number(env.WALNUT_PLACE_MIN_DISK_GB);
+  // Only a number counts from the config: an empty `placement_min_disk_gb:` loads as null, which Number() reads as 0 (off).
+  const fromConfig = typeof config?.placement_min_disk_gb === 'number' ? config.placement_min_disk_gb : NaN;
+  for (const n of [fromEnv, fromConfig]) if (Number.isFinite(n) && n >= 0) return n * 1024 ** 3;
+  return DEFAULT_PLACE_MIN_DISK_GB * 1024 ** 3;
+}
+
+export function placementCaps(env: NodeJS.ProcessEnv = process.env, config?: { placement_min_disk_gb?: number }) {
   return {
     loadPerCpu: num(env.WALNUT_PLACE_MAX_LOAD_PER_CPU, 3),
     cpuBusy: Math.min(1, num(env.WALNUT_PLACE_MAX_CPU_BUSY, 0.95)),
     memAvailShare: Math.min(1, num(env.WALNUT_PLACE_MIN_MEM_SHARE, 0.05)),
-    diskFreeBytes: num(env.WALNUT_PLACE_MIN_DISK_GB, 20) * 1024 ** 3,
+    diskFreeBytes: placeMinDiskBytes(config, env),
   };
 }
 
@@ -280,7 +299,7 @@ export function judgeHost(
   if (load.cpuBusy != null && load.cpuBusy >= caps.cpuBusy) view.reasons.push(`CPU ${Math.round(load.cpuBusy * 100)}% busy`);
   if (memShare != null && memShare <= caps.memAvailShare) view.reasons.push(`${Math.round(memShare * 100)}% memory available`);
   if (load.diskFreeBytes != null && load.diskFreeBytes < caps.diskFreeBytes) {
-    view.reasons.push(`${(load.diskFreeBytes / 1024 ** 3).toFixed(1)} GB disk free (floor ${Math.round(caps.diskFreeBytes / 1024 ** 3)} GB)`);
+    view.reasons.push(`${(load.diskFreeBytes / 1024 ** 3).toFixed(1)} GB disk free (floor ${Number((caps.diskFreeBytes / 1024 ** 3).toFixed(1))} GB)`);
   }
   if (running >= runningLimit) view.reasons.push(`${running} sessions in a turn (limit ${runningLimit})`);
   if (liveReason) view.reasons.push(liveReason);
@@ -360,7 +379,7 @@ export async function hostLoads(opts: { hosts?: string[]; cloudBox?: boolean } =
   const runner = await import('../../providers/claude-code-session.js').then((m) => m.sessionRunner).catch(() => null);
   const inTurn = (s: import('../types.js').SessionRecord) => runner?.isInTurn(s.claudeSessionId) !== false;
   const { hostDisplayName } = await import('./host-display-name.js');
-  const caps = placementCaps();
+  const caps = placementCaps(process.env, config);
   return Promise.all(names.map(async (host) => {
     const key = host === LOCAL ? 'local' : host;
     // Its sessions in a turn and the starts holding a slot there, each task once.

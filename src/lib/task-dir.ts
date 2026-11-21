@@ -78,17 +78,20 @@ export const TASK_DIR_BUILD_IDLE_DAYS = 2
 /** The same while this machine's disk is low (under taskDirLowDiskFloorBytes, or disk-watermark.ts warn or critical). */
 export const TASK_DIR_BUILD_IDLE_DAYS_LOW_DISK = 0.25
 
+/** taskDirLowDiskFloorBytes' default (GiB). */
+export const TASK_DIR_LOW_DISK_GB = 20
+
 /**
- * Free space under which this machine's disk counts as low for task directories (GiB): the
- * floor under which new work already starts elsewhere (WALNUT_PLACE_MIN_DISK_GB, placement.ts).
+ * Free space under which this machine's disk counts as low for task directories, so idle
+ * clones lose their build output sooner (GiB, env WALNUT_TASK_DIR_LOW_DISK_GB). It stays well
+ * above the floor where new work stops (placement.ts placeMinDiskBytes, 3 GB since 2026-11-21):
+ * cleaning early is cheap, turning work away is not.
  * 2026-11-08: the Mac refilled from 30 to 12 GiB within hours, all of it from tasks still running.
  */
 export function taskDirLowDiskFloorBytes(env: Env): number {
-  for (const raw of [env.WALNUT_TASK_DIR_LOW_DISK_GB, env.WALNUT_PLACE_MIN_DISK_GB]) {
-    const n = raw === undefined || raw === '' ? NaN : Number(raw)
-    if (Number.isFinite(n) && n >= 0) return n * 1024 ** 3
-  }
-  return 20 * 1024 ** 3
+  const raw = env.WALNUT_TASK_DIR_LOW_DISK_GB
+  const n = raw === undefined || raw === '' ? NaN : Number(raw)
+  return (Number.isFinite(n) && n >= 0 ? n : TASK_DIR_LOW_DISK_GB) * 1024 ** 3
 }
 
 export function taskDirBuildIdleDays(env: Env, lowDisk = false): number {
