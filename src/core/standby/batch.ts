@@ -20,8 +20,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { holdWrites } from '../../utils/write-gate.js'
-import { digestFile, readChunks } from './chunks.js'
-import { limiter, scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
+import type { ChunkSink, FileDigest } from './chunks.js'
+import { scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
 import { openPinWorker, type Pin, type PinWorker } from './sqlite-pin.js'
 import { stageFile, type StageContext, type StageOutcome } from './stage.js'
 import { STANDBY_FORMAT, STANDBY_VERSION, chunkIds, type BatchFile, type BatchManifest, type CommitResult, type SourceStat, type StandbyTransport } from './types.js'
@@ -141,10 +141,25 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     /** Databases whose stat did not move across the pins: their pinned state is the stat's. */
     const steady = new Set<string>()
     let ctx!: StageContext
-    const stage = async (rel: string): Promise<void> => {
-      const out = await stageFile(rel, ctx)
+    /** Chunks the target holds or was sent in this batch. */
+    const known = new Set<string>()
+    const send = async (id: string, data: Buffer): Promise<void> => {
+      if (known.has(id)) return
+      known.add(id)
+      if (!(await opts.transport.missing([id])).size) return
+      await opts.transport.putChunk(id, data)
+      stats.sentChunks++
+      stats.sentBytes += data.length
+    }
+    /** What the hold read, kept in memory until the writes go again (the staging area). */
+    const heldChunks = new Map<string, Buffer>()
+    const keep = (id: string, data: Buffer) => { heldChunks.set(id, Buffer.from(data)) }
+    const stage = async (rel: string, sink: ChunkSink): Promise<void> => {
+      const out = await stageFile(rel, ctx, sink)
       if (!out.ok) throw new VoidBatch(`${rel}: ${out.why}${out.detail ? ` (${out.detail})` : ''}`)
       staged.set(rel, out)
+      stats.stagedFiles++
+      stats.stagedBytes += out.size
     }
     try {
       worker = await openPinWorker(dbs.map((d) => path.join(opts.home, d.p)))
@@ -175,9 +190,9 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
         if (sameStat(st, dbStats.get(p))) steady.add(p)
       }
       fsAfter = await fsClock(stagingDir, opts.home)
-      ctx = { home: opts.home, stagingDir, momentMs: fsMoment, afterCopy: opts.hooks?.afterCopy }
+      ctx = { home: opts.home, momentMs: fsMoment, afterCopy: opts.hooks?.afterCopy }
       const budget = opts.holdCopyBytes ?? 8 * 1024 * 1024
-      if (changed.reduce((n, e) => n + e.st.s, 0) <= budget) for (const e of changed) await stage(e.p)
+      if (changed.reduce((n, e) => n + e.st.s, 0) <= budget) for (const e of changed) await stage(e.p, keep)
     }, { drainMs: opts.drainMs ?? 300 })
     stats.holdMs = hold.holdMs
     stats.drainMs = hold.drainMs
@@ -186,6 +201,8 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     if (!pinned) throw new VoidBatch('databases were not pinned')
     stats.pinAttempts = (pinned as Pin).attempts
     await opts.hooks?.afterHold?.()
+    for (const [id, data] of heldChunks) await send(id, data)
+    heldChunks.clear()
 
     // 3. stage: the changed databases as pinned, then the files the hold did not copy
     const out = new Map<string, BatchFile>()
@@ -195,18 +212,26 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       const last = prev.get(d.p)
       // Unchanged since the last batch's stat, and no commit between this stat and the pins.
       if (last?.db && sameStat(last.src, src) && steady.has(d.p)) { out.set(d.p, last); continue }
-      const dest = path.join(stagingDir, 'db', d.p)
+      let dig: FileDigest
       try {
-        await pinner.copy(i, dest)
+        dig = await pinner.copy(i)
+        const missing = await opts.transport.missing(dig.chunks.filter((id) => !known.has(id)))
+        const want = dig.chunks.map((id, at) => (missing.has(id) ? at : -1)).filter((at) => at >= 0)
+        for (let k = 0; k < want.length; k += 32) {
+          const part = want.slice(k, k + 32)
+          const data = await pinner.chunks(part)
+          for (let j = 0; j < part.length; j++) await send(dig.chunks[part[j]], data[j])
+        }
+        await pinner.drop()
       } catch (err) {
         throw new VoidBatch(`database ${d.p} cannot be copied: ${err instanceof Error ? err.message : String(err)}`)
       }
-      const dig = await digestFile(dest)
-      staged.set(d.p, { ok: true, rel: d.p, staged: dest, st: src, x: false, h: dig.h, size: dig.size, chunks: dig.chunks, lengths: dig.lengths })
+      stats.stagedFiles++
+      stats.stagedBytes += dig.size
       out.set(d.p, fileEntry(d.p, dig.size, dig.h, dig.chunks, false, src, true))
     }
     await pinner.close()
-    for (const e of changed) if (!staged.has(e.p)) await stage(e.p)
+    for (const e of changed) if (!staged.has(e.p)) await stage(e.p, send)
 
     // 4. re-scan: place every move since step 1 before or after the moment
     const s2 = await scanHome(opts.home)
@@ -229,7 +254,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       if (then && sameStat(then.st, now.st)) continue
       // New since step 1 and born after the moment: the next batch's.
       if (!then && await bornAfter(rel)) continue
-      if (now.st.c < before) { await stage(rel); continue }
+      if (now.st.c < before) { await stage(rel, send); continue }
       throw new VoidBatch(`${rel} changed after the batch's moment, and its content at the moment is unknown`)
     }
     for (const [rel, then] of s1.files) {
@@ -250,19 +275,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     }
     for (const [rel, st] of staged) if (!out.has(rel)) out.set(rel, fileEntry(rel, st.size, st.h, st.chunks, st.x, st.st, false))
 
-    // 5. send
-    const sendSlot = limiter(4)
-    await Promise.all([...staged.values()].map((st) => sendSlot(async () => {
-      stats.stagedFiles++
-      stats.stagedBytes += st.size
-      const missing = await opts.transport.missing(st.chunks)
-      if (!missing.size) return
-      await readChunks(st.staged, st, missing, async (id, data) => {
-        await opts.transport.putChunk(id, data)
-        stats.sentChunks++
-        stats.sentBytes += data.length
-      })
-    })))
+    // 5. commit (every chunk was sent as it was read)
     const manifest: BatchManifest = {
       format: STANDBY_FORMAT,
       version: STANDBY_VERSION,

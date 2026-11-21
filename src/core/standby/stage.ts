@@ -1,38 +1,39 @@
 /**
- * Copy one plain file of the leader into a batch's staging area, and prove the copy is the
- * file as it was at the batch's moment.
+ * Take one plain file of the leader into a batch, and prove what was taken is the file as it
+ * was at the batch's moment.
  *
- * The rule (docs/reference/standby-copy.md, "One moment"): a copy counts only when
- *   1. before the copy, the file's ctime is older than the moment, read on the filesystem's
+ * The file is read once, in chunks (chunks.ts); each chunk goes to `sink` as it is read (kept
+ * in memory during the hold, sent at once after it). The rule (docs/reference/standby-copy.md,
+ * "One moment"): what was read counts only when
+ *   1. before the read, the file's ctime is older than the moment, read on the filesystem's
  *      own clock (so its last change came before the moment: no program can set a ctime), and
- *   2. after the copy, its size, mtime, ctime and inode are what they were before, and its
- *      content hashes to what was copied.
- * Then nothing changed it from before the moment until the copy ended, so the copy is its
+ *   2. after the read, its size, mtime, ctime and inode are what they were before, and the
+ *      bytes read are as many as its size.
+ * Then nothing changed it from before the moment until the read ended, so the chunks are its
  * content at the moment. Anything else is `late` (it changed at or after the moment) or
- * `changed` (it changed while it was copied): the caller voids the batch.
+ * `changed` (it changed while it was read): the caller voids the batch. Chunks a void read
+ * already sent are harmless: no batch names them, and a deep verify removes them.
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { digestFile, hashFile } from './chunks.js'
+import { digestFile, type ChunkSink } from './chunks.js'
 import { sameStat, toSourceStat } from './scan.js'
 import type { SourceStat } from './types.js'
 
 export type StageOutcome =
-  | { ok: true; rel: string; staged: string; st: SourceStat; x: boolean; h: string; size: number; chunks: string[]; lengths: number[] }
+  | { ok: true; rel: string; st: SourceStat; x: boolean; h: string; size: number; chunks: string[] }
   | { ok: false; rel: string; why: 'late' | 'changed' | 'gone' | 'unreadable' | 'not-a-file'; detail?: string }
 
 export interface StageContext {
   home: string
-  stagingDir: string
   /** The batch's moment on the filesystem's clock (batch.ts fsClock): a ctime must be below it. */
   momentMs: number
-  /** Test hook: runs after the copy, before the checks. */
+  /** Test hook: runs after the read, before the check. */
   afterCopy?: (rel: string) => Promise<void> | void
 }
 
-export async function stageFile(rel: string, ctx: StageContext): Promise<StageOutcome> {
+export async function stageFile(rel: string, ctx: StageContext, sink: ChunkSink): Promise<StageOutcome> {
   const abs = path.join(ctx.home, rel)
-  const staged = path.join(ctx.stagingDir, 'files', rel)
   let before: import('node:fs').Stats
   try {
     before = await fs.lstat(abs)
@@ -41,27 +42,16 @@ export async function stageFile(rel: string, ctx: StageContext): Promise<StageOu
   }
   if (!before.isFile()) return { ok: false, rel, why: 'not-a-file' }
   if (before.ctimeMs >= ctx.momentMs) return { ok: false, rel, why: 'late' }
+  let read: Awaited<ReturnType<typeof digestFile>>
   try {
-    await fs.mkdir(path.dirname(staged), { recursive: true })
-    await fs.copyFile(abs, staged)
+    read = await digestFile(abs, sink)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     return { ok: false, rel, why: code === 'ENOENT' ? 'gone' : 'unreadable', detail: String(err) }
   }
   await ctx.afterCopy?.(rel)
-  let after: import('node:fs').Stats
-  let source: { size: number; h: string }
-  let copy: Awaited<ReturnType<typeof digestFile>>
-  try {
-    source = await hashFile(abs)
-    after = await fs.lstat(abs)
-    copy = await digestFile(staged)
-  } catch (err) {
-    return { ok: false, rel, why: 'changed', detail: String(err) }
-  }
+  const after = await fs.lstat(abs).catch(() => null)
   const st = toSourceStat(before)
-  if (!sameStat(st, toSourceStat(after)) || source.h !== copy.h || copy.size !== before.size) {
-    return { ok: false, rel, why: 'changed' }
-  }
-  return { ok: true, rel, staged, st, x: (before.mode & 0o111) !== 0, h: copy.h, size: copy.size, chunks: copy.chunks, lengths: copy.lengths }
+  if (!after || !sameStat(st, toSourceStat(after)) || read.size !== before.size) return { ok: false, rel, why: 'changed' }
+  return { ok: true, rel, st, x: (before.mode & 0o111) !== 0, h: read.h, size: read.size, chunks: read.chunks }
 }

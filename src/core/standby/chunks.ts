@@ -1,12 +1,19 @@
 /**
- * Content ids for the standby copy: a file is cut into content-defined chunks (the backup's
- * own chunker, src/core/backup/repo/chunker.ts, used as it is) and each chunk is named by its
- * sha256. A file that did not change is never sent again, and a database copied page for page
- * (sqlite-pin.ts) shares most chunks with its last copy.
+ * Content ids for the standby copy: a file is cut into fixed 1 MiB chunks, each named by its
+ * sha256. A file that did not change is never sent again; a file that grew sends its last
+ * chunk and the new ones; a SQLite database copied page for page (sqlite-pin.ts) sends only
+ * the chunks whose pages changed, because 1 MiB is a whole number of pages.
+ *
+ * Fixed, not content-defined (as the backup's chunker is): cutting by content costs a pass of
+ * JavaScript over every byte, which made a batch of a 1.2 GB database take about 100 s; bytes
+ * inserted in the middle of a file (the case content-defined cuts help) are rare in a home,
+ * whose large files are databases, appended logs and recordings.
  */
 import crypto from 'node:crypto'
-import fs from 'node:fs'
-import { chunkStream } from '../backup/repo/chunker.js'
+import { createReadStream } from 'node:fs'
+import fs from 'node:fs/promises'
+
+export const CHUNK_BYTES = 1024 * 1024
 
 export const sha256 = (data: Buffer | Uint8Array): string => crypto.createHash('sha256').update(data).digest('hex')
 
@@ -18,56 +25,55 @@ export interface FileDigest {
   h: string
   /** chunk ids in order */
   chunks: string[]
-  /** each chunk's length, in the same order */
-  lengths: number[]
 }
 
-/** Read `file` once: its size, its sha256 and its chunk ids. `onChunk` sees each chunk as it is cut. */
-export async function digestFile(file: string, onChunk?: (id: string, data: Buffer) => Promise<void> | void): Promise<FileDigest> {
+export type ChunkSink = (id: string, data: Buffer) => Promise<void> | void
+
+/** Read `file` once: its size, its sha256 and its chunk ids; `sink` sees each chunk as it is read. */
+export async function digestFile(file: string, sink?: ChunkSink): Promise<FileDigest> {
   const whole = crypto.createHash('sha256')
   const chunks: string[] = []
-  const lengths: number[] = []
   let size = 0
-  for await (const chunk of chunkStream(fs.createReadStream(file))) {
-    whole.update(chunk)
-    size += chunk.length
-    const id = sha256(chunk)
-    chunks.push(id)
-    lengths.push(chunk.length)
-    if (onChunk) await onChunk(id, chunk)
+  const fh = await fs.open(file, 'r')
+  try {
+    for (;;) {
+      const buf = Buffer.allocUnsafe(CHUNK_BYTES)
+      let filled = 0
+      while (filled < CHUNK_BYTES) {
+        const { bytesRead } = await fh.read(buf, filled, CHUNK_BYTES - filled, size + filled)
+        if (!bytesRead) break
+        filled += bytesRead
+      }
+      if (!filled) break
+      const data = filled === CHUNK_BYTES ? buf : buf.subarray(0, filled)
+      whole.update(data)
+      const id = sha256(data)
+      chunks.push(id)
+      size += filled
+      if (sink) await sink(id, data)
+      if (filled < CHUNK_BYTES) break
+    }
+  } finally {
+    await fh.close()
   }
-  return { size, h: whole.digest('hex'), chunks, lengths }
+  return { size, h: whole.digest('hex'), chunks }
+}
+
+/** The same digest of bytes in memory (a database copied by sqlite-pin.ts). */
+export function digestBuffer(data: Uint8Array): FileDigest {
+  const whole = crypto.createHash('sha256').update(data).digest('hex')
+  const chunks: string[] = []
+  for (let off = 0; off < data.length; off += CHUNK_BYTES) chunks.push(sha256(data.subarray(off, off + CHUNK_BYTES)))
+  return { size: data.length, h: whole, chunks }
 }
 
 /** sha256 of a whole file, streamed. */
 export async function hashFile(file: string): Promise<{ size: number; h: string }> {
   const whole = crypto.createHash('sha256')
   let size = 0
-  for await (const piece of fs.createReadStream(file)) {
+  for await (const piece of createReadStream(file, { highWaterMark: CHUNK_BYTES })) {
     whole.update(piece as Buffer)
     size += (piece as Buffer).length
   }
   return { size, h: whole.digest('hex') }
-}
-
-/** Read the chunks of `file` named in `want` (by their place in `digest`), each checked against its id. */
-export async function readChunks(file: string, digest: Pick<FileDigest, 'chunks' | 'lengths'>, want: Set<string>, onChunk: (id: string, data: Buffer) => Promise<void>): Promise<void> {
-  const fh = await fs.promises.open(file, 'r')
-  try {
-    let offset = 0
-    for (let i = 0; i < digest.chunks.length; i++) {
-      const id = digest.chunks[i]
-      const len = digest.lengths[i]
-      if (want.has(id)) {
-        want.delete(id)
-        const data = Buffer.alloc(len)
-        const { bytesRead } = await fh.read(data, 0, len, offset)
-        if (bytesRead !== len || sha256(data) !== id) throw new Error(`${file} changed in staging`)
-        await onChunk(id, data)
-      }
-      offset += len
-    }
-  } finally {
-    await fh.close()
-  }
 }

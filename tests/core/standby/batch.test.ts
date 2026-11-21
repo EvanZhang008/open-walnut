@@ -47,8 +47,8 @@ describe('a batch', () => {
       expect(copied, rel).not.toContain(rel)
     }
     expect(copied.filter((p) => /-(wal|shm)$/.test(p))).toEqual([])
-    expect(fs.statSync(copyOf('triggers/check.sh')).mode & 0o777).toBe(0o555)
-    expect(fs.statSync(copyOf('config.yaml')).mode & 0o777).toBe(0o444)
+    expect(fs.statSync(copyOf('triggers/check.sh')).mode & 0o777).toBe(0o500)
+    expect(fs.statSync(copyOf('config.yaml')).mode & 0o777).toBe(0o400)
 
     for (const [rel, rows] of [['tasks/tasks.sqlite', 200], ['sessions.sqlite', 50], ['cache/applied-ops.sqlite', 5]] as const) {
       const { db, done } = openCopiedDb(copyOf(rel))

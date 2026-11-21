@@ -65,10 +65,10 @@ export async function verifyStandby(dir: string, opts: { deep?: boolean; now?: (
     const driftDir = path.join(t.drift, stamp(at))
     const save = async (rel: string, how: 'copy' | 'move'): Promise<string> => {
       const dest = path.join(driftDir, 'files', rel)
-      await fs.mkdir(path.dirname(dest), { recursive: true })
+      await fs.mkdir(path.dirname(dest), { recursive: true, mode: 0o700 })
       if (how === 'move') await fs.rename(path.join(t.copy, rel), dest)
       else await fs.copyFile(path.join(t.copy, rel), dest)
-      await fs.chmod(dest, 0o644).catch(() => {})
+      await fs.chmod(dest, 0o600).catch(() => {})
       return path.relative(t.root, dest)
     }
     const opened = new Set<string>()

@@ -8,8 +8,9 @@
  * seeing that commit, whatever writers do after). Pinning every database takes a few ms;
  * a commit that lands between the first pin and the last (seen as a -wal that grew) means
  * the pins are not of one moment, so they are dropped and taken again. Then each database
- * is copied with sqlite3_serialize inside its pinned transaction: the copy is exactly the
- * pinned state, page for page (so the next batch's copy shares most chunks with this one).
+ * is copied with sqlite3_serialize inside its pinned transaction, into the worker's memory: the
+ * copy is exactly the pinned state, page for page, so the next batch's copy shares every chunk
+ * whose pages did not change, and only those that did are read out of the worker and sent.
  * VACUUM INTO cannot run inside a transaction, which is why it is not used here.
  *
  * Any database that cannot be opened, pinned or copied fails the whole batch.
@@ -18,6 +19,7 @@
  */
 import { Worker } from 'node:worker_threads'
 import Database from '../../lib/sqlite.js'
+import { CHUNK_BYTES, type FileDigest } from './chunks.js'
 
 const PIN_WORKER = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
@@ -25,6 +27,7 @@ const { Database } = require('bun:sqlite')
 const fs = require('node:fs')
 const path = require('node:path')
 const open = []
+let held = null
 const walSize = (file) => { try { return fs.statSync(file + '-wal').size } catch { return -1 } }
 const ensureWal = (file) => {
   // A read-only connection to a WAL database needs its -wal to exist (src/lib/sqlite.ts).
@@ -71,11 +74,22 @@ parentPort.on('message', (m) => {
       endAll()
       parentPort.postMessage({ ok: false, message: 'databases kept changing while they were pinned' })
     } else if (m.cmd === 'copy') {
+      // Copy one database as pinned, into this worker's memory, and name its chunks (as
+      // chunks.ts digestBuffer does: fixed 1 MiB, sha256); the bytes stay here until 'chunks'.
       const o = open[m.index]
-      const bytes = o.db.serialize()
-      fs.mkdirSync(path.dirname(m.dest), { recursive: true })
-      fs.writeFileSync(m.dest, bytes)
-      parentPort.postMessage({ ok: true, size: bytes.length })
+      const u8 = o.db.serialize()
+      held = Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength)
+      const crypto = require('node:crypto')
+      const sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
+      const chunks = []
+      for (let off = 0; off < held.length; off += m.chunkBytes) chunks.push(sha(held.subarray(off, off + m.chunkBytes)))
+      parentPort.postMessage({ ok: true, size: held.length, h: sha(held), chunks })
+    } else if (m.cmd === 'chunks') {
+      const out = m.indexes.map((i) => Buffer.from(held.subarray(i * m.chunkBytes, (i + 1) * m.chunkBytes)))
+      parentPort.postMessage({ ok: true, data: out })
+    } else if (m.cmd === 'drop') {
+      held = null
+      parentPort.postMessage({ ok: true })
     } else if (m.cmd === 'close') {
       closeAll()
       parentPort.postMessage({ ok: true })
@@ -97,8 +111,13 @@ export interface Pin {
 export interface PinWorker {
   /** Pin every database opened, at one moment. Throws when that is not possible. */
   pin(opts?: { attempts?: number }): Promise<Pin>
-  /** Write database `index` (in the order given to openPinWorker) as it was pinned to `dest`. */
-  copy(index: number, dest: string): Promise<number>
+  /**
+   * Copy database `index` (in the order given to openPinWorker) as it was pinned, into the
+   * worker's memory, and digest it; then `chunks` reads parts of that copy, `drop` frees it.
+   */
+  copy(index: number): Promise<FileDigest>
+  chunks(indexes: number[]): Promise<Buffer[]>
+  drop(): Promise<void>
   /** End the read transactions and the worker. Safe to call twice. */
   close(): Promise<void>
 }
@@ -144,7 +163,12 @@ export async function openPinWorker(files: string[]): Promise<PinWorker> {
       const r = await ask({ cmd: 'pin', attempts: opts.attempts ?? 5 })
       return { pinnedAt: Number(r.pinnedAt), pinnedEnd: Number(r.pinnedEnd), attempts: Number(r.attempts) }
     },
-    copy: async (index, dest) => Number((await ask({ cmd: 'copy', index, dest })).size),
+    copy: async (index) => {
+      const r = await ask({ cmd: 'copy', index, chunkBytes: CHUNK_BYTES })
+      return { size: Number(r.size), h: String(r.h), chunks: r.chunks as string[] }
+    },
+    chunks: async (indexes) => ((await ask({ cmd: 'chunks', indexes, chunkBytes: CHUNK_BYTES })).data as Uint8Array[]).map((d) => Buffer.from(d.buffer, d.byteOffset, d.byteLength)),
+    drop: async () => { await ask({ cmd: 'drop' }) },
     close,
   }
 }

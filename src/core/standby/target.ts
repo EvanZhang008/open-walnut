@@ -56,9 +56,11 @@ export class StandbyTarget {
   }
 
   async init(): Promise<void> {
-    await fs.mkdir(this.t.root, { recursive: true })
-    for (const d of [this.t.batches, this.t.chunks]) await fs.mkdir(d, { recursive: true })
-    await fs.mkdir(this.t.copy, { recursive: true })
+    // The target holds the home's credentials: only its owner may enter it.
+    await fs.mkdir(this.t.root, { recursive: true, mode: 0o700 })
+    await fs.chmod(this.t.root, 0o700)
+    for (const d of [this.t.batches, this.t.chunks]) await fs.mkdir(d, { recursive: true, mode: 0o700 })
+    await fs.mkdir(this.t.copy, { recursive: true, mode: 0o700 })
     await this.locked(async () => {})
   }
 
@@ -85,10 +87,10 @@ export class StandbyTarget {
     const file = chunkPath(this.t, id)
     if (sha256(data) !== id) throw new Error(`chunk ${id} does not match its hash`)
     if (await fs.access(file).then(() => true, () => false)) return
-    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
     const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`
     try {
-      const fh = await fs.open(tmp, 'w', 0o444)
+      const fh = await fs.open(tmp, 'w', 0o400)
       try { await fh.writeFile(data) } finally { await fh.close() }
       await fs.rename(tmp, file)
     } catch (err) {
@@ -113,7 +115,7 @@ export class StandbyTarget {
 
   /** Build `f` at `dest` from its chunks, checked; mode read-only. */
   async build(f: BatchFile, dest: string): Promise<void> {
-    await fs.mkdir(path.dirname(dest), { recursive: true })
+    await fs.mkdir(path.dirname(dest), { recursive: true, mode: 0o700 })
     await fs.rm(dest, { force: true })
     const whole = crypto.createHash('sha256')
     const fh = await fs.open(dest, 'w', 0o600)
@@ -157,7 +159,7 @@ export class StandbyTarget {
 
     // Build the batch's new files beside the copy, each checked against its hash.
     await removeTree(this.t.apply)
-    await fs.mkdir(this.t.applyNew, { recursive: true })
+    await fs.mkdir(this.t.applyNew, { recursive: true, mode: 0o700 })
     const slot = limiter(16)
     try {
       await Promise.all(puts.map((f) => slot(() => this.build(f, path.join(this.t.applyNew, f.p)))))
@@ -205,7 +207,7 @@ export class StandbyTarget {
     await openDirs(this.t.copy, step.p, opened)
     if (step.existed) {
       const old = path.join(this.t.applyOld, step.p)
-      await fs.mkdir(path.dirname(old), { recursive: true })
+      await fs.mkdir(path.dirname(old), { recursive: true, mode: 0o700 })
       await fs.rename(dest, old).catch((err) => { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err })
     }
     if (step.op === 'put') {

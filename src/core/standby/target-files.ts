@@ -4,7 +4,7 @@
  *   standby.json       which batch is current (written last: the one step that makes a batch current)
  *   batches/<n>.json   the manifest of batch n (the current one, and the one before while a batch applies)
  *   chunks/<aa>/<id>   content chunks, named by their sha256
- *   copy/              the copy of the leader's home, read-only on disk
+ *   copy/              the copy of the leader's home, read-only on disk (owner only, like the whole target)
  *   copy-stat.json     each copied file's stat as written, so a verify pass sees a direct edit cheaply
  *   .apply/            a batch being made current: journal.json, new/ (its files), old/ (what they replace)
  *   drift/<time>/      what a verify pass found changed in copy/, saved before it was repaired
@@ -14,10 +14,11 @@ import path from 'node:path'
 import { CHUNK_ID } from './chunks.js'
 import { STANDBY_FORMAT, STANDBY_VERSION, type BatchFile, type BatchManifest, type StandbyState } from './types.js'
 
-export const FILE_MODE = 0o444
-export const EXEC_MODE = 0o555
-export const DIR_MODE = 0o555
-export const OPEN_DIR_MODE = 0o755
+/** The copy holds credentials too: its owner may read it, nobody else, and nobody may write it. */
+export const FILE_MODE = 0o400
+export const EXEC_MODE = 0o500
+export const DIR_MODE = 0o500
+export const OPEN_DIR_MODE = 0o700
 
 export interface TargetPaths {
   root: string
@@ -81,7 +82,7 @@ export async function fsyncPath(p: string): Promise<void> {
 
 /** Write a file durably: a temp file, fsync, rename over, fsync the dir. */
 export async function writeDurable(file: string, data: string | Buffer, mode = 0o644): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(16).slice(2)}`
   const fh = await fs.open(tmp, 'w', mode)
   try {

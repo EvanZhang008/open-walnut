@@ -34,6 +34,18 @@ describe('the copy is read-only', () => {
     expect(fs.statSync(copy('memory')).mode & 0o222).toBe(0)
     expect(() => fs.writeFileSync(copy('memory/MEMORY.md'), 'x')).toThrow(/EACCES|EPERM/)
   })
+
+  it('nobody but its owner can read the target: it holds the home\'s credentials', async () => {
+    sb = await sandbox('owner')
+    await oneBatch()
+    const all = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name)
+      return e.isDirectory() ? [p, ...all(p)] : [p]
+    })
+    expect(fs.statSync(sb.target).mode & 0o077).toBe(0)
+    const open = [...all(path.join(sb.target, 'copy')), ...all(path.join(sb.target, 'chunks'))].filter((p) => fs.statSync(p).mode & 0o077)
+    expect(open).toEqual([])
+  })
 })
 
 describe('verify finds, saves, repairs and reports once', () => {
