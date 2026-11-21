@@ -24,7 +24,7 @@
  *              the Mac: a task created Local never reaches the replica's copy, one made local
  *              after it was copied leaves it at the next round, and a host session's call about
  *              either while the Mac sleeps is `needs_leader {why:'task_kept_local'}`, by both doors,
- *              with no daemon away answer.
+ *              with no daemon away answer; a message to one is held for the Mac, once.
  *
  * Twins: as tests/e2e/replica-cluster-e2e.test.ts (REPLICA_CLUSTER_TWINS picks).
  */
@@ -363,7 +363,6 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     const refusals = {
       read: answerOf(await entryCall(entry, a.sid, 'task_get', { id: madeLocal }), 'task_get'),
       write: answerOf(await entryCall(entry, a.sid, 'task_update', { id: bornLocal, tags: ['vault'] }), 'task_update'),
-      send: await gatewayCall(c, b.sid, 'task_send', { to: bornLocal, text: 'please look at the appraisal', expect_reply: false }),
       short: await gatewayCall(c, b.sid, 'task_get', { id: madeLocal.slice(0, 8) }),
     }
     show('kept local refusals', refusals)
@@ -372,6 +371,11 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
       expect(r.error?.code, `${name}: ${JSON.stringify(r).slice(0, 1500)}`).toBe('needs_leader')
       expect(r.error?.detail?.why, `${name}: ${JSON.stringify(r).slice(0, 1500)}`).toBe('task_kept_local')
     }
+    // A message to it is held for the Mac by id (the daemon's held op), never refused or lost.
+    const held = okOf(await gatewayCall(c, b.sid, 'task_send', { to: bornLocal, text: 'please look at the appraisal', expect_reply: false }))
+    show('kept local send', held)
+    expect(held.held, JSON.stringify(held)).toBe(true)
+    expect(journal(c).filter((r: Record<string, any>) => r.kind === 'op' && r.op === 'task_send' && r.args?.to === bornLocal).length, 'held once').toBe(1)
     // Another task still answers from the copy.
     okOf(answerOf(await entryCall(entry, a.sid, 'task_get', { id: b.task }), 'task_get open'))
     expect(logSince(c, slept.after).filter((l) => l.msg === OFFLINE_LINE).map((l) => `${l.op}:${l.why}`)).toEqual([])

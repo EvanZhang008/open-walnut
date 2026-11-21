@@ -22,6 +22,7 @@ import * as sidecar from '../../src/providers/trigger-check-sidecar.js'
 import { buildTriggerMessage as serverEnvelope } from '../../src/core/routines/trigger-envelope.js'
 import { createOfflineHost, type HostSlice } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 
 const NOW = Date.parse('2026-10-05T21:00:00Z')
 const HOME = '/fixture/walnut-home'
@@ -182,7 +183,7 @@ describe('offline host: which session on this host takes the fire', () => {
     const host = createOfflineHost({
       fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
       keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
-      kit: createEnvelopeKit(), log: () => {},
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: (sid) => live.has(sid), turnActive: () => false, streamOffset: () => undefined,
       deliver: async (sid, text, messageId, o) => {
         if (fail.reason) return { ok: false, reason: fail.reason }
@@ -269,7 +270,7 @@ describe('offline host: a stopped session is resumed for the fire (trigger-host-
     const host = createOfflineHost({
       fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
       keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
-      kit: createEnvelopeKit(), log: () => {},
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: () => false, turnActive: () => false, streamOffset: () => undefined,
       deliver: async (sid) => { delivered.push(sid); return { ok: true } },
       resume: async (home, sid, text, messageId, taskId) => {

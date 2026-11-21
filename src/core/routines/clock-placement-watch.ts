@@ -82,6 +82,9 @@ function scheduleOwnerRefresh(now = Date.now()): void {
 export function startClockPlacementWatch(): void {
   if (watchStarted) return;
   watchStarted = true;
+  // A task kept or no longer kept (a subtask too, under a lead made local): what a host's checks
+  // deliver to it changes (trigger-push.ts keptOffFor).
+  void import('../replication/host-private.js').then(({ onHostPrivacyChange }) => onHostPrivacyChange(scheduleClockPlacement)).catch(() => {});
   void import('../event-bus.js').then(({ bus }) => {
     bus.subscribe('clock-placement', (event) => {
       if (watchedTasks.size === 0 && ownerOfJob.size === 0) return;

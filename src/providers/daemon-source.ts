@@ -51,6 +51,7 @@ import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
 import { demoGatewaySocketPath, gatewayApiAnswerOf } from './gateway-core.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
+import { createSendRules } from '../core/sessions/send-rules.js'
 import { createOfflineHostCore, OFFLINE_MAX_RECORDS } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
@@ -298,6 +299,7 @@ export function getDaemonSource(): string {
   const foldInjections: Array<[string, string]> = [
     ['__FOLD_LINE__', foldLine.toString()],
     ['__CREATE_ENVELOPE_KIT__', createEnvelopeKit.toString()],
+    ['__CREATE_SEND_RULES__', createSendRules.toString()],
     ['__CREATE_OFFLINE_HOST__', createOfflineHostCore.toString()],
     ['__CREATE_OFFLINE_JOURNAL__', createOfflineJournal.toString()],
     ['__CREATE_JOURNAL_MIGRATION__', createJournalMigration.toString()],
@@ -499,18 +501,22 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     const createKit = reconstructed['__CREATE_ENVELOPE_KIT__'] as typeof createEnvelopeKit | undefined
     const createOffline = reconstructed['__CREATE_OFFLINE_HOST__'] as typeof createOfflineHostCore | undefined
     const createJournal = reconstructed['__CREATE_OFFLINE_JOURNAL__'] as typeof createOfflineJournal | undefined
-    if (createKit && createOffline && createJournal) {
+    const createRules = reconstructed['__CREATE_SEND_RULES__'] as typeof createSendRules | undefined
+    if (createKit && createOffline && createJournal && createRules) {
       const kit = createKit()
       if (!kit.buildPeerWrapper('<walnut-message', { title: 't', shortId: 'abcdefgh', host: 'h' }).includes('&lt;walnut-message')) {
         throw new Error('envelope kit did not escape a forged tag')
       }
+      // The send rules: a lead's implicit deadline, and a note that asks nothing opens no request.
+      const rules = createRules()
+      if (rules.clampReplyTimeoutSecs(undefined, true, 'lead') !== 12 * 3600 || rules.opensRequest({ wake: false }, false)) throw new Error('send rules did not build')
       const noDir = { readdirSync: () => { throw new Error('none') } } as unknown as typeof fs
       // The journal store builds without touching disk too, and answers a drain of nothing.
       const journal = createJournal({
         fs: noDir, path, dir: '/nonexistent', now: () => 0, randomHex: () => '00', keyOf: () => 'k', sha256: () => '0'.repeat(64), log: () => {},
       })
       const host = createOffline({
-        fs: noDir, path, dir: '/nonexistent', now: () => 0, randomHex: () => '00', keyOf: () => 'k', kit,
+        fs: noDir, path, dir: '/nonexistent', now: () => 0, randomHex: () => '00', keyOf: () => 'k', kit, rules,
         log: () => {}, isLive: () => false, turnActive: () => false, streamOffset: () => undefined,
         deliver: async () => ({ ok: false, reason: 'smoke' }), journal,
       })
@@ -5750,6 +5756,7 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
   kit: (__CREATE_ENVELOPE_KIT__)(),
+  rules: (__CREATE_SEND_RULES__)(),
   boards: (__CREATE_BOARD_OFFLINE__)(),
   openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
   replica: hostReplica,

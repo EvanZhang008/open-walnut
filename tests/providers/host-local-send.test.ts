@@ -27,6 +27,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineHost, createOfflineHostCore, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createOfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
 import { sessionHandle } from '../../src/core/peers/walnut-message-tag.js'
 import { buildReplyTrailer, buildReplyDeliveryText, type SessionRequest } from '../../src/core/session-requests.js'
@@ -93,7 +94,7 @@ function harness(dir?: string, opts: { noPromptHook?: boolean } = {}): Harness {
     now: () => clock.now,
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (v) => createHash('sha1').update(v).digest('hex').slice(0, 12),
-    kit: createEnvelopeKit(),
+    kit: createEnvelopeKit(), rules: createSendRules(),
     log: () => {},
     isLive: (sid) => live.has(sid),
     turnActive: () => false,
@@ -452,7 +453,7 @@ describe('the source twin runs it from its text', () => {
       sha256: (body) => createHash('sha256').update(body).digest('hex'),
     })
     journals.push(journal)
-    const copy = rebuild(createOfflineHostCore)({ ...h.deps, kit: rebuild(createEnvelopeKit)(), journal })
+    const copy = rebuild(createOfflineHostCore)({ ...h.deps, kit: rebuild(createEnvelopeKit)(), rules: rebuild(createSendRules)(), journal })
     copy.configure(slice())
     const r = await copy.handleLocal(HOME, A, 'tools.call', { name: 'task_send', args: { to: TASK_B, text: 'from the copy', expect_reply: false } })
     expect(r?.ok).toBe(true)

@@ -25,6 +25,7 @@ import { createOfflineHost, type HostSlice, type LeaderDelivery, type OfflineRec
 import { createLeaderBook } from '../../src/providers/leader-core.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { createBackupLeader } from '../../src/core/leader/backup-leader.js'
 import { createBackupGateway, type GatewayRequestFrame } from '../../src/core/leader/backup-gateway.js'
 
@@ -84,7 +85,7 @@ function simulate() {
     const host = createOfflineHost({
       fs, path, dir: tmp(), now: () => clock.now,
       randomHex: (n) => randomBytes(n).toString('hex'), keyOf,
-      kit: createEnvelopeKit(), log: () => {},
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: (sid) => live.includes(sid),
       turnActive: () => false,
       streamOffset: () => 0,

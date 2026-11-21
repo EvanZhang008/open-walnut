@@ -3,7 +3,7 @@
  * and its rows. The filter itself (which tasks, which rows, the manifest a host takes), a copy
  * round against the real row-set follower (a row already copied is removed at the next round,
  * the companion keeps it), the search docs, and the host's own refusal of a call about such a
- * task (replica/local-calls.ts keptLocalRefusal).
+ * task (replica/kept-local-calls.ts keptLocalRefusal).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -11,7 +11,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-host-private', { CLOUD_MODE: false }))
 
 import {
-  hostManifest, hostPrivacyOf, keptFromHosts, keptVaultFolders, nothingKept, refKept, searchKeyKeptFromHosts, taskFree, type HostPrivacy,
+  hostManifest, hostPrivacyOf, keptFromHosts, keptVaultFolders, nothingKept, onHostPrivacyChange, refKept, searchKeyKeptFromHosts, taskFree, type HostPrivacy,
 } from '../../../src/core/replication/host-private.js'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../../src/constants.js'
@@ -21,7 +21,8 @@ import { NOTHING_HELD, createRowSetFollower, serialChain, type RowSetState } fro
 import { syncCopyKinds, type CopyKind, type CopyTarget } from '../../../src/core/replication/kinds/copy-kind.js'
 import { _resetReplicaStatusForTesting } from '../../../src/core/replication/replica-status.js'
 import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
-import { keptLocalRefusal } from '../../../src/replica/local-calls.js'
+import { keptLocalRefusal } from '../../../src/replica/kept-local-calls.js'
+import { namesKeptLocal } from '../../../src/core/replication/kinds/local-tasks.js'
 
 const HOLD = { target: 'acme', state: 'chosen', at: '2026-11-21T00:00:00.000Z' }
 
@@ -48,6 +49,39 @@ describe('which tasks a host never holds', () => {
     expect(privacy(['kept'], [['s-1', 'kept']]).sig).not.toBe(privacy(['kept']).sig)
     expect(hostPrivacyOf([{ id: 'open' }], [{ claudeSessionId: 's', taskId: 'open' }]).sig).toBe('')
   })
+
+  it('a subtask is kept with a kept parent at any depth, its sessions too; ids resolved the shared way; a loop ends the walk', () => {
+    const p = hostPrivacyOf(
+      [
+        { id: 'lead-0001', sync_hold: HOLD }, { id: 'child-01', parent_task_id: 'lead-0001' }, { id: 'grand-01', parent_task_id: 'child-01' },
+        // A legacy prefix ref names its parent; one that names the child itself never does.
+        { id: 'legacy-1', parent_task_id: 'lead-00' }, { id: 'lead-0001x', parent_task_id: 'lead-0001x' },
+        { id: 'loop-a', parent_task_id: 'loop-b' }, { id: 'loop-b', parent_task_id: 'loop-a' }, { id: 'open', parent_task_id: 'gone' },
+      ],
+      [{ claudeSessionId: 's-grand', taskId: 'grand-01' }, { claudeSessionId: 's-open', taskId: 'open' }],
+    )
+    expect([...p.tasks].sort()).toEqual(['child-01', 'grand-01', 'lead-0001', 'legacy-1'])
+    expect([...p.sessions]).toEqual(['s-grand'])
+    expect(hostPrivacyOf([{ id: 'loop-a', parent_task_id: 'loop-b' }, { id: 'loop-b', parent_task_id: 'loop-a' }], []).tasks.size).toBe(0)
+  })
+
+  it('a change of the kept set is told within seconds of the task change that made it, and only then', async () => {
+    let kept: string[] = []
+    const fired: number[] = []
+    const stop = onHostPrivacyChange(() => fired.push(Date.now()), async () => privacy(kept))
+    try {
+      const { bus } = await import('../../../src/core/event-bus.js')
+      await new Promise((r) => setTimeout(r, 50))
+      bus.emit('task:updated', { task: { id: 'open' } }, ['web-ui'])
+      await new Promise((r) => setTimeout(r, 2_400))
+      expect(fired, 'nothing kept changed').toEqual([])
+      kept = ['kept']
+      bus.emit('task:updated', { task: { id: 'kept' } }, ['web-ui'])
+      await vi.waitFor(() => expect(fired.length).toBe(1), { timeout: 5_000 })
+    } finally {
+      stop()
+    }
+  }, 15_000)
 
   it('a ref names a kept task, a kept session, or a row of another kind left out this round', () => {
     const p = privacy(['kept'], [['s-1', 'kept']])
@@ -204,13 +238,40 @@ describe('the host\'s own answer to a call about a kept task', () => {
   const here = { tasks: new Set(['kept-task-0001']), sessions: new Set(['kept-session-0001']) }
   const relayed = (over: Record<string, unknown> = {}) => ({ relayId: 7, capability: 'tools.call', callerSid: 'open-session', payload: { name: 'task_get', args: { id: 'kept-task-0001' } }, ...over })
 
-  it('a call naming it, by id or short id, at any depth, or by one of its sessions: needs_leader task_kept_local, final', () => {
+  it('a call naming it, by id, short id or path segment, at any depth, or by one of its sessions: needs_leader task_kept_local, final', () => {
     const want = { relayId: 7, errorCode: 'needs_leader', detail: { why: 'task_kept_local', final: true } }
     expect(keptLocalRefusal(relayed(), here)).toMatchObject(want)
-    expect(keptLocalRefusal(relayed({ payload: { name: 'task_send', args: { to: 'kept-t', text: 'hi' } } }), here)).toMatchObject(want)
+    expect(keptLocalRefusal(relayed({ payload: { name: 'task_get', args: { id: 'kept-t' } } }), here)).toMatchObject(want)
     expect(keptLocalRefusal(relayed({ payload: { name: 'task_update_bulk', args: { updates: [{ id: 'kept-task-0001' }] } } }), here)).toMatchObject(want)
-    expect(keptLocalRefusal(relayed({ payload: { name: 'session_send', args: { session_id: 'kept-session-0001', text: 'x' } } }), here)).toMatchObject(want)
-    expect(keptLocalRefusal(relayed({ callerSid: 'kept-session-0001', payload: { name: 'walnut_status', args: {} } }), here)).toMatchObject(want)
+    expect(keptLocalRefusal(relayed({ payload: { name: 'task_history', args: { id: 'kept-session-0001' } } }), here)).toMatchObject(want)
+    expect(keptLocalRefusal(relayed({ payload: { name: 'api', args: { method: 'GET', path: '/api/v1/tasks/kept-task-0001' } } }), here)).toMatchObject(want)
+    // A kept session's own call naming its task explicitly is about it too.
+    expect(keptLocalRefusal(relayed({ callerSid: 'kept-session-0001', payload: { name: 'board_get', args: { task: 'kept-task-0001' } } }), here)).toMatchObject(want)
+  })
+
+  it('a call of its own session that falls back on its own task: refused, final', () => {
+    const own = (name: string, args: Record<string, unknown> = {}) => keptLocalRefusal(relayed({ callerSid: 'kept-session-0001', payload: { name, args } }), here)
+    for (const name of ['agent_memory_read', 'brief_read', 'board_post', 'thread_list', 'open_items', 'task_dir', 'task_create']) {
+      expect(own(name, name === 'task_create' ? { title: 'a subtask', project: 'Elsewhere' } : {}), name).toMatchObject({ errorCode: 'needs_leader', detail: { why: 'task_kept_local', final: true } })
+    }
+    expect(String(own('agent_memory_read')!.error)).toMatch(/this session's task is kept local/)
+  })
+
+  it('a message to it runs: the host holds it for the Mac (away-sends.ts), whoever sends it', () => {
+    expect(keptLocalRefusal(relayed({ payload: { name: 'task_send', args: { to: 'kept-task-0001', text: 'hi' } } }), here)).toBeNull()
+    expect(keptLocalRefusal(relayed({ payload: { name: 'session_send', args: { to: 'kept-session-0001', text: 'x' } } }), here)).toBeNull()
+    expect(keptLocalRefusal(relayed({ callerSid: 'kept-session-0001', payload: { name: 'task_send', args: { to: 'open-task', text: 'kept-task-0001' } } }), here)).toBeNull()
+  })
+
+  it('any other call of its own session runs: a search, a skill, a status, a trigger, a task it names that is not kept', () => {
+    const own = (name: string, args: Record<string, unknown> = {}) => keptLocalRefusal(relayed({ callerSid: 'kept-session-0001', payload: { name, args } }), here)
+    expect(own('search', { q: 'appraisal' })).toBeNull()
+    expect(own('skill_read', { name: 'walnut' })).toBeNull()
+    expect(own('walnut_status')).toBeNull()
+    expect(own('trigger_list')).toBeNull()
+    expect(own('human_inbox_send', { subject: 'Done', type: 'report', text: 'ok' })).toBeNull()
+    expect(own('board_get', { task: 'open-task' })).toBeNull()
+    expect(own('agent_memory_read', { task: 'open-task' })).toBeNull()
   })
 
   it('anything else runs: another task, a short or spaced string, the tool list, an empty list', () => {
@@ -219,11 +280,18 @@ describe('the host\'s own answer to a call about a kept task', () => {
     expect(keptLocalRefusal(relayed({ payload: { name: 'task_list', args: { q: 'kept' } } }), here)).toBeNull()
     expect(keptLocalRefusal(relayed({ capability: 'tools.list', callerSid: 'kept-session-0001', payload: {} }), here)).toBeNull()
     expect(keptLocalRefusal(relayed(), { tasks: new Set(), sessions: new Set() })).toBeNull()
+    expect(namesKeptLocal('/api/v1/tasks/open-task', here)).toBe(false)
+    expect(namesKeptLocal('kept', here)).toBe(false)
   })
 
-  it('a same-host send while the Mac answers: not final, so the daemon relays it to the Mac', () => {
-    const r = keptLocalRefusal(relayed({ payload: { name: 'task_send', args: { to: 'kept-task-0001', text: 'hi' } } }), here, true)
-    expect(r).toMatchObject({ errorCode: 'needs_leader', detail: { why: 'task_kept_local' } })
-    expect((r!.detail as Record<string, unknown>).final).toBeUndefined()
+  it('a same-host send while the Mac answers: not final, so the daemon relays it to the Mac, as before', () => {
+    for (const r of [
+      keptLocalRefusal(relayed({ payload: { name: 'task_send', args: { to: 'kept-task-0001', text: 'hi' } } }), here, true),
+      keptLocalRefusal(relayed({ callerSid: 'kept-session-0001', payload: { name: 'task_send', args: { to: 'open-task', text: 'hi' } } }), here, true),
+    ]) {
+      expect(r).toMatchObject({ errorCode: 'needs_leader', detail: { why: 'task_kept_local' } })
+      expect((r!.detail as Record<string, unknown>).final).toBeUndefined()
+    }
+    expect(keptLocalRefusal(relayed({ payload: { name: 'task_send', args: { to: 'open-task', text: 'hi' } } }), here, true)).toBeNull()
   })
 })

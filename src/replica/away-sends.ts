@@ -11,10 +11,11 @@
  *                 lead that handed over, the caller itself, a COMPLETE task without force and a
  *                 reason). A reply is asked for unless expect_reply is false, or omitted on a note
  *                 up the org (reply-direction.ts goesUpIn, over the copy with this host's journal
- *                 folded in, so a task made here reports up too), or wake is false: its row is the
- *                 daemon's, as its own offline answer opens one (the "target ended without
- *                 replying" watch there takes it). A target not running here is held for the
- *                 Mac (the daemon's held op), for a Mac that drains `held-op`.
+ *                 folded in, so a task made here reports up too), or wake is false and not forced
+ *                 (delivered now, it asks nothing). Its row is the daemon's, as its own offline
+ *                 answer opens one (the "target ended without replying" watch there takes it). A target not running here is held for the
+ *                 Mac (the daemon's held op), for a Mac that drains `held-op`, and so is one the
+ *                 Mac keeps local (kept-local-calls.ts), named by id: this host holds none of it.
  *     a reply     in_reply_to (one id or up to 20): the request from this host's journal or the
  *                 copy, the asker running here, written into its session and settled here
  *                 (away-replies.ts)
@@ -23,8 +24,8 @@
  *     `needs_leader {why: 'server_delivers'}` and the daemon relays it to the Mac, carrying the
  *     message id it set. Any failure of this server's is the Mac's too (local-calls.ts onlineReply).
  *
- * The rules shared with the Mac (the reply default, the deadline and its kind, the refusals'
- * words) are its own, from core/sessions/send-rules.ts and session-requests.ts: one copy each.
+ * The rules shared with the Mac (the reply default, wake, the deadline and its kind, the refusals'
+ * words) are its own, from core/sessions/send-rules.ts, which the daemon runs too: one copy.
  *
  * The daemon writes it (`follower.peer`, 'follower-peer-v1'): the row's turn and stream facts,
  * the reply line, the live CLI's FIFO and the journal records, the same records its own answer
@@ -42,7 +43,7 @@ import { refNamesId } from '../lib/id-ref.js'
 import { kit, replyTo, serverDelivers, type ReplyContext } from './away-replies.js'
 import { frameAsCaller, taskSessions } from './away-starts.js'
 import { leaderAnswers } from '../core/server-role.js'
-import { admitRetiredLeadRule, asksReply, directionDecides, holdsQuietly, parentCompleteRefusal, replyKindOf, wakeFalseConflict, type RetiredLeadFacts, type SendRuleInput } from '../core/sessions/send-rules.js'
+import { admitRetiredLeadRule, directionDecides, holdsQuietly, opensRequest, parentCompleteRefusal, replyKindOf, ruleInputOf, wakeFalseConflict, type RetiredLeadFacts } from '../core/sessions/send-rules.js'
 import { clampReplyTimeoutSecs } from '../core/session-requests.js'
 import type { Overlay } from './overlay.js'
 import { log } from '../logging/index.js'
@@ -88,22 +89,13 @@ export interface AwaySendsDeps {
   sessionsOfTask(taskId: string): Promise<Array<{ sid: string; host?: string | null; startedAt?: string }>>
   /** A message delivered to a session here started a turn: it is watched again (ask-launch.ts watch). */
   continued?(sid: string): void
+  /** `to` names a task the Mac keeps local, or one of its sessions (kinds/local-tasks.ts): held for the Mac. */
+  keptLocal?(to: string): Promise<boolean>
   randomHex?(bytes: number): string
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
-
-/** The route body's fields as the shared send rules read them (send-rules.ts). */
-export function ruleInputOf(b: Record<string, unknown>): SendRuleInput {
-  return {
-    ...(typeof b.expect_reply === 'boolean' ? { expectReply: b.expect_reply } : {}),
-    ...(b.hands_on !== undefined ? { handsOn: b.hands_on } : {}),
-    ...(typeof b.wake === 'boolean' ? { wake: b.wake } : {}),
-    ...(b.force === true ? { force: true } : {}),
-    ...(typeof b.reason === 'string' ? { reason: b.reason } : {}),
-  }
-}
 
 /** Every task as this replica shows it: the copy's rows with this host's journal folded in, and the tasks made here. */
 export function tasksWithOverlay<T extends { id: string }>(rows: readonly T[], overlay: Pick<Overlay, 'task' | 'createdTaskIds'>): T[] {
@@ -266,6 +258,8 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
     if (!text) return refusalAnswer('bad_request', 'text must be a non-empty string')
     const to = str(b.to)
     if (!to) return refusalAnswer('bad_request', '`to` is required (or pass in_reply_to)')
+    // This host holds nothing of a task the Mac keeps local (kept-local-calls.ts): its message waits for the Mac, by id.
+    if (!online && await deps.keptLocal?.(to).catch(() => false)) return hold(w, sid, b, mid, 'its target is kept local on your Mac')
     // Before the session lookup: a completed parent usually has nothing running.
     const named = online ? undefined : (await deps.findTask(to)).task?.id
     const early = await parentComplete(me.taskId, named)
@@ -287,11 +281,12 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
     if (target.sid === sid) return refusalAnswer('self_send', 'target resolves to the calling session itself')
     const admitted = await admitComplete(target.taskId, b, lead.text, 'send')
     if ('error' in admitted) return admitted.error
-    // The server's default (send-rules.ts asksReply): a session asking another wants the answer, except
-    // a note up to its own leaders (a report); away, a note that asks nothing (wake false) opens none,
-    // as the daemon's own away answer (online such a note went to the Mac above, unless forced).
+    // The server's default (send-rules.ts opensRequest): a session asking another wants the answer,
+    // except a note up to its own leaders (a report); a note that asks nothing (wake false, not forced)
+    // is delivered now, since this host cannot hold it quietly, and opens none (online such a note went
+    // to the Mac above). The daemon's own away answer runs the same rule (offline-host-core.ts).
     const reportsUp = directionDecides(rules) && await deps.goesUp(me.taskId, target.taskId).catch(() => false)
-    const asks = asksReply(rules, reportsUp) && (online || b.wake !== false)
+    const asks = opensRequest(rules, reportsUp)
     // The Mac's deadline: by kind (a lead or Main answers for its teams), longer when the default asked.
     const kind = replyKindOf(target.taskId ? (await deps.task(target.taskId))?.org_role : undefined)
     const secs = clampReplyTimeoutSecs(typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined, b.expect_reply === undefined, kind)
@@ -406,6 +401,10 @@ export function wireAwaySends(o: {
     frame: (text, actor) => frameAsCaller(text, actor, task),
     sessionsOfTask: taskSessions,
     continued: (sid) => o.continued?.(sid),
+    keptLocal: async (to) => {
+      const { refreshLocalTasksHere, namesKeptLocal } = await import('../core/replication/kinds/local-tasks.js')
+      return namesKeptLocal(to, await refreshLocalTasksHere())
+    },
     log: (level, msg, data) => log.web[level](msg, data),
   })
 }

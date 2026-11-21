@@ -14,6 +14,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineHost, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createBoardOffline, type OfflineSliceBoard } from '../../src/providers/offline-board-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { BOARD_HTML_MAX_BYTES, BOARD_MESSAGE_MAX_BYTES, BOARD_PROJECT_STATUSES, BOARD_ITEM_ID_RE } from '../../src/core/boards/board-store.js'
 import { BOARD_PROJECT_TEXT_FIELDS, BOARD_PROJECT_TITLE_MAX } from '../../src/core/boards/board-items.js'
 
@@ -74,7 +75,7 @@ function harness(opts: { boards?: boolean; dir?: string } = {}) {
     now: () => Date.parse('2026-10-05T12:00:00Z'),
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (home) => createHash('sha1').update(home).digest('hex').slice(0, 12),
-    kit: createEnvelopeKit(),
+    kit: createEnvelopeKit(), rules: createSendRules(),
     log: () => {},
     isLive: () => true,
     turnActive: () => false,

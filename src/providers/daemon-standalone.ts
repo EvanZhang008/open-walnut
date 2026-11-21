@@ -125,6 +125,7 @@ import { createLetterCheck } from '../core/human-inbox/letter-check.js'
 import { createTriggerLabel } from '../core/routines/trigger-label.js'
 import { createTriggerWatches } from '../core/routines/trigger-watches.js'
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
+import { createSendRules } from '../core/sessions/send-rules.js'
 import {
   foldLine,
   initialFoldState,
@@ -4397,6 +4398,7 @@ const offlineHost = createOfflineHostCore({
   randomHex: (n) => crypto.randomBytes(n).toString('hex'),
   keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
   kit: createEnvelopeKit(),
+  rules: createSendRules(),
   boards: createBoardOffline(),
   replica: hostReplica,
   openItems: createOpenItemsText(),

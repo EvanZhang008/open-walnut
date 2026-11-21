@@ -33,7 +33,7 @@ import { forgetTaken, noteManifestTaken, runDeltaRound } from '../kind-delta.js'
 import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
 import { COMPANION_COPY_KINDS } from './gate.js'
-import { hostManifest, hostPrivacyNow, isTaskFree, leavesOutPrivate, type HostPrivacy, type ParentKind, type RowOwners } from '../host-private.js'
+import { hostManifest, hostPrivacyNow, isTaskFree, leavesOutPrivate, onHostPrivacyChange, type HostPrivacy, type ParentKind, type RowOwners } from '../host-private.js'
 import { answeredBy, noteRefusalEnded, noteRoundFailure } from '../round-outage.js'
 
 export const COPY_DEBOUNCE_MS = 3_000
@@ -404,6 +404,9 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
   }
   copySoons.add(soon)
   const unwatch = kinds.map((k) => k.watch(() => soon(k.kind)))
+  // A task kept or no longer kept: the kinds of owned rows go now, not at the sweep (host-private.ts).
+  const owned = kinds.filter((k) => k.owners && !isTaskFree(k.owners)).map((k) => k.kind)
+  if (owned.length > 0 && !deps.privacy) unwatch.push(onHostPrivacyChange(() => { for (const k of owned) soon(k) }))
   let unlistenTargets: (() => void) | null = null
   void import('../replica-targets.js').then(({ onReplicaTargetsChanged }) => {
     if (!stopped) unlistenTargets = onReplicaTargetsChanged(() => soon())

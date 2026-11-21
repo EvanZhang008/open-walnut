@@ -248,6 +248,7 @@ SOURCES=(
   src/providers/offline-host-core.ts
   src/providers/offline-journal-core.ts
   src/core/peers/envelope-kit.ts
+  src/core/sessions/send-rules.ts
   src/providers/leader-core.ts
   src/providers/walnut-scope-core.ts
   src/providers/served-walnuts-core.ts

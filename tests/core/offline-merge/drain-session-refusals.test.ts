@@ -40,6 +40,7 @@ import { closeDb } from '../../../src/core/task-db.js'
 import { _resetHostClocksForTesting } from '../../../src/core/offline-merge/host-clock.js'
 import { conflictDir, readConflictLog, type ConflictEntry } from '../../../src/core/offline-merge/conflict-log.js'
 import { __setOwnerConnectionForTesting } from '../../../src/core/sessions/owner-stop.js'
+import { startPhaseMark } from '../../../src/core/offline-merge/apply-session.js'
 
 const HOST = 'devbox'
 const JOB = { kind: 'plugin-job', plugin: 'acme-worker', job: 'worker' }
@@ -224,9 +225,13 @@ describe('a session record this Mac does not take', () => {
     const id = await hostTask('Quay moorings')
     const s = sid()
     const rec = runRec(s, id)
-    // What the cut drain left: the start's phase, with the start's own field time (startPhase), and no record.
+    // What the cut drain left: the start's phase, with the start's own field time and its mark (startPhase), and no record.
     await updateTaskRaw(id, { phase: 'IN_PROGRESS' }, { source: 'offline-handover' })
-    await updateTaskRaw(id, (t) => ({ field_at: { ...(t.field_at ?? {}), phase: new Date(rec.at).toISOString() } }), { source: 'offline-handover' })
+    const written = (await getTask(id)).phase_changed_at!
+    await updateTaskRaw(id, (t) => ({
+      field_at: { ...(t.field_at ?? {}), phase: new Date(rec.at).toISOString() },
+      applied_ops: [...(t.applied_ops ?? []), startPhaseMark(HOST, s, written)],
+    }), { source: 'offline-handover' })
     expect((await getTask(id)).field_at?.phase).toBe(new Date(rec.at).toISOString())
     expect(await getSessionByClaudeId(s)).toBeNull()
     // Meanwhile this Mac started its own session of the task: the retry's record is refused.
@@ -234,6 +239,19 @@ describe('a session record this Mac does not take', () => {
     await runOfflineHandover(journal([rec]).conn as never)
     expect(entriesOf(rec.opId).map((e) => e.kind)).toEqual(['refused'])
     expect((await getTask(id)).phase).toBe('TODO')
+  })
+
+  it('a person\'s In Progress set within the minute before the start is not taken back by a refused run', async () => {
+    const id = await hostTask('Quay bollards')
+    const rec = runRec(sid(), id, { at: Date.now() - 5_000, startedAt: Date.now() - 5_000 })
+    // The person moved it on the Mac a moment before the host's start: its field time is close
+    // to the start's, but no drain wrote it.
+    await updateTaskRaw(id, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    await updateTaskRaw(id, (t) => ({ field_at: { ...(t.field_at ?? {}), phase: new Date(rec.at as number).toISOString() } }), { source: 'test' })
+    await macSession(id)
+    await runOfflineHandover(journal([rec]).conn as never)
+    expect(entriesOf(rec.opId).map((e) => e.kind)).toEqual(['refused'])
+    expect((await getTask(id)).phase).toBe('IN_PROGRESS')
   })
 
   it('a phase someone else set is not taken back by a refused run', async () => {

@@ -32,6 +32,7 @@
 
 import { createHash } from 'node:crypto'
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
+import type { SendRules } from '../core/sessions/send-rules.js'
 import { createOfflineJournal } from './offline-journal-core.js'
 import type { BoardOffline, OfflineSliceBoard } from './offline-board-core.js'
 import type { HostReplica } from './host-replica-core.js'
@@ -88,6 +89,8 @@ export interface OfflineSliceTask {
   session_id?: string
   /** A lead that handed its project over: the lead that took it (org/retired-lead.ts). */
   handed_over_to?: { id: string; title: string; phase?: string }
+  /** The task's org role when it has one (a lead, Main): a request to it gets a lead's deadline (send-rules.ts replyKindOf). */
+  org_role?: string
   /**
    * Journal v2 (docs/plan/walnut-replica-servers-impl.md section 7): the other queueable
    * fields when the server ships them, and the server's per-field write time. A field
@@ -337,6 +340,8 @@ export interface OfflineHostDeps {
   /** Short stable file key for a home (a hash; homes are paths). */
   keyOf: (home: string) => string
   kit: EnvelopeKit
+  /** The send rules the server runs (core/sessions/send-rules.ts createSendRules): reply default, wake, deadlines, refusals. */
+  rules: SendRules
   log: (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
   /** The daemon runs a live CLI for this sid. */
   isLive: (sid: string) => boolean
@@ -478,7 +483,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return Object.keys(out).length ? out : null
   }
 
-  const { fs, path, kit } = deps
+  const { fs, path, kit, rules } = deps
   // The same as the module's escapeSenderWords: the factory body reaches nothing at
   // module scope, because daemon-source.ts inlines only its source text.
   const escapeSenderWords = (text: string): string => {
@@ -507,8 +512,6 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   const WRITE_WINDOW_MS = 60_000
   /** Waits before running a write again that another process's journal lock refused (whenUnlocked). */
   const LOCK_RETRY_MS = [100, 300, 900]
-  const DEFAULT_REPLY_SECS = 3_600
-  const IMPLICIT_REPLY_SECS = 6 * 3_600
   const DRAIN_BATCH = 200
   const QUEUED_OPS = ['task_update', 'task_complete']
   /** Held while nothing can take them (holdWrite); the Mac's twin list: offline-handover.ts HELD_OPS. */
@@ -1240,9 +1243,16 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return typeof given === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(given) ? given : `qm-offline-${deps.randomHex(8)}`
   }
 
-  function clampSecs(secs: unknown, implicit: boolean): number {
-    if (typeof secs !== 'number' || !Number.isFinite(secs)) return implicit ? IMPLICIT_REPLY_SECS : DEFAULT_REPLY_SECS
-    return Math.min(86_400, Math.max(60, Math.floor(secs)))
+  /** A request's deadline as the server sets it (send-rules.ts): by its target's kind (a lead or Main answers for its teams). */
+  function replySecs(home: string, secs: unknown, implicit: boolean, toTaskId: string | undefined): number {
+    const target = toTaskId ? tasksWithOverlay(home).find((t) => t.id === toTaskId) : undefined
+    return rules.clampReplyTimeoutSecs(typeof secs === 'number' ? secs : undefined, implicit, rules.replyKindOf(target?.org_role))
+  }
+
+  /** Whether a delivered send opens a request, by the server's rule (send-rules.ts opensRequest; up the org it reports). */
+  function opensRequest(home: string, args: Record<string, unknown>, fromTaskId: string | undefined, toTaskId: string | undefined): boolean {
+    const input = rules.ruleInputOf(args)
+    return rules.opensRequest(input, rules.directionDecides(input) && reportsUp(home, fromTaskId, toTaskId))
   }
 
   // ── ops ──
@@ -1447,40 +1457,26 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!refNamesId(parentRef, targetTaskId, tasks.some((t) => t.id === parentRef))) return undefined
     const parent = tasks.find((t) => t.id === targetTaskId)
     if (parent?.phase !== 'COMPLETE') return undefined
-    return fail('parent_complete', `"${parent.title}" (${parent.id}) is your task's parent and it is complete: it no longer takes messages `
-      + 'from its subtasks. Keep your result in your own task, where the user reads it; if that task should hear from you again, the user reopens it.',
-    { detail: { parentTaskId: parent.id } })
+    const no = rules.parentCompleteRefusal(parent)
+    return fail(no.code, no.message, { detail: no.detail })
   }
 
   /**
-   * The server's rule (session-send-core.ts admitRetiredLead): a session's new message to a lead
-   * that handed its project over is refused with the lead that took it, unless the caller is that
-   * lead or it forces with a reason (then the server's note follows when it is back).
+   * The server's rule (send-rules.ts admitRetiredLeadRule): a session's new message to a lead that
+   * handed its project over is refused with the lead that took it, unless the caller is that lead or
+   * it forces with a reason (which then leads the text). The text to deliver, or the refusal.
    */
-  function retiredLeadRefusal(home: string, callerSid: string, targetTaskId: string | undefined, args: Record<string, unknown>): GatewayResult | undefined {
-    if (!targetTaskId) return undefined
-    const lead = tasksWithOverlay(home).find((t) => t.id === targetTaskId)
-    const now = lead?.handed_over_to
-    if (!lead || !now || callerIdentity(home, callerSid).taskId === now.id) return undefined
-    const project = (lead.project ?? '').trim()
-    if (args.force === true) {
-      const reason = typeof args.reason === 'string' ? args.reason.replace(/\s+/g, ' ').trim() : ''
-      if (reason.length >= 10) return undefined
-      return fail('bad_request', `force:true needs a reason (at least 10 characters) saying why "${lead.title}" (${lead.id}), `
-        + `which no longer leads ${project}, must act rather than the lead that took over.`)
-    }
-    return fail('lead_handed_over', `${kit.handedOverPointer({ id: lead.id, title: lead.title, project }, now)} `
-      + 'If the old lead itself must act, pass force:true with reason:"<why it, not the lead that took over>".',
-    { detail: { taskId: lead.id, currentLeadTaskId: now.id, project } })
-  }
-
-  /** A forced message to an open lead that handed over: its reason leads the text, as on the server. */
-  function retiredLeadText(home: string, callerSid: string, targetTaskId: string | undefined, args: Record<string, unknown>, text: string): string {
+  function admitRetiredLead(home: string, callerSid: string, targetTaskId: string | undefined, args: Record<string, unknown>, text: string): { text: string } | { error: GatewayResult } {
     const lead = targetTaskId ? tasksWithOverlay(home).find((t) => t.id === targetTaskId) : undefined
-    if (!lead?.handed_over_to || lead.phase === 'COMPLETE' || args.force !== true) return text
-    if (callerIdentity(home, callerSid).taskId === lead.handed_over_to.id) return text
-    const reason = typeof args.reason === 'string' ? args.reason.replace(/\s+/g, ' ').trim() : ''
-    return `This comes to you although you no longer lead ${(lead.project ?? '').trim()}. Why: ${reason.slice(0, 300)}\n\n${text}`
+    const now = lead?.handed_over_to
+    if (!lead || !now || callerIdentity(home, callerSid).taskId === now.id) return { text }
+    const project = (lead.project ?? '').trim()
+    const r = rules.admitRetiredLeadRule({
+      message: kit.handedOverPointer({ id: lead.id, title: lead.title, project }, now),
+      detail: { taskId: lead.id, currentLeadTaskId: now.id, project },
+      retired: { lead: { id: lead.id, title: lead.title, ...(lead.phase ? { phase: lead.phase } : {}) } },
+    }, rules.ruleInputOf(args), text)
+    return 'error' in r ? { error: fail(r.error.code, r.error.message, r.error.detail ? { detail: r.error.detail } : undefined) } : r
   }
 
   /** This copy's view of a task (queued completions included): is it COMPLETE? */
@@ -1735,27 +1731,32 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     }
     if (typeof args.to !== 'string' || !args.to.trim()) return fail('bad_request', '`to` is required (or pass in_reply_to)')
     // Before the session lookup: a completed parent usually has nothing running.
+    // wake=false is a note that asks nothing: it cannot also ask (send-rules.ts).
+    const conflict = rules.wakeFalseConflict(rules.ruleInputOf(args))
+    if (conflict) return fail(conflict.code, conflict.message)
     const named = resolveTask(home, args.to).task?.id
-    const closed = parentCompleteRefusal(home, callerSid, named) ?? retiredLeadRefusal(home, callerSid, named, args)
+    const closed = parentCompleteRefusal(home, callerSid, named)
     if (closed) return closed
+    const early = admitRetiredLead(home, callerSid, named, args, text)
+    if ('error' in early) return early.error
     const target = resolveSendTarget(home, args.to)
     if (target.error) return target.error
     const closedTarget = parentCompleteRefusal(home, callerSid, target.taskId)
     if (closedTarget) return closedTarget
-    const handedOver = retiredLeadRefusal(home, callerSid, target.taskId, args)
-    if (handedOver) return handedOver
+    const lead = admitRetiredLead(home, callerSid, target.taskId, args, text)
+    if ('error' in lead) return lead.error
     const targetSid = target.sid!
     if (targetSid === callerSid) return fail('self_send', 'target resolves to the calling session itself')
-    const admitted = admitCompleteTarget(home, target.taskId, args, retiredLeadText(home, callerSid, target.taskId, args, text), 'send')
+    const admitted = admitCompleteTarget(home, target.taskId, args, lead.text, 'send')
     if ('error' in admitted) return admitted.error
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
     const slice = slices.get(home)!
     const me = callerIdentity(home, callerSid)
-    // Same default as the server: a session asking another session wants the answer, except a
-    // note up to its own leader, which reports.
-    const row = args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))
-      ? requestRow({ id: `rq-${deps.randomHex(6)}`, fromSessionId: callerSid, toSessionId: targetSid, toTaskId: target.taskId, preview: kit.requestPreview(text), secs: clampSecs(args.reply_timeout, args.expect_reply === undefined), online: false })
+    // The server's rule: a session asking another session wants the answer, except a note up to its
+    // own leader (a report) and a note that asks nothing (wake false: delivered now, it cannot wait here).
+    const row = opensRequest(home, args, me.taskId, target.taskId)
+      ? requestRow({ id: `rq-${deps.randomHex(6)}`, fromSessionId: callerSid, toSessionId: targetSid, toTaskId: target.taskId, preview: kit.requestPreview(text), secs: replySecs(home, args.reply_timeout, args.expect_reply === undefined, target.taskId), online: false })
       : undefined
     const envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
@@ -1882,8 +1883,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (denied) return denied
     const slice = slices.get(home)!
     const me = callerIdentity(home, callerSid)
-    const row = args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))
-      ? requestRow({ id: `rq-${deps.randomHex(6)}`, fromSessionId: callerSid, toSessionId: target.sid, toTaskId: target.taskId, preview: kit.requestPreview(text), secs: clampSecs(args.reply_timeout, args.expect_reply === undefined), online: true })
+    const row = opensRequest(home, args, me.taskId, target.taskId)
+      ? requestRow({ id: `rq-${deps.randomHex(6)}`, fromSessionId: callerSid, toSessionId: target.sid, toTaskId: target.taskId, preview: kit.requestPreview(text), secs: replySecs(home, args.reply_timeout, args.expect_reply === undefined, target.taskId), online: true })
       : undefined
     const envelope = kit.buildPeerWrapper(escapeSenderWords(text), {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
@@ -1963,6 +1964,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!text) return null
     // A hand-off links requests in the server's ledger: the server delivers it.
     if (args.hands_on !== undefined) return null
+    // A note that asks nothing waits on the server for its target's next message (quiet-notes.ts),
+    // and one that also asks is the server's to refuse (send-rules.ts).
+    const input = rules.ruleInputOf(args)
+    if (rules.holdsQuietly(input) || rules.wakeFalseConflict(input)) return null
     // An answer for the user (answers_ask) is recorded on the asking task, and delivered only to one
     // that runs (session-send-core.ts, ask-answer.ts answerReach): the server's alone to decide.
     if (args.answers_ask !== undefined) return null
@@ -2078,6 +2083,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const saved = journal.byOpId(home, opId)
       if (saved) {
         deps.log('info', 'offline host: a follower\'s peer message asked again, written once', { home, opId, seq: saved.seq })
+        // A held message (its `op` record) answers as it did the first time: queued, its id, "Do NOT resend".
+        if (saved.kind === 'op') return ok(heldAnswerOf(home, String(saved.op), saved, true))
         return ok({ ...peerAnswerOf(saved as unknown as Record<string, unknown>), duplicate: true })
       }
       const run = followerPeer(home, req, opId).catch((err: Error) => fail('internal', `offline host error: ${err.message}`))
@@ -2111,9 +2118,12 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!sessionOf(home, to) || !liveHere(home, to)) return fail('needs_leader', 'that session of this Walnut is not running on this host', { detail: { why: 'not_running_here' } })
     if (online && deps.pendingPrompt?.(to)) return leave('the session waits on a permission prompt')
     if (req.kind !== 'send' && req.kind !== 'reply') return fail('bad_request', 'follower.peer: kind is send or reply')
-    // Online: only the hand-off still open may write it (the relay to the server may not have it too).
-    const claim = online ? claimOnline(home, mid) : null
-    if (online && !claim) return leave('the hand-off of this message ended')
+    // A message handed over while the server answered is written by one side only: whichever way
+    // the follower now sends it (online, or away once the server left mid hand-off), it writes only
+    // under the open hand-off's claim. With no hand-off of this id, an away write needs none.
+    const handedOver = onlineClaims.has(`${home}\n${mid}`)
+    const claim = online || handedOver ? claimOnline(home, mid) : null
+    if ((online || handedOver) && !claim) return leave('the hand-off of this message ended')
     try { return await followerWrite(home, req, opId, { online, from, to, text, mid, leave, claim }) } finally { claim?.release() }
   }
 
@@ -2132,7 +2142,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const denied = (online ? admitPeerSend(from, to, str(req.dupText) || text) : admitWrite(from)) ?? roomFor(home)
       if (denied) return denied
       const toTaskId = str(req.toTaskId) || undefined
-      const secs = typeof ask?.secs === 'number' && Number.isFinite(ask.secs) ? Math.min(86_400, Math.max(60, Math.floor(ask.secs))) : DEFAULT_REPLY_SECS
+      const secs = rules.clampReplyTimeoutSecs(typeof ask?.secs === 'number' ? ask.secs : undefined)
       const row = ask ? requestRow({ id: rqId, fromSessionId: from, toSessionId: to, toTaskId, preview: str(ask.preview), secs, online }) : undefined
       const delivered = await deliverPeer(home, { fromSessionId: from, toSessionId: to, toTaskId, envelope: text, messageId: mid, row, online, opId })
       if (!delivered.ok) return online ? leave(`this host could not write it (${delivered.reason})`) : fail('internal', `delivery failed: ${delivered.reason}`)
@@ -2741,7 +2751,6 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const callId = typeof rawCallId === 'string' && /^oc-[A-Za-z0-9_-]{8,48}$/.test(rawCallId) ? rawCallId : ''
     const stable = callId ? callId.slice(3).split('_').join('-') : ''
     const message = name !== 'agent_memory_write'
-    const inReplyTo = args.in_reply_to !== undefined
     if (message && (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId))) {
       // The server's own retry fence for a message (send-queue.ts), from the call id when given.
       args.messageId = stable ? `qm-host-${stable}` : messageId(undefined)
@@ -2757,14 +2766,23 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const no = refusal(saved)
     if (no || !saved.ok) return no ?? fail('internal', 'not saved')
     deps.log('info', 'offline host: write held for the server', { home, op: name, callerSid, seq: saved.seq, opId: saved.opId, duplicate: saved.duplicate === true })
-    return ok({
-      queued: true, offline: true, held: true, op: name, seq: saved.seq,
-      ...(message ? { messageId: args.messageId } : {}), ...(saved.duplicate ? { duplicate: true } : {}),
+    // A duplicate answers the saved record's own message id (a regenerated one would name nothing).
+    const rec = (saved.duplicate ? journal.byOpId(home, saved.opId) : undefined) ?? { seq: saved.seq, args }
+    return ok(heldAnswerOf(home, name, rec, saved.duplicate === true))
+  }
+
+  /** The answer of a held `op` record: its first call's, and its retry's (with `duplicate`), alike. */
+  function heldAnswerOf(home: string, name: string, rec: { seq?: unknown; args?: unknown }, duplicate: boolean): Record<string, unknown> {
+    const args = (rec.args && typeof rec.args === 'object' ? rec.args : {}) as Record<string, unknown>
+    const message = name !== 'agent_memory_write'
+    return {
+      queued: true, offline: true, held: true, op: name, seq: rec.seq,
+      ...(message ? { messageId: args.messageId } : {}), ...(duplicate ? { duplicate: true } : {}),
       outcome: `Queued on this host: the Walnut server is away, and when it is back it ${message ? 'delivers this message' : 'makes this write'}, once. ${offlineNote(home)} Do NOT resend.`,
       next: message
-        ? (inReplyTo ? 'Nothing else is required.' : 'A reply you asked for arrives in your session once it is delivered; do not poll.')
+        ? (args.in_reply_to !== undefined ? 'Nothing else is required.' : 'A reply you asked for arrives in your session once it is delivered; do not poll.')
         : 'Nothing else is required.',
-    })
+    }
   }
 
   // ── triggers: the checks this host runs (walnut-trigger) ──
@@ -2952,13 +2970,13 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (name === 'trigger_resume') {
       if (hold?.deleted) return fail('not_found', `Trigger ${id} was deleted on this host; nothing to resume`)
       if (t && !(hold && !hold.on)) {
-        return ok({ id, name: t.def.name, state: 'armed', changed: false, offline: true, outcome: `"${t.def.name}" is running on this host; nothing changed.`, next: 'Nothing else is required.' })
+        return ok({ id, triggerId: id, name: t.def.name, state: 'armed', changed: false, offline: true, outcome: `"${t.def.name}" is running on this host; nothing changed.`, next: 'Nothing else is required.' })
       }
       if (!t) return notHere(`Resuming trigger ${id}, which was not paused on this host`)
     } else {
       if (!t) return notHere(`Trigger ${id} is not one this host runs for this Walnut; changing it`)
       if (hold && !hold.on && (name === 'trigger_pause' || hold.deleted)) {
-        return ok({ id, name: t.def.name, state: 'paused', changed: false, offline: true, outcome: `"${t.def.name}" is already ${hold.deleted ? 'deleted' : 'paused'} on this host; nothing changed.`, next: 'Nothing else is required.' })
+        return ok({ id, triggerId: id, name: t.def.name, state: hold.deleted ? 'deleted' : 'paused', changed: false, offline: true, outcome: `"${t.def.name}" is already ${hold.deleted ? 'deleted' : 'paused'} on this host; nothing changed.`, next: 'Nothing else is required.' })
       }
     }
     const denied = admitWrite(callerSid) ?? roomFor(home)
@@ -3433,7 +3451,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const denied = admitWrite(from.sid) ?? roomFor(home)
       if (denied) return denied
       let row: OfflineRequestRow | undefined
-      if (d.expect_reply !== false && !(d.expect_reply === undefined && reportsUp(home, fromTaskId, target.taskId))) {
+      if (opensRequest(home, { ...(d.expect_reply !== undefined ? { expect_reply: d.expect_reply } : {}) }, fromTaskId, target.taskId)) {
         const implicit = d.expect_reply === undefined
         row = {
           id: `rq-${deps.randomHex(6)}`,
@@ -3443,7 +3461,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
           preview: kit.requestPreview(text),
           status: 'pending',
           createdAt: new Date(deps.now()).toISOString(),
-          deadlineAt: deps.now() + clampSecs(d.reply_timeout, implicit) * 1000,
+          deadlineAt: deps.now() + replySecs(home, d.reply_timeout, implicit, target.taskId) * 1000,
           fromHost: from.host,
           ...(deps.turnActive(targetSid) ? { skipTurnEnds: 1 } : {}),
         }

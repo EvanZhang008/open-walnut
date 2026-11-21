@@ -148,6 +148,28 @@ describe('a message from this host, the follower\'s own rules', () => {
   })
 })
 
+describe('a message to a task the Mac keeps local (kept-local-calls.ts)', () => {
+  const keptLocal = async (to: string) => to === 'tc' || to === C || to === 'kept-task-0001'
+  it('is held for the Mac by id, the whole call, even when its session runs here or the copy lacks it', async () => {
+    for (const to of ['kept-task-0001', 'tc', C]) {
+      const h = harness({ keptLocal })
+      const r = await h.post({ to, text: 'the appraisal', expect_reply: false })
+      expect(r.status, JSON.stringify(r.body)).toBe(202)
+      expect(r.body).toMatchObject({ delivery: 'queued', targetSessionId: null })
+      expect(h.calls).toEqual([expect.objectContaining({ kind: 'hold', fromSessionId: B, callId: 'oc-feedfacefeedface', args: { to, text: 'the appraisal', expect_reply: false, messageId: 'qm-host-feedfacefeedface' } })])
+    }
+  })
+
+  it('another target is delivered here as before; while the Mac answers nothing is held here', async () => {
+    const h = harness({ keptLocal })
+    await h.post({ to: 'ta', text: 'hi', expect_reply: false })
+    expect(h.calls.map((c) => c.kind)).toEqual(['send'])
+    const online = harness({ keptLocal, leaderAnswers: () => true })
+    await online.post({ to: 'tc', text: 'hi', expect_reply: false })
+    expect(online.calls.map((c) => c.kind)).not.toContain('hold')
+  })
+})
+
 describe('a plugin job\'s message keeps its path (moved from away-starts.ts)', () => {
   it('a message to a task whose session runs here is delivered, framed as its sender\'s', async () => {
     const h = harness({}, { actor: JOB })

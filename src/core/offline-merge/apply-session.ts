@@ -56,7 +56,7 @@ import { isInboxProject } from '../inbox-project.js';
 import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { RefusedWrite } from './patch-check.js';
-import { resolveTaskId } from './apply-fields.js';
+import { resolveTaskId, withOp } from './apply-fields.js';
 import { lookupDrained } from './ledger.js';
 import type { V2Context, V2Record } from './apply-v2.js';
 import { SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS, type SessionEffort, type SessionMode } from '../types.js';
@@ -239,7 +239,7 @@ async function adoptRun(
   // status would read as a person's later choice and be kept).
   // A drain cut between that phase and the record (a crash) left the phase written: this drain's
   // retry takes it as its own (ownStartPhase), so a refusal now still takes it back.
-  const started = routine ? null : await startPhase(taskId, sid, ctx.at) ?? await ownStartPhase(taskId, sid, ctx.at);
+  const started = routine ? null : await startPhase(taskId, sid, ctx.at, ctx.hostKey) ?? await ownStartPhase(taskId, sid, ctx.hostKey);
   try {
     await adoptOutsideRecord({ claudeSessionId: sid, taskId }, () => createSessionRecord(sid, taskId, task.project ?? '', cwd, {
       host: ctx.hostKey,
@@ -266,10 +266,11 @@ async function adoptRun(
  * The phase a task's start gives it online, for a task still TODO: the start's message is the
  * session's input. Its field time is the start's own (`startedAt`, this server's clock), not the
  * drain's, so a phase the host wrote after the start (drained next, judged newer by time:
- * task-fields.ts) still wins over it. Returns when it was written (`phase_changed_at`), or null
- * when nothing moved.
+ * task-fields.ts) still wins over it. The task keeps a mark of that write (startPhaseMark, in
+ * applied_ops), so a retry of this drain knows the phase as its own (ownStartPhase). Returns when
+ * it was written (`phase_changed_at`), or null when nothing moved.
  */
-async function startPhase(taskId: string, sid: string, startedAt: number): Promise<string | null> {
+async function startPhase(taskId: string, sid: string, startedAt: number, hostKey: string): Promise<string | null> {
   const { applySessionPhase } = await import('../phase.js');
   const moved = await applySessionPhase(taskId, 'session:input', 'offline-handover', {
     sessionId: sid, shouldApply: (current) => current.phase === 'TODO',
@@ -277,28 +278,35 @@ async function startPhase(taskId: string, sid: string, startedAt: number): Promi
   if (!moved.changed) return null;
   const { getTask, updateTaskRaw } = await import('../task-manager.js');
   const written = (await getTask(taskId)).phase_changed_at ?? null;
-  const at = new Date(startedAt).toISOString();
-  await updateTaskRaw(taskId, (t) => ({ field_at: { ...(t.field_at ?? {}), phase: at } }), {
+  if (!written) return null;
+  const at = Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : '';
+  await updateTaskRaw(taskId, (t) => ({
+    ...(at && (t.field_at?.phase ?? '') > at ? { field_at: { ...(t.field_at ?? {}), phase: at } } : {}),
+    applied_ops: withOp(t, startPhaseMark(hostKey, sid, written)),
+  }), {
     source: 'offline-handover',
-    shouldUpdate: (t) => t.phase === 'IN_PROGRESS' && t.phase_changed_at === written && Number.isFinite(startedAt) && (t.field_at?.phase ?? '') > at,
+    shouldUpdate: (t) => t.phase === 'IN_PROGRESS' && t.phase_changed_at === written,
   }).catch((err: unknown) => log.session.warn('offline handover: a start\'s phase kept the drain\'s time', { taskId, error: err instanceof Error ? err.message : String(err) }));
   return written;
 }
 
-/** How far a start's field time may be from the record's time on a later drain (its clock offset is measured again). */
-const START_FIELD_SLACK_MS = 60_000
+/** The mark of the phase a host's start wrote on its task: the host, the session, and when. */
+export function startPhaseMark(hostKey: string, sid: string, writtenAt: string): string {
+  return `start-phase|${hostKey}|${sid}|${writtenAt}`;
+}
 
 /**
  * The phase an earlier drain of this same start wrote (startPhase) and then did not live to give
  * a session (the record is drained again): the task In Progress, this session not linked to it,
- * and the phase's field time the start's own. Returns its `phase_changed_at`, or null.
+ * and its phase still the very one that drain marked. A phase anyone else set (a person's In
+ * Progress a moment before the start) carries no such mark, so a refusal never takes it back.
+ * Returns its `phase_changed_at`, or null.
  */
-async function ownStartPhase(taskId: string, sid: string, startedAt: number): Promise<string | null> {
+async function ownStartPhase(taskId: string, sid: string, hostKey: string): Promise<string | null> {
   const { getTask } = await import('../task-manager.js');
   const t = await getTask(taskId).catch(() => null);
   if (!t || t.phase !== 'IN_PROGRESS' || (t.session_ids ?? []).includes(sid) || !t.phase_changed_at) return null;
-  const fieldAt = Date.parse(t.field_at?.phase ?? '');
-  return Number.isFinite(fieldAt) && Math.abs(fieldAt - startedAt) <= START_FIELD_SLACK_MS ? t.phase_changed_at : null;
+  return (t.applied_ops ?? []).includes(startPhaseMark(hostKey, sid, t.phase_changed_at)) ? t.phase_changed_at : null;
 }
 
 /**

@@ -18,6 +18,7 @@ import { createOfflineHost, createOfflineHostCore, type HostSlice, type OfflineH
 import { createOfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createOfflineSearch } from '../../src/providers/offline-search-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
 import { buildReplyTrailer, buildReplyDeliveryText, buildRequestNotification, clipNoticeMessage, type SessionRequest } from '../../src/core/session-requests.js'
 
@@ -76,7 +77,7 @@ function harness(dir?: string): Harness {
     now: () => clock.now,
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (home) => createHash('sha1').update(home).digest('hex').slice(0, 12),
-    kit: createEnvelopeKit(),
+    kit: createEnvelopeKit(), rules: createSendRules(),
     log: () => {},
     isLive: (sid) => live.has(sid),
     turnActive: (sid) => busy.has(sid),
@@ -804,7 +805,7 @@ describe('offline host: the source twin runs the factories from their text', () 
       sha256: (body) => createHash('sha256').update(body).digest('hex'),
     })
     journals.push(journal)
-    const copy = hostCopy({ ...h.deps, kit: kitCopy, journal })
+    const copy = hostCopy({ ...h.deps, kit: kitCopy, rules: rebuild(createSendRules)(), journal })
     copy.configure(slice())
     const r = await copy.handle(HOME, A, 'tools.call', { name: 'task_send', args: { to: B, text, expect_reply: false } })
     expect(r.ok).toBe(true)

@@ -8,9 +8,12 @@
  *     row naming a kept task through each of its task fields: a new owned kind fails here until
  *     its rows are added below; a new kind declared task-free fails until it is reviewed below;
  *   - every kind a follower serves on /bridge/replica has its leader kind here (no copy goes
- *     around the filter), and every module that reads the follower list (replicaTargets) or sends
- *     the host daemons their file copy (`replica.sync`) goes through host-private.ts, or is a
- *     reviewed sender of no one's rows.
+ *     around the filter), and every module that reads the follower list (replicaTargets) calls
+ *     host-private.ts's filter, or is a reviewed sender of no one's rows;
+ *   - every copy a host's daemon takes (providers/daemon-twin-state.ts, whose own ratchet lists
+ *     every `.configure` / `.sync` command and `host.slice`) names the module that builds it
+ *     through that filter, which calls it, or says why it holds no task's data, reviewed here.
+ * The filters of the daemon's own copies are run in host-private-daemon-copies.test.ts.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -25,6 +28,7 @@ import { hostManifest, hostPrivacyOf, isTaskFree, type OwnedKind } from '../../.
 import { buildKindManifest, type LeaderKind } from '../../../src/core/replication/kind-leader.js'
 import { followerKindNames } from '../../../src/core/replication/kind-follower.js'
 import { sha12 } from '../../../src/core/replication/kind.js'
+import { DAEMON_TWIN_STATE } from '../../../src/providers/daemon-twin-state.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../../..')
 type Kind = LeaderKind<any> & OwnedKind<any>
@@ -45,7 +49,8 @@ const hold = { target: 'acme', state: 'chosen', at: '2026-11-21T00:00:00.000Z' }
  * the parent rows left out, for a kind derived from another.
  */
 const ROWS: Record<string, { kept: unknown[]; open: unknown; derived?: string[] }> = {
-  tasks: { kept: [{ id: KEPT }], open: { id: 'open-task' } },
+  // A subtask with no hold of its own is kept with its kept parent.
+  tasks: { kept: [{ id: KEPT }, { id: 'kept-child', parent_task_id: KEPT }], open: { id: 'open-task' } },
   sessions: {
     kept: [{ claudeSessionId: KEPT_SID, taskId: KEPT }, { claudeSessionId: 's-2', taskId: 'open-task', legacyTaskId: KEPT }],
     open: { claudeSessionId: 's-3', taskId: 'open-task' },
@@ -79,7 +84,11 @@ const ROWS: Record<string, { kept: unknown[]; open: unknown; derived?: string[] 
     open: { agent: 'general', meta: { id: 'conv-2', askTaskId: 'open-task' } },
   },
   'conversation-bodies': { kept: [{ agent: 'general', id: 'conv-1' }], open: { agent: 'general', id: 'conv-2' }, derived: ['general/conv-1'] },
-  notifications: { kept: [{ id: 'n1', taskId: KEPT }, { id: 'n2', sessionId: KEPT_SID }], open: { id: 'n3', taskId: 'open-task', sessionId: 's-open' } },
+  // A letter's card goes with its letter (withheld for any of the letter's own owners).
+  notifications: {
+    kept: [{ id: 'n1', taskId: KEPT }, { id: 'n2', sessionId: KEPT_SID }, { id: 'n4', kind: 'letter', letterId: 'lt-1-aaaa' }],
+    open: { id: 'n3', taskId: 'open-task', sessionId: 's-open', letterId: 'lt-5-aaaa' }, derived: ['lt-1-aaaa'],
+  },
 }
 
 describe('nothing of a task kept local reaches a host: every copy kind', () => {
@@ -104,7 +113,7 @@ describe('nothing of a task kept local reaches a host: every copy kind', () => {
       // Keys the kind's own way; a plain hash (the kinds' own hash caches read store fields).
       const manifest = await buildKindManifest({ ...k, hash: (r: unknown) => sha12(JSON.stringify(r)) }, rows)
       expect(manifest.entries.length, `${k.kind}: sample keys are distinct`).toBe(rows.length)
-      const p = hostPrivacyOf([{ id: KEPT, sync_hold: hold }, { id: 'open-task' }], [{ claudeSessionId: KEPT_SID, taskId: KEPT }])
+      const p = hostPrivacyOf([{ id: KEPT, sync_hold: hold }, { id: 'kept-child', parent_task_id: KEPT }, { id: 'open-task' }], [{ claudeSessionId: KEPT_SID, taskId: KEPT }])
       if (k.derivedFrom) {
         expect(KINDS.some((x) => x.kind === k.derivedFrom && !isTaskFree(x.owners)), `${k.kind} derives from an owned kind`).toBe(true)
         p.derived.set(k.derivedFrom, new Set(sample.derived ?? []))
@@ -139,15 +148,43 @@ describe('nothing of a task kept local reaches a host: every copy kind', () => {
       }
     }
     walk(path.join(ROOT, 'src'))
-    // The leader's copy rounds (replicaTargets), and its file copy to the host daemons (`replica.sync`).
-    const readers = files.map((f) => path.relative(ROOT, f)).filter((f) => {
-      const text = readFileSync(path.join(ROOT, f), 'utf8')
-      return /\breplicaTargets\b/.test(text) || (f.startsWith('src/core/') && /['"]replica\.sync['"]/.test(text))
-    })
-    expect(readers).toEqual(expect.arrayContaining(['src/core/replication/task-replica.ts', 'src/core/host-replica.ts']))
+    // The leader's copy rounds (replicaTargets).
+    const readers = files.map((f) => path.relative(ROOT, f)).filter((f) => /\breplicaTargets\b/.test(readFileSync(path.join(ROOT, f), 'utf8')))
+    expect(readers).toEqual(expect.arrayContaining(['src/core/replication/task-replica.ts', 'src/core/replication/kinds/copy-kind.ts', 'src/core/replication/search-replica.ts']))
     for (const f of readers) {
       if (TASK_FREE_SENDERS[f]) continue
-      expect(readFileSync(path.join(ROOT, f), 'utf8'), `${f} reads the follower list: build what a host takes through host-private.ts`).toMatch(/host-private\.js'/)
+      expect(callsFilter(f), `${f} reads the follower list: build what a host takes through host-private.ts`).toBe(true)
     }
+  })
+})
+
+/** The calls of host-private.ts that build what a host takes. */
+const FILTERS = /\b(hostPrivacyNow|hostPrivacyOf|hostManifest|keptOffHost|ownedRowKept|searchKeyKeptFromHosts|keptVaultFolders)\(/
+
+/** Whether module `f` calls the filter (outside its comments), not only imports it. */
+function callsFilter(f: string): boolean {
+  return FILTERS.test(readFileSync(path.join(ROOT, f), 'utf8').replace(/^\s*(\/\/|\*).*$/gm, ''))
+}
+
+/** Reviewed: daemon copies that hold no task's data (each entry's own `taskFree` says why). */
+const REVIEWED_TASK_FREE_COPIES = [
+  'bridge.configure', 'server.configure', 'jobs.configure', 'leader.configure', 'leader.spawnTemplate', 'workspace.configure',
+  'turns.configure', 'net.configure', 'hooks.configure', 'skills.sync', 'secrets.sync', 'usage.budget.configure',
+]
+
+describe('nothing of a task kept local reaches a host: every copy its daemon takes', () => {
+  it('names the module that builds it through host-private.ts, which calls the filter, or why it holds no task\'s data', () => {
+    const entries = Object.entries(DAEMON_TWIN_STATE)
+    expect(entries.map(([cmd]) => cmd)).toEqual(expect.arrayContaining(['host.slice', 'triggers.configure', 'replica.sync']))
+    for (const [cmd, e] of entries) {
+      expect(e.hostPrivate, `${cmd}: say what it carries of a task kept local (daemon-twin-state.ts hostPrivate)`).toBeDefined()
+      if ('filteredIn' in e.hostPrivate) expect(callsFilter(e.hostPrivate.filteredIn), `${cmd}: ${e.hostPrivate.filteredIn} builds it through host-private.ts`).toBe(true)
+      else expect(e.hostPrivate.taskFree.length, `${cmd}: say why it holds no task's data`).toBeGreaterThan(20)
+    }
+  })
+
+  it('a copy declared free of task data is one reviewed here', () => {
+    const free = Object.entries(DAEMON_TWIN_STATE).filter(([, e]) => 'taskFree' in e.hostPrivate).map(([cmd]) => cmd)
+    expect(free.sort()).toEqual([...REVIEWED_TASK_FREE_COPIES].sort())
   })
 })

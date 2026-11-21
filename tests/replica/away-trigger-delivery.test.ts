@@ -13,6 +13,7 @@ import { createAwayTriggerDelivery, type AwayTriggerSession } from '../../src/re
 import { pickHostTriggerTarget } from '../../src/core/routines/host-trigger-target.js'
 import { createOfflineHost, type HostSlice } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 
 const HOST = 'devbox'
 const TASK = 'mslack00-0b27'
@@ -133,7 +134,7 @@ describe('the pick and the daemon\'s own path write the same thing', () => {
     const host = createOfflineHost({
       fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
       keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
-      kit: createEnvelopeKit(), log: () => {},
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: (sid) => live.includes(sid), turnActive: () => false, streamOffset: () => undefined,
       deliver: async (sid, text, messageId) => { writes.push({ kind: 'fifo', sid, text, messageId }); return { ok: true } },
       resume: async (_home, sid, text, messageId) => { writes.push({ kind: 'resume', sid, text, messageId }); return { ok: true } },

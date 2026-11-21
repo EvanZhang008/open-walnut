@@ -3,7 +3,7 @@
  * their sessions, on each host replica, in `cache/replica/local-tasks.json` (file-copy.ts). Ids
  * only: no title, no text. A host holds none of those tasks' rows, so without this list a call
  * about one would read as "not found"; with it, the host's own answer while the Mac is away says
- * the task is kept on the Mac (replica/local-calls.ts, why `task_kept_local`).
+ * the task is kept on the Mac (replica/kept-local-calls.ts, why `task_kept_local`).
  *
  * Hosts only (the companion holds the tasks themselves: gate.ts COMPANION_COPY_KINDS leaves it
  * out, so an older or a newer companion is never sent it). No choice of its own: it goes with the
@@ -13,6 +13,7 @@
  */
 
 import fsp from 'node:fs/promises'
+import { matchIdRef } from '../../../lib/id-ref.js'
 import { sha12 } from '../kind.js'
 import { hostPrivacyNow, taskFree } from '../host-private.js'
 import type { CopyKind } from './copy-kind.js'
@@ -29,10 +30,19 @@ export interface LocalTaskRow { id: string; sessions: string[] }
 async function leaderRows(): Promise<LocalTaskRow[]> {
   const p = await hostPrivacyNow()
   if (p.tasks.size === 0) return []
-  const byTask = new Map<string, string[]>([...p.tasks].sort().map((id) => [id, []]))
+  const byTask = new Map<string, Array<{ sid: string; at: string }>>([...p.tasks].sort().map((id) => [id, []]))
   const sessions = await (await import('../../session-tracker.js')).sessionRowsForReplica()
-  for (const s of sessions) if (p.sessions.has(s.claudeSessionId)) byTask.get(s.taskId)?.push(s.claudeSessionId)
-  return [...byTask].map(([id, sids]) => ({ id, sessions: [...new Set(sids)].sort().slice(0, MAX_SESSIONS) }))
+  for (const s of sessions) {
+    if (!p.sessions.has(s.claudeSessionId)) continue
+    // A session a newer one detached is kept through its old task: listed under it.
+    const list = byTask.get(s.taskId) ?? (s.legacyTaskId ? byTask.get(s.legacyTaskId) : undefined)
+    list?.push({ sid: s.claudeSessionId, at: s.lastActiveAt || s.startedAt || '' })
+  }
+  // The newest sessions when a task has more than the row holds; ids sorted, so the row's hash holds.
+  return [...byTask].map(([id, list]) => ({
+    id,
+    sessions: [...new Map(list.map((x) => [x.sid, x])).values()].sort((a, b) => b.at.localeCompare(a.at)).slice(0, MAX_SESSIONS).map((x) => x.sid).sort(),
+  }))
 }
 
 export const LOCAL_TASKS_KIND: CopyKind<LocalTaskRow> = {
@@ -110,6 +120,25 @@ export async function refreshLocalTasksHere(): Promise<LocalTasksHere> {
   }
   here = { sig, value: { tasks, sessions } }
   return here.value
+}
+
+/** The shortest string read as an id prefix (a session may pass a task's short id). */
+const ID_PREFIX_MIN = 6
+
+/**
+ * Whether `ref` names a task this host's copy says the Mac keeps local, or one of its sessions:
+ * the id, a prefix of 6 or more (lib/id-ref.ts), or a path segment (`/tasks/<id>`).
+ */
+export function namesKeptLocal(ref: string, here: LocalTasksHere): boolean {
+  if (here.tasks.size === 0) return false
+  const one = (v: string): boolean => {
+    if (here.tasks.has(v) || here.sessions.has(v)) return true
+    if (v.length < ID_PREFIX_MIN || /\s/.test(v)) return false
+    return matchIdRef(here.tasks, v, String).length > 0 || matchIdRef(here.sessions, v, String).length > 0
+  }
+  const v = ref.trim()
+  if (one(v)) return true
+  return !/\s/.test(v) && v.includes('/') && v.split(/[/?#]/).some((seg) => seg !== v && seg.length > 0 && one(seg))
 }
 
 /** The last read of the copy (refreshLocalTasksHere), empty before the first. */

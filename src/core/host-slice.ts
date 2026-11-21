@@ -8,6 +8,10 @@
  * uses it to deliver same-host task_send while no server is connected. Slim
  * rows only: the copy is for a session reading its own neighbourhood, not a
  * second board.
+ *
+ * A task kept local never rides it (replication/host-private.ts, the one filter of every
+ * host copy): not its row, its Board, nor a request of its own, unless a session of the
+ * task runs on this host (its CLI and transcript are there anyway).
  */
 
 import { createHash } from 'node:crypto';
@@ -43,7 +47,7 @@ const THREAD_TAIL = 40;
  * tree's root, where a first board_set would make one), and the boards that
  * exist among them.
  */
-async function teamBoards(sessionTaskIds: string[]): Promise<{ boards: OfflineSliceBoard[]; boardOf: Record<string, string> }> {
+async function teamBoards(sessionTaskIds: string[], boardKept: (taskId: string) => boolean): Promise<{ boards: OfflineSliceBoard[]; boardOf: Record<string, string> }> {
   const [{ resolveTeamBoardTask }, { getBoard }] = await Promise.all([
     import('./boards/board-team.js'),
     import('./boards/board-store.js'),
@@ -53,6 +57,8 @@ async function teamBoards(sessionTaskIds: string[]): Promise<{ boards: OfflineSl
   for (const id of sessionTaskIds) {
     try {
       const owner = await resolveTeamBoardTask(id);
+      // A board of a task kept local is no board this host holds (BOARDS_KIND.owners).
+      if (boardKept(owner.taskId)) continue;
       boardOf[id] = owner.taskId;
       if (owner.hasBoard && !owners.includes(owner.taskId)) owners.push(owner.taskId);
     } catch { /* the task is gone */ }
@@ -195,10 +201,22 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
     .sort((a, b) => (b.lastActiveAt || '').localeCompare(a.lastActiveAt || ''))
     .slice(0, MAX_SESSIONS);
 
+  const sessionTaskIds = [...new Set(records.map((s) => s.taskId).filter((id): id is string => !!id))];
+  // What this host never holds (host-private.ts): a task kept local and everything of it, unless
+  // a session of that task runs here.
+  const [{ hostPrivacyNow, keptOffHost, ownedRowKept }, { BOARDS_KIND }, { REQUESTS_KIND }] = await Promise.all([
+    import('./replication/host-private.js'),
+    import('./replication/kinds/boards.js'),
+    import('./replication/kinds/requests.js'),
+  ]);
+  const privacy = await hostPrivacyNow();
+  const ownHere = new Set(sessionTaskIds);
+  const keptOff = (id: string | undefined | null): boolean => keptOffHost(id, privacy, ownHere);
+
   const picked = new Map<string, OfflineSliceTask>();
   const leads: Task[] = [];
   const add = (t: Task | undefined): void => {
-    if (!t || picked.has(t.id) || picked.size >= MAX_TASKS) return;
+    if (!t || picked.has(t.id) || picked.size >= MAX_TASKS || keptOff(t.id)) return;
     if (t.org_role === 'lead') leads.push(t);
     picked.set(t.id, {
       id: t.id,
@@ -219,12 +237,13 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
       ...sliceFields(t),
       // The session a message to the task goes to, as the server picks it (session-send-core.ts).
       ...((t.session_id || t.exec_session_id) ? { session_id: t.session_id || t.exec_session_id } : {}),
+      // A lead's reply deadline differs (send-rules.ts replyKindOf): the daemon's offline send reads it.
+      ...(t.org_role ? { org_role: t.org_role } : {}),
     });
   };
   // Session tasks first (newest session first), then their parents, then the
   // team around them: their subtasks (down to MAX_SUBTASK_DEPTH below), and
   // their parents' other subtasks, so a leader and its workers read each other.
-  const sessionTaskIds = [...new Set(records.map((s) => s.taskId).filter((id): id is string => !!id))];
   const own = new Map((await listTasksByIds(sessionTaskIds)).map((t) => [t.id, t]));
   for (const id of sessionTaskIds) add(own.get(id));
   const parentIds = [...new Set([...own.values()].map((t) => t.parent_task_id).filter((id): id is string => !!id && !own.has(id)))];
@@ -247,7 +266,7 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
     for (const t of leads) {
       const now = successorOf(all, t);
       const row = picked.get(t.id);
-      if (now && row) row.handed_over_to = { id: now.id, title: now.title, ...(now.phase ? { phase: now.phase } : {}) };
+      if (now && row && !keptOff(now.id)) row.handed_over_to = { id: now.id, title: now.title, ...(now.phase ? { phase: now.phase } : {}) };
     }
   }
 
@@ -258,6 +277,9 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
   const hostOf = new Map(allSessions.map((s) => [s.claudeSessionId, displayHost(normalizeHostKey(s.host))]));
   const pending = (await requests.listPendingRequests())
     .filter((r) => sids.has(r.fromSessionId) || (!!r.toSessionId && sids.has(r.toSessionId)))
+    // One of a task kept local, the same rule as its copy kind (REQUESTS_KIND.owners), whichever
+    // host its sessions run on: only the task's row and its sessions ride along for its own session.
+    .filter((r) => !ownedRowKept(REQUESTS_KIND, r, privacy))
     .map((r) => {
       const fromHost = sids.has(r.fromSessionId) ? undefined : hostOf.get(r.fromSessionId);
       const toHost = !r.toSessionId || sids.has(r.toSessionId) ? undefined : hostOf.get(r.toSessionId);
@@ -272,7 +294,7 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
       };
     });
 
-  const { boards, boardOf } = await teamBoards(sessionTaskIds);
+  const { boards, boardOf } = await teamBoards(sessionTaskIds, (id) => ownedRowKept(BOARDS_KIND, { task_id: id } as Parameters<typeof BOARDS_KIND.key>[0], privacy));
   // What the queue would append to a turn nobody typed; the host appends it to what it delivers itself.
   const config = await (await import('./config-manager.js')).getConfig().catch(() => null);
   // The instruction notice below compares against the user's profile as on disk now.

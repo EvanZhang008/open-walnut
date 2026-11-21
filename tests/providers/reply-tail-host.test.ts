@@ -32,6 +32,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-reply-tail-h
 import { WALNUT_HOME } from '../../src/constants.js'
 import { createOfflineHost, escapeSenderWords, type HostSlice } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../src/core/sessions/output-mode.js'
 import { hostReplyTail } from '../../src/core/hints/hint-send.js'
@@ -61,7 +62,7 @@ function fixture(mainTail: string | null = TAIL) {
   const host = createOfflineHost({
     fs, path, dir, now: () => Date.now(),
     randomHex: (n) => randomBytes(n).toString('hex'), keyOf: (v) => createHash('sha1').update(v).digest('hex'),
-    kit: createEnvelopeKit(), openItems: createOpenItemsText(), log: () => {},
+    kit: createEnvelopeKit(), rules: createSendRules(), openItems: createOpenItemsText(), log: () => {},
     isLive: (sid) => live.has(sid), turnActive: () => false, pendingPrompt: () => null, streamOffset: () => undefined,
     deliver: async (sid, text) => { writes.push({ sid, text }); return { ok: true } },
     resume: async (_home, sid, text) => { writes.push({ sid, text, resumed: true }); return { ok: true } },

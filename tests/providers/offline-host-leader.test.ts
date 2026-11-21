@@ -14,6 +14,7 @@ import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineHost, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
 import { buildReplyDeliveryText, type SessionRequest } from '../../src/core/session-requests.js'
 
@@ -60,7 +61,7 @@ function harness(opts: { relay?: boolean } = {}) {
     now: () => clock.now,
     randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (home) => createHash('sha1').update(home).digest('hex').slice(0, 12),
-    kit: createEnvelopeKit(),
+    kit: createEnvelopeKit(), rules: createSendRules(),
     log: () => {},
     isLive: (sid) => live.has(sid),
     turnActive: () => false,

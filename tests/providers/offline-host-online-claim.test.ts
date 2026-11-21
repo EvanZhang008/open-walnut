@@ -138,6 +138,40 @@ describe('an online hand-off is written once: by this host or by the leader, nev
     expect(c.delivered).toEqual([SID_B])
   })
 
+  // The leader drops mid hand-off: the follower, seeing it gone, sends the same message on its away
+  // path (follower.peer online:false). Review round 2, N1: it wrote with no claim, and the hand-off's
+  // end then relayed it to the leader too (two deliveries, two rows).
+  it('the leader drops mid hand-off and the follower writes it away: no relay, one delivery, one row', async () => {
+    const c = cluster()
+    c.call()
+    const away = await c.host.handleFollowerPeer(JHOME, { ...PEER, online: false, opId: 'op-away-1' })
+    expect(away).toMatchObject({ ok: true, result: { delivered: true, messageId: MID } })
+    c.timeout()
+    await c.settle()
+    expect(c.relayed).toEqual([])
+    expect(c.answers).toEqual([expect.objectContaining({ ok: true, result: expect.objectContaining({ messageId: MID }) })])
+    expect(c.delivered).toEqual([SID_B])
+    expect(c.journal.records(JHOME).map((r) => r.kind)).toEqual(['row', 'delivery'])
+  })
+
+  it('a hand-off already relayed to the leader: the follower\'s away write of it is refused, nothing written', async () => {
+    const c = cluster()
+    c.call()
+    c.timeout()
+    await c.settle()
+    expect(c.relayed).toHaveLength(1)
+    const away = await c.host.handleFollowerPeer(JHOME, { ...PEER, online: false, opId: 'op-away-2' })
+    expect(away).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'server_delivers' } } })
+    expect(c.delivered).toEqual([])
+    expect(c.journal.records(JHOME)).toEqual([])
+  })
+
+  it('a message never handed over: an away follower.peer writes it with no claim', async () => {
+    const c = cluster()
+    expect(await c.host.handleFollowerPeer(JHOME, { ...PEER, online: false, opId: 'op-away-3' })).toMatchObject({ ok: true, result: { delivered: true } })
+    expect(c.delivered).toEqual([SID_B])
+  })
+
   it('no hand-off open for it: an online follower.peer writes nothing', async () => {
     const c = cluster()
     expect(await c.host.handleFollowerPeer(JHOME, PEER)).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'server_delivers' } } })

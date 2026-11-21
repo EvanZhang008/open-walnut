@@ -283,6 +283,7 @@ describe('the offline host answers reads from the copy', () => {
   async function host() {
     const { createOfflineHost } = await import('../../src/providers/offline-host-core.js')
     const { createEnvelopeKit } = await import('../../src/core/peers/envelope-kit.js')
+    const { createSendRules } = await import('../../src/core/sessions/send-rules.js')
     const replica = make()
     fill(replica)
     const offlineDir = fs.mkdtempSync(path.join(dir, 'oh-'))
@@ -290,7 +291,7 @@ describe('the offline host answers reads from the copy', () => {
       fs, path, dir: offlineDir, now: () => clock,
       randomHex: (n) => crypto.randomBytes(n).toString('hex'),
       keyOf: (v) => crypto.createHash('sha1').update(v).digest('hex').slice(0, 12),
-      kit: createEnvelopeKit(), log: () => {},
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: () => true, turnActive: () => false, streamOffset: () => 0,
       deliver: async () => ({ ok: true }),
       replica,

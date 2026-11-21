@@ -38,7 +38,7 @@ import { DigestMap } from './search-digest.js'
 import { noteRoundFailure, noteRoundReached } from './round-outage.js'
 import { companionKeepOf } from './companion-keep.js'
 import { keepsAllSearch, searchKeyKept, searchNoteKeyPrefix, type SearchKeep } from './search-replica-keep.js'
-import { hostPrivacyNow, leavesOutPrivate, searchKeyKeptFromHosts, type HostPrivacy } from './host-private.js'
+import { hostPrivacyNow, leavesOutPrivate, onHostPrivacyChange, searchKeyKeptFromHosts, type HostPrivacy } from './host-private.js'
 import {
   companionSearchMode, manifestValue, type CompanionSearchMode, type CompanionSearchReason, type WireDoc,
 } from './search-replica-wire.js'
@@ -455,6 +455,8 @@ export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () =>
         wired = true
         unlisten.push((await import('../search/wiring.js')).onSearchIndexDocChange(noteSearchDocChange))
         unlisten.push((await import('./replica-targets.js')).onReplicaTargetsChanged(soonRound))
+        // A task kept or no longer kept: its docs leave or return now, past a host's rest (host-private.ts).
+        unlisten.push(onHostPrivacyChange(soonRound))
       }
       await syncSearchReplica(deps, { now: urgent })
     })().catch((err) => log.memory.warn('search replica: round crashed', { error: err instanceof Error ? err.message : String(err) }))

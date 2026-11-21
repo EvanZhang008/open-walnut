@@ -17,11 +17,14 @@
  *                                session's call gets the daemon's own away answer instead
  *   a full journal, the brake    `queue_full` / `throttled` with the route's wait: retryable
  *   no host key yet             every call refused: an empty key would take the Mac's own origin
- *   a task the Mac keeps local  a call by one of its sessions, or naming it or one of its sessions
- *                               (core/replication/host-private.ts: this host holds none of it):
- *                               `needs_leader {why:'task_kept_local'}`, the caller's answer (`final`:
- *                               the daemon's own away answer does not take it); while the Mac
- *                               answers, a same-host send of it goes to the Mac as any other
+ *   a task the Mac keeps local  (core/replication/host-private.ts: this host's copies hold none of it)
+ *                               a call whose subject it is, by naming it or one of its sessions or as
+ *                               a call of its own session that falls back on its own task
+ *                               (kept-local-calls.ts): `needs_leader {why:'task_kept_local', final}`,
+ *                               the caller's answer, never the daemon's own away answer; a message to
+ *                               it is held for the Mac (away-sends.ts); any other call of its session
+ *                               runs here as any other. While the Mac answers, a same-host send that
+ *                               touches it goes to the Mac (not final), as any other
  *   too little time left        a call the daemon held while the Mac went quiet comes with what
  *                                is left of its time (`answerInMs`): it runs within that, and when
  *                                that is too short for the op (a start needs its start budget) it
@@ -31,8 +34,8 @@ import { log } from '../logging/index.js'
 import { packRelayResult, relayedCallOf, serveRelayedCall, type KeptRelay, type RelayedCall } from '../core/peers/gateway-answer.js'
 import { gatewayHubTimeoutMs } from '../providers/gateway-core.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../providers/daemon-frame-cap.js'
-import { refreshLocalTasksHere, type LocalTasksHere } from '../core/replication/kinds/local-tasks.js'
-import { matchIdRef } from '../lib/id-ref.js'
+import { refreshLocalTasksHere } from '../core/replication/kinds/local-tasks.js'
+import { keptLocalRefusal } from './kept-local-calls.js'
 
 /** The route refusals that go back with their own code: the daemon's away answer, and the two a caller retries. */
 const LIFTED = ['needs_leader', 'queue_full', 'throttled'] as const
@@ -75,36 +78,6 @@ export function onlineReply(reply: Record<string, unknown>): Record<string, unkn
   return { relayId: reply.relayId, errorCode: 'needs_leader', error: `${why}; your Mac delivers it`, detail: { why: 'server_delivers' } }
 }
 
-/** The shortest string taken as an id prefix (a session may pass a task's short id). */
-const ID_PREFIX_MIN = 6
-
-/** Whether `v` (an op's args, walked a few levels down) names a kept task or session, by id or id prefix. */
-function namesKept(v: unknown, here: LocalTasksHere, depth = 0): boolean {
-  if (typeof v === 'string') {
-    if (here.tasks.has(v) || here.sessions.has(v)) return true
-    if (v.length < ID_PREFIX_MIN || /\s/.test(v)) return false
-    return matchIdRef(here.tasks, v, String).length > 0 || matchIdRef(here.sessions, v, String).length > 0
-  }
-  if (depth >= 3 || !v || typeof v !== 'object') return false
-  for (const x of Array.isArray(v) ? v : Object.values(v as Record<string, unknown>)) if (namesKept(x, here, depth + 1)) return true
-  return false
-}
-
-/**
- * The refusal of a call about a task the Mac keeps local, or null. The caller is one of its
- * sessions (every call of it reads or writes its own task), or the call names it or one of its
- * sessions. `online` (a same-host send while the Mac answers): not final, so the daemon relays it.
- */
-export function keptLocalRefusal(call: RelayedCall, here: LocalTasksHere, online = false): Record<string, unknown> | null {
-  if (here.tasks.size === 0 || call.capability === 'tools.list') return null
-  const byCaller = here.sessions.has(call.callerSid)
-  if (!byCaller && !namesKept((call.payload as { args?: unknown } | null)?.args ?? call.payload, here)) return null
-  const error = byCaller
-    ? 'this session\'s task is kept local on your Mac, so this host keeps no copy of it; your Mac answers once it is back'
-    : 'that task is kept local on your Mac, so this host keeps no copy of it; your Mac answers once it is back'
-  return { relayId: call.relayId, errorCode: 'needs_leader', error, detail: { why: 'task_kept_local', ...(online ? {} : { final: true }) } }
-}
-
 /** How long the daemon may take to ack a result on the loopback link. */
 const RESULT_ACK_MS = 10_000
 
@@ -118,7 +91,7 @@ export interface LocalCallsDeps {
   /** Whether the Mac answers now (server-role.ts leaderAnswers). */
   leaderAnswers(): boolean
   /** What this host's copy says the Mac keeps local (kinds/local-tasks.ts); absent: that copy. */
-  localTasks?(): Promise<LocalTasksHere>
+  localTasks?(): ReturnType<typeof refreshLocalTasksHere>
 }
 
 /** The handler for the daemon's `gateway-request` events. */

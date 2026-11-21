@@ -31,7 +31,9 @@ export const NOTIFICATIONS_KIND: CopyKind<NotificationRecord> = {
   ordered: false,
   digest: false,
   choice: 'inbox',
-  owners: (n) => [n.taskId && `task:${n.taskId}`, n.sessionId && `session:${n.sessionId}`],
+  // A letter's card is its letter's too (letter-bridge.ts: its subject and preview): a letter left out leaves its card out.
+  owners: (n) => [n.taskId && `task:${n.taskId}`, n.sessionId && `session:${n.sessionId}`, n.letterId && `inbox:${n.letterId}`],
+  derivedFrom: 'inbox',
   rows: async () => (await listNotifications()).feed.filter(cardOk),
   watch: (soon) => onNotificationStoreWritten(soon),
 }

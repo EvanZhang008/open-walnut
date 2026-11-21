@@ -1,12 +1,15 @@
 /**
  * What a host's copies never hold: a task Walnut keeps local (Task.sync_hold: made local,
- * created Local, found private by the user's words or the model, or still being judged), and
- * everything copied for it (its sessions, requests, board, letters and their bodies, routines,
- * notifications, its search docs; its MEMORY.md and notes ride on its row).
+ * created Local, found private by the user's words or the model, or still being judged), every
+ * task under it (its subtasks at any depth, held or not), and everything copied for them (their
+ * sessions, requests, board, letters and their bodies and cards, routines, notifications, search
+ * docs; MEMORY.md and notes ride on the row).
  *
  * ONE place on the sending side. Every copy round (task-replica.ts, kinds/copy-kind.ts,
  * search-replica.ts) builds what a host target receives through `hostManifest` /
- * `searchKeyKeptFromHosts`, so a follower of any build, an older one included, never receives
+ * `searchKeyKeptFromHosts`, and so does every copy the host's daemon takes (host-slice.ts,
+ * routines/trigger-push.ts, host-replica.ts: providers/daemon-twin-state.ts lists them, each with
+ * where it is filtered), so a follower of any build, an older one included, never receives
  * such a row; a row it already holds goes at the next round by the protocol's own removal (the
  * manifest no longer names it). The host learns only the ids it lacks (kinds/local-tasks.ts),
  * so its own answers can say why instead of "not found".
@@ -14,7 +17,8 @@
  * Each copy kind names whose its rows are (`owners`): refs `task:<id>`, `session:<sid>`, or
  * `<kind>:<key>` for a row that belongs to a row of another kind (a letter body to its letter,
  * named in `derivedFrom`). A kind of no one's rows says why (`taskFree`).
- * tests/core/replication/host-private-guard.test.ts holds every kind to it.
+ * tests/core/replication/host-private-guard.test.ts holds every kind and every daemon copy to it.
+ * A change of the kept set reaches every copy within seconds (onHostPrivacyChange), not at its sweep.
  *
  * The cloud companion is not filtered: it is the user's own server that answers his phone while
  * the Mac is away, it creates Local tasks itself (task-manager.ts, the companion's create path),
@@ -24,6 +28,7 @@
 
 import type { SessionRecord, Task } from '../types.js'
 import { keptLocal } from '../private-tasks/visibility.js'
+import { matchIdRef } from '../../lib/id-ref.js'
 import { keptManifestHash, manifestHashOf, sha12, type ManifestEntry } from './kind.js'
 import type { KindManifest } from './kind-leader.js'
 
@@ -49,13 +54,14 @@ export interface OwnedKind<Row> {
   derivedFrom?: string
 }
 
-/** A task kept off every host's copies. One rule, the one that keeps it from outside services. */
+/** A task kept off every host's copies by its own hold. One rule, the one that keeps it from outside services. */
 export function keptFromHosts(task: { sync_hold?: unknown }): boolean {
   return keptLocal(task)
 }
 
 /** The tasks kept off hosts this round, and their sessions. */
 export interface HostPrivacy {
+  /** Every task kept: held itself, or under a held task (its subtasks, at any depth). */
   readonly tasks: ReadonlySet<string>
   readonly sessions: ReadonlySet<string>
   /** Changes whenever either set does ('' when nothing is kept). */
@@ -64,12 +70,55 @@ export interface HostPrivacy {
   readonly derived: Map<string, ReadonlySet<string>>
 }
 
+type PrivacyTask = Pick<Task, 'id'> & { sync_hold?: unknown; parent_task_id?: string | null }
+
+/**
+ * The tasks kept: each held task and everything under it. A subtask restates its lead's work,
+ * so it is kept with it whether or not it carries a hold of its own. Parents are resolved as
+ * every reader does (lib/id-ref.ts: the exact id, else a legacy prefix); a loop in the parent
+ * chain ends the walk there.
+ */
+function keptTasksOf(tasks: ReadonlyArray<PrivacyTask>): Set<string> {
+  const kept = new Set<string>()
+  if (!tasks.some((t) => keptFromHosts(t))) return kept
+  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const memo = new Map<string, boolean>()
+  // A legacy prefix ref: its candidates are read once per ref, and never name the child itself.
+  const byPrefix = new Map<string, PrivacyTask[]>()
+  const parentOf = (t: PrivacyTask): PrivacyTask | undefined => {
+    const ref = t.parent_task_id
+    if (!ref || ref === t.id) return undefined
+    const exact = byId.get(ref)
+    if (exact) return exact
+    let hits = byPrefix.get(ref)
+    if (!hits) byPrefix.set(ref, hits = matchIdRef(tasks, ref))
+    return hits.find((x) => x.id !== t.id)
+  }
+  for (const t of tasks) {
+    const path: string[] = []
+    const seen = new Set<string>()
+    let cur: PrivacyTask | undefined = t
+    let result = false
+    while (cur) {
+      const known = memo.get(cur.id)
+      if (known !== undefined) { result = known; break }
+      if (keptFromHosts(cur)) { result = true; path.push(cur.id); break }
+      if (seen.has(cur.id)) break
+      seen.add(cur.id)
+      path.push(cur.id)
+      cur = parentOf(cur)
+    }
+    for (const id of path) memo.set(id, result)
+    if (result) kept.add(t.id)
+  }
+  return kept
+}
+
 export function hostPrivacyOf(
-  tasks: ReadonlyArray<Pick<Task, 'id'> & { sync_hold?: unknown }>,
+  tasks: ReadonlyArray<PrivacyTask>,
   sessions: ReadonlyArray<Pick<SessionRecord, 'claudeSessionId' | 'taskId'> & { legacyTaskId?: string }>,
 ): HostPrivacy {
-  const kept = new Set<string>()
-  for (const t of tasks) if (keptFromHosts(t)) kept.add(t.id)
+  const kept = keptTasksOf(tasks)
   const sids = new Set<string>()
   if (kept.size > 0) {
     for (const s of sessions) {
@@ -80,18 +129,76 @@ export function hostPrivacyOf(
   return { tasks: kept, sessions: sids, sig, derived: new Map() }
 }
 
+/**
+ * Whether one host's own copy for its daemon (host-slice.ts, routines/trigger-push.ts) leaves
+ * out task `id`: kept, unless a session of its own runs on that host (`ownHere`: the tasks of the
+ * host's sessions), whose CLI and transcript are there anyway.
+ */
+export function keptOffHost(id: string | undefined | null, p: HostPrivacy, ownHere: { has(id: string): boolean }): boolean {
+  return !!id && p.tasks.has(id) && !ownHere.has(id)
+}
+
+/** Whether a row of `kind` is kept off hosts, by the kind's own `owners` (a row of no one's never is). */
+export function ownedRowKept<Row>(kind: Pick<OwnedKind<Row>, 'owners'>, row: Row, p: HostPrivacy): boolean {
+  const owners = kind.owners
+  if (p.tasks.size === 0 || !owners || isTaskFree(owners)) return false
+  return rowKept(owners, row, p)
+}
+
 /** Nothing kept: what a target that is not a host gets, and a round with no host target. */
 export function nothingKept(): HostPrivacy {
   return { tasks: new Set(), sessions: new Set(), sig: '', derived: new Map() }
 }
 
 /** The leader's privacy now: its task store (or the rows the caller already read) and its sessions. */
-export async function hostPrivacyNow(tasks?: ReadonlyArray<Pick<Task, 'id'> & { sync_hold?: unknown }>): Promise<HostPrivacy> {
+export async function hostPrivacyNow(tasks?: ReadonlyArray<PrivacyTask>): Promise<HostPrivacy> {
   const rows = tasks ?? (await (await import('../task-manager.js')).taskStoreForReplica()).tasks
   // Sessions are read only when a task is kept: the common case reads nothing more.
   if (!rows.some((t) => keptFromHosts(t))) return nothingKept()
   const sessions = await (await import('../session-tracker.js')).sessionRowsForReplica()
   return hostPrivacyOf(rows, sessions)
+}
+
+/** A task change is read for a new kept set this long after it (a burst is one read). */
+export const PRIVACY_WATCH_MS = 2_000
+const privacyListeners = new Set<() => void>()
+let privacyWatch: { timer: ReturnType<typeof setTimeout> | null; sig: string | null; name: string } | null = null
+
+/**
+ * `fn` runs when the kept set changes (a task made local or created Local, a hold cleared, a
+ * subtask moved under a kept lead), so every copy drops or regains those rows within seconds
+ * instead of at its next sweep. One subscription for every listener, read a little after each
+ * task change. `read`: tests only.
+ */
+export function onHostPrivacyChange(fn: () => void, read: () => Promise<HostPrivacy> = () => hostPrivacyNow()): () => void {
+  privacyListeners.add(fn)
+  if (!privacyWatch) {
+    const w = { timer: null as ReturnType<typeof setTimeout> | null, sig: null as string | null, name: `host-privacy-${Math.random().toString(36).slice(2, 10)}` }
+    privacyWatch = w
+    const check = async (): Promise<void> => {
+      const sig = (await read()).sig
+      const changed = w.sig !== null && sig !== w.sig
+      w.sig = sig
+      if (changed && privacyWatch === w) for (const l of [...privacyListeners]) { try { l() } catch { /* a listener's own failure */ } }
+    }
+    void check().catch(() => {})
+    void import('../event-bus.js').then(({ bus }) => {
+      if (privacyWatch !== w) return
+      bus.subscribe(w.name, (event) => {
+        if (!event.name.startsWith('task:') || w.timer) return
+        w.timer = setTimeout(() => { w.timer = null; void check().catch(() => {}) }, PRIVACY_WATCH_MS)
+        w.timer.unref?.()
+      }, { global: true, interest: ['task:'] })
+    }).catch(() => {})
+  }
+  return () => {
+    privacyListeners.delete(fn)
+    if (privacyListeners.size > 0 || !privacyWatch) return
+    const w = privacyWatch
+    privacyWatch = null
+    if (w.timer) clearTimeout(w.timer)
+    void import('../event-bus.js').then(({ bus }) => bus.unsubscribe(w.name)).catch(() => {})
+  }
 }
 
 /** The targets the rule applies to: a host's replica, never the companion. */

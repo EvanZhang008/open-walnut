@@ -345,6 +345,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/offline-host-core.ts',
   'src/providers/offline-journal-core.ts',
   'src/core/peers/envelope-kit.ts',
+  // The send rules it runs as the server does (reply default, wake, deadlines): same rule.
+  'src/core/sessions/send-rules.ts',
   // The leader book (who leads while the primary is away): same rule
   // (docs/plan/walnut-control-plane.md).
   'src/providers/leader-core.ts',

@@ -14,6 +14,11 @@
  *    routine mutation" into a no-op when nothing changed.
  *  - a disabled job is simply ABSENT. Disabling a routine is the kill switch, so
  *    the next push must actually take it off the daemon's clock.
+ *
+ * A check runs on its host whoever owns it, but what it delivers to a task kept local
+ * (replication/host-private.ts) stays off a host none of that task's sessions run on: the
+ * def goes without its `deliver` (the target and the prompt), and the fire waits for the
+ * server. A clock routine is placed where its target's session runs, so it keeps its own.
  */
 
 import { WALNUT_HOME } from '../../constants.js';
@@ -96,16 +101,35 @@ export function wireFireCap(stored: number): number {
  * the aliases that reach the same daemon, which keeps one set for all of them), and the
  * clock defs placed there. One def per id, the first kept.
  */
-export function compileTriggerDefs(jobs: CronJob[], hosts: string | readonly string[], clockDefs: TriggerDef[] = []): CompiledTriggers {
+export function compileTriggerDefs(
+  jobs: CronJob[], hosts: string | readonly string[], clockDefs: TriggerDef[] = [], keptOff: (taskId: string) => boolean = () => false,
+): CompiledTriggers {
   const aliases = typeof hosts === 'string' ? [hosts] : hosts;
   const seen = new Set<string>();
   const triggers = aliases
     .flatMap((host) => jobs.map((job) => triggerDefOf(job, host)))
     .filter((def): def is TriggerDef => def !== null)
+    .map((def) => (def.deliver && keptOff(def.deliver.taskId) ? withoutDeliver(def) : def))
     .concat(clockDefs)
     .filter((def) => !seen.has(def.id) && !!seen.add(def.id))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { payload: { version: 1, triggers }, hash: triggerPushHash(triggers) };
+}
+
+function withoutDeliver(def: TriggerDef): TriggerDef {
+  const { deliver: _deliver, ...rest } = def;
+  return rest;
+}
+
+/** Whether a check of the host reached by `aliases` delivers to `taskId` (host-private.ts keptOffHost). */
+async function keptOffFor(aliases: readonly string[]): Promise<(taskId: string) => boolean> {
+  const { hostPrivacyNow, keptOffHost } = await import('../replication/host-private.js');
+  const privacy = await hostPrivacyNow();
+  if (privacy.tasks.size === 0) return () => false;
+  const [{ sessionRowsForReplica }, { normalizeHostKey }] = await Promise.all([import('../session-tracker.js'), import('../host-slice.js')]);
+  const keys = new Set(aliases.map(normalizeHostKey));
+  const ownHere = new Set((await sessionRowsForReplica()).filter((s) => !!s.taskId && keys.has(normalizeHostKey(s.host))).map((s) => s.taskId));
+  return (taskId) => keptOffHost(taskId, privacy, ownHere);
 }
 
 /** `host` first, then the other aliases of its daemon, each once. */
@@ -139,6 +163,7 @@ export async function compileTriggersForHost(
   // Only the Mac hands clocks out; any other server pushes its checks alone.
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return compileTriggerDefs(jobs, aliases);
+  const keptOff = await keptOffFor(aliases);
   const { placeClocksForHost, noteWatchedTasks } = await import('./clock-placement.js');
   noteWatchedTasks(jobs);
   // Each alias's clocks are placed as its own (a clock's holder is the alias), one after
@@ -152,7 +177,7 @@ export async function compileTriggersForHost(
     }));
   }
   if (placed.length === 1) {
-    return { ...compileTriggerDefs(jobs, aliases, placed[0].defs), applied: placed[0].applied, rejected: placed[0].rejected };
+    return { ...compileTriggerDefs(jobs, aliases, placed[0].defs, keptOff), applied: placed[0].applied, rejected: placed[0].rejected };
   }
   // One reply for the whole set: each alias settles the clocks it holds (settleClocks reads only those).
   const each = async (run: (p: HostClocks) => Promise<void>): Promise<void> => {
@@ -161,7 +186,7 @@ export async function compileTriggersForHost(
     if (errors.length) throw errors[0];
   };
   return {
-    ...compileTriggerDefs(jobs, aliases, placed.flatMap((p) => p.defs)),
+    ...compileTriggerDefs(jobs, aliases, placed.flatMap((p) => p.defs), keptOff),
     applied: (reply) => each((p) => p.applied(reply)),
     rejected: () => each((p) => p.rejected()),
   };

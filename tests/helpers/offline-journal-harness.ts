@@ -10,6 +10,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineJournal, JOURNAL_V2_DRAINS, type OfflineJournalDeps } from '../../src/providers/offline-journal-core.js'
 import { createOfflineHost, type HostSlice, type OfflineHostDeps } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
 import { createLetterCheck } from '../../src/core/human-inbox/letter-check.js'
 
@@ -84,7 +85,7 @@ export function journalHost(dir: string, clock: Clock, opts: { drains?: string[]
   const deps: OfflineHostDeps = {
     fs, path, dir, now: () => clock.now,
     randomHex: (n) => randomBytes(n).toString('hex'),
-    keyOf, kit: createEnvelopeKit(), log: () => {},
+    keyOf, kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
     isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
     deliver: opts.deliver ?? (async () => ({ ok: true })),
     journal,

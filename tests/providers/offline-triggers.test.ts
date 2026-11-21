@@ -16,6 +16,7 @@ import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineHost, type OfflineTrigger, type OfflineTriggerStatus } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 
 const NOW = Date.parse('2026-10-13T21:00:00Z')
 const HOME = '/fixture/walnut-home'
@@ -51,7 +52,7 @@ function setup(opts: { triggers?: boolean; dir?: string } = {}) {
   const host = createOfflineHost({
     fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
-    kit: createEnvelopeKit(), log: () => {},
+    kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
     isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
     deliver: async () => ({ ok: true }),
     ...(opts.triggers === false ? {} : {
@@ -142,8 +143,9 @@ describe('trigger_pause / _resume / _delete on the host', () => {
     table.defs = table.defs.filter((d) => d.id !== 'job-pr')
     const listed = result(await call('trigger_list')).triggers
     expect(listed.find((t: { id: string }) => t.id === 'job-pr')).toMatchObject({ state: 'paused', enabled: false, changedHere: 'paused' })
-    // A second pause changes nothing and journals nothing.
-    expect(result(await call('trigger_pause', { id: 'job-pr' }))).toMatchObject({ changed: false })
+    // A second pause changes nothing and journals nothing; its answer still names the trigger
+    // under triggerId (a link frame's own id addresses the answer: away-calls.ts settleCall).
+    expect(result(await call('trigger_pause', { id: 'job-pr' }))).toMatchObject({ changed: false, id: 'job-pr', triggerId: 'job-pr' })
     expect(host.drain(HOME).records).toHaveLength(1)
     expect(table.changes).toBe(1)
   })
@@ -160,14 +162,14 @@ describe('trigger_pause / _resume / _delete on the host', () => {
     expect(table.changes).toBe(2)
     // Armed again (the daemon followed the hold): resuming again is a no-op.
     table.defs.push(trig('job-pr'))
-    expect(result(await call('trigger_resume', { id: 'job-pr' }))).toMatchObject({ changed: false })
+    expect(result(await call('trigger_resume', { id: 'job-pr' }))).toMatchObject({ changed: false, triggerId: 'job-pr' })
   })
 
   it('a resume of one paused before the server went away needs the server; one running is a no-op', async () => {
     const { call, table } = setup()
     const r = await call('trigger_resume', { id: 'job-paused-on-mac' })
     expect(!r.ok && r.error.code).toBe('hub_unreachable')
-    expect(result(await call('trigger_resume', { id: 'job-ci' }))).toMatchObject({ changed: false, state: 'armed' })
+    expect(result(await call('trigger_resume', { id: 'job-ci' }))).toMatchObject({ changed: false, state: 'armed', triggerId: 'job-ci' })
     expect(table.changes).toBe(0)
   })
 
@@ -179,9 +181,26 @@ describe('trigger_pause / _resume / _delete on the host', () => {
     expect(result(await call('trigger_list')).triggers.map((t: { id: string }) => t.id)).toEqual(['job-pr'])
     const again = await call('trigger_resume', { id: 'job-ci' })
     expect(!again.ok && again.error.code).toBe('not_found')
-    expect(result(await call('trigger_delete', { id: 'job-ci' }))).toMatchObject({ changed: false })
+    expect(result(await call('trigger_delete', { id: 'job-ci' }))).toMatchObject({ changed: false, state: 'deleted', triggerId: 'job-ci' })
     // A pause after a delete is not a resurrection either.
-    expect(result(await call('trigger_pause', { id: 'job-ci' }))).toMatchObject({ changed: false })
+    expect(result(await call('trigger_pause', { id: 'job-ci' }))).toMatchObject({ changed: false, state: 'deleted', triggerId: 'job-ci' })
+  })
+
+  it('every answer of a trigger change that names the trigger by id names it as triggerId too', async () => {
+    const { call, table } = setup()
+    const answers: Array<Record<string, any>> = []
+    const run = async (name: string, id: string) => { const r = await call(name, { id }); if (r.ok) answers.push(r.result) }
+    // Each branch: changed, nothing changed (running, already paused, already deleted).
+    await run('trigger_resume', 'job-ci')
+    await run('trigger_pause', 'job-pr')
+    await run('trigger_pause', 'job-pr')
+    table.defs = table.defs.filter((d) => d.id !== 'job-pr')
+    await run('trigger_resume', 'job-pr')
+    await run('trigger_delete', 'job-ci')
+    await run('trigger_delete', 'job-ci')
+    await run('trigger_pause', 'job-ci')
+    expect(answers.length).toBe(7)
+    for (const a of answers) if ('id' in a) expect(a.triggerId, JSON.stringify(a)).toBe(a.id)
   })
 
   it('never touches a trigger of another Walnut, one with no task, or one it does not run', async () => {
@@ -281,7 +300,7 @@ describe('two Walnuts on one host', () => {
     const host = createOfflineHost({
       fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
       keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
-      kit: createEnvelopeKit(), log: () => {},
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
       deliver: async () => ({ ok: true }),
       triggers: {

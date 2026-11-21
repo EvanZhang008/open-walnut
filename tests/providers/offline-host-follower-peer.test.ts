@@ -151,6 +151,32 @@ describe('follower.peer: a held message', () => {
     expect(h.journal.records(JHOME)).toEqual([expect.objectContaining({ kind: 'op', op: 'task_send', opId: 'op-hold-5' })])
   })
 
+  // Review round 2, N2: the retry read the held `op` record as a delivery and answered
+  // "delivered" with no message id and no "Do NOT resend" line.
+  it('a retry of a held message without a call id answers as the first did: queued, its message id, do not resend', async () => {
+    const h = host()
+    const { callId: _none, ...noCall } = HOLD
+    const first = await h.host.handleFollowerPeer(JHOME, { ...noCall, opId: 'op-hold-6' })
+    const retry = await h.host.handleFollowerPeer(JHOME, { ...noCall, opId: 'op-hold-6' })
+    expect(first).toMatchObject({ ok: true, result: { queued: true, held: true, messageId: 'qm-host-call9' } })
+    const { duplicate, ...again } = (retry as { ok: true; result: Record<string, unknown> }).result
+    expect(duplicate).toBe(true)
+    expect(again).toEqual((first as { ok: true; result: Record<string, unknown> }).result)
+    expect(String(again.outcome)).toContain('Do NOT resend.')
+    expect(again).not.toHaveProperty('delivered')
+  })
+
+  it('a retry of a held message with no message id of its own answers the id it was held under', async () => {
+    const h = host()
+    const { callId: _none, ...noCall } = HOLD
+    const bare = { ...noCall, args: { to: 'mtaskzzz-0009', text: 'later' } }
+    const first = await h.host.handleFollowerPeer(JHOME, { ...bare, opId: 'op-hold-7' }) as { ok: true; result: Record<string, unknown> }
+    const retry = await h.host.handleFollowerPeer(JHOME, { ...bare, opId: 'op-hold-7' }) as { ok: true; result: Record<string, unknown> }
+    expect(first.result.messageId).toMatch(/^qm-/)
+    expect(retry.result.messageId).toBe(first.result.messageId)
+    expect(h.journal.records(JHOME)).toHaveLength(1)
+  })
+
   it('an older Mac that drains no held-op: needs the Mac, nothing journaled', async () => {
     const h = host({ drains: JOURNAL_V2_DRAINS.filter((k) => k !== 'held-op') })
     expect(await h.host.handleFollowerPeer(JHOME, { ...HOLD, opId: 'op-hold-3' })).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_held' } } })

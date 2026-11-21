@@ -16,6 +16,7 @@ import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { createOfflineHost, type OfflineTrigger } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { validateTriggerDef } from '../../src/providers/trigger-check-core.js'
 import { HOST_TRIGGER_ID_RE } from '../../src/core/routines/trigger-api.js'
 
@@ -45,7 +46,7 @@ function setup(opts: { drains?: string[] | null; validate?: boolean | 'refuse'; 
   const host = createOfflineHost({
     fs, path, dir, now: () => NOW, randomHex: (n) => randomBytes(n).toString('hex'),
     keyOf: (h) => createHash('sha1').update(h).digest('hex').slice(0, 12),
-    kit: createEnvelopeKit(), log: () => {},
+    kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
     isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
     deliver: async () => ({ ok: true }),
     drainsOf: () => drains,

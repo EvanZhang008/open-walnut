@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createOfflineHost, type HostSlice } from '../../src/providers/offline-host-core.js';
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js';
+import { createSendRules } from '../../src/core/sessions/send-rules.js';
 import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js';
 import { TASK_ROUTING_CONTRACT } from '../../src/core/task-routing-contract.js';
 
@@ -23,7 +24,7 @@ function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-hos
   const state = { fail: false, leftOut: false };
   const host = createOfflineHost({ fs, path, dir, now: () => Date.now(),
     randomHex: (n) => randomBytes(n).toString('hex'), keyOf: (value) => createHash('sha1').update(value).digest('hex'),
-    kit: createEnvelopeKit(), openItems: createOpenItemsText(), log: () => {},
+    kit: createEnvelopeKit(), rules: createSendRules(), openItems: createOpenItemsText(), log: () => {},
     isLive: (sid) => live.has(sid), turnActive: () => false, pendingPrompt: () => null, streamOffset: () => undefined,
     deliver: async (sid, text, messageId) => {
       if (state.fail) return { ok: false, reason: 'offline' };

@@ -16,6 +16,7 @@ import {
 } from '../helpers/offline-journal-harness.js'
 import { createOfflineHost, type OfflineTrigger } from '../../src/providers/offline-host-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { createLetterCheck } from '../../src/core/human-inbox/letter-check.js'
 import { validateTriggerDef } from '../../src/providers/trigger-check-core.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
@@ -159,7 +160,7 @@ describe('triggers from the follower', () => {
     let n = 0
     const host = createOfflineHost({
       fs, path, dir, now: () => clock.now, randomHex: (b) => (n++).toString(16).padStart(b * 2, '0'), keyOf,
-      kit: createEnvelopeKit(), log: () => {}, isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
+      kit: createEnvelopeKit(), rules: createSendRules(), log: () => {}, isLive: () => true, turnActive: () => false, streamOffset: () => undefined,
       deliver: async () => ({ ok: true }), journal, drainsOf: () => drains, letters: createLetterCheck(),
       triggers: {
         armed: () => table.armed.map((def) => ({ home: JHOME, def, status: { nextRunAtMs: T0 + 5_000 } })),

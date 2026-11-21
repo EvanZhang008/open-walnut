@@ -26,6 +26,7 @@ import { isHeldElsewhereReason } from './sessions/undelivered-requests.js';
 import { log } from '../logging/index.js';
 // The cap and the retention prune keeps live beside how a copy reads them.
 import { MAX_REQUESTS, SETTLED_RETENTION_MS } from './session-request-retention.js';
+import { DEFAULT_REPLY_TIMEOUT_SECS, IMPLICIT_REPLY_TIMEOUT_SECS, MIN_REPLY_TIMEOUT_SECS, MAX_REPLY_TIMEOUT_SECS, REPLY_TIMEOUT_BY_KIND, clampReplyTimeoutSecs, type ReplyKind } from './sessions/send-rules.js';
 
 const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
 
@@ -33,36 +34,10 @@ const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
 // server is away builds the same previews and envelopes, byte for byte.
 const kit = createEnvelopeKit();
 
-/** Default reply deadline when the sender EXPLICITLY asked for a reply and
- *  named no timeout. An explicit ask is an ask: an hour of silence is worth
- *  hearing about. */
-export const DEFAULT_REPLY_TIMEOUT_SECS = 3_600;
-/** Default deadline for an IMPLICIT request — one the expect_reply default
- *  created because the caller was a session and said nothing either way
- *  (2026-09-01). These are the common case now, and most of them are "tell me
- *  when you're done" rather than "answer me": a 1h fuse on every session→session
- *  message turns the reply loop into a notification firehose, which is the exact
- *  noise the bell-badge denoise work went after. Six hours still guarantees the
- *  asker eventually hears something, without narrating every quiet hand-off. */
-export const IMPLICIT_REPLY_TIMEOUT_SECS = 6 * 60 * 60;
-/** Deadline bounds — a sweep tick is 60s, so sub-minute deadlines are noise. */
-export const MIN_REPLY_TIMEOUT_SECS = 60;
-export const MAX_REPLY_TIMEOUT_SECS = 24 * 60 * 60;
-
-/**
- * What kind of work a request asks for, which sets its default deadline (2026-11-04, the org
- * reflection: of 40 overdue notices a VP got in a day, most were 6h fuses on "read your task and
- * do it end to end" starts and on asks to leads, whose answers take a whole job or a team's round):
- *   - 'send': a message to a task about work it is doing (1h asked, 6h by default);
- *   - 'lead': a message to a lead or Main, whose answer waits on its teams;
- *   - 'start': starting a task, whose answer is the whole task done.
- */
-export type ReplyKind = 'send' | 'lead' | 'start';
-export const REPLY_TIMEOUT_BY_KIND: Readonly<Record<ReplyKind, { asked: number; implicit: number }>> = {
-  send: { asked: DEFAULT_REPLY_TIMEOUT_SECS, implicit: IMPLICIT_REPLY_TIMEOUT_SECS },
-  lead: { asked: 2 * 60 * 60, implicit: 12 * 60 * 60 },
-  start: { asked: 12 * 60 * 60, implicit: 12 * 60 * 60 },
-};
+// The deadlines (by kind, the bounds) are the send rules' (sessions/send-rules.ts), which a host
+// daemon answering while the server is away runs too: one copy.
+export { DEFAULT_REPLY_TIMEOUT_SECS, IMPLICIT_REPLY_TIMEOUT_SECS, MIN_REPLY_TIMEOUT_SECS, MAX_REPLY_TIMEOUT_SECS, REPLY_TIMEOUT_BY_KIND, clampReplyTimeoutSecs };
+export type { ReplyKind };
 
 /**
  * An overdue request whose target is plainly at work (a turn running, an answer it just sent,
@@ -438,19 +413,6 @@ function prune(requests: SessionRequest[]): SessionRequest[] {
     return [...settled.slice(settled.length - Math.max(0, MAX_REQUESTS - pending.length)), ...pending];
   }
   return kept;
-}
-
-/**
- * `implicit` = this request exists only because the expect_reply DEFAULT fired,
- * not because anyone asked. It changes nothing but the fallback fuse; a caller
- * that names its own timeout is honoured either way.
- */
-export function clampReplyTimeoutSecs(secs: number | undefined, implicit = false, kind: ReplyKind = 'send'): number {
-  if (typeof secs !== 'number' || !Number.isFinite(secs)) {
-    const by = REPLY_TIMEOUT_BY_KIND[kind] ?? REPLY_TIMEOUT_BY_KIND.send;
-    return implicit ? by.implicit : by.asked;
-  }
-  return Math.min(MAX_REPLY_TIMEOUT_SECS, Math.max(MIN_REPLY_TIMEOUT_SECS, Math.floor(secs)));
 }
 
 export async function createSessionRequest(input: {

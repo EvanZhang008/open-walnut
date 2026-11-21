@@ -461,9 +461,10 @@ describe('journal v2: v1 journals written by the 1fe1fd194 daemon migrate at eve
     const { oldOfflineHost } = await import('../helpers/v1-daemon-sources.js')
     const create = await oldOfflineHost()
     const { createEnvelopeKit } = await import('../../src/core/peers/envelope-kit.js')
+    const { createSendRules } = await import('../../src/core/sessions/send-rules.js')
     const { randomBytes } = await import('node:crypto')
     const old = create({
-      fs, path, dir, now: () => clock.now, randomHex: (n: number) => randomBytes(n).toString('hex'), keyOf, kit: createEnvelopeKit(),
+      fs, path, dir, now: () => clock.now, randomHex: (n: number) => randomBytes(n).toString('hex'), keyOf, kit: createEnvelopeKit(), rules: createSendRules(),
       log: () => {}, isLive: () => true, turnActive: () => false, streamOffset: () => undefined, deliver: async () => ({ ok: true }),
     })
     old.configure(jslice())
@@ -752,6 +753,7 @@ describe('journal v2: rebuilt from its text (the source twin inlines both cores)
     const { createOfflineJournal } = await import('../../src/providers/offline-journal-core.js')
     const { createOfflineHostCore } = await import('../../src/providers/offline-host-core.js')
     const { createEnvelopeKit } = await import('../../src/core/peers/envelope-kit.js')
+    const { createSendRules } = await import('../../src/core/sessions/send-rules.js')
     const { randomBytes, createHash } = await import('node:crypto')
     const rebuiltJournal = new Function('"use strict"; return ' + createOfflineJournal.toString())() as typeof createOfflineJournal
     const rebuiltHost = new Function('"use strict"; return ' + createOfflineHostCore.toString())() as typeof createOfflineHostCore
@@ -763,7 +765,7 @@ describe('journal v2: rebuilt from its text (the source twin inlines both cores)
     })
     rebuiltJournals.push(journal)
     const host = rebuiltHost({
-      fs, path, dir, now: () => clock.now, randomHex: (n) => randomBytes(n).toString('hex'), keyOf, kit: createEnvelopeKit(), log: () => {},
+      fs, path, dir, now: () => clock.now, randomHex: (n) => randomBytes(n).toString('hex'), keyOf, kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
       isLive: () => true, turnActive: () => false, streamOffset: () => undefined, deliver: async () => ({ ok: true }),
       journal, drainsOf: () => JOURNAL_V2_DRAINS.slice(),
     })

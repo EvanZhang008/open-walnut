@@ -26,6 +26,7 @@ import ts from 'typescript'
 import { createOfflineHostCore, type HostSlice, type OfflineHostDeps, type OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createOfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
 import { escapeHintTags } from '../../src/core/hints/hint-format.js'
 import { buildReplyDeliveryText, type SessionRequest } from '../../src/core/session-requests.js'
@@ -87,7 +88,7 @@ function inlinedHost(opts: { online?: boolean } = {}) {
   journals.push(journal)
   const deps: OfflineHostDeps = {
     ...base,
-    kit: rebuild(createEnvelopeKit)(),
+    kit: rebuild(createEnvelopeKit)(), rules: rebuild(createSendRules)(),
     journal,
     isLive: (sid) => sid === A || sid === B,
     turnActive: () => false,
