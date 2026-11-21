@@ -10,6 +10,7 @@
  */
 import type { Task } from '../types.js';
 import { userKindVerdict } from '../org/user-kind.js';
+import { choiceLabels } from '../org/ask-clarity.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
 import { AskOptionsError, readAskOptions } from '../ask-options.js';
 import { askSinceStamp, needsSinceOf, settleCheck, type UserSaid } from './user-spoke.js';
@@ -35,6 +36,8 @@ export interface ReportChange {
   /** needs: the user's earlier words user_kind_why rests on, and what they were about (org/user-kind.ts). Never stored. */
   user_kind_words?: string;
   user_kind_about?: string;
+  /** needs with a design or picture: who reviewed it and what they checked (org/ask-clarity.ts). Never stored. */
+  design_review?: string;
   /** needs: the decision it is (ask-decision.ts): its id, kept in other words, or "new" for another decision. */
   ask_id?: string;
   /** needs, the same decision: what is really new about it (a fact, an option, a deadline). */
@@ -86,7 +89,7 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
   // in readStatusReport (an ask with no kind reads as a report to its lead).
   let own: { kind: string; why: string } | undefined;
   if (c.state === 'needs' && by !== 'human') {
-    const verdict = userKindVerdict({ ...c, subject: ask });
+    const verdict = userKindVerdict({ ...c, subject: ask, detail: text(c.ask_more), labels: choiceLabels(c.ask_options) });
     if (!verdict.ok) throw new ReportChangeError(verdict.message.replace(/^Not sent to the user:/, 'Not put on the user:'), 'user_kind', 409);
     own = { kind: verdict.kind, why: verdict.why };
   }

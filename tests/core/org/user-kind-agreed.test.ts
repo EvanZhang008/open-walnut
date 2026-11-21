@@ -96,3 +96,110 @@ describe('words of his cover only what they were about', () => {
     expect(userKindVerdict({ user_kind: 'user_own', user_kind_why: why }).ok).toBe(true)
   })
 })
+
+describe('a question reads on its own (2026-11-21: "what is here?")', () => {
+  // The card the user could not read, word for word (title, body, button).
+  const title = 'Wi-Fi 浏览器登录入口放在 All devices 行不行'
+  const body = '放这个位置行吗？'
+  const button = '放这里，上线'
+  const kind = { user_kind: 'user_own', user_kind_why: 'He decides what his daily screen shows' }
+
+  it('refuses the card as it was, on every door', () => {
+    const v = userKindVerdict({ ...kind, subject: `${title}\n${body}`, labels: [button] })
+    expect(v.ok).toBe(false)
+    if (!v.ok) expect(v.message).toMatch(/points at a place only you can see/)
+    expect(() => openThread(emptyThreads('vp'), { title, text: body, from: 'task', ...kind, options: [{ label: button }] }, 'task:wifi', AT)).toThrow(/only you can see/)
+  })
+
+  it('refuses the same kind of question in other words', () => {
+    expect(userKindVerdict({ ...kind, subject: 'Put it here, ok?' }).ok).toBe(false)
+    expect(userKindVerdict({ ...kind, subject: 'Where should the export button go?' }).ok).toBe(false)
+    expect(userKindVerdict({ ...kind, subject: 'Ship the new sign-in entry?', labels: ['OK'] }).ok).toBe(false)
+    expect(userKindVerdict({ ...kind, subject: '这样可以吗？', labels: ['好'] }).ok).toBe(false)
+  })
+
+  it('passes the card rewritten: what it is, a picture, and choices that name their result', () => {
+    const v = userKindVerdict({
+      ...kind,
+      subject: 'Show the Wi-Fi sign-in entry (opens the hotel or plane login page) as a row under All devices?',
+      detail: 'Mockup: /home/user/.local/state/walnut/tasks/t1/wifi-entry.png',
+      design_review: 'sol: function 8/10, experience 8/10, interface 7/10; labelled the row',
+      labels: ['Show it under All devices and ship', 'Keep it in Settings only'],
+    })
+    expect(v.ok).toBe(true)
+    // A clear yes or no question keeps Yes and No.
+    expect(userKindVerdict({ ...kind, subject: 'Buy the yearly plan for $96?', labels: ['Yes', 'No'] }).ok).toBe(true)
+  })
+})
+
+describe('a design reaches him only after a scored review on another model (2026-11-21: "reviewed once", "sol", "rate it")', () => {
+  const kind = { user_kind: 'user_own', user_kind_why: 'He decides how his daily screen looks' }
+  // The mockup he got: the window buttons sat over the menu icon, sent as the pick with no review.
+  const subject = 'Title bar: pick A (window buttons on the left, menu icon beside them)?'
+  const detail = 'My pick, A: /home/user/.local/state/walnut/tasks/t2/titlebar-a.png'
+  const labels = ['Ship title bar A', 'Ship title bar B']
+
+  it('refuses the overlapping mockup sent with no review', () => {
+    const v = userKindVerdict({ ...kind, subject, detail, labels })
+    expect(v.ok).toBe(false)
+    if (!v.ok) expect(v.message).toMatch(/no review on record.*Sol, where your Agent tool has it.*out of 10/s)
+  })
+
+  it('refuses a review with no model or no scores', () => {
+    for (const note of ['looked fine to me, ship it', 'sol reviewed it, all good', 'function 8/10, experience 7/10, interface 6/10']) {
+      expect(userKindVerdict({ ...kind, subject, detail, labels, design_review: note }).ok, note).toBe(false)
+    }
+  })
+
+  it('passes with the reviewer model and three scores, or a small text-only change', () => {
+    expect(userKindVerdict({ ...kind, subject, detail, labels, design_review: 'sol: function 8/10, experience 7/10, interface 6/10; moved the window buttons off the menu icon' }).ok).toBe(true)
+    expect(userKindVerdict({ ...kind, subject, detail, labels, design_review: 'small: only the button label text changed' }).ok).toBe(true)
+  })
+
+  it('a plain link (a CR, a doc) is no design', () => {
+    expect(userKindVerdict({ ...kind, subject: 'Publish the release notes? https://example.com/notes', labels: ['Publish the notes', 'Hold them'] }).ok).toBe(true)
+  })
+})
+
+describe('the clarity check stays narrow and fast (review of 2026-11-21)', () => {
+  const kind = { user_kind: 'user_own', user_kind_why: 'Only he can decide this for his team' }
+  const ok = (subject: string, labels: string[] = [], detail = '') => userKindVerdict({ ...kind, subject, detail, labels }).ok
+
+  it('leaves ordinary decision asks alone', () => {
+    for (const q of [
+      'It looks like the build is flaky. Retry with a clean cache?',
+      'Which layout for the config schema: flat or nested?',
+      'Where should I put the new DB field for retries?',
+      'Put the token in the Authorization header?',
+      'Delete the unused assets/logo.png from the repo?',
+      'Accept this position (senior engineer offer)?',
+      'Keep it there until Friday?',
+      'Where should the notes and artifacts live?',
+      '超时改为30秒，这样可以吗？',
+      '要把 token 放这些环境变量里吗？',
+    ]) expect(ok(q, ['Do the first one', 'Do the second one']), q).toBe(true)
+  })
+
+  it('sees a picture after a full-width colon and in an <img>, and refuses vague labels with decoration', () => {
+    const q = '登录入口放在 All devices 行不行？'
+    expect(userKindVerdict({ ...kind, subject: `${q}截图：/tmp/a.png`, labels: ['Show it under All devices'], design_review: 'sol: function 8/10, experience 8 out of 10, interface 7/10' }).ok).toBe(true)
+    expect(userKindVerdict({ ...kind, subject: q, detail: '<img src="data:image/png;base64,AAAA">', labels: ['Show it under All devices'] }).ok).toBe(false)
+    for (const label of ['Go →', 'OK ✅', '(OK)', 'Go ahead', 'Looks good']) expect(ok('Ship the release notes to the blog?', [label, 'Hold them']), label).toBe(false)
+  })
+
+  it('catches pointing words in the body, not only the title', () => {
+    expect(ok('Wi-Fi browser sign-in entry under All devices, ok?', ['Show it and ship'], 'Put it in this spot, ok?')).toBe(false)
+  })
+
+  it('a long token never stalls the check', () => {
+    const t0 = Date.now()
+    ok('Ship it?', ['Ship the build'], `${'a.'.repeat(30_000)} ${'/'.repeat(30_000)} ${'x'.repeat(100_000)}.png`)
+    expect(Date.now() - t0).toBeLessThan(200)
+  })
+
+  it('a thread already waiting on him, reworded to point at "here", is refused', () => {
+    const { file, thread } = openThread(emptyThreads('vp'), { title: 'Ship the sign-in entry?', text: 'Ship it under All devices?', from: 'task', ...kind, options: [{ label: 'Ship it under All devices' }, { label: 'Keep it in Settings only' }] }, 'task:wifi', AT)
+    expect(() => updateThread(file, thread.id, { reply: 'Put it here, ok?' }, 'task:wifi', AT)).toThrow(/only you can see/)
+    expect(updateThread(file, thread.id, { reply: 'Ship the sign-in entry as a row under All devices?' }, 'task:wifi', AT).thread.reply).toMatch(/All devices/)
+  })
+})

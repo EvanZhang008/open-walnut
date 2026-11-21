@@ -29,7 +29,7 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
-import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM } from '../core/org/user-kind.js'
+import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM, DESIGN_REVIEW_PARAM } from '../core/org/user-kind.js'
 import { withOutcome } from './outcome.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { LIST_MAX } from '../lib/zod-rules.js'
@@ -139,6 +139,7 @@ defineOp({
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
     user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
     user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
+    design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
     resend_reason: z.string().optional().describe(
       'Only to send again a letter with the same subject as one you sent in the last 10 minutes: one line '
       + '(10+ characters) saying why it must be a new letter. Never stored'),

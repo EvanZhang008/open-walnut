@@ -18,13 +18,20 @@
  * whose CRs he had already agreed to publish sat in Needs you asking whether to swap in their new
  * descriptions, a step that only finished what he had agreed to; its reason was his words about
  * one other CR, said in another task (org/user-kind.ts citesUserWords checks that now).
+ * Its last sentence (2026-11-21): a card asked "put it in this position, ok?" with a "Put it here,
+ * ship" button and nothing to show where; org/ask-clarity.ts refuses such a question.
  */
 export const ANSWERED_THERE_RULE = 'Ask the user each thing once. A step that follows from what they already agreed to '
   + '(a new description or picture for the same CR, carrying out their words) is yours: do it, then tell them in one line. '
   + 'Words of theirs cover only what they were about (that task, CR or post), never a rule for anything else. '
   + 'Before you ask, or open or reword a thread, letter or status that asks, read again where the answer would be (a Slack '
   + 'DM or channel, a mail thread, a code review, a ticket outside Walnut; their cards and chats in it), the user\'s own '
-  + 'messages there included: when they already answered or acted, drop the ask and say so in one line.'
+  + 'messages there included: when they already answered or acted, drop the ask and say so in one line. '
+  + 'A question reads on its own to someone who never saw the task: what it is and what each choice does, no "here" or '
+  + '"this position", a screenshot or design page for where or how something looks, and each choice names its result. '
+  + 'A design or picture reaches them only after your own reviewer subagent on another model (Sol, where your Agent tool has it) checked each '
+  + 'image (overlaps, cut-off text, alignment, spacing, match with the real screen) and scored function, experience and '
+  + 'interface out of 10; put the scores and what changed in the page and your reply. Text-only or colour-only changes skip it.'
 
 /** The line a re-check of an open ask carries. */
 export const ANSWERED_THERE_RECHECK = 'When the ask is about a conversation or item outside Walnut (a Slack DM or channel, a mail '

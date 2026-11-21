@@ -22,6 +22,7 @@
  * has to pick a kind, and "undoing my own mess" or "choosing between two fine options" has none.
  * The kinds mirror the team charter (team-charter.ts) and the approval rules (answer-approval.ts).
  */
+import { askClarityRefusal } from './ask-clarity.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { USER_KIND_LEAD_WORDS } from '../human-inbox/walnut-letters/thread-words.js';
 
@@ -188,8 +189,14 @@ export interface UserKindInput {
   userKind?: unknown; user_kind?: unknown; userKindWhy?: unknown; user_kind_why?: unknown;
   /** The user's own earlier words the reason rests on, verbatim, and what they were about. */
   userKindWords?: unknown; user_kind_words?: unknown; userKindAbout?: unknown; user_kind_about?: unknown;
-  /** The text of this ask (its title, question and detail), to check cited words against. Never read from the caller's JSON. */
+  /** The text of this ask (its title and question), to check cited words against. Never read from the caller's JSON. */
   subject?: string;
+  /** The rest the user reads beside it (a body, More), where a picture may be (ask-clarity.ts). */
+  detail?: string;
+  /** The labels of its choices (ask-clarity.ts). */
+  labels?: readonly string[];
+  /** With a design or picture: who reviewed it, what they checked, what changed (ask-clarity.ts). */
+  design_review?: unknown; designReview?: unknown;
 }
 
 /** `user_kind` + `user_kind_why`, either spelling of the keys, judged. Pure. */
@@ -209,6 +216,10 @@ export function userKindVerdict(input: UserKindInput): UserKindVerdict {
   }
   const cited = known && why.length >= USER_KIND_WHY_MIN ? citedWordsRefusal(why, input) : null;
   if (cited) return { ok: false, message: cited };
+  // An explicit call's question must read on its own (ask-clarity.ts).
+  const unclear = known && why.length >= USER_KIND_WHY_MIN && input.subject !== undefined
+    ? askClarityRefusal(input.subject, input.detail ?? '', input.labels ?? [], str(input.design_review ?? input.designReview)) : null;
+  if (unclear) return { ok: false, message: unclear };
   if (known && why.length >= USER_KIND_WHY_MIN) return { ok: true, kind: kind as UserKind, why };
   const kinds = USER_KINDS.map((k) => `${k} (${USER_KIND_WORDS[k]})`).join('; ');
   return {
@@ -243,5 +254,9 @@ export const USER_KIND_WORDS_PARAM =
   'With user_kind, when user_kind_why rests on words the user said earlier: those words, verbatim. Words of theirs cover only what they were about.';
 export const USER_KIND_ABOUT_PARAM =
   'With user_kind_words: the task, CR, ticket or post those words were about (its id or link). Refused when it is not what this ask is about.';
+export const DESIGN_REVIEW_PARAM =
+  'With a needs that shows a design, image or page: the reviewer subagent\'s model (another model than its maker: Sol, where your Agent tool has it), '
+  + 'its scores for function, experience and interface out of 10, and what changed ("sol: function 8/10, experience 7/10, '
+  + 'interface 6/10; fixed ..."); "small: <what changed>" for a text-only or colour-only change.';
 export const USER_KIND_WHY_PARAM =
   `With user_kind: one line (at least ${USER_KIND_WHY_MIN} characters), in the language you write to the user, saying what in THIS question makes it that kind. The user reads it first. ${NOT_THE_USERS_DECISION}`;

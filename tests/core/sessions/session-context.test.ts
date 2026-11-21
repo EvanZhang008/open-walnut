@@ -398,7 +398,9 @@ describe('buildSessionContext (identity note)', () => {
     // 12300 → 13000 (2026-11-20) for the charter's ask-once bullet (answered-there.ts): finish what the
     // user agreed to, his words cover only what they were about, and read where the answer would be (his
     // own messages included) before asking (a task asked him for two hours what he had answered in the DM). 12,910.
-    expect(systemPrompt.length).toBeLessThan(13000)
+    // 13000 → 13600 (2026-11-21) for its sentences on a question that reads on its own and a design
+    // reviewed on another model before he sees it (ask-clarity.ts).
+    expect(systemPrompt.length).toBeLessThan(13600)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

@@ -10,7 +10,7 @@ import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
 import { ACK_PLACES, PLACE_WHY_MAX } from '../core/org/thread-view.js'
-import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM } from '../core/org/user-kind.js'
+import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM, DESIGN_REVIEW_PARAM } from '../core/org/user-kind.js'
 
 const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
   + '(Main and every lead keep them; a VP is a lead), or beside your chat on a task the user turned Threads on for. Walnut files every message he sends you, and tells you in that message which '
@@ -81,6 +81,7 @@ defineOp({
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
     user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
     user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
+    design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     ask_owner: z.string().max(128).optional().describe('The id of the task in your team whose Needs you already asks him this thread\'s decision: the thread then points at that ask (read as pending with askedIn, its conversation kept) and waits on him again by itself once that task stops asking it or asks another decision. Refused (409) when that task asks him nothing now. "" takes it off'),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
@@ -130,6 +131,7 @@ defineOp({
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
     user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
     user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
+    design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
     same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
     task: TASK_ARG,

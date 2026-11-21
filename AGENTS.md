@@ -7,6 +7,9 @@
 > `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-ops` (incidents + src/logging/).
 > Load the matching skill before non-trivial work in that area. **Any change the user can see:
 > read `.claude/skills/walnut-ui-requirements/SKILL.md` first** (the rules every UI change must meet).
+> A design or picture for the user is reviewed once first, scored, on another model (the charter): for a
+> Walnut UI change, the reviewer's brief and the standard it checks are the review prompt and the standard
+> in `.claude/skills/walnut-ui-requirements/`.
 > **Important docs:** browse [`docs/`](./docs/README.md) first; model work starts with
 > [Claude model configuration](./docs/reference/claude-model-configuration.md).
 > **This file holds only what every session needs before it touches anything** (40 KB cap,

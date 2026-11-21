@@ -10,6 +10,7 @@
  * `user_own` already covers what the user asked to decide. Without a kind and a reason the letter is
  * refused (409 `user_kind`); with them they lead the body, so the user reads why it is theirs.
  */
+import { choiceLabels } from '../org/ask-clarity.js';
 import { log } from '../../logging/index.js';
 import { userKindLead, userKindVerdict } from '../org/user-kind.js';
 import { LetterError } from './store.js';
@@ -23,7 +24,7 @@ function escapeHtml(s: string): string {
 
 /** The letter without the kind fields (never stored). */
 export function withoutUserKind(input: LetterInput): LetterInput {
-  const { userKind: _a, user_kind: _b, userKindWhy: _c, user_kind_why: _d, user_kind_words: _e, user_kind_about: _f, ...rest } = input;
+  const { userKind: _a, user_kind: _b, userKindWhy: _c, user_kind_why: _d, user_kind_words: _e, user_kind_about: _f, design_review: _g, ...rest } = input;
   return rest;
 }
 
@@ -40,7 +41,8 @@ export async function admitUserKindLetter(input: LetterInput, sender: LetterSend
   if (await isTriageSender(sender, {})) return rest;
   // The ask's own words (its subject and preview), never the body, where a sender names its source.
   const subject = [input.subject, input.text].filter((v): v is string => typeof v === 'string').join('\n');
-  const verdict = userKindVerdict({ ...input, subject });
+  const detail = [input.markdown, input.html].filter((v): v is string => typeof v === 'string').join('\n');
+  const verdict = userKindVerdict({ ...input, subject, detail, labels: choiceLabels(input.actions) });
   if (!verdict.ok) {
     log.notif.info('human-inbox: decision letter refused, no user kind named', { senderTaskId: sender.taskId });
     throw new LetterError(verdict.message, 'user_kind', 409);

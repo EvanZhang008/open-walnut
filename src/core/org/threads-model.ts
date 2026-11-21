@@ -52,6 +52,7 @@
  * store (threads-store.ts) runs them under the file lock.
  */
 import { userKindVerdict, type UserKindInput } from './user-kind.js';
+import { askClarityRefusal, choiceLabels, showsDesign } from './ask-clarity.js';
 import type { AskOption } from '../user-status.js';
 import { AskOptionsError, checkNeedsOptions, threadOptionsOf } from './thread-options.js';
 import { oneCardNow } from './one-card.js';
@@ -793,6 +794,8 @@ export interface ThreadPatch {
   /** With user_kind: the user's earlier words the reason rests on, and what they were about (user-kind.ts). Never stored. */
   user_kind_words?: string;
   user_kind_about?: string;
+  /** With a design or picture in it: who reviewed it and what they checked (ask-clarity.ts). Never stored. */
+  design_review?: string;
   /** With state needs from an agent: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
   same_ask_reason?: string;
   /** With close from a node: his own words asking for it (closeAskOf). Never stored. */
@@ -813,9 +816,9 @@ export interface ThreadPatch {
  */
 const waitsOnUser = (state: ThreadState): boolean => state === 'needs';
 
-function checkHandedToUser(by: ThreadWriter, input: UserKindInput, subject: string): void {
+function checkHandedToUser(by: ThreadWriter, input: UserKindInput & { options?: unknown }, subject: string, detail = ''): void {
   if (by === 'human') return;
-  const v = userKindVerdict({ ...input, subject });
+  const v = userKindVerdict({ ...input, subject, detail: isStr(detail) ? detail : '', labels: choiceLabels(input.options) });
   if (!v.ok) throw new ThreadError('user_kind', 409, v.message.replace(/^Not sent to the user:/, 'Not handed to the user:'));
 }
 
@@ -1007,7 +1010,13 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
   if (patchHandsToUser(cur, patch)) {
     // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
-    checkHandedToUser(by, patch, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'));
+    checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), cur.reply);
+  } else if (by !== 'human' && cur.state === 'needs' && !cur.closed && (patch.title !== undefined || patch.ask !== undefined || patch.reply !== undefined || patch.options !== undefined)) {
+    // A question already waiting on him, reworded: it must still read on its own (ask-clarity.ts).
+    const unclear = askClarityRefusal([patch.title ?? cur.title, patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n'), '',
+      choiceLabels(patch.options ?? cur.options),
+      isStr(patch.design_review) ? patch.design_review : showsDesign([cur.title, cur.ask, cur.reply].filter(isStr).join('\n')) ? 'small: reviewed when it was handed over' : '');
+    if (unclear) throw new ThreadError('user_kind', 409, unclear.replace(/^Not sent to the user:/, 'Not handed to the user:'));
   }
   if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
   if (patch.snooze?.trim() && cur.pinned) checkHisPin(cur, by, 'snoozed');
@@ -1291,6 +1300,8 @@ export interface OpenThreadInput {
   /** With user_kind: the user's earlier words the reason rests on, and what they were about (user-kind.ts). Never stored. */
   user_kind_words?: string;
   user_kind_about?: string;
+  /** With a design or picture in it: who reviewed it and what they checked (ask-clarity.ts). Never stored. */
+  design_review?: string;
   /** With state needs: why it asks what a task in the node's team already asks (same-ask.ts). Never stored. */
   same_ask_reason?: string;
   /** With state needs: the choices he picks from (thread-options.ts). */

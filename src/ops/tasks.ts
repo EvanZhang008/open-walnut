@@ -13,7 +13,7 @@ import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import { agentStatusView, summaryAt, SUMMARY_IS_HISTORY } from '../core/user-status.js'
-import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM } from '../core/org/user-kind.js'
+import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM, DESIGN_REVIEW_PARAM } from '../core/org/user-kind.js'
 import { WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
@@ -825,6 +825,7 @@ const REPORT_CHANGE = z.object({
   user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
   user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
   user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
+  design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
   same_as: z.string().max(200).optional().describe('With needs: the task in your team that owns this same decision. Keep it as a pointer, not a second Needs you ask. Its current decision must still be open.'),
   same_ask_reason: z.string().max(300).optional()
     .describe('With needs: only when a task in its tree already asks the user the same (409 same_ask) and this is really a different decision: one line saying why'),

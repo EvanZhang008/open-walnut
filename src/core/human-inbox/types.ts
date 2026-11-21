@@ -314,6 +314,8 @@ export interface NewLetter {
   /** The user's earlier words the reason rests on, and what they were about (org/user-kind.ts). Never stored. */
   user_kind_words?: string;
   user_kind_about?: string;
+  /** With a design or picture in it: who reviewed it and what they checked (org/ask-clarity.ts). Never stored. */
+  design_review?: string;
   /**
    * Why this letter goes again though the sender sent one with the same subject minutes ago
    * (human-inbox/duplicate-letter.ts). Either spelling; never stored.
