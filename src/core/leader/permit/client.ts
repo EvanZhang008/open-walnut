@@ -9,8 +9,8 @@
  */
 import type { ElapsedClock, PermitParams, PermitRecord, PermitReply, PermitTransport } from './types.js'
 import { genesisConfigId, majorityOf, nextConfigId, recordKey, sameList, sameRecord } from './types.js'
-import { holderLeaseMs } from './rules.js'
 import { randomBytes } from 'node:crypto'
+import { holderLeaseMs } from './rules.js'
 
 export interface ClientOptions {
   id: string
@@ -18,8 +18,13 @@ export interface ClientOptions {
   list: string[]
   /** The id of that list's configuration; default: the first one (genesisConfigId). */
   cfg?: string
-  /** This incarnation's nonce (tests only); default: random. */
-  nonce?: string
+  /** Its generation; default 0 (the first list). */
+  epoch?: number
+  /**
+   * Tests only: a fixed incarnation. Never set it in the wiring: two processes with one
+   * nonce bring back the restart bug the nonce exists for.
+   */
+  testNonce?: string
   transport: PermitTransport
   /** Elapsed time that never runs slow: createHolderClock(). */
   clock: ElapsedClock
@@ -48,6 +53,7 @@ export class PermitClient {
   /** During a witness list change: the new list, judged together with `list`. */
   private joint: string[] | null = null
   private cfg: string
+  private epoch: number
   /** This process's incarnation: on every record it writes. */
   private readonly nonce: string
   /**
@@ -69,7 +75,8 @@ export class PermitClient {
     this.id = opts.id
     this.list = [...opts.list].sort()
     this.cfg = opts.cfg ?? genesisConfigId(this.list)
-    this.nonce = opts.nonce ?? randomBytes(8).toString('hex')
+    this.epoch = opts.epoch ?? 0
+    this.nonce = opts.testNonce ?? randomBytes(8).toString('hex')
   }
 
   witnessList(): string[] {
@@ -77,8 +84,8 @@ export class PermitClient {
   }
 
   /** The configuration this machine judges by: its list, the pair's new list, the id. */
-  config(): { list: string[]; joint: string[] | null; cfg: string } {
-    return { list: [...this.list], joint: this.joint ? [...this.joint] : null, cfg: this.cfg }
+  config(): { list: string[]; joint: string[] | null; cfg: string; epoch: number } {
+    return { list: [...this.list], joint: this.joint ? [...this.joint] : null, cfg: this.cfg, epoch: this.epoch }
   }
 
   /** The new list while a change is between its two steps, else null. */
@@ -141,11 +148,12 @@ export class PermitClient {
    * final step again. `from` names the old list when this machine follows another one (it
    * finishes a change its holder left half done).
    */
-  changeWitnesses(newList: string[], from?: { list: string[]; cfg: string }): PermitRecord {
+  changeWitnesses(newList: string[], from?: { list: string[]; cfg: string; epoch: number }): PermitRecord {
     const next = [...newList].sort()
     if (from) {
       this.list = [...from.list].sort()
       this.cfg = from.cfg
+      this.epoch = from.epoch
       this.joint = null
       this.pairConfirmed = false
     }
@@ -227,12 +235,12 @@ export class PermitClient {
     if (this.chosen(p)) this.onChosen(p)
   }
 
-  private propose(fields: Omit<PermitRecord, 'number' | 'by' | 'nonce' | 'validMs' | 'list' | 'joint' | 'cfg'>, joint: string[] | null = this.joint): PermitRecord {
-    if (fields.progress) this.progress = fields.progress
+  private propose(fields: Omit<PermitRecord, 'number' | 'by' | 'nonce' | 'validMs' | 'list' | 'joint' | 'cfg' | 'epoch'>, joint: string[] | null = this.joint): PermitRecord {
+    if (fields.progress) this.progress = { ...fields.progress, by: this.id }
     const record: PermitRecord = {
       ...fields,
-      ...(this.progress && !fields.progress ? { progress: this.progress } : {}),
-      number: this.top + 1, by: this.id, nonce: this.nonce, validMs: this.opts.params.validMs, list: [...this.list], cfg: this.cfg,
+      ...(this.progress ? { progress: this.progress } : {}),
+      number: this.top + 1, by: this.id, nonce: this.nonce, validMs: this.opts.params.validMs, list: [...this.list], cfg: this.cfg, epoch: this.epoch,
       ...(joint ? { joint: [...joint] } : {}),
     }
     this.top = record.number
@@ -258,6 +266,7 @@ export class PermitClient {
     }
     if (r.kind === 'members' && r.stage === 'final') {
       this.cfg = nextConfigId(r.cfg, r.newList!)
+      this.epoch = r.epoch + 1
       this.list = [...r.newList!]
       this.joint = null
       this.pairConfirmed = false
@@ -304,13 +313,13 @@ export class PermitClient {
     for (const r of this.reads.values()) this.dropIfSuperseded(r)
     // Lists a majority of ours serve now: follow them (liveness only; what counts is
     // always judged by the lists a record names, which the witnesses check).
-    const lists = new Map<string, { list: string[]; joint: string[] | null; cfg: string; n: number }>()
+    const lists = new Map<string, { list: string[]; joint: string[] | null; cfg: string; epoch: number; n: number }>()
     for (const r of this.reads.values()) {
-      if (!this.list.includes(r.witness) || !r.list || !r.cfg) continue
+      if (!this.list.includes(r.witness) || !r.list || !r.cfg || r.epoch === null) continue
       const same = r.cfg === this.cfg && sameList(r.list, this.list) && (r.joint ? sameList(r.joint, this.joint) : this.joint === null)
       if (same) continue
       const key = `${r.cfg}|${[...r.list].sort().join(',')}|${r.joint ? [...r.joint].sort().join(',') : ''}`
-      const c = lists.get(key) ?? { list: [...r.list].sort(), joint: r.joint ? [...r.joint].sort() : null, cfg: r.cfg, n: 0 }
+      const c = lists.get(key) ?? { list: [...r.list].sort(), joint: r.joint ? [...r.joint].sort() : null, cfg: r.cfg, epoch: r.epoch, n: 0 }
       c.n++
       lists.set(key, c)
     }
@@ -319,6 +328,7 @@ export class PermitClient {
         this.list = c.list
         this.joint = c.joint
         this.cfg = c.cfg
+        this.epoch = c.epoch
         this.pairConfirmed = false
       }
     }

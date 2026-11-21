@@ -31,16 +31,24 @@ interface Variant {
   members?: boolean
   /** Most faults restart the machine that acts, mid-renew, and stamps repeat across restarts. */
   restarts?: boolean
+  /** With members: five witnesses (lists of three drawn from them) and a change about every minute. */
+  pool5?: boolean
+  /** One message in ten takes one to five minutes (old change steps arriving late). */
+  lateSteps?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
   const params = { ...DEFAULT_PERMIT_PARAMS, ...v.params }
-  const world = new World(params, { drop: 0.1, dup: 0.05, delayMs: v.delayMs ?? [2, 300], slow: 0.04, slowMs: [1_000, 90_000] }, seed)
+  const world = new World(params, {
+    drop: 0.1, dup: 0.05, delayMs: v.delayMs ?? [2, 300],
+    slow: v.lateSteps ? 0.1 : 0.04, slowMs: v.lateSteps ? [60_000, 300_000] : [1_000, 90_000],
+  }, seed)
   const r = world.rand
   const bound = (v.params?.maxDriftRate === 0 ? DEFAULT_PERMIT_PARAMS.maxDriftRate : params.maxDriftRate) * (v.driftShare ?? 0.99)
   const drift = (side: 1 | -1) => (v.worstDrift ? side : r() * 2 - 1) * bound
-  const pool = v.members ? [...W, 'w4'] : W
-  if (v.members) world.addWitness('w4', { drift: drift(1) })
+  const extra = v.members ? (v.pool5 ? ['w4', 'w5'] : ['w4']) : []
+  const pool = [...W, ...extra]
+  for (const id of extra) world.addWitness(id, { drift: drift(1), joinFrom: 0 })
   for (const id of W) {
     const n = world.addWitness(id, { drift: drift(1), store: new SimStore(v.lazyStore ? 'lazy' : 'durable'), bootstrap: W })
     if (v.lazyStore) {
@@ -66,10 +74,11 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
           m.c.changeWitnesses(pairTo)
           return
         }
-        if (v.members && r() < (v.tickMs ?? 5_000) / 240_000) {
+        if (v.members && r() < (v.tickMs ?? 5_000) / (v.pool5 ? 60_000 : 240_000)) {
           const list = m.c.witnessList()
           const out = list[Math.floor(r() * list.length)]
-          const inn = pool.find((x) => !list.includes(x))!
+          const out_ = pool.filter((x) => !list.includes(x))
+          const inn = out_[Math.floor(r() * out_.length)]
           m.c.changeWitnesses([...list.filter((x) => x !== out), inn])
           return
         }
@@ -179,10 +188,18 @@ describe('write permission: random schedules', () => {
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 60_000)
 
-  it('never lets two machines act at once when the holder restarts mid-renew and its records repeat (200 seeds)', () => {
-    const r = sweep(200, { restarts: true, tickMs: 1_000 })
+  // In chunks: one long synchronous block starves vitest's worker channel.
+  for (let from = 1; from <= 200; from += 50) {
+    it(`never lets two machines act at once when the holder restarts mid-renew and its records repeat (seeds ${from} to ${from + 49})`, () => {
+      const r = sweep(50, { restarts: true, tickMs: 1_000 }, from)
+      expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+      expect(r.activeShare).toBeGreaterThan(0.3)
+    }, 60_000)
+  }
+
+  it('never lets two machines act at once across many list changes over five witnesses, with steps arriving minutes late (100 seeds)', () => {
+    const r = sweep(100, { members: true, pool5: true, lateSteps: true })
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
-    expect(r.activeShare).toBeGreaterThan(0.3)
   }, 60_000)
 
   // Seed 12 here found the bug of a one-step list change (a witness that took a change no
@@ -201,9 +218,14 @@ describe('write permission: random schedules', () => {
   }, 120_000)
 
   describe('negative controls: each removed safety part is caught', () => {
-    it('margins removed: drift turns it red', () => {
-      const r = sweep(40, { params: { holderMarginMs: 0, witnessMarginMs: 0, maxDriftRate: 0 }, tickMs: 250, worstDrift: true, delayMs: [1, 20], splitsOnly: true })
-      expect(r.violations).toBeGreaterThan(0)
+    it('margins removed: drift turns it red', async () => {
+      let violations = 0
+      for (let from = 1; from <= 40 && violations === 0; from += 10) {
+        // Yield between chunks so vitest's worker channel is not starved.
+        await new Promise((res) => setImmediate(res))
+        violations += sweep(10, { params: { holderMarginMs: 0, witnessMarginMs: 0, maxDriftRate: 0 }, tickMs: 250, worstDrift: true, delayMs: [1, 20], splitsOnly: true }, from).violations
+      }
+      expect(violations).toBeGreaterThan(0)
     }, 120_000)
 
     it('a witness that answers before its record is on disk: crashes turn it red', () => {

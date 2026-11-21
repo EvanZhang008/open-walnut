@@ -10,7 +10,7 @@ merge.
 ## The record
 
 One numbered record per Walnut, kept by a fixed list of witnesses (three always-on machines,
-a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, validMs, list, cfg, progress }`
+a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, validMs, list, cfg, epoch, progress }`
 (`cfg`: which configuration of the witness list, below; `nonce`: the writer's incarnation):
 
 | kind | written by | gives the permission to | a witness takes it when |
@@ -24,9 +24,11 @@ a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, va
 Every witness takes only a number above the one it holds, so a duplicate, a replay or a late
 old record never lowers it. It writes the record to disk (file fsync, rename, directory fsync)
 before it answers yes; a file that is torn or fails its checksum makes it refuse everything,
-loudly, and is never read as "no record". A witness with no file at all is not set up: it
-waits to join through a members record (`bootstrapWitnessStore` sets up a new witness once and
-refuses a store that already has a file).
+loudly, and is never read as "no record". A witness with no file at all is not set up and takes
+nothing: `bootstrapWitnessStore` sets up the first witnesses with the first list, and
+`prepareJoiningWitness(store, epoch)` sets up a new witness, or one that lost its disk, to join
+through a list change from generation `epoch` on (give the current one). Both refuse a store
+that already has a file.
 
 ## When a machine may act
 
@@ -105,7 +107,12 @@ list can come back after changes (w1,w2,w3 then w2,w3,w4 then w1,w2,w3 again); o
 a witness that followed the changes from one that slept through them, which the random schedules
 also found (stress seed 1754) before the id existed. A witness waiting to join takes a change
 only into the new list, never as a member of the old one: a witness that left a list, or lost its
-disk, never counts for it again (stress seed 1309).
+disk, never counts for it again (stress seed 1309). Every configuration also has a **generation**
+(`epoch`: how many changes led to it), which orders configurations where the chained id cannot.
+A witness waiting to join takes a change only from its own generation (where it left, or what its
+operator set up) or a later one: a late step of an older change could otherwise put it back into
+a list that a majority, itself included, had already left, beside a straggler that never left it
+(stress seed 8618, with five witnesses and steps arriving minutes late).
 
 Why two steps: in one step, a witness that took a change no majority of the old list had
 confirmed would serve the new list at once, and a majority of the new list could then form
@@ -131,14 +138,21 @@ the highest progress stamp (`progress: { seq, writtenAt }`, carried on the holde
 against the copy's newest write, plus one whole lease for what it may have written after the
 stamp. Each witness keeps the highest stamp it ever took, so a contending grant that carries an
 older stamp, or none, neither hides how far the last real holder wrote nor blocks the other
-candidates. No stamp means no proof: it refuses.
+candidates. No stamp means no proof: it refuses. Two requirements on the stamp:
+
+- `seq` is the Walnut data's own write sequence: one sequence for the Walnut, which a new
+  holder continues from the copy it took over, never a counter of each machine's own.
+- `writtenAt` is the writer's wall clock (`by` names the writer). The rule subtracts two stamps
+  only when the same machine made both; a copy whose newest write another machine stamped is
+  refused unless it already has the last `seq`, since minutes of clock offset would hide minutes
+  of writes.
 
 ## How it is tested
 
 `tests/core/leader/permit/`: a simulated world (one real timeline; each node its own clock with
 drift, offset, wall jumps and sleeps; a network that delays, drops, duplicates and reorders;
 witnesses that crash and restart from their file). `model-check.test.ts` runs about 700 seeded
-15-minute schedules (some with witnesses swapped in and out of the list, some with the holder restarting mid-renew) against one invariant (at no real instant do two machines both have
+15-minute schedules (some with witnesses swapped in and out of the list, some with the holder restarting mid-renew, some with five witnesses and change steps arriving minutes late) against one invariant (at no real instant do two machines both have
 `mayAct()` true), plus negative controls that each remove one safety part (the margins, the
 fsync before the answer, the wall clock in the holder's clock, the fixed-list majority) and
 must find a violation. `named-cases.test.ts` holds the named schedules (the split, the 90 s

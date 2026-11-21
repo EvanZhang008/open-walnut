@@ -5,7 +5,7 @@
  * from their stored file, and machines whose mayAct() is checked after every event.
  */
 import {
-  bootstrapWitnessStore, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
+  bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
   type ElapsedClock, type PermitParams, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
 } from '../../../../src/core/leader/permit/index.js'
 
@@ -105,6 +105,8 @@ export class World {
   rand: () => number
   /** Set to an array to record every record a witness takes. */
   trace: string[] | null = null
+  /** The Walnut's own write sequence, shared by whichever machine holds the permission. */
+  writeSeq = 0
   /** Stops every pilot (a test then reads back a still world). */
   pilotsStopped = false
 
@@ -147,10 +149,14 @@ export class World {
     this.at(this.now + ms, run)
   }
 
-  addWitness(id: string, opts: { drift?: number; offset?: number; store?: SimStore; bootstrap?: string[] } = {}): WitnessNode {
+  /** `bootstrap`: the first list; `joinFrom`: a witness set up to join from that generation; neither: no file. */
+  addWitness(id: string, opts: { drift?: number; offset?: number; store?: SimStore; bootstrap?: string[]; joinFrom?: number } = {}): WitnessNode {
     const store = opts.store ?? new SimStore()
     if (opts.bootstrap) {
       bootstrapWitnessStore(store, opts.bootstrap)
+      store.flush()
+    } else if (opts.joinFrom !== undefined) {
+      prepareJoiningWitness(store, opts.joinFrom)
       store.flush()
     }
     const node: WitnessNode = { id, store, clock: new NodeClock(this, opts.drift ?? 0, 0, opts.offset ?? 0), w: null, downUntil: 0 }
@@ -186,7 +192,7 @@ export class World {
       ? createWitnessClock({ monotonic: node.clock.monotonic })
       : createHolderClock({ monotonic: node.clock.monotonic, wall: node.clock.wall })
     return new PermitClient({
-      id: node.id, list, clock, params: this.params, ...(nonce ? { nonce } : {}),
+      id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}),
       transport: { send: (w, req) => this.send(node.id, w, req) },
     })
   }
@@ -314,7 +320,6 @@ export interface PilotOptions {
 export function pilot(world: World, id: string, opts: PilotOptions): void {
   const tick = opts.tickMs ?? 5_000
   let lastRenew = -Infinity
-  let progress = 0
   const step = (): void => {
     const m = world.machines.get(id)!
     if (world.pilotsStopped) return
@@ -328,9 +333,10 @@ export function pilot(world: World, id: string, opts: PilotOptions): void {
       return
     }
     if (c.mayAct()) {
-      if (!opts.sparseStamps || world.rand() < 0.25) progress++
+      // One write sequence for the Walnut: whoever acts continues it.
+      if (!opts.sparseStamps || world.rand() < 0.25) world.writeSeq++
       if (world.now - lastRenew >= world.params.renewEveryMs) {
-        c.renew({ seq: progress, writtenAt: opts.sparseStamps ? progress : m.clock.wall() })
+        c.renew({ seq: world.writeSeq, writtenAt: opts.sparseStamps ? world.writeSeq : m.clock.wall() })
         lastRenew = world.now
       }
       opts.onTick?.(m)
@@ -344,7 +350,7 @@ export function pilot(world: World, id: string, opts: PilotOptions): void {
     const mine = reads.filter((r) => r.held?.holder === id && !r.grantable).length
     const mineHeld = mine >= Math.floor(c.witnessList().length / 2) + 1
     if ((s && s.kind === 'handover' && s.holder === id) || mineHeld) {
-      c.renew({ seq: progress, writtenAt: opts.sparseStamps ? progress : m.clock.wall() })
+      c.renew({ seq: world.writeSeq, writtenAt: opts.sparseStamps ? world.writeSeq : m.clock.wall() })
       lastRenew = world.now
     } else if (opts.wantsLead && reads.length > 0) {
       const ans = mayAskForTakeover({

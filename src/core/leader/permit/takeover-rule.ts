@@ -19,8 +19,11 @@ export interface TakeoverRuleInput {
   cfg?: string
   /** Answers of one fresh read round. */
   reads: PermitReply[]
-  /** The newest write in this machine's standby copy, with the holder's stamp for it. */
-  standby: { seq: number; writtenAt?: number }
+  /**
+   * The newest write in this machine's standby copy: its seq, and the stamp its writer
+   * made for it (writtenAt on writtenBy's wall clock).
+   */
+  standby: { seq: number; writtenAt?: number; writtenBy?: string }
   params: PermitParams
   /** Design: 5 minutes. */
   maxBehindMs: number
@@ -55,6 +58,10 @@ export function mayAskForTakeover(input: TakeoverRuleInput): TakeoverRuleAnswer 
   let behind = holderLeaseMs(input.params)
   if (input.standby.seq < p.seq) {
     if (input.standby.writtenAt === undefined) return { ok: false, reason: 'the copy has no stamp for its newest write: cannot prove how far behind it is' }
+    // Two wall clocks are never subtracted: minutes of offset would hide minutes of writes.
+    if (!p.by || input.standby.writtenBy !== p.by) {
+      return { ok: false, reason: 'the copy\'s newest write and the last stamp were made by different machines: their clocks do not compare' }
+    }
     behind += Math.max(0, p.writtenAt - input.standby.writtenAt)
   }
   if (behind > input.maxBehindMs) {

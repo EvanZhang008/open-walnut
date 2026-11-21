@@ -4,7 +4,7 @@
  */
 export * from './types.js'
 export { judge, isMember, checkTiming, maxSafeDrift, holderLeaseMs, witnessHoldMs, grantable, holdsForHolder, type WitnessState, type Judgement } from './rules.js'
-export { createFilePermitStore, bootstrapWitnessStore, encodeStored, decodeStored, PermitStoreCorrupt, type PermitStore, type StoredWitness } from './store.js'
+export { createFilePermitStore, bootstrapWitnessStore, prepareJoiningWitness, encodeStored, decodeStored, PermitStoreCorrupt, type PermitStore, type StoredWitness } from './store.js'
 export { PermitWitness, type WitnessOptions } from './witness.js'
 export { PermitClient, PermitNotHeld, type ClientOptions, type ProposalOutcome } from './client.js'
 export { createHolderClock, createWitnessClock, DISTRUST_STEP_MS, WALL_BACK_TOLERANCE_MS, type ClockSources } from './clock.js'

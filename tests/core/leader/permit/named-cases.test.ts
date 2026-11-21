@@ -378,7 +378,7 @@ describe('changing the witness list', () => {
   it('w4 replaces w3 only with a majority of both lists; the old list cannot grant after it', () => {
     const w = world()
     // w4 joins with no record and no list: it waits for a members record that names it.
-    w.addWitness('w4')
+    w.addWitness('w4', { joinFrom: 0 })
     const a = aHolds(w)
     pilot(w, 'A', { wantsLead: true, tickMs: 1_000 })
     w.run(5_000)
@@ -397,13 +397,13 @@ describe('changing the witness list', () => {
     expect(b.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
     expect(b.c.mayAct()).toBe(true)
     // w3 is out: it refuses everything now.
-    const r3 = w.witnesses.get('w3')!.w!.handle({ type: 'propose', record: { number: 999, kind: 'grant', holder: 'C', by: 'C', nonce: 'c1', validMs: w.params.validMs, list: W, cfg: genesisConfigId(W) } })
+    const r3 = w.witnesses.get('w3')!.w!.handle({ type: 'propose', record: { number: 999, kind: 'grant', holder: 'C', by: 'C', nonce: 'c1', validMs: w.params.validMs, list: W, cfg: genesisConfigId(W), epoch: 0 } })
     expect(r3.ok).toBe(false)
   })
 
   it('a members record that only the old majority took does not move the list, and a retry finishes it', () => {
     const w = world()
-    w.addWitness('w4')
+    w.addWitness('w4', { joinFrom: 0 })
     const a = aHolds(w)
     w.partition('A', 'w4')
     w.partition('A', 'w2')
@@ -423,7 +423,7 @@ describe('changing the witness list', () => {
 
   it('a change that reached one majority, then lost its holder, is finished by another machine once the permission ran out', () => {
     const w = world()
-    w.addWitness('w4')
+    w.addWitness('w4', { joinFrom: 0 })
     const a = aHolds(w)
     w.partition('A', 'w4')
     w.partition('A', 'w2')
@@ -432,12 +432,12 @@ describe('changing the witness list', () => {
     // A is gone for good. Before the permission runs out, nobody may finish it.
     for (const id of ['w1', 'w2', 'w3', 'w4']) w.partition('A', id)
     const b = w.addMachine('B', W)
-    b.c.changeWitnesses(['w1', 'w2', 'w4'], { list: W, cfg: genesisConfigId(W) })
+    b.c.changeWitnesses(['w1', 'w2', 'w4'], { list: W, cfg: genesisConfigId(W), epoch: 0 })
     w.run(20_000)
     expect(b.c.mayAct()).toBe(false)
     expect(b.c.witnessList()).toEqual(W)
     w.run(100_000)
-    b.c.changeWitnesses(['w1', 'w2', 'w4'], { list: W, cfg: genesisConfigId(W) })
+    b.c.changeWitnesses(['w1', 'w2', 'w4'], { list: W, cfg: genesisConfigId(W), epoch: 0 })
     w.run(101_000)
     expect(b.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
     expect(b.c.mayAct()).toBe(true)

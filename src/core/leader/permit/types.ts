@@ -43,6 +43,12 @@ export interface PermitRecord {
    */
   cfg: string
   /**
+   * How many list changes led to that configuration (0 for the first list). It orders
+   * configurations, which the chained id cannot: a witness waiting to join takes a change
+   * only from its own generation or a later one, never a late step of an older change.
+   */
+  epoch: number
+  /**
    * During a witness list change: the new list. The record is then judged by both lists
    * and counts only with a majority of each.
    */
@@ -59,10 +65,17 @@ export interface PermitRecord {
   progress?: PermitProgress
 }
 
-/** How far a holder had written: its write sequence and its own wall-clock stamp of it. */
+/**
+ * How far a holder had written. `seq` is the Walnut data's own write sequence: ONE sequence
+ * for the Walnut, which a new holder continues from the copy it took over (never a counter of
+ * each machine's own). `writtenAt` is the writer's wall clock, so it compares only with other
+ * stamps of the same writer (`by`).
+ */
 export interface PermitProgress {
   seq: number
   writtenAt: number
+  /** The machine that made the stamp; PermitClient fills it in. */
+  by?: string
 }
 
 export interface PermitParams {
@@ -111,6 +124,8 @@ export interface PermitReply {
   joint: string[] | null
   /** The id of the configuration it serves (null: waiting to join). */
   cfg: string | null
+  /** Its configuration's generation, or the one it waits to join from (null: not set up). */
+  epoch: number | null
   /** The highest progress stamp (by seq) any record it accepted carried. */
   progress: PermitProgress | null
   /** Whether this witness would grant the permission to another machine now. */
@@ -156,7 +171,7 @@ export function majorityOf(list: readonly string[]): number {
 export function recordKey(r: PermitRecord): string {
   return JSON.stringify([
     r.number, r.kind, r.holder, r.by, r.from ?? null, r.to ?? null, r.validMs,
-    r.nonce, r.cfg, [...r.list].sort(), r.joint ? [...r.joint].sort() : null, r.newList ? [...r.newList].sort() : null, r.stage ?? null,
+    r.nonce, r.cfg, r.epoch, [...r.list].sort(), r.joint ? [...r.joint].sort() : null, r.newList ? [...r.newList].sort() : null, r.stage ?? null,
     r.progress ? [r.progress.seq, r.progress.writtenAt] : null,
   ])
 }

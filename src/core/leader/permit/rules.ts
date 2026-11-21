@@ -16,6 +16,12 @@ export interface WitnessState {
   /** The id of the configuration of `list` (kept through the pair step); null while joining. */
   cfg: string | null
   /**
+   * That configuration's generation (types.ts PermitRecord.epoch). For a witness waiting to
+   * join: the generation it may join from (where it retired, or what its operator set up).
+   * null: not set up at all (no file): it takes nothing.
+   */
+  epoch: number | null
+  /**
    * The highest progress stamp any record it took carried. Kept when a later record carries
    * none or a lower one (a contending grant), so the takeover rule still sees how far the
    * last real holder wrote (review round 1, S-2).
@@ -25,7 +31,7 @@ export interface WitnessState {
 
 function higher(a: PermitProgress | null, b: PermitProgress | undefined): PermitProgress | null {
   if (!b) return a
-  return !a || b.seq > a.seq ? { seq: b.seq, writtenAt: b.writtenAt } : a
+  return !a || b.seq > a.seq ? { seq: b.seq, writtenAt: b.writtenAt, ...(b.by ? { by: b.by } : {}) } : a
 }
 
 /** How long the holder counts one record: from when it SENT it, on its own clock. */
@@ -83,7 +89,10 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
   if (r.validMs !== p.validMs) return 'bad-validity'
   if (typeof r.nonce !== 'string' || r.nonce.length === 0) return 'bad-nonce'
   if (!uniqueList(r.list) || typeof r.cfg !== 'string' || r.cfg.length === 0) return 'bad-list'
-  if (r.progress && (!Number.isSafeInteger(r.progress.seq) || !Number.isFinite(r.progress.writtenAt))) return 'bad-progress'
+  if (!Number.isSafeInteger(r.epoch) || r.epoch < 0) return 'bad-epoch'
+  if (r.progress && (!Number.isSafeInteger(r.progress.seq) || !Number.isFinite(r.progress.writtenAt) || (r.progress.by !== undefined && r.progress.by !== r.by))) {
+    return 'bad-progress'
+  }
   if (r.joint !== undefined && (!uniqueList(r.joint) || sameList(r.joint, r.list))) return 'bad-list'
   switch (r.kind) {
     case 'grant':
@@ -116,7 +125,11 @@ export function isMember(s: WitnessState, self: string): boolean {
  *   list from an earlier configuration is not it, stress seed 1754).
  */
 function changeStartsHere(s: WitnessState, self: string, r: PermitRecord, joining: boolean): boolean {
-  if (joining) return r.newList!.includes(self) && !r.list.includes(self)
+  // ...and only from its own generation or a later one: a witness that left at generation g
+  // never took part in anything after g, so it cannot be one of the majority that left a
+  // later configuration; a late step of an older change could put it back into a list
+  // that majority already left, beside a straggler (stress seed 8618).
+  if (joining) return s.epoch !== null && r.epoch >= s.epoch && r.newList!.includes(self) && !r.list.includes(self)
   const fromOld = s.cfg === r.cfg && sameList(s.list, r.list)
   const inPair = fromOld && sameList(s.joint, r.newList)
   if (r.stage === 'joint') return fromOld && (!s.joint || inPair)
@@ -152,20 +165,22 @@ function mayRewrite(s: WitnessState, r: PermitRecord, now: number, p: PermitPara
 export function judge(s: WitnessState, self: string, r: PermitRecord, now: number, p: PermitParams): Judgement {
   const bad = shapeError(r, p)
   if (bad) return { ok: false, reason: bad }
-  const accept = (list: string[] | null = s.list, joint: string[] | null = s.joint, cfg: string | null = s.cfg): Judgement =>
-    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg, progress: higher(s.progress, r.progress) } })
+  const accept = (list: string[] | null = s.list, joint: string[] | null = s.joint, cfg: string | null = s.cfg, epoch: number | null = s.epoch): Judgement =>
+    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg, epoch, progress: higher(s.progress, r.progress) } })
   const joining = !isMember(s, self)
 
   if (r.kind === 'members') {
-    if (!changeStartsHere(s, self, r, joining)) return { ok: false, reason: joining ? 'not-a-member' : 'wrong-list' }
+    if (!changeStartsHere(s, self, r, joining)) return { ok: false, reason: joining ? (s.epoch === null ? 'not-set-up' : 'not-a-member') : 'wrong-list' }
     if (s.held && r.number <= s.held.number) return { ok: false, reason: 'stale-number' }
     if (!joining && !mayRewrite(s, r, now, p)) return { ok: false, reason: 'not-holder' }
-    return r.stage === 'joint' ? accept([...r.list], [...r.newList!], r.cfg) : accept([...r.newList!], null, nextConfigId(r.cfg, r.newList!))
+    return r.stage === 'joint'
+      ? accept([...r.list], [...r.newList!], r.cfg, r.epoch)
+      : accept([...r.newList!], null, nextConfigId(r.cfg, r.newList!), r.epoch + 1)
   }
 
-  if (joining) return { ok: false, reason: 'not-a-member' }
+  if (joining) return { ok: false, reason: s.epoch === null ? 'not-set-up' : 'not-a-member' }
   const sameJoint = r.joint ? sameList(r.joint, s.joint) : s.joint === null
-  if (r.cfg !== s.cfg || !sameList(r.list, s.list) || !sameJoint) return { ok: false, reason: 'wrong-list' }
+  if (r.cfg !== s.cfg || r.epoch !== s.epoch || !sameList(r.list, s.list) || !sameJoint) return { ok: false, reason: 'wrong-list' }
   if (s.held && r.number <= s.held.number) return { ok: false, reason: 'stale-number' }
 
   const live = holdsForHolder(s, now, p)
