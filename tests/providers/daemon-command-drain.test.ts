@@ -884,7 +884,8 @@ describe('standalone ACP command lifetime', () => {
     const handle = compile<(ws: unknown, id: number, cmd: unknown, op?: string) => Promise<unknown>>(`${rule}\n${extract(standalone, name)}\nreturn ${name};`, {
       acp: { acpStart: () => operation.promise, acpOp: () => operation.promise, acpStop: () => operation.promise },
       sendOk: vi.fn(), sendError: vi.fn(), safeSend: vi.fn(), GATEWAY_SOCK_PATH: '/fixture/gateway',
-      GATEWAY_SHIM_DIR: '/fixture/bin', process: { env: {} }, path,
+      // The runtime reads its env as daemonEnv (createDaemonRuntime's options.env).
+      GATEWAY_SHIM_DIR: '/fixture/bin', process: { env: {} }, daemonEnv: {}, path,
       sessionStartGate: new DaemonSessionGate(), cancelledStartPath: () => '/fixture/cancelled-starts/fixture',
       fs: { existsSync: () => false },
       // acpStart binds a resumed session's budget first; this frame names no provider session.
