@@ -103,6 +103,8 @@ export interface DaemonLink {
 }
 
 const CALL_TIMEOUT_MS = 5_000
+/** The keys of a command frame (`{ id, cmd, ...params }`): no parameter may take one. */
+export const FRAME_KEYS = ['id', 'cmd'] as const
 
 /**
  * A request that never left this server (no link, or the socket refused the
@@ -175,6 +177,9 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${cmd} timed out`)) }, timeoutMs)
       pending.set(id, (m) => { clearTimeout(timer); resolve(m) })
       try {
+        // A parameter named like a frame key would re-address the command (its answer then never comes back).
+        const clash = FRAME_KEYS.find((k) => k in params)
+        if (clash) throw new Error(`the ${cmd} command has a parameter named "${clash}", which is a frame key; rename it`)
         const message = JSON.stringify({ id, cmd, ...params })
         assertFrameFits(message, `the ${cmd} command`, 'its daemon')
         socket.send(message)

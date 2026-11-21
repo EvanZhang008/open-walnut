@@ -21,37 +21,14 @@
  *
  * Twins: as tests/e2e/replica-cluster-e2e.test.ts (REPLICA_CLUSTER_TWINS picks).
  */
-import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
-import net from 'node:net'
 import path from 'node:path'
 import { BUN, startReplicaCluster, waitFor, WINDOWS, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
-import { hostJournal as journal, hostStream, macSessions, macTasks, replicaKnowsDefaultHost, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
+import { gatewayCall, hostJournal as journal, hostStream, keepLogsOnFailure, macSessions, macTasks, replicaKnowsDefaultHost } from '../helpers/replica-cluster-reads.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 const TITLE = 'Sync the venue list on the host'
-
-/** One `walnut` call on the host daemon's gateway socket, as a session's CLI sends it. */
-function walnut(c: ReplicaCluster, sid: string, name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
-  return new Promise((resolve, reject) => {
-    const sock = net.connect(path.join(c.base, 'hd', 'agent-gateway.sock'))
-    let buf = ''
-    sock.on('connect', () => sock.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name, args } }) + '\n'))
-    sock.on('data', (d) => {
-      buf += d.toString()
-      if (buf.includes('\n')) { sock.destroy(); resolve(JSON.parse(buf.slice(0, buf.indexOf('\n')))) }
-    })
-    sock.on('error', reject)
-  })
-}
-
-/** On a failure: the cluster's logs in a file that outlives it. */
-function keepLogsOnFailure(c: () => ReplicaCluster | undefined, twin: string): void {
-  onTestFailed(() => {
-    const cl = c()
-    if (cl) process.stdout.write(`replica-cluster-local-calls-e2e: logs at ${writeClusterLogs(cl, `local-calls-${twin}`)}\n`)
-  })
-}
 
 describe.each(TWINS)('a host\'s own walnut calls while the Mac is away (%s twin)', (twin) => {
   let c: ReplicaCluster
@@ -87,7 +64,7 @@ describe.each(TWINS)('a host\'s own walnut calls while the Mac is away (%s twin)
   afterAll(async () => { await c?.stop() }, 120_000)
 
   it('while the Mac sleeps: a task made and started on the host, its tags changed, and a message delivered to its session', async () => {
-    keepLogsOnFailure(() => c, twin)
+    keepLogsOnFailure(() => c, `local-calls-${twin}`)
     // The project's defaults are in the replica's copy (where the start is decided) before the Mac
     // sleeps: read on disk, since the replica forwards a read to the Mac while it answers.
     await waitFor(() => (replicaKnowsDefaultHost(c, 'Acme', 'devbox') ? true : null), 60_000, 'the replica\'s copy to hold the project\'s default host')
@@ -100,13 +77,13 @@ describe.each(TWINS)('a host\'s own walnut calls while the Mac is away (%s twin)
     const quietAt = slept.after + WINDOWS.quietMs + 1_000
     if (Date.now() < quietAt) await new Promise((r) => setTimeout(r, quietAt - Date.now()))
 
-    const created = await walnut(c, callerSid, 'task_create', { title: TITLE, project: 'Acme', message: 'start on the host' })
+    const created = await gatewayCall(c, callerSid, 'task_create', { title: TITLE, project: 'Acme', message: 'start on the host' })
     expect(created.ok, JSON.stringify(created)).toBe(true)
     taskId = String(created.result.id ?? created.result.task?.id ?? '')
     expect(taskId).not.toBe('')
     // At once, with no wait for the copy: the replica shows the session it started (noteStarted),
     // so the message finds it on this host instead of answering that it needs the Mac.
-    const sent = await walnut(c, callerSid, 'task_send', { to: taskId, text: 'sent right after the start', expect_reply: false })
+    const sent = await gatewayCall(c, callerSid, 'task_send', { to: taskId, text: 'sent right after the start', expect_reply: false })
     expect(sent.ok, JSON.stringify(sent)).toBe(true)
     const start = await waitFor(() => journal(c).find((r) => r.kind === 'session' && r.taskId === taskId), 60_000, 'the task\'s session record')
     expect(start).toMatchObject({ run: 'task', host: 'devbox', cwd: hostCwd })
@@ -116,14 +93,14 @@ describe.each(TWINS)('a host\'s own walnut calls while the Mac is away (%s twin)
     // Only one session for the task: the message went to the one the start made.
     expect(journal(c).filter((r) => r.kind === 'session' && r.taskId === taskId)).toHaveLength(1)
 
-    const tagged = await walnut(c, callerSid, 'task_update', { id: taskId, tags: ['team:acme'] })
+    const tagged = await gatewayCall(c, callerSid, 'task_update', { id: taskId, tags: ['team:acme'] })
     expect(tagged.ok, JSON.stringify(tagged)).toBe(true)
     expect(journal(c).some((r) => r.kind === 'task-fields' && r.taskId === taskId && JSON.stringify(r.fields ?? {}).includes('team:acme'))).toBe(true)
     await waitFor(() => hostStream(c, startedSid).some((l) => l.type === 'result' && String(l.result).includes('sent right after the start')), 120_000, 'the message to reach the started session')
   }, 420_000)
 
   it('the Mac wakes: it holds that task and its session exactly once; a second drain changes nothing', async () => {
-    keepLogsOnFailure(() => c, twin)
+    keepLogsOnFailure(() => c, `local-calls-${twin}`)
     c.wakeMac()
     await c.waitBack(token)
     let seen = ''

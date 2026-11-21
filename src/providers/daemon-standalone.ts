@@ -5442,7 +5442,7 @@ async function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Recor
 function cmdFollowerTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
   if (!home) return sendError(ws, id, 'follower.triggers: send follower.hello first')
-  sendOk(ws, id, offlineHost.followerTriggers(home, cmd.id))
+  sendOk(ws, id, offlineHost.followerTriggers(home, cmd.triggerId))
 }
 
 async function cmdFollowerTriggerTest(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -13651,7 +13651,8 @@ function flushSendQueue(ws: ServerWebSocket<WsData>) {
 
 function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<string, unknown>) {
   if (ws?.data?.origin === 'follower') data = followerReads.settle(ws, id, data) ?? data
-  safeSend(ws, JSON.stringify({ id, ok: true, ...data }))
+  // The frame's own keys win: an answer field named `id` or `ok` (a trigger's id) never re-addresses it.
+  safeSend(ws, JSON.stringify({ ...data, id, ok: true }))
 }
 
 /** `level`: an expected refusal (a job restarting) is logged below error. */

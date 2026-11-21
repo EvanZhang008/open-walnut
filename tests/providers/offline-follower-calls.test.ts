@@ -257,7 +257,7 @@ describe('the twins carry the follower\'s trigger commands', () => {
       expect(src, twin).toContain("'follower.triggers', 'follower.trigger.test',")
       expect(src, twin).toMatch(/case 'follower\.triggers': return cmdFollowerTriggers\(/)
       expect(src, twin).toMatch(/case 'follower\.trigger\.test': return cmdFollowerTriggerTest\(/)
-      expect(src, twin).toContain('offlineHost.followerTriggers(home, cmd.id)')
+      expect(src, twin).toContain('offlineHost.followerTriggers(home, cmd.triggerId)')
       expect(src, twin).toContain('offlineHost.followerTriggerTest(home, { actor: cmd.actor, args: cmd.args })')
     }
   })

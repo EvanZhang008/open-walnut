@@ -2977,8 +2977,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       : name === 'trigger_resume'
         ? `Resumed ${label} on this host: the first check runs within seconds, every ${everyLabel(def.everyMs)} after that; Walnut records it when the server reconnects.`
         : `Deleted ${label} on this host: nothing checks it any more; Walnut deletes the trigger when the server reconnects. Its check script file is untouched.`
+    // triggerId: the same id under a name a link frame never takes (its own `id` addresses the answer).
     return ok({
-      id: def.id, name: def.name, state: name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
+      id: def.id, triggerId: def.id, name: def.name, state: name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
       changed: true, queued: true, offline: true, ...(duplicate ? { duplicate: true } : {}), outcome, next: 'Nothing else is required. Do not repeat the call.',
     })
   }
@@ -3149,7 +3150,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function triggerArmedAnswer(home: string, id: string, p: Pick<TriggerPlan, 'name' | 'description' | 'everyMs' | 'run' | 'cwd' | 'taskId'>, parked: string, duplicate = false): GatewayResult {
     const here = slices.get(home)?.host ?? ''
     return ok({
-      id, name: p.name, host: here, queued: true, offline: true, ...(duplicate ? { duplicate: true } : {}),
+      id, triggerId: id, name: p.name, host: here, queued: true, offline: true, ...(duplicate ? { duplicate: true } : {}),
       job: { id, name: p.name, description: p.description, schedule: { kind: 'every', everyMs: p.everyMs }, check: { run: p.run, ...(p.cwd ? { cwd: p.cwd } : {}), host: here }, executor: { type: 'session', config: { target: p.taskId } } },
       outcome: `Trigger armed on this host: the daemon here runs the check every ${everyLabel(p.everyMs)} from now on and delivers the prompt into the task's session when it fires, while the Walnut server is away too. Walnut records trigger ${id} under this id when the server is back.${parked}`,
       next: `Do not create it again. Tell the user in one line what is watched and how often. Turn it off with trigger_delete '{"id":"${id}"}' once it has done its job.`,

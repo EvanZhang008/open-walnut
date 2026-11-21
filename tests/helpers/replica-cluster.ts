@@ -427,7 +427,8 @@ function pluginConfig(p: ClusterPlugin | undefined): string[] {
   ]
 }
 
-function macConfig(plugin?: ClusterPlugin): string {
+/** `extra`: more top-level lines of the Mac's config.yaml (e.g. an `experimental:` block); its copy rides the config kind. */
+function macConfig(plugin?: ClusterPlugin, extra: readonly string[] = []): string {
   return [
     'version: 1',
     'user:', `  name: ${MAC_USER_NAME}`,
@@ -445,6 +446,7 @@ function macConfig(plugin?: ClusterPlugin): string {
     '  projects:', ...MAC_FAVORITES.projects.map((x) => `    - ${JSON.stringify(x)}`),
     '  notes:', ...MAC_FAVORITES.notes.map((x) => `    - ${JSON.stringify(x)}`),
     ...pluginConfig(plugin),
+    ...extra,
     '',
   ].join('\n')
 }
@@ -582,7 +584,7 @@ async function bootMac(script: string, file: string, env: Record<string, string>
  */
 export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
 
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[] }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -605,7 +607,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const mockCli = path.join(d.bin, MOCK_CLI_NAME)
   writeStubBin(d.bin)
   writeAppDir(d.app, app)
-  fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin))
+  fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin, opts.macConfigExtra))
   if (opts.plugin) {
     for (const [rel, text] of Object.entries(opts.plugin.files)) {
       const file = path.join(d.macData, 'plugins', opts.plugin.id, rel)

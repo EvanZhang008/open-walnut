@@ -1,12 +1,101 @@
 /**
- * Read-only looks at a replica cluster's files (tests/helpers/replica-cluster.ts) that the
- * host-local-call e2e tests share: the host daemon's journal and session streams, and the
- * stores of the Mac and the replica read on disk (never through a server).
+ * What the host-local-call e2e tests of a replica cluster (tests/helpers/replica-cluster.ts)
+ * share: read-only looks at its files (the host daemon's journal, log and session streams, the
+ * stores of the Mac and the replica read on disk, never through a server, a session CLI's env),
+ * and a session's `walnut` call by either door it has on the host (the daemon's gateway socket,
+ * the host call entry its daemon gave it).
  */
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import http from 'node:http'
+import net from 'node:net'
 import path from 'node:path'
+import { onTestFailed } from 'vitest'
 import Database from '../../src/lib/sqlite.js'
 import type { ReplicaCluster } from './replica-cluster.js'
+import { createHostCallClient, type HostCallOutcome } from '../../src/providers/host-call-client-core.js'
+
+/** A gateway answer: `{ok, result}` or `{ok:false, error}`. */
+export type GatewayAnswer = Record<string, any>
+
+/** The request line a session's CLI sends for one tool call (wn-cli.ts). */
+function callLine(sid: string, name: string, args: Record<string, unknown>, callId?: string): Record<string, unknown> {
+  return { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) } }
+}
+
+/** One `walnut` call on the host daemon's gateway socket, as a session's CLI sends it (the old door). */
+export function gatewayCall(c: ReplicaCluster, sid: string, name: string, args: Record<string, unknown>, callId?: string): Promise<GatewayAnswer> {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(path.join(c.base, 'hd', 'agent-gateway.sock'))
+    let buf = ''
+    sock.on('connect', () => sock.write(JSON.stringify(callLine(sid, name, args, callId)) + '\n'))
+    sock.on('data', (d) => {
+      buf += d.toString()
+      if (buf.includes('\n')) { sock.destroy(); resolve(JSON.parse(buf.slice(0, buf.indexOf('\n')))) }
+    })
+    sock.on('error', reject)
+  })
+}
+
+/** The entry env a session's CLI was given (every WALNUT_CALL_* variable: its address and its token). */
+export function callEnvOf(env: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('WALNUT_CALL_')))
+}
+
+/** Whether the client a session's `walnut` uses (host-call-client-core.ts) takes `callEnv` as an entry. */
+export function entryGiven(callEnv: Record<string, string>): boolean {
+  return createHostCallClient({ http, env: callEnv }).entry() !== null
+}
+
+/**
+ * The same line through the host call entry (the new door), by the client a session's `walnut`
+ * uses (host-call-client-core.ts), with the entry env its daemon gave the session (callEnvOf):
+ * the entry's answer, or why it did not take the line.
+ */
+export function entryCall(callEnv: Record<string, string>, sid: string, name: string, args: Record<string, unknown>, callId?: string, timeoutMs = 90_000): Promise<HostCallOutcome> {
+  return createHostCallClient({ http, env: callEnv }).post(callLine(sid, name, args, callId), timeoutMs)
+}
+
+/** The host daemon's log lines (JSON, in order), every file of it. */
+export function hostDaemonLog(c: ReplicaCluster): Array<Record<string, any>> {
+  const dir = path.join(c.base, 'hd')
+  let names: string[] = []
+  try { names = fs.readdirSync(dir).filter((n) => /^daemon-.*\.log$/.test(n)).sort() } catch { return [] }
+  const out: Array<Record<string, any>> = []
+  for (const n of names) {
+    for (const line of fs.readFileSync(path.join(dir, n), 'utf8').split('\n')) {
+      if (!line) continue
+      try { out.push(JSON.parse(line) as Record<string, any>) } catch { /* partial */ }
+    }
+  }
+  return out
+}
+
+/**
+ * The env of the mock CLI running session `sid` (its command line names the cluster's copy of the
+ * mock and the sid), read from /proc: null when no such process runs, or where /proc is not there.
+ */
+export function sessionCliEnv(c: ReplicaCluster, sid: string): Record<string, string> | null {
+  let ps = ''
+  try { ps = execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }) } catch { return null }
+  const mock = path.join(c.base, 'bin', 'mock-claude.cjs')
+  const row = ps.split('\n').map((l) => l.trim()).find((l) => l.includes(` ${mock} `) && new RegExp(`--(session-id|resume) ${sid}(\\s|$)`).test(l))
+  if (!row) return null
+  const pid = Number(row.slice(0, row.indexOf(' ')))
+  let raw = ''
+  try { raw = fs.readFileSync(`/proc/${pid}/environ`, 'utf8') } catch { return null }
+  const env: Record<string, string> = {}
+  for (const kv of raw.split('\0')) { const i = kv.indexOf('='); if (i > 0) env[kv.slice(0, i)] = kv.slice(i + 1) }
+  return env
+}
+
+/** On a failure: the cluster's logs in a file that outlives it, its path printed. */
+export function keepLogsOnFailure(c: () => ReplicaCluster | undefined, label: string): void {
+  onTestFailed(() => {
+    const cl = c()
+    if (cl) process.stdout.write(`replica-cluster: ${label} logs at ${writeClusterLogs(cl, label)}\n`)
+  })
+}
 
 /** The host daemon's journal records (every line with a seq, latest by seq). */
 export function hostJournal(c: ReplicaCluster): Array<Record<string, any>> {
@@ -45,12 +134,17 @@ export function replicaKnowsDefaultHost(c: ReplicaCluster, project: string, host
   return String(rows[0]?.metadata ?? '').includes(host)
 }
 
-/** On a failure: the cluster's logs (the Mac, the replica, the host daemon) in a file that outlives it. */
+/**
+ * On a failure: the cluster's logs (the Mac, the replica, the host daemon) in a file that outlives
+ * it, under REPLICA_CLUSTER_LOG_DIR when set (a container's own /tmp goes with it), else /tmp.
+ */
 export function writeClusterLogs(c: ReplicaCluster, label: string): string {
-  const out = path.join('/tmp', `rcl-${label}-${Date.now()}.log`)
+  const dir = process.env.REPLICA_CLUSTER_LOG_DIR || '/tmp'
+  fs.mkdirSync(dir, { recursive: true })
+  const out = path.join(dir, `rcl-${label}-${Date.now()}.log`)
   let daemon = ''
   try {
-    for (const n of fs.readdirSync(path.join(c.base, 'hd')).filter((n) => /^daemon-.*\.log$/.test(n))) daemon += fs.readFileSync(path.join(c.base, 'hd', n), 'utf8').slice(-40_000)
+    for (const n of fs.readdirSync(path.join(c.base, 'hd')).filter((n) => /^daemon-.*\.log$/.test(n))) daemon += fs.readFileSync(path.join(c.base, 'hd', n), 'utf8').slice(-400_000)
   } catch { /* gone */ }
   const l = c.logs()
   fs.writeFileSync(out, `--- mac ---\n${l.mac}\n--- replica ---\n${l.replica}\n--- host daemon ---\n${daemon}\n`)

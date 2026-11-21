@@ -57,7 +57,9 @@ export function callIdOfWrite(opId: string, method: string, opPath: string): str
 export function settleCall(r: Awaited<ReturnType<ReplicaWrite['submit']>>, status: number): PortAnswer {
   if (r.kind === 'answered') return { answered: true }
   if (r.kind === 'refused') return refusalAnswer(r.code, r.message, r.detail, r.retryAfterMs)
-  const { appendMs: _ms, appendCpuMs: _cpu, ...body } = r.reply
+  // A link frame's own `id` addresses the answer; a trigger's id rides as triggerId (offline-host-core.ts).
+  const { appendMs: _ms, appendCpuMs: _cpu, id: _frame, ok: _ok, triggerId, ...rest } = r.reply
+  const body = typeof triggerId === 'string' ? { id: triggerId, ...rest } : rest
   return { answered: false, status, body }
 }
 

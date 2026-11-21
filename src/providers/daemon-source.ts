@@ -6770,7 +6770,7 @@ async function cmdFollowerOp(ws, id, cmd) {
 function cmdFollowerTriggers(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.triggers: send follower.hello first');
-  sendOk(ws, id, offlineHost.followerTriggers(home, cmd.id));
+  sendOk(ws, id, offlineHost.followerTriggers(home, cmd.triggerId));
 }
 
 async function cmdFollowerTriggerTest(ws, id, cmd) {
@@ -16014,7 +16014,8 @@ function cmdList(ws, id) {
 // ever changes.
 function sendOk(ws, id, data) {
   if (ws && ws.origin === 'follower') data = followerReads.settle(ws, id, data) || data;
-  try { ws.send(JSON.stringify({ id, ok: true, ...data })); } catch {}
+  // The frame's own keys win: an answer field named id or ok never re-addresses it.
+  try { ws.send(JSON.stringify({ ...data, id, ok: true })); } catch {}
 }
 
 // level: an expected refusal (a job restarting) is logged below error.

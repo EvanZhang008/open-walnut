@@ -110,7 +110,7 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
 
   async function hereTriggers(id?: string): Promise<HereTrigger[] | null> {
     try {
-      const r = await deps.request('follower.triggers', id ? { id } : {}, READ_TIMEOUT_MS)
+      const r = await deps.request('follower.triggers', id ? { triggerId: id } : {}, READ_TIMEOUT_MS)
       return r.ok === false || !Array.isArray(r.triggers) ? null : r.triggers as HereTrigger[]
     } catch (err) {
       deps.log('warn', 'replica: this host\'s triggers could not be read', { error: err instanceof Error ? err.message : String(err) })
