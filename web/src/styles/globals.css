@@ -2103,7 +2103,7 @@ select {
      fullscreen panel (9001) and terminal overlay (9999). width + maxHeight are set
      inline from the JS POPOVER_WIDTH constant (single source for the placement math). */
   position: fixed;
-  background: #fff;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
@@ -9113,6 +9113,9 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   overflow-y: auto;
 }
 :root[data-theme="dark"] .stt-dropdown-menu { background: var(--bg-elevated); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .stt-dropdown-menu { background: var(--bg-elevated); }
+}
 .stt-dropdown-group-label {
   padding: 6px 8px 4px;
   font-size: 0.75rem;
@@ -9201,6 +9204,9 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   background: #fff;
 }
 :root[data-theme="dark"] .stt-model-manager { background: var(--bg-secondary); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .stt-model-manager { background: var(--bg-secondary); }
+}
 .stt-model-header h4 { margin: 0 0 2px; font-size: 0.9rem; }
 
 .stt-model-tabs {
@@ -9290,6 +9296,9 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   background: #fff;
 }
 :root[data-theme="dark"] .stt-engine-config { background: var(--bg-secondary); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .stt-engine-config { background: var(--bg-secondary); }
+}
 
 /* ── STT Setup Progress ── */
 
@@ -10183,7 +10192,7 @@ body.walnut-dragging {
 
 .session-plan-card-header:hover .plan-card-expand-btn:hover {
   opacity: 1;
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--bg-hover);
 }
 
 /* Touch devices: always show expand button at low opacity */
@@ -10257,7 +10266,7 @@ body.walnut-dragging {
 .plan-popup-close:hover {
   opacity: 1;
   color: var(--fg);
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--bg-hover);
 }
 
 .plan-popup-body {
@@ -17712,8 +17721,18 @@ a.task-kebab-info:hover {
 [data-theme="dark"] .command-palette-control .command-palette-name {
   color: #fbbf24;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .command-palette-control .command-palette-name {
+    color: #fbbf24;
+  }
+}
 [data-theme="dark"] .command-palette-control .command-palette-desc {
   color: #b59533;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .command-palette-control .command-palette-desc {
+    color: #b59533;
+  }
 }
 
 .command-palette-source-control {
@@ -17723,6 +17742,12 @@ a.task-kebab-info:hover {
 [data-theme="dark"] .command-palette-source-control {
   color: #fbbf24;
   background: rgba(251, 191, 36, 0.15);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .command-palette-source-control {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.15);
+  }
 }
 
 .command-palette-source-app {
@@ -17738,6 +17763,12 @@ a.task-kebab-info:hover {
   color: #22d3ee;
   background: rgba(34, 211, 238, 0.12);
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .command-palette-source-built-in {
+    color: #22d3ee;
+    background: rgba(34, 211, 238, 0.12);
+  }
+}
 
 .command-palette-source-skill {
   color: #6d28d9;
@@ -17746,6 +17777,12 @@ a.task-kebab-info:hover {
 [data-theme="dark"] .command-palette-source-skill {
   color: #a78bfa;
   background: rgba(167, 139, 250, 0.15);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .command-palette-source-skill {
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.15);
+  }
 }
 
 /* ===== "@" File Mention Popup (mini VS Code above chat input) ===== */
@@ -18362,6 +18399,12 @@ a.task-kebab-info:hover {
 [data-theme="dark"] .sps-tag-live {
   background: #1b3a1e;
   color: #81c784;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .sps-tag-live {
+    background: #1b3a1e;
+    color: #81c784;
+  }
 }
 
 .sps-live .sps-path-cwd { opacity: 0.85; }
@@ -21210,6 +21253,12 @@ td.usage-share-col {
   background: rgba(175, 82, 222, 0.18);
   color: #BF5AF2;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .tag-chip {
+    background: rgba(175, 82, 222, 0.18);
+    color: #BF5AF2;
+  }
+}
 
 .tag-chip-inline {
   max-width: 80px;
@@ -21250,6 +21299,12 @@ a.tag-chip:hover {
 :root[data-theme="dark"] a.tag-chip:hover {
   color: #BF5AF2;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) a.tag-chip,
+  :root:not([data-theme]) a.tag-chip:hover {
+    color: #BF5AF2;
+  }
+}
 .tag-chip-link {
   display: inline-flex;
   align-items: center;
@@ -21274,6 +21329,11 @@ a.tag-chip:focus-visible,
 :root[data-theme="dark"] .tag-chip-clickable:hover {
   background: rgba(175, 82, 222, 0.28);
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .tag-chip-clickable:hover {
+    background: rgba(175, 82, 222, 0.28);
+  }
+}
 
 .tag-chip-active {
   background: rgba(175, 82, 222, 0.25);
@@ -21282,6 +21342,12 @@ a.tag-chip:focus-visible,
 :root[data-theme="dark"] .tag-chip-active {
   background: rgba(175, 82, 222, 0.35);
   outline-color: rgba(191, 90, 242, 0.5);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .tag-chip-active {
+    background: rgba(175, 82, 222, 0.35);
+    outline-color: rgba(191, 90, 242, 0.5);
+  }
 }
 
 /* A tag the display rules keep off task pills: still listed in the tag editor, muted and dashed. */
@@ -28514,8 +28580,17 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 [data-theme="dark"] .file-viewer-code .token.doctype,
 [data-theme="dark"] .session-diff-table .token.cdata,
 [data-theme="dark"] .file-viewer-code .token.cdata { color: #8b949e; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.comment,
+  :root:not([data-theme]) .file-viewer-code .token.prolog,
+  :root:not([data-theme]) .file-viewer-code .token.doctype,
+  :root:not([data-theme]) .file-viewer-code .token.cdata { color: #8b949e; }
+}
 [data-theme="dark"] .session-diff-table .token.punctuation,
 [data-theme="dark"] .file-viewer-code .token.punctuation { color: #c9d1d9; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.punctuation { color: #c9d1d9; }
+}
 [data-theme="dark"] .session-diff-table .token.property,
 [data-theme="dark"] .file-viewer-code .token.property,
 [data-theme="dark"] .session-diff-table .token.tag,
@@ -28530,6 +28605,15 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 [data-theme="dark"] .file-viewer-code .token.symbol,
 [data-theme="dark"] .session-diff-table .token.deleted,
 [data-theme="dark"] .file-viewer-code .token.deleted { color: #79c0ff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.property,
+  :root:not([data-theme]) .file-viewer-code .token.tag,
+  :root:not([data-theme]) .file-viewer-code .token.boolean,
+  :root:not([data-theme]) .file-viewer-code .token.number,
+  :root:not([data-theme]) .file-viewer-code .token.constant,
+  :root:not([data-theme]) .file-viewer-code .token.symbol,
+  :root:not([data-theme]) .file-viewer-code .token.deleted { color: #79c0ff; }
+}
 [data-theme="dark"] .session-diff-table .token.selector,
 [data-theme="dark"] .file-viewer-code .token.selector,
 [data-theme="dark"] .session-diff-table .token.attr-name,
@@ -28542,28 +28626,55 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 [data-theme="dark"] .file-viewer-code .token.builtin,
 [data-theme="dark"] .session-diff-table .token.inserted,
 [data-theme="dark"] .file-viewer-code .token.inserted { color: #a5d6ff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.selector,
+  :root:not([data-theme]) .file-viewer-code .token.attr-name,
+  :root:not([data-theme]) .file-viewer-code .token.string,
+  :root:not([data-theme]) .file-viewer-code .token.char,
+  :root:not([data-theme]) .file-viewer-code .token.builtin,
+  :root:not([data-theme]) .file-viewer-code .token.inserted { color: #a5d6ff; }
+}
 [data-theme="dark"] .session-diff-table .token.operator,
 [data-theme="dark"] .file-viewer-code .token.operator,
 [data-theme="dark"] .session-diff-table .token.entity,
 [data-theme="dark"] .file-viewer-code .token.entity,
 [data-theme="dark"] .session-diff-table .token.url,
 [data-theme="dark"] .file-viewer-code .token.url { color: #79c0ff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.operator,
+  :root:not([data-theme]) .file-viewer-code .token.entity,
+  :root:not([data-theme]) .file-viewer-code .token.url { color: #79c0ff; }
+}
 [data-theme="dark"] .session-diff-table .token.atrule,
 [data-theme="dark"] .file-viewer-code .token.atrule,
 [data-theme="dark"] .session-diff-table .token.attr-value,
 [data-theme="dark"] .file-viewer-code .token.attr-value,
 [data-theme="dark"] .session-diff-table .token.keyword,
 [data-theme="dark"] .file-viewer-code .token.keyword { color: #ff7b72; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.atrule,
+  :root:not([data-theme]) .file-viewer-code .token.attr-value,
+  :root:not([data-theme]) .file-viewer-code .token.keyword { color: #ff7b72; }
+}
 [data-theme="dark"] .session-diff-table .token.function,
 [data-theme="dark"] .file-viewer-code .token.function,
 [data-theme="dark"] .session-diff-table .token.class-name,
 [data-theme="dark"] .file-viewer-code .token.class-name { color: #d2a8ff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.function,
+  :root:not([data-theme]) .file-viewer-code .token.class-name { color: #d2a8ff; }
+}
 [data-theme="dark"] .session-diff-table .token.regex,
 [data-theme="dark"] .file-viewer-code .token.regex,
 [data-theme="dark"] .session-diff-table .token.important,
 [data-theme="dark"] .file-viewer-code .token.important,
 [data-theme="dark"] .session-diff-table .token.variable,
 [data-theme="dark"] .file-viewer-code .token.variable { color: #ffa657; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .file-viewer-code .token.regex,
+  :root:not([data-theme]) .file-viewer-code .token.important,
+  :root:not([data-theme]) .file-viewer-code .token.variable { color: #ffa657; }
+}
 
 /* Honor the OS dark preference when no explicit theme is set. */
 @media (prefers-color-scheme: dark) {
@@ -33860,6 +33971,9 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 /* On a dark page the light shadow does not show: a deeper one keeps the lift. */
 [data-theme="dark"] .quote-pin-menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .quote-pin-menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); }
+}
 
 /* The choice: inline or in Tree, each with what it does under its name. */
 .quote-ask-modes {

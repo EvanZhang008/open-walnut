@@ -28,6 +28,9 @@
   color: #8944AB;
 }
 :root[data-theme="dark"] .link-hover-card-kind { color: #BF5AF2; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .link-hover-card-kind { color: #BF5AF2; }
+}
 .link-hover-card-target {
   margin-top: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

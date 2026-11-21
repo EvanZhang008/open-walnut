@@ -26,6 +26,11 @@
 :root[data-theme="dark"] .trigger-picker {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .trigger-picker {
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
+  }
+}
 
 .trigger-picker:focus-visible {
   outline: none;

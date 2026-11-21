@@ -19,6 +19,9 @@
 }
 
 :root[data-theme="dark"] .qb-scrim { background: rgba(0, 0, 0, 0.2); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .qb-scrim { background: rgba(0, 0, 0, 0.2); }
+}
 
 .qb-center {
   position: fixed;

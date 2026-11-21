@@ -92,4 +92,7 @@
 .find-box-layer { position: relative; flex: none; height: 0; z-index: -1; pointer-events: none; }
 .find-box { position: absolute; border-radius: 2px; background-color: rgba(255, 200, 0, 0.38); }
 [data-theme="dark"] .find-box { background-color: rgba(255, 200, 0, 0.32); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .find-box { background-color: rgba(255, 200, 0, 0.32); }
+}
 .find-box.find-box-active { background-color: rgba(255, 145, 0, 0.9); }

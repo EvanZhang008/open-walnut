@@ -11,6 +11,9 @@
   vertical-align: middle;
 }
 :root[data-theme="dark"] .tag-pill-group { background: rgba(175, 82, 222, 0.18); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .tag-pill-group { background: rgba(175, 82, 222, 0.18); }
+}
 .tag-pill-group > .tag-chip { background: transparent; min-width: 0; }
 .tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
 .tag-pill-group > .tag-chip-overflow {

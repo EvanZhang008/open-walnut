@@ -122,7 +122,13 @@
 /* Selected text echoed on the page: a quieter tint than a find match. */
 ::highlight(walnut-page-selmatch) { background-color: rgba(80, 160, 255, 0.28); }
 [data-theme="dark"] ::highlight(walnut-find) { background-color: rgba(255, 200, 0, 0.32); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-find) { background-color: rgba(255, 200, 0, 0.32); }
+}
 [data-theme="dark"] ::highlight(walnut-page-selmatch) { background-color: rgba(100, 170, 255, 0.30); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-page-selmatch) { background-color: rgba(100, 170, 255, 0.30); }
+}
 /* WebKit, in a session chat (page-find.ts BoxPaint): matches are boxes drawn
    behind the text, so the highlight keeps only the active match's dark text;
    what cannot be boxed is painted as `walnut-find-solid`. */
@@ -130,6 +136,9 @@
 [data-find-boxes] ::highlight(walnut-find-active) { background-color: transparent; color: #1a1a1a; }
 ::highlight(walnut-find-solid) { background-color: rgba(255, 200, 0, 0.38); }
 [data-theme="dark"] ::highlight(walnut-find-solid) { background-color: rgba(255, 200, 0, 0.32); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-find-solid) { background-color: rgba(255, 200, 0, 0.32); }
+}
 ::highlight(walnut-find-solid-active) { background-color: rgba(255, 145, 0, 0.9); color: #1a1a1a; }
 
 /* ── Passage comments (from passage-comments.css) ── */
@@ -147,7 +156,13 @@
   text-underline-offset: 3px;
 }
 [data-theme="dark"] ::highlight(walnut-comment) { background-color: rgba(255, 159, 10, 0.2); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-comment) { background-color: rgba(255, 159, 10, 0.2); }
+}
 [data-theme="dark"] ::highlight(walnut-comment-sent) { background-color: rgba(255, 159, 10, 0.1); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-comment-sent) { background-color: rgba(255, 159, 10, 0.1); }
+}
 
 /* ── Document comments (from doc-comments.css) ── */
 /* Comments on a document (DocCommentsLayer): the paint on the commented words,
@@ -185,10 +200,19 @@
 /* Dark theme: the same yellow at full alpha over a dark bubble reads as a block
    of colour and swallows the text, so it goes lighter. */
 [data-theme="dark"] ::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.26); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.26); }
+}
 [data-theme="dark"] ::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.7); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.7); }
+}
 /* The quote pill's HELD passage (QuotePinSelectionBar): the document selection
    collapsed because the composer took focus for dictated text, and the pill keeps
    pointing at these words. Selection-blue on purpose: the reader sees the passage
    they selected, unchanged. */
 ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.30); }
 [data-theme="dark"] ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.38); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.38); }
+}

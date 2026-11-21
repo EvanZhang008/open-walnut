@@ -104,6 +104,9 @@
 /* The headline sits outside .usage-bd, so the stat carries its own copy of the orange slot. */
 .settings-addons-stat[data-direct] { --usage-s2: #c2410c; }
 :root[data-theme="dark"] .settings-addons-stat[data-direct] { --usage-s2: #f08a5d; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .settings-addons-stat[data-direct] { --usage-s2: #f08a5d; }
+}
 .settings-addons-stat[data-direct] .settings-addons-stat-value { color: var(--usage-s2); }
 .settings-addons-stat[data-direct] .settings-addons-stat-label { color: var(--usage-s2); font-weight: 600; }
 /* A fourth figure (Billed directly) joins the row instead of wrapping to a second one. */
