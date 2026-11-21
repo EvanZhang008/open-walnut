@@ -413,7 +413,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/line-read-past-rewrite.test.ts", sleep: "await sleep(200)", reason: "negative: no challenge before the process names any line queued" },
   { file: "tests/providers/line-read-past-rewrite.test.ts", sleep: "await sleep(300)", reason: "negative: a CLI with no lifecycle reports is never challenged" },
   { file: "tests/providers/line-read-past-rewrite.test.ts", sleep: "await sleep(400)", reason: "negative: a line read back as queued is never challenged" },
-  { file: "tests/providers/line-read-past-rewrite.test.ts", sleep: "await sleep(500)", reason: "negative: the rewrite the daemon cannot judge is not asked about again" },
+  { file: "tests/providers/line-read-past-rewrite.test.ts", sleep: "await sleep(300)", reason: "negative: a parked line the daemon could not judge is never probed or written again" },
   { file: "tests/providers/line-unread-park.test.ts", sleep: "await sleep(400)", reason: "negative: no more probes about a parked line" },
   { file: "tests/providers/line-unread-park.test.ts", sleep: "await sleep(2000)", reason: "time under test: a turn that keeps printing for 2 s must not be parked" },
   { file: "tests/providers/line-unread-park.test.ts", sleep: "await sleep(900)", reason: "time under test: the output beat runs 900 ms; the park bound is measured from its last output" },

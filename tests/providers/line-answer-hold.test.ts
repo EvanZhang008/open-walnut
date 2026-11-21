@@ -470,7 +470,9 @@ describe('class guard: every server path that settles a taken line goes through 
     expect(toRan).toHaveLength(2)
     for (const c of toRan) expect(c).toMatch(/this\.settleLineFate\(/)
     // settleLineFate's only handling of ran is settleTakenLine.
-    const ran = src.slice(src.indexOf('private settleLineFate('), src.indexOf('private settleLineFate(') + 2000)
+    // The whole method, however long it grows (a fixed cut once dropped its last branch).
+    const at = src.indexOf('private settleLineFate(')
+    const ran = src.slice(at, src.indexOf('\n  }\n', at) + 4)
     expect(ran).toMatch(/if \(known\.fate === 'ran'\) \{[\s\S]*?this\.settleTakenLine\(/)
     expect(ran).toMatch(/if \(known\.fate === 'unanswered'\) \{ this\.resendUnanswered\(/)
     // The live `started` frame goes to settleTakenLine, never straight to release.
