@@ -43,6 +43,9 @@ export function threadsFromRecords(threads: unknown): ReflectionThread[] {
       ...(str(t.state) ? { state: t.state } : {}), ...(t.closed ? { closed: true } : {}), ...(str(t.reply) ? { reply: t.reply } : {}),
       ...(str(t.replyAt) ? { replyAt: t.replyAt } : {}), ...(str(t.reply_sid) ? { replySid: t.reply_sid } : {}),
       ...(str(t.updatedAt) ? { updatedAt: t.updatedAt } : {}), ...(options.length ? { options } : {}),
+      ...(str(t.askId) ? { askId: t.askId } : {}),
+      // Its card is another's: a task's own ask (judged as that ask), a letter or a choice it shows.
+      ...(t.askOwner || t.reportAsk || t.letter || t.choice ? { cardOfOther: true } : {}),
     }];
   });
 }

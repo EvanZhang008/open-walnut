@@ -22,7 +22,8 @@ import { managedTasks } from './team.js';
 import { collectCandidates, type Candidate, type CandidateDeps } from './candidates.js';
 import { LANGUAGE_GUIDANCE, measureLanguage } from './language.js';
 import { messagesFromAsks, rulesTextOf, threadsFromRecords } from './inputs.js';
-import { readPains, PAIN_TITLES_FOR_JUDGE } from './pains.js';
+import { PAIN_TITLES_FOR_JUDGE } from './pains.js';
+import { readPains } from './pains-store.js';
 import { recordPain } from './pain-record.js';
 
 export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates.js';

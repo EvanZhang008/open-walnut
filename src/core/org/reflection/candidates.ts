@@ -48,6 +48,8 @@ export interface CardOption { label: string; recommended?: boolean }
 export interface ReflectionThread {
   id: string; title: string; messages: ReflectionThreadMessage[]; tasks?: string[];
   state?: string; closed?: boolean; reply?: string; replyAt?: string; replySid?: string; updatedAt?: string; options?: CardOption[];
+  /** The decision the card asks (minted once per ask), and whether its card shows another's words (a task's ask, a letter, a choice). */
+  askId?: string; cardOfOther?: boolean;
 }
 
 export interface Candidate {
@@ -224,22 +226,24 @@ export function cardText(head: string, words: string, options: readonly CardOpti
   const buttons = options?.length
     ? `Buttons: ${options.map((o) => `[${o.label}${o.recommended ? ' (recommended)' : ''}]`).join(' ')}`
     : kind === 'yes_no' ? 'Buttons: [Yes] [No]' : 'Buttons: none (he answers in his own words)';
-  return [head, words.trim() || '(no summary: the card shows only Walnut\'s line that none is written yet)', buttons].filter(Boolean).join('\n');
+  return [head, words.trim() || '(no summary written: the card shows only a line Walnut took from the latest answer)', buttons].filter(Boolean).join('\n');
 }
 
 /**
  * A thread card of the node or a lead in its team waiting on his decision (state needs): judged once
- * per version of the card (its summary and buttons), for whether a reader who never saw the work
+ * per decision (its ask id; with none, its summary and buttons), for whether a reader who never saw the work
  * knows from it what he decides, what is recommended, where the plan is, and can answer with one
  * click (2026-11-21, the user: "what the fucking is the plan"; the card showed one line and no buttons).
  */
 async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
   for (const th of await p.threadsOf(owner.id)) {
-    if (th.state !== 'needs' || th.closed) continue;
+    // A task's own ask is judged as that ask (needsAskCandidate); a letter or a choice is not the thread's words.
+    if (th.state !== 'needs' || th.closed || th.cardOfOther) continue;
     const at = th.replyAt ?? th.updatedAt ?? th.messages[th.messages.length - 1]?.at;
     if (!at || at <= p.floor || p.now - Date.parse(at) < ANSWER_GRACE_MS) continue;
     const text = cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options);
-    const key = `card:${th.id}:${sha12(text)}`;
+    // Once per decision: a summary rewritten for the same ask is not judged again (each rewrite would spend a call).
+    const key = `card:${th.id}:${th.askId ?? sha12(cardText('', th.reply ?? '', th.options))}`;
     if (has(p, key)) continue;
     const since = new Date(p.now - EVIDENCE_MS).toISOString();
     const evidence = th.messages.filter((m) => m.at > since).slice(-EVIDENCE_MAX)

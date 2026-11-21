@@ -4,7 +4,7 @@
  * results where the reflection's nightly note reads them (pains-tests.json, GuardRun).
  *
  * Usage (from a checkout of the repo, the one whose tests count, e.g. a clean one at main):
- *   bun scripts/pain-guards.mjs --registry <pains.json> --out <pains-tests.json> [--dry-run]
+ *   bun scripts/pain-guards.mjs --registry <pains.json> --out <pains-tests.json> [--root <checkout>] [--dry-run]
  *
  * For each entry with a test: no_file when its file is gone, no_test when the file no longer holds
  * a test of that name; otherwise one vitest run over all the named files (the focus config, JSON
@@ -26,7 +26,8 @@ if (!registry || (!outFile && !dry)) {
   process.stderr.write('usage: bun scripts/pain-guards.mjs --registry <pains.json> --out <pains-tests.json> [--dry-run]\n');
   process.exit(2);
 }
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// --root: the checkout whose tests count (default: the one this script is in).
+const root = path.resolve(opt('--root') ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const entries = (JSON.parse(fs.readFileSync(registry, 'utf-8')).entries ?? []).filter((e) => e?.id && e?.test?.file && e?.test?.name);
 
 /** Is `name` a test title in the file's text: a string literal opening a test call (its escaped quotes read as quotes). */
@@ -58,7 +59,8 @@ if (toRun.size && !dry) {
   const byFile = new Map();
   for (const f of json?.testResults ?? []) byFile.set(path.relative(root, f.name), f.assertionResults ?? []);
   for (const [id, t] of toRun) {
-    const tests = (byFile.get(t.rel) ?? []).filter((a) => a.title === t.name || a.fullName === t.name || a.fullName?.endsWith(` ${t.name}`));
+    // The test's own title, exactly (a title built at run time is matched the same way, as it ran).
+    const tests = (byFile.get(t.rel) ?? []).filter((a) => a.title === t.name || a.fullName === t.name);
     if (!tests.length) {
       results[id] = json && !t.literal ? { result: 'no_test', detail: `${t.rel} has no test "${t.name}"` }
         : { result: 'not_run', detail: json ? 'not in the run\'s report' : `vitest gave no report (exit ${run.status}): ${(run.stderr ?? '').slice(-300)}` };

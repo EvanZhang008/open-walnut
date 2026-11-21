@@ -7,16 +7,18 @@
  *   <node folder>/pains.json        the registry (PainFile, schemaVersion 1): what scripts and the pass read
  *   <node folder>/pains.md          the same, as he reads it
  *   <node folder>/pains-tests.json  the guard tests' last run (scripts/pain-guards.mjs), when one runs
+ *   <node folder>/pains/images/     his pictures, by content (images/ stays out of the data sync)
+ *
+ * Paths inside the registry are relative to the node folder, so they hold when the folder moves with
+ * its project. Reading and writing the files: pains-store.ts.
  *
  * A pain with no rule or no test is unowned, whatever status was written: its node hands it on. The
  * nightly note lists what is unowned, and every guard test the last run did not pass, missed, or that
  * has not run for GUARD_RUN_STALE_MS.
  */
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { nodeArtifactsDir } from '../../artifacts/paths.js';
-import { withFileLock } from '../../../utils/file-lock.js';
 
 export const PAIN_SCHEMA_VERSION = 1;
 export const PAIN_STATUSES = ['live', 'in_progress', 'unowned'] as const;
@@ -64,6 +66,10 @@ export interface GuardRun { schemaVersion: 1; at: string; commit?: string; resul
 export const painsFileOf = (nodeId: string): string => path.join(nodeArtifactsDir(nodeId), 'pains.json');
 export const painsMarkdownOf = (nodeId: string): string => path.join(nodeArtifactsDir(nodeId), 'pains.md');
 export const guardRunFileOf = (nodeId: string): string => path.join(nodeArtifactsDir(nodeId), 'pains-tests.json');
+/** His pictures, relative to the node folder (git-sync ignores every images/ folder). */
+export const PAIN_IMAGES_REL = path.join('pains', 'images');
+/** A path the registry holds, as an absolute one: relative ones are the node folder's. Pure but for the folder. */
+export const resolvePainPath = (nodeId: string, p: string): string => (path.isAbsolute(p) ? p : path.join(nodeArtifactsDir(nodeId), p));
 
 export const painId = (seed: string): string => `pn-${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 8)}`;
 
@@ -71,13 +77,16 @@ export const painId = (seed: string): string => `pn-${crypto.createHash('sha256'
 export function lacksGenericDefault(e: Pick<PainEntry, 'scope' | 'rule'>): boolean {
   // Only the product's own code (its default instructions, its gates, its UI) is a default for every
   // user: a rule in USER.md, a team's guidance, a skill or a developer doc is not.
-  return e.scope === 'all_users' && !!e.rule && !/(?:^|[\s(;,'])(?:src|web)\//.test(e.rule.where);
+  return e.scope === 'all_users' && !!e.rule && !/(?:^|[\s(;,'/])(?:src|web\/src)\/(?!AGENTS\.md)/.test(e.rule.where);
 }
 
 /** The status shown: what was written, unless no rule or no test covers it yet. Pure. */
 export function statusOf(e: Pick<PainEntry, 'status' | 'rule' | 'test'>): PainStatus {
   return !e.rule?.where || !e.test?.file || !e.test?.name ? 'unowned' : e.status;
 }
+
+/** The fields this release reads; any other field of an entry is kept as written (pains-store.ts). */
+export const PAIN_KNOWN_KEYS: ReadonlySet<string> = new Set(['id', 'title', 'kind', 'scope', 'scopeWhy', 'firstAt', 'lastAt', 'count', 'quotes', 'rootCause', 'rule', 'test', 'owner', 'status', 'note', 'changedBy']);
 
 const str = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null);
@@ -110,28 +119,17 @@ export function normalizePain(raw: unknown): PainEntry | null {
   };
 }
 
-/** The registry, or [] when there is none or it cannot be read. */
-export async function readPains(nodeId: string): Promise<PainEntry[]> {
-  const raw = await fsp.readFile(painsFileOf(nodeId), 'utf-8').catch(() => null);
-  if (raw === null) return [];
-  try {
-    const f = JSON.parse(raw) as Partial<PainFile>;
-    return Array.isArray(f.entries) ? f.entries.map(normalizePain).filter((x): x is PainEntry => !!x) : [];
-  } catch {
-    return [];
-  }
-}
 
 const STATUS_LABEL: Record<PainStatus, string> = { unowned: 'Unowned (no rule or no test yet)', in_progress: 'In progress', live: 'Live (rule and test in place)' };
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** One entry as pains.md shows it. Pure. */
-export function renderPain(e: PainEntry, run?: GuardRun | null): string {
+export function renderPain(e: PainEntry, run?: GuardRun | null, resolve: (p: string) => string = (p) => p): string {
   const g = e.test ? run?.results[e.id] : undefined;
   return [
     `### ${e.title} (${e.id})`,
     `- Scope: ${e.scope === 'all_users' ? 'every user would meet it' : 'only this user'}${e.scopeWhy ? ` (${e.scopeWhy})` : ''}. Kind: ${e.kind}. Said ${e.count} time${e.count === 1 ? '' : 's'}, ${e.firstAt.slice(0, 10)} to ${e.lastAt.slice(0, 10)}.`,
-    ...e.quotes.map((q) => `- His words (${q.at.slice(0, 16).replace('T', ' ')}${q.taskId ? `, task ${q.taskId}` : ''}${q.threadId ? `, thread ${q.threadId}` : ''}): "${oneLine(q.text)}"${q.images?.length ? ` Screenshot: ${q.images.join(', ')}` : ''}`),
+    ...e.quotes.map((q) => `- His words (${q.at.slice(0, 16).replace('T', ' ')}${q.taskId ? `, task ${q.taskId}` : ''}${q.threadId ? `, thread ${q.threadId}` : ''}): "${oneLine(q.text)}"${q.images?.length ? ` Screenshot: ${q.images.map(resolve).join(', ')}` : ''}`),
     `- Root cause: ${e.rootCause ?? 'not found yet'}`,
     `- Rule: ${e.rule ? `${e.rule.where}${e.rule.text ? `: ${oneLine(e.rule.text)}` : ''}` : 'none yet'}`,
     ...(lacksGenericDefault(e) ? ['- Generic default: missing (the rule is not in the product\'s code or default instructions, so other users do not get it)'] : []),
@@ -143,7 +141,7 @@ export function renderPain(e: PainEntry, run?: GuardRun | null): string {
 }
 
 /** The whole of pains.md. Pure. */
-export function renderPains(nodeName: string, entries: readonly PainEntry[], run?: GuardRun | null): string {
+export function renderPains(nodeName: string, entries: readonly PainEntry[], run?: GuardRun | null, resolve?: (p: string) => string): string {
   const head = [
     `# Pain registry: ${nodeName}`,
     '',
@@ -155,7 +153,7 @@ export function renderPains(nodeName: string, entries: readonly PainEntry[], run
   // What needs someone first: unowned, then in progress, then live.
   const body = [...PAIN_STATUSES].reverse().flatMap((s) => {
     const of = entries.filter((e) => statusOf(e) === s).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-    return of.length ? [`## ${STATUS_LABEL[s]}`, '', ...of.map((e) => renderPain(e, run))] : [];
+    return of.length ? [`## ${STATUS_LABEL[s]}`, '', ...of.map((e) => renderPain(e, run, resolve))] : [];
   });
   return [...head, ...body].join('\n');
 }
@@ -176,40 +174,8 @@ export function guardRunOf(raw: unknown): GuardRun | null {
   return { schemaVersion: 1, at, ...(r && str(r.commit) ? { commit: r.commit.slice(0, 64) } : {}), results: out };
 }
 
-export async function readGuardRun(nodeId: string): Promise<GuardRun | null> {
-  try {
-    return guardRunOf(JSON.parse(await fsp.readFile(guardRunFileOf(nodeId), 'utf-8')));
-  } catch {
-    return null;
-  }
-}
 
-/** Keep a guard run's results, then show them in pains.md. */
-export async function writeGuardRun(nodeId: string, nodeName: string, run: GuardRun, nowMs: number): Promise<void> {
-  const file = guardRunFileOf(nodeId);
-  await fsp.mkdir(path.dirname(file), { recursive: true });
-  await fsp.writeFile(`${file}.${process.pid}.tmp`, `${JSON.stringify(run, null, 2)}\n`, 'utf-8');
-  await fsp.rename(`${file}.${process.pid}.tmp`, file);
-  await updatePains(nodeId, nodeName, (entries) => entries, nowMs);
-}
 
-/** Write the registry (JSON, then the Markdown) under the JSON's lock; `change` gets the entries as read. */
-export async function updatePains(nodeId: string, nodeName: string, change: (entries: PainEntry[]) => PainEntry[], nowMs: number): Promise<PainEntry[]> {
-  const file = painsFileOf(nodeId);
-  let out: PainEntry[] = [];
-  await withFileLock(file, async () => {
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    out = change(await readPains(nodeId));
-    const data: PainFile = { schemaVersion: PAIN_SCHEMA_VERSION, nodeId, nodeName, updatedAt: new Date(nowMs).toISOString(), entries: out };
-    const tmp = `${file}.${process.pid}.tmp`;
-    await fsp.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
-    await fsp.rename(tmp, file);
-    const md = painsMarkdownOf(nodeId);
-    await fsp.writeFile(`${md}.${process.pid}.tmp`, renderPains(nodeName, out, await readGuardRun(nodeId)), 'utf-8');
-    await fsp.rename(`${md}.${process.pid}.tmp`, md);
-  });
-  return out;
-}
 
 /** A complaint the reflection found, as the registry takes it. */
 export interface PainReport {

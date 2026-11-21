@@ -10,7 +10,9 @@ import fsp from 'node:fs/promises';
 import type { Task } from '../../types.js';
 import { handedToLine, readDayEntries, reflectionDayFileOf, ruleLine, type DayEntry } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
-import { painsFileOf, painsNightlyText, painsReport, readGuardRun, readPains } from './pains.js';
+import crypto from 'node:crypto';
+import { painsFileOf, painsNightlyText, painsReport } from './pains.js';
+import { readGuardRun, readPainsFile } from './pains-store.js';
 
 /** Minutes after local midnight: before the VPs' 20:00 reflection routines. */
 export const NIGHTLY_AT_MIN = 19 * 60 + 45;
@@ -72,16 +74,21 @@ export function nightlyText(nodeName: string, file: string, record: string | rea
 
 /** The pain registry's lines for tonight: its unowned pains and the guard tests not known to pass ('' for none). */
 export async function painsNightly(nodeId: string, nowMs: number): Promise<string> {
-  const entries = await readPains(nodeId);
-  if (!entries.length) return '';
+  const read = await readPainsFile(nodeId);
+  if (read.state === 'missing') return '';
+  // A registry that cannot be read is never written over: someone must fix it, so it is said.
+  if (read.state === 'bad') return `Pain registry (${painsFileOf(nodeId)}): it cannot be read and no complaint is filed until it is fixed: ${read.why}.`;
+  if (!read.entries.length) return '';
   const run = await readGuardRun(nodeId);
-  return painsNightlyText(painsFileOf(nodeId), painsReport(entries, run, nowMs), run);
+  return painsNightlyText(painsFileOf(nodeId), painsReport(read.entries, run, nowMs), run);
 }
+
+const hashOf = (t: string) => crypto.createHash('sha256').update(t).digest('hex').slice(0, 16);
 
 /** The day's note with the registry's part after it; a day with no finding has only the registry's. Pure. */
 export function withPains(day: string, pains: string, nodeName: string): string {
   if (!pains) return day;
-  return day ? `${day}\n\n${pains}` : `${nodeName}'s reflection found no new decision to fix today, but its pain registry needs you.\n\n${pains}\n\nNo reply is needed.`;
+  return day ? `${day}\n\n${pains}` : `${nodeName}'s reflection found no new decision to fix today, but its pain registry needs you.\n\n${pains}`;
 }
 
 /** Send today's record to the node once, after NIGHTLY_AT_MIN. Answers what it did. */
@@ -94,7 +101,12 @@ export async function nightlyNote(node: Task, nodeName: string, nowMs: number, s
   const record = { markdown: await fsp.readFile(file, 'utf-8').catch(() => ''), entries: (await readDayEntries(node.id, date)) ?? [] };
   // Marked first: a send that fails is not sent again tonight (the record stays for tomorrow's reading).
   await updateReflectionState(node.id, (s) => { s.nightly = date; }, nowMs);
-  const pains = await painsNightly(node.id, nowMs).catch(() => '');
+  // The registry's part goes out when it changed since the last note that carried it: an unchanged
+  // list is never sent again (every note wakes the node's session).
+  const painsNow = await painsNightly(node.id, nowMs).catch(() => '');
+  const painsHash = painsNow ? hashOf(painsNow) : '';
+  const pains = painsNow && painsHash !== (await readReflectionState(node.id, nowMs)).painsNote ? painsNow : '';
+  if (pains) await updateReflectionState(node.id, (s) => { s.painsNote = painsHash; }, nowMs);
   const found = dayLines(record.markdown, record.entries).length > 0;
   if (!found && !pains) return 'none';
   const text = withPains(found ? nightlyText(nodeName, file, record) : '', pains, nodeName);

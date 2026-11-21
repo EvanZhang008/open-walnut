@@ -34,6 +34,8 @@ export interface ReflectionState {
   skills: { date: string; count: number };
   /** The last local date whose record went to the node's own session (nightly.ts). */
   nightly?: string;
+  /** The pain registry's part of the last nightly note that carried one (a hash): an unchanged part is not sent again. */
+  painsNote?: string;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
@@ -70,6 +72,7 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     removed: Array.isArray(r.removed) ? r.removed.filter((s): s is string => typeof s === 'string') : [],
     skills: r.skills?.date === today && Number.isFinite(r.skills.count) ? r.skills : { date: today, count: 0 },
     ...(typeof r.nightly === 'string' ? { nightly: r.nightly } : {}),
+    ...(typeof r.painsNote === 'string' ? { painsNote: r.painsNote } : {}),
   };
 }
 

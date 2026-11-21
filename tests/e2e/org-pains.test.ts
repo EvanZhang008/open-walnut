@@ -13,7 +13,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-org-pains'))
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import { IMAGES_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask } from '../../src/core/task-manager.js'
 
@@ -44,7 +44,7 @@ describe('the pain registry routes', () => {
   it('adds pains, takes a rule and a test, records a guard run, and refuses a task that is no node', async () => {
     const vp = await api<{ task: { id: string } }>('POST', '/org/vps', { name: 'Lagoon' })
     const id = vp.json.task.id
-    const pic = path.join(WALNUT_HOME, 'pics', '1795-pier.png')
+    const pic = path.join(IMAGES_DIR, '1795-pier.png')
     await fs.mkdir(path.dirname(pic), { recursive: true })
     await fs.writeFile(pic, 'png')
     const pain = { id: 'pn-01', title: 'Cards lose their reply', kind: 'regression', scope: 'all_users', firstAt: '2026-11-20T10:00:00Z', lastAt: '2026-11-20T10:00:00Z', count: 1, status: 'unowned', quotes: [{ at: '2026-11-20T10:00:00Z', text: 'the reply is gone', images: [pic] }] }
@@ -58,8 +58,8 @@ describe('the pain registry routes', () => {
     let read = await api<{ entries: Entry[]; markdown: string }>('GET', `/org/nodes/${id}/pains`)
     expect(read.json.entries[0]).toMatchObject({ id: 'pn-01', shown: 'unowned' })
     const kept = read.json.entries[0].quotes[0].images![0]
-    expect(kept).not.toBe(pic)
-    expect(await fs.readFile(kept, 'utf-8')).toBe('png')
+    expect(kept).toMatch(/^pains\/images\//)
+    expect(await fs.readFile(path.join(path.dirname(read.json.markdown), kept), 'utf-8')).toBe('png')
 
     const patched = await api<{ entry: Entry }>('PATCH', `/org/nodes/${id}/pains/pn-01`, {
       rule: { where: 'src/core/x.ts', text: 'Keep the reply.' }, test: { file: 'tests/core/x.test.ts', name: 'keeps the reply' }, status: 'live',
@@ -76,6 +76,15 @@ describe('the pain registry routes', () => {
     read = await api<{ entries: Entry[]; markdown: string; guardRun: { results: Record<string, { result: string }> } }>('GET', `/org/nodes/${id}/pains`)
     expect(read.json.guardRun.results['pn-01'].result).toBe('failed')
     expect(await fs.readFile(read.json.markdown, 'utf-8')).toContain('(last run: failed, expected 1)')
+
+    // A registry hand-edited into broken JSON is never written over: the write answers 409.
+    const file = (read.json as unknown as { file: string }).file
+    await fs.writeFile(file, '{ "entries": [ ,')
+    const refused = await api<{ code: string }>('PATCH', `/org/nodes/${id}/pains/pn-01`, { note: 'x' })
+    expect(refused.status).toBe(409)
+    expect(refused.json.code).toBe('registry_unreadable')
+    expect(await fs.readFile(file, 'utf-8')).toBe('{ "entries": [ ,')
+    expect((await api<{ state: string }>('GET', `/org/nodes/${id}/pains`)).json.state).toBe('bad')
 
     const plain = await addTask({ title: 'Just a task' })
     expect((await api('GET', `/org/nodes/${plain.task.id}/pains`)).status).toBe(404)

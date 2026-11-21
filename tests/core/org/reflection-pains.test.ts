@@ -12,12 +12,14 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reflection-pains'))
 
-import { WALNUT_HOME } from '../../../src/constants.js'
+import { IMAGES_DIR, WALNUT_HOME } from '../../../src/constants.js'
 import type { Task } from '../../../src/core/types.js'
 import {
-  addComplaint, guardRunOf, lacksGenericDefault, normalizePain, painsFileOf, painsMarkdownOf, painsNightlyText, painsReport, readPains, renderPains, statusOf,
-  guardRunFileOf, GUARD_RUN_STALE_MS, PAIN_QUOTES_MAX, type PainEntry, type PainReport,
+  addComplaint, guardRunOf, lacksGenericDefault, normalizePain, painsFileOf, painsMarkdownOf, painsNightlyText, painsReport, renderPains, statusOf,
+  resolvePainPath, GUARD_RUN_STALE_MS, PAIN_QUOTES_MAX, type PainEntry, type PainReport,
 } from '../../../src/core/org/reflection/pains.js'
+import { readPains, updatePains, writeGuardRun, readGuardRun } from '../../../src/core/org/reflection/pains-store.js'
+import { importPains } from '../../../src/core/org/reflection/pain-record.js'
 import { reflectForNode, type ReflectDeps } from '../../../src/core/org/reflection/pipeline.js'
 import { cardText, collectCandidates, type ReflectionThread } from '../../../src/core/org/reflection/candidates.js'
 import { verifyFinding } from '../../../src/core/org/reflection/judge.js'
@@ -124,6 +126,8 @@ describe('what the registry flags', () => {
     expect(lacksGenericDefault({ ...all, rule: { where: '/x/guidance.md line 3', text: '' } })).toBe(true)
     expect(lacksGenericDefault({ ...all, rule: { where: '.claude/skills/ui/SKILL.md rule 4', text: '' } })).toBe(true)
     expect(lacksGenericDefault({ ...all, rule: { where: 'src/core/team-charter.ts line 58; USER.md', text: '' } })).toBe(false)
+    expect(lacksGenericDefault({ ...all, rule: { where: '/x/walnut/src/core/a.ts', text: '' } })).toBe(false)
+    expect(lacksGenericDefault({ ...all, rule: { where: 'web/src/AGENTS.md', text: '' } })).toBe(true)
     expect(lacksGenericDefault({ scope: 'only_him', rule: { where: 'USER.md', text: '' } })).toBe(false)
     expect(lacksGenericDefault({ ...all })).toBe(false)
   })
@@ -168,12 +172,24 @@ describe('the nightly report of the registry', () => {
     expect(await nightlyNote(node, 'Marina VP', evening.getTime(), async (_n, text) => { sent.push(text); return true })).toBe('sent')
     expect(sent[0]).toContain('no rule or no guard test yet')
     expect(sent[0]).toContain('Cards lose their reply')
+    // The next night, the same list is not sent again.
+    const next = evening.getTime() + 24 * 3600_000
+    expect(await nightlyNote(node, 'Marina VP', next, async (_n, text) => { sent.push(text); return true })).toBe('none')
+  })
+
+  it('a registry that cannot be read is said in the note', async () => {
+    await fs.mkdir(path.dirname(painsFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(painsFileOf(vp.id), '{ broken')
+    const sent: string[] = []
+    const evening = new Date(NOW); evening.setHours(21, 0, 0, 0)
+    await nightlyNote({ ...vp }, 'Marina VP', evening.getTime(), async (_n, text) => { sent.push(text); return true })
+    expect(sent[0]).toContain('it cannot be read and no complaint is filed until it is fixed')
   })
 })
 
 describe('a finding with his words goes to the registry', () => {
   it('a new pain from the judge, his picture kept next to it, then a second complaint the judge matched', async () => {
-    const pic = path.join(WALNUT_HOME, 'tmp-images', '1795-card.png')
+    const pic = path.join(IMAGES_DIR, '1795-card.png')
     await fs.mkdir(path.dirname(pic), { recursive: true })
     await fs.writeFile(pic, 'png')
     const first = { id: 'u1', at: iso(100), text: 'The reply under the card used to show.', images: [pic] }
@@ -181,10 +197,12 @@ describe('a finding with his words goes to the registry', () => {
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
     const [pain] = await readPains(vp.id)
     expect(pain).toMatchObject({ title: 'Cards lose their reply', scope: 'all_users', status: 'unowned', count: 1, owner: { taskId: worker.id } })
-    expect(pain.rule?.where).toContain('guidance.md line 1')
+    expect(pain.rule).toEqual({ where: 'guidance.md', text: 'Keep what a card showed when its layout changes.' })
+    // Kept next to the registry by content, as a path relative to the node folder (it moves with its project).
     const kept = pain.quotes[0].images![0]
-    expect(kept).not.toBe(pic)
-    expect(await fs.readFile(kept, 'utf-8')).toBe('png')
+    expect(kept).toMatch(/^pains\/images\/[0-9a-f]{16}\.png$/)
+    expect(await fs.readFile(resolvePainPath(vp.id, kept), 'utf-8')).toBe('png')
+    expect(await fs.readFile(painsMarkdownOf(vp.id), 'utf-8')).toContain(resolvePainPath(vp.id, kept))
     expect(await fs.readFile(painsMarkdownOf(vp.id), 'utf-8')).toContain('Cards lose their reply')
     const day = await readDayEntries(vp.id, localDate(NOW))
     expect(day![0].pain).toMatchObject({ id: pain.id, isNew: true })
@@ -199,12 +217,91 @@ describe('a finding with his words goes to the registry', () => {
     expect(after[0].count).toBe(2)
   })
 
+  it('a finding the judge names no pain for is no complaint: nothing is filed', async () => {
+    const { d } = deps({ messages: [{ id: 'u1', at: iso(100), text: 'The reply under the card used to show.' }], answers: [verdict(null)] })
+    const r = await reflectForNode(vp, 'Marina VP', [vp, worker], d)
+    expect(r.findings[0].verdict.verdict).toBe('bad_decision')
+    expect(await readPains(vp.id)).toEqual([])
+    expect((await readDayEntries(vp.id, localDate(NOW)))![0].pain).toBeUndefined()
+  })
+
   it('a pain id the judge was not shown opens a new pain, never a guess', () => {
     const v = verifyFinding(verdict({ same_as: 'pn-made-up', title: 'X', scope: 'only_him' }), {
       signal: 'regression', sessionText: BEFORE, userText: 'it used to show', rulesText: '', guidance: [], pains: [{ id: 'pn-real', title: 'Y' }],
     })
     expect(v.verdict).toBe('bad_decision')
     expect(v.verdict === 'bad_decision' && v.finding.pain).toEqual({ same_as: '', title: 'X', scope: 'only_him' })
+  })
+})
+
+describe('the registry is never written over what it cannot read', () => {
+  const seed = async (text: string) => {
+    await fs.mkdir(path.dirname(painsFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(painsFileOf(vp.id), text)
+  }
+  const one = () => addComplaint([], report()).entries[0]
+
+  it('a pains.json that does not parse refuses the write and is left as it is', async () => {
+    const broken = `{"schemaVersion":1,"entries":[${JSON.stringify(one())},]}`
+    await seed(broken)
+    await expect(updatePains(vp.id, 'Marina VP', (e) => [...e, one()], NOW)).rejects.toThrow(/not changed: it is not valid JSON/)
+    expect(await fs.readFile(painsFileOf(vp.id), 'utf-8')).toBe(broken)
+  })
+
+  it('a file a newer release wrote is refused too, never downgraded', async () => {
+    await seed(JSON.stringify({ schemaVersion: 2, entries: [one()] }))
+    await expect(updatePains(vp.id, 'Marina VP', (e) => e, NOW)).rejects.toThrow(/newer Walnut/)
+  })
+
+  it('fields this release does not read, and entries it cannot read, are kept', async () => {
+    const e = { ...one(), severity: 'high', tests: [{ file: 'a' }] }
+    const odd = { title: 'no id', quotes: [{ at: iso(1), text: 'his words' }] }
+    await seed(JSON.stringify({ schemaVersion: 1, entries: [e, odd] }))
+    await updatePains(vp.id, 'Marina VP', (x) => x.map((p) => ({ ...p, note: 'seen' })), NOW)
+    const back = JSON.parse(await fs.readFile(painsFileOf(vp.id), 'utf-8'))
+    expect(back.entries[0]).toMatchObject({ severity: 'high', tests: [{ file: 'a' }], note: 'seen' })
+    expect(back.entries[1]).toEqual(odd)
+  })
+
+  it('a known field cleared stays cleared (the written-over copy never brings it back)', async () => {
+    await seed(JSON.stringify({ schemaVersion: 1, entries: [{ ...one(), test: { file: 'tests/a.test.ts', name: 'a' } }] }))
+    await updatePains(vp.id, 'Marina VP', (x) => x.map(({ test: _t, ...p }) => p), NOW)
+    expect((await readPains(vp.id))[0].test).toBeUndefined()
+  })
+
+  it('guard runs written at once all land, and the last is the one kept', async () => {
+    await seed(JSON.stringify({ schemaVersion: 1, entries: [one()] }))
+    const runs = [1, 2, 3].map((i) => ({ schemaVersion: 1 as const, at: iso(10 - i), results: { x: { result: 'passed' as const, detail: String(i) } } }))
+    const done = await Promise.allSettled(runs.map((r) => writeGuardRun(vp.id, 'Marina VP', r, NOW)))
+    expect(done.map((d) => d.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled'])
+    expect((await readGuardRun(vp.id))?.results.x.detail).toMatch(/^[123]$/)
+    expect((await fs.readdir(path.dirname(painsFileOf(vp.id)))).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+})
+
+describe('his pictures', () => {
+  const pain = (id: string, image: string): PainEntry => ({ ...addComplaint([], report()).entries[0], id, quotes: [{ at: iso(1), text: id, images: [image] }] })
+
+  it('two pictures of the same name stay two, and a pain already there is not copied again', async () => {
+    for (const [dir, body] of [['x1', 'AAA'], ['x2', 'BBB']]) {
+      await fs.mkdir(path.join(IMAGES_DIR, dir), { recursive: true })
+      await fs.writeFile(path.join(IMAGES_DIR, dir, 'screenshot.png'), body)
+    }
+    await importPains(vp.id, 'Marina VP', [pain('pn-i1', path.join(IMAGES_DIR, 'x1', 'screenshot.png')), pain('pn-i2', path.join(IMAGES_DIR, 'x2', 'screenshot.png'))], NOW)
+    const [a, b] = await readPains(vp.id)
+    expect(await fs.readFile(resolvePainPath(vp.id, a.quotes[0].images![0]), 'utf-8')).toBe('AAA')
+    expect(await fs.readFile(resolvePainPath(vp.id, b.quotes[0].images![0]), 'utf-8')).toBe('BBB')
+    await fs.writeFile(path.join(IMAGES_DIR, 'x1', 'screenshot.png'), 'CHANGED')
+    expect(await importPains(vp.id, 'Marina VP', [pain('pn-i1', path.join(IMAGES_DIR, 'x1', 'screenshot.png'))], NOW)).toMatchObject({ kept: ['pn-i1'] })
+    expect(await fs.readFile(resolvePainPath(vp.id, (await readPains(vp.id))[0].quotes[0].images![0]), 'utf-8')).toBe('AAA')
+  })
+
+  it('a picture outside Walnut\'s own places is not copied, only its path kept', async () => {
+    const outside = path.join(WALNUT_HOME, '..', `elsewhere-${process.pid}.png`)
+    await fs.writeFile(outside, 'x')
+    await importPains(vp.id, 'Marina VP', [pain('pn-o', outside)], NOW)
+    expect((await readPains(vp.id))[0].quotes[0].images).toEqual([outside])
+    await fs.rm(outside, { force: true })
   })
 })
 
@@ -228,6 +325,29 @@ describe('a thread card waiting on his decision', () => {
     expect(c.ask!.text).toContain('(no summary')
     expect(await cands([card({ state: 'answered' })])).toHaveLength(0)
     expect(await cands([card({ closed: true })])).toHaveLength(0)
+  })
+
+  it('is judged once per decision: a summary rewritten for the same ask is not judged again', async () => {
+    const [c] = await cands([card({ askId: 'ask-1', reply: 'First summary.' })])
+    expect(c.key).toBe('card:th-pk01:ask-1')
+    expect(await cands([card({ askId: 'ask-1', reply: 'Rewritten summary.' })], new Set([c.key]))).toHaveLength(0)
+    expect(await cands([card({ askId: 'ask-2', reply: 'Rewritten summary.' })], new Set([c.key]))).toHaveLength(1)
+  })
+
+  it('a card that shows a task\'s own ask, a letter or a choice is left to those', async () => {
+    expect(await cands([card({ reply: 'x', cardOfOther: true })])).toHaveLength(0)
+    const [t] = threadsFromRecords([{ id: 'th-1', title: 'T', state: 'needs', messages: [], askOwner: { task: 'w-1', at: iso(1) } }])
+    expect(t.cardOfOther).toBe(true)
+  })
+
+  it('a session\'s ask shows him its buttons, and keeps the key it had before', async () => {
+    const asking = { ...worker, user_status: { state: 'needs', source: 'session', ask: 'Ship the pier page now?', at: iso(30), askSessionId: 'sess-1',
+      askForm: { summary: 'Ship the pier page now?', kind: 'single', options: [{ id: 'a', label: 'Ship it', recommended: true }, { id: 'b', label: 'Wait' }] } } } as unknown as Task
+    const { candidates } = await collectCandidates(vp, [vp, asking], iso(600), new Set(), deps().d)
+    const ask = candidates.find((c) => c.signal === 'needs_ask' && c.task.id === worker.id)!
+    expect(ask.ask!.text).toContain('Buttons: [Ship it (recommended)] [Wait]')
+    const crypto = await import('node:crypto')
+    expect(ask.key).toBe(`ask:${worker.id}:session:${crypto.createHash('sha256').update('Ship the pier page now?').digest('hex').slice(0, 12)}`)
   })
 
   it('its buttons show which one is recommended', () => {
