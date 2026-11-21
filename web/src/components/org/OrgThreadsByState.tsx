@@ -9,6 +9,7 @@
  * The chips stay at the top of the pane while a long group scrolls (sticky, org-threads.css), and a
  * card that leaves the group on screen leaves a line in its place for a few seconds (thread-moves.ts).
  */
+import { focusUnlessTyping } from '@/utils/focus-unless-typing';
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { OrgThread } from '@/api/org-threads';
 import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
@@ -32,7 +33,7 @@ function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove
     const id = window.setTimeout(() => {
       const li = ref.current;
       if (li?.contains(document.activeElement)) {
-        li.closest('[data-testid="org-thread-groups"]')?.querySelector<HTMLElement>('[data-testid="org-threads-chip"][aria-pressed="true"]')?.focus({ preventScroll: true });
+        focusUnlessTyping(li.closest('[data-testid="org-thread-groups"]')?.querySelector<HTMLElement>('[data-testid="org-threads-chip"][aria-pressed="true"]'));
       }
       onDone(m.id);
     }, MOVE_NOTE_MS);
