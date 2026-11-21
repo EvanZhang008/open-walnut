@@ -206,6 +206,20 @@ writes 0 of 10 void, hold p50 39 ms, p95 50 ms; with an ungated append every sec
 void; every 200 ms, 2 of 10 void. The real server test (`tests/e2e/standby-real-server.test.ts`)
 gives 0 of 8 void, hold p50 28 ms, p95 61 ms.
 
+The same 20 GB home, 10 incremental batches each, before (mac/main at 2026-11-21) and after
+the patched large files and the append-only marks:
+
+| What | Before | After |
+|---|---|---|
+| Incremental batch time | p50 32.1 s, p95 41.1 s | p50 23.7 s, p95 24.7 s |
+| Written into the copy's files by the process per batch | the changed files whole (1.5 GB) | p50 2.6 MB (20 files patched) |
+| Disk writes per batch (`/proc/self/io`) | p50 1,485 MB | p50 1,479 MB: ext4 has no reflink, so the clone is a kernel copy of the whole file |
+| Hold | p50 89 ms, p95 158 ms | p50 82 ms, p95 96 ms |
+| An ungated append every 20 ms to the session audit log | 10 of 10 void | 0 of 10 void (8,819 appends during the batches) |
+
+On APFS the clone shares the blocks, so the disk writes should fall to the patched chunks too:
+not measured yet.
+
 **Writes the gate does not hold** void a batch when they land on a file between the moment
 and its read, unless the file is marked append-only (above). Before the marks, one append
 every 20 ms to the session audit log voided every batch.
