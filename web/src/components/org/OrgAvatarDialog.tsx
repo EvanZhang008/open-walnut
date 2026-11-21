@@ -1,6 +1,6 @@
 /**
- * "Edit name and avatar…" from an Org row's right-click (the "Org avatars" experiment). One
- * dialog: the name (a VP's own name, or the task's title), and the avatar three ways:
+ * "Edit name and avatar…" from an Org row's right-click. One dialog: the name (a VP's own name,
+ * or the task's title), and the avatar three ways:
  *
  *   Presets      the org's characters; pick one, then its colour. A dot marks a pair another node
  *                wears already (it can still be picked).

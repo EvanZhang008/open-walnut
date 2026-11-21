@@ -610,7 +610,7 @@ export function OrgPage() {
   // short (2026-10-26, the user: "too messy"): a list of VPs or projects is one row that opens a
   // picker at the cursor, the way a folder menu's Project row does.
   const picker = useCursorFlyout<OrgRowPick>();
-  // "Edit name and avatar…" (the "Org avatars" experiment; off, the menu has no such row).
+  // "Edit name and avatar…" on every row that stands for a task.
   const avatarEditor = useAvatarEditor(channels.rows);
   const rowMenu = useCallback((target: ChannelMenuTarget, point: CursorPoint, origin: HTMLElement | null): ContextMenuItem[] =>
     orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin), newDirector: leaders.directors ? (key) => askNewDirector(key, 'list') : undefined, editAvatar: avatarEditor.edit }),
@@ -662,7 +662,6 @@ export function OrgPage() {
           routers={filterChannels(channels.routers, query)}
           moved={moved}
           rowMenu={rowMenu}
-          routerMenu={!!avatarEditor.edit}
           total={channels.rows.length}
           vps={vpCount(channels.rows)}
           selectedKey={phone ? null : topicId ? nodeParam : selected.key}

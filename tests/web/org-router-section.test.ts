@@ -126,7 +126,7 @@ describe('the Routers section in the Org list', () => {
   })
 
   it('selects a router like a node: onSelect, never onOpenTask', () => {
-    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} onMenu=\{routerMenu \? onMenu : undefined\} \/>/)
+    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} onMenu=\{onMenu\} \/>/)
     expect(section).not.toMatch(/onOpenTask/)
   })
 

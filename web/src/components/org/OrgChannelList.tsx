@@ -28,7 +28,7 @@ import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { askCount, avatarColor, type ChannelRow, type ChannelState, type MovedRow, shownName } from './org-channels-model';
+import { askCount, type ChannelRow, type ChannelState, type MovedRow, shownName } from './org-channels-model';
 import { usePointerHold } from './hold-order';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { OrgEditableName } from './OrgEditableName';
@@ -187,7 +187,7 @@ function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly Move
           onClick={() => onSelect(m.vpKey)}
           onContextMenu={onMenu ? (e) => onMenu(e, { moved: m }) : undefined}
         >
-          <NodeAvatar taskId={undefined} name={m.project} size={26} color={avatarColor(m.project)} className="is-moved" />
+          <NodeAvatar taskId={undefined} name={m.project} size={26} className="is-moved" />
           <span className="org-channel-mid">
             <span className="org-channel-name">{m.project}</span>
             <span className="org-channel-latest" data-testid="org-moved-line">
@@ -229,12 +229,10 @@ interface Props {
   onToggleLock?: (taskId: string) => void;
   /** The Directors under a VP's row (org-leaders.ts) and its projects; absent while the experiment is off. */
   directors?: OrgDirectorsView;
-  /** The routers' rows open the row menu too (its only item for them is the avatar editor). */
-  routerMenu?: boolean;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, directors, routerMenu, now }: Props) {
+export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, keptOf, openTaskIds, onUnwatch, onToggleLock, directors, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   const sections = orgName.settings.directorsLayout === 'sections';
@@ -336,7 +334,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         ))}
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
-        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={routerMenu ? onMenu : undefined} />
+        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={onMenu} />
         <OrgTopicsSection topics={topics} selectedKey={selectedKey} now={now} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>

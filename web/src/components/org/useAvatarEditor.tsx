@@ -1,19 +1,16 @@
 /**
- * The Org page's "Edit name and avatar…" (the "Org avatars" experiment): which row it is for,
- * how its name is changed, and the dialog itself. Off, `edit` is undefined and the row menu
- * shows no such row. It never reads the whole task store (tasks-context-readers-ratchet): the
+ * The Org page's "Edit name and avatar…": which row it is for, how its name is changed, and the
+ * dialog itself. It never reads the whole task store (tasks-context-readers-ratchet): the
  * dialog reads its one row, and a rename goes through the store's writers.
  */
 import { useState, type ReactNode } from 'react';
 import { editOrgNode } from '@/api/org';
 import { useTaskStoreActions } from '@/contexts/TasksContext';
-import { useExperimental } from '@/hooks/useExperimental';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { rowTaskId, type ChannelRow, shownName } from './org-channels-model';
 import { OrgAvatarDialog, type AvatarDialogTarget, type RenameKind } from './OrgAvatarDialog';
 
 export function useAvatarEditor(rows: readonly ChannelRow[]): { edit: ((row: ChannelRow) => void) | undefined; dialog: ReactNode } {
-  const on = useExperimental('org_avatars');
   const actions = useTaskStoreActions();
   const [target, setTarget] = useState<AvatarDialogTarget | null>(null);
 
@@ -30,7 +27,7 @@ export function useAvatarEditor(rows: readonly ChannelRow[]): { edit: ((row: Cha
   }, [target, actions]);
 
   return {
-    edit: on ? edit : undefined,
+    edit,
     dialog: target ? <OrgAvatarDialog target={target} onRename={rename} onClose={() => setTarget(null)} /> : null,
   };
 }

@@ -1,6 +1,6 @@
 /**
- * Every avatar the Org page draws goes through OrgAvatar.tsx (NodeAvatar), so the "Org avatars"
- * experiment reaches every one of them: before it, four places drew their own two-letter tile
+ * Every avatar the Org page draws goes through OrgAvatar.tsx (NodeAvatar), so each node wears its
+ * own character everywhere: before it, four places drew their own two-letter tile
  * (the list, the routers, a moved project; the head and the chart through the list's copy).
  * A new place that draws letters by itself (initials(...) or an `org-avatar` tile) fails here, and
  * so does one that works out a row's shown name without shownName.

@@ -6,8 +6,7 @@
  *   POST /org/avatars/draw { prompt?, name?, taskId? } → { svgs: [svg, ...] }
  *        three avatars the user's own model draws for a description; nothing is written
  *   GET  /org/avatars/:taskId.png[?size=96] → image/png
- *        the avatar the Org page shows for the task, as a PNG for the phone; 404 while the
- *        "Org avatars" experiment is off, so an app shows its own look then
+ *        the avatar the Org page shows for the task, as a PNG for the phone
  *
  * The writes run on the primary only (501 on a replica), as every org write does.
  */
@@ -52,8 +51,6 @@ orgAvatarsV1Router.get('/org/avatars/:file', async (req: Request, res: Response,
   try {
     const m = /^(.+)\.png$/.exec(String(req.params.file))
     if (!m) throw new OrgError('not_found', 404, 'Ask for <task id>.png.')
-    const [{ getConfig }, { experimentalEnabled }] = await Promise.all([import('../../core/config-manager.js'), import('../../core/experimental.js')])
-    if (!experimentalEnabled((await getConfig()).experimental, 'org_avatars')) throw new OrgError('avatars_off', 404, 'Org avatars are off (Settings › Experimental).')
     const tm = await import('../../core/task-manager.js')
     const { isPluginOnlyTask } = await import('../../core/org/org-tree.js')
     // The tasks the Org page has (a plugin's own tasks never reach it), so both pick the same.

@@ -12,7 +12,7 @@
  */
 import { useEffect, useState, type MouseEvent } from 'react';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
-import { rowAvatarColor, type ChannelRow, shownName } from './org-channels-model';
+import { type ChannelRow, shownName } from './org-channels-model';
 import { NodeAvatar } from './OrgAvatar';
 import { TAB_DOT } from './org-task-tabs';
 import { directorRows, type LeaderGroup, type LeaderNode } from './org-leaders';
@@ -69,7 +69,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
               onContextMenu={(e) => onMenu(e, d)}
             >
               {/* Its own avatar with the experiment on; off, its VP's letters, as before. */}
-              <NodeAvatar taskId={d.id} name={vp.name} size={26} color={rowAvatarColor(vp)} className="is-director" />
+              <NodeAvatar taskId={d.id} name={vp.name} size={26} className="is-director" />
               <span className="org-channel-mid">
                 <span className="org-channel-top">
                   <span className="org-channel-name">{d.title}</span>

@@ -1704,7 +1704,7 @@ team is talked to through that task; the Inbox never gets a lead.
 
 ### Org avatars (additive, 2026-11-20): `/org/avatars`
 
-Behind the `org_avatars` experiment (off by default). Every task has a default avatar, worked out
+On for everyone since 2026-11-21 (it was the `org_avatars` experiment). Every task has a default avatar, worked out
 from the task list (`src/core/org/avatars/`): the CEO, VPs, routers and leaders never share one, and
 a newer node never changes an older one's. A chosen one is stored on the task as `org_avatar
 { preset? | svg? | image?, at, by? }` (local-only; an older Walnut ignores it).
@@ -1720,7 +1720,7 @@ a newer node never changes an older one's. A chosen one is stored on the task as
   `502 draw_failed`, `504 draw_timeout` (two minutes).
 - `GET /api/v1/org/avatars/:taskId.png[?size=16..512]` → `200 image/png` (default 96): the
   avatar the Org page shows for that task, for a client that draws pictures (the phone).
-  `404` while the experiment is off, or for an unknown task.
+  `404` for an unknown task.
 - Every PUT and POST answers `501` on a replica.
 
 ### An Org node's Threads (additive, 2026-11): `/tasks/:id/threads`

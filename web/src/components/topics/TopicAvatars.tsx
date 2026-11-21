@@ -35,8 +35,7 @@ export function MemberAvatar({ who, size = 30 }: { who: Who; size?: number }) {
   // A string from the selector: one row's write elsewhere never draws this avatar again.
   const taskId = useTaskListSelect(({ tasks }) => memberTaskId(ref, tasks)) ?? (ref?.kind === 'task' ? ref.taskId : undefined);
   if (typeof who !== 'string' && (ref?.kind === 'task' || ref?.kind === 'org')) {
-    const main = ref.kind === 'org' && ref.node === 'main';
-    return <NodeAvatar taskId={taskId} name={who.name} size={size} main={main} color={avatarColor(who.name)} className="topic-avatar" />;
+    return <NodeAvatar taskId={taskId} name={who.name} size={size} className="topic-avatar" />;
   }
   const style = { width: size, height: size, fontSize: Math.round(size * 0.37) };
   if (who === 'human') return <span className="org-avatar topic-avatar is-human" style={style} aria-hidden="true">You</span>;

@@ -33,7 +33,7 @@ export function orgRowMenu({ target, cards, select, openChart, pick, newDirector
   pick: (p: OrgRowPick) => void;
   /** Absent while the Directors are off. */
   newDirector?: ((vpKey: string) => void) | undefined;
-  /** The "Org avatars" experiment is on: the row's name and avatar are edited here. */
+  /** The row's name and avatar are edited here ("Edit name and avatar…"). */
   editAvatar?: (row: ChannelRow) => void;
 }): ContextMenuItem[] {
   const projectOf = (key: string) => cards.flatMap((c) => c.projects).find((p) => p.key === key);

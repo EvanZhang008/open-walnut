@@ -2,8 +2,8 @@
  * The Org avatars' routes on a real server (src/web/routes/org-avatars-v1.ts):
  *   - PUT /api/v1/org/avatars/:id sets a preset, an SVG or an image, refuses a picture that could
  *     run or load, and `reset` brings the default back; an agent's write names it;
- *   - GET /api/v1/org/avatars/:id.png is a 404 while the experiment is off, then the PNG of what
- *     the Org page shows (a chosen avatar, else the default);
+ *   - GET /api/v1/org/avatars/:id.png is the PNG of what the Org page shows (a chosen avatar, else
+ *     the default), with no setting to turn on;
  *   - POST /api/v1/org/avatars/draw answers three SVGs from the model's reply.
  * Only the model call is replaced (no provider is configured in a test home).
  */
@@ -38,7 +38,6 @@ let taskId = ''
 const put = (id: string, body: unknown, headers: Record<string, string> = {}) =>
   fetch(`${base}/api/v1/org/avatars/${id}`, { method: 'PUT', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
 const png = (id: string) => fetch(`${base}/api/v1/org/avatars/${id}.png?size=64`)
-const setFlag = (on: boolean) => fetch(`${base}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ experimental: { org_avatars: on } }) })
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -81,9 +80,7 @@ describe('org avatars', () => {
     expect(res.status).toBe(404)
   })
 
-  it('the phone PNG is off with the experiment, then shows what the Org page shows', async () => {
-    expect((await png(leadId)).status).toBe(404)
-    expect((await setFlag(true)).status).toBe(200)
+  it('the phone PNG shows what the Org page shows, on a fresh install', async () => {
     let res = await png(leadId)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toMatch(/image\/png/)
@@ -93,7 +90,6 @@ describe('org avatars', () => {
     res = await png(taskId)
     expect(res.status).toBe(200)
     expect((await png('nope')).status).toBe(404)
-    await setFlag(false)
   })
 
   it('draws three avatars from the model, saving nothing', async () => {

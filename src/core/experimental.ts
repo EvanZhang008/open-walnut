@@ -151,12 +151,6 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
-    id: 'org_avatars',
-    name: 'Org avatars',
-    description: 'Every node on the Org page (the CEO, each VP, router and leader, and their tasks) wears a small round character instead of two letters, each its own. Right-click a VP or a router for "Edit name and avatar…": pick a preset, upload a picture, or let the AI draw three to choose from. The phone shows the same avatars.',
-    default: false,
-  },
-  {
     id: 'threads_one_card',
     name: 'One card for what waits on you',
     description: 'A thread that waits on you is one card everywhere it shows: its choices are buttons you click (the recommended one first), your typed reply goes in its box, and it has no Acknowledge, which is for a thread that asks no choice. A task\'s own question lives on its thread instead of a second card, an open thread with an answer reads To read (Done is one you closed), and words you type on a decision letter\'s thread answer that letter, a short yes picking the option it recommends.',

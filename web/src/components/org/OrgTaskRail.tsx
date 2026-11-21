@@ -154,7 +154,7 @@ function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude
               {own === 'notstarted'
                 ? <span className="org-task-ring" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
                 : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}
-              <NodeAvatar taskId={t.id} name={t.title} size={20} onlyPicture className="org-task-avatar" />
+              <NodeAvatar taskId={t.id} name={t.title} size={20} className="org-task-avatar" />
               <span className="org-task-text">
                 <span className="org-task-title">{orgDisplayTitle(t)}</span>
                 {note && <AgentText compact inline {...(noteField ? taskTextSource(t, noteField) : { unknownSource: true })} text={note} className="org-task-note" testId="org-task-note" />}
