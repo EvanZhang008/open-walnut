@@ -167,6 +167,32 @@ registerBurstContext('requests', () => {
   return { recent: recent.slice(0, 25), recentCount: recent.length, olderCount: all.length - recent.length }
 })
 
+/** Requests answered in the last RECENT_MS, for the same line: what was busy just before. */
+const RECENT_MS = 2 * 60_000
+const recentDone: Array<{ at: number; key: string; ms: number; inBytes: number; outBytes: number }> = []
+/** A path with its ids folded (`/api/sessions/:id/history`), so one route reads as one row. */
+export function routeShape(path: string): string {
+  return path.split('/').map((seg) => (/\d/.test(seg) && seg.length >= 8) || seg.length > 40 ? ':id' : seg).join('/')
+}
+function noteDone(key: string, ms: number, inBytes: number, outBytes: number): void {
+  const now = Date.now()
+  recentDone.push({ at: now, key, ms, inBytes, outBytes })
+  while (recentDone.length > 0 && now - recentDone[0]!.at > RECENT_MS) recentDone.shift()
+  if (recentDone.length > 20_000) recentDone.splice(0, recentDone.length - 20_000)
+}
+registerBurstContext('recentRequests', () => {
+  const now = Date.now()
+  const by = new Map<string, { n: number; ms: number; inMB: number; outMB: number }>()
+  for (const r of recentDone) {
+    if (now - r.at > RECENT_MS) continue
+    const row = by.get(r.key) ?? { n: 0, ms: 0, inMB: 0, outMB: 0 }
+    row.n += 1; row.ms += r.ms; row.inMB += r.inBytes / 1048576; row.outMB += r.outBytes / 1048576
+    by.set(r.key, row)
+  }
+  return [...by].map(([route, r]) => ({ route, n: r.n, ms: r.ms, inMB: Math.round(r.inMB * 10) / 10, outMB: Math.round(r.outMB * 10) / 10 }))
+    .sort((a, b) => b.outMB + b.inMB - (a.outMB + a.inMB) || b.ms - a.ms).slice(0, 15)
+})
+
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
   // A request an earlier mount already logs (a host replica mounts this before
   // its away routes, server.ts) gets one line, not two.
@@ -185,6 +211,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
 
   const start = Date.now()
   inFlight.set(reqId, { method: req.method, path: (req.originalUrl ?? '').split('?')[0] ?? '', start })
+  // A compressed answer has no content-length: the socket's own count says what went out
+  // (one request at a time on an HTTP/1.1 connection).
+  const wroteBefore = req.socket?.bytesWritten ?? 0
 
   // Exactly one line per request, whichever way the response ends. `finish` is
   // the ordinary path; `close` also fires for a response nobody ever ended (an
@@ -195,7 +224,12 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   const record = (aborted: boolean) => {
     if (logged) return
     logged = true
+    const entry = inFlight.get(reqId)
     inFlight.delete(reqId)
+    if (entry) {
+      noteDone(`${entry.method} ${routeShape(entry.path)}`, Date.now() - start,
+        Number(req.headers['content-length'] ?? 0) || 0, Math.max(0, (req.socket?.bytesWritten ?? 0) - wroteBefore))
+    }
     const duration = Date.now() - start
     const status = res.statusCode
     const method = req.method

@@ -500,6 +500,45 @@ describe('windowed reads are refused for a session with recorded rewinds', () =>
     );
   });
 
+  // 2026-11-21: one rewound 146 MB session was read and filtered 129 times in an hour at
+  // 35 file sizes; a filtered tail is kept and answers again while nothing changed.
+  it('a filtered over-ceiling tail answers the next read at the same stat, until the rewinds change', async () => {
+    const { t, cut } = paddedRewound();
+    await write('s-ceiling-kept', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
+    probeMock.mockResolvedValue({ deadUuids: ['a2', 'u3'], queueDeadKeys: [], skippedCuts: [], lineCount: 200 });
+    const { log } = await import('../../src/logging/index.js');
+    const info = vi.spyOn(log.session, 'info');
+    const tailReads = () => info.mock.calls.filter((c) => String(c[0]).includes('over the byte ceiling')).length;
+
+    await read('s-ceiling-kept');
+    const again = await read('s-ceiling-kept');
+    expect(textsOf(again).some((x) => x.includes('ABANDONED'))).toBe(false);
+    expect(tailReads()).toBe(1);
+
+    // Another rewind recorded with no cache invalidation reaching this reader: the kept
+    // tail no longer answers, and the tail is read and filtered again.
+    mockRecord = { inPlaceRewinds: [cut, { ...cut, uuid: 'another-cut' }] };
+    await read('s-ceiling-kept');
+    expect(tailReads()).toBe(2);
+    info.mockRestore();
+  });
+
+  it('an unfiltered over-ceiling tail of a rewound session is never kept', async () => {
+    const { t, cut } = paddedRewound();
+    await write('s-ceiling-unkept', t);
+    mockRecord = { inPlaceRewinds: [cut] };
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '8192';
+    probeMock.mockResolvedValue(null);
+    const { log } = await import('../../src/logging/index.js');
+    const info = vi.spyOn(log.session, 'info');
+    await read('s-ceiling-unkept');
+    await read('s-ceiling-unkept');
+    expect(info.mock.calls.filter((c) => String(c[0]).includes('over the byte ceiling')).length).toBe(2);
+    info.mockRestore();
+  });
+
   it('a TRUNCATED probe answer falls back to the unfiltered degrade rather than half-filtering', async () => {
     // The probe's cap (a rewind to line 1 of a very long transcript) means "I did
     // not send you a dead set" — applying the empty one would look like a filter

@@ -80,6 +80,10 @@ interface ParsedHistoryCacheEntry {
    *  (who would get this same tail from the over-ceiling path) is answered with it
    *  too (windowedEntryServes). */
   overCeiling?: boolean;
+  /** A window parsed with a rewind filter: the rewinds it was filtered by (rewindCutsKey).
+   *  It answers only while the session's recorded rewinds still read the same, and grows
+   *  by no incremental state (the growth path does not look for cuts). */
+  windowCutsKey?: string;
   /** Incremental append-read state (see readSessionHistory). Absent when the
    *  last read couldn't establish it (no resolvable path / stat failed). */
   inc?: HistoryIncrementalState;
@@ -1467,19 +1471,19 @@ const OVER_CEILING_TAIL_BYTES = 4 * 1024 * 1024;
  */
 async function cacheWindowRead(
   sessionId: string, host: string | undefined, read: HistoryWindowRead, windowBytes: number,
-  mtimeMs: number, statSize: number, extra: { overCeiling?: true } = {},
+  mtimeMs: number, statSize: number, extra: { overCeiling?: true; windowCutsKey?: string } = {},
 ): Promise<void> {
-  // A rewind recorded while the window was read: the window may hold the rewound-away
-  // branch and the stat does not change with a rewind, so nothing is kept (the next read
-  // takes the filtered path).
-  if (await getInPlaceRewinds(sessionId)) return;
+  // The rewinds now recorded must be the ones the window was parsed for (none, or the
+  // filter it was read with): one recorded while the window was read may leave the
+  // rewound-away branch in it, and a rewind does not change the stat, so nothing is kept.
+  if (rewindCutsKey(await getInPlaceRewinds(sessionId)) !== (extra.windowCutsKey ?? '')) return;
   const current = cacheGet(sessionId, host);
   if (current && isFresh(current, mtimeMs, statSize) && !(current.windowed && current.approxChars < windowBytes)) {
     // The same tail already kept by a tail-bounded caller: it now answers every caller.
     if (extra.overCeiling && current.windowed && !current.overCeiling) current.overCeiling = true;
     return;
   }
-  const inc = seedWindowIncrementalState(sessionId, read, windowBytes);
+  const inc = extra.windowCutsKey ? undefined : seedWindowIncrementalState(sessionId, read, windowBytes);
   const orphans = getOrphanFinishedAgentIds(read.messages);
   cacheSet(sessionId, {
     mtimeMs, size: statSize, messages: read.messages, windowed: true, ...extra,
@@ -1601,7 +1605,8 @@ export async function readSessionHistoryTail(
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
         if (cached && isFresh(cached, st.mtimeMs, st.size)
-            && (!cached.windowed || cached.approxChars >= Math.min(maxTailBytes, DaemonFileReader.maxReadBytes()))) return cached.messages;
+            && (!cached.windowed || cached.approxChars >= Math.min(maxTailBytes, DaemonFileReader.maxReadBytes()))
+            && (cached.windowCutsKey === undefined || cached.windowCutsKey === rewindCutsKey(await getInPlaceRewinds(sessionId)))) return cached.messages;
         // A session with recorded in-place rewinds can't use the window: the
         // cut anchors resolve against the FULL file, and the cut/anchor lines
         // may precede the window's start — an unfilterable window would serve
@@ -1707,7 +1712,8 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
           if (cached && isFresh(cached, mtimeMs, statSize)) {
             // A windowed entry answers only the callers windowedEntryServes names; the
             // rest fall through to the real full read below, which overwrites it.
-            if (windowedEntryServes(cached, options)) {
+            if (windowedEntryServes(cached, options)
+                && (cached.windowCutsKey === undefined || cached.windowCutsKey === rewindCutsKey(await getInPlaceRewinds(sessionId)))) {
               // Cache hit — return cached messages (skipSubagents is the common path
               // now, so cached messages don't include childMessages; no mutation concern).
               return handOff(cached.messages);
@@ -1911,8 +1917,14 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     const read = await readHistoryWindow(sessionId, cwd, host, OVER_CEILING_TAIL_BYTES, tailParseOpts);
     if (read) {
       // Keyed by the stat this read began from; a read refused without one is not kept.
-      if (!rewindCuts && mtimeMs !== undefined && statSize !== undefined && fileSize === statSize) {
-        await cacheWindowRead(sessionId, host, read, OVER_CEILING_TAIL_BYTES, mtimeMs, statSize, { overCeiling: true });
+      // A rewound session's tail is kept only when the daemon's dead set filtered it
+      // (2026-11-21: one 146 MB rewound session was read 129 times in an hour, at 35 sizes).
+      const keep = mtimeMs !== undefined && statSize !== undefined && fileSize === statSize
+        && (!rewindCuts || tailParseOpts !== undefined);
+      if (keep) {
+        await cacheWindowRead(sessionId, host, read, OVER_CEILING_TAIL_BYTES, mtimeMs!, statSize!, {
+          overCeiling: true, ...(rewindCuts ? { windowCutsKey: rewindCutsKey(rewindCuts) } : {}),
+        });
       }
       return handOff(read.messages);
     }
