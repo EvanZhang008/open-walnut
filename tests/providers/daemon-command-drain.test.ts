@@ -121,7 +121,8 @@ const idleHostExec = () => ({ stuck: () => false, endForUpdate: vi.fn(), untilEn
  * (options.hardExit). A daemon process passes process.exit and a SIGKILL of itself as those two,
  * so the compiled standalone gets them as runDaemonProcess wires them, over the injected process.
  */
-const STANDALONE_SHUTDOWN = 'requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => options.exit(code)) }'
+// The runtime exits through exitRuntime (options.exit, then in process what an exit gives back).
+const STANDALONE_SHUTDOWN = 'requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => exitRuntime(code)) }'
 const stopDaemonSource = (source: string) => {
   if (/function exitDaemon\(/.test(source)) {
     const exit = `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
@@ -129,7 +130,7 @@ const stopDaemonSource = (source: string) => {
   }
   if (!source.includes(STANDALONE_SHUTDOWN)) throw new Error('standalone: requestDaemonShutdown no longer exits with stopDaemon\'s code')
   const options = "const options = { exit: (code) => process.exit(code), hardExit: () => process.kill(process.pid, 'SIGKILL') };"
-  return `${options} const daemonEnv = process.env; let shutdown = null; let requestDaemonShutdown = null; let exitAsked = false; const stopDaemon = ${extract(source, 'stopDaemon')}; ${STANDALONE_SHUTDOWN}; return requestDaemonShutdown;`
+  return `${options} const exitRuntime = (code) => options.exit(code); const daemonEnv = process.env; let shutdown = null; let requestDaemonShutdown = null; let exitAsked = false; const stopDaemon = ${extract(source, 'stopDaemon')}; ${STANDALONE_SHUTDOWN}; return requestDaemonShutdown;`
 }
 const template = getDaemonSource()
 const templateDrain = compile<typeof createDaemonCommandDrain>(

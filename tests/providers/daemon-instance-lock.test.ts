@@ -30,6 +30,7 @@ function emitter() {
   return {
     on(event: string, fn: AnyFn) { map.set(event, [...(map.get(event) ?? []), fn]) },
     emit(event: string, ...args: unknown[]) { for (const fn of map.get(event) ?? []) fn(...args) },
+    count: (event: string) => (map.get(event) ?? []).length,
   }
 }
 
@@ -85,7 +86,7 @@ function makeStubNet(opts: StubOptions = {}) {
     if (o.close) events.emit('close')
     return { line, banner: () => parseDaemonLockBanner(line.trim()), destroyed: () => destroyed }
   }
-  return { netApi, calls, serve }
+  return { netApi, calls, serve, serverListeners: (event: string) => serverEvents.count(event) }
 }
 
 const inUse: NodeJS.ErrnoException = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' })
@@ -284,6 +285,46 @@ describe('acquireDaemonInstanceLock — refusals', () => {
       await expect(acquireDaemonInstanceLock({ ...BASE, net: stub.netApi, ...patch }))
         .rejects.toBeInstanceOf(DaemonLockOptionsError)
       expect(stub.calls.createServer).toBe(0)
+    }
+  })
+})
+
+// Each pass of the lingering retry listens again on the one server: a listener pair per pass piled
+// up (Bun warned MaxListenersExceeded from the 11th of ~40 passes in the 1 s linger).
+describe('acquireDaemonInstanceLock: the lingering retry adds no listeners per pass', () => {
+  it('~40 passes against a holder that is always gone leave one error and one listening listener', async () => {
+    const stub = makeStubNet({ listenError: inUse, probeError: new Error('ECONNREFUSED') })
+    await expect(acquireDaemonInstanceLock({ ...BASE, port: 23456, net: stub.netApi }))
+      .rejects.toMatchObject({ name: 'DaemonLockConflictError', reason: 'unreachable' })
+    expect(stub.calls.listen.length).toBeGreaterThan(20)
+    expect(stub.serverListeners('error')).toBe(1)
+    expect(stub.serverListeners('listening')).toBe(1)
+  })
+
+  it('on a real server too, and the pass that wins still takes the lock', async () => {
+    const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-lock-'))
+    const lingering = net.createServer((socket) => socket.destroy())
+    await new Promise<void>((resolve) => lingering.listen({ port: 0, host: '127.0.0.1' }, () => resolve()))
+    const port = (lingering.address() as net.AddressInfo).port
+    let server: net.Server | null = null
+    let atCreation = { error: 0, listening: 0 }
+    const capturing: LockNetLike = {
+      createServer: (handler) => {
+        server = net.createServer(handler as (s: net.Socket) => void)
+        atCreation = { error: server.listenerCount('error'), listening: server.listenerCount('listening') }
+        return server as unknown as LockServerLike
+      },
+      createConnection: (o) => net.createConnection(o) as unknown as LockSocketLike,
+    }
+    try {
+      setTimeout(() => lingering.close(), 600)
+      const got = await acquireDaemonInstanceLock({ runtimeDir, uid: os.userInfo().uid, pid: process.pid, instanceId: 'd-many-passes', port, deadlineMs: 500, net: capturing })
+      expect(got.kind).toBe('owner')
+      expect(server!.listenerCount('error')).toBe(atCreation.error + 1)
+      expect(server!.listenerCount('listening')).toBe(atCreation.listening + 1)
+      if (got.kind === 'owner') await got.release()
+    } finally {
+      fs.rmSync(runtimeDir, { recursive: true, force: true })
     }
   })
 })

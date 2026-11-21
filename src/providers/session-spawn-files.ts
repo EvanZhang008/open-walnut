@@ -10,7 +10,11 @@
  *   - a fresh start unlinks and recreates the stream (a NEW inode, so a new stream epoch), never
  *     truncates it in place;
  *   - the stream is opened O_APPEND: the daemon appends its own marker lines to it as well;
- *   - a resume touches the stream, so health checks see a fresh mtime.
+ *   - a resume touches the stream, so health checks see a fresh mtime;
+ *   - the stream and the stderr log are 0600 (STREAM_FILE_MODE) whatever the process's umask
+ *     (inside a server's process it is the server's, usually 022): every open that can create one
+ *     passes the mode, and a fresh start sets it on both (the stream was just made anew, a
+ *     stderr log left by an older run may be wider).
  * A step that fails gives back what the steps before it opened.
  */
 import type fsType from 'node:fs'
@@ -51,10 +55,15 @@ export interface SessionSpawnFiles {
 }
 
 export const MKFIFO_TIMEOUT_MS = 10_000
+/** The stream's and the stderr log's mode. */
+export const STREAM_FILE_MODE = 0o600
 
 export async function prepareSpawnFiles(deps: SpawnFilesDeps, req: SpawnFilesRequest): Promise<SessionSpawnFiles> {
   const { fs } = deps
-  const open = promisify(fs.open) as (file: string, flags: string | number) => Promise<number>
+  const openWithMode = promisify(fs.open) as (file: string, flags: string | number, mode: number) => Promise<number>
+  // A file this creates is private from its first byte, whatever the umask.
+  const open = (file: string, flags: string | number) => openWithMode(file, flags, STREAM_FILE_MODE)
+  const fchmod = promisify(fs.fchmod) as (fd: number, mode: number) => Promise<void>
   const fstat = promisify(fs.fstat) as (fd: number) => Promise<{ size: number }>
   const opened: number[] = []
   const closeOpened = () => { for (const fd of opened.splice(0)) { try { fs.closeSync(fd) } catch { /* already closed */ } } }
@@ -83,6 +92,11 @@ export async function prepareSpawnFiles(deps: SpawnFilesDeps, req: SpawnFilesReq
     const cronStartOffset = (await fstat(outputFd)).size
     const stderrFd = await open(req.stderrPath, req.resume ? 'a' : 'w')
     opened.push(stderrFd)
+    if (!req.resume) {
+      for (const fd of [outputFd, stderrFd]) {
+        await fchmod(fd, STREAM_FILE_MODE).catch((err: unknown) => deps.warn('spawn: could not make a stream file private', { sid: req.sid, error: String(err) }))
+      }
+    }
     const stderrStartOffset = (await fstat(stderrFd)).size
     if (req.resume) {
       const now = new Date()

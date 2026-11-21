@@ -164,7 +164,8 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(task).toMatch(/restampTaskState\(ck\.task, now\)/)
       expect(src).toMatch(/FOLD_CHECKPOINT_EVERY_BYTES = 32 \* 1024 \* 1024/)
       expect(src).toMatch(/FOLD_CHECKPOINT_SWEEP_MS = 5 \* 60_?000/)
-      expect(src.match(/checkpointSessionFold\(session, true\)/g)).toHaveLength(2) // death + shutdown
+      // death + shutdown, in both; the binary has a third: saveNow (a stop past its budget inside a server).
+      expect(src.match(/checkpointSessionFold\(session, true\)/g)).toHaveLength(src === standaloneSrc ? 3 : 2)
       expect(src).toMatch(/checkpointSessionFold\(session, false\)/) // periodic
       // A forced write replaces a checkpoint something else deleted (the server's
       // startup stream cleanup did, under live sessions, before a daemon upgrade).
@@ -2004,7 +2005,9 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // placeholder-seeded runtime list — daemonCapabilities() wraps
     // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
     expect(standaloneSrc).toMatch(/capabilities:\s*helloCapabilities\(\)/)
-    expect(standaloneSrc).toMatch(/return\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1',\s*'service-update-force-v1'\]\s*:\s*\[\]\)/)
+    // In process the door's capabilities are left out (`advertised`, DOOR_CAPABILITIES); a program advertises them all.
+    expect(standaloneSrc).toMatch(/const advertised = LISTEN \? ADVERTISED_DAEMON_CAPABILITIES : ADVERTISED_DAEMON_CAPABILITIES\.filter\(\(c\) => !DOOR_CAPABILITIES\.has\(c\)\)/)
+    expect(standaloneSrc).toMatch(/return\s*\[\.\.\.advertised,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1',\s*'service-update-force-v1'\]\s*:\s*\[\]\)/)
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
     // getDaemonSource substitutes the ADVERTISED list into that placeholder,

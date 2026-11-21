@@ -18,12 +18,14 @@ export interface LoopBudget {
 export const LOOP_BUDGET_MS = 4
 
 export function createLoopBudget(budgetMs = LOOP_BUDGET_MS, now: () => number = () => performance.now()): LoopBudget {
+  let inTurn = false
   let turnStartedAt = 0
-  const endTurn = () => { turnStartedAt = 0 }
+  const endTurn = () => { inTurn = false }
   return {
     over() {
-      if (!turnStartedAt) {
-        turnStartedAt = now() || 1
+      if (!inTurn) {
+        inTurn = true
+        turnStartedAt = now()
         setImmediate(endTurn)
         return false
       }

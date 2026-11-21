@@ -83,6 +83,7 @@ async function loadRuntimeModule(): Promise<{ module: RuntimeModule; script: str
 interface Held { runtime: DaemonRuntime; dir: string; ended: boolean }
 let held: Held | null = null
 let starting: Promise<InProcessStart> | null = null
+let startingDir: string | null = null
 
 export type InProcessStart = { kind: 'started'; dir: string } | { kind: 'existing'; port: string }
 
@@ -96,6 +97,9 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
     if (held.dir !== opts.dir) return Promise.reject(new Error(`an in-process daemon already serves ${held.dir}`))
     return Promise.resolve({ kind: 'started', dir: held.dir })
   }
+  // One start at a time, for one dir: a second caller for another dir is refused, never handed this one.
+  if (starting && startingDir !== opts.dir) return Promise.reject(new Error(`an in-process daemon is starting for ${startingDir}`))
+  if (!starting) startingDir = opts.dir
   starting ??= (async (): Promise<InProcessStart> => {
     const { module: { createDaemonRuntime }, script } = await loadRuntimeModule()
     const entry: Held = { runtime: null as unknown as DaemonRuntime, dir: opts.dir, ended: false }
@@ -125,7 +129,7 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
     held = entry
     log.session.info('in-process daemon started', { dir: opts.dir, version: entry.runtime.version })
     return { kind: 'started', dir: opts.dir }
-  })().finally(() => { starting = null })
+  })().finally(() => { starting = null; startingDir = null })
   return starting
 }
 
@@ -158,14 +162,27 @@ export async function inProcessDaemonServesCheck(): Promise<string | null> {
  * lock; an isolated dir's agents are ended, the production dir's keep running for the next start.
  * Returns the exit code a program would use (null when none ran).
  */
-export async function stopInProcessDaemon(reason: string): Promise<number | null> {
+export async function stopInProcessDaemon(reason: string, budgetMs?: number): Promise<number | null> {
   if (starting) await starting.catch(() => {})
   const entry = held
   if (!entry || entry.ended) return null
   held = null
   entry.ended = true
   log.session.info('in-process daemon stopping', { dir: entry.dir, reason })
-  const code = await entry.runtime.stop()
+  const stopping = entry.runtime.stop()
+  if (budgetMs !== undefined) {
+    // The server's own exit will not wait past its bail: what a stop saves last (the registry, the
+    // fold checkpoints) is saved now when the drain is still running at the budget.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = await Promise.race([stopping.then(() => false), new Promise<true>((r) => { timer = setTimeout(() => r(true), budgetMs) })])
+    clearTimeout(timer)
+    if (late) {
+      log.session.warn('in-process daemon stop ran past its budget; its registry and checkpoints are saved now', { dir: entry.dir, budgetMs })
+      entry.runtime.saveNow()
+      return null
+    }
+  }
+  const code = await stopping
   log.session.info('in-process daemon stopped', { dir: entry.dir, code })
   return code
 }

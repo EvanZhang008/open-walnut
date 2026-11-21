@@ -279,16 +279,20 @@ export async function acquireDaemonInstanceLock(
     try { socket.end(JSON.stringify(banner) + '\n') } catch { clear() }
   })
 
+  // One 'error' and one 'listening' listener for every pass: the lingering retry below listens up
+  // to ~40 times, and a pair added per pass piled up past the emitter's limit (Bun warned
+  // MaxListenersExceeded). Each event settles the pass in flight, if any; an error after the lock
+  // is held settles nothing and is ignored, as before.
+  let passInFlight: ((err: NodeJS.ErrnoException | null) => void) | null = null
+  const settlePass = (err: NodeJS.ErrnoException | null) => {
+    const settle = passInFlight
+    passInFlight = null
+    settle?.(err)
+  }
+  server.on('error', (err: unknown) => settlePass(err as NodeJS.ErrnoException))
+  server.on('listening', () => settlePass(null))
   const listenOnce = () => new Promise<NodeJS.ErrnoException | null>((resolve) => {
-    let settled = false
-    const settle = (err: NodeJS.ErrnoException | null) => {
-      if (settled) return
-      settled = true
-      resolve(err)
-    }
-    // Each attempt's listeners stay (the lock's net surface has no off); a settled one ignores later events.
-    server.on('error', (err: unknown) => settle(err as NodeJS.ErrnoException))
-    server.on('listening', () => settle(null))
+    passInFlight = resolve
     server.listen({ port: requestedPort, host: DAEMON_LOCK_HOST, exclusive: true })
   })
 

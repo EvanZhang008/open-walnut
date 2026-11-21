@@ -261,7 +261,7 @@ import { createInProcessClient } from './daemon-in-process-client.js'
 import { createSessionTailer, type SessionTailer } from './session-tailer.js'
 import { prepareSpawnFiles } from './session-spawn-files.js'
 import { createSpawnPool } from './spawn-pool.js'
-import { createDaemonChildSpawn, type ChildProcessUse } from './daemon-child-spawn.js'
+import { containListeners, createDaemonChildSpawn, type ChildProcessUse } from './daemon-child-spawn.js'
 import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
 import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
 import { readCronBootId } from './daemon-cron-host.js'
@@ -288,15 +288,16 @@ const daemonEnv = options.env
 /** The WebSocket door (its port, daemon.port): closed for a runtime its server calls directly (in-process-daemon.ts). */
 const LISTEN = options.listen !== false
 const PROGRAM_SCRIPT = options.program?.script ?? ''
-// Every timer this runtime starts ends with stop(), and one that throws is logged, never the
-// host's crash (daemon-runtime-timers.ts): a process that only exited never needed either.
+// Every timer this runtime starts ends with stop(). In a server's process (no door) one that throws
+// is logged, never the server's crash; a daemon program lets it reach its crash handler, which
+// exits for a clean restart that re-adopts every CLI, as it always did (daemon-runtime-timers.ts).
 const runtimeTimers = createRuntimeTimers((what, err) => {
   try { logMsg('error', `daemon ${what} threw; the daemon goes on`, { error: err instanceof Error ? (err.stack ?? err.message) : String(err) }) } catch { /* the log itself */ }
 }, LISTEN && !daemonEnv.WALNUT_DAEMON_SLOW_CALLBACK_MS ? undefined : {
   // Inside another program a callback that holds the loop holds that program: it is named in the log.
   ms: Number(daemonEnv.WALNUT_DAEMON_SLOW_CALLBACK_MS) || 50,
   report: (what, heldMs, label) => logMsg('warn', 'daemon callback held the loop', { what, heldMs: Math.round(heldMs), label }),
-})
+}, !LISTEN)
 const { setTimeout, setInterval, setImmediate, clearTimeout, clearInterval, clearImmediate } = runtimeTimers
 const clearRuntimeTimers = () => runtimeTimers.clearAll()
 // Children get the runtime's env, its dir as cwd once started, and umask 077 (daemon-child-spawn.ts).
@@ -308,7 +309,7 @@ const spawnPool = LISTEN ? null : createSpawnPool({ umask: CHILD_UMASK, onError:
 const childProcess = createDaemonChildSpawn(
   { spawn: rawSpawn, execFile: rawExecFile, execFileSync: rawExecFileSync, execSync: rawExecSync, bunSpawn: ((...a: never[]) => (Bun.spawn as (...b: never[]) => unknown)(...a)) as never, umask: (mask?: number) => (mask === undefined ? process.umask() : process.umask(mask)), ...(spawnPool ? { pool: spawnPool } : {}) },
   // A dir removed under it (a temp cleanup) is no cwd: the process's own then, never a failed start.
-  { env: daemonEnv, cwd: () => (childCwd && fs.existsSync(childCwd) ? childCwd : undefined), umask: CHILD_UMASK },
+  { env: daemonEnv, cwd: () => (childCwd && fs.existsSync(childCwd) ? childCwd : undefined), umask: CHILD_UMASK, ...(LISTEN ? {} : { contain: runtimeTimers.contain }) },
 )
 const spawn = childProcess.spawn
 const execFile = childProcess.execFile
@@ -323,7 +324,7 @@ const childUse: ChildProcessUse = { spawn, execFile, execFileSync, execSync, env
 /** This runtime's embedded editor (capability 'vscode-v1', vscode-server-core.ts): its record under the runtime's HOME. */
 const codeServer = createCodeServer(childUse)
 /** The test hooks' and the stuck drain's hard end (a process SIGKILLs itself). */
-const dieHard = (): void => { if (options.hardExit) options.hardExit(); else options.exit(1) }
+const dieHard = (): void => { if (options.hardExit) options.hardExit(); else exitRuntime(1) }
 const daemonCommands = createDaemonCommandDrain()
 const sessionStartGate = new DaemonSessionGate()
 const sessionStopVersions = new Map<string, number>()
@@ -2745,8 +2746,15 @@ function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
 }
 
 /** What this daemon's hello advertises: also what its serves file records. */
+/**
+ * What needs the WebSocket door (its port file): walnut-net dials it, a host server and a hub
+ * forward are reached through it. A runtime inside a server's process has none, so it does not
+ * claim them (the server then says the host lacks them, never a silent failure).
+ */
+const DOOR_CAPABILITIES = new Set(['net-v1', 'net-join-v1', 'host-server-v1', 'hub-forward-v1'])
 function helloCapabilities(): string[] {
-  return [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1', 'service-update-force-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : []), ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : [])]
+  const advertised = LISTEN ? ADVERTISED_DAEMON_CAPABILITIES : ADVERTISED_DAEMON_CAPABILITIES.filter((c) => !DOOR_CAPABILITIES.has(c))
+  return [...advertised, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1', 'service-update-force-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : []), ...(socketPeerPidReady() ? [CALLER_PROOF_CAPABILITY] : [])]
 }
 
 /** This Walnut's per-Walnut pushes: an older server sends them naming no home. */
@@ -6655,10 +6663,12 @@ function startGatewayListener() {
           d.chunks = []
           const respond = (resp: GatewayResponse) => reply(socket, resp)
           gatewayCallerLeft.set(respond, () => d.closed === true)
-          // One request's error is its own answer: inside a server's process a throw here would end the server.
+          // One request's error is its own answer. Inside a server's process that is all (a throw would
+          // end the server); a daemon program still goes on to its crash handler, as it always did.
           try { handleGatewayLine(line, respond, socket.fd, d.openedAt) } catch (err) {
             logMsg('error', 'agent gateway request threw', { error: err instanceof Error ? (err.stack ?? err.message) : String(err) })
             try { respond(gatewayError('internal', 'the request failed in the daemon')) } catch { /* the caller went away */ }
+            if (LISTEN) throw err
           }
         },
         drain(socket) { pump(socket) },
@@ -7733,7 +7743,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions, childUse) : null
     proc = barrier?.process
       // Inside another program: started on the pool's thread, its pid known once it runs (spawn-pool.ts).
-      ?? (spawnPool ? await spawnPool.spawnDetached(userShell, ['-c', shellCmd], spawnOptions) as unknown as ReturnType<typeof spawn> : spawn(userShell, ['-c', shellCmd], spawnOptions))
+      ?? (spawnPool ? containListeners(await spawnPool.spawnDetached(userShell, ['-c', shellCmd], spawnOptions), runtimeTimers.contain) as unknown as ReturnType<typeof spawn> : spawn(userShell, ['-c', shellCmd], spawnOptions))
   } catch (error) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd)
     throw error
@@ -11343,19 +11353,27 @@ function cmdSubscribeAgent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   }
 
   // Poll for new data
+  /** In process: the most one agent-file poll reads in a tick (pollData). */
+  const AGENT_POLL_MAX_BYTES = 1024 * 1024
   function pollData() {
     for (const [filePath, fileState] of sub.files) {
       try {
         const stat = fs.statSync(filePath)
         if (stat.size > fileState.offset) {
           const fd = fs.openSync(filePath, 'r')
-          const bytes = stat.size - fileState.offset
+          // Inside a server's process one tick reads at most AGENT_POLL_MAX_BYTES, up to its last
+          // complete line (the rest comes on the next ticks): a large backlog never holds every
+          // route at once. A daemon program reads it all, as it always did.
+          const backlog = stat.size - fileState.offset
+          const bytes = LISTEN ? backlog : Math.min(backlog, AGENT_POLL_MAX_BYTES)
           const buf = Buffer.alloc(bytes)
           fs.readSync(fd, buf, 0, bytes, fileState.offset)
           fs.closeSync(fd)
-          fileState.offset = stat.size
+          const lastNl = bytes < backlog ? buf.lastIndexOf(0x0a) : -1
+          const used = bytes < backlog && lastNl >= 0 ? lastNl + 1 : bytes
+          fileState.offset += used
 
-          const lines = buf.toString('utf-8').split('\n').filter((l: string) => l.trim())
+          const lines = buf.subarray(0, used).toString('utf-8').split('\n').filter((l: string) => l.trim())
           if (lines.length > 0) {
             sendEvent(ws, 'agent', {
               sid,
@@ -15172,8 +15190,9 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     fs.writeFileSync(portTmp, String(port))
     fs.renameSync(portTmp, PORT_FILE)
   } else { try { fs.unlinkSync(PORT_FILE) } catch {} }
-  // The host network runs once this daemon answers on its port (net-v1).
-  netSupervisor.start()
+  // The host network runs once this daemon answers on its port (net-v1). A runtime inside a
+  // server's process has no port: walnut-net could not reach it, so it never starts there.
+  if (LISTEN) netSupervisor.start()
   // Hub forwards listen once the links they ride can come (hub-forward-v1).
   hubForwards.start()
   // daemon.pid names us now: the journal writes are ours (journal v2 migration).
@@ -15348,7 +15367,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     try { server?.stop(true) } catch {}
     void daemonInstanceLock?.release().catch(() => {})
     clearRuntimeTimers()
-    options.exit(code)
+    exitRuntime(code)
   }
   let shutdown: Promise<number> | null = null
   const stopDaemon = (): Promise<number> => {
@@ -15399,7 +15418,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // A signal, a trial's end, a service update or handover: stop, then the process exits.
   // Asked twice (a second signal), it still exits once.
   let exitAsked = false
-  requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => options.exit(code)) }
+  requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => exitRuntime(code)) }
   return { kind: 'started', port }
 }
 
@@ -15412,6 +15431,7 @@ function inProcessClient(onFrame: (frame: DaemonFrame) => void, onClose?: () => 
     unregister: (socket) => { inProcessClients.delete(socket); handleDisconnect(socket) },
     heardFrom: (socket) => heardFrom(socket),
     warn: (msg, data) => logMsg('warn', msg, data),
+    checkFrames: daemonEnv.WALNUT_IN_PROCESS_FRAME_CHECK === '1',
   }, onFrame, onClose)
   return client
 }
@@ -15435,8 +15455,23 @@ async function stopRuntime(): Promise<number> {
   }
   listeningServer = null
   daemonInstanceLock = null
-  // What a process gives back only by exiting: its listeners, its in-process clients, its
-  // threads, its own clocks.
+  releaseWhatAnExitWould()
+  return code
+}
+
+/**
+ * The runtime ended itself (its heartbeat saw another daemon take the dir, a stop it was asked
+ * for). A program then exits; inside a server's process the exit is a callback, so what the exit
+ * would have given back is given back here too: the in-process clients are closed (their server
+ * sees the close and dials again), the gateway listener, the threads and the clocks end.
+ */
+function exitRuntime(code: number): void {
+  options.exit(code)
+  if (!LISTEN) releaseWhatAnExitWould()
+}
+
+/** What a process gives back only by exiting: its listeners, its in-process clients, its threads, its own clocks. */
+function releaseWhatAnExitWould(): void {
   try { gatewayListener?.stop(true) } catch {}
   gatewayListener = null
   for (const client of [...inProcessClients]) client.close()
@@ -15447,7 +15482,6 @@ async function stopRuntime(): Promise<number> {
   try { historyReadyExecutor.close() } catch {}
   try { spawnPool?.close() } catch {}
   clearRuntimeTimers()
-  return code
 }
 
 return {
@@ -15462,6 +15496,10 @@ return {
     return startRun
   },
   stop: stopRuntime,
+  saveNow: () => {
+    try { persistRegistry() } catch (error) { logMsg('error', 'saveNow: registry write failed', { error: String(error) }) }
+    for (const session of sessions.values()) { try { checkpointSessionFold(session, true) } catch { /* the next boot folds from the last one */ } }
+  },
   requestStop: () => {
     if (!requestDaemonShutdown) return false
     requestDaemonShutdown()

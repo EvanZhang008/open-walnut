@@ -49,7 +49,8 @@ export async function stopDemoProcesses(paths: DemoPaths, recovering = false): P
   if (reopened) gate.reopenDaemonDials()
   try {
     const port = await localDaemon.ensureRunning()
-    const conn = await connections.getDirectDaemonConnection('__local__', `ws://127.0.0.1:${port}`)
+    // In process (experiment in_process_daemon) there is no port: its own address is the daemon's.
+    const conn = await connections.getDirectDaemonConnection('__local__', localDaemon.runsInProcess && localDaemon.wsUrl ? localDaemon.wsUrl : `ws://127.0.0.1:${port}`)
     const deps = { connection: async () => conn }
     const quiet = await conn.send('demo.quiesce', { home: paths.data }, 30_000)
     if (quiet.ok !== true || quiet.quiet !== true || !Array.isArray(quiet.acpRuntimes)

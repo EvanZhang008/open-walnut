@@ -96,3 +96,43 @@ describe('createDaemonChildSpawn', () => {
     expect(process.umask()).toBe(before)
   })
 })
+
+// In a server's process an uncaught throw in a child's handler ends the server (review S6,
+// 2026-11-21): with `contain`, every callback handed in through the seam is guarded.
+describe('createDaemonChildSpawn with contain', () => {
+  const makeContained = () => {
+    const errors: string[] = []
+    const contain = <A extends unknown[]>(what: string, fn: (...a: A) => unknown) => (...a: A) => {
+      try { fn(...a) } catch (err) { errors.push(`${what}: ${(err as Error).message}`) }
+    }
+    const child = createDaemonChildSpawn({
+      spawn: cp.spawn, execFile: cp.execFile, execFileSync: cp.execFileSync, execSync: cp.execSync,
+      umask: (mask?: number) => (mask === undefined ? process.umask() : process.umask(mask)),
+    }, { env: process.env, cwd: () => undefined, umask: null, contain })
+    return { child, errors }
+  }
+
+  it('a throwing exit, data and stream listener is reported, never thrown; removal by the own function works', async () => {
+    const { child, errors } = makeContained()
+    const proc = child.spawn('sh', ['-c', 'echo hi'], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const removed = () => { throw new Error('removed one ran') }
+    proc.on('exit', removed)
+    proc.off('exit', removed)
+    proc.stdout!.on('data', () => { throw new Error('data boom') })
+    await new Promise<void>((resolve) => {
+      proc.on('close', () => { resolve(); throw new Error('close boom') })
+    })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(errors.some((e) => e.includes('data boom'))).toBe(true)
+    expect(errors.some((e) => e.includes('close boom'))).toBe(true)
+    expect(errors.some((e) => e.includes('removed one ran'))).toBe(false)
+  })
+
+  it('a throwing execFile callback is reported', async () => {
+    const { child, errors } = makeContained()
+    await new Promise<void>((resolve) => {
+      child.execFile('echo', ['x'], () => { resolve(); throw new Error('cb boom') })
+    })
+    expect(errors).toEqual([expect.stringContaining('cb boom')])
+  })
+})

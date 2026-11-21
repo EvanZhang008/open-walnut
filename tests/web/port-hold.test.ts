@@ -9,7 +9,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import http from 'node:http'
-import { holdPort, listenAfterHold } from '../../src/web/port-hold.js'
+import { holdPort, listenAfterHold, listenAttempt } from '../../src/web/port-hold.js'
 import { createSpawnPool } from '../../src/providers/spawn-pool.js'
 
 function freePort(): Promise<number> {
@@ -86,13 +86,50 @@ describe('holdPort', () => {
   })
 })
 
+describe('listenAttempt', () => {
+  const close = (s: net.Server) => new Promise<void>((r) => s.close(() => r()))
+  const listeners = (s: net.Server) => ({ error: s.listenerCount('error'), listening: s.listenerCount('listening') })
+
+  // A listen callback stays as a 'listening' listener when the listen fails: ~80 of them in a 2 s
+  // retry used to pile up on the one server object.
+  it('leaves no listener behind, after many failed attempts and after the one that works', async () => {
+    const port = await freePort()
+    const other = await listen(port)
+    const srv = net.createServer()
+    const before = listeners(srv)
+    try {
+      for (let i = 0; i < 40; i++) {
+        await expect(listenAttempt(srv, port, '127.0.0.1')).rejects.toMatchObject({ code: 'EADDRINUSE' })
+      }
+      expect(listeners(srv)).toEqual(before)
+    } finally { await close(other) }
+    await listenAttempt(srv, port, '127.0.0.1')
+    expect((srv.address() as net.AddressInfo).port).toBe(port)
+    expect(listeners(srv)).toEqual(before)
+    await close(srv)
+  })
+
+  it('the same through listenAfterHold\'s retries', async () => {
+    const port = await freePort()
+    const holder = await listen(port)
+    setTimeout(() => { void close(holder) }, 200)
+    const srv = net.createServer()
+    const before = listeners(srv)
+    let retries = 0
+    await listenAfterHold(() => listenAttempt(srv, port, '127.0.0.1'), { stepMs: 5, onRetry: (n) => { retries = n } })
+    expect(retries).toBeGreaterThan(10)
+    expect(listeners(srv)).toEqual(before)
+    await close(srv)
+  })
+})
+
 describe('the boot order', () => {
   it('the server takes its port before it starts the local daemon, and frees it right before listen', () => {
     const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/web/server.ts'), 'utf8')
     const hold = src.indexOf('serverPortHold = await holdPort(')
     const daemon = src.indexOf('await localDaemon.ensureRunning()')
     const release = src.lastIndexOf('await serverPortHold?.release()')
-    const listenAt = src.indexOf('httpServer!.listen(port')
+    const listenAt = src.indexOf('listenAttempt(httpServer!, port')
     expect(hold).toBeGreaterThan(0)
     expect(daemon).toBeGreaterThan(hold)
     expect(release).toBeGreaterThan(daemon)
@@ -101,11 +138,7 @@ describe('the boot order', () => {
 })
 
 describe('listenAfterHold', () => {
-  const httpListen = (srv: http.Server, port: number) => () => new Promise<void>((resolve, reject) => {
-    const onError = (err: Error) => reject(err)
-    srv.once('error', onError)
-    srv.listen(port, '127.0.0.1', () => { srv.off('error', onError); resolve() })
-  })
+  const httpListen = (srv: http.Server, port: number) => () => listenAttempt(srv, port, '127.0.0.1')
   const close = (s: net.Server | http.Server) => new Promise<void>((r) => s.close(() => r()))
 
   it('takes the port once a brief holder lets go, on the same server object', async () => {

@@ -4,9 +4,12 @@
  * those names are these:
  *   - every timer started is tracked, and clearAll() (the runtime's stop()) ends them all: a
  *     daemon that was a whole process never needed it, its exit ended them;
- *   - a callback that throws, or returns a promise that rejects, is reported (onError) and the
- *     runtime goes on: inside a server's process an uncaught error would end the server;
- *   - contain() gives an event handler (a child's exit, a socket's data) the same guard.
+ *   - with `contain` (a runtime inside a server's process), a callback that throws, or returns a
+ *     promise that rejects, is reported (onError) and the runtime goes on: there an uncaught error
+ *     would end the server. Without it (a daemon program) an error goes on to the process as it
+ *     always did: its crash handler writes the breadcrumb, exits, and the restart re-adopts every
+ *     CLI, which a clock that keeps failing cannot do;
+ *   - contain() gives an event handler (a child's exit, a socket's data) the same rule.
  * Pure wiring around the process's own timers.
  */
 
@@ -32,6 +35,8 @@ export function createRuntimeTimers(
   onError: (what: string, err: unknown) => void,
   /** A callback that held the loop at least `ms`: reported with what it was (its name or its first characters). */
   slow?: { ms: number; report: (what: string, heldMs: number, label: string) => void },
+  /** Report and go on (true, the default: in process) or let errors reach the process (a daemon program). */
+  contain = true,
 ): RuntimeTimers {
   const timers = new Set<Timer>()
   const immediates = new Set<Immediate>()
@@ -39,13 +44,17 @@ export function createRuntimeTimers(
     const startedAt = slow ? performance.now() : 0
     try {
       const out = fn(...args)
-      if (out && typeof (out as Promise<unknown>).then === 'function') {
+      if (contain && out && typeof (out as Promise<unknown>).then === 'function') {
         ;(out as Promise<unknown>).then(undefined, (err) => onError(what, err))
       }
-    } catch (err) { onError(what, err) }
-    if (slow) {
-      const held = performance.now() - startedAt
-      if (held >= slow.ms) { try { slow.report(what, held, fn.name || String(fn).replace(/\s+/g, ' ').slice(0, 120)) } catch { /* a report never throws */ } }
+    } catch (err) {
+      if (!contain) throw err
+      onError(what, err)
+    } finally {
+      if (slow) {
+        const held = performance.now() - startedAt
+        if (held >= slow.ms) { try { slow.report(what, held, fn.name || String(fn).replace(/\s+/g, ' ').slice(0, 120)) } catch { /* a report never throws */ } }
+      }
     }
   }
 

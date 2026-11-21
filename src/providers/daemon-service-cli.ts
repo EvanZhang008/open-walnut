@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
 import { DAEMON_SERVICE_LABEL, daemonInstallRoot, readDaemonServiceExecutable } from './daemon-service-config.js'
 import { accountInfo } from '../lib/account.js'
+import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
 import { createDaemonServiceManager, daemonServiceConfigPath, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
 import { pruneDaemonServiceVersions, stageDaemonServiceArtifact } from './daemon-service-artifact.js'
 import { openDaemonServiceFiles, withDaemonServiceFiles, type DaemonServiceFiles } from './daemon-service-files.js'
@@ -169,12 +170,25 @@ export async function requestDaemonServiceUpdate(
   }
 }
 
+/** Refuses when the dir's lock is held by a daemon with no door: one inside a Walnut server's process. */
+export async function refuseInProcessOwner(runtimeDir: string, read = readDaemonInstanceOwner): Promise<void> {
+  const owner = await read({ runtimeDir, uid: os.userInfo().uid }).catch(() => null)
+  if (owner && owner.wsPort === null && !(await fs.stat(path.join(runtimeDir, 'daemon.pid')).then(() => true, () => false))) {
+    throw new Error('A Walnut server runs the session daemon inside its own process for this dir (experiment in_process_daemon, pid '
+      + `${owner.pid}). Turn the experiment off in Settings and restart Walnut, then install the service.`)
+  }
+}
+
 export async function requestRunningDaemonHandover(runtimeDir: string, stateDir: string, pending: boolean, updating = false, force = false, replyMs = 60_000): Promise<boolean> {
   let connection: WebSocket | undefined
   let requested = false
   let refused = false
   let exited = false
   try {
+    // A server that runs the daemon in its own process (experiment in_process_daemon) holds the
+    // dir's lock with no door and no daemon.pid: nothing here could hand it over, and a service
+    // daemon started anyway would meet that lock at every start of its manager's loop.
+    await refuseInProcessOwner(runtimeDir)
     let pid: number
     try { pid = Number(await fs.readFile(path.join(runtimeDir, 'daemon.pid'), 'utf8')) }
     catch (error) {

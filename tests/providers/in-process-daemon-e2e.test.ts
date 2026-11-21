@@ -46,6 +46,8 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
       WALNUT_DAEMON_DIR: dir,
       WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy'),
       WALNUT_IN_PROCESS_DAEMON: '1',
+      // Every frame either way is frozen and checked to be plain JSON (daemon-in-process-client.ts).
+      WALNUT_IN_PROCESS_FRAME_CHECK: '1',
       SHELL: '/bin/sh',
       PATH: '/usr/bin:/bin',
     }
@@ -114,5 +116,10 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
     expect(s4.cliGoneAtEnd).toBe(true)
     // The same CLI answered every round, whichever runtime held it.
     expect([s4.afterRestart.pid, s4.onProgram.pid, s4.backInProcess.pid]).toEqual([s4.cliPid, s4.cliPid, s4.cliPid])
+
+    // Frames are shared objects: none was what JSON would change, and none was written to once handed over.
+    const runtimeLogs = fs.readdirSync(dir).filter((f) => /^daemon-.*\.log$/.test(f)).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n')
+    expect(runtimeLogs).not.toContain('in-process frame is not plain JSON')
+    expect(runtimeLogs).not.toMatch(/Attempted to assign to readonly|Cannot assign to read only|object is not extensible/)
   }, 90_000)
 })

@@ -65,6 +65,11 @@ export interface DaemonRuntime {
   start(): Promise<{ kind: 'started'; port: number } | { kind: 'existing'; port: string }>
   /** Stops it the way a SIGTERM always did (drain, save, release the lock) and ends its timers; the exit code a process would use. */
   stop(): Promise<number>
+  /**
+   * Saves now, synchronously, what a stop saves last (the registry, each session's fold checkpoint):
+   * for a host process that must exit before stop() finished (its shutdown bail).
+   */
+  saveNow(): void
   /** The stop a signal asks for: stop, then options.exit. False when start() is not far enough to stop yet. */
   requestStop(): boolean
   /**

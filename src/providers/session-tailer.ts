@@ -17,10 +17,19 @@
  * waits in the carry (BYTES: a UTF-8 char split across reads is decoded once) until its newline
  * arrives. `boundary` is the absolute offset of the carry's first byte, the last COMPLETE-line
  * boundary (boundary + carry length === read cursor at all times): it is what the owner publishes
- * (replay, attach, the registry), never a mid-line offset. The carry is a part list, not one
- * Buffer (C26): with no newline in the new bytes nothing completes, so they are only appended; the
- * newline search starts past the carry (it holds none by invariant). A line over `carryMaxBytes`
- * is dropped and the tailer realigns on the next newline (`overflowed` on that batch).
+ * (replay, attach, the registry), never a mid-line offset, with one exception below. The carry is
+ * a part list, not one Buffer (C26): with no newline in the new bytes nothing completes, so they
+ * are only appended; the newline search starts past the carry (it holds none by invariant).
+ *
+ * Carry overflow, the one exception: a line over `carryMaxBytes` is dropped (`overflowed` on that
+ * batch) and the tailer realigns on its newline. From the drop until that newline arrives the
+ * carry is empty and `boundary` IS the cursor, inside the dropped line (each read without a
+ * newline moves both). The newline's read puts `boundary` back on a line end. A reader that starts
+ * at such a mid-line offset (a replay, a rebuilt tailer) gets the rest of the dropped line as its
+ * first line, which is no JSON: its parse() throws, as for any line that is no JSON.
+ *
+ * A file call that never settles (a hung network file system) fails after `readTimeoutMs`
+ * through `onError`, like any failed read, and the next tick reads again from the same cursor.
  *
  * Each line comes with `parse()`: the line's JSON, parsed at the first call and kept (a line that
  * is no JSON throws the same error each call). Every consumer of a line asks it, so a line is
@@ -148,8 +157,25 @@ export interface SessionTailerOptions {
   sliceLines?: number
   /** The loop's budget the slices are handed over under (default: the process's shared one). */
   budget?: LoopBudget
-  /** A read failed (ENOENT excepted: the CLI has not written its first line yet). */
+  /** A read failed (ENOENT excepted: the CLI has not written its first line yet), or timed out. */
   onError(err: unknown, consecutive: number): void
+  /** How long one stat or read may take before it counts as failed (default TAILER_READ_TIMEOUT_MS). */
+  readTimeoutMs?: number
+}
+
+export const TAILER_READ_TIMEOUT_MS = 30_000
+
+/**
+ * `call`, or an ETIMEDOUT error once `ms` passed without it settling. The call itself cannot be
+ * cancelled: a late result is dropped (the next tick reads that range again).
+ */
+function withDeadline<T>(call: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(`session tailer: ${what} did not settle within ${ms}ms`), { code: 'ETIMEDOUT' })), ms)
+    timer.unref?.()
+  })
+  return Promise.race([call, timeout]).finally(() => clearTimeout(timer))
 }
 
 export interface SessionTailer {
@@ -167,13 +193,14 @@ export function createSessionTailer(opts: SessionTailerOptions): SessionTailer {
   let reading: Promise<void> | null = null
   let stopped = false
   let consecutiveErrors = 0
+  const readTimeoutMs = opts.readTimeoutMs ?? TAILER_READ_TIMEOUT_MS
 
   const readOnce = async (): Promise<void> => {
     if (stopped || !opts.active()) return
     try {
-      const { size } = await io.stat(opts.path)
+      const { size } = await withDeadline(io.stat(opts.path), readTimeoutMs, 'stat')
       if (stopped || size <= lines.cursor) { consecutiveErrors = 0; return }
-      const buf = await io.read(opts.path, lines.cursor, Math.min(size - lines.cursor, opts.maxReadBytes))
+      const buf = await withDeadline(io.read(opts.path, lines.cursor, Math.min(size - lines.cursor, opts.maxReadBytes)), readTimeoutMs, 'read')
       if (stopped || !opts.active()) return
       consecutiveErrors = 0
       if (!buf.length) return

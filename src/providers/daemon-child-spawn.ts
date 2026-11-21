@@ -16,6 +16,12 @@
  *
  * With a spawn pool (spawn-pool.ts: a runtime inside a server's process), execFile starts its child
  * on the pool's thread, which gives it the umask itself; one with `shell` stays here.
+ *
+ * With `contain` (also a runtime inside a server's process, where an uncaught error ends the
+ * server), every callback a caller hands in through these functions is guarded: execFile's
+ * callback and each listener added to a returned child or to its stdin, stdout and stderr. A
+ * throw there is reported and the runtime goes on; a daemon program passes none and keeps its
+ * crash-and-restart rule.
  */
 import type * as cp from 'node:child_process'
 import { promisify } from 'node:util'
@@ -27,6 +33,48 @@ export interface DaemonChildDefaults {
   cwd: () => string | undefined
   /** The umask a child is forked with; null leaves the process's own. */
   umask: number | null
+  /** Guards a callback (daemon-runtime-timers.ts contain()); left out, callbacks run as given. */
+  contain?: <A extends unknown[]>(what: string, fn: (...args: A) => unknown) => (...args: A) => void
+}
+
+const LISTENER_ADDERS = ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener'] as const
+const LISTENER_REMOVERS = ['off', 'removeListener'] as const
+
+/**
+ * Every listener later added to `emitter` runs guarded by `contain`. A removal by the caller's own
+ * function finds the guarded one (one guard per function and emitter). Returns the emitter.
+ */
+export function containListeners<T>(emitter: T, contain: NonNullable<DaemonChildDefaults['contain']>): T {
+  if (!emitter || typeof emitter !== 'object') return emitter
+  const em = emitter as unknown as Record<string, unknown>
+  const guards = new WeakMap<object, (...a: unknown[]) => void>()
+  const guardOf = (event: unknown, fn: unknown) => {
+    if (typeof fn !== 'function') return fn
+    let g = guards.get(fn)
+    if (!g) { g = contain(`child ${String(event)} listener`, fn as (...a: unknown[]) => unknown); guards.set(fn, g) }
+    return g
+  }
+  for (const name of LISTENER_ADDERS) {
+    const add = em[name]
+    if (typeof add !== 'function') continue
+    em[name] = function (this: unknown, event: unknown, fn: unknown) { return (add as (...a: unknown[]) => unknown).call(this, event, guardOf(event, fn)) }
+  }
+  for (const name of LISTENER_REMOVERS) {
+    const remove = em[name]
+    if (typeof remove !== 'function') continue
+    em[name] = function (this: unknown, event: unknown, fn: unknown) {
+      return (remove as (...a: unknown[]) => unknown).call(this, event, (typeof fn === 'function' && guards.get(fn)) || fn)
+    }
+  }
+  return emitter
+}
+
+/** A returned child and its three streams with their listeners guarded. */
+function containChild<T>(child: T, contain: DaemonChildDefaults['contain']): T {
+  if (!contain || !child || typeof child !== 'object') return child
+  const c = child as unknown as Record<string, unknown>
+  for (const stream of ['stdin', 'stdout', 'stderr']) if (c[stream]) containListeners(c[stream], contain)
+  return containListeners(child, contain)
 }
 
 interface RawChildProcess {
@@ -89,7 +137,7 @@ export function createDaemonChildSpawn(raw: RawChildProcess, defaults: DaemonChi
   const spawn = ((command: string, ...rest: unknown[]) => {
     const args = Array.isArray(rest[0]) ? rest[0] as string[] : []
     const opts = isObject(rest[0]) ? rest[0] : isObject(rest[1]) ? rest[1] : undefined
-    return underUmask(() => raw.spawn(command, args, fill(opts) as cp.SpawnOptions))
+    return containChild(underUmask(() => raw.spawn(command, args, fill(opts) as cp.SpawnOptions)), defaults.contain)
   }) as typeof cp.spawn
 
   // execFile(file, args?, options?, callback?): any of the three may be left out.
@@ -101,11 +149,12 @@ export function createDaemonChildSpawn(raw: RawChildProcess, defaults: DaemonChi
     let opts: Opts | undefined
     if (isObject(rest[i])) opts = rest[i++] as Opts
     else if (rest[i] == null && typeof rest[i + 1] === 'function') i++
-    const callback = typeof rest[i] === 'function' ? rest[i] as (...a: unknown[]) => void : undefined
-    if (raw.pool && !opts?.shell) return raw.pool.execFile(file, args, fill(opts), callback) as cp.ChildProcess
-    return underUmask(() => (raw.execFile as unknown as (...a: unknown[]) => cp.ChildProcess)(
+    const given = typeof rest[i] === 'function' ? rest[i] as (...a: unknown[]) => void : undefined
+    const callback = given && defaults.contain ? defaults.contain(`execFile ${file} callback`, given) : given
+    if (raw.pool && !opts?.shell) return containChild(raw.pool.execFile(file, args, fill(opts), callback) as cp.ChildProcess, defaults.contain)
+    return containChild(underUmask(() => (raw.execFile as unknown as (...a: unknown[]) => cp.ChildProcess)(
       file, args, fill(opts), ...(callback ? [callback] : []),
-    ))
+    )), defaults.contain)
   }) as typeof cp.execFile
   // util.promisify(execFile) resolves { stdout, stderr }, as node's own does.
   ;(execFile as unknown as Record<symbol, unknown>)[promisify.custom] = (file: string, ...rest: unknown[]) =>

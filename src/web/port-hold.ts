@@ -22,13 +22,7 @@ export async function holdPort(port: number, host?: string): Promise<PortHold | 
   // readiness poll) is cut at once, as a closed port would refuse it, never left hanging.
   const holder = net.createServer({ pauseOnConnect: true }, (socket) => socket.destroy())
   // A port this process let go of a moment ago is retried briefly (listenAfterHold, below).
-  await listenAfterHold(() => new Promise<void>((resolve, reject) => {
-    const onError = (err: Error) => reject(err)
-    holder.once('error', onError)
-    const done = () => { holder.off('error', onError); resolve() }
-    if (host) holder.listen(port, host, done)
-    else holder.listen(port, done)
-  }), { budgetMs: HOLD_RELISTEN_BUDGET_MS })
+  await listenAfterHold(() => listenAttempt(holder, port, host), { budgetMs: HOLD_RELISTEN_BUDGET_MS })
   holder.unref()
   let released: Promise<void> | null = null
   return {
@@ -46,6 +40,23 @@ const RELISTEN_STEP_MS = 25
 const HOLD_RELISTEN_BUDGET_MS = 500
 
 /**
+ * One listen of `server` on `port` (and `host`) that leaves no listener behind, whichever way it
+ * ends: the one it did not need is removed. Each attempt of listenAfterHold is one of these; a
+ * listen callback (`listen(port, cb)`) instead stays as a 'listening' listener on every attempt
+ * that failed, ~80 of them in a 2 s retry.
+ */
+export function listenAttempt(server: net.Server, port: number, host?: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => { server.off('listening', onListening); reject(err) }
+    const onListening = () => { server.off('error', onError); resolve() }
+    server.once('error', onError)
+    server.once('listening', onListening)
+    if (host) server.listen(port, host)
+    else server.listen(port)
+  })
+}
+
+/**
  * The real listen, right after the hold is released. A port this process held a moment ago can
  * still be taken for a few milliseconds: a child that another thread is starting holds a copy of
  * every descriptor of this process until it has exec'd (Bun closes them in the child one by one,
@@ -54,7 +65,9 @@ const HOLD_RELISTEN_BUDGET_MS = 500
  * in_process_daemon), so a listen at that moment met EADDRINUSE and the server died on its own
  * port (2026-11-21, two of a dozen restarts with a session alive). EADDRINUSE is retried until
  * `budgetMs`; any other error, or a port still taken after it, is the caller's as before.
- * `listen` must be callable again after it rejected (node's and Bun's servers are).
+ * `listen` must be callable again after it rejected (node's and Bun's servers are), and must remove
+ * what it added to the server whichever way it ends, or each retry leaves listeners behind:
+ * listenAttempt does both.
  */
 export async function listenAfterHold(
   listen: () => Promise<void>,

@@ -163,3 +163,28 @@ describe('createRuntimeTimers: contain() guards an event handler the same way', 
     rt.clearAll()
   })
 })
+
+// A daemon program (contain=false) keeps its old rule: an error reaches the process, whose crash
+// handler exits for a clean restart that re-adopts every CLI (review S1, 2026-11-21).
+describe('createRuntimeTimers without contain: errors reach the process, as before', () => {
+  it('contain() rethrows, the slow report still runs, nothing is reported as contained', () => {
+    const reported: string[] = []
+    const slow: string[] = []
+    const rt = createRuntimeTimers((what) => { reported.push(what) }, { ms: 0, report: (what) => { slow.push(what) } }, false)
+    expect(() => rt.contain('child exit', () => { throw new Error('boom') })()).toThrow('boom')
+    expect(reported).toEqual([])
+    expect(slow).toEqual(['child exit'])
+  })
+
+  it('a rejected promise is left to the process (no handler attached)', async () => {
+    const reported: string[] = []
+    const rt = createRuntimeTimers((what) => { reported.push(what) }, undefined, false)
+    const p = Promise.reject(new Error('late'))
+    const seen: unknown[] = []
+    p.catch((e) => seen.push(e))
+    rt.contain('rejects', () => p)()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(reported).toEqual([])
+    expect(seen).toHaveLength(1)
+  })
+})

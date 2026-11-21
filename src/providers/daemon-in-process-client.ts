@@ -8,7 +8,10 @@
  *     it, and never in the same turn as the runtime's own work. A backlog is handed over under the
  *     loop's shared budget (loop-budget.ts), so the loop's timers and requests run between.
  *   - A frame the runtime still has only as text (a relay that forwards bytes) is parsed once.
- * Frames are shared objects: neither side mutates one it was handed.
+ * Frames are shared objects: neither side mutates one it was handed, and each is what JSON could
+ * carry. With `checkFrames` (tests, WALNUT_IN_PROCESS_FRAME_CHECK=1 in the runtime's env) both hold
+ * for every frame either way: it is frozen (a write throws) and one that JSON would change (a Date,
+ * a Map, a Buffer, an undefined field) is reported.
  *
  * The runtime sees the client as one of its sockets (`ws`): it is in its client set, the keepalive
  * pings it (answered at once), and its close goes through the runtime's disconnect.
@@ -28,6 +31,25 @@ export interface InProcessClientDeps<Ws> {
   /** Proof of life (the runtime's keepalive). */
   heardFrom(ws: Ws): void
   warn(msg: string, data: Record<string, unknown>): void
+  /** Freeze every frame and report one JSON would change (tests). */
+  checkFrames?: boolean
+}
+
+function deepFreeze(value: unknown): void {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return
+  Object.freeze(value)
+  for (const v of Object.values(value)) deepFreeze(v)
+}
+
+/** Whether `a` is exactly what JSON gives back for it (plain objects, arrays, strings, finite numbers, booleans, null). */
+export function isPlainJson(a: unknown): boolean {
+  if (a === null || typeof a === 'string' || typeof a === 'boolean') return true
+  if (typeof a === 'number') return Number.isFinite(a)
+  if (Array.isArray(a)) return a.every(isPlainJson)
+  if (typeof a !== 'object') return false
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.prototype && proto !== null) return false
+  return Object.values(a as Record<string, unknown>).every((v) => v !== undefined && isPlainJson(v))
 }
 
 export interface InProcessClient {
@@ -76,8 +98,15 @@ export function createInProcessClient<Ws>(
     head = 0
     flushing = false
   }
+  const checked = (frame: Frame, way: string): Frame => {
+    if (!deps.checkFrames) return frame
+    if (!isPlainJson(frame)) deps.warn('in-process frame is not plain JSON', { way, cmd: frame.cmd, ev: frame.ev, id: frame.id })
+    deepFreeze(frame)
+    return frame
+  }
   const deliver = (frame: Frame) => {
     if (ws.readyState !== OPEN) return
+    checked(frame, 'to the client')
     queue.push(frame)
     if (!flushing) { flushing = true; setImmediate(flush) }
   }
@@ -114,6 +143,7 @@ export function createInProcessClient<Ws>(
   deps.register(socket)
 
   const handOver = (frame: Frame) => {
+    checked(frame, 'to the runtime')
     deps.heardFrom(socket)
     try { deps.handleCommandFrame(socket, frame) } catch (err) {
       // The handler answers its own errors; one that escapes it is answered here, never thrown at the caller.

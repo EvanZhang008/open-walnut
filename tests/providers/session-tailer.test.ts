@@ -1,17 +1,19 @@
 /**
  * The session tailer (session-tailer.ts): the pure line assembler, parseOnce, and the tailer
- * itself over an injected file system and injected clocks (no disk, no real interval: each test
- * calls tick() itself).
+ * itself over an injected file system, injected clocks and an injected loop budget (no disk, no
+ * real interval: each test calls tick() itself).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createLineAssembler,
   createSessionTailer,
   parseOnce,
+  TAILER_READ_TIMEOUT_MS,
   type SessionTailerOptions,
   type TailedLine,
   type TailerFs,
 } from '../../src/providers/session-tailer.js'
+import type { LoopBudget } from '../../src/providers/loop-budget.js'
 
 const bytes = (s: string) => Buffer.from(s, 'utf-8')
 
@@ -447,5 +449,203 @@ describe('createSessionTailer', () => {
       expect(t.batches[0].lines).toHaveLength(1)
       expect(spy).not.toHaveBeenCalled()
     } finally { spy.mockRestore() }
+  })
+})
+
+// ---- Slicing under the loop's budget, with a budget the test drives ----
+
+/** A budget the test spends and ends: over() is true once spent; each yieldTurn waits for endTurn(). */
+function fakeBudget() {
+  let spent = false
+  let overCalls = 0
+  let spendAt: number | null = null
+  const turns: Array<Deferred<void>> = []
+  const budget: LoopBudget = {
+    over() {
+      overCalls++
+      if (spendAt !== null && overCalls >= spendAt) { spent = true; spendAt = null }
+      return spent
+    },
+    yieldTurn() { const d = deferred<void>(); turns.push(d); return d.promise },
+  }
+  return {
+    budget,
+    turns,
+    get overCalls() { return overCalls },
+    spend() { spent = true },
+    /** The budget is spent from the nth over() call on (the slices run back to back until then). */
+    spendAtCall(n: number) { spendAt = n },
+    /** Ends the turn the tailer waits on; `spentAgain` leaves the next turn spent too. */
+    endTurn(spentAgain = false) { spent = spentAgain; turns.shift()!.resolve() },
+  }
+}
+
+/** n lines of 2 bytes each ('a\n', 'b\n', ...): line i ends at v = 2 * (i + 1). */
+const nLines = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(97 + i) + '\n').join('')
+
+function slicedTailer(overrides: Partial<SessionTailerOptions> = {}) {
+  const b = fakeBudget()
+  const events: Array<['boundary', number] | ['lines', number[], { overflowed: boolean; last: boolean }]> = []
+  const t = makeTailer({
+    sliceLines: 3,
+    budget: b.budget,
+    onBoundary: (v) => { events.push(['boundary', v]) },
+    onLines: (lines, info) => { events.push(['lines', lines.map((l) => l.v), { overflowed: info.overflowed, last: info.last }]) },
+    ...overrides,
+  })
+  return { ...t, b, events }
+}
+
+describe('createSessionTailer: slices under the loop budget', () => {
+  it('hands a read over sliceLines at a time, each slice\'s boundary published before its lines', async () => {
+    const t = slicedTailer()
+    t.file.append(nLines(7) + 'tor')
+    await t.tailer.tick()
+    expect(t.events).toEqual([
+      ['boundary', 6], ['lines', [2, 4, 6], { overflowed: false, last: false }],
+      ['boundary', 12], ['lines', [8, 10, 12], { overflowed: false, last: false }],
+      // The last slice publishes the assembler's boundary: the last complete line, before the torn tail.
+      ['boundary', 14], ['lines', [14], { overflowed: false, last: true }],
+    ])
+    expect(t.b.overCalls).toBe(3)
+    expect(t.b.turns).toHaveLength(0)
+    expect(t.tailer.boundary).toBe(14)
+    expect(t.tailer.cursor).toBe(17)
+  })
+
+  it('a read with no complete line still makes one empty last slice', async () => {
+    const t = slicedTailer()
+    t.file.append('torn')
+    await t.tailer.tick()
+    expect(t.events).toEqual([['boundary', 0], ['lines', [], { overflowed: false, last: true }]])
+  })
+
+  it('a spent budget makes the next slice wait for a later turn; the read stays in flight meanwhile', async () => {
+    const t = slicedTailer()
+    t.file.append(nLines(7))
+    // Spent from the start: even the first slice waits for the turn to end.
+    t.b.spend()
+    const pending = t.tailer.tick()
+    await vi.waitFor(() => expect(t.b.turns).toHaveLength(1))
+    expect(t.events).toEqual([])
+    // One read in flight: a tick meanwhile joins it.
+    expect(t.tailer.tick()).toBe(pending)
+
+    t.b.endTurn(true) // the fresh turn is spent after its one slice too
+    await vi.waitFor(() => expect(t.b.turns).toHaveLength(1))
+    expect(t.events).toEqual([['boundary', 6], ['lines', [2, 4, 6], { overflowed: false, last: false }]])
+
+    t.b.endTurn() // the next turn has room for the rest
+    await pending
+    expect(t.events.slice(2)).toEqual([
+      ['boundary', 12], ['lines', [8, 10, 12], { overflowed: false, last: false }],
+      ['boundary', 14], ['lines', [14], { overflowed: false, last: true }],
+    ])
+    expect(t.b.turns).toHaveLength(0)
+  })
+
+  it('a stop between slices hands over nothing more, and a tailer from the published boundary re-reads exactly the rest', async () => {
+    const t = slicedTailer()
+    t.file.append(nLines(7))
+    // Spent once the first slice is handed over.
+    t.b.spendAtCall(2)
+    const pending = t.tailer.tick()
+    await vi.waitFor(() => expect(t.b.turns).toHaveLength(1))
+    t.tailer.stop()
+    t.b.endTurn()
+    await pending
+    expect(t.events).toEqual([['boundary', 6], ['lines', [2, 4, 6], { overflowed: false, last: false }]])
+
+    // The owner rebuilds from what was published (6), never from the assembler's cursor (14).
+    const published = (t.events.filter((e) => e[0] === 'boundary').at(-1) as ['boundary', number])[1]
+    expect(published).toBe(6)
+    const delivered: number[] = []
+    const rebuilt = createSessionTailer({
+      path: '/fake/session.jsonl', startOffset: published, maxReadBytes: 1024, carryMaxBytes: 1024,
+      fs: t.file.fs, timers: fakeTimers().timers, active: () => true, sliceLines: 3, budget: fakeBudget().budget,
+      onLines: (lines) => { delivered.push(...lines.map((l) => l.v)) }, onBoundary: () => {}, onError: () => {},
+    })
+    await rebuilt.tick()
+    expect(delivered).toEqual([8, 10, 12, 14])
+  })
+
+  it('active() turning false during the wait for a turn stops the handing over', async () => {
+    const t = slicedTailer()
+    t.file.append(nLines(7))
+    t.b.spendAtCall(2)
+    const pending = t.tailer.tick()
+    await vi.waitFor(() => expect(t.b.turns).toHaveLength(1))
+    expect(t.events).toHaveLength(2)
+    t.setActive(false)
+    t.b.endTurn()
+    await pending
+    expect(t.events).toHaveLength(2)
+  })
+
+  it('tells an overflow on the read\'s last slice only', async () => {
+    const t = slicedTailer({ carryMaxBytes: 4 })
+    t.file.append(nLines(5) + 'whale-tail-over-the-cap')
+    await t.tailer.tick()
+    expect(t.events).toEqual([
+      ['boundary', 6], ['lines', [2, 4, 6], { overflowed: false, last: false }],
+      // After the drop the boundary is the cursor (inside the dropped line, the header's exception).
+      ['boundary', 33], ['lines', [8, 10], { overflowed: true, last: true }],
+    ])
+    expect(t.batches.every((b) => b.info.carryBytes === 23)).toBe(true)
+  })
+})
+
+describe('createSessionTailer: a file call that never settles', () => {
+  const never = <T>() => new Promise<T>(() => {})
+
+  it('a read that hangs fails through onError after readTimeoutMs, and the next tick reads again', async () => {
+    const t = makeTailer({ readTimeoutMs: 30 })
+    t.file.append('a\n')
+    const realRead = t.file.fs.read
+    t.file.fs.read = () => never()
+    await t.tailer.tick()
+    expect(t.errors).toHaveLength(1)
+    expect(t.errors[0]).toMatchObject({ consecutive: 1, err: { code: 'ETIMEDOUT' } })
+    expect(t.batches).toEqual([])
+    expect(t.tailer.cursor).toBe(0)
+
+    // Still hung: counted as consecutive, like any failing read.
+    await t.tailer.tick()
+    expect(t.errors.map((e) => e.consecutive)).toEqual([1, 2])
+
+    // The disk answers again: the same range is read and handed over.
+    t.file.fs.read = realRead
+    await t.tailer.tick()
+    expect(t.delivered()).toEqual([{ line: 'a', v: 2 }])
+    expect(t.errors).toHaveLength(2)
+  })
+
+  it('a stat that hangs times out the same way', async () => {
+    const t = makeTailer({ readTimeoutMs: 30 })
+    t.file.fs.stat = () => never()
+    const started = Date.now()
+    await t.tailer.tick()
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(t.errors).toHaveLength(1)
+    expect(String((t.errors[0].err as Error).message)).toContain('stat did not settle within 30ms')
+  })
+
+  it('a hung read that answers after its timeout hands nothing over twice', async () => {
+    const t = makeTailer({ readTimeoutMs: 30 })
+    t.file.append('a\n')
+    const realRead = t.file.fs.read
+    const late = deferred<Buffer>()
+    t.file.fs.read = () => late.promise
+    await t.tailer.tick()
+    expect(t.errors).toHaveLength(1)
+    t.file.fs.read = realRead
+    await t.tailer.tick()
+    late.resolve(Buffer.from('a\n'))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(t.delivered()).toEqual([{ line: 'a', v: 2 }])
+  })
+
+  it('defaults to TAILER_READ_TIMEOUT_MS', () => {
+    expect(TAILER_READ_TIMEOUT_MS).toBe(30_000)
   })
 })

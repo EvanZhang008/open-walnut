@@ -158,4 +158,16 @@ describe('event-loop blocking ratchet', () => {
       `ScreenCaptureKit native methods referenced outside src/core/audio-capture.ts: ${files.join(', ')}`,
     ).toBe(true);
   });
+
+  // The daemon runtime can run on the server's own thread (experiment in_process_daemon): its
+  // synchronous file reads and sleeps hold every route there too. Counted for daemon-standalone.ts
+  // only; the number may only fall (review S5, 2026-11-21: boot adoption re-folds a stream with
+  // readSync, the isolated-dir reap sleeps with Atomics.wait).
+  it('daemon-standalone.ts: readSync and Atomics.wait call sites do not grow', async () => {
+    const fs = await import('node:fs');
+    const text = fs.readFileSync(path.join(repoRoot, 'src/providers/daemon-standalone.ts'), 'utf8');
+    const count = (re: RegExp) => (text.match(re) ?? []).length;
+    expect(count(/\breadSync\(/g), 'a new readSync( in daemon-standalone.ts: read asynchronously (fs.promises / the tailer)').toBeLessThanOrEqual(9);
+    expect(count(/\bAtomics\.wait\(/g), 'a new Atomics.wait( in daemon-standalone.ts: wait with a timer').toBeLessThanOrEqual(2);
+  });
 });

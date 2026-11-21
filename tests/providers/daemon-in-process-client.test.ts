@@ -4,7 +4,7 @@
  * handler answers through ws.data.deliverFrame (an object) or ws.send (text), as the runtime does.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createInProcessClient, type Frame, type InProcessWs } from '../../src/providers/daemon-in-process-client.js'
+import { createInProcessClient, isPlainJson, type Frame, type InProcessWs } from '../../src/providers/daemon-in-process-client.js'
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
@@ -238,5 +238,35 @@ describe('createInProcessClient: closing', () => {
     expect(ws.send(JSON.stringify({ ev: 'late-text' }))).toBe(0)
     await settle()
     expect(frames).toEqual([])
+  })
+})
+
+// Frames are shared objects (review S8, 2026-11-21): with checkFrames each is frozen and one JSON
+// would change is reported, both ways.
+describe('createInProcessClient with checkFrames', () => {
+  it('isPlainJson tells what JSON keeps from what it changes', () => {
+    expect(isPlainJson({ a: [1, 'x', true, null, { b: 2 }] })).toBe(true)
+    for (const bad of [{ d: new Date(0) }, { m: new Map() }, { u: undefined }, { n: Number.NaN }, { b: Buffer.from('x') }]) expect(isPlainJson(bad)).toBe(false)
+  })
+
+  it('freezes what it hands over and reports a frame that is not plain JSON', async () => {
+    const warned: string[] = []
+    let ws: InProcessWs | null = null
+    const handled: Frame[] = []
+    const { client, ws: socket } = createInProcessClient<InProcessWs>({
+      handleCommandFrame: (_w, frame) => { handled.push(frame) },
+      register: () => {}, unregister: () => {}, heardFrom: () => {},
+      warn: (msg) => { warned.push(msg) },
+      checkFrames: true,
+    }, () => {})
+    ws = socket
+    client.send({ id: 1, cmd: 'x', at: new Date(0) })
+    expect(Object.isFrozen(handled[0])).toBe(true)
+    expect(warned).toEqual(['in-process frame is not plain JSON'])
+    const event = { ev: 'e', nested: { v: 1 } }
+    ws.data.deliverFrame(event)
+    expect(Object.isFrozen(event.nested)).toBe(true)
+    expect(warned).toHaveLength(1)
+    client.close()
   })
 })

@@ -1189,6 +1189,8 @@ async function portInUseError(port: number): Promise<Error> {
 
 /** The server's port, held from before the local daemon starts until listen (port-hold.ts). */
 let serverPortHold: import('./port-hold.js').PortHold | null = null
+/** What stopServer gives an in-process daemon's stop, out of the 7 s signal bail (commands/web.ts). */
+const IN_PROCESS_DAEMON_STOP_BUDGET_MS = 5_000
 
 /**
  * Create and start the server.
@@ -3239,18 +3241,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   await serverPortHold?.release()
   serverPortHold = null
   try {
-    // A port this process held a moment ago is retried briefly on EADDRINUSE (listenAfterHold).
-    const { listenAfterHold } = await import('./port-hold.js')
+    // A port this process held a moment ago is retried briefly on EADDRINUSE (listenAfterHold);
+    // each attempt removes the listeners it added (listenAttempt).
+    const { listenAfterHold, listenAttempt } = await import('./port-hold.js')
     let retries = 0
-    await listenAfterHold(() => new Promise<void>((resolve, reject) => {
-      const onError = (err: Error) => reject(err)
-      httpServer!.once('error', onError)
-      // A host replica listens on loopback only; the companion's unit asks for loopback too (bind-address.ts).
-      const bindAddress = serverBindAddress({ replica: isHostReplica(), requested: options.bindAddress })
-      const done = () => { httpServer!.off('error', onError); resolve() }
-      if (bindAddress) httpServer!.listen(port, bindAddress, done)
-      else httpServer!.listen(port, done)
-    }), { onRetry: (n) => { retries = n } })
+    // A host replica listens on loopback only; the companion's unit asks for loopback too (bind-address.ts).
+    const bindAddress = serverBindAddress({ replica: isHostReplica(), requested: options.bindAddress })
+    await listenAfterHold(() => listenAttempt(httpServer!, port, bindAddress || undefined), { onRetry: (n) => { retries = n } })
     if (retries) log.web.info('listen: the port came free after a brief hold', { port, retries })
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
@@ -7453,6 +7450,13 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // Before the first await: every awaited step below runs through shutdownStep (shutdown-steps.ts),
   // named for the bail and bounded to fit inside the caller's bail when it has one.
   beginShutdownSteps({ bailMs: opts.bailMs })
+  // First: a daemon run in this process (experiment in_process_daemon) stops as a daemon program does
+  // on SIGTERM: drained, its registry saved, its dir's lock released. The production dir's sessions
+  // keep running for the next start; an isolated dir's agents end with it. A program had 45 s for
+  // its drain; here most of the bail, and what it saves last is saved at the budget either way.
+  await shutdownStep('in-process daemon', async () => {
+    await (await import('../providers/in-process-daemon.js')).stopInProcessDaemon(opts.reason ?? 'server stop', IN_PROCESS_DAEMON_STOP_BUDGET_MS - 500)
+  }, { budgetMs: IN_PROCESS_DAEMON_STOP_BUDGET_MS })
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
@@ -7716,12 +7720,6 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   await shutdownStep('launcher leaving mark', async () => {
     (await import('./serve-launcher-beat.js')).serveLauncherLeaving(opts.reason ?? 'server stop')
   }, { budgetMs: 1_000 })
-  // A daemon run in this process (experiment in_process_daemon) stops as a daemon program does on
-  // SIGTERM: drained, its registry saved, its dir's lock released. The production dir's sessions
-  // keep running for the next start; an isolated dir's agents end with it.
-  await shutdownStep('in-process daemon', async () => {
-    await (await import('../providers/in-process-daemon.js')).stopInProcessDaemon(opts.reason ?? 'server stop')
-  }, { budgetMs: 4_000 })
   if (searchV2WiringHandle) {
     const wiring = searchV2WiringHandle
     await shutdownStep('search index', () => wiring.stop(), { budgetMs: 2_500 })
