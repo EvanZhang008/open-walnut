@@ -871,7 +871,7 @@ describe('a host outage folds into one plain card', () => {
     expect(Object.keys(folds).sort()).toEqual([...LINK_FAILURE_KINDS].sort());
     const session = createSubsystemLogger('session');
     LINK_FAILURE_KINDS.forEach((kind, i) => {
-      session.error('transport start failed', { host: `box${i}`, taskId: `t${i}`, linkKind: kind, error: 'a dial failure in words nobody listed' });
+      session.error('transport start failed', { host: `box${i}`, taskId: `t${i}`, linkFailureKind: kind, error: 'a dial failure in words nobody listed' });
     });
     const feed = await feedAfterCount(LINK_FAILURE_KINDS.length);
     LINK_FAILURE_KINDS.forEach((kind, i) => {
@@ -884,7 +884,7 @@ describe('a host outage folds into one plain card', () => {
     const src = fs.readFileSync(path.resolve('src/providers/claude-code-session.ts'), 'utf8');
     const at = src.indexOf("('transport start failed', {");
     expect(at).toBeGreaterThan(0);
-    expect(src.slice(at, at + 600)).toContain('linkKind: linkFailure');
+    expect(src.slice(at, at + 600)).toContain('linkFailureKind: linkFailure');
   });
 
   it('the host network sentence for a silent daemon folds under its host', async () => {

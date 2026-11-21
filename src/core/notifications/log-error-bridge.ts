@@ -341,11 +341,11 @@ export function installLogErrorNotifications(
     // persisted into the key and rendered as a group heading.
     const redactedCause = redactSensitiveText(causeText);
     // A producer that holds the error itself says its link-failure kind
-    // (link-failure.ts) in `meta.linkKind`: 'no-link' means the command never
+    // (link-failure.ts) in `meta.linkFailureKind`: 'no-link' means the command never
     // reached the host, whatever words the dial failed with, so it is the host's
-    // outage by kind, not by a wording this file must know. (`linkKind`, since
+    // outage by kind, not by a wording this file must know. (`linkFailureKind`, since
     // other producers log a `linkFailure` sentence.)
-    const noLink = payload.meta?.linkKind === 'no-link';
+    const noLink = payload.meta?.linkFailureKind === 'no-link';
     const causeKey = causeKeyForError({
       text: redactedCause,
       ...(metaHost ? { host: metaHost } : {}),

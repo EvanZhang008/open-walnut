@@ -3665,7 +3665,7 @@ export class ClaudeCodeSession {
         taskId: this.taskId, host: host ?? 'local', cwd, isRemote: !!sshTarget,
         error: err instanceof Error ? err.message : String(err),
         // The kind lets Walnut Health fold a dead link into its host's one outage card.
-        ...(linkFailure ? { linkKind: linkFailure } : {}),
+        ...(linkFailure ? { linkFailureKind: linkFailure } : {}),
         ...(startRecovering ? { startRecovery: true } : {}),
       })
       this._rejectSessionReady(err)
