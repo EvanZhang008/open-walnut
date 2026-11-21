@@ -104,16 +104,19 @@ export function useVoiceConversation(
   const reopenMic = (gen: number): Promise<VoiceMic | null> => {
     const ctx = ctxRef.current;
     if (!ctx) return Promise.resolve(null);
-    micOpeningRef.current ??= VoiceMic.open(ctx).then((mic) => {
-      micOpeningRef.current = null;
-      if (genRef.current !== gen) { mic.close(); return null; }
+    if (micOpeningRef.current) return micOpeningRef.current;
+    const opening: Promise<VoiceMic | null> = VoiceMic.open(ctx).then((mic) => {
+      if (micOpeningRef.current === opening) micOpeningRef.current = null;
+      // Closed, or paused again while the browser opened it: the mic stays off.
+      if (genRef.current !== gen || stateRef.current?.phase !== 'listening') { mic.close(); return null; }
       micRef.current = mic;
       return mic;
     }, (err) => {
-      micOpeningRef.current = null;
+      if (micOpeningRef.current === opening) micOpeningRef.current = null;
       if (genRef.current === gen) dispatch({ type: 'mic-failed', error: `The microphone did not open: ${err instanceof Error ? err.message : String(err)}` });
       return null;
     });
+    micOpeningRef.current = opening;
     return micOpeningRef.current;
   };
 
@@ -281,6 +284,7 @@ export function useVoiceConversation(
       if (reply) lastReplyRef.current = reply;
       dispatch({ type: 'reply', spoken: reply?.text ?? null });
     }, (err) => {
+      if (genRef.current !== gen) return;
       log.warn('voice', 'spoken text failed', { sessionId: sessionRef.current, error: err instanceof Error ? err.message : String(err) });
       dispatch({ type: 'reply', spoken: null });
     });

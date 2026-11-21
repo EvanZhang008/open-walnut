@@ -17,8 +17,6 @@
   column-gap: 16px;
   row-gap: 4px;
   padding: 16px;
-  /* Room for the two lines of words in every state, so the transcript above never jumps. */
-  min-height: 88px;
   box-sizing: border-box;
 }
 
@@ -69,14 +67,14 @@
 .voice-bar-text {
   grid-area: text;
   min-width: 0;
+  /* Room for the two lines (what was heard, what is said) in every state, so the transcript above does not jump. */
+  min-height: 40px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.voice-bar-text:empty {
-  display: none;
-}
+
 
 .voice-bar-title {
   grid-area: title;
@@ -87,11 +85,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  column-gap: 8px;
+  /* The tools' 28 px line: the title's first line sits on its centre. */
+  line-height: 28px;
 }
 
 .voice-bar-hint {
   font-size: 12px;
+  line-height: 20px;
   font-weight: 400;
   color: var(--fg-muted);
 }
@@ -140,7 +141,7 @@
 @container (max-width: 480px) {
   .voice-bar-inner {
     grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas: 'orb title' 'orb text' 'tools tools';
+    grid-template-areas: 'orb title' 'orb text' 'orb tools';
   }
   .voice-bar-tools {
     justify-content: flex-end;

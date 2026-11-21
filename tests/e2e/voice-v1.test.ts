@@ -59,7 +59,7 @@ describe('/api/v1/voice', () => {
     const res = await post('/api/v1/voice/spoken', { text: 'Done. All tests passed.\n\n---\n\n| a | b |\n```ts\nx\n```' })
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.text).toBe('Done. All tests passed.')
+    expect(body.text).toBe('Done. All tests passed. The rest is on screen.')
     expect(body.language).toBe('en-US')
     expect(body.truncated).toBe(true)
     expect(body.chunks[0]).toBe('Done.')

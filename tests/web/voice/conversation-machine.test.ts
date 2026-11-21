@@ -128,6 +128,23 @@ describe('voice conversation', () => {
     expect(run([{ type: 'reply', spoken: null }], listening).effects).toEqual([])
   })
 
+  it('an answer that comes while another is read is read next, never lost', () => {
+    const speaking = run([{ type: 'reply', spoken: 'Old answer.' }]).state
+    const held = run([{ type: 'reply', spoken: 'New answer.' }], speaking)
+    expect(held.state.phase).toBe('speaking')
+    expect(held.state.pending).toBe('New answer.')
+    const next = run([{ type: 'speech-done' }], held.state)
+    expect(next.state.phase).toBe('speaking')
+    expect(next.state.lastSpoken).toBe('New answer.')
+    expect(next.effects).toEqual(['speak'])
+    expect(run([{ type: 'speech-done' }], next.state).state.phase).toBe('listening')
+    // An answer that came while they talked: dropped once they send something new.
+    const talking = run([{ type: 'speech-start' }, { type: 'reply', spoken: 'Stale.' }, { type: 'end-of-speech' }]).state
+    expect(run([{ type: 'transcribed', take: talking.take, text: 'next question' }], talking).state.pending).toBeNull()
+    // Only a cough: the answer is read.
+    expect(run([{ type: 'transcribed', take: talking.take, text: '' }], talking).state.lastSpoken).toBe('Stale.')
+  })
+
   it('a mic that does not open again pauses with its sentence', () => {
     const { state } = run([{ type: 'mic-failed', error: 'The microphone did not open: gone' }])
     expect(state.phase).toBe('paused')

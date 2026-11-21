@@ -22,7 +22,8 @@ function OrbIcon({ phase }: { phase: VoicePhase }) {
   if (phase === 'transcribing' || phase === 'waiting') {
     return (
       <svg className="voice-orb-spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+        <circle cx="12" cy="12" r="10" opacity="0.3" />
+        <path d="M12 2a10 10 0 1 1 -10 10" strokeLinecap="round" />
       </svg>
     );
   }
@@ -59,8 +60,8 @@ export function VoiceTalkButton({ onClick, disabled }: { onClick: () => void; di
   );
 }
 
-/** `onStopRun` stops the session's turn (the composer's ■), shown while it works. */
-export function VoiceConversationBar({ voice, onStopRun }: { voice: VoiceConversation; onStopRun?: () => void }) {
+/** `onStopRun` stops the session's turn (the composer's ■); shown whenever the turn runs (`running`), whatever the voice does. */
+export function VoiceConversationBar({ voice, onStopRun, running }: { voice: VoiceConversation; onStopRun?: () => void; running?: boolean }) {
   const state = voice.state;
   const phase: VoicePhase = state?.phase ?? 'paused';
   const status = STATUS[phase];
@@ -86,7 +87,7 @@ export function VoiceConversationBar({ voice, onStopRun }: { voice: VoiceConvers
       </div>
       <div className="voice-bar-tools">
         {engineLabel && <span className="voice-bar-engine" data-testid="voice-engine">{engineLabel}</span>}
-        {phase === 'waiting' && onStopRun && (
+        {(running || phase === 'waiting') && onStopRun && (
           <button type="button" className="btn btn-sm" onClick={onStopRun} data-testid="voice-stop-run" title="Stop the agent's turn">
             Stop
           </button>

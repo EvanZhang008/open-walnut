@@ -106,6 +106,8 @@ test('talk, pause sends with the voice hint, the answer is read, then it listens
   await talkAndPause(page)
   await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
   await expect(page.getByTestId('voice-heard')).toContainText('What is on today?')
+  // While the turn works, the bar offers the composer's stop.
+  await expect(column.getByTestId('voice-stop-run')).toBeVisible()
   const sent = await sends(page)
   expect(sent).toHaveLength(1)
   expect(JSON.stringify(sent[0])).toContain('What is on today?')

@@ -27,6 +27,8 @@ export interface VoiceState {
   error: string | null;
   /** Bumps on every new take, so a late transcription of an old take is dropped. */
   take: number;
+  /** An answer that came while another was read or the person talked: read once it is quiet again. */
+  pending?: string | null;
 }
 
 export type VoiceEffect =
@@ -74,7 +76,7 @@ export function openVoice(): Step {
 function speak(state: VoiceState, spoken: string): Step {
   const effects: VoiceEffect[] = state.phase === 'listening' ? [{ type: 'discard-take' }] : [];
   effects.push({ type: 'speak', text: spoken });
-  return { state: { ...state, phase: 'speaking', heard: false, lastSpoken: spoken, error: null }, effects };
+  return { state: { ...state, phase: 'speaking', heard: false, lastSpoken: spoken, error: null, pending: null }, effects };
 }
 
 function listen(state: VoiceState, extra: VoiceEffect[] = [], patch: Partial<VoiceState> = {}): Step {
@@ -102,9 +104,10 @@ export function reduceVoice(state: VoiceState, event: VoiceEvent): Step {
     case 'transcribed': {
       if (state.phase !== 'transcribing' || event.take !== state.take) return same(state);
       const text = event.text.trim();
-      // Noise, a cough: nothing to send, keep listening.
-      if (!text) return listen(state);
-      return { state: { ...state, phase: 'waiting', lastHeard: text, error: null }, effects: [{ type: 'send', text }] };
+      // Noise, a cough: nothing to send; an answer that came meanwhile is read, else keep listening.
+      if (!text) return state.pending ? speak(state, state.pending) : listen(state);
+      // They said something new: an answer that came while they talked is stale now.
+      return { state: { ...state, phase: 'waiting', lastHeard: text, error: null, pending: null }, effects: [{ type: 'send', text }] };
     }
 
     case 'transcribe-failed':
@@ -121,7 +124,7 @@ export function reduceVoice(state: VoiceState, event: VoiceEvent): Step {
       // An answer arrives for a turn we were waiting on, or one the session started
       // itself while the person was quiet; never over what they are saying.
       const quiet = state.phase === 'waiting' || (state.phase === 'listening' && !state.heard);
-      if (!quiet) return same(state);
+      if (!quiet) return event.spoken ? same({ ...state, pending: event.spoken }) : same(state);
       if (!event.spoken) return state.phase === 'waiting' ? listen(state) : same(state);
       return speak(state, event.spoken);
     }
@@ -137,7 +140,8 @@ export function reduceVoice(state: VoiceState, event: VoiceEvent): Step {
 
     case 'speech-done':
       if (state.phase !== 'speaking') return same(state);
-      return listen(state);
+      // An answer that came meanwhile is read next.
+      return state.pending ? speak(state, state.pending) : listen(state);
 
     case 'speak-failed':
       if (state.phase !== 'speaking') return same(state);

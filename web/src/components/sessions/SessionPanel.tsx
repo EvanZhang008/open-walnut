@@ -4315,7 +4315,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           {voice.micError && !voice.open && (
             <div className="composer-prompt-warning" role="alert" data-testid="voice-mic-error">{voice.micError}</div>
           )}
-          {voice.open ? <VoiceConversationBar voice={voice} onStopRun={handleStopTurn} /> : (
+          {voice.open ? <VoiceConversationBar voice={voice} onStopRun={handleStopTurn} running={pageStreaming(threads.stack.api.currentKey)} /> : (
           <ChatInput
             sendBlocked={macSessionAway}
             sendSlot={voiceOn && !plainChat && !ownComposerLight && !macSessionAway ? <VoiceTalkButton onClick={voice.start} /> : undefined}

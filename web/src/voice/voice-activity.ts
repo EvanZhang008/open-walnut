@@ -37,7 +37,9 @@ export const ECHO_LEARN_MS = 500;
 /** A voice must be this many times louder than the leak it would carry anyway. */
 const ECHO_MARGIN = 2;
 /** The leak measured is never taken above this: someone talking at once must not lock barge-in out. */
-const MAX_LEAK = 3;
+const MAX_LEAK = 1;
+/** However loud the output, a voice this loud always counts (a raised voice near the mic). */
+const MAX_ECHO_THRESHOLD = 0.15;
 
 export type ActivityEvent = 'speech-start' | 'end-of-speech' | null;
 
@@ -80,7 +82,7 @@ export class VoiceActivity {
           this.loudSince = null;
           return null;
         }
-        threshold = Math.max(threshold, this.echoEnv * this.leak * ECHO_MARGIN);
+        threshold = Math.max(threshold, Math.min(MAX_ECHO_THRESHOLD, this.echoEnv * this.leak * ECHO_MARGIN));
       }
     }
     const loud = rms > threshold;

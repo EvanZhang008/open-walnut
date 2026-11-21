@@ -108,6 +108,14 @@ describe('voice activity', () => {
     expect(feedEcho(v, 0.2, 0.3, 0.3, ECHO_LEARN_MS, 0).events).toEqual([])
   })
 
+  it('someone talking from the first moment never locks barge-in out', () => {
+    const v = new VoiceActivity(BARGE_IN_OPTIONS)
+    // They talk over the leak-measuring half second: the leak reads high.
+    const r = feedEcho(v, 0.2, 0.3, 0.5, ECHO_LEARN_MS, 0)
+    // A raised voice still counts.
+    expect(feedEcho(v, 0.2, 0.3, 0.2, 500, r.t).events.length).toBe(1)
+  })
+
   it('with headphones (no leak) a normal voice interrupts', () => {
     const v = new VoiceActivity(BARGE_IN_OPTIONS)
     const r = feedEcho(v, 0.2, 0, 0, 1000, 0)
