@@ -48,9 +48,10 @@ function clock() {
 }
 
 describe('who waits', () => {
-  it('only a server Walnut.app started itself, never a deploy\'s launchd server or any other', () => {
+  it('only a server Walnut.app started itself (its own mark), never a deploy\'s server or any other', () => {
     expect(isAppStartedServer({ WALNUT_LAUNCHER: 'mac-app' })).toBe(true)
-    expect(isAppStartedServer({ WALNUT_LAUNCHER: 'mac-app', WALNUT_LAUNCHD_LABEL: 'com.open-walnut.dev-prod' })).toBe(false)
+    // The app passes its own environment on: opened from a deploy's server, it carries that label.
+    expect(isAppStartedServer({ WALNUT_LAUNCHER: 'mac-app', WALNUT_LAUNCHD_LABEL: 'com.open-walnut.dev-prod' })).toBe(true)
     expect(isAppStartedServer({})).toBe(false)
     expect(isAppStartedServer({ WALNUT_LAUNCHER: 'cli' })).toBe(false)
   })
@@ -108,7 +109,7 @@ describe('waitOutDeploySwitch', () => {
     writeSwitch(h, gone.pid!)
     expect(await waitOutDeploySwitch({ home: h, lockFile, env: APP_ENV, now: c.now, sleep: c.sleep })).toBe('none')
     writeSwitch(h, livePid())
-    expect(await waitOutDeploySwitch({ home: h, lockFile, env: { WALNUT_LAUNCHER: 'mac-app', WALNUT_LAUNCHD_LABEL: 'x' }, now: c.now, sleep: c.sleep })).toBe('none')
+    expect(await waitOutDeploySwitch({ home: h, lockFile, env: { WALNUT_LAUNCHD_LABEL: 'x' }, now: c.now, sleep: c.sleep })).toBe('none')
   })
 })
 

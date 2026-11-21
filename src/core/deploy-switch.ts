@@ -9,7 +9,7 @@
  * the instance lock before the deploy's own server could (2026-11-21: from then on the app's
  * server, not the deploy's compiled file, served production, and every remote host got a daemon
  * without the compiled file's ACP files). A server the app started itself (WALNUT_LAUNCHER=
- * mac-app, and no launchd job of a deploy) that finds a live switch waits for the deploy's
+ * mac-app) that finds a live switch waits for the deploy's
  * server to take the lock; the lock then refuses it, and the app attaches to the deploy's
  * server (desktop/main.swift handleServerStartupFailure). Bounded: a switch whose deploy is
  * gone, an old one, or one that outlasts MAX_WAIT_MS lets it start as before.
@@ -25,9 +25,15 @@ export function deploySwitchFile(home: string): string {
   return path.join(home, 'local', 'deploy-switch.json')
 }
 
-/** A server Walnut.app started itself, which the app restarts on its own: the only one that waits. */
+/**
+ * A server Walnut.app started itself, which the app restarts on its own: the only one that waits.
+ * The app sets WALNUT_LAUNCHER=mac-app for its own server; both of a deploy's launch paths remove
+ * it (scripts/dev-prod.sh). Other variables say nothing: the app passes its own environment on,
+ * and an app opened from a deploy's server carries that server's WALNUT_LAUNCHD_LABEL (2026-11-21:
+ * read as "a deploy's server", the app's restart did not wait).
+ */
 export function isAppStartedServer(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.WALNUT_LAUNCHER === 'mac-app' && !env.WALNUT_LAUNCHD_LABEL
+  return env.WALNUT_LAUNCHER === 'mac-app'
 }
 
 export interface DeploySwitch { pid: number; at: number }
