@@ -28,7 +28,18 @@ const fs = require('node:fs')
 const path = require('node:path')
 const open = []
 let held = null
-const walSize = (file) => { try { return fs.statSync(file + '-wal').size } catch { return -1 } }
+// A -wal's size and head (checkpoint sequence and salts): a commit grows it, a restart
+// (writing again from frame 1 after a full checkpoint) changes the head even at the same size.
+const walSig = (file) => {
+  try {
+    const fd = fs.openSync(file + '-wal', 'r')
+    try {
+      const head = Buffer.alloc(32)
+      const n = fs.readSync(fd, head, 0, 32, 0)
+      return fs.fstatSync(fd).size + ':' + head.subarray(0, n).toString('hex')
+    } finally { fs.closeSync(fd) }
+  } catch { return 'none' }
+}
 const ensureWal = (file) => {
   // A read-only connection to a WAL database needs its -wal to exist (src/lib/sqlite.ts).
   try {
@@ -52,7 +63,7 @@ parentPort.on('message', (m) => {
         ensureWal(file)
         const db = new Database(file, { readonly: true })
         db.exec('PRAGMA busy_timeout = 5000')
-        open.push({ file, db, wal: -1 })
+        open.push({ file, db, wal: '' })
       }
       parentPort.postMessage({ ok: true })
     } else if (m.cmd === 'pin') {
@@ -62,11 +73,11 @@ parentPort.on('message', (m) => {
         for (const o of open) {
           o.db.exec('BEGIN')
           o.db.query('SELECT count(*) FROM sqlite_master').get()
-          o.wal = walSize(o.file)
+          o.wal = walSig(o.file)
         }
-        // A commit after a database's pin grows its -wal (a pinned reader keeps it from
-        // being reset): any growth before the last pin means the pins are not one moment.
-        if (open.every((o) => walSize(o.file) === o.wal)) {
+        // A commit after a database's pin changes its -wal's size or head: any change before
+        // the last pin means the pins are not one moment.
+        if (open.every((o) => walSig(o.file) === o.wal)) {
           parentPort.postMessage({ ok: true, pinnedAt, pinnedEnd: Date.now(), attempts: attempt })
           return
         }

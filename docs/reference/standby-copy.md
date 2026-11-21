@@ -21,26 +21,33 @@ experiment `switchable_leader` (off by default).
 
 ## One moment
 
-A batch runs in five steps (`batch.ts`):
+A batch runs in six steps (`batch.ts`):
 
 1. **Scan.** Walk the home (`scan.ts`, about 0.4 s for 100k files) and compare each file's
-   stat with the last batch: size, mtime, **ctime** and inode.
+   stat with the last batch: size, mtime, **ctime** and inode. Each dir's stat is noted too,
+   before it is listed.
 2. **Hold.** Hold Walnut's own gated writes for an instant (`src/utils/write-gate.ts`: every
    `withFileLock` section and every `writeTextFile`/`writeJsonFile`), wait for the ones under
    way, let 15 ms pass, read the filesystem's clock (the ctime of a probe file in
    `tmp/standby-staging/`: that is the batch's **moment**), then pin every database at once
    (`sqlite-pin.ts`: a worker thread holds a read-only connection to each and starts a read
-   transaction on all of them; a commit that lands between the first pin and the last makes
-   it pin again). Changed plain files up to 8 MB in total are read into memory (the staging
-   area) while the hold is on. Then writes go on.
-3. **Stage.** Copy each changed database as pinned (`sqlite3_serialize` inside its read
+   transaction on all of them; a commit that lands between the first pin and the last, seen
+   by the `-wal` size or its header, which a WAL restart changes, makes it pin again; a
+   database replaced since the scan voids the batch). Then the **names at the moment**
+   (`moment-names.ts`): every dir whose stat moved since the scan is listed again, so a file
+   made after the scan is known to have existed at the moment even if it is replaced or
+   removed right after. Changed plain files and such new files, up to 8 MB in total, are read
+   into memory (the staging area) while the hold is on. Then writes go on.
+3. **Stage.** Read the changed files the hold did not.
+4. **Re-scan.** Walk again and place every path of either scan or of the moment's names: a
+   path that did not exist at the moment is the next batch's; a file whose last change came
+   before the moment is taken now; anything else (changed after the moment with no copy from
+   before it, a dir whose names at the moment cannot be told) voids the batch.
+5. **Databases.** Copy each changed database as pinned (`sqlite3_serialize` inside its read
    transaction, in the worker's memory: page for page, so only the chunks whose pages changed
-   are new) and read the changed files the hold did not.
-4. **Re-scan.** Walk again and place every move since step 1: a file whose last change came
-   before the moment is taken now; a file born after the moment is the next batch's; anything
-   else (changed after the moment with no copy from before it, removed around the moment)
-   voids the batch.
-5. **Send.** Fixed 1 MiB chunks named by their sha256 (`chunks.ts`), sent as they are read,
+   are new). The pins hold since the moment, so this comes after the re-scan: the window in
+   which a plain file's change can void the batch is the scan time, not the databases' copy.
+6. **Send.** Fixed 1 MiB chunks named by their sha256 (`chunks.ts`), sent as they are read,
    only those the target lacks. Then commit. Fixed, not content-defined like the backup's
    chunker: cutting by content is a JavaScript pass over every byte, and made one batch of a
    1.2 GB database take about 100 s; a home's large files (databases, appended logs,
@@ -54,8 +61,10 @@ because a ctime comes from a coarse kernel clock: on clouddev a write's ctime la
 clock by 10 ms, enough to place a write made after a wall-clock moment before it (seen in a
 test, 2026-11-21). The content is hashed once, while it is read; a second hash after the read
 would cost a second full read and prove nothing the unchanged ctime does not. The hold makes a void batch
-rarer; this rule makes a wrong batch impossible, whatever the writer: the notes app, a
-plugin's process, a person.
+rarer; this rule, with the names at the moment, is what keeps a committed batch to one
+moment, whatever the writer: the notes app, a plugin's process, a person. It rests on the
+filesystem keeping ctimes as POSIX says (a name added to or removed from a dir moves the dir's
+ctime); tested on Linux ext4, not yet on APFS.
 
 **Changes the scan sees.** Any write, rename or `utimes` moves a file's ctime, so a rewrite
 that keeps the size and the mtime is still seen. Not seen: a change while the system clock
@@ -77,7 +86,8 @@ moment; the writes under way did not end within 300 ms.
 <target>/copy/              the copy of the home: files 0400 (0500 executable), dirs 0500
 <target>/copy-stat.json     each copied file's stat as written: a cheap verify compares it
 <target>/.apply/            a batch being made current: journal.json, new/, old/
-<target>/drift/<time>/      what a verify pass found changed in copy/, and report.json
+<target>/drift/<time>/      what a verify pass (or a commit, `<time>-commit`) found changed in
+                            copy/, and report.json
 ```
 
 The whole target is its owner's only (0700): it holds the home's credentials.
@@ -90,6 +100,13 @@ and no state write, every path goes back to the previous batch; with the state w
 only the cleanup is left. A batch with no change writes no chunk, no file and no manifest:
 only the position (`batch`, `takenAt`) moves.
 
+Before the swap, each path the batch replaces or removes is compared with what the last commit
+wrote (`copy-stat.json`): a file edited in the copy is saved to `drift/<time>-commit/` first,
+so a commit never drops an edit silently, and an entry that is not a dir on the way to a path
+(a link someone put there) is moved there whole, so nothing is ever written through it. A
+failure of the state write rolls the swap back unless the write had landed; a failure of the
+cleanup after it leaves the batch current, and the next caller's recovery finishes it.
+
 Tested (`tests/core/standby/target-crash.test.ts`): a process killed with SIGKILL after the
 files are built, after the journal, between moving a file's old version out and its new one
 in, halfway through the swap, after the swap, and after the state write; the disk full while
@@ -97,14 +114,20 @@ chunks arrive and while files are built. Each leaves one whole batch that verifi
 
 ## Verify (A3)
 
-`verifyStandby` (`verify.ts`) compares each file of the current batch with what commit wrote:
+`verifyStandby` (`verify.ts`) works in an order that never writes through an entry someone put
+in the copy. First it moves to `drift/<time>/files/`, as they are, every entry that is neither
+a file nor a dir (a link is moved, never followed), every dir where a file of the batch
+belongs, every dir no file of the batch lies under (an added empty dir too), and every other
+file the batch does not have. Then it compares each file of the batch with what commit wrote:
 its stat first (an edit, a chmod, a replace moves the ctime or the inode), its sha256 when the
-stat moved or with `--deep`. A changed file is copied to `drift/<time>/files/`, then built
-again from its chunks; a file the batch does not have is moved there; a missing one is built
-again. One `report.json` per pass that found drift; the server hands each report to Walnut
-Health once (`publishErrorNotification`, no `needsYou`: it never pops up to the person). A CLI
-pass leaves its report for the server's next pass. The runner verifies after every batch;
-`--deep` also removes chunks no file uses any more.
+stat moved or with `--deep`. A changed file is copied to drift, then built again from its
+chunks; a missing one is built again; one it cannot read is opened and read, or moved to drift
+and built again; a dir it cannot read is opened. Last, every dir gets its read-only mode back
+(quietly: the edit inside is what is reported). One `report.json` per pass that found drift;
+the server hands each report, a commit's included, to Walnut Health once
+(`publishErrorNotification`, no `needsYou`: it never pops up to the person). A CLI pass leaves
+its report for the server's next pass. The runner verifies after every batch; `--deep` also
+removes chunks no file uses any more.
 
 ## Running it
 
@@ -150,3 +173,9 @@ outside it.
 - Debounced writes that are still in memory are not in a batch (the same as at a crash);
   a manual switch must flush first (phase B).
 - Symlinks in the home are skipped, as the backup skips them.
+- Reading a WAL database read-only needs its `-wal` file: when one is missing, the pin worker
+  creates it empty in the home (the copy's one write to the leader's side; SQLite would do the
+  same on its next open).
+- The write gate knows a held write by an async context: a timer or a detached promise started
+  inside a gated section inherits it and passes the gate later. That only makes a void batch
+  more likely, never a wrong one (the rule above does not rely on the gate).

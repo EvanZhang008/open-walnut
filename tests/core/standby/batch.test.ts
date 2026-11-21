@@ -139,7 +139,7 @@ describe('a void batch', () => {
     // Unchanged at the scan, changed right after the hold: its content at the moment is unknown.
     const out = await batch({ afterHold: () => write(sb.home, 'user-own-folder/plan.md', 'changed after the moment\n') })
     expect(out.ok).toBe(false)
-    expect(!out.ok && out.reason).toMatch(/plan\.md changed after the batch's moment/)
+    expect(!out.ok && out.reason).toMatch(/plan\.md changed or went after the batch's moment/)
     expect((await standbyStatus(sb.target)).batch).toBe(1)
   })
 
@@ -178,5 +178,68 @@ describe('a void batch', () => {
     const out = await batch({ afterScan: () => { seeded.dbs[2].close(); dbs.splice(dbs.indexOf(seeded.dbs[2]), 1); for (const s of ['', '-wal', '-shm']) fs.rmSync(path.join(sb.home, `cache/applied-ops.sqlite${s}`), { force: true }) } })
     expect(out.ok).toBe(false)
     expect((await standbyStatus(sb.target)).batch).toBe(1)
+  })
+})
+
+describe('the names at the moment come from the moment, not from the first scan', () => {
+  const rewrite = (rel: string, content: string) => {
+    // As writeTextFile does: a temp file renamed over the old one (a new inode).
+    const abs = path.join(sb.home, rel)
+    fs.writeFileSync(`${abs}.next`, content)
+    fs.renameSync(`${abs}.next`, abs)
+  }
+
+  it('a file made after the first scan and replaced after the hold is in the batch as it was at the moment', async () => {
+    sb = await sandbox('born-replaced')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    const out = await batch({
+      afterScan: () => write(sb.home, 'user-own-folder/new.md', 'v1 at the moment\n'),
+      afterHold: () => rewrite('user-own-folder/new.md', 'v2 after the moment\n'),
+    })
+    // A batch may be void here, never complete without the file that existed at its moment.
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.readFileSync(copyOf('user-own-folder/new.md'), 'utf8')).toBe('v1 at the moment\n')
+  })
+
+  it('a file made after the first scan and deleted after the hold is in the batch too', async () => {
+    sb = await sandbox('born-deleted')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    const out = await batch({
+      afterScan: () => write(sb.home, 'artifacts/notes/fresh/n.md', 'made before the moment\n'),
+      afterHold: () => fs.rmSync(path.join(sb.home, 'artifacts/notes/fresh'), { recursive: true }),
+    })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.readFileSync(copyOf('artifacts/notes/fresh/n.md'), 'utf8')).toBe('made before the moment\n')
+    // The next batch is of a later moment: the file is gone there.
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    expect(fs.existsSync(copyOf('artifacts/notes/fresh/n.md'))).toBe(false)
+  })
+
+  it('a file made after the moment waits for the next batch', async () => {
+    sb = await sandbox('born-late')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const out = await batch({ afterHold: () => write(sb.home, 'user-own-folder/later.md', 'after\n') })
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.existsSync(copyOf('user-own-folder/later.md'))).toBe(false)
+    await settle()
+    expect((await batch()).ok).toBe(true)
+    expect(fs.readFileSync(copyOf('user-own-folder/later.md'), 'utf8')).toBe('after\n')
+  })
+
+  it.skipIf(process.platform === 'win32')('a backslash is part of a file name on this platform, not a separator', async () => {
+    sb = await sandbox('backslash')
+    dbs.push(...seedHome(sb.home).dbs)
+    write(sb.home, 'user-own-folder/a\\b.md', 'a name with a backslash\n')
+    await settle()
+    const out = await batch()
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(fs.readFileSync(copyOf('user-own-folder/a\\b.md'), 'utf8')).toBe('a name with a backslash\n')
+    expect((await verifyStandby(sb.target)).drift).toEqual([])
   })
 })

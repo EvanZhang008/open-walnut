@@ -21,7 +21,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { holdWrites } from '../../utils/write-gate.js'
 import type { ChunkSink, FileDigest } from './chunks.js'
-import { scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
+import { DB_NAME, scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
+import { namesAtMoment, type MomentNames } from './moment-names.js'
 import { openPinWorker, type Pin, type PinWorker } from './sqlite-pin.js'
 import { stageFile, type StageContext, type StageOutcome } from './stage.js'
 import { STANDBY_FORMAT, STANDBY_VERSION, chunkIds, type BatchFile, type BatchManifest, type CommitResult, type SourceStat, type StandbyTransport } from './types.js'
@@ -62,6 +63,8 @@ export interface BatchStats {
   sentChunks: number
   sentBytes: number
   pinAttempts: number
+  /** Time the hold spent on the dirs' names at the moment. */
+  namesMs: number
 }
 
 export type BatchOutcome =
@@ -75,15 +78,29 @@ export class VoidBatch extends Error {
   }
 }
 
-/** A database's change detector: its own stat, moved on by its -wal's. */
+/** A database's change detector: its own stat, moved on by its -wal's (size, times and head). */
 async function databaseStat(abs: string): Promise<SourceStat> {
   const db = await fs.lstat(abs)
   const wal = await fs.lstat(`${abs}-wal`).catch(() => null)
+  let w: string | undefined
+  if (wal) {
+    const fh = await fs.open(`${abs}-wal`, 'r').catch(() => null)
+    if (fh) {
+      try {
+        const head = Buffer.alloc(32)
+        const { bytesRead } = await fh.read(head, 0, 32, 0)
+        w = head.subarray(0, bytesRead).toString('hex')
+      } finally {
+        await fh.close()
+      }
+    }
+  }
   return {
     s: db.size + (wal ? wal.size : 0),
     m: Math.max(db.mtimeMs, wal?.mtimeMs ?? 0),
     c: Math.max(db.ctimeMs, wal?.ctimeMs ?? 0),
     i: db.ino,
+    ...(w === undefined ? {} : { w }),
   }
 }
 
@@ -104,20 +121,9 @@ async function fsClock(stagingDir: string, home: string): Promise<number> {
   return st.ctimeMs
 }
 
-/** The nearest existing dir above `rel`: its ctime says when an entry under it last went. */
-async function parentCtime(home: string, rel: string): Promise<number> {
-  let dir = path.dirname(rel)
-  for (;;) {
-    const st = await fs.lstat(dir === '.' ? home : path.join(home, dir)).catch(() => null)
-    if (st) return st.ctimeMs
-    if (dir === '.') return Number.POSITIVE_INFINITY
-    dir = path.dirname(dir)
-  }
-}
-
 export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
   const started = performance.now()
-  const stats: BatchStats = { scanMs: 0, rescanMs: 0, holdMs: 0, drainMs: 0, totalMs: 0, files: 0, databases: 0, stagedFiles: 0, stagedBytes: 0, sentChunks: 0, sentBytes: 0, pinAttempts: 0 }
+  const stats: BatchStats = { scanMs: 0, rescanMs: 0, holdMs: 0, drainMs: 0, totalMs: 0, files: 0, databases: 0, stagedFiles: 0, stagedBytes: 0, sentChunks: 0, sentBytes: 0, pinAttempts: 0, namesMs: 0 }
   const settleMs = opts.settleMs ?? 15
   const stagingDir = path.join(opts.stagingDir, `batch-${process.pid}-${Date.now()}`)
   let worker: PinWorker | null = null
@@ -169,9 +175,9 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     const pinner: PinWorker = worker
     const dbStatAll = () => Promise.all(dbs.map(async (d) => [d.p, await databaseStat(path.join(opts.home, d.p))] as const))
     let pin: Pin | null = null
-    /** The moment and the end of the pins, on the filesystem's own clock (fsClock). */
+    /** The moment, on the filesystem's own clock (fsClock). */
     let fsMoment = 0
-    let fsAfter = 0
+    let names: MomentNames | null = null
     const hold = await holdWrites(async () => {
       // Gated writes that ended just now should land in an earlier tick than the moment.
       await new Promise((r) => setTimeout(r, settleMs))
@@ -181,6 +187,8 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       } catch (err) {
         throw new VoidBatch(`a database cannot be read (${String(err)})`)
       }
+      // A database replaced since the scan (a new inode) is not the file the worker opened.
+      for (const d of dbs) if (dbStats.get(d.p)!.i !== d.st.i) throw new VoidBatch(`database ${d.p} was replaced around the batch's moment`)
       try {
         pin = await pinner.pin()
       } catch (err) {
@@ -189,10 +197,19 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       for (const [p, st] of await dbStatAll().catch(() => [] as Array<readonly [string, SourceStat]>)) {
         if (sameStat(st, dbStats.get(p))) steady.add(p)
       }
-      fsAfter = await fsClock(stagingDir, opts.home)
+      names = await namesAtMoment(opts.home, s1, fsMoment)
       ctx = { home: opts.home, momentMs: fsMoment, afterCopy: opts.hooks?.afterCopy }
       const budget = opts.holdCopyBytes ?? 8 * 1024 * 1024
       if (changed.reduce((n, e) => n + e.st.s, 0) <= budget) for (const e of changed) await stage(e.p, keep)
+      // Files made since the scan that existed at the moment: read them while writes are held.
+      const made = names.listed.filter((rel) => !s1.files.has(rel) && !staged.has(rel) && !DB_NAME.test(rel) && names!.existed(rel) === true)
+      let room = budget - [...staged.values()].reduce((n, e) => n + e.size, 0)
+      for (const rel of made) {
+        const size = await fs.lstat(path.join(opts.home, rel)).then((st) => st.size).catch(() => 0)
+        if (size > room) break
+        room -= size
+        await stage(rel, keep)
+      }
     }, { drainMs: opts.drainMs ?? 300 })
     stats.holdMs = hold.holdMs
     stats.drainMs = hold.drainMs
@@ -201,11 +218,48 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     if (!pinned) throw new VoidBatch('databases were not pinned')
     stats.pinAttempts = (pinned as Pin).attempts
     await opts.hooks?.afterHold?.()
+    const atMoment: MomentNames = names as unknown as MomentNames
+    stats.namesMs = atMoment.ms
     for (const [id, data] of heldChunks) await send(id, data)
     heldChunks.clear()
 
-    // 3. stage: the changed databases as pinned, then the files the hold did not copy
+    // 3. stage the changed files the hold did not read (the databases are pinned: they wait)
+    for (const e of changed) if (!staged.has(e.p)) await stage(e.p, send)
+
+    // 4. re-scan, and place every path of either scan or of the moment's dirs
+    const s2 = await scanHome(opts.home)
+    stats.rescanMs = s2.ms
+    if (s2.unreadable.length) throw new VoidBatch(`cannot read ${s2.unreadable.slice(0, 5).join(', ')}`)
     const out = new Map<string, BatchFile>()
+    const dbPaths = new Set(dbs.map((d) => d.p))
+    const paths = new Set([...s1.files.keys(), ...s2.files.keys(), ...staged.keys(), ...atMoment.listed])
+    for (const rel of [...paths].sort()) {
+      const existed = atMoment.existed(rel)
+      if (existed === false) continue
+      if (existed === null) throw new VoidBatch(`${rel}: whether it existed at the batch's moment is unknown`)
+      const then = s1.files.get(rel)
+      const now = s2.files.get(rel)
+      if (dbPaths.has(rel)) continue // pinned: copied below
+      if (then?.db || now?.db) throw new VoidBatch(`database ${rel} appeared around the batch's moment`)
+      const st = staged.get(rel)
+      if (st) { out.set(rel, fileEntry(rel, st.size, st.h, st.chunks, st.x, st.st, false)); continue }
+      const last = prev.get(rel)
+      // Unchanged from the last batch through both scans: its content at the moment is the last batch's.
+      if (then && now && last && sameStat(then.st, now.st)) { out.set(rel, last); continue }
+      // Changed or made since the first scan, last changed before the moment: read it now.
+      if (now && now.st.c < fsMoment) {
+        await stage(rel, send)
+        const got = staged.get(rel)!
+        out.set(rel, fileEntry(rel, got.size, got.h, got.chunks, got.x, got.st, false))
+        continue
+      }
+      throw new VoidBatch(`${rel} changed or went after the batch's moment, and its content at the moment is unknown`)
+    }
+    for (const rel of s2.files.keys()) {
+      if (s2.files.get(rel)!.db && !dbPaths.has(rel) && atMoment.existed(rel) !== false) throw new VoidBatch(`database ${rel} appeared around the batch's moment`)
+    }
+
+    // 5. copy each changed database as pinned (pinned since the moment, so any time is fine)
     for (let i = 0; i < dbs.length; i++) {
       const d = dbs[i]
       const src = dbStats.get(d.p)!
@@ -231,51 +285,8 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       out.set(d.p, fileEntry(d.p, dig.size, dig.h, dig.chunks, false, src, true))
     }
     await pinner.close()
-    for (const e of changed) if (!staged.has(e.p)) await stage(e.p, send)
 
-    // 4. re-scan: place every move since step 1 before or after the moment
-    const s2 = await scanHome(opts.home)
-    stats.rescanMs = s2.ms
-    if (s2.unreadable.length) throw new VoidBatch(`cannot read ${s2.unreadable.slice(0, 5).join(', ')}`)
-    const before = fsMoment
-    const bornAfter = async (rel: string): Promise<boolean> => {
-      const born = await fs.lstat(path.join(opts.home, rel)).then((st) => st.birthtimeMs).catch(() => 0)
-      return born > fsAfter
-    }
-    for (const [rel, now] of s2.files) {
-      const then = s1.files.get(rel)
-      if (now.db && !then) {
-        // A database made since step 1 was not pinned: fine only when it was made after the moment.
-        if (await bornAfter(rel)) continue
-        throw new VoidBatch(`database ${rel} appeared around the batch's moment`)
-      }
-      if (now.db || out.has(rel) || then?.db) continue
-      if (staged.has(rel)) continue // copied with its content at the moment; a later change is the next batch's
-      if (then && sameStat(then.st, now.st)) continue
-      // New since step 1 and born after the moment: the next batch's.
-      if (!then && await bornAfter(rel)) continue
-      if (now.st.c < before) { await stage(rel, send); continue }
-      throw new VoidBatch(`${rel} changed after the batch's moment, and its content at the moment is unknown`)
-    }
-    for (const [rel, then] of s1.files) {
-      if (then.db || s2.files.has(rel) || staged.has(rel)) continue
-      // Gone since step 1: gone before the moment, it is out of the batch; else unknown.
-      if (await parentCtime(opts.home, rel) >= before) throw new VoidBatch(`${rel} was removed around the batch's moment`)
-    }
-
-    // The batch: every file of the moment.
-    for (const [rel, e] of s1.files) {
-      if (e.db || out.has(rel)) continue
-      const st = staged.get(rel)
-      if (st) { out.set(rel, fileEntry(rel, st.size, st.h, st.chunks, st.x, st.st, false)); continue }
-      if (!s2.files.has(rel)) continue
-      const last = prev.get(rel)
-      if (!last) throw new VoidBatch(`${rel} has neither a copy nor a previous batch`)
-      out.set(rel, last)
-    }
-    for (const [rel, st] of staged) if (!out.has(rel)) out.set(rel, fileEntry(rel, st.size, st.h, st.chunks, st.x, st.st, false))
-
-    // 5. commit (every chunk was sent as it was read)
+    // 6. commit (every chunk was sent as it was read)
     const manifest: BatchManifest = {
       format: STANDBY_FORMAT,
       version: STANDBY_VERSION,

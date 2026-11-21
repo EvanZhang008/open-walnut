@@ -15,6 +15,8 @@ export interface SourceStat {
   c: number
   /** inode */
   i: number
+  /** A database's only: the head of its -wal (checkpoint sequence and salts), which a WAL restart changes even when the size does not */
+  w?: string
 }
 
 /** One file of a batch. */

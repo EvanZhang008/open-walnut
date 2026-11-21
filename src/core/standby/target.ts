@@ -10,12 +10,19 @@
  * or a failure at any point is undone by `recover` (run first by every caller): the journal
  * says which paths moved, .apply/old holds what they replaced. After it lands, recovery only
  * finishes the cleanup.
+ *
+ * Before the swap, every path the batch replaces or removes is checked against what the last
+ * commit wrote there (copy-stat.json): a direct edit is saved to drift/ first (drift.ts), so a
+ * commit never drops one silently, and an entry that is not a dir on the way to a path (a link
+ * put there) is moved aside, so nothing is written through it.
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { withFileLock } from '../../utils/file-lock.js'
-import { sha256 } from './chunks.js'
+import { log } from '../../logging/index.js'
+import { hashFile, sha256 } from './chunks.js'
+import { DriftRecorder } from './drift.js'
 import { limiter } from './scan.js'
 import {
   EXEC_MODE, FILE_MODE, chunkPath, closeDirs, copyStatOf, currentFiles, fsyncPath, manifestPath, openDirs,
@@ -91,7 +98,8 @@ export class StandbyTarget {
     const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`
     try {
       const fh = await fs.open(tmp, 'w', 0o400)
-      try { await fh.writeFile(data) } finally { await fh.close() }
+      // On disk before its name: a chunk lost to a power cut after the rename would never be sent again.
+      try { await fh.writeFile(data); await fh.sync() } finally { await fh.close() }
       await fs.rename(tmp, file)
     } catch (err) {
       await fs.rm(tmp, { force: true }).catch(() => {})
@@ -168,11 +176,17 @@ export class StandbyTarget {
       throw err
     }
     await hooks.point?.('files-built')
-    await writeDurable(manifestPath(this.t, manifest.batch), JSON.stringify(manifest))
     const journal: Journal = {
       batch: manifest.batch,
       steps: [...dels.map((p) => ({ p, op: 'del' as const, existed: true })), ...puts.map((f) => ({ p: f.p, op: 'put' as const, existed: before.has(f.p) }))],
     }
+    try {
+      await this.saveDirectEdits(journal.steps, before, manifest.batch)
+    } catch (err) {
+      await removeTree(this.t.apply)
+      throw err
+    }
+    await writeDurable(manifestPath(this.t, manifest.batch), JSON.stringify(manifest))
     await writeDurable(this.t.journal, JSON.stringify(journal))
     await hooks.point?.('journal-written')
 
@@ -193,13 +207,71 @@ export class StandbyTarget {
     await closeDirs(opened)
 
     // The one step: name the new batch current.
-    await writeState(this.t, {
-      ...state,
-      current: { batch: manifest.batch, takenAt: manifest.takenAt, manifest: manifest.batch, fileCount: manifest.files.length, bytes, committedAt: now },
-    })
+    try {
+      await writeState(this.t, {
+        ...state,
+        current: { batch: manifest.batch, takenAt: manifest.takenAt, manifest: manifest.batch, fileCount: manifest.files.length, bytes, committedAt: now },
+      })
+    } catch (err) {
+      // The write may have landed before it failed (the dir's fsync): only a state that still
+      // names the previous batch is rolled back.
+      if ((await readState(this.t).catch(() => state)).current?.batch !== manifest.batch) {
+        await this.rollBack(journal)
+        throw err
+      }
+    }
     await hooks.point?.('state-written')
-    await this.finish(journal, before, next)
+    // The batch is current: a cleanup that fails is finished by the next caller's recovery.
+    await this.finish(journal, before, next).catch((err) => log.session.warn('standby: cleanup after commit failed', { error: String(err) }))
     return { batch: manifest.batch, written: puts.length, deleted: dels.length, unchanged: false }
+  }
+
+  /** Save what was changed directly at each path the swap is about to replace or remove. */
+  private async saveDirectEdits(steps: JournalStep[], before: Map<string, BatchFile>, batch: number): Promise<void> {
+    const stats = await readCopyStats(this.t)
+    const rec = new DriftRecorder(this.t, new Date(), '-commit')
+    const opened = new Set<string>()
+    const aside = async (rel: string, kind: 'added' | 'modified', detail: string) => {
+      await openDirs(this.t.copy, rel, opened)
+      rec.add({ p: rel, kind, detail, saved: await rec.save(rel, 'move') })
+    }
+    try {
+      for (const step of steps) {
+        const parts = step.p.split('/')
+        let blocked = false
+        for (let i = 1; i < parts.length && !blocked; i++) {
+          const rel = parts.slice(0, i).join('/')
+          const st = await fs.lstat(path.join(this.t.copy, rel)).catch(() => null)
+          if (!st) break
+          if (st.isDirectory()) continue
+          await aside(rel, 'added', 'not a dir, on the way to a file of the batch')
+          blocked = true
+        }
+        if (blocked) continue
+        const abs = path.join(this.t.copy, step.p)
+        const st = await fs.lstat(abs).catch(() => null)
+        const prev = before.get(step.p)
+        if (!st) continue
+        if (!st.isFile() || !prev) {
+          await aside(step.p, prev ? 'modified' : 'added', 'found in the copy where this batch writes')
+          continue
+        }
+        const was = stats[step.p]
+        const now = copyStatOf(st)
+        if (was && was.every((v, i) => v === now[i])) continue
+        const got = await hashFile(abs).catch(async () => {
+          await fs.chmod(abs, FILE_MODE).catch(() => {})
+          return hashFile(abs).catch(() => null)
+        })
+        if (got && got.h === prev.h && got.size === prev.size) continue
+        if (!got) { await aside(step.p, 'modified', 'unreadable in the copy; replaced by this batch'); continue }
+        await openDirs(this.t.copy, step.p, opened)
+        rec.add({ p: step.p, kind: 'modified', detail: 'changed in the copy; replaced by this batch', saved: await rec.save(step.p, 'copy') })
+      }
+    } finally {
+      await closeDirs(opened)
+    }
+    await rec.write(batch)
   }
 
   private async swapIn(step: JournalStep, opened: Set<string>, hooks: CommitHooks): Promise<void> {

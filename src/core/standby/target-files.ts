@@ -62,7 +62,8 @@ export function manifestPath(t: TargetPaths, batch: number): string {
 
 /** A relative path of a batch, refused if it could leave the copy. */
 export function safeRel(rel: string): string {
-  if (!rel || rel.startsWith('/') || rel.includes('\\') || rel.split('/').some((p) => p === '' || p === '.' || p === '..')) {
+  // A backslash is a separator only on Windows; elsewhere `a\b.md` is a fine note name.
+  if (!rel || rel.startsWith('/') || (process.platform === 'win32' && rel.includes('\\')) || rel.split('/').some((p) => p === '' || p === '.' || p === '..')) {
     throw new Error(`unsafe path in a batch: ${JSON.stringify(rel)}`)
   }
   return rel
@@ -146,19 +147,24 @@ export function copyStatOf(st: import('node:fs').Stats): CopyStat {
   return [st.ino, st.size, st.mtimeMs, st.ctimeMs, st.mode & 0o777]
 }
 
-/** Make every dir from `rel`'s parent up to the copy's root writable (for a rename inside it). */
+/**
+ * Make every dir from `rel`'s parent up to the copy's root writable (for a rename inside it).
+ * Refuses a path through anything but a real dir (a link put there could point outside the
+ * copy); verify moves such an entry aside first.
+ */
 export async function openDirs(copyRoot: string, rel: string, opened: Set<string>): Promise<void> {
   const parts = rel.split('/').slice(0, -1)
   let dir = copyRoot
   for (let i = 0; i <= parts.length; i++) {
     if (i > 0) dir = path.join(dir, parts[i - 1])
     if (opened.has(dir)) continue
-    try {
-      await fs.chmod(dir, OPEN_DIR_MODE)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-      await fs.mkdir(dir, { mode: OPEN_DIR_MODE })
-    }
+    const st = await fs.lstat(dir).catch((err) => {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    })
+    if (st && !st.isDirectory()) throw Object.assign(new Error(`${dir} is not a dir in the copy`), { code: 'ENOTDIR' })
+    if (st) await fs.chmod(dir, OPEN_DIR_MODE)
+    else await fs.mkdir(dir, { mode: OPEN_DIR_MODE })
     opened.add(dir)
   }
 }
@@ -182,16 +188,36 @@ export async function removeTree(p: string): Promise<void> {
   }
 }
 
-/** Every file under `root` (relative, '/'-separated), and every non-file, non-dir entry as well. */
-export async function listTree(root: string, rel = '', out: { files: string[]; others: string[] } = { files: [], others: [] }): Promise<{ files: string[]; others: string[] }> {
-  const entries = await fs.readdir(rel ? path.join(root, rel) : root, { withFileTypes: true }).catch((err) => {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw err
+export interface TreeListing {
+  files: string[]
+  /** Neither a file nor a dir: a link, a socket. Never entered. */
+  others: string[]
+  /** Every dir below the root, with its mode. */
+  dirs: Array<{ rel: string; mode: number }>
+}
+
+/**
+ * Every entry under `root` (relative, '/'-separated). A dir it cannot read is opened (and
+ * added to `opened`, for closeDirs), so a chmod in the copy cannot hide what is in it.
+ */
+export async function listTree(root: string, opened?: Set<string>, rel = '', out: TreeListing = { files: [], others: [], dirs: [] }): Promise<TreeListing> {
+  const abs = rel ? path.join(root, rel) : root
+  const read = () => fs.readdir(abs, { withFileTypes: true })
+  const entries = await read().catch(async (err) => {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return []
+    if (code !== 'EACCES' || !opened) throw err
+    await fs.chmod(abs, OPEN_DIR_MODE)
+    opened.add(abs)
+    return read()
   })
   for (const e of entries) {
     const child = rel ? `${rel}/${e.name}` : e.name
-    if (e.isDirectory()) await listTree(root, child, out)
-    else if (e.isFile()) out.files.push(child)
+    if (e.isDirectory()) {
+      const st = await fs.lstat(path.join(root, child))
+      out.dirs.push({ rel: child, mode: st.mode & 0o777 })
+      await listTree(root, opened, child, out)
+    } else if (e.isFile()) out.files.push(child)
     else out.others.push(child)
   }
   return out

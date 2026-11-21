@@ -77,7 +77,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
     let behindTold = false
     const report = (r: DriftReport) => d.notify({
       title: 'Standby copy: files changed there directly',
-      body: `A verify pass of the standby copy at ${s.dir} found ${r.items.length} file(s) changed there directly; each was saved under drift/ and put back from batch ${r.batch}: ${r.items.slice(0, 5).map((i) => `${i.p} (${i.kind})`).join(', ')}`,
+      body: `The standby copy at ${s.dir} had ${r.items.length} path(s) changed in it directly; each was saved under drift/ and the copy put back to batch ${r.batch}: ${r.items.slice(0, 5).map((i) => `${i.p} (${i.kind})`).join(', ')}`,
       dedupScope: `standby-drift:${r.at}`,
     })
     const once = async (): Promise<BatchOutcome | null> => {
