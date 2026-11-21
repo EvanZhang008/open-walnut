@@ -174,6 +174,20 @@ describe('human_inbox_send here', () => {
     expect(big).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'needs_mac' } } })
     expect(sent).toEqual([])
   })
+
+  it('an info letter the user did not ask for is refused for a session as the Mac refuses it, needs the Mac for any other caller; one he asked for is kept', async () => {
+    // 2026-11-21 real host run: it was saved here and refused unheard by the drain (info-letter-rule.ts).
+    const INFO = { subject: 'Progress', type: 'info', markdown: 'Step 2 done', text: 'Step 2 done' }
+    const sent: Sent[] = []
+    const bySession = await run(calls(), { method: 'POST', path: '/v1/human-inbox', body: INFO, replicaWrite: write('op-i1', sent) })
+    expect(bySession).toMatchObject({ status: 409, body: { error: { code: 'info_not_inbox' } } })
+    const byJob = await run(calls({ kind: 'plugin-job', plugin: 'acme', job: 'sync' }), { method: 'POST', path: '/v1/human-inbox', body: INFO, replicaWrite: write('op-i2', sent) })
+    expect(byJob).toMatchObject({ status: 503, body: { error: { code: 'needs_leader' } } })
+    expect(sent).toEqual([])
+    const asked = await run(calls(), { method: 'POST', path: '/v1/human-inbox', body: { ...INFO, user_asked: true }, replicaWrite: write('op-i3', sent) })
+    expect(asked).toMatchObject({ status: 201 })
+    expect(sent.map((x) => x.op)).toEqual(['human_inbox_send'])
+  })
 })
 
 describe('triggers here', () => {
