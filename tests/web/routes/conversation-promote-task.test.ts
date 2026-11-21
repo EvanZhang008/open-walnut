@@ -107,7 +107,7 @@ describe('POST /api/agents/:agentId/conversations/:cid/promote-task', () => {
     expect(res.status).toBe(201)
     const body = (await res.json()) as { task: Record<string, any> }
     expect(body.task.title).toBe('Calendar sync bug hunt')
-    expect(body.task.project ?? '').toBe('')
+    expect(body.task.project).toBe('Inbox')
   })
 
   it('409s a conversation that has no lane session yet', async () => {

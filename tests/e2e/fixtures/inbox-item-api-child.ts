@@ -47,6 +47,7 @@ const { apiV1Router } = await import('../../../src/web/routes/api-v1.js');
 const { taskV1Router } = await import('../../../src/web/routes/task-v1.js');
 const { messagesV1Router } = await import('../../../src/web/routes/messages-v1.js');
 const { errorHandler } = await import('../../../src/web/middleware/error-handler.js');
+const { v1InboxWire } = await import('../../../src/web/middleware/v1-inbox-wire.js');
 const { setSelfApiRoot } = await import('../../../src/lib/self-api-root.js');
 const { bridgeForHost, attachBridge, closeAllBridges } = await import('../../../src/web/ws/bridge-registry.js');
 const { registerInboxMailSource } = await import('../../../src/core/human-inbox/item-source-registry.js');
@@ -93,6 +94,8 @@ app.post('/fixture/flags', (req, res) => {
   save(); res.json({ ok: true });
 });
 app.use('/api', authMiddleware);
+// As server.ts mounts it: every v1 JSON answer says '' for the Inbox.
+app.use('/api/v1', v1InboxWire);
 app.use('/api/v1', async (req, res, next) => {
   const kind = req.method !== 'POST' ? undefined : req.path === '/tasks' ? 'task_create' : /^\/tasks\/[^/]+\/start$/.test(req.path) ? 'task_start' : undefined;
   if (kind && kind === holdKind) {

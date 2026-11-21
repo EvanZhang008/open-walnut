@@ -28,7 +28,7 @@ afterEach(async () => {
 describe('default platform routing', () => {
   it('a task with no project lands in Inbox and is always local', async () => {
     const { task } = await addTask({ title: 'Captured' });
-    expect(task.project).toBe('');
+    expect(task.project).toBe('Inbox');
     expect(task.source).toBe('local');
   });
 

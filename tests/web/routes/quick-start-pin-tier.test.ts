@@ -114,7 +114,7 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
     // The hardcoded `Local / 'Quick Start'` staging group is gone: an unfiled
     // quick-start lands in Inbox and the auto-organize pass (disabled in tests)
     // is what may later file it under a real project.
-    expect(task!.project).toBe('');
+    expect(task!.project).toBe('Inbox');
     expect(task!.pinned).toBe(true);
     expect(task!.focus_tier).toBe('focus');
   });

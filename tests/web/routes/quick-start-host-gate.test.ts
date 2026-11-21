@@ -135,8 +135,12 @@ async function withBuildboxConfig(): Promise<void> {
   await fs.writeFile(CONFIG_FILE, 'hosts:\n  buildbox:\n    hostname: build.example.com\n    user: alice\n    label: Build box\n', 'utf-8');
 }
 
+/** Image files only: the store's first open makes the empty dirs under IMAGES_DIR (initDirectories),
+ *  and the route reads the task's project (the Inbox's included) before the gate. */
 async function imageFiles(): Promise<string[]> {
-  return fs.readdir(IMAGES_DIR, { recursive: true }).then((xs) => xs.map(String)).catch(() => []);
+  return fs.readdir(IMAGES_DIR, { recursive: true, withFileTypes: true })
+    .then((xs) => xs.filter((d) => d.isFile()).map((d) => path.join(d.parentPath, d.name)))
+    .catch(() => []);
 }
 
 describe('POST /api/sessions/quick-start: the gate precedes images and the cwd mkdir', () => {

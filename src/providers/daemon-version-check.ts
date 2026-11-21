@@ -412,6 +412,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/network-cause-core.ts',
   'src/core/types.ts',
   'src/core/experimental.ts',
+  // types.ts re-exports the Inbox name and helpers (the web reads them through it).
+  'src/core/inbox-project.ts',
   'src/lib/git-env.ts',
   'src/providers/path-ref-parse.ts',
   'src/providers/host-runtime-types.ts',

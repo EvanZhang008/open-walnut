@@ -79,7 +79,7 @@ describe('CLI integration: add command', () => {
     expect((aliased.task as Record<string, unknown>).project).toBe('walnut');
 
     const inbox = run('add "No project" --json') as Record<string, unknown>;
-    expect((inbox.task as Record<string, unknown>).project).toBe('');
+    expect((inbox.task as Record<string, unknown>).project).toBe('Inbox');
   });
 });
 

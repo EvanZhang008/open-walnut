@@ -33,6 +33,7 @@ const FIXED: Record<string, string> = {
   'core/task-db.ts#migrateGroupsToFolders': 'Startup folder conversion only.',
   'core/task-db.ts#backfillNullTimestamps': 'Startup timestamp repair only.',
   'core/task-db.ts#normalizeStoredTags': 'Tag normalization only.',
+  'core/inbox-migration.ts#migrateInboxProject': 'Startup project conversion only: files projectless rows and folders into the Inbox.',
   'hooks/on-compact.ts#updateSessionLastActive': 'Updates last_active_at only.',
   'hooks/session-status-store.ts#markSessionStoppedInSqlite': 'Updates the status projection only.',
   'core/session-db.ts#ensureSessionStatusColumns': 'Adds and backfills the status revision columns only.',

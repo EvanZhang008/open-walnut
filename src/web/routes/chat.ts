@@ -453,7 +453,8 @@ export async function resolveEntityRefs(text: string): Promise<string> {
     ...Array.from(taskIds).map(async (id) => {
       try {
         const task = await getTask(id)
-        const label = task.project ? `${task.project} / ${task.title}` : task.title
+        // An Inbox task reads by its title alone, as the web's pills do (taskReferenceLabel).
+        const label = isInboxProject(task.project) ? task.title : `${task.project} / ${task.title}`
         taskLabels.set(id, label)
       } catch (err) {
         log.web.debug('failed to resolve task label', { taskId: id, error: err instanceof Error ? err.message : String(err) })

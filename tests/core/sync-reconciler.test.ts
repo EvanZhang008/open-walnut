@@ -564,7 +564,9 @@ describe('SyncReconciler', () => {
       expect(await storedTitles()).toEqual([]);
       const projects = await getStoreProjects();
       expect(Object.keys(projects).map((k) => k.toLowerCase())).not.toContain('quick start');
-      expect(Object.keys(projects).map((k) => k.toLowerCase())).not.toContain('inbox');
+      // The Inbox is a real project now, but only its own local row: a pull never claims it.
+      const inbox = Object.entries(projects).filter(([k]) => k.toLowerCase() === 'inbox');
+      expect(inbox.map(([k, p]) => [k, p.source])).toEqual([['Inbox', 'local']]);
     });
 
     it('keeps the local project on update when remote points at another provider\'s project', async () => {

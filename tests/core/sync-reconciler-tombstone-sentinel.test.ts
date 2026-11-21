@@ -156,8 +156,8 @@ describe('retired .metadata sentinels', () => {
 
     expect(await listTasks()).toHaveLength(0);
     expect(reportedCreated(info)).toBe(0);
-    // No project row manufactured for a sentinel-only list either.
-    expect(Object.keys(await getStoreProjects())).toHaveLength(0);
+    // No project row manufactured for a sentinel-only list either: only the store's own Inbox.
+    expect(Object.keys(await getStoreProjects())).toEqual(['Inbox']);
   });
 });
 

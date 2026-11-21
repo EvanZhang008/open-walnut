@@ -194,7 +194,8 @@ describe('PATCH /api/tasks/:id — project moves', () => {
       .patch(`/api/tasks/${task.id}`)
       .send({ project: '' });
 
+    // '' still names the Inbox on a write; the web /api answers with its name.
     expect(res.status).toBe(200);
-    expect(res.body.task.project).toBe('');
+    expect(res.body.task.project).toBe('Inbox');
   });
 });

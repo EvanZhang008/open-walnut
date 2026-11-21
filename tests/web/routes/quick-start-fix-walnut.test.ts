@@ -227,7 +227,7 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
       expect(task!.title).toBe('just do the thing');
       // No caller-supplied project → Inbox (the old 'Quick Start' staging
       // project is gone; auto-organize is what files it later).
-      expect(task!.project).toBe('');
+      expect(task!.project).toBe('Inbox');
       expect(capture.get()!.message).toBe('just do the thing');
     } finally {
       capture.dispose();

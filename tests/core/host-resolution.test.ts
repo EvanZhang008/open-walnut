@@ -171,9 +171,9 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('resolves nothing from the registry for an Inbox task (no row by design)', async () => {
+  it('resolves nothing for an Inbox task while the Inbox has no defaults', async () => {
     const { task } = await addTask({ title: 'Loose thought' });
-    expect(task.project).toBe('');
+    expect(task.project).toBe('Inbox');
 
     const result = await resolveHostAndCwd({ id: task.id, project: task.project }, undefined, undefined);
 

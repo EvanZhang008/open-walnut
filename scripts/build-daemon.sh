@@ -287,6 +287,7 @@ SOURCES=(
   src/providers/network-cause-core.ts
   src/core/types.ts
   src/core/experimental.ts
+  src/core/inbox-project.ts
   src/lib/git-env.ts
   src/providers/path-ref-parse.ts
   src/providers/host-runtime-types.ts
