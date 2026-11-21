@@ -25,7 +25,7 @@ defineOp({
     + 'abnormal (no close frame: network or crash), transport_error, refused, revoked (its credential no longer verifies), '
     + 'credential_check_failed (this server could not check it in time), protocol_error, send_failed. '
     + 'Also that server\'s server_started and server_stopping lines; a stop names its reason: deploy, companion-update, '
-    + 'self-update, or the signal. Use it to tell a planned server restart from a node that failed. Oldest first, the newest '
+    + 'app-update, self-update, or the signal. Use it to tell a planned server restart from a node that failed. Oldest first, the newest '
     + '`limit` of the span; `current` is the node\'s live connection. Identifiers only: no account, token or data.',
   input: {
     node: z.string().optional().describe('A node id: only its events (the server lines always come along)'),

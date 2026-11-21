@@ -33,6 +33,29 @@ case "$pid" in *[!0-9]*) say "refusing a pid that is not a number: $pid"; exit 2
 case "$target" in *.app) ;; *) say "refusing a target that is not an .app: $target"; exit 2 ;; esac
 [ -d "$staged" ] || { say "no staged app at $staged"; exit 2; }
 
+# A planned restart's marker (src/core/planned-restart.ts): the server this update stops
+# (the app's own, or a deploy's under one of the session hosts ended below) says it stopped
+# for an app update, so the next boot on the same build is not counted as a restart on its
+# own (the server.restarts alarm; 2026-11-20 two installs rang it). Best effort. The app
+# writes it itself before it stops the server it started (AppUpdateBridge.swift); this script
+# writes it before it ends the old app's session hosts, and, for a build put in place by hand
+# with no host to end, before the new app opens (the app was quit first, with its server).
+walnut_home="${OPEN_WALNUT_HOME:-$HOME/.open-walnut}"
+write_planned_restart() {
+  [ -d "$walnut_home" ] || return 0
+  mkdir -p "$walnut_home/local" 2>/dev/null || return 0
+  marker="$walnut_home/local/planned-restart.json"
+  # A deploy's fresh marker, left right before its own stop, keeps its reason; a stale one
+  # (older than the server's 5 minutes) or an earlier update's is replaced.
+  if [ -e "$marker" ] && [ -n "$(find "$marker" -mmin -5 2>/dev/null)" ] \
+    && ! grep -q '"reason":"app-update"' "$marker" 2>/dev/null; then
+    return 0
+  fi
+  printf '{"at":"%s","reason":"app-update"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$marker.$$.tmp" 2>/dev/null \
+    && mv -f "$marker.$$.tmp" "$marker" 2>/dev/null || rm -f "$marker.$$.tmp" 2>/dev/null
+  return 0
+}
+
 exe="$target/Contents/MacOS/Walnut"
 # Processes started from the app's executable: "<pid> host" for a session host
 # (`Walnut --session-host -- <program>`), "<pid> app" for anything else. Of a
@@ -90,6 +113,7 @@ fi
 # daemon, launchd for a deploy's server) starts it from the new app. SIGTERM:
 # the host passes it on, the daemon keeps its sessions for the next one.
 if [ -n "$old_hosts" ]; then
+  write_planned_restart
   say "ending the session hosts of the old app: $(echo $old_hosts)"
   for h in $old_hosts; do
     [ "$h" -gt 1 ] 2>/dev/null && kill -TERM "$h" 2>/dev/null
@@ -119,5 +143,8 @@ for left in "${target%.app}".previous-*.app; do
   rm -rf "$left" && say "removed a leftover old app: $left"
 done
 say "updated $target"
+# A build put in place by hand (pid 0) with no host ended: the app was quit first, and with it
+# the server it started; the new app starts it again on its build. The next boot finds it.
+[ "$pid" = 0 ] && [ -z "$old_hosts" ] && write_planned_restart
 "$open_app" $open_flags "$target"
 exit 0

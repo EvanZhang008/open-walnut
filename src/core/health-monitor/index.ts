@@ -94,6 +94,8 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
     pid: process.pid,
     build: await runningBuildKey(),
     exitTraceFile: opts.exitTraceFile,
+    // The boot's one read (with the feature-node start's sweep of a marker nobody took).
+    lastPlannedStop: async () => (await (await import('../planned-restart.js')).plannedStopAtBoot(dataDir)).last,
     actsOn: () => actionsOn,
     fixMode,
     autoFix: async (id, labels) => (actionsOn ? runAutoFix(id, dataDir, labels) : { ok: false, detail: 'actions are off on an isolated server' }),

@@ -22,6 +22,8 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
     var onStateChange: ((AppUpdateState) -> Void)?
     /// Install: stop the server (within the given seconds), then quit the app.
     var stopServerAndQuit: ((_ timeout: TimeInterval) -> Void)?
+    /// The data home this app's server uses: apply-update.sh leaves its planned-restart marker there.
+    var dataHome: (() -> String?)?
 
     private(set) var state: AppUpdateState
     private var active: Action?
@@ -421,6 +423,11 @@ final class AppUpdater: NSObject, URLSessionDownloadDelegate, URLSessionTaskDele
                           cacheRoot.appendingPathComponent("apply-update.log").path]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
+        if let home = dataHome?(), !home.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            env["OPEN_WALNUT_HOME"] = home
+            proc.environment = env
+        }
         do { try proc.run() } catch {
             log.log("app_update_install_failed", fields: ["message": error.localizedDescription])
             return false

@@ -17,6 +17,7 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
         updater.stopServerAndQuit = { [weak self] timeout in
             self?.stopServerForUpdate(timeout: timeout) { NSApp.terminate(nil) }
         }
+        updater.dataHome = { [weak self] in self?.walnutHome }
         appUpdater = updater
         updater.configure()
         refreshUpdateMenuItem(updater.state)
@@ -270,6 +271,7 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
     func stopServerForUpdate(timeout: TimeInterval, then: @escaping () -> Void) {
         let proc = ownsServer ? serverProcess : nil
         DesktopLogger.shared.log("app_update_stopping_server", fields: ["owned": String(proc != nil)])
+        if proc != nil, let home = walnutHome { writeAppUpdatePlannedRestart(home: home) }
         stopServer()
         guard let server = proc else { then(); return }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -357,4 +359,27 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
         alert.addButton(withTitle: "OK")
         if let window = target ?? window { alert.beginSheetModal(for: window, completionHandler: nil) } else { alert.runModal() }
     }
+}
+
+/// A planned restart's marker (src/core/planned-restart.ts), left right before an app update
+/// stops the server this app started (AppUpdateBridge.stopServerForUpdate) or quits the app
+/// for the installed one (DesktopUpdateBridge.restart): the server says it stopped for an app
+/// update, and its next boot on the same build is not counted as a restart on its own (the
+/// server.restarts alarm). A deploy's fresh marker keeps its reason. Best effort.
+func writeAppUpdatePlannedRestart(home: String) {
+    let fm = FileManager.default
+    var isDir: ObjCBool = false
+    guard fm.fileExists(atPath: home, isDirectory: &isDir), isDir.boolValue else { return }
+    let dir = (home as NSString).appendingPathComponent("local")
+    let marker = (dir as NSString).appendingPathComponent("planned-restart.json")
+    if let modified = (try? fm.attributesOfItem(atPath: marker))?[.modificationDate] as? Date,
+       Date().timeIntervalSince(modified) < 300,
+       let text = try? String(contentsOfFile: marker, encoding: .utf8), !text.contains("\"reason\":\"app-update\"") {
+        return
+    }
+    guard (try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil else { return }
+    let stamp = ISO8601DateFormatter().string(from: Date())
+    let tmp = marker + ".\(ProcessInfo.processInfo.processIdentifier).tmp"
+    guard fm.createFile(atPath: tmp, contents: Data("{\"at\":\"\(stamp)\",\"reason\":\"app-update\"}\n".utf8), attributes: [.posixPermissions: 0o600]) else { return }
+    if rename(tmp, marker) != 0 { try? fm.removeItem(atPath: tmp) }
 }

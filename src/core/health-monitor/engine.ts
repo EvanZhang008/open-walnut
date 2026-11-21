@@ -24,11 +24,11 @@ import {
 import { HealthStore, MEMORY_MINUTES, pruneLogHours, type LogHoursFile, type StateFile } from './store.js'
 import type { AlarmActionRecord, AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState, EngineDeps, FixMode, MinuteRow, TellTaskResult } from './types.js'
 import { fixBrief, recoveredNote, ringAgainNote, type BriefInput } from './brief.js'
-import { bootOnSameBuild, shutdownBailsSince } from './exit-trace.js'
+import { bootOnSameBuild, plannedStopBefore, shutdownBailsSince, unplannedRestart } from './exit-trace.js'
 import { effectiveOverride, overrideHolds, ownerOf, patchOverride, type OverridePatch } from './overrides.js'
 
 export { effectiveOverride, overrideHolds } from './overrides.js'
-export { bootOnSameBuild } from './exit-trace.js'
+export { bootOnSameBuild, plannedStopBefore, unplannedRestart } from './exit-trace.js'
 
 /** New fix tasks a day for the built-in alarms (disk, memory, host links, ...). */
 export const FIX_TASKS_PER_DAY = 5
@@ -83,8 +83,9 @@ export class HealthMonitor {
   /** Load, record this boot, and start the minute clock (`clock: false` in tests that drive tick()). */
   async start(opts: { clock?: boolean } = {}): Promise<void> {
     const now = this.now()
-    const [rows, state, hours] = await Promise.all([
+    const [rows, state, hours, lastStop] = await Promise.all([
       this.deps.store.loadRecentMinutes(now), this.deps.store.loadState(), this.deps.store.loadLogHours(),
+      this.deps.lastPlannedStop?.().catch(() => null) ?? null,
     ])
     this.rows = rows
     this.state = state
@@ -101,7 +102,8 @@ export class HealthMonitor {
     }
     delete this.logHours.recent
     const build = this.deps.build ?? null
-    this.state.events.push({ kind: 'boot', at: now, pid: this.deps.pid, build, sameBuild: bootOnSameBuild(this.state.events, build) })
+    const after = plannedStopBefore(this.state.events, lastStop, now)
+    this.state.events.push({ kind: 'boot', at: now, pid: this.deps.pid, build, sameBuild: bootOnSameBuild(this.state.events, build), ...(after ? { after } : {}) })
     await this.readShutdownBails()
     this.state.events = this.state.events.filter((e) => e.at > now - EVENTS_KEEP_MS)
     this.deps.collector.start()
@@ -177,7 +179,7 @@ export class HealthMonitor {
     const day = now - 86_400_000
     return {
       'server.restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day).length,
-      'server.unplanned_restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && e.sameBuild === true).length,
+      'server.unplanned_restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && unplannedRestart(e)).length,
       'server.deploys_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && e.sameBuild !== true).length,
       'server.shutdown_bails_24h': this.state.events.filter((e) => e.kind === 'shutdown-bail' && e.at > day).length,
     }

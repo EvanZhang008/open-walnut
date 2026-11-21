@@ -40,6 +40,8 @@ export interface ServerEvent {
   build?: string | null
   /** A boot on the build the boot before it ran: a crash, a respawn or a reboot, never a deploy. */
   sameBuild?: boolean
+  /** Why the server before this boot stopped, when a planned restart said so (`app-update`, `deploy`). */
+  after?: string
 }
 
 export interface StateFile {

@@ -5,6 +5,7 @@
  */
 
 import fsp from 'node:fs/promises'
+import { sameBuildRestartReasons } from '../planned-restart.js'
 import type { ServerEvent } from './store.js'
 
 const TAIL_BYTES = 256 * 1024
@@ -47,4 +48,29 @@ export function bootOnSameBuild(events: readonly ServerEvent[], build: string | 
     return 'build' in e && e.build === build
   }
   return false
+}
+
+/**
+ * Why the server before this boot stopped, when its planned restart said so: the last planned
+ * stop counts only when the server that recorded it is the one the last boot started (or no
+ * server took it: pid 0, a marker left after that server stopped), and it is from after that
+ * boot. A record from an older server (a crash since then) says nothing.
+ */
+export function plannedStopBefore(
+  events: readonly ServerEvent[], stop: { reason: string; pid: number; takenAt: number } | null | undefined, now: number,
+): string | undefined {
+  if (!stop) return undefined
+  let last: ServerEvent | undefined
+  for (let i = events.length - 1; i >= 0 && !last; i--) if (events[i].kind === 'boot') last = events[i]
+  if (!last || (stop.pid !== 0 && last.pid !== stop.pid) || stop.takenAt < last.at || stop.takenAt > now) return undefined
+  return stop.reason
+}
+
+/**
+ * A boot on the build that already ran that nothing planned to come back on it: a crash and
+ * its respawn, a relaunch, a reboot. A Mac app update ends the server so it starts again under
+ * the new app, on the same build (2026-11-20: two app installs counted as restarts on their own).
+ */
+export function unplannedRestart(e: ServerEvent): boolean {
+  return e.kind === 'boot' && e.sameBuild === true && !(sameBuildRestartReasons as readonly string[]).includes(e.after ?? '')
 }

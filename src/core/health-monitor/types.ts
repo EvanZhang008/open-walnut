@@ -169,6 +169,8 @@ export interface EngineDeps {
   now?: () => number
   /** The server's exit trace (shutdown cut-offs are read from it at boot). */
   exitTraceFile?: string | null
+  /** The last planned stop a stopping server recorded (core/planned-restart.ts): why the server before this boot stopped. */
+  lastPlannedStop?: () => Promise<{ reason: string; pid: number; takenAt: number } | null>
   /** False on a server that takes no actions (an isolated one): alarms still evaluate, nothing acts or records an action. */
   actsOn?: () => boolean
   fixMode: () => Promise<FixMode>

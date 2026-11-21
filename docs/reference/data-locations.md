@@ -208,6 +208,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/runtime/` | machine | no | The runtime tree of this install |
 | `~/.open-walnut/local/running-switches/` | machine | no | Engine switches this server is running |
 | `~/.open-walnut/local/planned-restart.json` | machine | no | A restart this server planned |
+| `~/.open-walnut/local/last-planned-stop.json` | machine | no | Why the last server stopped, for the next boot |
 | `~/.open-walnut/local/spawn-journal.jsonl` | machine | no | Sessions this host's daemon started |
 | `~/.open-walnut/local/host-mcp.json` | machine | no | MCP servers this host offers |
 | `~/.open-walnut/local/expose-handover.json` | machine | no | Port handover between server generations |

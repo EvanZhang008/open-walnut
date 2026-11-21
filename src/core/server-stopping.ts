@@ -23,7 +23,7 @@ export function resetServerStopping(): void { stopping = false; why = undefined 
 export function isServerStopping(): boolean { return stopping }
 
 /**
- * Why this server stops, once known: a planned restart's marker (`deploy`, `companion-update`,
+ * Why this server stops, once known: a planned restart's marker (`deploy`, `companion-update`, `app-update`,
  * planned-restart.ts) or stopServer's own `self-update`. A signal name says nothing of why (a
  * deploy stops the server with SIGTERM too), so it is never taken.
  */
@@ -31,7 +31,7 @@ export function noteServerStopReason(reason: string | undefined): void {
   if (stopping && reason && WORDS[reason]) why = reason
 }
 
-const WORDS: Record<string, string> = { deploy: 'a deploy', 'companion-update': 'an update', 'self-update': 'an update' }
+const WORDS: Record<string, string> = { deploy: 'a deploy', 'companion-update': 'an update', 'app-update': 'an update', 'self-update': 'an update' }
 
 /** The stop in plain words ("a deploy", "an update"), or '' while its reason is not known. */
 export function serverStopWords(): string {

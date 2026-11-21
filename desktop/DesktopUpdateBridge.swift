@@ -96,6 +96,9 @@ enum DesktopUpdateBridge {
         // An older shell cannot check another window's unsent work: refuse unless the page
         // looked at every window or the person chose to restart anyway.
         if !force && (contentWindowCount(app) ?? 2) > 1 { return otherWindowsOpen }
+        // The app stops the server it started as it quits; the installed app starts it again.
+        let env = ProcessInfo.processInfo.environment
+        writeAppUpdatePlannedRestart(home: env["OPEN_WALNUT_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory() + "/.open-walnut")
         guard app.terminate() else { return 1 }
         let deadline = Date().addingTimeInterval(30)
         while !app.isTerminated && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }

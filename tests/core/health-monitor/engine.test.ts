@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
-import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, isInvestigation, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
+import { bootOnSameBuild, plannedStopBefore, unplannedRestart, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, isInvestigation, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
 import { BUILTIN_ALARMS, setCustomAlarms } from '../../../src/core/health-monitor/alarms.js'
 import { customAlarmDefs } from '../../../src/core/health-monitor/custom-metrics.js'
 import { DAY_MS, hourStart, logDef, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
@@ -55,7 +55,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-async function harness(opts: { pid?: number; exitTrace?: string; now?: number; build?: string | null } = {}): Promise<Harness> {
+async function harness(opts: { pid?: number; exitTrace?: string; now?: number; build?: string | null; lastPlannedStop?: { reason: string; pid: number; takenAt: number } | null } = {}): Promise<Harness> {
   const clock = { now: opts.now ?? START }
   const disk = { free: 200, usedPct: 40 }
   const GiB = 1024 ** 3
@@ -85,6 +85,7 @@ async function harness(opts: { pid?: number; exitTrace?: string; now?: number; b
     build: opts.build,
     now: () => clock.now,
     exitTraceFile: opts.exitTrace ?? null,
+    ...(opts.lastPlannedStop !== undefined ? { lastPlannedStop: async () => opts.lastPlannedStop ?? null } : {}),
     ...(opts.actsOn === false ? { actsOn: () => false } : {}),
     fixMode: async () => h.mode.v,
     autoFix: async (id, labels) => { h.autoFixes.push(id); h.autoFixLabels.push(labels); return { ok: true, detail: `${id} ran` } },
@@ -609,6 +610,52 @@ describe('health monitor engine', () => {
     expect(row.v['server.unplanned_restarts_24h']).toBe(2)
     expect(h.m.alarms['server.restarts'].state).toBe('ALARM')
     expect(h.fixes.map((f) => f.alarmId)).toContain('server.restarts')
+  })
+
+  // 2026-11-20: two Mac app installs ended the session host a deploy's server ran under, the
+  // server came back on its build under the new app, and the alarm read them as crashes.
+  it('a same-build boot after a Mac app update is planned; after a deploy that did not take, or a crash, it counts', async () => {
+    let pid = 300
+    let now = START
+    const reboot = async (build: string, stop?: string) => {
+      const prev = pid
+      const h = await harness({ now, pid: ++pid, build, lastPlannedStop: stop ? { reason: stop, pid: prev, takenAt: now - 5_000 } : null })
+      await minutes(h, 6)
+      h.m.stop(); await h.m.flushed(); harnesses = harnesses.filter((x) => x !== h)
+      now = h.clock.now + 60 * 60_000
+      return h
+    }
+    let h = await reboot('c1@t1')
+    h = await reboot('c1@t1', 'app-update')
+    h = await reboot('c1@t1', 'app-update')
+    let row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.restarts_24h']).toBe(3)
+    expect(row.v['server.unplanned_restarts_24h']).toBe(0)
+    expect(h.m.alarms['server.restarts'].state).toBe('OK')
+    // A deploy's stop that came back on the old build (the app's restart won): it did not take.
+    h = await reboot('c1@t1', 'deploy')
+    // A crash: no planned stop recorded by the server before it.
+    h = await reboot('c1@t1')
+    row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.unplanned_restarts_24h']).toBe(2)
+    expect(h.m.alarms['server.restarts'].state).toBe('ALARM')
+  })
+
+  it('a planned stop counts only for the server the last boot started, taken after that boot', () => {
+    const boot = (pid: number, at: number): ServerEvent => ({ kind: 'boot', at, pid, build: 'a@1' })
+    const stop = (pid: number, takenAt: number) => ({ reason: 'app-update', pid, takenAt })
+    expect(plannedStopBefore([], stop(1, 5), 10)).toBeUndefined() // no boot before
+    expect(plannedStopBefore([boot(1, 1)], null, 10)).toBeUndefined()
+    expect(plannedStopBefore([boot(1, 1)], stop(1, 5), 10)).toBe('app-update')
+    expect(plannedStopBefore([boot(1, 1), boot(2, 7)], stop(1, 5), 10)).toBeUndefined() // an older server's record: 2 crashed since
+    expect(plannedStopBefore([boot(1, 6)], stop(1, 5), 10)).toBeUndefined() // taken before its boot: not this stop
+    expect(plannedStopBefore([boot(1, 1)], stop(1, 50), 10)).toBe(undefined) // from the future
+    expect(plannedStopBefore([boot(1, 1)], stop(0, 5), 10)).toBe('app-update') // a marker no server took, left after boot 1
+    expect(plannedStopBefore([boot(1, 6)], stop(0, 5), 10)).toBeUndefined() // left before boot 1: not its stop
+    expect(unplannedRestart({ ...boot(2, 7), sameBuild: true, after: 'app-update' })).toBe(false)
+    expect(unplannedRestart({ ...boot(2, 7), sameBuild: true, after: 'deploy' })).toBe(true)
+    expect(unplannedRestart({ ...boot(2, 7), sameBuild: true })).toBe(true)
+    expect(unplannedRestart({ ...boot(2, 7), sameBuild: false, after: 'deploy' })).toBe(false)
   })
 
   it('a boot is the same build only when the boot before it recorded that build', () => {

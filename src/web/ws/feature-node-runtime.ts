@@ -9,7 +9,7 @@ import { discoveryRequest } from '../../core/feature-nodes/discovery.js'
 import type { ReadTransport } from '../../core/feature-nodes/connections.js'
 import type { Clock } from '../../core/feature-nodes/protocol.js'
 import { ConnectionJournal } from '../../core/feature-nodes/connection-journal.js'
-import { takePlannedRestart } from '../../core/planned-restart.js'
+import { plannedStopAtBoot, resetPlannedStopAtBoot, takePlannedRestart } from '../../core/planned-restart.js'
 import { noteServerStopReason } from '../../core/server-stopping.js'
 import { buildIdOf } from '../../core/companion-build/wire.js'
 import { getBuildInfo } from '../../lib/build-info.js'
@@ -58,7 +58,8 @@ export function startFeatureNodes(): void {
   featureNodeJournal().record({ type: 'server_started', build: buildId() })
   hub ??= new FeatureNodeHub(clock, featureNodeJournal())
   // A marker the previous server never took (an older build, a SIGKILL) is not this server's to read at its stop.
-  void takePlannedRestart(WALNUT_HOME).then((stale) => {
+  resetPlannedStopAtBoot()
+  void plannedStopAtBoot(WALNUT_HOME).then(({ stale }) => {
     if (stale) log.info('planned-restart marker the previous server never took, removed', { reason: stale.reason, build: stale.build })
   })
   setFeatureRequestHandler(async (frame) => {
@@ -181,7 +182,7 @@ export function stopFeatureNodes(stopReason?: string): Promise<void> {
   if (!serving) return stopping ?? Promise.resolve()
   return stopping ??= (async () => {
     const started = Date.now()
-    const planned = await bounded(takePlannedRestart(WALNUT_HOME), 300, null)
+    const planned = await bounded(takePlannedRestart(WALNUT_HOME, Date.now(), { stopping: true }), 300, null)
     const open = [...activeSockets.values()]
     const reason = planned?.reason ?? stopReason ?? 'unknown'
     // Why this server stops, for the work it cuts short (a move paused by a deploy says so).

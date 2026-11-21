@@ -118,7 +118,7 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
   {
     id: 'server.restarts',
     title: 'Server restarts on its own',
-    description: 'Times this server started again on the build it already ran (a crash and its respawn, a relaunch, a reboot) in the last 24 hours. Deploys and updates start a new build and are not counted: the deploy queue paces those.',
+    description: 'Times this server started again on the build it already ran (a crash and its respawn, a relaunch, a reboot) in the last 24 hours. Deploys and updates start a new build and are not counted: the deploy queue paces those. A Mac app update restarts the server on its build on purpose and is not counted either.',
     metric: 'server.unplanned_restarts_24h', kind: 'gauge', stat: 'last', periodMin: 5, comparison: '>=', threshold: 2,
     evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'missing',
     unit: 'per day', action: { then: 'fix-task' },

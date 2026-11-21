@@ -37,7 +37,10 @@ function scratch() {
 // zombie still answers kill -0, so a sync run would wait out the full minute.
 function run(args: string[], env: Record<string, string> = {}): Promise<{ status: number | null }> {
   return new Promise((resolve) => {
-    const child = spawn('/bin/sh', [SCRIPT, ...args], { env: { ...process.env, ...env }, stdio: 'ignore' });
+    // A data home that does not exist unless a case names its own: the script writes no
+    // planned-restart marker anywhere else, and never into the real one.
+    const home = { OPEN_WALNUT_HOME: path.join(os.tmpdir(), `apply-update-no-home-${process.pid}`) };
+    const child = spawn('/bin/sh', [SCRIPT, ...args], { env: { ...process.env, ...home, ...env }, stdio: 'ignore' });
     child.on('exit', (status) => resolve({ status }));
   });
 }
@@ -159,6 +162,62 @@ describe('apply-update.sh', () => {
     expect(fs.readdirSync(path.dirname(s.target))).toEqual(['Walnut.app']);
     expect(fs.readFileSync(s.log, 'utf8')).toContain(`ending the session hosts of the old app: ${outer}`);
   });
+
+  // The server an update stops (a deploy's under an ended host, or the app's own) says it
+  // stopped for an app update, so its next boot on the same build is no restart "on its own"
+  // (src/core/planned-restart.ts; 2026-11-20 two installs rang the server.restarts alarm).
+  it('leaves an app-update planned-restart marker before it ends a host, and keeps a deploy\'s', async () => {
+    const s = scratch();
+    const home = path.join(s.dir, 'home');
+    fs.mkdirSync(home);
+    const marker = path.join(home, 'local', 'planned-restart.json');
+    const exe = path.join(s.target, 'Contents', 'MacOS', 'Walnut');
+    const seen = path.join(s.dir, 'seen.txt');
+    await standInHost(s.dir, `${exe} --session-host -- /stage/walnut web --port 3456`, seen, marker);
+    const r = await run(['0', s.target, s.staged, s.log], { WALNUT_APPLY_UPDATE_OPEN: s.opener, OPEN_WALNUT_HOME: home });
+    expect(r.status).toBe(0);
+    // The host saw the marker when its SIGTERM came (the stand-in records the file it was given).
+    expect(JSON.parse(fs.readFileSync(seen, 'utf8').trim()).reason).toBe('app-update');
+    const plan = JSON.parse(fs.readFileSync(marker, 'utf8')) as { at: string; reason: string };
+    expect(plan.reason).toBe('app-update');
+    expect(Math.abs(Date.now() - Date.parse(plan.at))).toBeLessThan(60_000);
+
+    // A deploy's fresh marker, left right before its own stop, keeps its reason; a stale one
+    // (a server never took it) is replaced, or it would hide this update from the next stop.
+    const deploy = '{"at":"2026-11-21T00:00:00Z","reason":"deploy","build":"abc123456"}\n';
+    for (const [age, kept] of [[0, true], [10 * 60, false]] as const) {
+      const t = scratch();
+      fs.writeFileSync(marker, deploy);
+      const then = Date.now() / 1000 - age;
+      fs.utimesSync(marker, then, then);
+      await standInHost(t.dir, `${path.join(t.target, 'Contents', 'MacOS', 'Walnut')} --session-host -- /x`, path.join(t.dir, 'seen.txt'), marker);
+      expect((await run(['0', t.target, t.staged, t.log], { WALNUT_APPLY_UPDATE_OPEN: t.opener, OPEN_WALNUT_HOME: home })).status).toBe(0);
+      expect(JSON.parse(fs.readFileSync(marker, 'utf8')).reason, `a marker ${age}s old`).toBe(kept ? 'deploy' : 'app-update');
+    }
+  });
+
+  // The in-app update: the app writes the marker itself before it stops its own server
+  // (AppUpdateBridge.swift); the script, waiting for the app, writes none of its own.
+  it('waiting for the app, with no host to end, leaves no marker of its own', async () => {
+    const s = scratch();
+    const home = path.join(s.dir, 'home');
+    fs.mkdirSync(home);
+    expect((await run(['999999', s.target, s.staged, s.log], { WALNUT_APPLY_UPDATE_OPEN: s.opener, OPEN_WALNUT_HOME: home })).status).toBe(0);
+    expect(fs.existsSync(path.join(home, 'local', 'planned-restart.json'))).toBe(false);
+  });
+
+  // By hand (pid 0) the app was quit first, and its server with it: the marker is left for
+  // the next boot to find. A run that refuses or fails stops nothing and leaves none.
+  it('with pid 0 leaves the marker only once the new app is in place', async () => {
+    const s = scratch()
+    const home = path.join(s.dir, 'home')
+    fs.mkdirSync(home)
+    const marker = path.join(home, 'local', 'planned-restart.json')
+    expect((await run(['1', path.join(s.dir, 'not-an-app'), s.staged, s.log], { OPEN_WALNUT_HOME: home })).status).toBe(2)
+    expect(fs.existsSync(marker)).toBe(false)
+    expect((await run(['0', s.target, s.staged, s.log], { WALNUT_APPLY_UPDATE_OPEN: s.opener, OPEN_WALNUT_HOME: home })).status).toBe(0)
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8')).reason).toBe('app-update')
+  })
 
   it('removes an old app an earlier run left beside the new one', async () => {
     const s = scratch();
