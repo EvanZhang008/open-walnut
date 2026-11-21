@@ -73,10 +73,16 @@ parentPort.on('message', (m) => {
       for (let attempt = 1; attempt <= m.attempts; attempt++) {
         endAll()
         const pinnedAt = Date.now()
-        for (const o of open) {
+        for (const [i, o] of open.entries()) {
           o.db.exec('BEGIN')
           o.db.query('SELECT count(*) FROM sqlite_master').get()
           o.wal = walSig(o.file)
+          // Test hook: stop between the first pin and the next until told to go on.
+          if (m.pauseDir && attempt === 1 && i === 0) {
+            fs.writeFileSync(path.join(m.pauseDir, 'paused'), '')
+            const wait = new Int32Array(new SharedArrayBuffer(4))
+            for (let t = 0; t < 2000 && !fs.existsSync(path.join(m.pauseDir, 'resume')); t++) Atomics.wait(wait, 0, 0, 5)
+          }
         }
         // A commit after a database's pin changes its -wal's size or head: any change before
         // the last pin means the pins are not one moment.
@@ -124,7 +130,7 @@ export interface Pin {
 
 export interface PinWorker {
   /** Pin every database opened, at one moment. Throws when that is not possible. */
-  pin(opts?: { attempts?: number }): Promise<Pin>
+  pin(opts?: { attempts?: number; /** Tests: pause after the first database's pin until <dir>/resume exists. */ pauseDir?: string }): Promise<Pin>
   /**
    * Copy database `index` (in the order given to openPinWorker) as it was pinned, into the
    * worker's memory, and digest it; then `chunks` reads parts of that copy, `drop` frees it.
@@ -174,7 +180,7 @@ export async function openPinWorker(files: string[]): Promise<PinWorker> {
   }
   return {
     pin: async (opts = {}) => {
-      const r = await ask({ cmd: 'pin', attempts: opts.attempts ?? 5 })
+      const r = await ask({ cmd: 'pin', attempts: opts.attempts ?? 5, pauseDir: opts.pauseDir })
       return { pinnedAt: Number(r.pinnedAt), pinnedEnd: Number(r.pinnedEnd), attempts: Number(r.attempts) }
     },
     copy: async (index) => {
