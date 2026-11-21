@@ -10,7 +10,7 @@ import { projectKey, userStateOf } from '@open-walnut/org-tree';
 import { shownState } from '@open-walnut/user-status';
 import { STATUS_SECTION_LABELS, isNotStarted, isWatched, notStartedReason, sortSectionTasks } from '@/components/tasks/status-sections';
 import { readStatusLine } from './org-ask-form';
-import { flattenNodes, needsRowText, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { askCount, flattenNodes, needsRowText, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import type { LayoutSlot } from '@/utils/layout-record';
 import type { TaskTextField } from '@/utils/agent-text-source';
@@ -93,6 +93,42 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
     && (row.kind === 'main' || projects.has(projectKey(t.project)))));
   const waits = of('waiting');
   return { watching, needs, working: of('working'), waiting: waits.filter((t) => !isNotStarted(t)), notstarted: waits.filter((t) => isNotStarted(t)), done };
+}
+
+/**
+ * Whether a node keeps Threads (the CEO, a VP): what the node IS, never whether its own task exists
+ * yet. Its header then leads with its threads and draws no Needs you pill, and its side bar holds
+ * Threads and the Brief (2026-11-03, the user: "the little red should be thread instead of need u,
+ * also, even if no thread, show 0 thread"). Keyed on the row, so a CEO not started yet (no Main task,
+ * no contactId) reads the same as once it runs, and its "1 Needs you" never vanishes on start
+ * (2026-11-20). A router keeps none.
+ */
+export function nodeKeepsThreads(row: Pick<ChannelRow, 'kind' | 'isLead'>, contact?: Pick<Task, 'org_role'>): boolean {
+  if (row.kind === 'router') return false;
+  return row.kind === 'main' || row.isLead || contact?.org_role === 'main' || contact?.org_role === 'lead';
+}
+
+/** One count of a node's header: a tab and how many it counts (each opens its tab). */
+export interface HeaderPill { tab: OrgTaskTab; n: number }
+
+/**
+ * The node header's state counts, from the same tabs the side bar's sections are made of, so the two
+ * never disagree. Needs you counts asks only (a card only to read is no ask), approvals included, as
+ * the Needs you section's own count does (`sectionCount`); a node that keeps Threads has no Needs
+ * you pill (its threads lead its header instead, `nodeKeepsThreads`), its tasks' asks are in its Tasks.
+ */
+export function headerPills(tabs: OrgTaskTabs, approvals: number, keepsThreads: boolean): HeaderPill[] {
+  const needs = askCount(tabs.needs) + approvals;
+  const out: HeaderPill[] = [];
+  if (!keepsThreads && needs > 0) out.push({ tab: 'needs', n: needs });
+  for (const tab of ['working', 'waiting', 'notstarted'] as const) if (tabs[tab].length > 0) out.push({ tab, n: tabs[tab].length });
+  return out;
+}
+
+/** The count a side-bar section's heading shows: Needs you counts asks and approvals (as the header
+ *  does, `headerPills`), every other section what it lists. */
+export function sectionCount(sec: OrgTaskSection, approvals: number): number {
+  return sec.tab === 'needs' ? askCount(sec.alerts) + approvals : sec.tasks.length + sec.alerts.length;
 }
 
 function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {

@@ -180,8 +180,8 @@ const KNOWN_SECTION_READS = [
 /** Every count or test of the Org page's cards and every shownState (which puts To read under Needs
  *  you) on the Org page, each with why it is not a count of asks. */
 const KNOWN_ALERT_LENGTHS = [
-  'web/src/components/org/OrgTaskRail.tsx: sec.alerts.length', // whether the list renders at all (the fold row included), and the other sections' sizes
-  'web/src/components/org/OrgTaskRail.tsx: sec.alerts.length', // the same line: a non-Needs section's size
+  'web/src/components/org/OrgTaskRail.tsx: sec.alerts.length', // whether the list renders at all (the fold row included)
+  'web/src/components/org/org-task-tabs.ts: sec.alerts.length', // sectionCount: a non-Needs section's size (Needs you counts asks)
   'web/src/components/org/org-channels-model.ts: alerts.length', // whether any card names the row
   'web/src/components/org/org-task-tabs.ts: s.alerts.length', // whether a section is drawn
   'web/src/components/org/org-channels-model.ts: alerts.some', // channelState: red only for an ask (isAsk)

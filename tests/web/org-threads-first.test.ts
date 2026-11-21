@@ -97,9 +97,10 @@ describe('threads come first', () => {
     const pills = src.slice(src.indexOf('function CountPills'), src.indexOf('function TeamLiveLine'))
     expect(pills).not.toMatch(/\} open</)
     expect(pills).toMatch(/\{keepsThreads && \(/)
-    expect(pills).toMatch(/!keepsThreads && askCount\(tabs\.needs\)/)
+    // The state pills are headerPills', which draws no Needs you for a node that keeps Threads.
+    expect(pills).toMatch(/headerPills\(tabs, approvals, keepsThreads\)/)
     expect(pills.indexOf('org-pill-threads')).toBeGreaterThan(0)
-    expect(pills.indexOf('org-pill-threads')).toBeLessThan(pills.indexOf("pill('working'"))
+    expect(pills.indexOf('org-pill-threads')).toBeLessThan(pills.indexOf('headerPills('))
   })
 
   it('every web count of threads goes through threadCounts (one predicate, one number)', () => {

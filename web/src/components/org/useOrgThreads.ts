@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { fetchOrgThreads, patchOrgThread, splitOrgThread, type OrgThread, type OrgThreadPatch } from '@/api/org-threads';
 import { useEvent } from '@/hooks/useWebSocket';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useTaskStoreActions } from '@/contexts/TasksContext';
 import { statusWithThreads } from '@/hooks/status-prediction';
 import { log } from '@/utils/log';
@@ -145,11 +146,14 @@ function readNode(taskId: string, why: string): Promise<boolean | 'stale'> {
 /** Test seam: forget every node (a module store outlives a test's page). */
 export function resetOrgThreadsForTest(): void { nodes.clear(); listeners.clear(); }
 
+/** A node that keeps Threads before its task exists (a CEO not started): none, never "Loading…". */
+const NO_THREADS: OrgThread[] = [];
+
 export function useOrgThreads(taskId: string | undefined, enabled: boolean): OrgThreadsState {
   // The store's writes only, never its rows: an open chat keeps this hook mounted, and the full
   // context changes on every task write (TaskStoreActions).
   const tasks = useTaskStoreActions();
-  const threads = useSyncExternalStore(subscribe, () => (taskId && enabled ? nodes.get(taskId)?.drawn ?? null : null));
+  const threads = useSyncExternalStore(subscribe, () => (!enabled ? null : taskId ? nodes.get(taskId)?.drawn ?? null : NO_THREADS));
   const [error, setError] = useState<string | null>(null);
   /** A write the server refused: kept until the next write saves (a re-read does not clear it). */
   const [writeError, setWriteError] = useState<string | null>(null);
@@ -261,7 +265,7 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     }
   }, [taskId, load]);
 
-  const heard = useCallback((threadId: string, saved?: OrgThread, words?: string): void => {
+  const heard = useLeanCallback((threadId: string, saved?: OrgThread, words?: string): void => {
     if (!taskId) return;
     const node = nodeOf(taskId);
     // A read out now started before his reply was filed: its answer must not draw the card back.

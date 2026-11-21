@@ -49,12 +49,12 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
-import { ORG_RAIL_TAB_LABELS, TAB_DOT, allTasksSections, sectionOpen, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TAB_LABELS, TAB_DOT, allTasksSections, sectionCount, sectionOpen, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
-import { askCount, isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
@@ -323,8 +323,8 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
       {sections.length === 0 && <p className="org-task-empty" data-testid="org-task-empty">Nothing open here.</p>}
       {sections.map((sec) => {
         const open = sectionOpen(sec.tab, flipped);
-        // Needs you counts what asks the user; a card with only something to read is no ask (isAsk).
-        const count = sec.tab === 'needs' ? askCount(sec.alerts) + approvals.length : sec.tasks.length + sec.alerts.length;
+        // Needs you counts what asks the user, as the header does (sectionCount, headerPills).
+        const count = sectionCount(sec, approvals.length);
         return (
           <section key={sec.tab} className="org-task-section" data-testid="org-task-section" data-tab={sec.tab} data-open={open ? '1' : '0'}>
             <SectionHead tab={sec.tab} count={count} open={open} onFlip={() => onFlip(sec.tab)} />

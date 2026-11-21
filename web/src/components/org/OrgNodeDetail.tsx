@@ -55,11 +55,11 @@ import { ORG_TOP_DEFAULT, ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreads
 import { newsAt, sharedAnswers, threadCountLabel, threadCounts, type ThreadCounts } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, allTasksSections, isSectionFlips, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_TASK_TAB_LABELS, allTasksSections, headerPills, isSectionFlips, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import type { ImageAttachment } from '@/api/chat';
 import {
-  areaIdWords, askCount, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
+  areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
 
 export type OrgTab = 'board' | 'team' | 'chat';
@@ -112,18 +112,16 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
   needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
 };
 
-/** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
- *  counted from the same lists as the Task view's tabs; each pill opens its tab. Needs you counts
- *  its cards, a result or an answer to look at included (To read has no pill of its own). Its own
- *  Threads come first, and no "N open" (2026-11-03, the user: "remove xx open not needed also show
- *  thread and number"). */
-/** The header's counts. `keepsThreads` (the CEO, a VP): its threads first, always, "0 threads" in grey,
+/** The header's counts: the user's status of the node's work in the Board's words, made by
+ *  `headerPills` from the same tabs as the side bar's sections; each pill opens its tab, and no
+ *  "N open" (2026-11-03, the user: "remove xx open not needed also show thread and number").
+ *  `keepsThreads` (the CEO, a VP, `nodeKeepsThreads`): its threads first, always, "0 threads" in grey,
  *  and no Needs you of its own (2026-11-03, the user: "the little red should be thread instead of need
  *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. */
 function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
-    <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
+    <button key={tab} type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
       <i style={{ background: TAB_DOT[tab] }} />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
     </button>
   );
@@ -141,10 +139,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
           <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)}
         </button>
       )}
-      {!keepsThreads && askCount(tabs.needs) + approvals > 0 && pill('needs', askCount(tabs.needs) + approvals)}
-      {tabs.working.length > 0 && pill('working', tabs.working.length)}
-      {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
-      {tabs.notstarted.length > 0 && pill('notstarted', tabs.notstarted.length)}
+      {headerPills(tabs, approvals, keepsThreads).map((p) => pill(p.tab, p.n))}
     </span>
   );
 }
@@ -247,8 +242,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // Main and a lead keep a Brief and Threads. The row says so too, before the node's own task has
   // loaded (a reload paints from the cache first), so a reload does not show Task for a moment
   // before the view it was left on.
-  const keepsBrief = !isRouter && (contact?.org_role === 'main' || contact?.org_role === 'lead'
-    || (!!row.contactId && (row.kind === 'main' || row.isLead)));
+  // By what the node is, never whether its task exists yet: a CEO not started reads as it will once
+  // it runs, so its header never flips from Needs you to its threads on start (nodeKeepsThreads).
+  const keepsBrief = nodeKeepsThreads(row, contact);
   // The Brief is off (core/org/brief-off.ts): Threads by state take its place; a node left on the
   // Brief opens on Threads, and nothing reads or refreshes the letter.
   const briefOff = useExperimental('brief_off');

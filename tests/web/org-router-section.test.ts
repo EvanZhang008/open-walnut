@@ -19,6 +19,7 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe, type ChannelRow } from '../../web/src/components/org/org-channels-model.js'
 import { OrgAvatar } from '../../web/src/components/org/OrgAvatar'
+import { nodeKeepsThreads } from '../../web/src/components/org/org-task-tabs.js'
 
 const { OrgRouterSection, routersHeading } = await import('../../web/src/components/org/OrgRouterSection')
 
@@ -430,7 +431,9 @@ describe('router settings in the page (source guards)', () => {
   })
 
   it('a router has no side bar: no Tasks, Brief, Threads or Board', () => {
-    expect(detail).toMatch(/const keepsBrief = !isRouter && \(/)
+    // No Brief or Threads: nodeKeepsThreads says no for a router (tests/web/org-header-counts-guard.test.ts).
+    expect(detail).toContain('const keepsBrief = nodeKeepsThreads(row, contact);')
+    expect(nodeKeepsThreads({ kind: 'router', isLead: false }, { org_role: 'lead' })).toBe(false)
     expect(detail).toContain('const railHidden = isRouter || railKeptHidden;')
     expect(detail).toContain('{!isRouter && !railHidden && rail}')
     expect(detail).toContain('{!isRouter && railSide && !railHidden && (')
