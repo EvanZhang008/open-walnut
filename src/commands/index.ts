@@ -177,6 +177,16 @@ export function registerCommands(program: Command): void {
       const { runBackupRestore, plainFailure } = await import('./backup.js');
       await runBackupRestore(options).catch(plainFailure('Restore'));
     });
+  backup.command('drill')
+    .description('Restore the newest backup into a temporary folder, check it, then delete it (your data and backups are only read)')
+    .option('--snapshot <id>', 'Backup to drill, from `backup list` (default: the newest)')
+    .option('--key <recoveryKey>', 'Recovery key of encrypted backups (default: this machine\'s saved key)')
+    .option('--json', 'Print the result as JSON')
+    .option('--no-record', 'Do not keep the result for Settings (local/restore-drill.json)')
+    .action(async (options: Record<string, unknown>) => {
+      const { runBackupDrill, plainFailure } = await import('./backup.js');
+      await runBackupDrill(options).catch(plainFailure('Drill'));
+    });
 
   program
     .command('sync')

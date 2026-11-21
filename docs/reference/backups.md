@@ -1,15 +1,18 @@
 # Backups
 
-Walnut backs up its data folder (`~/.open-walnut`: notes, tasks, passwords, sign-ins,
-settings) to a place the user already has: Cloudflare R2, Google Drive, or an Amazon S3
-bucket (or any S3-compatible service). Encryption is a switch, off by default: off, the
+Walnut backs up its data folder (`~/.open-walnut`: notes, tasks, sign-ins, settings) to a
+place the user already has: Cloudflare R2, Google Drive, or an Amazon S3 bucket (or any
+S3-compatible service). Only the data folder: the password vault and the fleet secrets of a
+real install live outside it (`~/.local/state/open-walnut/`, `src/core/vault/paths.ts`) and
+are in no backup; only a throwaway server (a test, an ephemeral server) keeps its vault inside
+its data folder. `open-walnut backup drill` lists everything backups leave out. Encryption is a switch, off by default: off, the
 files go up as they are and there is no key to keep; on, everything is encrypted on the
 computer before it is uploaded, and only the recovery key opens it. Settings, Backup can
 list the backups and restore any of them into a new folder.
 
 Code: `src/core/backup/` (engine), `src/web/routes/backup*.ts` (routes),
 `web/src/components/settings/sections/BackupSection.tsx` and `sections/backup/` (the pane),
-`src/commands/backup.ts` (`open-walnut backup run | list | restore`).
+`src/commands/backup.ts` (`open-walnut backup run | list | restore | drill`).
 
 ## Setting it up
 
@@ -197,6 +200,44 @@ choose the kind for `run`.
 
 `WALNUT_BACKUP_SECRET_ACCESS_KEY` and `WALNUT_BACKUP_RECOVERY_KEY` keep the secrets out of
 the shell history. The `restore-backup` skill walks a Claude Code session through it.
+
+## Restore drill
+
+A backup is otherwise only proven when someone restores it. The restore drill proves it on an
+ordinary day: `open-walnut backup drill` (`--snapshot <id>` for another backup than the
+newest, `--key` for encrypted ones, `--json`), and once a week while the experiment "Weekly
+restore drill" (`restore_drill`, off by default) is on. Code: `src/core/backup/restore-drill*.ts`.
+
+It restores the backup into a new folder under the OS temp dir (never the data folder), then:
+
+- **files**: the restored tree against the backup's own list: the same files, each of its
+  size, and each file's chunks hash back to the ids the backup recorded;
+- **databases**: every database passes `PRAGMA integrity_check` (on a worker thread). The
+  format records no row counts at backup time, so rows are counted and reported, not compared;
+- **must-have**: every file of the data folder that the data-location manifest
+  (`src/core/home-manifest/`) classes leader-data and the backup's rules take, and that existed
+  6 hours before the backup finished, must be in it. This catches a backup whose own list
+  missed something, which the files check cannot;
+- **read-back**: the newest task of `tasks/tasks.sqlite` and a note are read from the
+  restored folder;
+- **boot**: not run. Walnut has no boot mode with plugins, the session daemon, schedules and
+  outward sends all off (the ephemeral server pauses schedules but loads plugins and starts its
+  own daemon), so the drill says so instead of starting one.
+
+It also lists what backups leave out by design, read from the code: the leader-data places the
+backup's rules skip (everything under `cache/`, the applied-ops ledger included, `browser/`,
+`tmp/` recordings and file history, `.git`, `config.yaml.history`), the folders kept on the
+machine that collected them (`health/`, `places/`), and every leader-data place outside the
+data folder (the password vault, the fleet secrets). The list is reported, nothing changes.
+
+The drill only reads: the destination is opened through a store that refuses every write, the
+data folder is only walked, and no backup lock is taken (that lock is a file in the data folder;
+a scheduled drill waits instead while a backup runs). On Google Drive, reading may refresh the
+stored sign-in, as listing backups in Settings does. The folder is removed at the end, also
+after a failure; one a killed drill left behind is removed by the next drill. The result (when,
+which backup, each check, the not-in-backups list, how long) is kept in
+`local/restore-drill.json` and returned by `GET /api/backup/status` as `restoreDrill`. A
+scheduled drill that fails is a Walnut Health notice, retired by the next one that passes.
 
 ## Earlier versions of config.yaml
 

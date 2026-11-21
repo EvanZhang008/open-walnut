@@ -203,6 +203,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/preview-storage/` | leader-data | no | Saved state of rich previews |
 | `~/.open-walnut/local/quiet-held-push.json` | leader-data | no | Phone pushes held during quiet hours |
 | `~/.open-walnut/local/machine-id` | machine | no | This machine's id for daemon updates |
+| `~/.open-walnut/local/restore-drill.json` | machine | no | The last restore drill of this machine's backups: when, which backup, each check |
 | `~/.open-walnut/local/health-monitor/` | machine | no | Walnut Health records of this machine |
 | `~/.open-walnut/local/feature-nodes/` | machine | no | Connection journal of feature nodes |
 | `~/.open-walnut/local/runtime/` | machine | no | The runtime tree of this install |

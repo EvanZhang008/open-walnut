@@ -192,6 +192,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A command an agent runs on a host (host_exec), a plugin\'s script there and an agent such as Codex keep running when Walnut\'s service on that host restarts or updates, and the next service picks each one up where it was: its whole output, its exit code, the turn it was in. Off: they run as before, and an update there waits for them or ends them.',
     default: false,
   },
+  {
+    id: 'restore_drill',
+    name: 'Weekly restore drill',
+    description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

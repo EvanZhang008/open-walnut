@@ -114,6 +114,19 @@ export function isExcluded(relPath: string): boolean {
   return EXCLUDED_FILE_RE.some((re) => re.test(relPath));
 }
 
+/**
+ * How a backup takes the file at `relPath` (data-dir relative): as is ('raw'), as a
+ * consistent copy under SQLITE_SNAPSHOT_PREFIX ('snapshot', a canonical DB), or not at
+ * all (null). The same rules scanDataDir and findCanonicalSqlite walk by, for one path;
+ * the restore drill (restore-drill-checks.ts) asks it what a backup must hold.
+ */
+export function backupTakes(relPath: string): 'raw' | 'snapshot' | null {
+  if (relPath.endsWith('.sqlite') && !EXCLUDED_DIRS.has(relPath.split('/')[0]) && !REBUILDABLE_SQLITE_RE.test(relPath)) {
+    return 'snapshot';
+  }
+  return isExcluded(relPath) ? null : 'raw';
+}
+
 export interface ScanOptions {
   /** Leave out local/backup/ (the plaintext mirror). */
   withoutBackupSecrets?: boolean;

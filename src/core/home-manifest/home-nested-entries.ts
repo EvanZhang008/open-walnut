@@ -89,6 +89,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   lead('local.preview-storage', 'local/preview-storage', 'dir', 'Saved state of rich previews'),
   lead('local.quiet-held-push', 'local/quiet-held-push.json', 'file', 'Phone pushes held during quiet hours'),
   mach('local.machine-id', 'local/machine-id', 'file', 'This machine\'s id for daemon updates'),
+  mach('local.restore-drill', 'local/restore-drill.json', 'file', 'The last restore drill of this machine\'s backups: when, which backup, each check'),
   mach('local.health-monitor', 'local/health-monitor', 'dir', 'Walnut Health records of this machine'),
   mach('local.feature-nodes', 'local/feature-nodes', 'dir', 'Connection journal of feature nodes'),
   mach('local.runtime', 'local/runtime', 'dir', 'The runtime tree of this install'),

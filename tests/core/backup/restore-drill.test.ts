@@ -1,0 +1,258 @@
+/**
+ * The restore drill (src/core/backup/restore-drill.ts) on real repositories in a local
+ * folder: a good backup passes and lists what backups leave out by design; a damaged
+ * chunk, a torn database, a file the repository lacks and a file left out of the backup
+ * each fail it and name the cause; it writes nothing in the data home or the
+ * destination; its temporary folder is gone after a pass, a failure and a kill.
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { createMockConstants } from '../../helpers/mock-constants.js';
+
+vi.mock('../../../src/constants.js', () => createMockConstants());
+
+import { LocalStore } from '../../../src/core/backup/stores/local-store.js';
+import type { BackupStore } from '../../../src/core/backup/stores/types.js';
+import { runEncryptedBackup } from '../../../src/core/backup/encrypted-backup.js';
+import { repoStore } from '../../../src/core/backup/repo-mode.js';
+import { parseRecoveryKey } from '../../../src/core/backup/repo/crypto.js';
+import { readRecoveryKey } from '../../../src/core/backup/recovery-key.js';
+import {
+  DRILL_DIR_PREFIX, readDrillRecord, readOnlyStore, removeLeftoverDrills, runRestoreDrill, writeDrillRecord,
+  type DrillResult,
+} from '../../../src/core/backup/restore-drill.js';
+import type { BackupConfig } from '../../../src/core/backup/types.js';
+import { chmodTree, listing, makeFullHome, write, writeAlteredSnapshot } from './restore-drill-helpers.js';
+
+let root: string;
+let home: string;
+let destDir: string;
+let tmpRoot: string;
+let stateDir: string;
+let store: BackupStore;
+
+const DEST = { type: 'r2' as const, bucket: 'b', account_id: '0'.repeat(32), access_key_id: 'AK', secret_access_key: 'S' };
+const plainCfg: BackupConfig = { enabled: true, destination: DEST, encrypt: false };
+const encCfg: BackupConfig = { enabled: true, destination: DEST, encrypt: true, recovery_key_saved_at: '2026-11-19T00:00:00Z' };
+
+beforeEach(async () => {
+  root = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-drill-'));
+  home = path.join(root, 'home');
+  destDir = path.join(root, 'dest');
+  tmpRoot = path.join(root, 'drill-tmp');
+  stateDir = path.join(root, 'state');
+  await fsp.mkdir(tmpRoot);
+  await makeFullHome(home);
+  // The password vault outside the data home, as on a real install.
+  await write(stateDir, 'open-walnut/vault/vault.json', '{}');
+  store = new LocalStore(destDir);
+});
+
+afterEach(async () => {
+  await chmodTree(root, true).catch(() => {});
+  await fsp.rm(root, { recursive: true, force: true });
+});
+
+const drill = (cfg: BackupConfig, over: Partial<Parameters<typeof runRestoreDrill>[0]> = {}) =>
+  runRestoreDrill({ cfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: { 'xdg-state': stateDir }, ...over });
+
+const check = (r: DrillResult, id: string) => r.checks.find((c) => c.id === id)!;
+
+async function rawKeyOf(cfg: BackupConfig): Promise<Buffer | null> {
+  return cfg.encrypt ? parseRecoveryKey((await readRecoveryKey(home))!) : null;
+}
+
+async function drillFolders(): Promise<string[]> {
+  return (await fsp.readdir(tmpRoot)).filter((n) => n.startsWith(DRILL_DIR_PREFIX));
+}
+
+describe.each([
+  ['unencrypted', plainCfg],
+  ['encrypted', encCfg],
+])('a good backup (%s) passes', (_kind, cfg) => {
+  it('every check passes, a task and a note read back, and what backups leave out is listed', async () => {
+    await runEncryptedBackup(cfg, { dataDir: home, store });
+    const r = await drill(cfg);
+    expect(r.error).toBeUndefined();
+    expect(r.ok, JSON.stringify(r.checks, null, 2)).toBe(true);
+    expect(r.snapshot).toMatchObject({ encrypted: cfg.encrypt === true });
+    for (const id of ['restore', 'files', 'databases', 'must-have', 'read-back']) expect(check(r, id).ok, id).toBe(true);
+    // No isolated boot mode exists: said, not faked.
+    expect(check(r, 'boot')).toMatchObject({ ok: null });
+    expect(check(r, 'boot').detail).toMatch(/plugins.*session daemon/);
+    expect(check(r, 'read-back').detail).toContain('Plan the garden');
+    expect(check(r, 'read-back').detail).toContain('artifacts/notes/journal/2026-11-20.md');
+    expect(check(r, 'files').detail).toMatch(/hashed back/);
+    expect(check(r, 'databases').detail).toMatch(/no row counts/);
+    expect(r.databases.map((d) => d.path)).toEqual(['org/threads.sqlite', 'sessions.sqlite', 'tasks/tasks.sqlite']);
+    expect(r.databases.find((d) => d.path === 'tasks/tasks.sqlite')).toMatchObject({ ok: true, tables: 1, rows: 2 });
+    // The must-have list really looked: the user's own notes folder and the stores were required.
+    expect(check(r, 'must-have').detail).toMatch(/^(\d+) leader-data files/);
+    expect(Number(/^(\d+)/.exec(check(r, 'must-have').detail)![1])).toBeGreaterThanOrEqual(10);
+
+    const ids = r.notInBackups.map((e) => e.id);
+    for (const id of ['cache.applied-ops', 'browser-replays', 'health', 'places', 'tmp.stt-recordings', 'state.vault', 'state.secrets-master']) {
+      expect(ids, id).toContain(id);
+    }
+    expect(r.notInBackups.find((e) => e.id === 'state.vault')).toMatchObject({ present: true, why: expect.stringMatching(/outside the data home/) });
+    expect(r.notInBackups.find((e) => e.id === 'health')).toMatchObject({ present: true, class: 'machine' });
+    // What a backup does hold is never listed as left out.
+    for (const id of ['tasks.db', 'secrets', 'config-yaml', 'memory', 'local.backup']) expect(ids, id).not.toContain(id);
+    expect(await drillFolders()).toEqual([]);
+  }, 60_000);
+});
+
+describe('a damaged backup fails the drill and names the cause', () => {
+  it('a corrupted chunk: the pack it sits in is named damaged', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const packs = (await repoStore(store, false).list('packs/')).sort((a, b) => b.size - a.size);
+    const file = path.join(destDir, 'plain', packs[0].key);
+    const body = await fsp.readFile(file);
+    body[10] ^= 0xff;
+    await fsp.writeFile(file, body);
+    const r = await drill(plainCfg);
+    expect(r.ok).toBe(false);
+    expect(check(r, 'restore')).toMatchObject({ ok: false });
+    expect(check(r, 'restore').problems![0]).toMatch(/damaged/);
+    expect(await drillFolders()).toEqual([]);
+  }, 60_000);
+
+  it('a torn database: restored as listed, but integrity_check names it', async () => {
+    await runEncryptedBackup(encCfg, { dataDir: home, store });
+    const db = await fsp.readFile(path.join(home, 'tasks', 'tasks.sqlite'));
+    const torn = Buffer.concat([db.subarray(0, 4096), Buffer.alloc(4096, 0x5a)]);
+    await writeAlteredSnapshot(store, await rawKeyOf(encCfg), { replace: { '.sqlite-snapshots/tasks/tasks.sqlite': torn } });
+    const r = await drill(encCfg);
+    expect(r.ok).toBe(false);
+    expect(check(r, 'restore').ok).toBe(true);
+    expect(check(r, 'files').ok).toBe(true);
+    expect(check(r, 'databases')).toMatchObject({ ok: false });
+    expect(check(r, 'databases').problems!.join('\n')).toContain('tasks/tasks.sqlite');
+    expect(r.databases.find((d) => d.path === 'tasks/tasks.sqlite')!.ok).toBe(false);
+    expect(await drillFolders()).toEqual([]);
+  }, 60_000);
+
+  it('a file the backup lists but its repository lacks: restore names that file', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const repo = repoStore(store, false);
+    const index = await repo.list('index/');
+    // The data pack goes; the tree packs stay so the list still reads.
+    const dataPacks = (await repo.list('packs/')).sort((a, b) => b.size - a.size);
+    await fsp.rm(path.join(destDir, 'plain', dataPacks[0].key));
+    expect(index.length).toBeGreaterThan(0);
+    const r = await drill(plainCfg);
+    expect(r.ok).toBe(false);
+    expect(check(r, 'restore').problems![0]).toMatch(/Backup is incomplete: a part of .+ is missing/);
+  }, 60_000);
+
+  it('a backup missing a must-have entry: the entry and its files are named', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    await writeAlteredSnapshot(repoStore(store, false), null, { drop: (p) => p.startsWith('memory/') || p.startsWith('Recipes/') });
+    const r = await drill(plainCfg);
+    expect(r.ok).toBe(false);
+    // The backup restores as it says: only the independent list sees the gap.
+    expect(check(r, 'restore').ok).toBe(true);
+    expect(check(r, 'files').ok).toBe(true);
+    const mustHave = check(r, 'must-have');
+    expect(mustHave.ok).toBe(false);
+    expect(mustHave.problems!.join('\n')).toContain('memory: 1 file(s)');
+    expect(mustHave.problems!.join('\n')).toContain('memory/MEMORY.md');
+    expect(mustHave.problems!.join('\n')).toContain('unlisted:Recipes');
+  }, 60_000);
+
+  it('a file born after the backup is not required in it (the default slack)', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    await write(home, 'memory/new-today.md', 'written after the backup');
+    const r = await drill(plainCfg, { mustHaveSlackMs: undefined });
+    expect(check(r, 'must-have').ok).toBe(true);
+  }, 60_000);
+
+  it('no backups yet, no key: the drill says why it could not run', async () => {
+    const none = await drill(plainCfg);
+    expect(none).toMatchObject({ ok: false, error: expect.stringMatching(/No Walnut backups|No backups/) });
+    await runEncryptedBackup(encCfg, { dataDir: home, store });
+    await fsp.rm(path.join(home, 'local', 'backup', 'recovery-key'));
+    const noKey = await drill(encCfg);
+    expect(noKey).toMatchObject({ ok: false, error: expect.stringMatching(/no recovery key/) });
+    expect(noKey.notInBackups.length).toBeGreaterThan(0);
+  }, 60_000);
+});
+
+describe('read-only on the data home and the destination', () => {
+  it('passes with both read-only, and neither changed', async () => {
+    await runEncryptedBackup(encCfg, { dataDir: home, store });
+    const before = { home: await listing(home), dest: await listing(destDir) };
+    await chmodTree(home, false);
+    await chmodTree(destDir, false);
+    const r = await drill(encCfg);
+    expect(r.ok, JSON.stringify(r.checks, null, 2)).toBe(true);
+    await chmodTree(home, true);
+    await chmodTree(destDir, true);
+    expect(await listing(home)).toEqual(before.home);
+    expect(await listing(destDir)).toEqual(before.dest);
+  }, 60_000);
+
+  it('the store it reads through refuses every write', async () => {
+    const ro = readOnlyStore(store);
+    await expect(ro.put('x', Buffer.from('y'))).rejects.toThrow(/never writes/);
+    await expect(ro.delete('x')).rejects.toThrow(/never writes/);
+    await expect(fsp.stat(destDir)).rejects.toThrow();
+  });
+
+  it('refuses a temporary folder inside the data home', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const r = await drill(plainCfg, { tmpRoot: path.join(home, 'tmp') });
+    expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/inside the data home/) });
+    expect(await fsp.readdir(path.join(home, 'tmp'))).toEqual(['stt-recordings']);
+  }, 60_000);
+});
+
+describe('the temporary folder never stays', () => {
+  it('a drill that was killed leaves its folder; the next drill removes it', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const ready = path.join(root, 'ready');
+    const child = spawn(process.execPath, [path.join(import.meta.dirname, 'fixtures', 'restore-drill-child.ts'), home, destDir, tmpRoot, ready], {
+      env: { ...process.env, OPEN_WALNUT_HOME: home }, stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += String(d); });
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    for (let i = 0; i < 300 && !(await fsp.stat(ready).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(await fsp.stat(ready).then(() => true, () => false), stderr).toBe(true);
+    child.kill('SIGKILL');
+    await exited;
+    const left = await drillFolders();
+    expect(left).toHaveLength(1);
+
+    const r = await drill(plainCfg);
+    expect(r.ok).toBe(true);
+    expect(r.removedLeftovers).toBe(1);
+    expect(await drillFolders()).toEqual([]);
+  }, 60_000);
+
+  it('leaves alone a folder whose drill still runs, and anything not named like a drill folder', async () => {
+    const live = path.join(tmpRoot, `${DRILL_DIR_PREFIX}abc123`);
+    await fsp.mkdir(live);
+    await fsp.writeFile(path.join(live, 'drill-owner.json'), JSON.stringify({ pid: process.ppid }));
+    await fsp.mkdir(path.join(tmpRoot, `${DRILL_DIR_PREFIX}not-ours-at-all`));
+    await fsp.mkdir(path.join(tmpRoot, 'something-else'));
+    expect(await removeLeftoverDrills(tmpRoot)).toBe(0);
+    expect((await fsp.readdir(tmpRoot)).sort()).toEqual([`${DRILL_DIR_PREFIX}abc123`, `${DRILL_DIR_PREFIX}not-ours-at-all`, 'something-else'].sort());
+    // A day old, it goes whatever its owner file says (a pid the system reused).
+    expect(await removeLeftoverDrills(tmpRoot, Date.now() + 25 * 3_600_000)).toBe(1);
+  });
+});
+
+describe('the record Settings will read', () => {
+  it('round trips at local/restore-drill.json', async () => {
+    expect(await readDrillRecord(home)).toBeNull();
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const r = await drill(plainCfg);
+    await writeDrillRecord(home, r);
+    expect(await readDrillRecord(home)).toEqual(r);
+    expect(await fsp.stat(path.join(home, 'local', 'restore-drill.json')).then((s) => s.isFile())).toBe(true);
+  }, 60_000);
+});

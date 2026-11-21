@@ -136,6 +136,7 @@ backupRouter.get('/status', async (_req: Request, res: Response) => {
   // dataDir: the restore result names the real data folder to swap it with.
   const { computerName } = await import('../../core/backup/local-state.js');
   const { readPendingSwitch, lastSwitchError, lastSwitchDone } = await import('../../core/backup/restore-switch.js');
+  const { readDrillRecord } = await import('../../core/backup/restore-drill.js');
   res.json({
     ...scheduler.health, primary: true, dataDir: WALNUT_HOME, machineName: await computerName(),
     // "Use this restored data" asked, not done yet (it is done at the next start), or how the last one failed.
@@ -143,6 +144,8 @@ backupRouter.get('/status', async (_req: Request, res: Response) => {
     switchDone: await lastSwitchDone(WALNUT_HOME),
     // Whether "Use this data" can restart Walnut by itself, or the user quits and opens it.
     canRestart: (await import('../../core/self-update/live-update.js')).hasRestartHandler(),
+    // The last restore drill (restore-drill.ts), null before the first: for a Settings row later.
+    restoreDrill: await readDrillRecord(WALNUT_HOME),
   });
 });
 

@@ -722,6 +722,7 @@ let searchV2WiringHandle: { stop(): Promise<void> } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
 let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
+let restoreDrillHandle: import('../core/backup/restore-drill-runtime.js').DrillRuntime | null = null
 let keepAwakeHandle: import('../core/keep-awake.js').KeepAwakeHandle | null = null
 let gitMaintenanceHandle: { stop: () => void } | null = null
 let sendPathCanaryHandle: import('../core/send-path-canary.js').SendPathCanaryHandle | null = null
@@ -3839,6 +3840,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
     setBackupScheduler(backupSchedulerHandle)
     setDriveEventEmitter(broadcastEvent)
+    // The weekly restore drill: no timer unless the experiment restore_drill is on.
+    // A failure is Walnut Health's (no needsYou), retired by the next drill that passes.
+    const { startRestoreDrillRuntime } = await import('../core/backup/restore-drill-runtime.js')
+    restoreDrillHandle?.stop()
+    restoreDrillHandle = startRestoreDrillRuntime({
+      notify: (n) => publishErrorNotification(n),
+      onRecovered: () => { void publishRecovery(['backup-drill']) },
+    })
   }
   // An ephemeral server backs nothing up, unless a test of backups asks for it
   // (it then backs up its own temp data home to the destination its config names).
@@ -7677,6 +7686,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     backupSchedulerHandle.stop()
     setBackupScheduler(null)
     backupSchedulerHandle = null
+  }
+  if (restoreDrillHandle) {
+    restoreDrillHandle.stop()
+    restoreDrillHandle = null
   }
   if (keepAwakeHandle) {
     keepAwakeHandle.stop()

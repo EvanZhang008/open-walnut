@@ -4,6 +4,7 @@
  *   backup run                         one backup now
  *   backup list [--key <k>]            the backups there are
  *   backup restore [--at <id>] [--to <dir>] [--force] [--key <k>] [--profile <p>]
+ *   backup drill [--snapshot <id>] [--key <k>] [--json] [--no-record]   restore into a temp folder, check, delete
  *
  * With `backup.destination` in config.yaml or `--type` (and no --bucket flag) these work
  * on the repository backups, encrypted or not (`--encrypt` / `--no-encrypt`); otherwise on
@@ -247,4 +248,41 @@ export async function runBackupRestore(options: Record<string, unknown>): Promis
     `(host ${result.manifest.hostname}, walnut ${result.manifest.walnutVersion})`,
   );
   console.log(`To adopt it: stop the server, move ${target} to ~/.open-walnut, restart.`);
+}
+
+/** `backup drill`: restore into a temporary folder, check it, delete it (core/backup/restore-drill.ts). */
+export async function runBackupDrill(options: Record<string, unknown>): Promise<void> {
+  // No Drive sign-in from here: a drill only reads backups that this machine already reaches.
+  const cfg = (await getConfig()).backup;
+  if (!cfg?.destination?.type) {
+    throw new Error('No backup service is set up (Settings, Backup). The restore drill works on those backups; the older S3 copy has none.');
+  }
+  const { runRestoreDrill, writeDrillRecord } = await import('../core/backup/restore-drill.js');
+  if (options.json !== true) console.log('Restoring the backup into a temporary folder to check it ...');
+  const r = await runRestoreDrill({
+    cfg, dataDir: WALNUT_HOME,
+    ...(typeof options.snapshot === 'string' ? { snapshotId: options.snapshot } : {}),
+    ...(keyOf(options) ? { recoveryKey: keyOf(options) } : {}),
+  });
+  if (options.record !== false) await writeDrillRecord(WALNUT_HOME, r);
+  if (!r.ok) process.exitCode = 1;
+  if (options.json === true) {
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
+  const s = r.snapshot;
+  console.log(`Restore drill ${r.ok ? 'PASSED' : 'FAILED'} in ${Math.round(r.durationMs / 1000)}s: ${r.destination}`);
+  if (s) console.log(`  backup ${s.id} of ${s.createdAt} from ${s.hostname}, ${s.fileCount} files (${mb(s.totalBytes)}), ${s.encrypted ? 'encrypted' : 'unencrypted'}`);
+  if (r.error) console.log(`  ${r.error}`);
+  for (const c of r.checks) {
+    console.log(`  ${c.ok === true ? 'ok  ' : c.ok === false ? 'FAIL' : 'skip'} ${c.id}: ${c.detail}`);
+    for (const p of c.problems ?? []) console.log(`         ${p}`);
+  }
+  const here = r.notInBackups.filter((e) => e.present !== false);
+  const absent = r.notInBackups.filter((e) => e.present === false);
+  if (here.length) {
+    console.log('Not in backups, by design (reported, not changed):');
+    for (const e of here) console.log(`  ${e.place}: ${e.what}. Why: ${e.why}.`);
+  }
+  if (absent.length) console.log(`  ${absent.length} more such places do not exist on this machine (--json lists them).`);
 }
