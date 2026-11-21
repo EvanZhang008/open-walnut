@@ -688,7 +688,7 @@ function ReloadBanner({
       <div className="notes-reload-banner conflict" role="status" data-testid="notes-needs-leader-banner">
         <span className="notes-reload-banner-text">{message ?? 'This change needs your Mac.'} Your text stays here, unsaved.</span>
         <div className="notes-reload-banner-actions">
-          <button className="btn btn-sm" onClick={onDismiss}>Keep editing</button>
+          <button className="btn btn-sm btn-ghost" onClick={onDismiss}>Keep editing</button>
         </div>
       </div>
     );
@@ -721,7 +721,7 @@ function ReloadBanner({
           {conflict ? 'Load latest' : 'Reload'}
         </button>
         {!conflict && (
-          <button className="btn btn-sm" onClick={onDismiss}>
+          <button className="btn btn-sm btn-ghost" onClick={onDismiss}>
             Keep editing
           </button>
         )}

@@ -501,7 +501,7 @@ function EditableQueuedMessage({ queueId, message, onSave, onCancel }: {
       <div className="session-msg-edit-actions">
         <BoxMic boxRef={textareaRef} text={value} setText={setValue} handleRef={mic} />
         <button onClick={gate.send} className="btn btn-sm btn-primary" {...dictationWaitProps(gate)}>Save</button>
-        <button onClick={cancel} className="btn btn-sm">Cancel</button>
+        <button onClick={cancel} className="btn btn-sm btn-ghost">Cancel</button>
       </div>
     </div>
   );

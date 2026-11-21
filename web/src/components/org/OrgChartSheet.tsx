@@ -429,7 +429,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
               </ul>
               {error && <p className="oc-confirm-error" role="alert" data-testid="org-chart-error">Not changed. {error}</p>}
               <div className="oc-confirm-actions">
-                <button type="button" className="btn btn-sm" onClick={cancelAsk} disabled={busy}>Cancel</button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={cancelAsk} disabled={busy}>Cancel</button>
                 <button type="button" className="btn btn-sm btn-primary" data-testid="org-chart-apply" onClick={() => { void apply(); }} disabled={busy} autoFocus>
                   {busy ? 'Working…' : pending.confirm}
                 </button>

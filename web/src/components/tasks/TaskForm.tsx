@@ -154,7 +154,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
         )}
 
         <div className="form-actions">
-          <button type="button" className="btn" onClick={cancel}>Cancel</button>
+          <button type="button" className="btn btn-ghost" onClick={cancel}>Cancel</button>
           <button type="submit" className="btn btn-primary" {...dictationWaitProps(gate)}>{initial ? 'Save' : 'Add Task'}</button>
         </div>
       </form>

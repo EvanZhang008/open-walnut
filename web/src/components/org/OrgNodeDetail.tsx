@@ -123,11 +123,11 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
  *  it counts (2026-11-21, a review on his data: "8 threads" over a Threads list whose All chip read 61,
  *  "32 Waiting / snoozed" beside a Waiting / Snoozed chip of 38): the threads pill counts the threads
  *  for him (Needs you and Done, thread-groups.ts threadsForHim), "for you"; the pills after "Tasks"
- *  count its tasks, not threads. */
+ *  count its tasks, not threads. They are quiet keys (.btn-ghost): a line of counts, not a toolbar. */
 function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
-    <button key={tab} type="button" className="btn btn-sm" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
+    <button key={tab} type="button" className="btn btn-sm btn-ghost" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
       <i style={{ background: TAB_DOT[tab] }} />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
     </button>
   );
@@ -136,7 +136,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
       {keepsThreads && (
         <button
           type="button"
-          className="btn btn-sm"
+          className="btn btn-sm btn-ghost"
           data-testid="org-pill-threads"
           data-threads={shown}
           onClick={onThreads}

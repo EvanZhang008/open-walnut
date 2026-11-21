@@ -72,7 +72,7 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
       <p data-testid="router-setup-existing" data-task-id={existing.id}>This area already has a router: <strong>{existing.org_name || existing.title}</strong>. Open it to change its name or VP links.</p>
       <div className="org-router-setup-actions">
         <button type="submit" className="btn btn-sm btn-primary" data-testid="router-setup-open-existing">Open router</button>
-        <button type="button" className="btn btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
     </> : <>
       <label>Name<MicInput value={draft.value.name} maxLength={ROUTER_NAME_MAX} data-draft-key={draft.key ?? undefined} setText={(name) => draft.setValue((value) => ({ ...value, name }))} micRef={nameMic} data-testid="router-name" disabled={busy} /></label>
@@ -93,7 +93,7 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
       {error && <p ref={errorRef} role="alert" data-testid="router-setup-error">{error}</p>}
       <div className="org-router-setup-actions">
         <button type="submit" className="btn btn-sm btn-primary" data-testid="router-setup-create" disabled={busy || (!draft.value.name.trim() && !gate.micBusy && !gate.waiting)} {...dictationWaitProps(gate)}>{busy ? 'Creating…' : 'Create router'}</button>
-        <button type="button" className="btn btn-sm" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </>}
   </form>;

@@ -131,7 +131,7 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
           </MicField>
           {error && <p className="topic-error" data-testid="topic-new-error">{error}</p>}
           <div className="app-modal-actions">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-primary" data-testid="topic-new-create" disabled={!ready && !gate.micBusy && !gate.waiting} onClick={gate.send} {...dictationWaitProps(gate)}>
               {busy ? 'Creating…' : 'Create topic'}
             </button>

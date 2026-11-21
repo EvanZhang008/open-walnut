@@ -314,9 +314,9 @@
   outline-offset: -2px;
 }
 
-/* A text button's label hugs the right edge of its reserved width, so it lines
-   up with the other controls in the column (F26). */
-.btn-link .btn-reserve > * { text-align: right; }
+/* A text button's or quiet key's label hugs the right edge of its reserved width, so it lines
+   up with the other controls in the column (F26; Remove reserves its "Click again" width). */
+:is(.btn-link, .btn-ghost) .btn-reserve > * { text-align: right; }
 
 /* ── Text inputs, numbers, selects ── */
 .settings-input {

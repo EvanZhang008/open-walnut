@@ -63,7 +63,7 @@ beside `btn` carries only layout (margin, flex, width).
 | `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this) | min-height 28 px, padding 2 px 10 px, 12 px |
 | `.btn-primary` | the one main action of a view | `--accent` fill, `--on-accent` text, hover `--accent-hover` |
 | `.btn-danger` | a destructive action | `--error` label on the plain key; with `.btn-primary` the solid red confirm (Yes, delete) |
-| `.btn-ghost` | a quiet tool: Cancel beside a main action, Snooze, a row's tools | no fill until hover, `--fg-muted`; with `.btn-danger` a red label |
+| `.btn-ghost` | a quiet tool: Cancel beside a main action, Snooze, a row's tools | no fill until hover, `--fg-secondary` (never `--fg-muted`: a quiet key still reads at a glance); with `.btn-danger` a red label |
 | `.btn-icon` | an icon alone | the quiet tool, square: 28 px (24 px with `.btn-sm`), its svg 16 px (14 px) |
 | `.btn-link` | an action inside text or at a row's end | `--accent-text`, no box, underline on hover |
 | `.btn-block` | a key that takes the whole line | full width, label centred; `.btn-block.btn-ghost` is a menu or list row, label at the left |

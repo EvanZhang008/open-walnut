@@ -136,7 +136,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
         </span>
       )}
       <div className="mail-correct-actions">
-        <button type="button" className="btn btn-sm" onClick={props.onCancel} data-testid="mail-correct-cancel">Cancel</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={props.onCancel} data-testid="mail-correct-cancel">Cancel</button>
         <button type="button" className="btn btn-sm btn-primary" disabled={!next} onClick={gate.send} data-testid="mail-correct-next" {...dictationWaitProps(gate)}>
           Next
         </button>

@@ -227,7 +227,7 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
 
       {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
       <div className="pw-editor-actions">
-        <button type="button" className="btn btn-sm" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn btn-sm btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
       </div>
     </form>

@@ -907,7 +907,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           <div className="routine-form-footer">
             {error && <div className="cron-form-error routine-save-error" role="alert">{error}</div>}
             <div className="form-actions">
-              <button type="button" className="btn" onClick={requestClose} disabled={saving}>Cancel</button>
+              <button type="button" className="btn btn-ghost" onClick={requestClose} disabled={saving}>Cancel</button>
               <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
                 {saving ? 'Saving…' : routine ? 'Save' : 'Create'}
               </button>

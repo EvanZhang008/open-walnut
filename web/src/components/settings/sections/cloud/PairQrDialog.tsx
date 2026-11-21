@@ -98,7 +98,7 @@ export function PairQrDialog({ name, phase, repair, reach, created, qrDataURL, e
             <button ref={primaryRef} tabIndex={0} className="btn btn-primary" onClick={onClose} data-testid="devices-qr-done">Done</button>
           ) : (
             <>
-              <button tabIndex={0} className="btn" onClick={onClose} disabled={working} data-testid="devices-show-qr-cancel">Cancel</button>
+              <button tabIndex={0} className="btn btn-ghost" onClick={onClose} disabled={working} data-testid="devices-show-qr-cancel">Cancel</button>
               {(repair || phase === 'failed') && (
                 <button
                   ref={primaryRef}

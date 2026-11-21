@@ -164,7 +164,7 @@ export function MailCorrectStepRule(props: StepRuleProps) {
         </p>
       )}
       <div className="mail-correct-actions">
-        <button type="button" className="btn btn-sm" onClick={props.onBack} disabled={props.saving} data-testid="mail-correct-back">Back</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={props.onBack} disabled={props.saving} data-testid="mail-correct-back">Back</button>
         <button
           type="button"
           className="btn btn-sm btn-primary"

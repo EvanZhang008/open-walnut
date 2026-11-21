@@ -30,7 +30,7 @@
   --btn-primary-fill-hover: color-mix(in srgb, var(--accent) 74%, var(--btn-shade));
   --btn-danger-fill: color-mix(in srgb, var(--error) 84%, var(--btn-shade));
   --btn-danger-fill-hover: color-mix(in srgb, var(--error) 72%, var(--btn-shade));
-  --btn-danger-text: color-mix(in srgb, var(--error) 80%, var(--fg));
+  --btn-danger-text: color-mix(in srgb, var(--error) 70%, var(--fg));
   box-sizing: border-box;
   /* WebKit keeps its native push-button look under a custom background (Mac app). */
   -webkit-appearance: none;

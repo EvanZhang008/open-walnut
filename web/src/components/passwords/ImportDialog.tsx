@@ -105,7 +105,7 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
               </div>
             )}
             <div className="pw-modal-actions">
-              <button type="button" className="btn btn-sm" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>Cancel</button>
               <button type="button" className="btn btn-sm btn-primary" disabled={!report || report.toAdd === 0 || busy} onClick={() => void go()}>
                 Import {report?.toAdd ? `${report.toAdd} item${report.toAdd === 1 ? '' : 's'}` : ''}
               </button>

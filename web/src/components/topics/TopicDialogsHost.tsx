@@ -80,7 +80,7 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
           )}
           {error && <p className="topic-error" data-testid="topic-add-error">{error}</p>}
           <div className="app-modal-actions">
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-primary" data-testid="topic-add-new" onClick={() => openNewTopic(members)}>+ New topic with them</button>
           </div>
         </div>

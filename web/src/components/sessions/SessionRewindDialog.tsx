@@ -267,7 +267,7 @@ export function SessionRewindDialog({
         {error && <div className="rewind-dialog-error">{error}</div>}
 
         <div className="app-modal-actions">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="button" className="btn btn-primary" onClick={confirm} disabled={busy || checkingGuard || !preview}>
             {confirmLabel}
           </button>

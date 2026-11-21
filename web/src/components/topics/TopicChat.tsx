@@ -162,7 +162,7 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
   if (!topic) {
     return (
       <div className="topic-chat is-empty" data-testid="topic-chat" data-topic-id={topicId}>
-        {onBack && <button type="button" className="btn btn-sm" onClick={onBack}>Back</button>}
+        {onBack && <button type="button" className="btn btn-sm btn-ghost" onClick={onBack}>Back</button>}
         <p className="topic-muted" aria-busy={!error}>{error ?? 'Loading the topic…'}</p>
       </div>
     );
