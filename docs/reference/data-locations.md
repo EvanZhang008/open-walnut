@@ -109,7 +109,6 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/distributed-skills/` | rebuildable | no | Skills the leader sends to this host's daemon, sent again on connect |
 | `~/.open-walnut/cloud-setup-job.json` | machine | yes | An in-flight cloud setup run, with its pairing code |
 | `~/.open-walnut/code-server/` | machine | no | The in-app editor: its data and the instance running here |
-| `~/.open-walnut/diagnostics/` | machine | yes | Heap snapshots of the server running here, taken on request: they hold whatever the process held |
 | `~/.open-walnut/time-tracking/` | leader-data | no | Time records: work hours, calls, app and site samples |
 | `~/.open-walnut/health/` | machine | no | Health data: it follows the existing rule that this data stays on the machine that collected it (git sync and backups leave it out) |
 | `~/.open-walnut/places/` | machine | no | Place visits from the phone: they follow the existing rule that this data stays on the machine that collected it |

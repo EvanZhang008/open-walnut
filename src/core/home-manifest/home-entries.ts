@@ -100,7 +100,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   rebuild('distributed-skills', 'distributed-skills', 'dir', 'Skills the leader sends to this host\'s daemon, sent again on connect'),
   mach('cloud-setup-job', 'cloud-setup-job.json', 'file', 'An in-flight cloud setup run, with its pairing code', { sensitive: true }),
   mach('code-server', 'code-server', 'dir', 'The in-app editor: its data and the instance running here'),
-  mach('diagnostics', 'diagnostics', 'dir', 'Heap snapshots of the server running here, taken on request: they hold whatever the process held', { sensitive: true }),
+  mach('diagnostics', 'diagnostics', 'dir', 'Heap snapshots at their first place (they go to the runtime dir now): they hold whatever the process held', { sensitive: true, legacy: true }),
   // Time, health, places.
   lead('time-tracking', 'time-tracking', 'dir', 'Time records: work hours, calls, app and site samples'),
   mach('health', 'health', 'dir', 'Health data: it follows the existing rule that this data stays on the machine that collected it (git sync and backups leave it out)'),
