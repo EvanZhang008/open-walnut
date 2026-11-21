@@ -79,6 +79,8 @@ export interface CommitResult {
   unchanged: boolean
   /** Of the written files, how many were made from the last batch's copy with only their changed chunks written. */
   patched?: number
+  /** Patches that did not match their hash and were built whole instead (a sign of trouble). */
+  patchFailed?: number
   /** Bytes written into new files (a patched file counts its changed chunks only; a clone that the filesystem cannot share copies the rest in the kernel). */
   bytesWritten?: number
 }

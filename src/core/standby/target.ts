@@ -209,6 +209,7 @@ export class StandbyTarget {
     const slot = limiter(16)
     const copyStats = await readCopyStats(this.t)
     let patched = 0
+    let patchFailed = 0
     let bytesWritten = 0
     try {
       await Promise.all(puts.map((f) => slot(async () => {
@@ -225,6 +226,7 @@ export class StandbyTarget {
               return
             } catch (err) {
               // A patch that does not come out as the batch's file: build it whole instead.
+              patchFailed++
               log.session.warn('standby: a patched file did not match its hash; building it whole', { path: f.p, error: String(err) })
             }
           }
@@ -284,7 +286,7 @@ export class StandbyTarget {
     await hooks.point?.('state-written')
     // The batch is current: a cleanup that fails is finished by the next caller's recovery.
     await this.finish(journal, before, next).catch((err) => log.session.warn('standby: cleanup after commit failed', { error: String(err) }))
-    return { batch: manifest.batch, written: puts.length, deleted: dels.length, unchanged: false, patched, bytesWritten }
+    return { batch: manifest.batch, written: puts.length, deleted: dels.length, unchanged: false, patched, patchFailed, bytesWritten }
   }
 
   /** Save what was changed directly at each path the swap is about to replace or remove. */

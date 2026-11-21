@@ -147,6 +147,7 @@ describe('a changed large file is made from the last batch\'s copy', () => {
     const out = await snapshotTo(sb.home, sb.target)
     expect(out.ok, out.ok ? '' : out.reason).toBe(true)
     expect(out.ok && out.commit.patched).toBe(1)
+    expect(out.ok && out.commit.patchFailed).toBe(0)
     // The changed 1 MiB chunk of the big file, plus the small files written whole.
     expect(out.ok && out.commit.bytesWritten).toBeLessThan(1024 * 1024 + 64 * 1024)
     expectBatch(2)
@@ -165,6 +166,8 @@ describe('a changed large file is made from the last batch\'s copy', () => {
     const out = await snapshotTo(sb.home, sb.target)
     expect(out.ok, out.ok ? '' : out.reason).toBe(true)
     expect(out.ok && out.commit.patched).toBe(0)
+    // Not even tried: an edited copy is never a clone source (patchFailed counts a tried one).
+    expect(out.ok && out.commit.patchFailed).toBe(0)
     expectBatch(2)
     const saved = fs.readdirSync(path.join(sb.target, 'drift')).filter((d) => d.endsWith('-commit'))
     expect(saved).toHaveLength(1)
