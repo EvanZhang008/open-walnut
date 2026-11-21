@@ -146,7 +146,8 @@ function slowLink(connect: () => Promise<DaemonLink>, mbit: number, downMbit: nu
 /** ms per 1 MiB chunk through `link`, one at a time and eight at once. */
 async function chunkCost(connect: () => Promise<DaemonLink>, dir: string, walnut: string[]): Promise<{ oneAtATimeMs: number; eightAtOnceMs: number }> {
   const timeIt = async (n: number, window: number) => {
-    const t = new RemoteStandbyTarget({ connect, dir, walnut, window })
+    // One at a time: no chunk is held beyond the one being sent.
+    const t = new RemoteStandbyTarget({ connect, dir, walnut, window, ...(window === 1 ? { bufferBytes: 1 } : {}) })
     await t.current()
     const chunks = Array.from({ length: n }, () => rnd(1024 * 1024))
     const started = performance.now()

@@ -60,6 +60,14 @@ export function manifestPath(t: TargetPaths, batch: number): string {
   return path.join(t.batches, `${batch}.json`)
 }
 
+/** Refuse a target inside the home (it would copy itself) or a home inside the target. */
+export function checkTargetPlace(home: string, dir: string): void {
+  const h = path.resolve(home)
+  const d = path.resolve(dir)
+  const inside = (a: string, b: string) => a === b || a.startsWith(`${b}${path.sep}`)
+  if (inside(d, h) || inside(h, d)) throw new Error(`the standby target ${d} and the home ${h} must not contain each other`)
+}
+
 /** A relative path of a batch, refused if it could leave the copy. */
 export function safeRel(rel: string): string {
   // A backslash is a separator only on Windows; elsewhere `a\b.md` is a fine note name.

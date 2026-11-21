@@ -5,7 +5,7 @@
  * the target lacks, a dropped link is waited out, a link gone too long fails the batch and the
  * next sends only the missing chunks, a lost apply answer is judged by the target, and a full
  * disk or a target that moved leaves the batch before whole. Kills of the receiving process and
- * a real daemon are in remote-transport-twin-e2e.test.ts.
+ * a real daemon are in remote-twin-e2e.test.ts.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import crypto from 'node:crypto'
@@ -14,6 +14,8 @@ import path from 'node:path'
 import { RemoteStandbyTarget } from '../../../src/core/standby/remote-transport.js'
 import { composeManifest, runReceiveOp } from '../../../src/core/standby/receive.js'
 import { fakeStandbyHost } from './fake-standby-host.js'
+
+const sha256Hex = (d: Buffer) => crypto.createHash('sha256').update(d).digest('hex')
 import { standbyStatus, takeBatch, verifyStandby } from '../../../src/core/standby/index.js'
 import { ORPHAN_CHUNK_KEEP_MS } from '../../../src/core/standby/verify.js'
 import { targetPaths } from '../../../src/core/standby/target-files.js'
@@ -219,6 +221,52 @@ describe('a standby target on another host', () => {
   })
 })
 
+describe('a file put back to an old version', () => {
+  it('sends the old version\'s chunks again (the target removed them when it was replaced)', async () => {
+    sb = await sandbox('remote-aba')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    const t = remote(l)
+    const versions = ['{"v":"A"}\n', '{"v":"B"}\n', '{"v":"A"}\n', '{"v":"B"}\n']
+    for (const [i, v] of versions.entries()) {
+      write(sb.home, 'cache/status-riding.json', v)
+      await settle()
+      const out = await batch(t)
+      expect(out.ok, `batch ${i + 1}: ${out.ok ? '' : out.reason}`).toBe(true)
+      expect(fs.readFileSync(path.join(sb.target, 'copy/cache/status-riding.json'), 'utf8')).toBe(v)
+    }
+    await expectCopyIsHome()
+  })
+})
+
+describe('sending chunks', () => {
+  it('holds chunks to send so the batch reads on, up to its buffer, and flush waits for them', async () => {
+    sb = await sandbox('remote-buffer')
+    const l = fakeStandbyHost(sb.root)
+    let open!: () => void
+    const gate = new Promise<void>((r) => { open = r })
+    l.state.fault = () => undefined
+    const slow = { ...l.link, send: async (cmd: string, params?: Record<string, unknown>, ms?: number) => { if (cmd === 'fs.writePart') await gate; return l.link.send(cmd, params, ms) } }
+    const chunk = (n: number) => { const d = Buffer.alloc(1024 * 1024, n); return { id: sha256Hex(d), d } }
+    const t = new RemoteStandbyTarget({ connect: async () => slow, dir: sb.target, bufferBytes: 2 * 1024 * 1024 })
+    await t.current()
+    const [a, b, c] = [chunk(1), chunk(2), chunk(3)]
+    // Two fit the buffer: they return before anything was sent.
+    await t.putChunk(a.id, a.d)
+    await t.putChunk(b.id, b.d)
+    // The third waits for room.
+    let third = false
+    const p = t.putChunk(c.id, c.d).then(() => { third = true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(third).toBe(false)
+    open()
+    await p
+    await t.flush()
+    for (const x of [a, b, c]) expect(fs.existsSync(path.join(sb.target, 'chunks', x.id.slice(0, 2), x.id))).toBe(true)
+  })
+})
+
 describe('the receiving side', () => {
   it('rebuilds the manifest only when it matches the leader\'s hash, against the batch it holds', async () => {
     sb = await sandbox('receive-compose')
@@ -234,10 +282,18 @@ describe('the receiving side', () => {
     await expect(composeManifest(t, { ...upload, base: null })).rejects.toThrow(/against batch none/)
   })
 
+  it('refuses a target that lies in that machine\'s own Walnut home or holds it', async () => {
+    sb = await sandbox('receive-home')
+    const home = path.join(sb.root, 'host-home')
+    await expect(runReceiveOp('init', path.join(home, 'standby'), {}, home)).rejects.toThrow(/must not contain each other/)
+    await expect(runReceiveOp('init', sb.root, {}, home)).rejects.toThrow(/must not contain each other/)
+    expect(fs.existsSync(home)).toBe(false)
+  })
+
   it('takes an upload or export path only inside the target\'s .incoming/', async () => {
     sb = await sandbox('receive-paths')
-    await expect(runReceiveOp('init', sb.target, { export: path.join(sb.root, 'elsewhere.gz'), chunks: true })).rejects.toThrow(/is not a file of/)
-    await expect(runReceiveOp('apply', sb.target, { upload: path.join(sb.target, '.incoming', '..', 'standby.json') })).rejects.toThrow(/is not a file of/)
-    await expect(runReceiveOp('nope', sb.target, {})).rejects.toThrow(/unknown receive op/)
+    await expect(runReceiveOp('init', sb.target, { export: path.join(sb.root, 'elsewhere.gz'), chunks: true }, path.join(sb.root, 'host-home'))).rejects.toThrow(/is not a file of/)
+    await expect(runReceiveOp('apply', sb.target, { upload: path.join(sb.target, '.incoming', '..', 'standby.json') }, path.join(sb.root, 'host-home'))).rejects.toThrow(/is not a file of/)
+    await expect(runReceiveOp('nope', sb.target, {}, path.join(sb.root, 'host-home'))).rejects.toThrow(/unknown receive op/)
   })
 })

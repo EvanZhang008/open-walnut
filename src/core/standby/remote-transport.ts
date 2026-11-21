@@ -28,7 +28,7 @@ import { SCRIPT_MAX_TIMEOUT_MS } from '../../providers/host-script-core.js'
 import { runScriptOnHost } from '../hosts/host-script.js'
 import { sha256 } from './chunks.js'
 import { INCOMING, RECEIVE_MARK, type ApplyAnswer, type InitAnswer, type ManifestRef, type TargetExport, type VerifyAnswer } from './receive.js'
-import type { BatchFile, BatchManifest, BatchUpload, CommitResult, StandbyState, StandbyTransport } from './types.js'
+import { chunkIds, type BatchFile, type BatchManifest, type BatchUpload, type CommitResult, type StandbyState, type StandbyTransport } from './types.js'
 
 const gzip = promisify(zlib.gzip)
 const gunzip = promisify(zlib.gunzip)
@@ -50,6 +50,11 @@ export interface RemoteTargetOptions {
   linkWaitMs?: number
   /** Chunks in flight at once (default 8): enough to keep a slow link busy. */
   window?: number
+  /**
+   * Bytes of chunks held to send (default 256 MiB): the batch reads on while a slow link sends,
+   * so its files are read right after its moment and not as fast as the link allows.
+   */
+  bufferBytes?: number
   /** Variables for the receive runs there (tests: a kill point). */
   env?: Record<string, string>
 }
@@ -86,6 +91,8 @@ export interface RemoteStats {
 
 export class RemoteStandbyTarget implements StandbyTransport {
   readonly stats: RemoteStats = { commands: 0, resent: 0, sentBytes: 0, lastApplyMs: 0 }
+  /** The last command gave up on a link that stayed down (the runner skips its retries then). */
+  unreachable = false
   /** The last apply's answer (its verify pass and the drift reports waiting). */
   lastApply: ApplyAnswer | null = null
   private link: DaemonLink | null = null
@@ -94,8 +101,12 @@ export class RemoteStandbyTarget implements StandbyTransport {
   /** Chunk ids the target holds (null: not read yet, or dropped after a failure). */
   private held: Set<string> | null = null
   private viewed: { state: StandbyState; files: BatchFile[] } | null = null
+  /** Chunks waiting to go; `queuedBytes` counts them and those in flight. */
+  private queue: Array<{ id: string; data: Buffer }> = []
+  private queuedBytes = 0
   private inflight = new Set<Promise<void>>()
   private failed: unknown = null
+  private waiters: Array<() => void> = []
   private readonly dir: string
   private readonly incoming: string
 
@@ -110,6 +121,8 @@ export class RemoteStandbyTarget implements StandbyTransport {
     try {
       this.link = await this.o.connect()
     } catch (err) {
+      // A host Walnut does not know never comes: say so at once.
+      if (err instanceof Error && err.name === 'UnknownHostError') throw err
       // No route now: wait for it like a dropped one.
       throw markLinkFailure(err instanceof Error ? err : new Error(String(err)), 'no-link')
     }
@@ -124,12 +137,14 @@ export class RemoteStandbyTarget implements StandbyTransport {
       try {
         reply = await (await this.conn()).send(cmd, params, timeoutMs)
       } catch (err) {
+        if (linkFailureKind(err) && Date.now() >= until) this.unreachable = true
         if (!linkFailureKind(err) || Date.now() >= until) throw err
         this.link = null
         this.stats.resent++
         await sleep(Math.min(5_000, 250 * 2 ** attempt))
         continue
       }
+      this.unreachable = false
       this.stats.commands++
       if (reply.ok === false) throw new RemoteRefusal(cmd, reply)
       return reply
@@ -196,8 +211,11 @@ export class RemoteStandbyTarget implements StandbyTransport {
     const until = Date.now() + (this.o.linkWaitMs ?? 120_000)
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.receive<T>(op, args, timeoutMs)
+        const answer = await this.receive<T>(op, args, timeoutMs)
+        this.unreachable = false
+        return answer
       } catch (err) {
+        if (linkFailureKind(err) && Date.now() >= until) this.unreachable = true
         if (!linkFailureKind(err) || Date.now() >= until) throw err
         this.stats.resent++
         await sleep(Math.min(5_000, 250 * 2 ** attempt))
@@ -213,8 +231,9 @@ export class RemoteStandbyTarget implements StandbyTransport {
   }
 
   async current(): Promise<{ state: StandbyState; files: BatchFile[] }> {
-    if (this.failed || this.inflight.size) {
-      await Promise.allSettled([...this.inflight])
+    // What a void batch left to send still goes (the next batch need not send it); a failure forgets what the target holds.
+    await this.settle()
+    if (this.failed) {
       this.failed = null
       this.reset()
     }
@@ -239,21 +258,57 @@ export class RemoteStandbyTarget implements StandbyTransport {
     return new Set(ids.filter((id) => !this.held!.has(id)))
   }
 
-  async putChunk(id: string, data: Buffer): Promise<void> {
-    if (sha256(data) !== id) throw new Error(`chunk ${id} does not match its hash`)
-    while (this.inflight.size >= (this.o.window ?? 8)) await Promise.race(this.inflight)
-    if (this.failed) throw this.failed
-    // The caller may reuse its buffer once this returns.
-    const own = Buffer.from(data)
-    const p: Promise<void> = this.writeFile(path.join(this.dir, 'chunks', id.slice(0, 2), id), own)
-      .then(() => { this.held?.add(id) }, (err) => { this.failed ??= err })
-      .finally(() => { this.inflight.delete(p) })
-    this.inflight.add(p)
+  private notify(): void {
+    const w = this.waiters
+    this.waiters = []
+    for (const wake of w) wake()
   }
 
-  /** Wait for every chunk in flight; throws the first one that failed (and forgets what the target holds). */
+  private changed(): Promise<void> {
+    return new Promise((resolve) => { this.waiters.push(resolve) })
+  }
+
+  /** Keep `window` chunks in flight from the queue; after a failure, drop the rest (the batch fails). */
+  private pump(): void {
+    while (!this.failed && this.inflight.size < (this.o.window ?? 8) && this.queue.length) {
+      const { id, data } = this.queue.shift()!
+      const p: Promise<void> = this.writeFile(path.join(this.dir, 'chunks', id.slice(0, 2), id), data)
+        .then(() => { this.held?.add(id) }, (err) => { this.failed ??= err })
+        .finally(() => {
+          this.inflight.delete(p)
+          this.queuedBytes -= data.length
+          this.pump()
+          this.notify()
+        })
+      this.inflight.add(p)
+    }
+    if (this.failed && this.queue.length) {
+      for (const q of this.queue) this.queuedBytes -= q.data.length
+      this.queue = []
+      this.notify()
+    }
+  }
+
+  async putChunk(id: string, data: Buffer): Promise<void> {
+    // The caller may reuse its buffer once this returns.
+    const own = Buffer.from(data)
+    if (sha256(own) !== id) throw new Error(`chunk ${id} does not match its hash`)
+    const budget = this.o.bufferBytes ?? 256 * 1024 * 1024
+    while (!this.failed && this.queuedBytes > 0 && this.queuedBytes + own.length > budget) await this.changed()
+    if (this.failed) throw this.failed
+    this.queue.push({ id, data: own })
+    this.queuedBytes += own.length
+    this.pump()
+  }
+
+  /** Until nothing is queued or in flight (a failure drops the queue). */
+  private async settle(): Promise<void> {
+    while (this.queue.length || this.inflight.size) await this.changed()
+  }
+
+  /** Send every chunk held; throws the first one that failed (and forgets what the target holds). */
   async flush(): Promise<void> {
-    await Promise.allSettled([...this.inflight])
+    await this.settle()
     if (this.failed) { const err = this.failed; this.failed = null; this.reset(); throw err }
   }
 
@@ -295,8 +350,23 @@ export class RemoteStandbyTarget implements StandbyTransport {
     }
     // A batch that changed no content writes no manifest: the target keeps the one it had.
     if (!answer.commit.unchanged && answer.manifest) this.base = { ref: answer.manifest, files: manifest.files }
+    this.forgetReplaced(manifest, before, puts, dels)
     this.lastApply = answer
     return answer.commit
+  }
+
+  /**
+   * The target removed the chunks only the replaced versions used (StandbyTarget's finish):
+   * forget them here too, so a file put back to an old version sends its chunks again.
+   */
+  private forgetReplaced(manifest: BatchManifest, before: Map<string, BatchFile>, puts: BatchFile[], dels: string[]): void {
+    if (!this.held) return
+    const keep = new Set<string>()
+    for (const f of manifest.files) for (const id of chunkIds(f)) keep.add(id)
+    for (const p of [...puts.map((f) => f.p), ...dels]) {
+      const old = before.get(p)
+      if (old) for (const id of chunkIds(old)) if (!keep.has(id)) this.held.delete(id)
+    }
   }
 
   /** A verify pass there; answers its result and the drift reports not yet handed on. */

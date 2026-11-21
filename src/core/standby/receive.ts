@@ -23,7 +23,7 @@ import { promisify } from 'node:util'
 import { CHUNK_ID, sha256 } from './chunks.js'
 import { reportPendingDrift, type DriftReport } from './drift.js'
 import { StandbyTarget, type CommitHooks } from './target.js'
-import { currentFiles, manifestPath, readState, writeDurable, type TargetPaths } from './target-files.js'
+import { checkTargetPlace, currentFiles, manifestPath, readState, writeDurable, type TargetPaths } from './target-files.js'
 import { compareBatchPaths, type BatchFile, type BatchManifest, type BatchUpload, type CommitResult, type StandbyState } from './types.js'
 import { verifyStandby, type VerifyResult } from './verify.js'
 
@@ -41,8 +41,8 @@ const EXPORT_STALE_MS = 2 * 60_000
 export interface ManifestRef { n: number; size: number; mtimeMs: number; ino: number }
 
 export interface InitAnswer { state: StandbyState; manifest: ManifestRef | null; exported?: { path: string; size: number } }
-export interface ApplyAnswer { commit: CommitResult; manifest: ManifestRef | null; verify?: VerifyResult; pending?: DriftReport[] }
-export interface VerifyAnswer { verify: VerifyResult; pending: DriftReport[] }
+export interface ApplyAnswer { commit: CommitResult; manifest: ManifestRef | null; verify?: VerifyResult & { driftTotal: number }; pending?: PendingDrift[] }
+export interface VerifyAnswer { verify: VerifyResult & { driftTotal: number }; pending: PendingDrift[] }
 export interface TargetExport { chunks?: string[]; files?: BatchFile[] }
 
 /** A file the leader names must lie in the target's `.incoming/`, and nowhere else. */
@@ -77,11 +77,27 @@ async function chunkList(t: TargetPaths): Promise<string[]> {
   return out
 }
 
-/** The drift reports not yet handed to Walnut Health. */
-async function pendingDrift(t: TargetPaths): Promise<DriftReport[]> {
-  const out: DriftReport[] = []
-  await reportPendingDrift(t, async (r) => { out.push(r); return false })
+/** Items of a drift report or a verify pass an answer carries (the rest stay in the report on that host). */
+const ANSWER_ITEMS = 50
+/** Reports an answer carries; the next pass carries the rest. */
+const ANSWER_REPORTS = 20
+
+/** A drift report as an answer carries it: its first items and how many it has. */
+export type PendingDrift = DriftReport & { total: number }
+
+/** The drift reports not yet handed to Walnut Health, oldest first, each cut to its first items. */
+async function pendingDrift(t: TargetPaths): Promise<PendingDrift[]> {
+  const out: PendingDrift[] = []
+  await reportPendingDrift(t, async (r) => {
+    if (out.length < ANSWER_REPORTS) out.push({ ...r, items: r.items.slice(0, ANSWER_ITEMS), total: r.items.length })
+    return false
+  })
   return out
+}
+
+/** A verify result as an answer carries it: its first items and how many it found. */
+function answerVerify(v: VerifyResult): VerifyResult & { driftTotal: number } {
+  return { ...v, drift: v.drift.slice(0, ANSWER_ITEMS), driftTotal: v.drift.length }
 }
 
 export const sameManifestRef = (a: ManifestRef | null | undefined, b: ManifestRef | null | undefined): boolean =>
@@ -98,18 +114,21 @@ export async function receiveInit(dir: string, opts: { exportTo?: string; chunks
   const incoming = path.join(t.root, INCOMING)
   await fs.mkdir(incoming, { recursive: true, mode: 0o700 })
   await sweepIncoming(incoming, opts.now ?? Date.now())
-  const state = await readState(t)
-  const answer: InitAnswer = { state, manifest: await manifestRef(t, state) }
-  if (opts.exportTo) {
-    const file = incomingFile(t, opts.exportTo)
-    const out: TargetExport = {}
-    if (opts.chunks) out.chunks = await chunkList(t)
-    if (opts.files && !sameManifestRef(answer.manifest, opts.haveManifest)) out.files = await currentFiles(t, state)
-    const gz = await gzip(Buffer.from(JSON.stringify(out)))
-    await writeDurable(file, gz, 0o600)
-    answer.exported = { path: file, size: gz.length }
-  }
-  return answer
+  // Under the target's lock: an apply finishing meanwhile removes chunks only its replaced versions used.
+  return target.locked(async () => {
+    const state = await readState(t)
+    const answer: InitAnswer = { state, manifest: await manifestRef(t, state) }
+    if (opts.exportTo) {
+      const file = incomingFile(t, opts.exportTo)
+      const out: TargetExport = {}
+      if (opts.chunks) out.chunks = await chunkList(t)
+      if (opts.files && !sameManifestRef(answer.manifest, opts.haveManifest)) out.files = await currentFiles(t, state)
+      const gz = await gzip(Buffer.from(JSON.stringify(out)))
+      await writeDurable(file, gz, 0o600)
+      answer.exported = { path: file, size: gz.length }
+    }
+    return answer
+  })
 }
 
 /** The whole manifest from an upload and this target's current batch, checked against the leader's hash. */
@@ -132,12 +151,14 @@ export async function receiveApply(dir: string, uploadFile: string, opts: { veri
   const t = target.t
   const file = incomingFile(t, uploadFile)
   try {
+    // Owner-only again before anything is built (a target removed since the batch's init was made by fs.writePart).
+    await target.init()
     const upload = JSON.parse((await gunzip(await fs.readFile(file))).toString('utf8')) as BatchUpload
     const manifest = await composeManifest(t, upload)
     const commit = await target.commit(manifest, opts.hooks)
     const answer: ApplyAnswer = { commit, manifest: await manifestRef(t, await readState(t)) }
     if (opts.verify) {
-      answer.verify = await verifyStandby(dir)
+      answer.verify = answerVerify(await verifyStandby(dir))
       answer.pending = await pendingDrift(t)
     }
     return answer
@@ -147,7 +168,7 @@ export async function receiveApply(dir: string, uploadFile: string, opts: { veri
 }
 
 export async function receiveVerify(dir: string, opts: { deep?: boolean } = {}): Promise<VerifyAnswer> {
-  const verify = await verifyStandby(dir, { deep: opts.deep })
+  const verify = answerVerify(await verifyStandby(dir, { deep: opts.deep }))
   return { verify, pending: await pendingDrift(new StandbyTarget(dir).t) }
 }
 
@@ -168,8 +189,13 @@ export interface ReceiveOptions {
   at?: string
 }
 
-/** One op of `walnut standby receive <op> <dir>`: its answer (the CLI prints it after RECEIVE_MARK). */
-export async function runReceiveOp(op: string, dir: string, o: ReceiveOptions): Promise<unknown> {
+/**
+ * One op of `walnut standby receive <op> <dir>`: its answer (the CLI prints it after RECEIVE_MARK).
+ * `home` is this machine's own Walnut home: a target inside it, or holding it, is refused (it
+ * would copy itself, or write into the home), as a local target is.
+ */
+export async function runReceiveOp(op: string, dir: string, o: ReceiveOptions, home?: string): Promise<unknown> {
+  checkTargetPlace(home ?? (await import('../../constants.js')).WALNUT_HOME, dir)
   if (op === 'init') {
     return receiveInit(dir, { exportTo: o.export, chunks: o.chunks, files: o.files, haveManifest: o.haveManifest ? JSON.parse(o.haveManifest) as ManifestRef : null })
   }

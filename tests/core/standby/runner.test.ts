@@ -109,4 +109,36 @@ describe('standby runner', () => {
     expect(drift[0].body).toContain(`standby-box:${sb.target}`)
     expect(fs.readFileSync(file, 'utf8')).toBe('# Memory\n')
   }, 60_000)
+
+  it('a standby host out of reach is reported behind once, with the last batch known there, without waiting out each step', async () => {
+    sb = await sandbox('remote-away')
+    dbs.push(...seedHome(sb.home).dbs)
+    const host = fakeStandbyHost(sb.root)
+    const notices: Array<{ title: string; body: string }> = []
+    runner = startStandbyRunner({
+      settings: async () => ({ on: true, home: sb.home, dir: sb.target, host: 'standby-box', intervalSeconds: 3600 }),
+      notify: async (n) => { notices.push(n); return true },
+      connect: async () => host.link,
+      linkWaitMs: 300,
+    })
+    await runner.reconcile()
+    expect((await runner.runOnce())?.ok).toBe(true)
+    host.state.down = true
+    const real = Date.now.bind(Date)
+    const later = vi.spyOn(Date, 'now').mockImplementation(() => real() + 6 * 60_000)
+    try {
+      const started = real()
+      const out = await runner.runOnce()
+      expect(out?.ok).toBe(false)
+      // One attempt and no verify or state read over the dead link: a few waits of 300 ms, not minutes.
+      expect(real() - started).toBeLessThan(10_000)
+      const behind = notices.filter((n) => n.title === 'Standby copy is behind')
+      expect(behind).toHaveLength(1)
+      expect(behind[0].body).toMatch(/could not be read \(its host is out of reach\); the last batch known there is batch 1/)
+      await runner.runOnce()
+      expect(notices.filter((n) => n.title === 'Standby copy is behind')).toHaveLength(1)
+    } finally {
+      later.mockRestore()
+    }
+  }, 60_000)
 })

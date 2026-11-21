@@ -177,21 +177,37 @@ the daemon and the server are one program, every host has it.
 | Step | How it goes | Why that way |
 |---|---|---|
 | Read the target | `walnut standby receive init` (run by the daemon's `exec.script`) makes the target owner-only, finishes an apply a kill cut off, and writes into `.incoming/` the chunk ids it holds and its current files, only those the leader does not hold already; the leader reads that file with `fs.readRange` | One run and one read per batch; an unchanged batch reads about 100 bytes back |
-| Send chunks | `fs.writePart`, one 1 MiB chunk a part, eight in flight: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch |
+| Send chunks | `fs.writePart`, one 1 MiB chunk a part, eight in flight and up to 256 MiB held to send: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch; the batch reads its files right after its moment while a slow link sends (reading at the link's pace voided 4 of 5 batches under a steady writer at 20 Mbit/s) |
 | Send the batch | an upload (`BatchUpload`: the files that differ from the target's batch, and the paths gone), gzipped, written the same way | An incremental batch sends its few changed entries, not a manifest of every file |
 | Make it current | `walnut standby receive apply` rebuilds the whole manifest from its own current batch and the upload, takes it only when its sha256 is the leader's, then runs `StandbyTarget.commit` and a verify pass | The same rules as a local target, word for word: every chunk and file checked, one switch, a kill or a full disk leaves the batch before whole |
 
 A dropped link is dialled again and the command sent again for up to two minutes; only commands
-that do the same thing twice are sent twice. An apply whose answer was lost (the link went
+that do the same thing twice are sent twice. A host Walnut does not know fails at once. When the
+target replaces a file's version it removes the chunks only the old version used, and the leader
+forgets them too, so a file put back to an old version sends them again. The receiving side
+refuses a target folder that lies in that machine's own Walnut home or holds it, as a local
+target is refused. An apply whose answer was lost (the link went
 while it ran) is never sent again: the leader asks the target which batch it holds and takes
 the answer from there. A target another leader moved meanwhile refuses the upload (it is
 against another batch), and the next batch reads it again. A chunk the leader believed the
 target held, gone there, fails one batch; the next reads the target's list again and sends it.
 
-Limits: an apply runs within the daemon's script limit (10 minutes), which a first batch of a
-very large home on a slow disk could pass (it is then stopped there, and the batch before stays
-current); the runner reads the target's state through the same link, so a host that cannot be
-reached for five minutes is reported behind once.
+Limits:
+
+- An apply runs within the daemon's script limit (10 minutes). The first batch of the 20 GB
+  synthetic home applied in 339 s on a busy dev box; a home whose apply takes longer there is
+  stopped each time, keeps the batch before (none, for a first batch) and never gets further.
+  The way past it is an apply that is not a script, once the standby host runs Walnut itself.
+- While a database's changed chunks wait to go, its pin stays open: on the first batch over a
+  slow link (a 1.5 GB database at 20 Mbit/s, about ten minutes) the leader's WAL cannot be
+  checkpointed meanwhile and grows. Incremental batches send a database's few changed chunks.
+- After any failure the leader reads the target's whole chunk list again (about 33 bytes a
+  chunk, gzipped, one read).
+- A host out of reach is reported behind once, about five minutes after its last batch plus the
+  two minutes a dropped link is waited for, naming the last batch known there; its batches are
+  not tried again until the next tick.
+- Answers carry at most 50 drift items and 20 reports a pass (the rest wait on that host for the
+  next pass), so a large drift never overflows the script's output.
 
 ## Running it
 

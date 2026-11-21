@@ -46,7 +46,7 @@ export function fakeStandbyHost(root: string) {
         if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) o[k] = rest[++i]
         else o[k] = true
       }
-      const answer = await runReceiveOp(op, dir, o as ReceiveOptions).catch((err: Error) => ({ error: err.message }))
+      const answer = await runReceiveOp(op, dir, o as ReceiveOptions, path.join(root, 'standby-host-home')).catch((err: Error) => ({ error: err.message }))
       return { ok: true, code: 0, stdout: `${RECEIVE_MARK}${JSON.stringify(answer)}\n`, stderr: '', timedOut: false, truncated: false }
     }
     return { ok: false, error: `unknown command ${cmd}` }

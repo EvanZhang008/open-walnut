@@ -2,13 +2,14 @@
  * The standby copy of the leader's home (docs/reference/standby-copy.md): whole-folder
  * batches to a target directory, kept complete, checked for direct edits.
  *
- * This phase has one transport, local: the target is a directory on this machine. A remote
- * transport implements StandbyTransport (types.ts) and changes nothing else.
+ * The target is a directory on this machine (localTransport) or on another host
+ * (remote-transport.ts); both implement StandbyTransport (types.ts).
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { takeBatch, type BatchOptions, type BatchOutcome } from './batch.js'
 import { StandbyTarget } from './target.js'
+import { checkTargetPlace } from './target-files.js'
 import type { StandbyTransport } from './types.js'
 
 export { takeBatch, type BatchOutcome, type BatchStats } from './batch.js'
@@ -23,13 +24,7 @@ export async function localTransport(dir: string): Promise<StandbyTarget & Stand
   return target
 }
 
-/** Refuse a target inside the home (it would copy itself) or a home inside the target. */
-export function checkTargetPlace(home: string, dir: string): void {
-  const h = path.resolve(home)
-  const d = path.resolve(dir)
-  const inside = (a: string, b: string) => a === b || a.startsWith(`${b}${path.sep}`)
-  if (inside(d, h) || inside(h, d)) throw new Error(`the standby target ${d} and the home ${h} must not contain each other`)
-}
+export { checkTargetPlace } from './target-files.js'
 
 /** One batch from `home` to the local target `dir`. */
 export async function snapshotTo(home: string, dir: string, opts: Partial<Omit<BatchOptions, 'home' | 'transport'>> = {}): Promise<BatchOutcome> {

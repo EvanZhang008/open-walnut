@@ -41,6 +41,8 @@ export interface StandbyRunnerDeps {
   onRecovered?(): void
   /** The link to a standby host's daemon (default: Walnut's own, src/core/hosts/link.ts). */
   connect?(host: string): Promise<DaemonLink>
+  /** How long a dropped link to a standby host is waited for (default 2 min; tests shorten it). */
+  linkWaitMs?: number
 }
 
 /** Where the batches go: a folder here, or one on a standby host. */
@@ -51,6 +53,8 @@ interface StandbySite {
   /** A verify pass after a batch; each drift report not yet handed on goes to `report` once. */
   verify(out: BatchOutcome | null, report: (r: DriftReport) => Promise<boolean>): Promise<void>
   current(): Promise<{ batch: number; takenAt: string } | null>
+  /** The site's host stayed out of reach through the last call (a remote site only). */
+  unreachable?(): boolean
 }
 
 function localSite(home: string, dir: string): StandbySite {
@@ -65,8 +69,8 @@ function localSite(home: string, dir: string): StandbySite {
   }
 }
 
-function remoteSite(home: string, host: string, dir: string, walnut: string[] | undefined, connect: (host: string) => Promise<DaemonLink>): StandbySite {
-  const target = new RemoteStandbyTarget({ connect: () => connect(host), dir, walnut })
+function remoteSite(home: string, host: string, dir: string, walnut: string[] | undefined, connect: (host: string) => Promise<DaemonLink>, linkWaitMs?: number): StandbySite {
+  const target = new RemoteStandbyTarget({ connect: () => connect(host), dir, walnut, ...(linkWaitMs ? { linkWaitMs } : {}) })
   return {
     label: `${host}:${dir}`,
     // The home's own scratch (tmp/ is rebuildable): staging never reaches the copy.
@@ -77,6 +81,7 @@ function remoteSite(home: string, host: string, dir: string, walnut: string[] | 
       for (const r of pending) if (await report(r).catch(() => false)) await target.markReported(r.at)
     },
     current: async () => (await target.state()).current,
+    unreachable: () => target.unreachable,
   }
 }
 
@@ -125,10 +130,12 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
     let running: Promise<BatchOutcome | null> | null = null
     let ended = false
     let behindTold = false
-    const site = s.host ? remoteSite(s.home, s.host, s.dir, s.walnut, d.connect ?? defaultConnect) : localSite(s.home, s.dir)
-    const report = (r: DriftReport) => d.notify({
+    const site = s.host ? remoteSite(s.home, s.host, s.dir, s.walnut, d.connect ?? defaultConnect, d.linkWaitMs) : localSite(s.home, s.dir)
+    /** The last batch the site was known to hold (a host out of reach cannot say). */
+    let known: { batch: number; takenAt: string } | null = null
+    const report = (r: DriftReport & { total?: number }) => d.notify({
       title: 'Standby copy: files changed there directly',
-      body: `The standby copy at ${site.label} had ${r.items.length} path(s) changed in it directly; each was saved under drift/ and the copy put back to batch ${r.batch}: ${r.items.slice(0, 5).map((i) => `${i.p} (${i.kind})`).join(', ')}`,
+      body: `The standby copy at ${site.label} had ${r.total ?? r.items.length} path(s) changed in it directly; each was saved under drift/ and the copy put back to batch ${r.batch}: ${r.items.slice(0, 5).map((i) => `${i.p} (${i.kind})`).join(', ')}`,
       dedupScope: `standby-drift:${r.at}`,
     })
     const once = async (): Promise<BatchOutcome | null> => {
@@ -138,14 +145,25 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         out = await site.batch().catch((err) => ({ ok: false as const, reason: String(err), stats: {} as never }))
         if (out.ok) break
         log.session.info('standby: batch void', { reason: out.reason, attempt })
+        // A void batch is tried again soon; a host out of reach is not (the next tick tries).
+        if (site.unreachable?.()) break
       }
-      await site.verify(out, report).catch((err) => log.session.warn('standby: verify failed', { error: String(err) }))
-      const status = await site.current().catch(() => null)
+      const away = site.unreachable?.() === true
+      let readErr: string | null = null
+      if (!away) {
+        await site.verify(out, report).catch((err) => log.session.warn('standby: verify failed', { error: String(err) }))
+        const now = await site.current().catch((err) => { readErr = String(err); return undefined })
+        if (now !== undefined) known = now
+      }
+      const status = known
       const behind = !status?.takenAt || Date.now() - Date.parse(status.takenAt) > BEHIND_MS
       if (behind && !behindTold) {
+        const holds = away || readErr
+          ? `could not be read (${away ? 'its host is out of reach' : readErr}); the last batch known there is ${status ? `batch ${status.batch}, taken at ${status.takenAt}` : 'none'}`
+          : `holds ${status?.takenAt ? `batch ${status.batch}, taken at ${status.takenAt}` : 'no complete batch yet'}`
         behindTold = await d.notify({
           title: 'Standby copy is behind',
-          body: `The standby copy at ${site.label} holds ${status?.takenAt ? `batch ${status.batch}, taken at ${status.takenAt}` : 'no complete batch yet'}. Last attempt: ${out && !out.ok ? out.reason : 'ok'}`,
+          body: `The standby copy at ${site.label} ${holds}. Last attempt: ${out && !out.ok ? out.reason : 'ok'}`,
           dedupScope: 'standby-behind',
           recoveryKey: 'standby',
         })
