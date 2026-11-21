@@ -361,7 +361,7 @@ struct PopoutWindowTests {
         var request = URLRequest(url: URL(string: "http://localhost:\(port)/api/v1/human-inbox")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["subject": subject, "type": "info", "html": html])
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["subject": subject, "type": "info", "html": html, "user_asked": true])
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 201, let id = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String else {

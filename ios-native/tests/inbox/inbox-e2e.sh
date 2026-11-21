@@ -152,6 +152,8 @@ digest = {
 heads_up = {
     "subject": "Heads up: the build host disk is at 70%",
     "type": "info",
+    # A report the user asked for: an info letter enters the inbox only then.
+    "user_asked": True,
     "text": "Not urgent. Cleaning the old artifact cache would free about 20GB.",
     "markdown": "Nothing to do yet. The artifact cache is the biggest chunk.\n",
     "pin": True,
