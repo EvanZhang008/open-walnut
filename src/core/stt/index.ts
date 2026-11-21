@@ -4,7 +4,7 @@
  * Factory function creates the appropriate engine based on config.
  */
 
-import { readAsChinese, readAsEnglish } from './context-language.js';
+import { chineseHearingWins, mayBeTranslated } from './context-language.js';
 import fs from 'node:fs';
 import { readFile, rename, copyFile, rm, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -362,17 +362,17 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
       const plain = await engine.transcribe({ ...req, prompt: undefined });
       result = { ...plain, durationMs: result.durationMs + plain.durationMs };
     } else if (QWEN_ENGINES.has(engine.name) && (!req.language || req.language === 'auto')
-      && result.durationMs <= LANGUAGE_RECHECK_MAX_MS && readAsEnglish(result.text)
+      && result.durationMs <= LANGUAGE_RECHECK_MAX_MS && mayBeTranslated(result.text)
       && (await import('./user-terms.js')).userWritesCjk()) {
-      // Qwen3-ASR can write a Chinese speaker's take as an English translation
-      // (context-language.ts). Heard again as Chinese it writes what was said; a
-      // take spoken in English stays English and the first answer is kept, as it
-      // is when this second hearing fails: the first answer is a good one.
+      // Qwen3-ASR can write a Chinese speaker's take, or a stretch of it, as an
+      // English translation (context-language.ts). Heard again as Chinese it
+      // writes what was said; a take spoken in English stays English and the
+      // first answer is kept, as it is when this second hearing fails.
       try {
         req.signal?.throwIfAborted();
         const zh = await engine.transcribe({ ...req, language: 'zh' });
-        const chinese = readAsChinese(zh.text);
-        log.stt.warn(`Transcription came back in English for a speaker who writes Chinese; heard as Chinese it ${chinese ? 'came back in Chinese, kept that' : 'stayed English, kept the first'}`);
+        const chinese = chineseHearingWins(result.text, zh.text);
+        log.stt.warn(`Transcription came back (partly) in English for a speaker who writes Chinese; heard as Chinese it ${chinese ? 'came back in Chinese, kept that' : 'stayed English, kept the first'}`);
         result = chinese
           ? { ...zh, durationMs: result.durationMs + zh.durationMs }
           : { ...result, durationMs: result.durationMs + zh.durationMs };

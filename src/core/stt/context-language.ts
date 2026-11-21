@@ -8,6 +8,11 @@
  * happens with one word of the 40-term context, and on a phone take's last piece,
  * which starts mid-sentence on English words. Heard again with the language set
  * to Chinese, each comes back as said; a take spoken in English stays English.
+ *
+ * It also translates only part of a take (2026-11-19, a 62 s take: its first 90
+ * words came back as English sentences, its last line in Chinese, so the take as
+ * a whole did not read as English). The user's real mixed speech never runs past
+ * 13 English words in a row (40 of his takes); a translated stretch is a paragraph.
  */
 
 const CJK_CHAR = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/gu
@@ -31,4 +36,29 @@ export function readAsEnglish(text: string): boolean {
 export function readAsChinese(text: string): boolean {
   const { share, units } = cjkShare(text)
   return units >= 4 && share >= 0.5
+}
+
+/** The most English words in a row with no Chinese between them. */
+export function longestEnglishRun(text: string): number {
+  let best = 0
+  let run = 0
+  for (const unit of text.match(/[A-Za-z][A-Za-z']*|[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/gu) ?? []) {
+    run = /^[A-Za-z]/.test(unit) ? run + 1 : 0
+    if (run > best) best = run
+  }
+  return best
+}
+
+/** English words in a row that mark a translated stretch inside a Chinese take. */
+export const TRANSLATED_RUN_WORDS = 30
+
+/** Worth hearing again as Chinese: all English, or Chinese with a paragraph of English in it. */
+export function mayBeTranslated(text: string): boolean {
+  if (readAsEnglish(text)) return true
+  return (text.match(CJK_CHAR)?.length ?? 0) > 0 && longestEnglishRun(text) >= TRANSLATED_RUN_WORDS
+}
+
+/** The Chinese hearing is the take as said: Chinese, and clearly more of it than the first. */
+export function chineseHearingWins(first: string, zh: string): boolean {
+  return readAsChinese(zh) && cjkShare(zh).share >= cjkShare(first).share + 0.15
 }

@@ -11,6 +11,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // "I'm not blaming you, but this thing is called answered" in Chinese, with its English words.
 const ZH = '哦，不是我错怪你了，但是这有一个东西叫做 answered，为什么有两个呀'
 const EN = 'Oh, not me. I blame you. But the problem is, this has a thing called answered.'
+// A 62 s take of 2026-11-19 (neutral words): its first stretch came back as English
+// sentences, its last line in Chinese ("will there be no network later? how do others do it?").
+const PART_EN = 'Okay. Okay. Then we make a big design, right? Because this thing involves very, very many changes. ' +
+  'That is to say, later our daemon is more lightweight, right? Why does this plugin job need the daemon to manage it? ' +
+  'Should the server not manage it? The daemon is more stable. '
+const PART = PART_EN + '\u751a\u81f3\u4e4b\u540e\u662f\u4e0d\u662f\u5c31\u6ca1\u6709\u7f51\u4e86\uff1f\u522b\u4eba\u662f\u600e\u4e48\u505a\u7684\u5462\uff1f'
 const EN_REAL = 'So the interview is about payments, and the system design round comes after lunch.'
 
 const calls: string[] = []
@@ -33,7 +39,7 @@ vi.mock('../../src/core/stt/engine-mlx.js', async (importOriginal) => ({
 }))
 
 import { transcribeAudio } from '../../src/core/stt/index.js'
-import { cjkShare, readAsChinese, readAsEnglish } from '../../src/core/stt/context-language.js'
+import { chineseHearingWins, cjkShare, longestEnglishRun, mayBeTranslated, readAsChinese, readAsEnglish, TRANSLATED_RUN_WORDS } from '../../src/core/stt/context-language.js'
 import { _setTitleTermsForTest } from '../../src/core/stt/user-terms.js'
 import { editPairs, termShaped } from '../../src/core/stt/learn-from-sends.js'
 import type { Config } from '../../src/core/types.js'
@@ -62,6 +68,30 @@ describe('reading the language of a transcription', () => {
   })
 })
 
+describe('a take translated only in part', () => {
+  it('a paragraph of English inside a Chinese take is worth hearing again', () => {
+    expect(readAsEnglish(PART)).toBe(false)
+    expect(longestEnglishRun(PART)).toBeGreaterThanOrEqual(TRANSLATED_RUN_WORDS)
+    expect(mayBeTranslated(PART)).toBe(true)
+  })
+
+  it('the user\'s real mixed speech is never heard twice', () => {
+    // His longest real English run in 40 takes was 13 words; terms sit between Chinese.
+    const mixed = '\u6211\u89c9\u5f97 the system design round comes after lunch and then we talk about payments \u5bf9\u5427'
+    expect(longestEnglishRun(mixed)).toBe(13)
+    expect(mayBeTranslated(mixed)).toBe(false)
+    expect(mayBeTranslated(ZH)).toBe(false)
+  })
+
+  it('the Chinese hearing wins only with clearly more Chinese than the first', () => {
+    expect(chineseHearingWins(PART, ZH)).toBe(true)
+    expect(chineseHearingWins(EN, ZH)).toBe(true)
+    // A Chinese take that really quoted a paragraph of English comes back the same: the first stays.
+    expect(chineseHearingWins(PART, PART)).toBe(false)
+    expect(chineseHearingWins(EN, EN)).toBe(false)
+  })
+})
+
 describe('transcribeAudio for a speaker who writes Chinese', () => {
   beforeEach(() => {
     calls.length = 0
@@ -86,6 +116,13 @@ describe('transcribeAudio for a speaker who writes Chinese', () => {
     expect(calls).toEqual(['auto', 'zh'])
     expect(r.text).toBe(EN_REAL)
     expect(r.durationMs).toBe(70)
+  })
+
+  it('a take translated in part is heard again as Chinese, and its Chinese answer is the text', async () => {
+    withContext = PART
+    const r = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT })
+    expect(calls).toEqual(['auto', 'zh'])
+    expect(r.text).toBe(ZH)
   })
 
   it('a long take whose first pass was slow is not heard twice', async () => {
