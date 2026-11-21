@@ -242,6 +242,9 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/tmp/spawned-sessions/` | machine | no | Sessions this machine's daemon started (older ledger) |
 | `~/.open-walnut/tmp/resume-records/` | machine | no | Resume records of this machine's daemon |
 | `~/.open-walnut/tmp/trigger-state/` | machine | no | What each trigger on this machine's daemon already saw and reported |
+| `~/.open-walnut/tmp/offline-host/` | machine | no | This machine's daemon's offline journal: what it took while the leader was away |
+| `~/.open-walnut/tmp/leader/` | machine | no | This machine's daemon's leader book |
+| `~/.open-walnut/tmp/usage-budgets/` | machine | no | Usage budgets as this machine's daemon holds them |
 | `~/.open-walnut/tmp/host-exec/` | machine | no | Commands run on this machine and their output |
 | `~/.open-walnut/tmp/host-vitals/` | machine | no | This machine's load and memory samples |
 | `~/.open-walnut/tmp/standby-staging/` | machine | no | A standby batch being staged on this machine, emptied after each batch |
