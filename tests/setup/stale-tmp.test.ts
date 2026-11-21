@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { OWNER_FILE, pidAlive, sweepStaleTmpDirs, writeOwnerPid } from './stale-tmp'
+import { OWNER_FILE, VITEST_PROJECT_TMP_RULE, pidAlive, sweepStaleTmpDirs, writeOwnerPid } from './stale-tmp'
 
 /** A pid that certainly belonged to a process and is certainly gone now. */
 function deadPid(): number {
@@ -160,6 +160,39 @@ describe('sweepStaleTmpDirs — age only (mock homes re-created by child process
     ageTo(dir, 24 * 60 * 60_000)
     expect(sweepStaleTmpDirs([{ prefix: '', pidFrom: 'age', orphanAgeMs: 1 }], root)).toEqual([])
     expect(exists(dir)).toBe(true)
+  })
+})
+
+describe('sweepStaleTmpDirs — vitest project dirs (random name, known contents)', () => {
+  function vitestDir(name: string, kids: string[], ageMs: number): string {
+    const dir = path.join(root, name)
+    fs.mkdirSync(dir)
+    for (const k of kids) {
+      fs.mkdirSync(path.join(dir, k))
+      fs.writeFileSync(path.join(dir, k, '00016925ce658421773b2939fac6298192d87b86'), 'x')
+      ageTo(path.join(dir, k), ageMs)
+    }
+    ageTo(dir, ageMs)
+    return dir
+  }
+
+  it('removes an old <nanoid>/ssr dir, keeps a young one and anything with other contents', () => {
+    const day = 49 * 60 * 60_000
+    const old = vitestDir('0aLhcvGuzvuQ1Hflh9QpS', ['ssr'], day)
+    const oldWeb = vitestDir('9SPQB-zixnMhPVwpN8sqw', ['ssr', 'web'], day)
+    const young = vitestDir('CWEQm13EXxIftTLF6RzdR', ['ssr'], 60 * 60_000)
+    const foreign = vitestDir('rkqsCg1fxw-NYw-0dpb3v', ['walnut-app-link-tests'], day)
+    const mixed = vitestDir('6nI81zeFcacoNfIWVGj1F', ['ssr', 'notes.txt'], day)
+    const empty = vitestDir('4_QkybCObbQQ7z-uFTSQE', [], day)
+    const longName = vitestDir('hpUqorP7_Q9IbmQa4Op-Nx', ['ssr'], day)
+    // A long-lived run (watch mode): its parent is old, but ssr/ gained a module an hour ago.
+    const live = vitestDir('jpWrB9URwzsbByZ_9yJUw', ['ssr'], day)
+    ageTo(path.join(live, 'ssr'), 60 * 60_000)
+
+    const removed = sweepStaleTmpDirs([VITEST_PROJECT_TMP_RULE], root)
+
+    expect(removed.sort()).toEqual([old, oldWeb].sort())
+    for (const d of [young, foreign, mixed, empty, longName, live]) expect(exists(d), d).toBe(true)
   })
 })
 

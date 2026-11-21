@@ -80,6 +80,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/acp-daemon.ts',
   'src/providers/acp-thread-restore.ts',
   'src/providers/acp-host-artifacts.ts',
+  'src/lib/cli-private-tmp.ts',
   // Where the compiled walnut file keeps the worker and adapters it runs as a host daemon.
   'src/lib/single-file.ts',
   'node_modules/@agentclientprotocol/codex-acp/package.json',

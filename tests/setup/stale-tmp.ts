@@ -54,6 +54,24 @@ export type StaleTmpRule = {
   pidFrom: 'name' | 'owner-file' | 'age'
   /** `owner-file` / `age`: a dir with no owner is stale once older than this (default 2h). */
   orphanAgeMs?: number
+  /**
+   * When set, a dir is this rule's only if it has at least one entry and every
+   * entry's name matches: for makers whose dir names are random (vitest's
+   * `<nanoid>/ssr`), the contents are what tell them from anyone else's.
+   */
+  children?: RegExp
+}
+
+/**
+ * Vitest's own per-project dir: `<tmp>/<nanoid()>/ssr|web/<sha1>`, the forks pool's
+ * transformed modules (vitest `project.tmpDir`). Vitest removes it on a clean exit
+ * only, so every run an agent's timeout killed left one behind: 50 of them, 3.5 GB,
+ * on the Mac on 2026-11-21. The name is random, so the contents identify it; a day
+ * since its `ssr/` last gained a module keeps a live run's, a watch mode or another
+ * repo's run included (their dirs share this shape).
+ */
+export const VITEST_PROJECT_TMP_RULE: StaleTmpRule = {
+  prefix: '', name: /^[A-Za-z0-9_-]{21}$/, children: /^(ssr|web)$/, pidFrom: 'age', orphanAgeMs: 48 * 60 * 60_000,
 }
 
 export function pidAlive(pid: number): boolean {
@@ -90,13 +108,26 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function childrenMatch(dir: string, re: RegExp): boolean {
+  try {
+    const names = fs.readdirSync(dir)
+    return names.length > 0 && names.every((n) => re.test(n))
+  } catch {
+    return false
+  }
+}
+
 function isStale(dir: string, rule: StaleTmpRule, base: string, now: number): boolean {
+  if (rule.children && !childrenMatch(dir, rule.children)) return false
   const pid = ownerPidOf(dir, rule, base)
   if (pid !== null) return !pidAlive(pid)
   if (rule.pidFrom === 'name') return false // suffix is not a pid: not ours to judge
   let mtime: number
   try {
     mtime = fs.statSync(dir).mtimeMs
+    // A dir known by its contents is as young as its newest child: vitest's `ssr/`
+    // gains an entry with every module a live run transforms, its parent never.
+    if (rule.children) for (const n of fs.readdirSync(dir)) mtime = Math.max(mtime, fs.statSync(path.join(dir, n)).mtimeMs)
   } catch {
     return false
   }

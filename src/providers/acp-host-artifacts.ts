@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import { withPrivateTmp } from '../lib/cli-private-tmp.js'
 
 /** What the primary sends for an adapter that must be resolved on the host. */
 export interface AcpHostAdapterSpec {
@@ -160,14 +161,14 @@ function firstLine(s: string): string | null {
 }
 
 function runVersion(binary: string, args: readonly string[], env: NodeJS.ProcessEnv, ms: number): Promise<string | null> {
-  return new Promise((resolve) => {
+  return withPrivateTmp(env, (runEnv) => new Promise((resolve) => {
     try {
-      execFile(binary, [...args], { env, timeout: ms, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 }, (err, stdout, stderr) => {
+      execFile(binary, [...args], { env: runEnv, timeout: ms, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 }, (err, stdout, stderr) => {
         if (err && !String(stdout ?? '').trim()) return resolve(null)
         resolve(firstLine(String(stdout ?? '')) ?? firstLine(String(stderr ?? '')))
       })
     } catch { resolve(null) }
-  })
+  }))
 }
 
 const PROBE_TTL_MS = 60_000

@@ -28,7 +28,7 @@ import fs from 'node:fs';
 import { acquireTestSlot, releaseTestSlot } from './test-gate';
 import { assertTestRuntime } from './runtime-deps';
 import { assertNoMachineHold } from '../../src/lib/machine-hold';
-import { sweepStaleTmpDirs } from './stale-tmp';
+import { VITEST_PROJECT_TMP_RULE, sweepStaleTmpDirs } from './stale-tmp';
 // Shared with runtime-dir-isolation.ts (workers): one name, one sweep rule.
 import { PROD_RUNTIME_DIR, RUNTIME_DIR_PREFIX, isCallerChosenRuntime } from './runtime-dir-choice';
 import { stripGitRedirectEnv } from './git-env-isolation';
@@ -160,6 +160,8 @@ function sweepRuntimeDirs(): void {
     // runs are serialized by the test gate, so at setup/teardown time nothing
     // live owns a mock home older than an hour.
     { prefix: '', name: MOCK_HOME_NAME, pidFrom: 'age', orphanAgeMs: 60 * 60_000 },
+    // Vitest's own per-project dir, left by every killed run (stale-tmp.ts).
+    VITEST_PROJECT_TMP_RULE,
   ]);
   // A dir the caller chose (CI's per-job one) holds one subdir per worker
   // (runtime-dir-choice.ts); reclaim the dead ones there too.

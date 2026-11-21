@@ -18,6 +18,7 @@
  * buckets are split once more by the local calendar day each response was written.
  */
 import { execFile } from 'node:child_process';
+import { withPrivateTmp } from '../lib/cli-private-tmp.js';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
@@ -380,10 +381,10 @@ export function parseOpenCodeExport(text: string): { rows: UsageRow[]; costUsd: 
 }
 
 function runOpenCodeExport(sessionId: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('opencode', ['export', sessionId], { timeout: 20_000, maxBuffer: 128 * 1024 * 1024, env: openCodeBinaryEnv() },
+  return withPrivateTmp(openCodeBinaryEnv(), (env) => new Promise((resolve, reject) => {
+    execFile('opencode', ['export', sessionId], { timeout: 20_000, maxBuffer: 128 * 1024 * 1024, env },
       (err, stdout) => err ? reject(err) : resolve(String(stdout)));
-  });
+  }));
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────

@@ -37,6 +37,7 @@ import { log } from '../logging/index.js'
 import { getLocalDaemonConnection } from './local-daemon-dial.js'
 import { mapCodexCatalog, resolveCodexEngine } from './codex-engine-config.js'
 import { endpointServedModels, keepServedModels, providerFromCodexConfig } from './codex-endpoint-models.js'
+import { withPrivateTmp } from '../lib/cli-private-tmp.js'
 
 export interface EngineModelCatalog {
   engine: SessionEngine
@@ -127,10 +128,11 @@ export function probeAdapterModels(
   if (!cmd) return Promise.reject(new Error('empty adapter command'))
   const cwd = options.cwd ?? os.homedir()
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS
-  return new Promise((resolve, reject) => {
+  // A private TMPDIR: a bun-compiled adapter (opencode) leaves a native library there per start.
+  return withPrivateTmp(options.env ?? process.env, (env) => new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
-      env: options.env ?? process.env,
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let settled = false
@@ -206,7 +208,7 @@ export function probeAdapterModels(
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
       },
     })
-  })
+  }))
 }
 
 function describeRpcError(error: unknown): string {

@@ -24,6 +24,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { withPrivateTmp } from '../../lib/cli-private-tmp.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -266,11 +267,12 @@ function isWalnutBundledPath(canonical: string): boolean {
 async function readVersion(binary: string, args: readonly string[]): Promise<string | null> {
   if (args.length === 0) return null;
   try {
-    const { stdout, stderr } = await execFileAsync(binary, [...args], {
+    const { stdout, stderr } = await withPrivateTmp(process.env, (env) => execFileAsync(binary, [...args], {
+      env,
       timeout: ENGINE_VERSION_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
       windowsHide: true,
-    });
+    }));
     const text = (stdout || stderr || '').split('\n').map((l) => l.trim()).find((l) => l.length > 0);
     return text ? text.slice(0, 120) : null;
   } catch {
