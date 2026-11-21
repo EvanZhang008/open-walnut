@@ -16,6 +16,7 @@ import type { Topic } from '@/api/topics';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { detectMention } from '@/components/chat/mention-trigger';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { draftKey } from '@/utils/drafts';
 import { mentionCandidates, mentionKeyAction, mentionSpans, orgRef, refKey, taskRef, type MentionCandidate } from './topic-model';
@@ -39,7 +40,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
   const rows = useMemo(() => (at ? mentionCandidates(at.query, topic.members, openTasks, 8, orgNodes) : []), [at, topic.members, openTasks, orgNodes]);
   const open = !!at && rows.length > 0;
   // Every "@Name" that names a member is drawn as a pill in the box: the same rule that decides who it wakes.
-  const namedPills = useMemo(() => (body: string) => mentionSpans(body, topic.members), [topic.members]);
+  const namedPills = useLeanCallback((body: string) => mentionSpans(body, topic.members), [topic.members]);
   const placement = useMenuPlacement(open, wrap, menuRef, { preferSide: 'up', align: 'start', minHeight: 120, onAnchorLost: () => setAt(null) });
 
   const box = () => wrap.current?.querySelector('textarea') ?? null;
