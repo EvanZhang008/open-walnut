@@ -816,11 +816,28 @@ function waitingSourceFields(report: StatusReport): Pick<UserStatus, 'waitingBy'
 
 /** Its own current report says done, whatever its phase: Main and a lead are never closed and wait
  *  on the user's next message; a worker waits on its lead to check and close it; a task with neither
- *  is the user's result to read and close (a wait on the user is Needs you, never Waiting). */
-function doneStatus(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'>, w: Partial<UserStatus>): UserStatus {
+ *  is the user's result to read and close (a wait on the user is Needs you, never Waiting), except
+ *  a program's run, which waits on its program (resultOf). */
+function doneStatus(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead' | 'programRun'>, w: Partial<UserStatus>): UserStatus {
   if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
   if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: LEAD_CLOSE_WAIT, ...w });
-  return toRead('result', RESULT_TO_READ, w);
+  return resultOf(input, w);
+}
+
+/**
+ * A finished turn's result with no lead above it: the user's to read and close, except a program's
+ * run (UserStatusInput.programRun). Nobody asked for that run, so what its session reports is the
+ * program's to take, whether the session wrote a report (a plugin's job runs it in Walnut, and
+ * Walnut asks every turn for one) or none (an imported one). 2026-11-21: the first run a plugin's
+ * job started read "The result is ready" where an imported run reads Waiting.
+ */
+function resultOf(input: Pick<UserStatusInput, 'programRun'>, w: Partial<UserStatus>): UserStatus {
+  return input.programRun ? programRunWait(w) : toRead('result', RESULT_TO_READ, w);
+}
+
+/** A program's run with no real ask waits on the program that runs it (PROGRAM_RUN_WAIT). */
+function programRunWait(w: Partial<UserStatus>): UserStatus {
+  return strip({ state: 'waiting', kind: 'outside', waitingOn: PROGRAM_RUN_WAIT, ...w });
 }
 
 /** A status with nothing asked of the user, only something to read (ToRead). */
@@ -1245,8 +1262,11 @@ function openAskOf(input: UserStatusInput, current: StatusReport | null, anyRepo
   const src = report ? askSourceFields(report) : {};
   if (reportAsksUser(report)) return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(report.ask), ...w, ...src });
   // On NEED_ACTION the phase already says it is the user's turn, so any wait its report names is
-  // theirs (waitIsUsers); elsewhere only a wait that names the user is (reportWaitsOnUser).
-  if (report && !none(report.waiting_on) && (input.phase === 'NEED_ACTION' ? waitIsUsers(report, hasAbove(input)) : reportWaitsOnUser(report, hasAbove(input)))) {
+  // theirs (waitIsUsers); elsewhere only a wait that names the user is (reportWaitsOnUser). A
+  // program's run is on NEED_ACTION after every turn, asked for by no one: there too only a wait
+  // that names the user is theirs, and one on a clock or a check is its program's.
+  const anyWaitIsUsers = input.phase === 'NEED_ACTION' && !input.programRun;
+  if (report && !none(report.waiting_on) && (anyWaitIsUsers ? waitIsUsers(report, hasAbove(input)) : reportWaitsOnUser(report, hasAbove(input)))) {
     return strip<UserStatus>({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w, ...src });
   }
   if (!none(input.openLetter)) return strip<UserStatus>({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
@@ -1376,8 +1396,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       const on = report.state === 'waiting' && !report.kindless_ask ? clean(report.waiting_on) : '';
       return toRead('answer', on ? `${ANSWER_TO_READ}; then it waits on: ${on.slice(0, 160)}` : ANSWER_TO_READ, on ? { ...w, ...waitSrc } : w);
     }
-    // An ask with no kind of the user's own and no lead above it: its result is there to read.
-    if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
+    // An ask with no kind of the user's own and no lead above it: its result is there to read
+    // (a program's run: its program's to take, resultOf).
+    if (report?.kindless_ask && !hasAbove(input)) return resultOf(input, w);
     // Its own report says done (doneStatus): a task with a leader waits on its lead to check it, never
     // parked for it (report-phase.ts). One with none is the user's to read and close, and a wait on
     // the user is Needs you, never Waiting (2026-11-01 org review, by the user's rule of 2026-10-30:
@@ -1412,10 +1433,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its turn ended without asking you anything', ...w });
     // A program's run a plugin put on the board (types.ts isProgramRunTask: imported, or run in
-    // Walnut by its job): nobody asked for it, so what
-    // its turn left is no one's to read; it waits on the program that runs it (2026-11-19: 89 such
-    // runs sat in one user's Needs you). Every real ask above still wins.
-    if (input.programRun) return strip({ state: 'waiting', kind: 'outside', waitingOn: PROGRAM_RUN_WAIT, ...w });
+    // Walnut by its job): nobody asked for it, so what its turn left is no one's to read; it waits
+    // on the program that runs it (2026-11-19: 89 such runs sat in one user's Needs you). Every
+    // real ask above still wins.
+    if (input.programRun) return programRunWait(w);
     // No session ever ran a turn here: a person or a lead set it to need the user by hand, which is
     // their word, not a turn's end.
     if (!input.hasSession) return strip({ state: 'needs', ask: MARKED_ASK, ...w });
@@ -1462,8 +1483,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (own && !tasks.length) return own;
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w, ...(reported ? waitSrc : {}) });
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
-  // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a result to read and close.
-  if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
+  // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a
+  // result to read and close (a program's run: its program's to take, resultOf).
+  if (report?.kindless_ask && !hasAbove(input)) return resultOf(input, w);
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w, ...waitSrc });
   // A standing routine: between fires it waits on the next one.
   const wake = wakeSource(input, w, nowMs, true);
