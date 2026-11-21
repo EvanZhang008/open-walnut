@@ -162,10 +162,14 @@ describe('a standby target on another host', () => {
     write(sb.home, 'big/blob.bin', crypto.randomBytes(3 * 1024 * 1024))
     await settle()
     let n = 0
-    l.state.fault = (cmd) => (cmd === 'fs.writePart' && ++n > 1 ? { ok: false, error: 'fs.writePart failed: ENOSPC: no space left on device, write', code: 'io' } : undefined)
+    l.state.fault = (cmd, params) => (cmd === 'fs.writePart' && String(params.path).includes('/chunks/') && ++n > 1
+      ? { ok: false, error: 'fs.writePart failed: ENOSPC: no space left on device, write', code: 'io' } : undefined)
+    const mark = l.log.length
     const out = await batch(t)
     expect(out.ok).toBe(false)
     expect(!out.ok && out.reason).toMatch(/ENOSPC/)
+    // A chunk that did not arrive stops the batch before anything is applied there.
+    expect(l.log.slice(mark).filter((e) => e.cmd === 'receive apply')).toEqual([])
     expect((await standbyStatus(sb.target)).batch).toBe(1)
     expect(fs.readFileSync(path.join(sb.target, 'copy/memory/MEMORY.md'), 'utf8')).toBe('# Memory\n')
     l.state.fault = null
