@@ -5,11 +5,11 @@
  * OrgThreadsByState.tsx, ThreadChoiceAnswer.tsx).
  *
  *  1. The lead's side bar has Threads and Tasks, no Brief tab.
- *  2. Threads read in their groups under All: Needs you holds the Board choice's card with its two
- *     options, the recommended one marked; Done holds the lead's answered thread (its result); Working
- *     holds the one it took on.
+ *  2. Threads read in their groups: Needs you holds the Board choice's card with its two options, the
+ *     recommended one marked; Done holds the lead's answered thread (its result); Working, folded,
+ *     counts the one it took on and shows it once opened.
  *  3. He clicks an option: the card leaves Needs you, the Board reads the choice answered, and
- *     the thread is under Closed.
+ *     the thread is under Closed (folded until opened).
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -115,9 +115,8 @@ test('a lead\'s Org page: no Brief tab, its Threads by state, and the Board\'s c
   await expect(page.getByTestId('org-top-task')).toBeVisible()
   await expect(page.getByTestId('org-top-brief')).toHaveCount(0)
 
-  // 2. In their groups under All: Needs you with the choice's card, Done, Working.
+  // 2. In their groups: Needs you with the choice's card, Done, Working folded.
   await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', 'all')
   const needs = group(page, 'needs')
   await expect(needs.getByTestId('org-thread-group-head')).toContainText('Needs you')
   const card = needs.locator(`[data-testid="org-thread"][data-thread-id="${ids.choiceThread}"]`)
@@ -138,6 +137,9 @@ test('a lead\'s Org page: no Brief tab, its Threads by state, and the Board\'s c
   await expect(read.getByTestId('org-thread-state')).toHaveText('Done')
   const working = group(page, 'working')
   await expect(working.getByTestId('org-thread-group-count')).toHaveText('1')
+  await expect(working).toHaveAttribute('data-open', 'false')
+  await expect(working.getByTestId('org-thread')).toHaveCount(0)
+  await working.getByTestId('org-thread-group-head').click()
   await expect(working.getByTestId('org-thread-title')).toHaveText(WORKING_TITLE)
   await shot(page, '1-groups')
 
@@ -148,6 +150,7 @@ test('a lead\'s Org page: no Brief tab, its Threads by state, and the Board\'s c
   const done = group(page, 'done')
   await expect(done.getByTestId('org-thread-group-count')).toHaveText('1', { timeout: 15_000 })
   await expect(done.getByTestId('org-thread-group-head')).toContainText('Closed')
+  if ((await done.getAttribute('data-open')) !== 'true') await done.getByTestId('org-thread-group-head').click()
   await expect(done.locator(`[data-thread-id="${ids.choiceThread}"]`)).toBeVisible()
   await expect(done.locator(`[data-thread-id="${ids.choiceThread}"]`).getByTestId('org-thread-state')).toHaveText('Closed')
   await shot(page, '2-answered')

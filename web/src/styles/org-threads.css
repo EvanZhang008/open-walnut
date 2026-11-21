@@ -137,30 +137,22 @@
 }
 .org-threads-closed-toggle:hover { color: var(--fg-secondary); }
 
-/* Threads in their three groups (experiment brief_off, components/org/OrgThreadsByState.tsx): a heading per group. */
+/* Threads in their groups (experiment brief_off, components/org/OrgThreadsByState.tsx): a heading
+   per group; Needs you and Done open, the rest a fold (a button head with a chevron) until opened. */
 .org-thread-groups { display: flex; flex-direction: column; gap: 6px; }
 .org-thread-group { display: flex; flex-direction: column; gap: 8px; }
 .org-thread-group-head { display: inline-flex; align-items: baseline; gap: 6px; margin: 4px 0 0; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
+.org-thread-group-head:focus { outline: none; }
+/* A folded group is a row he clicks: the family's quiet full-width key (.btn .btn-block .btn-ghost),
+   its count a small pill. */
+.org-thread-group-fold .org-thread-group-count {
+  padding: 0 6px; border-radius: var(--radius-sm); background: var(--bg-tertiary); font-size: var(--font-size-sm); line-height: 18px;
+}
+.org-thread-group-chevron { width: 10px; color: var(--fg-muted); font-weight: 400; }
 .org-thread-group-count { font-weight: 400; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
 /* The card a chat message's thread line opened (sessions/reply-thread-line.tsx), marked a moment. */
 .org-thread.is-focused { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 0.3s ease; }
-
-/* The chips over the groups (ThreadsFilterBar): a filter, a click shows only that group. They stay
-   at the top of the pane while a long group scrolls under them (2026-11-21: in Archived's hundred
-   cards they scrolled away), on the pane's own background so no card shows through. */
-.org-threads-filter {
-  display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0 4px; padding: 8px 0 6px;
-  position: sticky; top: 0; z-index: 3; background: var(--bg);
-}
-.org-threads-chip {
-  display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border-radius: 999px;
-  border: 1px solid transparent; background: var(--bg-secondary); color: var(--fg);
-  font-size: var(--font-size-sm); cursor: pointer;
-}
-.org-threads-chip:hover { border-color: var(--border); }
-.org-threads-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.org-threads-chip-count { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 
 /* A card he acknowledged at work (ThreadKnown.tsx): what it waits on, how it ends. */
 .org-thread-state i.is-known { background: transparent; border: 1.5px solid var(--accent); box-sizing: border-box; }

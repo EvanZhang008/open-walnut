@@ -48,7 +48,7 @@
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, pinnedNow, sharedAnswers, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
@@ -64,7 +64,7 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { THREAD_LIST_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
 import { timeAgo } from '@/utils/time';
-import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -81,13 +81,15 @@ import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { Answer, Words } from './thread-card-text';
-import { ALL_SHOWS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown } from '@open-walnut/thread-groups';
+import { FOLDED_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown, type ThreadGroup } from '@open-walnut/thread-groups';
 import { TaskChips } from './ThreadTaskChips';
 import { KnownBlock } from './ThreadKnown';
-import { OrgThreadsByState, isThreadFilter } from './OrgThreadsByState';
-import type { ThreadFilter } from './ThreadsFilterBar';
+import { OrgThreadsByState } from './OrgThreadsByState';
 import '@/styles/org-threads.css';
 import '@/styles/notice-card.css';
+
+/** No fold opened: how every node's Threads come up. */
+const NO_FOLDS: ReadonlySet<ThreadGroup> = new Set();
 
 /** What Walnut's stand-in summary line says it is (core/org/thread-view.ts SummaryLine). */
 const STAND_IN_NOTE: Record<Exclude<NonNullable<SummaryLine['from']>, 'none'>, (name: string) => string> = {
@@ -489,8 +491,20 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
   const [showSnoozed, setShowSnoozed] = usePageView('org', 'threads.showSnoozed', false, isBoolean);
-  // The group chip he picked (OrgThreadsByState), kept per node.
-  const [filter, setFilter] = usePageViewOf<ThreadFilter>('org', 'threads.filter', owner?.id ?? name, 'all', isThreadFilter);
+  // The folds he opened (OrgThreadsByState): plain state of this view on this node, never kept, so
+  // coming back (another node, the pane closed, a reload) shows them folded again.
+  const foldNode = owner?.id ?? name;
+  const [folds, setFolds] = useState<{ node: string; opened: ReadonlySet<ThreadGroup> }>({ node: foldNode, opened: NO_FOLDS });
+  // Another node shown in this same view: its folds start folded (and A, B, A folds A again).
+  if (folds.node !== foldNode) setFolds({ node: foldNode, opened: NO_FOLDS });
+  const opened = folds.node === foldNode ? folds.opened : NO_FOLDS;
+  const openFold = useCallback((g: ThreadGroup, open: boolean) => setFolds((f) => {
+    const was = f.node === foldNode ? f.opened : NO_FOLDS;
+    if (f.node === foldNode && was.has(g) === open) return f;
+    const next = new Set(was);
+    if (open) next.add(g); else next.delete(g);
+    return { node: foldNode, opened: next };
+  }), [foldNode]);
   const all = state.threads;
   const needsFirst = useExperimental('top_thread');
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
@@ -525,10 +539,9 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const groups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
   const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
     if (groups) {
-      // Out of the group he picked: All shows it, an archived one only its own chip.
+      // In a folded group: it opens, so the card can be brought into view.
       const g = THREAD_GROUPS.find((x) => groups[x].some((y) => y.id === t.id));
-      const shows = !g || filter === g || (filter === 'all' && ALL_SHOWS.includes(g));
-      if (g && !shows) setFilter(ALL_SHOWS.includes(g) ? 'all' : g);
+      if (g && FOLDED_GROUPS.includes(g)) openFold(g, true);
       return;
     }
     if (t.closed) setShowClosed(true);
@@ -541,7 +554,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       <ThreadsTopicBar owner={owner} />
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {groups && all !== null && <OrgThreadsByState groups={groups} filter={filter} onFilter={setFilter} card={card} name={name} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
+      {groups && all !== null && <OrgThreadsByState groups={groups} opened={opened} onOpen={openFold} card={card} name={name} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">

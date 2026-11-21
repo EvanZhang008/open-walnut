@@ -67,7 +67,6 @@ describe('every group has its place on each surface, in his words', () => {
 
   it('the web draws each group by the shared labels', () => {
     expect(read('web/src/components/org/OrgThreadsByState.tsx')).toContain('THREAD_GROUP_LABELS[g]')
-    expect(read('web/src/components/org/ThreadsFilterBar.tsx')).toContain('THREAD_GROUP_LABELS[group]')
     for (const g of THREAD_GROUPS) expect(THREAD_GROUP_LABELS[g], g).toBeTruthy()
   })
 

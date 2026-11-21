@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { listedForHim, type ViewThread } from '../../../src/core/org/thread-view.js'
-import { ALL_SHOWS, FOR_HIM_GROUPS, groupThreads, threadCounts, threadGroupOf, threadsForHim } from '../../../src/core/org/thread-groups.js'
+import { FOLDED_GROUPS, FOR_HIM_GROUPS, groupThreads, threadCounts, threadGroupOf, threadsForHim } from '../../../src/core/org/thread-groups.js'
 import { keepsThreads } from '../../../src/core/org/keeps-threads.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../../..')
@@ -101,8 +101,8 @@ describe('every kind of thread is counted by its group', () => {
     expect(threadCounts([before], NOW)).toMatchObject({ shown: 1, needs: 0, below: 1, id: before.id })
   })
 
-  it('the groups a count lights up show under All, his Threads\' default (no pick to find the card)', () => {
-    for (const g of FOR_HIM_GROUPS) expect(ALL_SHOWS).toContain(g)
+  it('the groups a count lights up are the open ones of his Threads (no fold to open to find the card)', () => {
+    for (const g of FOR_HIM_GROUPS) expect(FOLDED_GROUPS).not.toContain(g)
   })
 
   it('every org node kind that keeps Threads is counted by threadCounts; a router keeps none', () => {

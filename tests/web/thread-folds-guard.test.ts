@@ -1,0 +1,64 @@
+/**
+ * His Threads are folded groups, not a row of chips (2026-11-21, the user: "the default is the view
+ * you need: Needs you first, then Done, and the rest auto collapsed"; "why so many tabs"). A filter
+ * row whose default was All (commit 9f73d8e161) drew every group's cards at once.
+ *
+ * Fails when:
+ *  - a new group of src/core/org/thread-groups.ts has no place: every group is either open
+ *    (FOR_HIM_GROUPS: Needs you, Done) or folded (FOLDED_GROUPS), in the view's order;
+ *  - the web view draws its groups in another order, brings back a filter row, or keeps an opened
+ *    fold through utils/view-memory.ts (an opened fold is plain state, folded again next time);
+ *  - the phone keeps its folds in @AppStorage, or misses a fold for a folded group.
+ * The browser flow is tests/e2e/browser/thread-groups-folds.spec.ts.
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { FOLDED_GROUPS, FOR_HIM_GROUPS, THREAD_GROUPS } from '../../src/core/org/thread-groups.js'
+
+const root = path.resolve(import.meta.dirname, '../..')
+const read = (p: string) => fs.readFileSync(path.join(root, p), 'utf8')
+const BY_STATE = 'web/src/components/org/OrgThreadsByState.tsx'
+const THREADS = 'web/src/components/org/OrgThreads.tsx'
+const IOS_VIEW = 'ios-native/Walnut/Views/Org/OrgThreadsView.swift'
+
+describe('every Threads group has its place: open or folded', () => {
+  it('each group is open (Needs you, Done) or folded, once, in the view\'s order', () => {
+    expect([...FOR_HIM_GROUPS]).toEqual(['needs', 'read'])
+    for (const g of THREAD_GROUPS) {
+      const places = [FOR_HIM_GROUPS.includes(g), FOLDED_GROUPS.includes(g)].filter(Boolean).length
+      expect(places, `${g}: open or folded, exactly one`).toBe(1)
+    }
+    expect([...FOR_HIM_GROUPS, ...FOLDED_GROUPS]).toEqual([...THREAD_GROUPS])
+  })
+
+  it('the web draws the open groups, then the folded ones, with no filter row', () => {
+    const view = read(BY_STATE)
+    expect(view).toContain('[...FOR_HIM_GROUPS, ...FOLDED_GROUPS].map(')
+    expect(view).toContain('aria-expanded={open}')
+    expect(fs.existsSync(path.join(root, 'web/src/components/org/ThreadsFilterBar.tsx'))).toBe(false)
+    for (const f of [BY_STATE, THREADS]) {
+      const src = read(f)
+      for (const gone of ['ThreadsFilterBar', 'org-threads-chip', "'threads.filter'", 'isThreadFilter', 'ThreadFilter']) {
+        expect(src, `${f}: ${gone}`).not.toContain(gone)
+      }
+    }
+  })
+
+  it('an opened fold is never kept: no view memory for it', () => {
+    expect(read(BY_STATE)).not.toMatch(/usePageView|useView\b/)
+    // The Threads' other kept choices are the toggles of the view without groups (byState off).
+    const keys = [...read(THREADS).matchAll(/usePageView(?:Of)?(?:<[^>]*>)?\(\s*'org',\s*'([^']+)'/g)].map((m) => m[1])
+    expect(keys.length).toBeGreaterThan(0)
+    for (const k of keys) expect(k, `kept view choice ${k}`).not.toMatch(/fold|filter|group|open/i)
+  })
+
+  it('the phone folds each folded group in view state, never @AppStorage', () => {
+    const ios = read(IOS_VIEW)
+    expect(ios).not.toMatch(/@AppStorage\([^)]*[Ff]old/)
+    expect(ios).toMatch(/@State private var openFolds: Set<String> = \[\]/)
+    // The phone's fold id of a group (Closed is `closed` there, the group id `done`).
+    const foldId: Record<string, string> = { done: 'closed' }
+    for (const g of FOLDED_GROUPS) expect(ios, g).toContain(`foldBinding("${foldId[g] ?? g}")`)
+  })
+})

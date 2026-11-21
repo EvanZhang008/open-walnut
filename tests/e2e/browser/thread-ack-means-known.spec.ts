@@ -5,7 +5,8 @@
  * it should go to closed or wait or wip", "keep Acknowledged, simpler").
  *
  * With the Brief off (his Threads in their groups, experiment brief_off):
- *  1. The chips are All and the seven groups, each counted; a click on Working shows only Working.
+ *  1. Needs you and Done open, the other groups folded with their counts (an empty one not drawn);
+ *     a click on Working's head opens it.
  *  2. Acknowledge on a lead's thread whose task still works: the card goes to Acknowledged at once,
  *     reading Acknowledged and "AI is deciding where this goes."; no Acknowledge on it any more.
  *  3. The lead's AI places it (thread_update place, place_why): the card moves to Waiting / Snoozed,
@@ -95,7 +96,13 @@ async function openLead(page: Page): Promise<void> {
 
 const group = (page: Page, g: string) => page.locator(`section[data-testid="org-thread-group"][data-group="${g}"]`)
 const card = (page: Page, g: string, id: string) => group(page, g).locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
-const chip = (page: Page, g: string) => page.locator(`[data-testid="org-threads-chip"][data-group="${g}"]`)
+const count = (page: Page, g: string) => group(page, g).getByTestId('org-thread-group-count')
+/** Opens a folded group (OrgThreadsByState); one already open stays open. */
+async function openFold(page: Page, g: string): Promise<void> {
+  await expect(group(page, g)).toBeVisible({ timeout: 15_000 })
+  if ((await group(page, g).getAttribute('data-open')) !== 'true') await group(page, g).getByTestId('org-thread-group-head').click()
+  await expect(group(page, g)).toHaveAttribute('data-open', 'true')
+}
 
 async function shot(page: Page, name: string): Promise<void> {
   fs.mkdirSync(SHOTS, { recursive: true })
@@ -136,23 +143,24 @@ test('Acknowledge: the card waits in Acknowledged while the AI decides, then sho
   await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
   await expect(card(page, 'read', ids.result)).toBeVisible({ timeout: 20_000 })
 
-  // 1. All and the seven groups; a click on Working shows only Working.
-  await expect(page.getByTestId('org-threads-chip')).toHaveText([/^All \d+$/, /^Needs you \d+$/, /^Done \d+$/, /^Working \d+$/, /^Waiting \/ Snoozed \d+$/, /^Acknowledged \d+$/, /^Closed \d+$/, /^Archived \d+$/])
-  await expect(chip(page, 'read')).toContainText('Done 1')
-  await expect(chip(page, 'known')).toContainText('Acknowledged 0')
-  await chip(page, 'working').click()
-  await expect(chip(page, 'working')).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.locator('section[data-testid="org-thread-group"]')).toHaveCount(1)
+  // 1. Done open with its card; Working folded to its count; Acknowledged empty, so not drawn. A
+  //    click on Working's head opens it.
+  await expect(group(page, 'read')).toHaveAttribute('data-open', 'true')
+  await expect(count(page, 'read')).toHaveText('1')
+  await expect(group(page, 'known')).toHaveCount(0)
+  await expect(group(page, 'working')).toHaveAttribute('data-open', 'false')
+  await expect(count(page, 'working')).toHaveText('1')
+  await expect(card(page, 'working', ids.work)).toHaveCount(0)
+  await openFold(page, 'working')
   await expect(card(page, 'working', ids.work)).toBeVisible()
-  await expect(page.locator(`[data-testid="org-thread"][data-thread-id="${ids.result}"]`)).toHaveCount(0)
   await shot(page, '1-working')
 
   // 2. Acknowledge: at once in Acknowledged, the AI deciding.
   await card(page, 'working', ids.work).getByTestId('org-thread-ack').click()
-  await chip(page, 'all').click()
+  await openFold(page, 'known')
   const deciding = card(page, 'known', ids.work)
   await expect(deciding).toBeVisible({ timeout: 15_000 })
-  await expect(chip(page, 'known')).toContainText('Acknowledged 1')
+  await expect(count(page, 'known')).toHaveText('1')
   await expect(deciding.getByTestId('org-thread-state')).toHaveText('Acknowledged')
   await expect(deciding.getByTestId('org-thread-ack-line')).toHaveText('AI is deciding where this goes.')
   await expect(deciding.getByTestId('org-thread-time')).toContainText('You acknowledged')
@@ -168,6 +176,7 @@ test('Acknowledge: the card waits in Acknowledged while the AI decides, then sho
 
   // 3. The lead's AI decides: Waiting, with what it waits on.
   await leadPlaces(request, ids.work, 'waiting', 'waits on the new timer board, due Friday')
+  await openFold(page, 'waiting')
   const placed = card(page, 'waiting', ids.work)
   await expect(placed).toBeVisible({ timeout: 15_000 })
   await expect(card(page, 'known', ids.work)).toHaveCount(0)
@@ -181,21 +190,19 @@ test('Acknowledge: the card waits in Acknowledged while the AI decides, then sho
   await shot(page, '3-placed-waiting')
 
   // 4. The result card: Acknowledged too; the AI closes it, and the Closed card says why.
-  await chip(page, 'read').click()
   // A To read card is the one card look: its Acknowledge the one blue key, before its box.
   const look = await expectFamily(card(page, 'read', ids.result), 'To read card')
   expect(look.blue, 'its Acknowledge is blue').toBe(1)
   await card(page, 'read', ids.result).getByTestId('org-thread-ack').click()
-  await chip(page, 'known').click()
+  await openFold(page, 'known')
   await expect(card(page, 'known', ids.result).getByTestId('org-thread-ack-line')).toHaveText('AI is deciding where this goes.', { timeout: 15_000 })
   await leadPlaces(request, ids.result, 'closed', 'the test results are in and he read them')
   await expect.poll(async () => (await threadOf(request, ids.result))?.closed).toMatchObject({ how: 'acked', by: `task:${ids.lead}` })
-  await chip(page, 'done').click()
+  await openFold(page, 'done')
   const shut = card(page, 'done', ids.result)
   await expect(shut.getByTestId('org-thread-state')).toHaveText('Closed', { timeout: 15_000 })
   await expect(shut.getByTestId('org-thread-ack-line')).toHaveText('Moved to Closed: the test results are in and he read them')
   await shot(page, '4-result-closed')
-  await chip(page, 'all').click()
   expect(pageErrors).toEqual([])
 })
 

@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { THREAD_STATES, type OrgThread } from '../../../src/core/org/threads-model.js'
-import { ALL_SHOWS, ARCHIVE_AFTER_MS, THREAD_GROUPS, THREAD_GROUP_LABELS, groupThreads, threadGroupOf, threadStateOf, type ThreadGroup } from '../../../src/core/org/thread-groups.js'
+import { ARCHIVE_AFTER_MS, FOLDED_GROUPS, FOR_HIM_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, groupThreads, threadGroupOf, threadStateOf, type ThreadGroup } from '../../../src/core/org/thread-groups.js'
 import { isKnown } from '../../../src/core/org/thread-known.js'
 import { snoozedNow } from '../../../src/core/org/thread-view.js'
 import { NOW, ago, threadShapes as shapes } from './thread-shapes'
@@ -41,8 +41,8 @@ describe('the groups of his Threads', () => {
   it('are exactly Needs you, Done, Working, Waiting / Snoozed, Acknowledged, Closed and Archived, in that order', () => {
     expect(THREAD_GROUPS).toEqual(['needs', 'read', 'working', 'waiting', 'known', 'done', 'archived'])
     expect(THREAD_GROUPS.map((g) => THREAD_GROUP_LABELS[g])).toEqual(['Needs you', 'Done', 'Working', 'Waiting / Snoozed', 'Acknowledged', 'Closed', 'Archived'])
-    // All shows every group but Archived, which shows only on its own chip.
-    expect(ALL_SHOWS).toEqual(['needs', 'read', 'working', 'waiting', 'known', 'done'])
+    // Needs you and Done open, the rest folded below them, in that order.
+    expect([...FOR_HIM_GROUPS, ...FOLDED_GROUPS]).toEqual(THREAD_GROUPS)
   })
 
   it('every thread shape is in exactly one group, and the old groups map without a loss', () => {

@@ -129,7 +129,8 @@ final class OrgThreadFocusTests: XCTestCase {
         XCTAssertEqual(outcome(.init(startedAt: t0, result: .failed)), .unchecked, "a failed check claims nothing")
         XCTAssertEqual(outcome(.init(startedAt: t0, result: .found)), .wait, "found: the list holds it on the next render")
         // Found, it joins the list: a closed one shows in the closed fold.
-        let old = try thread("th-0000c0", extra: #","closed":{"how":"acked","at":"2026-10-20T11:00:00Z","by":"human"}"#)
+        // Closed within the day (a day after, it is in Archived).
+        let old = try thread("th-0000c0", extra: #","closed":{"how":"acked","at":"2026-11-04T11:00:00Z","by":"human"}"#)
         let merged = OrgThreadsStore.merged(threads, keeping: [old.id: old])
         XCTAssertEqual(merged.map(\.id), ["th-000001", "th-0000c0"])
         XCTAssertEqual(OrgThreadRevealModel.outcome(

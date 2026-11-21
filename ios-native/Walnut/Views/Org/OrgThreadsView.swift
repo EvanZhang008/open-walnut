@@ -23,10 +23,10 @@ struct OrgThreadsView: View {
 
     private var focusThreadId: String? { focus?.threadId }
 
-    // Working, Waiting / Snoozed and Archived stay as he left them, per node (the web keeps a view per node);
-    // Closed is history, so every visit starts with it folded.
-    @AppStorage("org.threads.openFolds", store: AppPrefs.defaults) private var openFolds = ""
-    @State private var showClosed = false
+    /// The folds he opened while on this page, per node ("<node>/<fold>"). Plain view state, never
+    /// kept: coming back shows every fold folded again, Needs you and Done open above them, as the
+    /// web does (2026-11-21, the user: "the rest are auto collapsed", and folded again next time).
+    @State private var openFolds: Set<String> = []
     /// The card just revealed, marked until a moment after (`highlightSeconds`).
     @State private var highlight: OrgThreadFocus?
     /// DEBUG: the card the UI tests read as just revealed (`testMarkSeconds`).
@@ -50,18 +50,15 @@ struct OrgThreadsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private func isOpen(_ fold: String) -> Bool {
-        openFolds.split(separator: " ").contains(Substring("\(store.taskId)/\(fold)"))
+        openFolds.contains("\(store.taskId)/\(fold)")
     }
 
     private func foldBinding(_ fold: String) -> Binding<Bool> {
-        if fold == "closed" { return $showClosed }
         let key = "\(store.taskId)/\(fold)"
         return Binding(
-            get: { isOpen(fold) },
+            get: { openFolds.contains(key) },
             set: { on in
-                var keys = openFolds.split(separator: " ").map(String.init).filter { $0 != key }
-                if on { keys.append(key) }
-                openFolds = keys.suffix(40).joined(separator: " ")
+                if on { openFolds.insert(key) } else { openFolds.remove(key) }
             }
         )
     }
@@ -69,6 +66,7 @@ struct OrgThreadsView: View {
     private var showWorking: Bool { isOpen("working") }
     private var showWaiting: Bool { isOpen("waiting") }
     private var showKnown: Bool { isOpen("known") }
+    private var showClosed: Bool { isOpen("closed") }
     private var showArchived: Bool { isOpen("archived") }
 
     var body: some View {
@@ -129,7 +127,8 @@ struct OrgThreadsView: View {
                     } else if sections.open.isEmpty {
                         emptyText(sections)
                     }
-                    ForEach(sections.open) { t in
+                    // Needs you first, then Done, as the web draws them (each in its own order).
+                    ForEach(OrgThreadModel.needsFirst(sections.open, now: now)) { t in
                         card(t, shared: shared, now: now, snoozed: false).id(t.id)
                     }
                     fold("\(sections.working.count) working", count: sections.working.count, open: foldBinding("working"), id: "working")
@@ -415,7 +414,7 @@ struct OrgThreadsView: View {
             case .working: foldBinding("working").wrappedValue = true
             case .waiting: foldBinding("waiting").wrappedValue = true
             case .known: foldBinding("known").wrappedValue = true
-            case .closed: showClosed = true
+            case .closed: foldBinding("closed").wrappedValue = true
             case .archived: foldBinding("archived").wrappedValue = true
             case nil: break
             }

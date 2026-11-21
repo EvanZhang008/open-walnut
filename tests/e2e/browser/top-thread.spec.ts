@@ -15,9 +15,9 @@
  *  3b. A card whose words run past the top's room: the cut block fades at its end, and Show all
  *     (or a click on its title) opens it whole in the Threads view beside the chat, scrolled to and
  *     marked, while the top keeps its bound height and never folds into nothing. With the Threads
- *     in their groups (brief_off), the card's top, its title first, sits just under the sticky
- *     chips, never its middle, also from another chip scrolled far down (2026-11-21, a review on
- *     his data: Show all landed mid-card, the title under the chips, once wholly above the view).
+ *     in their groups (brief_off), the card's top, its title first, sits at the top of the pane,
+ *     never its middle, also from the pane scrolled far down (2026-11-21, a review on his data:
+ *     Show all landed mid-card, the title out of sight, once wholly above the view).
  *  4. A task with Threads on and a letter to answer, in a Home column: the letter (not a thread)
  *     still shows in the strip, the thread under it. The switch off: today's strip alone.
  * The fixture is shared: this file makes its own project, tasks and letter, and puts the flags back.
@@ -85,7 +85,8 @@ async function startSession(request: APIRequestContext, taskId: string, message 
 
 /** A thread the node opened that waits on him (as its session does with thread_create). */
 async function needsThread(request: APIRequestContext, node: string, sid: string, title: string): Promise<string> {
-  const why = { user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes.' }
+  // The spec opens several asks on one node: each says it is a decision of its own (thread-supersede.ts).
+  const why = { user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes.', separate_reason: 'Each card here is a decision of its own.' }
   const { thread } = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${node}/threads/open`, { title, text: `${title}?`, state: 'needs', from: 'node', ...why }, sid)
   await patch(request, `/api/v1/tasks/${node}/threads/${thread.id}`, { reply: `${title}: pick one.`, state: 'needs', ...why }, sid)
   return thread.id
@@ -111,18 +112,21 @@ async function openLead(page: Page): Promise<void> {
 const topOf = (scope: Locator | Page) => scope.getByTestId('top-thread')
 const paneCards = (page: Page) => page.getByTestId('org-rail').locator('[data-testid="org-thread-list"][data-show="open"] > [data-testid="org-thread"]')
 
-/** How far a card's top sits under the Threads pane's sticky chips (negative: hidden under them or above). */
-async function gapUnderChips(page: Page, card: Locator): Promise<number> {
-  const chips = (await page.getByTestId('org-rail').getByTestId('org-threads-filter').boundingBox())!
-  const box = (await card.boundingBox())!
-  return Math.round(box.y - (chips.y + chips.height))
+/** How far a card's top sits under the top of the pane that scrolls it (negative: above it). */
+async function gapUnderTop(card: Locator): Promise<number> {
+  return card.evaluate((el) => {
+    let s: HTMLElement | null = el.parentElement
+    while (s && !(s.scrollHeight > s.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(s).overflowY))) s = s.parentElement
+    const top = s ? s.getBoundingClientRect().top : 0
+    return Math.round(el.getBoundingClientRect().top - top)
+  })
 }
 
-async function expectTopUnderChips(page: Page, card: Locator): Promise<void> {
-  await expect.poll(() => gapUnderChips(page, card), { timeout: 5_000 }).toBeGreaterThanOrEqual(0)
-  // Settled there, not drifting on: just under the chips, its head in sight.
-  await page.waitForTimeout(800)
-  const gap = await gapUnderChips(page, card)
+async function expectTopAtTop(card: Locator): Promise<void> {
+  await expect.poll(() => gapUnderTop(card), { timeout: 5_000 }).toBeGreaterThanOrEqual(0)
+  // Settled there, not drifting on: at the pane's top, its head in sight.
+  await card.page().waitForTimeout(800)
+  const gap = await gapUnderTop(card)
   expect(gap).toBeGreaterThanOrEqual(0)
   expect(gap).toBeLessThanOrEqual(24)
   await expect(card.getByTestId('org-thread-head')).toBeInViewport()
@@ -273,7 +277,8 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
 test('a card cut off in the top fades at its end, and Show all opens it whole in the Threads view', async ({ page, request }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
-  const why = { user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes.' }
+  // The spec opens several asks on one node: each says it is a decision of its own (thread-supersede.ts).
+  const why = { user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes.', separate_reason: 'Each card here is a decision of its own.' }
   const title = `Long field notes ${STAMP}`
   const { thread } = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.lead}/threads/open`, { title, text: `${title}?`, state: 'needs', from: 'node', ...why }, ids.leadSid)
   // Well under the summary's cap (THREAD_REPLY_MAX), so the Threads view holds every word of it.
@@ -301,16 +306,14 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
   const inRail = rail.locator(`[data-testid="org-thread"][data-thread-id="${thread.id}"]`)
   await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
   await expect(inRail).toBeInViewport()
-  // Its top just under the sticky chips: the card is taller than the pane, so a centred one hid its title.
+  // Its top at the pane's top: the card is taller than the pane, so a centred one hid its title.
   expect((await inRail.boundingBox())!.height).toBeGreaterThan((await rail.boundingBox())!.height)
-  await expectTopUnderChips(page, inRail)
+  await expectTopAtTop(inRail)
   await expect(inRail.getByTestId('org-thread-reply')).toContainText('Bed 30')
   await shot(page, '9-show-all', detail)
-  // From another chip scrolled far down: a click on its title picks All and brings its top under the
-  // chips the same; the top neither folds nor grows.
+  // From the pane scrolled far down (Done's cards under it): a click on its title brings its top to
+  // the pane's top the same; the top neither folds nor grows.
   await expect(inRail).not.toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
-  await rail.locator('[data-testid="org-threads-chip"][data-group="read"]').click()
-  await expect(rail.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', 'read')
   await rail.getByTestId('org-thread').last().evaluate((el) => {
     let s: HTMLElement | null = el.parentElement
     while (s && !(s.scrollHeight > s.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(s).overflowY))) s = s.parentElement
@@ -318,9 +321,8 @@ test('a card cut off in the top fades at its end, and Show all opens it whole in
     s.scrollTop = s.scrollHeight
   })
   await top.getByTestId('org-thread-head').click()
-  await expect(rail.getByTestId('org-thread-groups')).toHaveAttribute('data-filter', 'all')
   await expect(inRail).toHaveAttribute('data-focused', 'true', { timeout: 10_000 })
-  await expectTopUnderChips(page, inRail)
+  await expectTopAtTop(inRail)
   await shot(page, '9b-show-all-from-done', detail)
   await expect(top.getByTestId('org-thread-messages')).toHaveCount(0)
   await expect(top.getByTestId('org-thread-reply')).toBeVisible()

@@ -63,7 +63,8 @@ final class OrgThreadsStoreRulesTests: XCTestCase {
     }
 
     func testARevealOfACopyReadByIdAsksAgainFirst() throws {
-        let byId = try thread("th-0000c0", state: "answered", closedAt: "2026-10-01T10:00:00Z")
+        // Closed today: a day after its close it is in Archived instead.
+        let byId = try thread("th-0000c0", state: "answered", closedAt: "2026-11-08T10:00:00Z")
         let threads = [byId]
         let sections = OrgThreadModel.sections(threads, now: Self.now)
         let read = OrgThreadRevealModel.Read(startedAt: t0 + 1, failed: false)

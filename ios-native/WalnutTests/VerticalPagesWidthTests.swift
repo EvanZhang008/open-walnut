@@ -23,12 +23,9 @@ final class VerticalPagesWidthTests: XCTestCase {
     private typealias H = VerticalPageHarness
     private typealias F = VerticalPagesWidthFixtures
 
-    private var restoreFolds: String?
     private var savedNoteKey: String?
 
     override func tearDown() {
-        if let restoreFolds { AppPrefs.defaults.set(restoreFolds, forKey: "org.threads.openFolds") }
-        restoreFolds = nil
         if let savedNoteKey { DiskCache.remove(key: savedNoteKey) }
         savedNoteKey = nil
         super.tearDown()
@@ -36,20 +33,21 @@ final class VerticalPagesWidthTests: XCTestCase {
 
     // MARK: - Org Threads
 
-    /// The page with Snoozed, In progress and Closed all open, so every card it can list is laid out.
+    /// The page as it opens, and with each fold opened by a request for one of its threads, so
+    /// every card it can list is laid out.
     func testThreadsPageWithEveryFoldOpenNeverScrollsSideways() throws {
         let threads = try F.threads()
-        restoreFolds = AppPrefs.defaults.string(forKey: "org.threads.openFolds") ?? ""
-        // Snoozed and In progress open from the kept folds; Closed opens for a request to show a closed thread.
-        AppPrefs.defaults.set("\(F.vpTaskId)/snoozed \(F.vpTaskId)/inProgress", forKey: "org.threads.openFolds")
+        // Folds are not kept (OrgThreadsView openFolds): a request to show a thread opens its fold.
+        let asks: [OrgThreadFocus?] = [nil, Optional(OrgThreadFocus(threadId: F.closedThreadId, at: Date()))]
+            + threads.filter { $0.closed == nil }.map { Optional(OrgThreadFocus(threadId: $0.id, at: Date())) }
         for width in H.widths + [1024] {
             let stores = H.Stores()
             let store = OrgThreadsStore(taskId: F.vpTaskId, threads: threads, cache: nil,
                                         read: { throw URLError(.notConnectedToInternet) })
-            for focus in [nil, OrgThreadFocus(threadId: F.closedThreadId, at: Date())] {
+            for focus in asks {
                 let page = OrgThreadsView(store: store, name: F.name, sessionId: "sess-fixture-vp", focus: focus, cover: .constant(nil))
                 let hosted = H.host(H.provided(page, stores), width: width)
-                H.assertPageFits(focus == nil ? "Threads" : "Threads with Closed open", hosted)
+                H.assertPageFits(focus.map { "Threads showing \($0.threadId)" } ?? "Threads", hosted)
                 hosted.close()
             }
         }

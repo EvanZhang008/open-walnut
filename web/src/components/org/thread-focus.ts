@@ -63,28 +63,25 @@ export function topShows(node: string, thread: string): boolean {
 const FOCUS_MARK_MS = 2_400;
 /** How long a card brought into view is kept at the top while the pane settles. */
 const SETTLE_MS = 1_200;
-/** The space between the sticky head and the card's top. */
+/** The space above the card's top. */
 const HEAD_GAP = 8;
-/** What a view keeps at the top of its scroller (the Threads chips, ThreadsFilterBar). */
-const STICKY_HEAD = '[data-sticky-head]';
 /** Him scrolling or acting himself: the card is no longer held in place. */
 const HIS_INPUT = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
 
 /**
- * Bring a card's top into view just under the view's sticky head (2026-11-21, a review on his data:
- * Show all scrolled to the middle of a long card, its title under the chips, and once, from a deeply
- * scrolled Archived, the card ended above the view). A long card's start is what he reads first, so
- * it aligns at its start, never its centre, and at once: a smooth scroll lands wrong when the chip
- * change or the cards' words move the layout under it. While the pane settles (SETTLE_MS) every
- * change of its size aligns it again, until he scrolls or acts himself. Returns the stop.
+ * Bring a card's top into view (2026-11-21, a review on his data: Show all scrolled to the middle
+ * of a long card, and once, from a deeply scrolled Archived, the card ended above the view). A long
+ * card's start is what he reads first, so it aligns at its start, never its centre, and at once: a
+ * smooth scroll lands wrong when a fold opening or the cards' words move the layout under it.
+ * While the pane settles (SETTLE_MS) every change of its size aligns it again, until he scrolls or
+ * acts himself. Returns the stop.
  */
 export function scrollCardToTop(root: HTMLElement, id: string): () => void {
   let card: HTMLElement | null = null;
   const align = () => {
     card = root.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(id)}"]`);
     if (!card) return;
-    const head = root.querySelector<HTMLElement>(STICKY_HEAD);
-    card.style.scrollMarginTop = `${Math.ceil(head?.getBoundingClientRect().height ?? 0) + HEAD_GAP}px`;
+    card.style.scrollMarginTop = `${HEAD_GAP}px`;
     card.scrollIntoView?.({ block: 'start', behavior: 'auto' });
   };
   let raf = requestAnimationFrame(() => { raf = requestAnimationFrame(align); });

@@ -21,7 +21,6 @@ final class ViewMemoryGuardTests: XCTestCase {
         "Views/Calendar/CalendarTabView.swift:mode": "kept by CalendarViewPreference, restored on appear",
         "Views/Calendar/CalendarTabView.swift:filter": "kept by CalendarFilterPreference, restored on appear",
         "Views/Chat/ComposerView.swift:mode": "the composer's mode model, not a choice",
-        "Views/Org/OrgThreadsView.swift:showClosed": "the Closed shelf starts shut on purpose: 176 closed threads under the open ones",
         "Views/Sessions/SessionConversationView.swift:showRename": "the rename alert's flag, passed to the menu by binding",
         "Views/Sessions/NewSessionSheet.swift:mode": "a new draft's permission mode, from the draft start rule",
         "Views/Sessions/NewSessionChatView.swift:mode": "a new draft's permission mode, from the draft start rule",

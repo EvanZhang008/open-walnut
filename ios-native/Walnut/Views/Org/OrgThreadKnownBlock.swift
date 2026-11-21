@@ -42,12 +42,15 @@ struct OrgThreadKnownBlock: View {
                     .font(.subheadline)
             } else {
                 ForEach(waits) { x in
-                    Text(line(x))
+                    // A task's title and what it waits on are agent words: Markdown, paths open.
+                    Text(MarkdownParser.inline(line(x)))
                         .font(.subheadline)
+                        .handlingFilePathLinks()
                     if let what = x.what {
-                        Text(what)
+                        Text(MarkdownParser.inline(what))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
+                            .handlingFilePathLinks()
                     }
                 }
                 if thread.awaits?.replies == true {

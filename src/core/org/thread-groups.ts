@@ -29,7 +29,7 @@ export { ACK_DECIDING_LINE, ackCardLine, backFromKnown, inAcknowledged, isKnown,
  *   known     Acknowledged: he acknowledged it and the node's AI is deciding where it goes, at most
  *             KNOWN_CLOSE_MS before Walnut's rule places it (thread-known.ts)
  *   done      Closed: really over (acknowledged, dropped, moved on)
- *   archived  Archived: closed ARCHIVE_AFTER_MS ago or more, shown only on its own chip
+ *   archived  Archived: closed ARCHIVE_AFTER_MS ago or more
  * The ids are the wire's (GET /api/v1/thread-states, kept view choices), so older clients read them;
  * THREAD_GROUP_LABELS are the words he reads. `listed`: his view lists it now (listedForHim). Pure.
  */
@@ -38,8 +38,6 @@ export const THREAD_GROUPS: readonly ThreadGroup[] = ['needs', 'read', 'working'
 export const THREAD_GROUP_LABELS: Record<ThreadGroup, string> = {
   needs: USER_STATE_LABELS.needs, read: 'Done', working: USER_STATE_LABELS.working, waiting: 'Waiting / Snoozed', known: 'Acknowledged', done: 'Closed', archived: 'Archived',
 };
-/** The groups All shows: Archived only when its own chip is picked. */
-export const ALL_SHOWS: readonly ThreadGroup[] = THREAD_GROUPS.filter((g) => g !== 'archived');
 
 /**
  * A closed thread is Archived a day after it closed (the server deletes it a week after,
@@ -101,8 +99,16 @@ export function threadStateOf<T extends GroupedThread & { id: string; updatedAt:
   return null;
 }
 
-/** The groups that wait on him: a decision (Needs you) or a result he has not read (`read`, drawn as Done). Open by default on his Threads. */
+/** The groups that wait on him: a decision (Needs you) or a result he has not read (`read`, drawn as Done). Always open on his Threads. */
 export const FOR_HIM_GROUPS: readonly ThreadGroup[] = ['needs', 'read'];
+
+/**
+ * The groups his Threads fold to one line (label, count) under the open ones, in this order; one
+ * he opens stays open only while he is there, never remembered (2026-11-21, the user: "the default
+ * is the view you need: Needs you first, then Done, and the rest auto collapsed", no row of tabs).
+ * Every group is in FOR_HIM_GROUPS or here (tests/web/thread-folds-guard.test.ts).
+ */
+export const FOLDED_GROUPS: readonly ThreadGroup[] = ['working', 'waiting', 'known', 'done', 'archived'];
 
 type Counted = ViewThread & { id: string; state: string; updatedAt: string };
 

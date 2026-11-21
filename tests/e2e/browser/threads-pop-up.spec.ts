@@ -357,20 +357,19 @@ test('on, Threads by state: a card below snoozed says until when, and its Unsnoo
     await isolateUiPrefs(page)
     await loadHome(page)
     await openLead(page)
-    const chip = (g: string) => page.locator(`[data-testid="org-threads-chip"][data-group="${g}"]`)
+    const group = (g: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"]`)
     const inGroup = (g: string) => page.locator(`[data-testid="org-thread-group"][data-group="${g}"] [data-testid="org-thread"][data-thread-id="${id}"]`)
     const line = page.locator(`[data-testid="org-thread-move-note"][data-moved-id="${id}"]`)
     const focused = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.testid ?? document.activeElement?.tagName ?? null)
-    await chip('needs').click()
     await expect(inGroup('needs')).toBeVisible({ timeout: 20_000 })
     await expect(inGroup('needs').getByTestId('org-thread-popped-input')).toHaveAttribute('placeholder', `Answer Task status foundation ${STAMP}`)
     await inGroup('needs').getByTestId('org-thread-popped-input').click()
     await page.keyboard.type(WORDS, { delay: 10 })
     await inGroup('needs').getByTestId('org-thread-popped-send').click()
-    // It left Needs you for Working: a line says so; Show picks Working.
+    // It left Needs you for Working: a line says so; Show opens Working.
     await expect(line).toContainText('Moved to Working')
     await line.getByTestId('org-thread-move-show').click()
-    await expect(chip('working')).toHaveAttribute('aria-pressed', 'true')
+    await expect(group('working')).toHaveAttribute('data-open', 'true')
     await expect(inGroup('working')).toBeVisible()
     // Snoozed with the keyboard: Enter on Snooze, then on 2h.
     await inGroup('working').getByTestId('org-thread-snooze').focus()
@@ -382,9 +381,9 @@ test('on, Threads by state: a card below snoozed says until when, and its Unsnoo
     await expect(line).toContainText('Moved to Waiting / Snoozed')
     await expect.poll(focused).toBe('org-thread-move-show')
     await shot(page, '7-snoozed-line')
-    // Show: Waiting / Snoozed, the card saying until when, Snoozed and Unsnooze on it.
+    // Show: Waiting / Snoozed opens, the card saying until when, Snoozed and Unsnooze on it.
     await page.keyboard.press('Enter')
-    await expect(chip('waiting')).toHaveAttribute('aria-pressed', 'true')
+    await expect(group('waiting')).toHaveAttribute('data-open', 'true')
     const card = inGroup('waiting')
     await expect(card).toHaveAttribute('data-group', 'waiting')
     await expect(card.getByTestId('org-thread-snoozed-until')).toHaveText(/^Snoozed until (today|tomorrow), /)
@@ -417,7 +416,8 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   const WORDS = `Put each code in the tab it belongs to ${STAMP}`
-  const why = { user_kind: 'user_own', user_kind_why: 'It spends his own garden budget.' }
+  // Two asks of one task at once: each says it is a decision of its own (thread-supersede.ts).
+  const why = { user_kind: 'user_own', user_kind_why: 'It spends his own garden budget.', separate_reason: 'Each card here is a decision of its own.' }
   const open = async (title: string) => (await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${ids.owner}/threads/open`, {
     title: `${title} ${STAMP}`, text: `${title}? ${STAMP}`, state: 'needs', from: 'node', ...why,
   }, ids.ownerSid)).thread.id
@@ -465,6 +465,7 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     expect(file.threads.find((t) => t.id === second)?.messages.find((m) => m.text === WORDS)?.delivery?.state).not.toBe('delivered')
     const working = page.locator('[data-testid="org-thread-group"][data-group="working"]')
     await expect(working).toBeVisible()
+    if ((await working.getAttribute('data-open')) !== 'true') await working.getByTestId('org-thread-group-head').click()
     await expect(working.locator(`[data-thread-id="${second}"]`).getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS)
     await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${second}"]`)).toHaveCount(0)
     await expect(page.locator(`[data-testid="org-thread-group"][data-group="needs"] [data-thread-id="${first}"]`)).toBeVisible()

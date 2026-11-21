@@ -284,6 +284,13 @@ enum OrgThreadModel {
         return .working
     }
 
+    /// The open cards in the order his Threads draw them: Needs you first, then Done (and one listed
+    /// for another reason), each keeping its own order (the web's FOR_HIM_GROUPS, open above the folds).
+    static func needsFirst(_ open: [OrgThread], now: Date) -> [OrgThread] {
+        let needs = open.filter { group($0, inView: true, now: now) == .needs }
+        return needs + open.filter { group($0, inView: true, now: now) != .needs }
+    }
+
     /// Where a thread went after an action took it off the cards, said once at the top of the
     /// page; nil while it is still on a card.
     static func movedNotice(_ id: String, threads: [OrgThread], now: Date) -> String? {
