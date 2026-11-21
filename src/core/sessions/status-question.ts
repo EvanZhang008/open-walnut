@@ -208,11 +208,18 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     // Its open threads, each asked where it stands (status-threads.ts).
     const { threadQuestionFor, readThreadLines } = await import('./status-threads.js');
     const threads = await threadQuestionFor(task, lang ? uiLanguageName(lang) : undefined);
-    const answer = (await sessionRunner.requestTurnCompleteSelfReport(
-      sessionId, buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined) + sameAsk + owed.block + threads.block, STATUS_TIMEOUT_MS,
-    )).trim();
+    const prompt = buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined) + sameAsk + owed.block + threads.block;
+    const answer = (await sessionRunner.requestTurnCompleteSelfReport(sessionId, prompt, STATUS_TIMEOUT_MS)).trim();
     if (owed.listed.length) await applyOwedAnswer(taskId, owed.listed, answer);
-    const read = readStatusReport(answer);
+    let read = readStatusReport(answer);
+    // An ask the user could not read on its own is asked once more, with what to fix (unclear-ask.ts).
+    if (read) {
+      const { askAgainIfUnclear } = await import('./unclear-ask.js');
+      // Its thread lines stay the first answer's: the second question is about the ask.
+      read = await askAgainIfUnclear({ sessionId, taskId, report: read, answer, prompt, prevAsk: task.status_report?.ask,
+        ask: (p) => sessionRunner.requestTurnCompleteSelfReport(sessionId, p, STATUS_TIMEOUT_MS), read: readStatusReport,
+        turnRunning: () => sessionRunner.isTurnRunning(sessionId) });
+    }
     const report = read && threads.block ? { ...read, ...readThreadLines(answer, threads.refs) } : read;
     if (!report) {
       log.session.warn('status question: no status in the answer', { sessionId, taskId, why, head: answer.slice(0, 200) });

@@ -197,6 +197,8 @@ export interface UserKindInput {
   labels?: readonly string[];
   /** With a design or picture: who reviewed it, what they checked, what changed (ask-clarity.ts). */
   design_review?: unknown; designReview?: unknown;
+  /** The writer's own words in `subject` when the rest is the user's (a thread he opened carries his title). */
+  own_words?: string;
 }
 
 /** `user_kind` + `user_kind_why`, either spelling of the keys, judged. Pure. */
@@ -218,7 +220,7 @@ export function userKindVerdict(input: UserKindInput): UserKindVerdict {
   if (cited) return { ok: false, message: cited };
   // An explicit call's question must read on its own (ask-clarity.ts).
   const unclear = known && why.length >= USER_KIND_WHY_MIN && input.subject !== undefined
-    ? askClarityRefusal(input.subject, input.detail ?? '', input.labels ?? [], str(input.design_review ?? input.designReview)) : null;
+    ? askClarityRefusal(input.subject, input.detail ?? '', input.labels ?? [], str(input.design_review ?? input.designReview), input.own_words !== undefined ? { ownWords: input.own_words } : {}) : null;
   if (unclear) return { ok: false, message: unclear };
   if (known && why.length >= USER_KIND_WHY_MIN) return { ok: true, kind: kind as UserKind, why };
   const kinds = USER_KINDS.map((k) => `${k} (${USER_KIND_WORDS[k]})`).join('; ');

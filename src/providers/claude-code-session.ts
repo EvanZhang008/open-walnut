@@ -11683,7 +11683,17 @@ export class ClaudeCodeSession {
         // Withdrawn (control_cancel_request) or answered during the gap.
         if (!this._pendingPermissionRequests.has(request_id)) return
         if (!routed) {
-          this._awaitUserDecision(request_id, request)
+          // A question for the user that does not read on its own goes back once, with what to fix
+          // (core/sessions/unclear-ask.ts); asked again, it reaches the user as written.
+          import('../core/sessions/unclear-ask.js')
+            .then(({ unclearUserQuestion }) => unclearUserQuestion(sessionId, request.input))
+            .catch(() => null)
+            .then((unclear) => {
+              if (!this._pendingPermissionRequests.has(request_id)) return
+              if (!unclear) { this._awaitUserDecision(request_id, request); return }
+              this._pendingPermissionRequests.delete(request_id)
+              if (!this.respondToControlRequest(request_id, request, false, unclear)) this._awaitUserDecision(request_id, request)
+            })
           return
         }
         this._pendingPermissionRequests.delete(request_id)

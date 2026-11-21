@@ -386,13 +386,16 @@ ${withStatus ? FOR_USER_PROMPT : ''}${opts?.memory ? agentMemoryPrompt(opts.memo
  *  missing this list makes the new label bleed into the previous field. */
 /** The four lines every task's status is shown from (src/core/user-status.ts). The user reads
  *  them on the Board, the Org page and the phone, so the plain-words rule is the point. */
+/** The summary fallback's second question about an unclear ask: short, its recap and phase wait on it. */
+const UNCLEAR_ASK_TIMEOUT_MS = 60_000;
+
 export const FOR_USER_PROMPT = `Then these lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
 FOR_USER_STATE: one of needs-you | working | waiting | done. First: when this turn answered the user's message or showed them something to read (an answer, a walkthrough, a result they asked for) and the task is not finished, it is needs-you, whatever the task waits on next; say that wait in FOR_USER_NEXT. needs-you also when the next move is the user's: something only they can give (input, a file or text to paste, a review, a decision, an approval, a login, an action on their device), even with no rush; a wait on the user is ALWAYS needs-you, never waiting (waiting takes the task off their list). A question for your lead or another task is waiting, not needs-you; so is a failure of the machine (a full disk, a Walnut restart, a lost connection to a host): that is waiting on machine, which Walnut and your lead retry once it clears. working while the task's own work goes on: you carry on by yourself right now, or a build, test run, CI run, deploy or land of your own change runs and you act on it when it ends (a background command, a trigger you armed on it or your wait clock brings you back). The work is not finished, so it is working even while your session sits idle; never park the task on it (no wait:true, no phase=WAITING: arm its watch with watches:"own"); say what runs in FOR_USER_NOW. waiting ONLY when nothing of this turn is for the user to read and the task is really blocked outside its own work: on a person (a CR or PR review, an approval, a Slack or mail reply), another team's pipeline, another task or your lead, or a time you were told to wait for; arm a trigger on it. done when what the task asked for is finished.
-FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Never a step for your lead or another task (merge, land, deploy, review it): that is waiting, with FOR_USER_WAITING_ON lead: or task:. Otherwise none. Never a question your lead, a VP or Main already decided for the user (in a message to you, or what you recorded of it): act on that decision instead. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours. Write it so the user gets the whole issue at a glance (at most 120 characters), and so they can answer with one click whenever that can work.
+FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Never a step for your lead or another task (merge, land, deploy, review it): that is waiting, with FOR_USER_WAITING_ON lead: or task:. Otherwise none. Never a question your lead, a VP or Main already decided for the user (in a message to you, or what you recorded of it): act on that decision instead. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours. Write it to read on its own to someone who never saw this task (at most 120 characters): what the thing is and what you recommend, never "here", "this" or "this plan" alone; so they can answer with one click whenever that can work.
 FOR_USER_ASK_OWN: needs-you with an ask only: which of the user's own kinds the ask is, then why in a few words, as "kind: why" ("spending: it buys a paid plan for the team"). The kind is one of ${USER_KINDS.join(' | ')}: ${Object.entries(USER_KIND_WORDS).map(([k, w]) => `${k} is ${w}`).join('; ')}. ${NOT_THE_USERS_DECISION} Never ask the user to look at, open or check something you can check yourself: do that, then report the result. With no kind of the user's own, Walnut drops the ask and reads the turn as a report to your lead, so write none rather than a weak kind.
 FOR_USER_ASK_KIND: needs-you only: how the user answers: yes-no | single | multi | text. Prefer yes-no, then a choice (single: pick one; multi: pick several), over text; text only when no short list of answers fits. Otherwise none.
-FOR_USER_ASK_OPTIONS: single or multi only: 2 to 5 options worth choosing, separated by " | ", each a few words; put "(recommended)" after the one you recommend. No filler options (no "Other", no "Something else": the user can always write their own words). Otherwise none.
-FOR_USER_ASK_MORE: needs-you only, optional: the detail behind the ask that the summary leaves out (why it matters, what each option does), a few short sentences, with every code review, ticket, pull request or document it names as its full URL the user can click. Otherwise none.
+FOR_USER_ASK_OPTIONS: single or multi only: 2 to 5 options worth choosing, separated by " | ", each a few words naming its result ("Ship it under All devices", never "OK" or "Go"); put "(recommended)" after the one you recommend. No filler options (no "Other", no "Something else": the user can always write their own words). Otherwise none.
+FOR_USER_ASK_MORE: needs-you only, optional: the detail behind the ask that the summary leaves out (why it matters, what each option does), a few short sentences, with every code review, ticket, pull request or document it names as its full URL the user can click, and a screenshot or design page by absolute path when it is about where or how something looks; a picture goes only after a reviewer on another model scored it: add "Reviewed: <model>, function N/10, experience N/10, interface N/10". Otherwise none.
 FOR_USER_WAITING_ON: waiting only: <outside | task | lead | machine | own>: on what exactly ("outside: the code review", "outside: the release team's pipeline", "task: the Bun migration lead's commit", "machine: 20 GB of free disk"). own: is your own build, test run, CI run, deploy or land, which the user reads as working ("own: the build of my change"). A wait on the user is needs-you, not here. Walnut parks the task only for one of these; anything else puts it back on the user's list. Otherwise none.
 FOR_USER_NOW: where the work stands now.
 FOR_USER_NEXT: who does what next ("You decide, then I run the tests", "I deploy once the tests pass").`;
@@ -878,6 +881,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
 
     let existingNote = '';
     let promptedTitle = '';
+    let prevStatusAsk: string | undefined;
     let links: { kind: string; target: string; name: string; user: boolean }[] = [];
     let taskPhase = '';
     let selfReport = '';
@@ -897,6 +901,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         const taskRow = await getTask(taskId);
         existingNote = (taskRow.note ?? '').trim();
         promptedTitle = (taskRow.title ?? '').trim();
+        prevStatusAsk = taskRow.status_report?.ask;
         const { linkTagViews } = await import('../link-tags.js');
         const auto = new Set(taskRow.auto_links ?? []);
         links = linkTagViews(taskRow.tags, taskRow.link_names).map((v) => ({ kind: v.kind, target: v.target, name: v.name, user: !auto.has(v.target) }));
@@ -1100,7 +1105,16 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
 
     // (a1b) The task's status for the user (FOR_USER_*): what the Board, the Org page and the
     // phone show, derived together with live facts in src/core/user-status.ts.
-    const statusReport = statusOwned ? null : readStatusReport(selfReport);
+    let statusReport = statusOwned ? null : readStatusReport(selfReport);
+    // An ask the user could not read on its own is asked once more, as the status question does (unclear-ask.ts).
+    if (statusReport) {
+      const [{ askAgainIfUnclear }, { buildStatusPrompt }] = await Promise.all([import('../sessions/unclear-ask.js'), import('../sessions/status-question.js')]);
+      const lang = nonEnglishUiLanguage(uiLanguage);
+      statusReport = await askAgainIfUnclear({ sessionId: p.sessionId, taskId, report: statusReport, answer: selfReport,
+        prompt: buildStatusPrompt(FOR_USER_PROMPT, promptedTitle, lang ? uiLanguageName(lang) : undefined), prevAsk: prevStatusAsk,
+        ask: (q) => sessionRunner.requestTurnCompleteSelfReport(p.sessionId, q, UNCLEAR_ASK_TIMEOUT_MS), read: readStatusReport,
+        turnRunning: () => sessionRunner.isTurnRunning(p.sessionId) });
+    }
     // (a1d) Its own MEMORY.md: the entry or rewrite it gave, under the row lock, within the limit
     // (sessions/agent-memory.ts). A rewrite of a file that changed since the ask is skipped.
     const memoryAsk = memory ? readAgentMemoryField(memoryField) : null;

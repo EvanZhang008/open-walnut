@@ -131,6 +131,8 @@ describe('no text Walnut gives a session tells it to write the report in a reply
     'src/core/sessions/status-question.ts',
     // The status side question's per-thread lines (2026-11-20): it asks them and reads them back.
     'src/core/sessions/status-threads.ts',
+    // The status side question asked again about an ask the user could not read (2026-11-21).
+    'src/core/sessions/unclear-ask.ts',
     'src/core/ask-decision.ts',
     'src/core/same-ask-tree.ts',
     'src/core/sessions/user-asks-model.ts',

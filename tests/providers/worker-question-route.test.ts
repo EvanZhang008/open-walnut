@@ -95,6 +95,34 @@ describe('ClaudeCodeSession: a worker question goes to its leader', () => {
     expect(responses).toHaveLength(0)
   })
 
+  // The card the user could not read (2026-11-21), as test data, escaped: "Put it in this position, ok?".
+  const UNCLEAR = {
+    ...QUESTION, request_id: 'req-ask-2',
+    request: { ...QUESTION.request, input: { questions: [{ question: '\u653e\u8fd9\u4e2a\u4f4d\u7f6e\u884c\u5417\uff1f', options: [{ label: 'OK' }, { label: 'Keep it in Settings' }] }] } },
+  }
+
+  it('a question for the user that does not read on its own goes back once with the reason, then to the user', async () => {
+    const asked = collect(EventNames.SESSION_PERMISSION_REQUEST)
+    routeWorkerQuestion.mockResolvedValue(null)
+    feed(session, UNCLEAR)
+    await vi.waitFor(() => expect(responses).toHaveLength(1))
+    expect(responses[0]).toMatchObject({ requestId: 'req-ask-2', allow: false })
+    expect(responses[0].message).toMatch(/only you can see.*Ask it again rewritten/)
+    expect(asked).toHaveLength(0)
+    expect(session.hasPendingPermission).toBe(false)
+    // Asked again unchanged: it reaches the user as written.
+    feed(session, { ...UNCLEAR, request_id: 'req-ask-3' })
+    await vi.waitFor(() => expect(asked).toHaveLength(1))
+    expect(responses).toHaveLength(1)
+  })
+
+  it('a worker\'s unclear question still goes to its leader: the check is only for the user', async () => {
+    routeWorkerQuestion.mockResolvedValue({ message: 'Your question went to your leader.', requestId: 'rq-abc124', leaderTaskId: 'task-lead' })
+    feed(session, { ...UNCLEAR, request_id: 'req-ask-4' })
+    await vi.waitFor(() => expect(responses).toHaveLength(1))
+    expect(responses[0]).toEqual({ requestId: 'req-ask-4', allow: false, message: 'Your question went to your leader.' })
+  })
+
   it('a routing failure falls back to the user, never to a silent hang', async () => {
     const asked = collect(EventNames.SESSION_PERMISSION_REQUEST)
     routeWorkerQuestion.mockRejectedValue(new Error('boom'))

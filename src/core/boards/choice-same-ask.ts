@@ -6,6 +6,7 @@
  */
 import { choiceSpecs } from './board-html.js';
 import { resolveChoiceRef } from './open-choice.js';
+import { boardChoiceRefusal } from '../org/ask-clarity.js';
 
 /** The choices `after` adds to `before`, with the task each asks for (its `task`, else the Board's). */
 export function newChoices(boardTaskId: string, before: string | undefined, after: string, allIds: readonly string[]): Array<{ id: string; taskId: string; text: string }> {
@@ -34,4 +35,18 @@ export async function refuseSameAskChoices(boardTaskId: string, before: string |
     const id = `choice:${boardTaskId}/${c.id}`;
     await refuseSameAsk(c.taskId, title, 'choice', input, options, { id, key: id, more: options.join('\n') });
   }
+}
+
+/**
+ * Why a new choice of a Board write does not read on its own, or null (org/ask-clarity.ts): it also
+ * reaches the user as a thread card away from the Board (choice-threads.ts). Pure.
+ */
+export function unclearNewChoice(before: string | undefined, after: string): string | null {
+  const old = before ? choiceSpecs(before) : {};
+  for (const [id, spec] of Object.entries(choiceSpecs(after))) {
+    if (Object.hasOwn(old, id)) continue;
+    const why = boardChoiceRefusal(spec.title ?? '', spec.options.map((o) => o.label));
+    if (why) return `Choice "${id}": ${why}`;
+  }
+  return null;
 }

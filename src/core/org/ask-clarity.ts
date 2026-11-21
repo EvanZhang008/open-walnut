@@ -24,11 +24,12 @@ const DEICTIC = /\b(?:(?:put|place|move) (?:it |them )?(?:here|there)|(?:right|o
 
 /**
  * A question about how something on screen looks, or where it goes: a place word beside a screen noun
- * ("where the notes live" is a storage question; "the token in the header" is not a screen).
+ * ("where the notes live" is a storage question; "the token in the header" is not a screen; a bare
+ * "card", "panel", "menu" or "screen" is a bank card, an interview panel, a lunch menu as often).
  */
 const LOOK = /\b(?:mock-?up|colou?r scheme)\b|\u8bbe\u8ba1\u7a3f|\u914d\u8272|\u957f\u4ec0\u4e48\u6837/i;
 const PLACE = /\b(?:where|position|placement|place|put|move|above|below)\b|\u4f4d\u7f6e|\u653e(?:\u5728|\u54ea|\u5230)|\u632a\u5230|\u79fb\u5230|\u4e0a\u9762\u8fd8\u662f\u4e0b\u9762|\u5de6\u8fb9\u8fd8\u662f\u53f3\u8fb9/i;
-const SCREEN = /\b(?:button|tab|menu|card|icon|panel|sidebar|toolbar|title ?bar|screen|sign-in entry)s?\b|\u6309\u94ae|\u5165\u53e3|\u6807\u7b7e\u9875|\u83dc\u5355|\u5361\u7247|\u56fe\u6807|\u9762\u677f|\u4fa7\u680f|\u5de5\u5177\u680f|\u6807\u9898\u680f|\u754c\u9762|\u9875\u9762/i;
+const SCREEN = /\b(?:button|tab|icon|sidebar|toolbar|title ?bar|sign-in entry|(?:settings|home|start|lock|login|sign-in) (?:screen|page|menu)|(?:context|dropdown|drop-down|app) menu)s?\b|\u6309\u94ae|\u5165\u53e3|\u6807\u7b7e\u9875|\u83dc\u5355|\u5361\u7247|\u56fe\u6807|\u9762\u677f|\u4fa7\u680f|\u5de5\u5177\u680f|\u6807\u9898\u680f|\u754c\u9762|\u9875\u9762/i;
 
 /**
  * A picture to look at, which is also what a design is: an image, video or HTML page by absolute path,
@@ -41,9 +42,9 @@ const DESIGN = /(?:^|[^\w/.~-])~?\/[^\s"'<>)]{1,300}\.(?:png|jpe?g|gif|webp|svg|
  * A review on record: the reviewer's model and its three scores (the user, 2026-11-21: "Shoudl be
  * part of the task, with a differnet model, we can use sol", then "rate it"), or "small: <what changed>".
  */
-export function reviewed(note: string): boolean {
+export function reviewed(note: string, anywhere = false): boolean {
   const t = note.trim().slice(0, SCAN_MAX);
-  if (/^small:\s*\S.{4,}/i.test(t)) return true;
+  if ((anywhere ? /(?:^|\W)small:\s*\S.{4,}/i : /^small:\s*\S.{4,}/i).test(t)) return true;
   const model = /\b(?:sol|astra|luna|gpt[-\w.]{0,20}|opus|sonnet|haiku|fable|gemini|codex)\b/i.test(t);
   const scores = (t.match(/\b(?:10|\d)(?:\.\d)?\s*(?:\/|out of)\s*10\b/gi) ?? []).length;
   return model && scores >= 3;
@@ -74,10 +75,14 @@ export function choiceLabels(raw: unknown): string[] {
  * Why the question does not read on its own, or null. `question`: its title and question (where the
  * pointing words are judged); `detail`: the rest the user reads beside it (where a picture may be).
  */
-export function askClarityRefusal(question: string, detail = '', labels: readonly string[] = [], review = ''): string | null {
+export function askClarityRefusal(question: string, detail = '', labels: readonly string[] = [], review = '', opts: { reviewInText?: boolean; ownWords?: string } = {}): string | null {
   const q = question.slice(0, SCAN_MAX);
   const all = `${q}\n${detail.slice(0, SCAN_MAX)}`;
   const hasPicture = DESIGN.test(all);
+  // A thread he opened carries his words as its title: only the writer's own words are judged bare.
+  const bare = bareOpeningRefusal(opts.ownWords ?? q);
+  if (bare) return bare;
+  if (PLAN_PAGE.test(all) && !PATH_OR_LINK.test(all)) return PLAN_PAGE_REFUSAL;
   const pointing = [all, ...labels].find((t) => DEICTIC.test(t));
   if (pointing && !hasPicture) {
     return `Not sent to the user: the question points at a place only you can see ("${DEICTIC.exec(pointing)![0]}"). `
@@ -91,13 +96,14 @@ export function askClarityRefusal(question: string, detail = '', labels: readonl
   // A design shown to him was looked at once by a reviewer on another model (2026-11-21, the user,
   // after a title bar mockup whose window buttons sat on the menu icon: "The design need ot be at
   // least reviewed once"). A text-only or colour-only change says so: "small: <what changed>".
-  if (hasPicture && !reviewed(review)) {
+  // Where the ask has no field of its own for it (a turn-end line, an AskUserQuestion), the review is named in its text.
+  if (hasPicture && !reviewed(review) && !(opts.reviewInText && reviewed(all, true))) {
+    const how = opts.reviewInText
+      ? 'then name it in the text: "Reviewed: <model>, function N/10, experience N/10, interface N/10; <what changed>" (a text-only or colour-only change: "small: <what changed>").'
+      : 'then pass design_review with the reviewer model, the three scores and what changed (for example "sol: function 8/10, experience 7/10, interface 6/10; fixed the window buttons over the menu icon"). Only a text-only or colour-only change skips this: design_review "small: <what changed>".';
     return 'Not sent to the user: it shows a design, image or page with no review on record. Start your own reviewer subagent on '
       + 'another model than the one that made it (Sol, where your Agent tool has it), have it check every picture once (overlaps, cut-off or '
-      + 'overflowing text, alignment, spacing, match with the real screen) and score function, experience and interface out of 10, '
-      + 'fix what it found, then pass design_review with the reviewer model, the three scores and what changed (for example '
-      + '"sol: function 8/10, experience 7/10, interface 6/10; fixed the window buttons over the menu icon"). Only a text-only '
-      + 'or colour-only change skips this: design_review "small: <what changed>".';
+      + `overflowing text, alignment, spacing, match with the real screen) and score function, experience and interface out of 10, fix what it found, ${how}`;
   }
   const vague = labels.find((l) => VAGUE_LABEL.test(clean(l)) || DEICTIC.test(l));
   if (vague) {
@@ -110,12 +116,25 @@ export function askClarityRefusal(question: string, detail = '', labels: readonl
 /** A first sentence with no subject: "Go ahead with this plan? I recommend it." names nothing. */
 const BARE_OPENING = /^(?:(?:\u8981\u4e0d\u8981|\u662f\u5426|\u8981|\u53ef\u4ee5)(?:\u6309|\u7167)?(?:\u8fd9\u4e2a|\u90a3\u4e2a|\u8fd9\u6837|\u6b64)?(?:\u65b9\u6848|\u8ba1\u5212|\u505a\u6cd5)?(?:\u505a|\u6765|\u529e|\u5f04|\u6539)?|(?:should|shall|can) (?:i|we) (?:do|go ahead with|proceed with|ship|start) (?:it|this|that|the plan)|go ahead(?: with (?:it|this|the plan))?|proceed|do it|ok|okay|\u884c\u4e0d\u884c|\u53ef\u4ee5\u5417|\u597d\u5417)\s*[?\uff1f.!\u3002\uff01]*$/i;
 
-/** A plan or design named as a page or document, which then needs its path or link. */
-const PLAN_PAGE = /\u65b9\u6848\u9875|\u8bbe\u8ba1\u9875|\u65b9\u6848(?:\u56fe|\u6587\u6863|\u7a3f)|\b(?:plan|design|proposal|mockup) (?:page|doc(?:ument)?)\b/i;
+/** A plan or design page or document pointed at as one that exists ("see the plan page"), which then needs its path or link; one still to write ("write a design doc first") does not. */
+const PLAN_PAGE = /(?:\u770b|\u89c1|\u6253\u5f00|\u8fd9\u4e2a|\u90a3\u4e2a|\u6309)\s*(?:\u65b9\u6848\u9875|\u8bbe\u8ba1\u9875|\u65b9\u6848(?:\u56fe|\u6587\u6863|\u7a3f))|\b(?:see|open|read|review|check|per|in|the|this|that|my) (?:plan|design|proposal|mockup) (?:page|doc(?:ument)?)\b/i;
 const PATH_OR_LINK = /https?:\/\/[^\s"'<>)]{1,300}|(?:^|[^\w/.~-])~?\/[^\s"'<>)]{1,300}/;
 
 /** A yes or no question, which then needs its choices as buttons. */
 const YES_NO = /\u8981\u4e0d\u8981|\u662f\u5426|\u505a\u4e0d\u505a|\u884c\u4e0d\u884c|\u53ef\u4ee5\u5417|\u597d\u5417|^(?:should|shall|do|can|may) (?:i|we|you)\b|\bok to\b/i;
+
+const PLAN_PAGE_REFUSAL = 'Not handed to the user: it names a plan or design page with no path to it. Put its absolute path (or link) beside it.';
+
+/** A first sentence that names nothing ("Go ahead with this plan? I recommend it."), as the refusal, or null. */
+function bareOpeningRefusal(text: string): string | null {
+  let t = text.slice(0, SCAN_MAX).trim();
+  // "OK. Merge PR 12 for the sync fix?": an "OK." alone opens, the next sentence asks.
+  t = t.replace(/^(?:ok(?:ay)?|\u597d(?:\u7684)?)[.!\u3002\uff01]\s*(?=\S)/i, '');
+  const first = firstSentence(t);
+  if (!first || !BARE_OPENING.test(first)) return null;
+  return `Not handed to the user: "${first}" names nothing. The user reads its first sentence first: say what they decide and what you `
+    + 'recommend in it ("Store passkeys in the Walnut password extension? I recommend yes: ..."), then the key points and evidence paths.';
+}
 
 function firstSentence(text: string): string {
   const t = text.trim().split('\n').find((l) => l.trim()) ?? '';
@@ -140,15 +159,10 @@ export function needsCardRefusal(card: { title: string; summary: string; hasSumm
       + 'sentence says what they decide and what you recommend, then the key points and the evidence by absolute path.';
   }
   for (const text of [summary, card.opener ?? '']) {
-    const first = firstSentence(text);
-    if (first && BARE_OPENING.test(first)) {
-      return `Not handed to the user: "${first}" names nothing. The card shows its first sentence: say what they decide and what you `
-        + 'recommend in it ("Store passkeys in the Walnut password extension? I recommend yes: ..."), then the key points and evidence paths.';
-    }
+    const bare = bareOpeningRefusal(text);
+    if (bare) return bare;
   }
-  if (PLAN_PAGE.test(all) && !PATH_OR_LINK.test(all)) {
-    return 'Not handed to the user: it names a plan or design page with no path to it. Put its absolute path (or link) in the summary.';
-  }
+  if (PLAN_PAGE.test(all) && !PATH_OR_LINK.test(all)) return PLAN_PAGE_REFUSAL;
   // The node's own words only: a thread he opened carries his question as its title.
   if (YES_NO.test(firstSentence(summary)) && card.options.length === 0) {
     return 'Not handed to the user: it asks a yes or no question with no buttons. Pass options, each naming its result, your pick first '
@@ -170,4 +184,48 @@ export function longTextHint(text: string | undefined): string | null {
   if (t.length <= LONG_TEXT_CHARS || DESIGN.test(t.slice(0, SCAN_MAX))) return null;
   return `This is ${t.length} characters, long for the user to read. Cut it to the answer first and a few lines, `
     + 'put a picture, table or GIF in place of a block of text, and move detail to a file by its path.';
+}
+
+/**
+ * The doors with no field for a review or a refusal of their own (2026-11-21, the user: "I think you
+ * write it well, but the ones below do not"; the workers' asks reach him through these):
+ *   - a task's turn-end lines (FOR_USER_ASK, _ASK_MORE, _ASK_OPTIONS; status-question.ts asks it to
+ *     write them again once, with the reason);
+ *   - an AskUserQuestion prompt (its PreToolUse hook denies it with the reason, ops/link-check.ts);
+ *   - a new Board choice (refused 409, its title and option labels: the page around it is its picture).
+ * A review of a picture is named in the text itself ("Reviewed: sol, function 8/10, ...").
+ */
+export function turnEndAskRefusal(r: { state?: string; ask?: string; ask_more?: string; ask_options?: ReadonlyArray<{ label: string }> }): string | null {
+  if (r.state !== 'needs' || !r.ask?.trim()) return null;
+  return askClarityRefusal(r.ask, r.ask_more ?? '', (r.ask_options ?? []).map((o) => o.label), '', { reviewInText: true });
+}
+
+/** One AskUserQuestion question as the tool takes it. */
+interface ToolQuestion { question?: unknown; header?: unknown; options?: unknown }
+
+export function askUserQuestionRefusal(toolInput: unknown): string | null {
+  const qs = (toolInput as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(qs)) return null;
+  const s = (v: unknown): string => (typeof v === 'string' ? v : '');
+  for (const q of qs.slice(0, 8) as ToolQuestion[]) {
+    const opts = Array.isArray(q?.options) ? (q.options as Array<{ label?: unknown; description?: unknown; preview?: unknown }>) : [];
+    const detail = opts.map((o) => `${s(o?.description)}\n${s(o?.preview)}`).join('\n');
+    const why = askClarityRefusal(`${s(q?.question)}\n${s(q?.header)}`, detail, opts.map((o) => s(o?.label)).filter(Boolean), '', { reviewInText: true });
+    if (why) return why;
+  }
+  return null;
+}
+
+export function boardChoiceRefusal(title: string, labels: readonly string[]): string | null {
+  const t = title.slice(0, SCAN_MAX);
+  const pointing = [t, ...labels].find((x) => DEICTIC.test(x));
+  if (pointing) {
+    return `Not added: the choice points at a place only you can see ("${DEICTIC.exec(pointing)![0]}"). It also reaches the user as a thread `
+      + 'card on its own, away from the Board: say in its title what the thing is and where it goes.';
+  }
+  const bare = bareOpeningRefusal(t);
+  if (bare) return bare;
+  const vague = labels.find((l) => VAGUE_LABEL.test(clean(l)));
+  if (vague) return `Not added: the option "${vague}" says nothing on its own. Name the result in each label, so the user can pick without reading back.`;
+  return null;
 }

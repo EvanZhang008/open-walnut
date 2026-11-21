@@ -1010,7 +1010,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
   if (patchHandsToUser(cur, patch)) {
     // The ask's own words only: never older context, where a sender names its source (user-kind.ts).
-    checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), cur.reply);
+    checkHandedToUser(by, { ...patch, options: patch.options ?? cur.options, ...(cur.opener ? {} : { own_words: [patch.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') }) }, [patch.title ?? cur.title, patch.ask, patch.reply].filter(isStr).join('\n'), cur.reply);
     if (by !== 'human') {
       const own = (isStr(patch.reply) ? patch.reply : cur.reply) || '';
       const card = needsCardRefusal({ title: patch.title ?? cur.title, summary: own || cur.opener?.text || '', hasSummary: !!own.trim(), opener: cur.opener?.text, options: choiceLabels(patch.options ?? cur.options) });
@@ -1020,7 +1020,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     // A question already waiting on him, reworded: it must still read on its own (ask-clarity.ts).
     const unclear = askClarityRefusal([patch.title ?? cur.title, patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n'), '',
       choiceLabels(patch.options ?? cur.options),
-      isStr(patch.design_review) ? patch.design_review : showsDesign([cur.title, cur.ask, cur.reply].filter(isStr).join('\n')) ? 'small: reviewed when it was handed over' : '');
+      isStr(patch.design_review) ? patch.design_review : showsDesign([cur.title, cur.ask, cur.reply].filter(isStr).join('\n')) ? 'small: reviewed when it was handed over' : '',
+      cur.opener ? {} : { ownWords: [patch.ask ?? cur.ask, patch.reply ?? cur.reply].filter(isStr).join('\n') });
     if (unclear) throw new ThreadError('user_kind', 409, unclear.replace(/^Not sent to the user:/, 'Not handed to the user:'));
   }
   if (patch.pin === false && cur.pinned) checkHisPin(cur, by, 'unpinned');
@@ -1348,14 +1349,15 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   // A thread the node opens is for him to act on or follow: never hidden from the start (but Walnut's quiet one).
   if (quiet && input.state !== undefined && input.state !== 'pending') throw new ThreadError('bad_input', 400, 'A quiet thread opens pending.');
   if (!quiet && input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
-  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input, [input.title, input.text].filter(isStr).join('\n'));
   const options = optionsOf(input.options);
-  if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
-  if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);
+  // The card's shape first (no summary hides all below the first line), then the question's words.
   if (!quiet && by !== 'human' && waitsOnUser(input.state ?? 'needs')) {
     const card = needsCardRefusal({ title: input.title, summary: isStr(input.reply) && input.reply.trim() ? input.reply : input.text, hasSummary: isStr(input.reply) && !!input.reply.trim(), opener: input.text, options: options.map((o) => o.label) });
     if (card) throw new ThreadError('user_kind', 409, card);
   }
+  if (!quiet && waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input, [input.title, input.text].filter(isStr).join('\n'));
+  if (options.length && !waitsOnUser(input.state ?? 'needs')) throw new ThreadError('bad_input', 400, 'options go with state needs: he picks one while it waits on him.');
+  if (waitsOnUser(input.state ?? 'needs')) checkChoicesAsOptions(by, [input.text], options);
   const tasks = taskList(input.tasks ?? []);
   // The first post's writer: its verified session (never one the input names), none for the user.
   const s = by === 'human' ? undefined : verifiedSource(source);

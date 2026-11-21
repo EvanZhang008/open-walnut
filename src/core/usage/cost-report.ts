@@ -98,6 +98,7 @@ const FEATURE: Record<string, string> = {
   transfer: 'Session transfer', 'routine-draft': 'Routine drafts', 'host-learning': 'Host learning',
   'privacy-check': 'Private task checks',
   'outbound-check': 'Personal-matter checks before a send',
+  'ask-check': 'Readability checks of asks before the user sees them',
   'reply-language': 'Reply language rewrites',
   drawing: 'Drawing diagrams', reflection: 'Org reflection', avatar: 'Org avatars',
 };

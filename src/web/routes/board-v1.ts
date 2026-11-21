@@ -338,8 +338,10 @@ boardV1Router.get('/tasks/:id/board', route(async (req, res) => {
 
 /** A new Board choice asks the user: one already asked (its tree, or another team about its matter) is a 409. */
 async function refuseSameAskChoicesOr409(taskId: string, before: string | undefined, after: string, b: Record<string, unknown>): Promise<void> {
-  const { refuseSameAskChoices } = await import('../../core/boards/choice-same-ask.js')
+  const { refuseSameAskChoices, unclearNewChoice } = await import('../../core/boards/choice-same-ask.js')
   const { SameAskError } = await import('../../core/same-ask.js')
+  const unclear = unclearNewChoice(before, after)
+  if (unclear) throw new RouteError(409, 'unclear_ask', unclear)
   await refuseSameAskChoices(taskId, before, after, { same_ask_reason: b.same_ask_reason ?? b.sameAskReason }).catch((err) => {
     if (err instanceof SameAskError) throw new RouteError(409, 'same_ask', err.message)
     log.task.debug('board: same-ask check of new choices failed, write let through', { taskId, error: err instanceof Error ? err.message : String(err) })

@@ -41,7 +41,7 @@ describe('a follow-up of what the user already agreed to is never his', () => {
       expect(v.ok, why).toBe(false)
       if (!v.ok) expect(v.message).toMatch(/the step that follows is yours\. Do it now and tell them in one line afterwards/)
     }
-    for (const why of stillHis) expect(userKindVerdict({ user_kind: 'outward', user_kind_why: why, subject: 'Go ahead?' }).ok, why).toBe(true)
+    for (const why of stillHis) expect(userKindVerdict({ user_kind: 'outward', user_kind_why: why, subject: 'Move the meeting with Alex to Thursday 3pm?' }).ok, why).toBe(true)
     // The turn-end line has no subject: it keeps the old verdict (a refusal there would silently drop the ask).
     expect(userKindVerdict({ user_kind: 'outward', user_kind_why: followUps[0] }).ok).toBe(true)
   })
@@ -108,7 +108,7 @@ describe('a question reads on its own (2026-11-21: "what is here?")', () => {
     const v = userKindVerdict({ ...kind, subject: `${title}\n${body}`, labels: [button] })
     expect(v.ok).toBe(false)
     if (!v.ok) expect(v.message).toMatch(/points at a place only you can see/)
-    expect(() => openThread(emptyThreads('vp'), { title, text: body, from: 'task', ...kind, options: [{ label: button }] }, 'task:wifi', AT)).toThrow(/only you can see/)
+    expect(() => openThread(emptyThreads('vp'), { title, text: body, from: 'task', ...kind, options: [{ label: button }, { label: 'Keep it in Settings only' }] }, 'task:wifi', AT)).toThrow(/only you can see/)
   })
 
   it('refuses the same kind of question in other words', () => {
