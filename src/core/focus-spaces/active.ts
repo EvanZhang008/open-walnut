@@ -97,13 +97,20 @@ async function enterLocked(input: EnterFocusInput, now: number, allow?: (prev: A
   if (allow && !allow(prev)) return null
   const next = await resolveFocus(input, prev, getFocusSpace, now)
   current = next
-  await writeJsonFile(activeFile(), current)
-  await setQuiet({
-    source: FOCUS_QUIET_SOURCE,
-    reason: `Focus: ${next.name}`,
-    scope: next.scope,
-    ...(next.until !== undefined ? { until: next.until } : {}),
-  })
+  try {
+    await writeJsonFile(activeFile(), current)
+    await setQuiet({
+      source: FOCUS_QUIET_SOURCE,
+      reason: `Focus: ${next.name}`,
+      scope: next.scope,
+      ...(next.until !== undefined ? { until: next.until } : {}),
+    })
+  } catch (err) {
+    // Half done (the file written, the hold not): back to the focus there was, so the two agree.
+    current = prev
+    await writeJsonFile(activeFile(), prev).catch(() => {})
+    throw err
+  }
   publish()
   return next
 }
@@ -182,12 +189,12 @@ export async function followSpaceChange(spaceId: string): Promise<void> {
  * `onlyBy`/`onlyOwner`: a focus block ending leaves only the focus it entered itself, never one the
  * person chose since, nor another plugin's (or its own newer generation's) block.
  */
-export async function leaveFocus(opts: { onlyBy?: FocusBy; onlyOwner?: string } = {}): Promise<ActiveFocus | null> {
+export async function leaveFocus(opts: { onlyBy?: FocusBy; onlyOwner?: (owner: string | undefined) => boolean } = {}): Promise<ActiveFocus | null> {
   return serial(async () => {
     const was = await loadLocked(Date.now())
     if (!was) return null
     if (opts.onlyBy && was.by !== opts.onlyBy) return null
-    if (opts.onlyOwner !== undefined && was.owner !== opts.onlyOwner) return null
+    if (opts.onlyOwner && !opts.onlyOwner(was.owner)) return null
     await leaveLocked()
     return was
   })

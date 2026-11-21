@@ -214,25 +214,29 @@ async function enterBlockFocus(tasks: string[], until: number | undefined, owner
     const { getTask } = await import('../task-manager.js')
     const title = tasks.length === 1 ? (await getTask(tasks[0]).catch(() => null))?.title : undefined
     const live = until !== undefined && until > Date.now() && until <= Date.now() + 24 * 3600_000
-    await enterFocusIf(
+    const entered = await enterFocusIf(
       { scope: { tasks }, name: title || 'Focus block', by: 'block', owner, ...(live ? { until } : {}) },
       (prev) => !prev || prev.by === 'block',
     )
-    blockOwners.add(owner)
+    if (entered) blockOwners.add(owner)
   } catch (err) {
     log.notif.warn('focus block could not enter its focus space', { error: String(err) })
   }
 }
 
-/** Plugin generations that entered a block focus: only they ever ask to leave one. */
+/** Live plugin generations (this process) that entered a block focus. */
 const blockOwners = new Set<string>()
 
-/** The block focus this generation entered ends; another plugin's, or a newer generation's, stays. */
+/**
+ * The block focus this generation entered ends, and so does one an earlier run of the same plugin
+ * left (its generation is gone: a restart); another plugin's, or a live generation's, stays.
+ */
 async function leaveBlockFocus(owner: string): Promise<void> {
-  if (!blockOwners.has(owner)) return
+  const plugin = owner.slice(0, owner.lastIndexOf('#') + 1)
+  const mine = (o: string | undefined) => o === owner || (!!o && !!plugin && o.startsWith(plugin) && !blockOwners.has(o))
   try {
     const { leaveFocus } = await import('../focus-spaces/active.js')
-    await leaveFocus({ onlyBy: 'block', onlyOwner: owner })
+    await leaveFocus({ onlyBy: 'block', onlyOwner: mine })
     blockOwners.delete(owner)
   } catch (err) {
     log.notif.warn('focus block could not leave its focus space', { error: String(err) })

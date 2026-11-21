@@ -63,10 +63,10 @@ describe('active focus', () => {
 
   it('only the owner of a block ends it', async () => {
     await enterFocus({ scope: { tasks: ['t1'] }, by: 'block', owner: 'walnut-rhythm#2' })
-    expect(await leaveFocus({ onlyBy: 'block', onlyOwner: 'walnut-rhythm#1' })).toBeNull()
-    expect(await leaveFocus({ onlyBy: 'block', onlyOwner: 'other-plugin#5' })).toBeNull()
+    expect(await leaveFocus({ onlyBy: 'block', onlyOwner: (o) => o === 'walnut-rhythm#1' })).toBeNull()
+    expect(await leaveFocus({ onlyBy: 'block', onlyOwner: (o) => o === 'other-plugin#5' })).toBeNull()
     expect(await getActiveFocus()).toMatchObject({ owner: 'walnut-rhythm#2' })
-    expect(await leaveFocus({ onlyBy: 'block', onlyOwner: 'walnut-rhythm#2' })).toMatchObject({ owner: 'walnut-rhythm#2' })
+    expect(await leaveFocus({ onlyBy: 'block', onlyOwner: (o) => o === 'walnut-rhythm#2' })).toMatchObject({ owner: 'walnut-rhythm#2' })
     expect(await getActiveFocus()).toBeNull()
   })
 

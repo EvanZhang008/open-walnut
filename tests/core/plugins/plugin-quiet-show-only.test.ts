@@ -92,4 +92,17 @@ describe('quiet.set showOnly', () => {
     await fresh.quiet.clear()
     expect(await getActiveFocus()).toBeNull()
   })
+
+  it('a block an earlier run of the plugin left (a restart) ends with the new run\'s clear', async () => {
+    await enterFocus({ scope: { tasks: ['task-a'] }, name: 'Question bank practice', by: 'block', owner: 'walnut-rhythm#999' })
+    const run = plugin()
+    await run.quiet.clear()
+    expect(await getActiveFocus()).toBeNull()
+  })
+
+  it('another plugin never ends a block left by an earlier run of Rhythm', async () => {
+    await enterFocus({ scope: { tasks: ['task-a'] }, name: 'Question bank practice', by: 'block', owner: 'walnut-rhythm#999' })
+    await plugin('walnut-mail').quiet.clear()
+    expect(await getActiveFocus()).toMatchObject({ by: 'block', owner: 'walnut-rhythm#999' })
+  })
 })
