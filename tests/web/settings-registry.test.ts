@@ -35,7 +35,7 @@ const EXPECTED_IDS = [
   'stt', 'audio-capture', 'calendar', 'permissions', 'org', 'triage', 'mail-rules', 'search', 'passwords', 'browser', 'backup',
   // Phones & Cloud: `devices` is the entry; its four tabs are panes of their own
   // (`tabOf: 'devices'`), the Cloud companion one keeping the old `#cloud` link.
-  'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'devices-wifi', 'devices-phones', 'remote-hosts', 'advanced',
+  'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'devices-phones', 'remote-hosts', 'advanced',
   // Use an API instead of Claude Code: renders under Advanced (navHidden).
   'providers',
   'experimental',
@@ -146,13 +146,12 @@ describe('core settings registry', () => {
     expect(ungated, 'sections that can render nothing with no `requires` gate').toEqual([])
   })
 
-  it('puts the four ways and All devices under Phones & Cloud as tabs, Tailscale, the tunnel and Same Wi-Fi on the Mac only', () => {
+  it('puts the three ways and All devices under Phones & Cloud as tabs, Tailscale and the tunnel on the Mac only', () => {
     const tabs = CORE_SETTINGS_CONTRIBUTIONS.filter((e) => e.tabOf)
     expect(tabs.map((e) => [e.id, e.tabOf, e.label])).toEqual([
       ['cloud', 'devices', 'Cloud companion'],
       ['devices-tailscale', 'devices', 'Tailscale'],
       ['devices-browser', 'devices', 'Tunnel'],
-      ['devices-wifi', 'devices', 'Same Wi-Fi'],
       ['devices-phones', 'devices', 'All devices'],
     ])
     // The tab bar's order is the registry's, and settings-way-panes names the same panes.
@@ -167,7 +166,6 @@ describe('core settings registry', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS.some((e) => e.parent === 'devices')).toBe(false)
     expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'devices-tailscale')?.requires).toBe('primary')
     expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'devices-browser')?.requires).toBe('primary')
-    expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'devices-wifi')?.requires).toBe('primary')
   })
 
   it('lists the macOS Access entry only where the server has a report', () => {

@@ -7,7 +7,7 @@
  */
 import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
-import { openWay } from './devices-ways-helpers'
+import { backToDevices } from './devices-ways-helpers'
 import { dropFakes } from './route-teardown'
 import { routeMacConsole } from './mac-console-route'
 
@@ -109,11 +109,11 @@ test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no ru
   })
   await openSettings(page)
   await clickNav(page, 'devices')
-  // The Same Wi-Fi tab pairs on this Wi-Fi, whatever else is set up.
-  const section = await openWay(page, 'wifi')
-  const pair = section.getByTestId('way-pair-wifi')
+  // With no companion and no Tailscale address (the fixture server), All devices pairs on this Wi-Fi.
+  const section = await backToDevices(page)
+  const pair = section.getByTestId('way-pair-all')
   await pair.locator('#devices-new-name').fill('Test phone')
-  await pair.getByTestId('devices-pair-new').click()
+  await pair.getByRole('button', { name: 'Pair phone' }).click()
   await expect.poll(() => names).toEqual(['Test-phone'])
   await expect(section).not.toContainText('Invalid device name')
 })

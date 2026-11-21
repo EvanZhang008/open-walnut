@@ -48,7 +48,6 @@ import { CloudProviderPicker } from './cloud/CloudProviderPicker';
 import { CloudSetupSteps, SetupLog } from './cloud/CloudSetupSteps';
 import { PairPhoneCard } from './cloud/PairPhoneCard';
 import { CloudWayExtras } from './cloud/CloudWayExtras';
-import { SettingsFoldGroup } from '../SettingsFoldGroup';
 import { PhonesCloudTabHead, usePhonesCloudView } from './cloud/PhonesCloudTabs';
 import { WAY_PANES } from '../settings-way-panes';
 import { DeviceList } from './cloud/DeviceList';
@@ -471,11 +470,34 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
           </div>
         )}
 
-        {/* Pairing a phone this way and the phones that use it come first: the Now line above
-            already says the companion is on, and its sync and update rows are upkeep. */}
-        {view === 'configured' && !replica && <DeviceList scope="cloud" />}
-        {view === 'configured' && refusedNotice}
+        {view === 'configured' && (
+          <SettingsGroup
+            className="cloud-configured"
+            footer="Replacing a companion isn't supported here yet; remove the cloud git remote first to start over."
+          >
+            <SettingsRow
+              label="Cloud sync"
+              help={<code className="settings-addons-mono">{cloudOrigin?.replace(/^https?:\/\//, '')}</code>}
+              control={connectedTag}
+            />
+            {refusedNotice}
+            <CompanionUpdatesRow />
+            {terminalJob && (
+              <SettingsRow
+                label="Old setup attempt"
+                help={`An earlier attempt ${job?.status === 'failed' ? 'failed' : 'was cancelled'}; your companion works, so you can clear it.`}
+                control={
+                  <SettingsButton disabled={busy} onClick={() => void act('clear', clearJob)}>
+                    Clear old attempt
+                  </SettingsButton>
+                }
+              />
+            )}
+          </SettingsGroup>
+        )}
         {view === 'configured' && errorNotice}
+        {/* The phones and Macs that use the companion, and pairing one more this way. */}
+        {view === 'configured' && !replica && <DeviceList scope="cloud" />}
 
         {view === 'unpaired' && (
           <SettingsGroup
@@ -490,41 +512,7 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
             <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>
           </SettingsGroup>
         )}
-        {view === 'configured' ? (
-          // The companion's upkeep, folded under its phones (2026-11-21 placement review: a first
-          // visit comes to pair a phone; sync, updates and what it keeps are looked at later).
-          <SettingsFoldGroup
-            id="cloud-manage"
-            heading="Manage cloud companion"
-            summary="Sync, updates, while this Mac is away, what it keeps"
-            bare
-            data-testid="cloud-manage"
-          >
-          <SettingsGroup
-            className="cloud-configured"
-            footer="Replacing a companion isn't supported here yet; remove the cloud git remote first to start over."
-          >
-            <SettingsRow
-              label="Cloud sync"
-              help={<code className="settings-addons-mono">{cloudOrigin?.replace(/^https?:\/\//, '')}</code>}
-              control={connectedTag}
-            />
-            <CompanionUpdatesRow />
-            {terminalJob && (
-              <SettingsRow
-                label="Old setup attempt"
-                help={`An earlier attempt ${job?.status === 'failed' ? 'failed' : 'was cancelled'}; your companion works, so you can clear it.`}
-                control={
-                  <SettingsButton disabled={busy} onClick={() => void act('clear', clearJob)}>
-                    Clear old attempt
-                  </SettingsButton>
-                }
-              />
-            )}
-          </SettingsGroup>
-            {cloudOrigin && config && onSave && <CloudWayExtras config={config} onSave={onSave} />}
-          </SettingsFoldGroup>
-        ) : cloudOrigin && config && onSave && <CloudWayExtras config={config} onSave={onSave} />}
+        {cloudOrigin && config && onSave && <CloudWayExtras config={config} onSave={onSave} />}
       </div>
     </SectionCard>
   );

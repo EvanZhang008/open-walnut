@@ -31,10 +31,9 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   margin-bottom: -1px;
-  /* Five tabs with their hints fit a 680 px pane (Settings at a 1280 px window). */
-  padding: 6px 7px;
+  padding: 8px 12px;
   border-bottom: 2px solid transparent;
   color: var(--fg-secondary, var(--fg-muted));
   font-size: 13.5px;
@@ -102,9 +101,15 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 }
 .pc-intro p { margin: 0; }
 .pc-intro-what { font-size: 14px; line-height: 20px; }
-.pc-intro .pc-intro-now { margin-top: 4px; }
+.pc-intro .pc-intro-when, .pc-intro .pc-intro-now { margin-top: 4px; }
+/* The word in its own column, so a long line wraps under its text, not under the word. */
+.pc-intro .pc-intro-when { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 8px; }
 .pc-intro-key { display: inline-block; min-width: 84px; margin-right: 8px; color: var(--fg-muted); }
+.pc-intro-when .pc-intro-key { min-width: 0; margin-right: 0; }
+/* A phone: each line's word above its text, so the text keeps the width. */
 @media (max-width: 560px) {
+  .pc-intro .pc-intro-when { display: block; }
+  .pc-intro-when .pc-intro-key { display: block; }
   /* A finger's worth of height for each tab. */
   .pc-tab { min-height: 44px; box-sizing: border-box; }
 }
@@ -200,20 +205,3 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .devices-qr-dialog-token { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; }
 .devices-qr-dialog-token .devices-token { flex: 1; min-width: 0; margin-top: 0; }
 .app-modal.devices-qr-dialog:focus { outline: none; }
-
-/* Same Wi-Fi tab, the browser sign-in code (cloud/WifiSignIn.tsx): what to do, above the fine print. */
-.devices-wifi-steps { display: block; margin-bottom: 6px; color: var(--fg); }
-
-/* A tab's name over what it is for ("Browser, anywhere"), PhonesCloudTabs TAB_HINT. */
-.pc-tab-text { display: inline-flex; flex-direction: column; line-height: 1.2; }
-.pc-tab-hint { font-size: 11px; font-weight: 400; color: var(--fg); white-space: normal; max-width: 8em; line-height: 1.25; }
-.pc-tab { align-items: flex-start; }
-.pc-tab .devices-way-dot { margin-top: 6px; }
-@media (max-width: 560px) {
-  /* Text on a phone is at least 12 px (phone-settings.spec.ts). */
-  .pc-tab-hint { font-size: 12px; }
-}
-/* A link to another tab inside a sentence (DeviceList): a finger's worth on a phone. */
-@media (max-width: 560px) {
-  .settings-addons-link.devices-go-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 4px; vertical-align: middle; }
-}

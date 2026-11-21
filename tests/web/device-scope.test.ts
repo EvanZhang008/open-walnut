@@ -50,16 +50,13 @@ describe('rowsForScope', () => {
   it("Tailscale: the phones with a record on this Mac (Tailscale reaches this Mac's own pairing)", () => {
     expect(names('tailscale')).toEqual(['desk-phone', 'pocket-phone'])
   })
-  it('Same Wi-Fi: the phones with a record on this Mac, and browsers signed in with a code (signed out where they were signed in)', () => {
-    expect(names('wifi')).toEqual(['browser-ab12cd', 'desk-phone', 'pocket-phone'])
-  })
   it('Tunnel: the browsers and the extension, never a phone', () => {
     expect(names('browser')).toEqual(['browser-ab12cd', 'extension-ef34'])
   })
   it('All devices: phones, browsers, the extension and Macs; simulators only in Advanced', () => {
     expect(names('all')).toEqual(['browser-ab12cd', 'desk-phone', 'extension-ef34', 'pocket-phone', 'studio-mac'])
     expect(names('advanced')).toEqual(['sim-one'])
-    for (const scope of ['all', 'cloud', 'tailscale', 'browser', 'wifi'] as const) expect(names(scope)).not.toContain('sim-one')
+    for (const scope of ['all', 'cloud', 'tailscale', 'browser'] as const) expect(names(scope)).not.toContain('sim-one')
   })
   it('a phone with both records shows once in each tab of its ways', () => {
     for (const scope of ['cloud', 'tailscale', 'all'] as const) {
@@ -72,17 +69,16 @@ describe('wayTags', () => {
   const pocket = rows.find((r) => r.name === 'pocket-phone')!
   const desk = rows.find((r) => r.name === 'desk-phone')!
   it('names the ways by their tabs, and never guesses Tailscale (only the phone knows whether it runs it)', () => {
-    expect(wayTags(pocket, { scope: 'all' })).toEqual(['Cloud companion', 'Same Wi-Fi'])
-    expect(wayTags(desk, { scope: 'all' })).toEqual(['Same Wi-Fi'])
-    expect(wayTags(desk, { scope: 'tailscale' })).toEqual(['Same Wi-Fi'])
+    expect(wayTags(pocket, { scope: 'all' })).toEqual(['Cloud companion', 'Wi-Fi'])
+    expect(wayTags(desk, { scope: 'all' })).toEqual(['Wi-Fi'])
+    expect(wayTags(desk, { scope: 'tailscale' })).toEqual(['Wi-Fi'])
   })
-  it("leaves out the tab's own way", () => {
-    expect(wayTags(pocket, { scope: 'cloud' })).toEqual(['Same Wi-Fi'])
-    expect(wayTags(pocket, { scope: 'wifi' })).toEqual(['Cloud companion'])
-    expect(wayTags(pocket, { scope: 'tailscale' })).toEqual(['Cloud companion', 'Same Wi-Fi'])
+  it("leaves out the cloud tab's own way", () => {
+    expect(wayTags(pocket, { scope: 'cloud' })).toEqual(['Wi-Fi'])
+    expect(wayTags(pocket, { scope: 'tailscale' })).toEqual(['Cloud companion', 'Wi-Fi'])
   })
   it("on the companion's own console every record there is the cloud companion way", () => {
-    // A replica's `devices` are its own records: never "Same Wi-Fi".
+    // A replica's `devices` are its own records: never "Wi-Fi".
     const onCompanion = mergeDeviceRows([{ name: 'pocket-phone', createdAt: at(1), role: 'phone' }], [])[0]
     expect(wayTags(onCompanion, { scope: 'all', replica: true })).toEqual(['Cloud companion'])
   })
@@ -92,20 +88,19 @@ describe('wayTags', () => {
 })
 
 describe('pairing and removal', () => {
-  it("each way's tab pairs through its own address; All devices only on the companion's console; the tunnel never", () => {
+  it("each way's tab pairs through its own address; All devices only on Wi-Fi while no way tab can; the tunnel never", () => {
     expect(pairTargetForScope('cloud')).toBe('cloud')
     expect(pairTargetForScope('tailscale')).toBe('tailnet')
-    // Wi-Fi pairs on its own tab (2026-11-21, the user: "Put it in closest so people know"), with or without a detected address.
-    expect(pairTargetForScope('wifi', ['lan'])).toBe('lan')
-    expect(pairTargetForScope('wifi', [])).toBe('lan')
-    expect(pairTargetForScope('wifi', ['cloud'], { replica: true })).toBeNull()
-    // On this Mac All devices pairs nothing: every way has its own tab that does.
-    for (const offered of [['lan'], [], ['lan', 'cloud'], ['lan', 'tailnet']] as const) expect(pairTargetForScope('all', offered)).toBeNull()
+    expect(pairTargetForScope('all', ['lan'])).toBe('lan')
+    expect(pairTargetForScope('all', [])).toBe('lan')
+    expect(pairTargetForScope('all', ['lan', 'cloud'])).toBeNull()
+    // A Tailscale address alone keeps Wi-Fi pairing: a phone without Tailscale cannot reach it.
+    expect(pairTargetForScope('all', ['lan', 'tailnet'])).toBe('lan')
     // The companion's own console pairs through its own address, another replica not at all.
     expect(pairTargetForScope('all', ['cloud'], { replica: true })).toBe('cloud')
     expect(pairTargetForScope('all', [], { replica: true })).toBeNull()
     // A browser signed in with a code is refused every code: no pairing anywhere.
-    for (const scope of ['all', 'cloud', 'tailscale', 'wifi'] as const) expect(pairTargetForScope(scope, ['lan'], { deviceCaller: true })).toBeNull()
+    for (const scope of ['all', 'cloud', 'tailscale'] as const) expect(pairTargetForScope(scope, ['lan'], { deviceCaller: true })).toBeNull()
     expect(pairTargetForScope('browser')).toBeNull()
     expect(pairTargetForScope('advanced')).toBeNull()
   })

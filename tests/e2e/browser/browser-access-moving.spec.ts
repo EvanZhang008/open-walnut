@@ -96,7 +96,7 @@ test('moving to a host: it runs here meanwhile, says what the host does, and fol
   await expect(state).toHaveAttribute('data-state', 'connected')
   await expect(state.locator('.browser-access-dot')).toHaveAttribute('data-dot', 'done')
   // This computer's address answers meanwhile: the phone link opens it; no Retry while it does.
-  await expect(page.getByTestId('browser-access-qr')).toHaveAttribute('data-for', `${URL_HERE}/#pair=ABCD-EFGH`)
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${URL_HERE}/#pair=ABCD-EFGH`)
   await expect(page.getByTestId('browser-access-retry')).toHaveCount(0)
   await expect(page.getByTestId('browser-access-runs-on-devbox')).toHaveAttribute('aria-checked', 'true')
   await shot(page, '1-moving-installing-walnut', group)
@@ -111,7 +111,7 @@ test('moving to a host: it runs here meanwhile, says what the host does, and fol
   // The host holds it: the line names the host, without a reload or a click.
   s.status = { ...base, state: 'connected', url: URL_HERE, runsOn: RUNS_ON }
   await expect(state).toHaveText('Connected through Acme Tunnel on Dev box.', { timeout: 10_000 })
-  await expect(page.getByTestId('browser-access-qr')).toHaveAttribute('data-for', `${URL_HERE}/#pair=ABCD-EFGH`)
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${URL_HERE}/#pair=ABCD-EFGH`)
   await shot(page, '3-handed-over', group)
   expect(errors).toEqual([])
 })

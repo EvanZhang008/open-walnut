@@ -37,16 +37,6 @@ export function devicesListChanged(): void {
 /** The server's word that a browser signed in with a link's code (src/web/routes/browser-pair.ts). */
 export const BROWSER_SIGNED_IN_EVENT = 'browser:signed-in';
 
-/**
- * Whether a sign-in (a BROWSER_SIGNED_IN_EVENT's data) used the code a page shows: the event names
- * the code by its id; one from an older server names none, and then any sign-in counts, as before.
- */
-export function usedCode(data: unknown, shown: { id?: string } | null): boolean {
-  if (!shown) return false;
-  const codeId = (data as { codeId?: unknown } | null)?.codeId;
-  return typeof codeId !== 'string' || !shown.id || codeId === shown.id;
-}
-
 /** How often a shown device list is read again (a phone that signs in elsewhere shows up). */
 export const DEVICES_POLL_MS = 15_000;
 let watchers = 0;

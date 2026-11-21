@@ -82,10 +82,10 @@ export function signInCopy({ state, touch, standalone, reason = null }: SignInCo
       ? `This ${device} no longer has access to Walnut. Sign in again below.`
       : 'Your tasks, AI sessions and notes, from the computer Walnut runs on.';
   const step2 = homeScreen
-    ? 'Paste the sign-in link (Copy sign-in link copies it) into the field above. Opening the link opens Safari, not this app.'
+    ? 'Paste the link shown under Open on your phone into the field above. Opening the link opens Safari, not this app.'
     : touch
-      ? 'On this phone, scan the QR code shown under On a phone, or open the sign-in link.'
-      : 'Open the sign-in link in this browser, or paste it below.';
+      ? 'On this phone, open the link shown under Open on your phone.'
+      : 'Open the link shown under Open on your phone in this browser, or paste it below.';
   const scanning = touch && !homeScreen;
   return {
     title,

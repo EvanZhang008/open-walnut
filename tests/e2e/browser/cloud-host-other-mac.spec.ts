@@ -260,7 +260,7 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   await expect(cloudCard.getByText('Not paired', { exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)
   await expect(cloudCard).toContainText(UNPAIRED)
-  // Cloud is no longer a pairing target: its tab has no pairing of its own.
+  // Cloud is no longer a pairing target: its tab has no Pair a phone this way.
   await expect(cloudCard.getByTestId('way-pair-cloud')).toHaveCount(0)
   await cloudCard.scrollIntoViewIfNeeded()
   await cloudCard.screenshot({ path: path.join(SHOTS, `cloud-companion-unpaired-${browserName}.png`) })

@@ -104,7 +104,7 @@ test('runs on the always-on host by default; moves to this computer and back', a
   await expect(page.getByTestId('browser-access-runs-on-devbox')).toHaveAttribute('aria-checked', 'true')
   await expect(runsOn).toContainText('Dev box stays on, so the address answers while this computer sleeps.')
   await expect(page.getByTestId('browser-access-state')).toHaveText('Connected through Acme Tunnel on Dev box.')
-  await expect(page.getByTestId('browser-access-qr')).toHaveAttribute('data-for', `${URL_HOST}/#pair=ABCD-EFGH`)
+  await expect(page.getByTestId('browser-access-link')).toHaveAttribute('href', `${URL_HOST}/#pair=ABCD-EFGH`)
   await group.scrollIntoViewIfNeeded()
   await shot(page, '1-on-host', group)
 

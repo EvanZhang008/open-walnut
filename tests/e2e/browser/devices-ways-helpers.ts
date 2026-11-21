@@ -1,19 +1,17 @@
 /**
- * Settings › Phones & Cloud is five tabs: each way (Cloud companion, Tailscale,
- * the tunnel, Same Wi-Fi), each pairing a phone or signing a browser in through its
- * own address, and All devices (the phones with the Walnut app, signed-in browsers,
- * the extension, other Macs; on this Mac it pairs nothing). The entry
+ * Settings › Phones & Cloud is four tabs: each way (Cloud companion, Tailscale,
+ * the tunnel), each pairing a phone through its own address, and All devices (the
+ * phones with the Walnut app, signed-in browsers, the extension, other Macs; it pairs
+ * on this Wi-Fi only when no way tab can). The entry
  * opens the tab in use (devices-ways-and-qr.spec.ts). Specs about one tab open it
  * from the tab bar first, the way a person does.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 
-export type DeviceWay = 'cloud' | 'tailscale' | 'browser' | 'wifi'
+export type DeviceWay = 'cloud' | 'tailscale' | 'browser'
 
 /** The tab's section id (core-settings-registry): `#cloud` kept its old deep link. */
-export const WAY_PANE: Record<DeviceWay, string> = {
-  cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser', wifi: 'devices-wifi',
-}
+export const WAY_PANE: Record<DeviceWay, string> = { cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser' }
 
 /** The All devices tab's pane id: phones, browsers, the extension and other Macs. */
 export const DEVICES_TAB = 'devices-phones'
@@ -47,19 +45,6 @@ export async function openDevicesTab(page: Page): Promise<Locator> {
   await page.getByTestId('settings-nav-devices').click()
   await expect(page.getByTestId('pc-tabs')).toBeVisible({ timeout: 30_000 })
   return openTab(page, DEVICES_TAB)
-}
-
-/**
- * On the Cloud companion tab (a companion set up), its upkeep is folded under its phones:
- * Cloud sync, updates, "While this Mac is away" and what it keeps, in "Manage cloud
- * companion", closed by default. Open it (no-op when open) and return it.
- */
-export async function openCloudManage(page: Page): Promise<Locator> {
-  const toggle = page.getByTestId('cloud-manage-toggle')
-  await expect(toggle).toBeVisible({ timeout: 30_000 })
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  return page.getByTestId('cloud-manage')
 }
 
 /** The pairing QR dialog (cloud/PairQrDialog.tsx). */

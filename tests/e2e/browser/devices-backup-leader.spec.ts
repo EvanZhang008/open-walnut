@@ -13,7 +13,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
-import { openCloudManage, openWay } from './devices-ways-helpers'
+import { openWay } from './devices-ways-helpers'
 import { dropFakes } from './route-teardown'
 import { putExactSection } from './config-section-helpers'
 
@@ -49,7 +49,7 @@ async function writeBridge(page: Page, cloudBridge: Record<string, unknown> | un
   await putExactSection(page.request, 'cloud_bridge', cloudBridge)
 }
 
-async function openDevices(page: Page, { companion = true } = {}) {
+async function openDevices(page: Page) {
   await page.goto('/')
   await page.waitForLoadState('domcontentloaded')
   await page.getByRole('link', { name: /settings/i }).first().click()
@@ -57,10 +57,8 @@ async function openDevices(page: Page, { companion = true } = {}) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  // The Cloud companion tab holds the row, folded under "Manage cloud companion" once one is set up.
-  const section = await openWay(page, 'cloud')
-  if (companion) await openCloudManage(page)
-  return section
+  // The Cloud companion tab holds the row.
+  return openWay(page, 'cloud')
 }
 
 async function shot(page: Page, name: string, region = page.locator('#cloud')) {
@@ -91,7 +89,7 @@ test.describe('Settings → Phones & Cloud: the cloud companion takes over', () 
     const row = section.locator('.settings-row', { has: page.locator('#devices-backup-leader') })
     await expect(row).toContainText('Cloud companion takes over')
     await expect(row).toContainText('this Mac takes back over when it wakes')
-    await expect(section.getByRole('heading', { name: 'While this Mac is away', exact: true })).toBeVisible()
+    await expect(section.getByRole('heading', { name: 'While this Mac is away' })).toBeVisible()
     const toggle = page.locator('#devices-backup-leader')
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
     await row.scrollIntoViewIfNeeded()
@@ -146,7 +144,7 @@ test.describe('Settings → Phones & Cloud: the cloud companion takes over', () 
 
   test('no cloud companion: no row', async ({ page }) => {
     await mockDevices(page, [LAN])
-    const section = await openDevices(page, { companion: false })
+    const section = await openDevices(page)
     await expect(section).toBeVisible()
     await expect(page.locator('#devices-backup-leader')).toHaveCount(0)
     await expect(section).not.toContainText('Cloud companion takes over')

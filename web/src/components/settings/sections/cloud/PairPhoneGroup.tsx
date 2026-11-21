@@ -1,6 +1,6 @@
 /**
  * Pairing a new phone on a Phones & Cloud tab (DeviceList.tsx): the name, and Pair. Each way's
- * own tab pairs through its own address ("Pair the Walnut app this way"); All devices pairs on this
+ * own tab pairs through its own address ("Pair a phone this way"); All devices pairs on this
  * Wi-Fi only when no way tab can (device-scope.ts pairTargetForScope).
  *
  * A phone paired once works over every way it can reach; the QR only picks the address it
@@ -21,7 +21,7 @@ import type { DeviceScope } from './device-scope';
 const PAIR_HELP: Record<PairTargetKind, string> = {
   cloud: 'The QR code points the phone at your companion, so it works away from home and while this Mac sleeps. At home it also reaches this Mac over Wi-Fi.',
   tailnet: "The QR code points the phone at this Mac's Tailscale address: it works wherever both run Tailscale, so the phone needs Tailscale on to connect the first time.",
-  lan: "The app tries this Mac's Wi-Fi address first; the same pairing also works through the companion or Tailscale once they are set up.",
+  lan: 'The QR code points the phone at this Mac on this Wi-Fi: it works while the phone is on the same Wi-Fi. For away from home, set up the cloud companion or Tailscale.',
 };
 
 /** On the companion's own console its address is this server's. */
@@ -71,17 +71,16 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, listState, busy, o
 
   return (
     <SettingsGroup
-      heading={fixedTarget === 'lan' ? 'Pair the Walnut app over Wi-Fi' : 'Pair the Walnut app on a new phone'}
+      heading={fixedTarget === 'lan' ? 'Pair a phone on this Wi-Fi' : scope === 'all' ? 'Pair a phone' : 'Pair a phone this way'}
       id={`way-pair-${scope}`}
       data-testid={`way-pair-${scope}`}
     >
       {!hasTarget && listState === 'ready' && <SettingsNotice kind="info">{PAIR_UNOFFERED[fixedTarget]}</SettingsNotice>}
-      {/* A way that cannot pair yet shows only what is missing, not a form that cannot be used. */}
-      {(offered || listState !== 'ready') && <SettingsRow
+      <SettingsRow
         label="Device name"
         htmlFor="devices-new-name"
         wide
-        help={`Name the phone, then get its QR code. ${scope === 'all' && fixedTarget === 'cloud' ? PAIR_HELP_HERE : PAIR_HELP[fixedTarget]}`}
+        help={scope === 'all' && fixedTarget === 'cloud' ? PAIR_HELP_HERE : PAIR_HELP[fixedTarget]}
         error={nameError ?? undefined}
         control={
           <span className="settings-addons-inline devices-add-row">
@@ -91,7 +90,7 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, listState, busy, o
               data-draft-key={nameDraft.key ?? undefined}
               className="settings-input settings-input--short"
               value={newName}
-              placeholder="Name it, e.g. My iPhone"
+              placeholder="My iPhone"
               setText={(text) => { setNewName(text); setNameError(null); }}
               micRef={nameMic}
               onEnter={addGate.send}
@@ -106,11 +105,11 @@ export function PairPhoneGroup({ scope, fixedTarget, targets, listState, busy, o
               data-testid="devices-pair-new"
               {...dictationWaitProps(addGate)}
             >
-              Get app pairing QR
+              Pair phone
             </SettingsButton>
           </span>
         }
-      />}
+      />
     </SettingsGroup>
   );
 }

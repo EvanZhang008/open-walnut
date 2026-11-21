@@ -9,9 +9,6 @@
  * Eight characters from an alphabet without look-alikes (no 0/O, 1/I/L), shown as
  * `ABCD-EFGH`, typed in any case, with or without the dash. Ten minutes, one use.
  * Only the hash is kept. At most a few live codes at a time: the oldest goes first.
- *
- * Each code also has an id, random and unrelated to the code, so the page that showed it can
- * tell its own code was used (the sign-in event names it) and can take back a code it replaced.
  */
 
 import crypto from 'node:crypto'
@@ -21,7 +18,7 @@ export const CODE_LENGTH = 8
 export const CODE_TTL_MS = 10 * 60_000
 export const MAX_LIVE_CODES = 5
 
-interface Pending { hash: string; expiresAt: number; id: string }
+interface Pending { hash: string; expiresAt: number }
 
 let pending: Pending[] = []
 
@@ -42,37 +39,23 @@ function prune(now: number): void {
   pending = pending.filter((p) => p.expiresAt > now)
 }
 
-export function mintBrowserCode(now = Date.now()): { code: string; expiresAt: number; id: string } {
+export function mintBrowserCode(now = Date.now()): { code: string; expiresAt: number } {
   prune(now)
   let raw = ''
   for (let i = 0; i < CODE_LENGTH; i++) raw += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)]
   const expiresAt = now + CODE_TTL_MS
-  const id = crypto.randomBytes(8).toString('hex')
-  pending.push({ hash: hashOf(raw), expiresAt, id })
+  pending.push({ hash: hashOf(raw), expiresAt })
   while (pending.length > MAX_LIVE_CODES) pending.shift()
-  return { code: formatCode(raw), expiresAt, id }
-}
-
-/** The id of a live code, once, and the code is gone after that; null for any other input. */
-export function consumeBrowserCodeId(input: string, now = Date.now()): string | null {
-  prune(now)
-  const normalized = normalizeCode(input)
-  if (normalized.length !== CODE_LENGTH) return null
-  const hash = hashOf(normalized)
-  const at = pending.findIndex((p) => crypto.timingSafeEqual(Buffer.from(p.hash), Buffer.from(hash)))
-  if (at < 0) return null
-  const [used] = pending.splice(at, 1)
-  return used.id
+  return { code: formatCode(raw), expiresAt }
 }
 
 /** True once for a live code, and the code is gone after that. */
 export function consumeBrowserCode(input: string, now = Date.now()): boolean {
-  return consumeBrowserCodeId(input, now) !== null
-}
-
-/** Take back a code by its id (the page that showed it made a new one): true when one was live. */
-export function revokeBrowserCode(id: string): boolean {
-  const at = pending.findIndex((p) => p.id === id)
+  prune(now)
+  const normalized = normalizeCode(input)
+  if (normalized.length !== CODE_LENGTH) return false
+  const hash = hashOf(normalized)
+  const at = pending.findIndex((p) => crypto.timingSafeEqual(Buffer.from(p.hash), Buffer.from(hash)))
   if (at < 0) return false
   pending.splice(at, 1)
   return true

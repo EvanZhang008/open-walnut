@@ -105,7 +105,7 @@ export interface HostServerEntry {
     chosenBy?: 'user' | 'default';
     /** Why the host's own tunnel does not run although it is on (it would take this computer's address). */
     expose: { enabled: boolean; provider: string | null; options: Record<string, string>; blocked?: string };
-    /** This computer's tunnel (Browser from anywhere) runs on this host, so its server runs whatever its switch said. */
+    /** This computer's tunnel (Open from a browser) runs on this host, so its server runs whatever its switch said. */
     carriesTunnel?: boolean;
     /** What the Mac copies to the host's replica (WP4), defaults filled in by the server. */
     copies?: Partial<HostCopyChoice>;

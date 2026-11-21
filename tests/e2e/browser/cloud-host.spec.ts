@@ -29,7 +29,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openBell } from './host-problems-fixture-helpers'
 import { pickRail, problemHosts, problemRow } from './host-attention-helpers'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, shownHomePath } from './draft-helpers'
-import { backToDevices, openWay } from './devices-ways-helpers'
+import { backToDevices } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -244,15 +244,12 @@ test('Phones & Cloud lists the other Mac as a Mac, and this Mac told the compani
   await expect(second).not.toContainText('phone')
   await expect(second.getByTestId('devices-show-qr')).toHaveCount(0)
   await expect(second.getByTestId('devices-remove')).toHaveCount(1)
-  // A real phone stays a phone; its new QR is on its way's tab, not on All devices.
+  // A real phone stays a phone, with its QR.
   const phone = section.locator('.devices-row[data-device-name="my-phone"]')
   await expect(phone).toHaveAttribute('data-device-role', 'phone')
-  await expect(phone.getByTestId('devices-show-qr')).toHaveCount(0)
+  await expect(phone.getByTestId('devices-show-qr')).toHaveCount(1)
   await expect(section.locator('.devices-row[data-device-name="mac-second"]')).toHaveCount(1)
   await macs.scrollIntoViewIfNeeded()
   await macs.screenshot({ path: path.join(SHOTS, `devices-other-macs-owner-${browserName}.png`) })
-  const cloud = await openWay(page, 'cloud')
-  await expect(cloud.getByTestId('way-devices-cloud').locator('.devices-row[data-device-name="my-phone"]').getByTestId('devices-show-qr')).toHaveCount(1, { timeout: 30_000 })
-  await expect(cloud.getByTestId('devices-macs').locator('.devices-row[data-device-name="mac-second"]').getByTestId('devices-show-qr')).toHaveCount(0)
   expect(errors).toEqual([])
 })

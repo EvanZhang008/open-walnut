@@ -1,7 +1,7 @@
 /** Browser sign-in codes (src/core/browser-pairing.ts): one use, ten minutes, typed loosely. */
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
-  CODE_ALPHABET, CODE_TTL_MS, MAX_LIVE_CODES, _resetBrowserCodesForTesting, consumeBrowserCode, consumeBrowserCodeId, mintBrowserCode, normalizeCode, revokeBrowserCode,
+  CODE_ALPHABET, CODE_TTL_MS, MAX_LIVE_CODES, _resetBrowserCodesForTesting, consumeBrowserCode, mintBrowserCode, normalizeCode,
 } from '../../src/core/browser-pairing.js'
 
 beforeEach(() => _resetBrowserCodesForTesting())
@@ -42,25 +42,5 @@ describe('browser sign-in codes', () => {
     expect(consumeBrowserCode(codes[0]!)).toBe(false)
     expect(consumeBrowserCode(codes[1]!)).toBe(false)
     expect(consumeBrowserCode(codes.at(-1)!)).toBe(true)
-  })
-
-  it('each code has its own id, unrelated to the code, named when it is used', () => {
-    const a = mintBrowserCode()
-    const b = mintBrowserCode()
-    expect(a.id).toMatch(/^[0-9a-f]{16}$/)
-    expect(a.id).not.toBe(b.id)
-    expect(a.id.toUpperCase()).not.toContain(a.code.replace('-', ''))
-    expect(consumeBrowserCodeId(b.code)).toBe(b.id)
-    expect(consumeBrowserCodeId(b.code)).toBeNull()
-    expect(consumeBrowserCodeId(a.code)).toBe(a.id)
-  })
-
-  it('a revoked code no longer signs in, and the others still do', () => {
-    const a = mintBrowserCode()
-    const b = mintBrowserCode()
-    expect(revokeBrowserCode(a.id)).toBe(true)
-    expect(revokeBrowserCode(a.id)).toBe(false)
-    expect(consumeBrowserCode(a.code)).toBe(false)
-    expect(consumeBrowserCode(b.code)).toBe(true)
   })
 })

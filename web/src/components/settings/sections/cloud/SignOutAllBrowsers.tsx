@@ -17,7 +17,7 @@ import { log } from '@/utils/log';
 const TIMEOUT_MS = 15_000;
 
 /** The browsers this row signs out: named by routes/browser-pair.ts, never the extension (`extension-…`). */
-export { SIGNED_IN_BROWSER } from './device-scope';
+export const SIGNED_IN_BROWSER = /^browser-[0-9a-f]{6}$/;
 
 /** What happened, said under the list: the row itself goes with the browsers it signed out. */
 export interface SignOutResult {

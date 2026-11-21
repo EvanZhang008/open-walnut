@@ -1,28 +1,25 @@
 /**
- * Settings → Phones & Cloud as five tabs, the layout the user picked (2026-11-03,
+ * Settings → Phones & Cloud as four tabs, the layout the user picked (2026-11-03,
  * design 1 of 10: "A also for ech option show a descripotion of what itbis in tbhe
  * top"), each way with its own devices (2026-11-18: "why this is in device not in
  * cloud compaion confused", "each section shoud have its own paried devide or
  * conenct devide"):
  *
- *   1. Cloud companion, Tailscale, the tunnel, Same Wi-Fi and All devices are tabs; Phones &
- *      Cloud opens the tab the phone uses. A tab's dot says On or Off (a screen reader
- *      hears the word); a word shows only for the way in use and one that needs a look. Each tab leads with what it is, when to
+ *   1. Cloud companion, Tailscale, the tunnel and All devices are tabs; Phones &
+ *      Cloud opens the tab the phone uses. Each tab leads with what it is, when to
  *      use it and its state now; the tab in use also says how the phone reaches
  *      Walnut. The sidebar lists Phones & Cloud alone.
- *   2. Each way's tab first pairs a phone (or signs a browser in) through its own address
- *      in place, then lists the devices that use it, with their actions: the companion's
- *      phones and Macs, the phones paired with this Mac (Tailscale and Same Wi-Fi reach
- *      those), the signed-in browsers and the extension. A row's Show QR there carries
- *      that tab's own way. All devices lists everything, each row tagged with its ways,
- *      and on this Mac pairs nothing and offers no Show QR.
+ *   2. Each way's tab lists the devices that use it, with their actions, and pairs a
+ *      phone through its own address in place: the companion's phones and Macs, the
+ *      phones paired with this Mac (Tailscale reaches those), the signed-in browsers
+ *      and the extension. All devices lists everything, each row tagged with its ways.
  *   3. A phone shows once in each tab of its ways, and Remove says it removes the
  *      whole phone on every way (one pairing works on all of them), then asks.
  *   4. Show QR and Pair open the code in a dialog in front of the user: a paired
  *      phone's new code asks first (it signs the phone out), the code says how to
  *      scan it, and the dialog cannot be closed while the code is being made.
  *   5. All devices lists phones, browsers, the extension and other Macs; pairing is on each
- *      way's tab (Wi-Fi's too, since 2026-11-21), and this Mac's own record and simulators are folded under Device records
+ *      way's tab, and this Mac's own record and simulators are folded under Device records
  *      in Settings > Advanced (2026-11-18).
  *
  * Real density, the shape of the user's own list: a phone paired through the
@@ -38,7 +35,6 @@
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openCloudManage } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -175,20 +171,6 @@ const tabs = (page: Page) => page.getByTestId('pc-tabs').locator('.pc-tab')
 const row = (scope: Locator, name: string) => scope.locator(`.devices-row[data-device-name="${name}"]`)
 const rowNames = (scope: Locator) => scope.locator('.devices-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-device-name')))
 
-/**
- * A tab's state: its dot, and the word. A plain On/Off shows only as the dot (a screen reader
- * hears "<word>: <label>"); a tag word shows for the way in use and one that needs a look.
- */
-async function expectTabState(page: Page, paneId: string, word: string, { shown = false } = {}) {
-  const tab = page.getByTestId(`pc-tab-${paneId}`)
-  if (shown) {
-    await expect(tab.locator('.devices-way-tag')).toHaveText(word, { timeout: 30_000 })
-  } else {
-    await expect(tab).toHaveAccessibleName(new RegExp(`^${word}: `), { timeout: 30_000 })
-    await expect(tab.locator('.devices-way-tag')).toHaveCount(0)
-  }
-}
-
 test.beforeEach(async ({ page }) => {
   // The shared fixture's ui-prefs hold whatever another spec left there: one that opened
   // the chat spot left it open, and a phone opens on that chat (a layer, Back where Menu
@@ -198,25 +180,18 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
 })
 
-test('Phones & Cloud opens the tab in use: five tabs, what the way is, how the phone gets in now', async ({ page }) => {
+test('Phones & Cloud opens the tab in use: four tabs, what the way is, how the phone gets in now', async ({ page }) => {
   await mockDevices(page)
   const cloud = await openPhonesCloud(page)
 
-  // Five tabs, the one in use open and saying so; the sidebar lists Phones & Cloud alone.
-  await expect(tabs(page).locator('.pc-tab-label')).toHaveText(['Cloud companion', 'Tailscale', 'Tunnel', 'Same Wi-Fi', 'All devices'])
-  // Under each name, a short line of what it is for.
-  const hints = await tabs(page).locator('.pc-tab-hint').allTextContents()
-  expect(hints).toHaveLength(5)
-  for (const hint of hints) expect(hint.trim().length, `hint "${hint}"`).toBeGreaterThan(0)
+  // Four tabs, the one in use open and saying so; the sidebar lists Phones & Cloud alone.
+  await expect(tabs(page).locator('.pc-tab-label')).toHaveText(['Cloud companion', 'Tailscale', 'Tunnel', 'All devices'])
   await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
-  await expectTabState(page, 'cloud', 'In use', { shown: true })
-  await expect(page.getByTestId('pc-tab-devices-tailscale').locator('.devices-way-dot')).toHaveAttribute('data-dot', 'off')
-  await expectTabState(page, 'devices-tailscale', 'Off')
-  await expectTabState(page, 'devices-browser', 'On')
-  await expect(page.getByTestId('pc-tab-devices-wifi').locator('.devices-way-dot')).toHaveAttribute('data-dot', 'on')
-  await expectTabState(page, 'devices-wifi', 'On')
+  await expect(page.getByTestId('pc-tab-cloud')).toContainText('In use')
+  await expect(page.getByTestId('pc-tab-devices-tailscale')).toContainText('Off')
+  await expect(page.getByTestId('pc-tab-devices-browser')).toContainText('On')
   // Five phones and browsers, each once: pocket-phone is paired on both boxes.
-  await expect(page.getByTestId('pc-tab-devices-phones').locator('.devices-way-tag')).toHaveText('5')
+  await expect(page.getByTestId('pc-tab-devices-phones')).toContainText('5')
   await expect(page.locator('#cloud-title')).toHaveText('Phones & Cloud')
   await expect(page.getByTestId('settings-nav-devices')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.settings-nav-subitem')).toHaveCount(0)
@@ -226,18 +201,14 @@ test('Phones & Cloud opens the tab in use: five tabs, what the way is, how the p
   // At the top: what it is, when to use it, its state; then how the phone gets in now.
   const intro = cloud.getByTestId('pc-intro-cloud')
   await expect(intro.locator('.pc-intro-what')).toHaveText('A small server of yours in the cloud. Your phone talks to it, and it talks to this Mac.')
-  // When to use it is the tab's own hint now, not a second line here.
-  await expect(intro.locator('.pc-intro-when')).toHaveCount(0)
+  await expect(intro.locator('.pc-intro-when')).toContainText('You want Walnut on the go, on any network, even while this Mac sleeps.')
   await expect(intro.locator('.pc-intro-now')).toContainText('On at walnut.example.com')
   const now = cloud.getByTestId('devices-now')
   await expect(now).toContainText('pocket-phone reaches Walnut through the cloud companion')
   await expect(now).toContainText('Last seen 2 min ago. Works anywhere, even while this Mac sleeps.')
-  // Then its own upkeep and settings, folded under its phones (closed until opened), and
-  // nothing of the other tabs.
-  await expect(cloud.getByTestId('cloud-manage-toggle')).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
-  await openCloudManage(page)
+  // Then its own settings, and nothing of the other tabs.
   const panel = cloud.getByTestId('devices-way-panel-cloud')
-  await expect(panel.getByRole('heading', { name: 'While this Mac is away', exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(panel.getByRole('heading', { name: 'While this Mac is away' })).toBeVisible({ timeout: 30_000 })
   await expect(panel.getByTestId('companion-keep')).toBeVisible()
   const top = async (sel: string) => (await cloud.locator(sel).first().boundingBox())!.y
   expect(await top('[data-testid="pc-tabs"]')).toBeLessThan(await top('[data-testid="pc-intro-cloud"]'))
@@ -260,7 +231,7 @@ test('each tab holds its own way and the devices that use it; All devices holds 
   await expect(cloudPhones.locator('.settings-group-heading')).toContainText('Phones on this companion')
   expect(await rowNames(cloudPhones)).toEqual(['pocket-phone'])
   // Its other way, by the tab's name; its own way is the tab itself.
-  await expect(row(cloudPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Also: Same Wi-Fi'])
+  await expect(row(cloudPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'])
   await expect(row(cloudPhones, 'pocket-phone').getByTestId('devices-show-qr')).toBeVisible()
   await expect(row(cloudPhones, 'pocket-phone').getByTestId('devices-remove')).toHaveText('Remove')
   const macs = cloud.getByTestId('devices-macs')
@@ -268,13 +239,12 @@ test('each tab holds its own way and the devices that use it; All devices holds 
   expect(await rowNames(macs)).toEqual(['this-mac-sync', 'studio-mac'])
   await expect(row(macs, 'this-mac-sync')).toContainText('This Mac')
   await expect(row(macs, 'this-mac-sync').getByTestId('devices-unpair-self')).toBeVisible()
-  await expect(cloud.getByTestId('way-pair-cloud')).toContainText('Pair the Walnut app on a new phone')
-  // Read top to bottom: the way, pairing one more, its devices, then the companion's own
-  // upkeep (Cloud sync, updates) and settings.
+  await expect(cloud.getByTestId('way-pair-cloud')).toContainText('Pair a phone this way')
+  // Read top to bottom: the way, its devices, pairing one more, then the companion's own settings.
   const top = async (sel: string) => (await cloud.locator(sel).first().boundingBox())!.y
-  expect(await top('[data-testid="way-pair-cloud"]')).toBeLessThan(await top('[data-testid="way-devices-cloud"]'))
-  expect(await top('[data-testid="way-devices-cloud"]')).toBeLessThan(await top('[data-testid="devices-macs"]'))
-  expect(await top('[data-testid="devices-macs"]')).toBeLessThan(await top('[data-testid="cloud-manage"]'))
+  expect(await top('[data-testid="way-devices-cloud"]')).toBeLessThan(await top('[data-testid="way-pair-cloud"]'))
+  expect(await top('[data-testid="way-pair-cloud"]')).toBeLessThan(await top('[data-testid="devices-macs"]'))
+  expect(await top('[data-testid="devices-macs"]')).toBeLessThan(await top('[data-testid="devices-way-panel-cloud"]'))
   await shot(page, 'tab-cloud-devices')
 
   await page.getByTestId('pc-tab-devices-tailscale').click()
@@ -286,29 +256,24 @@ test('each tab holds its own way and the devices that use it; All devices holds 
   await expect(ts.getByTestId('devices-way-panel-tailscale').locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store')
   await expect(ts.getByTestId('devices-now')).toHaveCount(0)
   await expect(page.getByTestId('settings-nav-devices')).toHaveAttribute('aria-current', 'page')
-  // The phones paired with this Mac switch to Tailscale by themselves once it runs; while it is
-  // off the list says so and holds no rows (All devices lists them), and pairing this way waits.
+  // The phones paired with this Mac, the ones Tailscale reaches; while it is off they say so,
+  // and pairing this way waits for it.
   const tsPhones = ts.getByTestId('way-devices-tailscale')
   await expect(tsPhones).toBeVisible({ timeout: 30_000 })
-  await expect(tsPhones.locator('.settings-group-heading')).toContainText('No phones use Tailscale yet')
-  await expect(tsPhones.locator('.devices-row')).toHaveCount(0)
-  const notRunning = tsPhones.locator('.settings-notice')
-  await expect(notRunning).toContainText('It starts once Tailscale runs on this Mac and on the phone, signed in to the same tailnet.')
-  await expect(notRunning.locator('a[href="#devices-phones"]')).toHaveCount(1)
-  // The notice says it all: the group's footer about Tailscale waits until it runs.
-  await expect(tsPhones).not.toContainText('a phone here uses this way once the Tailscale app runs on it too')
+  expect((await rowNames(tsPhones)).sort()).toEqual(['desk-phone', 'pocket-phone', 'spare-phone'])
+  await expect(tsPhones).toContainText("Tailscale isn't running on this Mac, so none of these connects this way now.")
+  await expect(tsPhones).toContainText('a phone here uses this way once the Tailscale app runs on it too')
+  await expect(row(tsPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Wi-Fi'])
+  await expect(row(tsPhones, 'desk-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'])
   const tsPair = ts.getByTestId('way-pair-tailscale')
   await expect(tsPair).toContainText('Set up Tailscale on this Mac first')
-  expect(await ts.locator('[data-testid="way-pair-tailscale"]').boundingBox().then((b) => b!.y))
-    .toBeLessThan(await tsPhones.boundingBox().then((b) => b!.y))
-  // A way that cannot pair yet shows what is missing, not a form that cannot be used.
-  await expect(tsPair.locator('#devices-new-name')).toHaveCount(0)
-  await expect(tsPair.getByTestId('devices-pair-new')).toHaveCount(0)
+  await ts.locator('#devices-new-name').fill('travel phone')
+  await expect(tsPair.getByTestId('devices-pair-new')).toBeDisabled()
   await shot(page, 'tab-tailscale')
 
   await page.getByTestId('pc-tab-devices-browser').click()
   const br = page.locator('#devices-browser')
-  await expect(br.getByTestId('pc-intro-devices-browser').locator('.pc-intro-what')).not.toBeEmpty()
+  await expect(br.getByTestId('pc-intro-devices-browser').locator('.pc-intro-when')).toContainText('You are on a computer or phone without the Walnut app.')
   await expect(br.getByTestId('pc-intro-devices-browser').locator('.pc-intro-now')).toContainText('Connected through Example tunnel.')
   await expect(br.getByTestId('browser-access')).toBeVisible({ timeout: 30_000 })
   // The browsers and the extension signed in with a code from this tab; no phone, no pairing.
@@ -320,69 +285,30 @@ test('each tab holds its own way and the devices that use it; All devices holds 
   await expect(br.getByTestId('browser-access-signed-in-row')).toHaveCount(0)
   await shot(page, 'tab-browser')
 
-  // Same Wi-Fi: what adds a device first (pairing the app on this Wi-Fi, a browser's one-time
-  // code), then the phones paired with this Mac (they reach it directly here) and the browsers
-  // signed in.
-  await page.getByTestId('pc-tab-devices-wifi').click()
-  await expect(page).toHaveURL(/#devices-wifi$/)
-  const wifi = page.locator('#devices-wifi')
-  await expect(wifi.getByTestId('pc-intro-devices-wifi').locator('.pc-intro-now')).toContainText('192.0.2.10:3456')
-  const wifiPair = wifi.getByTestId('way-pair-wifi')
-  await expect(wifiPair).toContainText('Pair the Walnut app over Wi-Fi')
-  await expect(wifiPair).toContainText("The app tries this Mac's Wi-Fi address first")
-  await expect(wifi.getByTestId('devices-wifi-browser')).toContainText('Sign in to Walnut in a browser')
-  await expect(wifi.getByTestId('devices-wifi-sign-in')).toBeVisible()
-  const wifiPhones = wifi.getByTestId('way-devices-wifi')
-  await expect(wifiPhones.locator('.settings-group-heading')).toContainText('Phones paired with this Mac')
-  expect((await rowNames(wifiPhones)).sort()).toEqual(['desk-phone', 'pocket-phone', 'spare-phone'])
-  // Its own way is the tab itself.
-  await expect(row(wifiPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Also: Cloud companion'])
-  await expect(row(wifiPhones, 'desk-phone').locator('.settings-tag')).toHaveCount(0)
-  await expect(row(wifiPhones, 'desk-phone').getByTestId('devices-show-qr')).toBeVisible()
-  // A browser signed in with a code is signed out right under the code; the extension is not one.
-  const wifiBrowsers = wifi.getByTestId('devices-browsers-group')
-  expect(await rowNames(wifiBrowsers)).toEqual(['browser-1a2b3c'])
-  await expect(wifiBrowsers).toContainText('A sign-in works on every address of this Walnut; Sign out ends it everywhere.')
-  await expect(row(wifiBrowsers, 'browser-1a2b3c').getByTestId('devices-remove')).toHaveText('Sign out')
-  await expect(wifi.getByTestId('devices-extensions-group')).toHaveCount(0)
-  const wifiOrder = await wifi.locator('[data-testid="way-pair-wifi"], [data-testid="devices-wifi-browser"], [data-testid="devices-browsers-group"], [data-testid="way-devices-wifi"]')
-    .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
-  expect(wifiOrder).toEqual(['way-pair-wifi', 'devices-wifi-browser', 'way-devices-wifi', 'devices-browsers-group'])
-  await shot(page, 'tab-wifi')
-
   await page.getByTestId('pc-tab-devices-phones').click()
   const dev = page.locator('#devices-phones')
-  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toContainText('remove a phone or sign a browser out here')
+  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toHaveText("Every phone, browser and Mac that can open Walnut, each with the ways it uses. Each way's own tab lists only the devices that use it.")
   await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-now')).toHaveCount(0)
   const phones = dev.getByTestId('devices-phones-group')
   await expect(phones.locator('.devices-row')).toHaveCount(3)
   // Each row tagged with the tabs it shows in.
-  await expect(row(phones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Same Wi-Fi'])
-  await expect(row(phones, 'desk-phone').locator('.settings-tag')).toHaveText(['Same Wi-Fi'])
+  await expect(row(phones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Wi-Fi'])
+  await expect(row(phones, 'desk-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'])
   await expect(dev.getByText('Direct', { exact: true })).toHaveCount(0)
   expect(await rowNames(dev.getByTestId('devices-extensions-group'))).toEqual(['extension-4d5e6f'])
   expect(await rowNames(dev.getByTestId('devices-macs'))).toEqual(['studio-mac'])
   await expect(phones.locator('.settings-group-heading')).toContainText('Phones with the Walnut app')
-  await expect(phones).toContainText("Pair one on its way's tab: Cloud companion (away from home), Same Wi-Fi (at home) or Tailscale. Paired once, it works over every way it can reach.")
-  // No pairing and no new QR here (each way's tab does that, for its own way), no Wi-Fi
-  // code, no records that are no phone.
-  for (const id of ['way-pair-all', 'devices-show-qr', 'devices-wifi-sign-in', 'devices-others-group', 'devices-add-group']) await expect(dev.getByTestId(id)).toHaveCount(0)
-  await expect(dev.locator('#devices-new-name')).toHaveCount(0)
-  // Its note leads to the tabs that pair, each a link to its tab.
-  await expect(phones.getByTestId('devices-all-go-cloud')).toHaveAttribute('href', '#cloud')
-  await expect(phones.getByTestId('devices-all-go-tailscale')).toHaveAttribute('href', '#devices-tailscale')
-  await expect(phones.getByTestId('devices-all-go-wifi')).toHaveAttribute('href', '#devices-wifi')
+  await expect(phones).toContainText('Signed in once by scanning a QR code; works over every way below.')
+  // No pairing here (the companion's tab pairs), no records that are no phone.
+  for (const id of ['way-pair-all', 'devices-others-group', 'devices-add-group']) await expect(dev.getByTestId(id)).toHaveCount(0)
   const order = await dev.evaluate((el) => ['walnut-servers', 'pc-tabs', 'pc-intro-devices-phones', 'devices-phones-group', 'devices-browsers-group']
     .map((id) => el.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect().top ?? -1))
   expect(order.every((t) => t >= 0)).toBe(true)
   expect([...order].sort((a, b) => a - b)).toEqual(order)
   await shot(page, 'tab-devices')
-  await phones.getByTestId('devices-all-go-wifi').click()
-  await expect(page.getByTestId('pc-tab-devices-wifi')).toHaveAttribute('aria-current', 'page')
-  await expect(page.locator('#devices-wifi').getByTestId('way-pair-wifi')).toBeVisible()
 
   // Old in-page anchors and rows open the tab that holds them (a link written to the hash).
-  for (const [hash, tab] of [['#devices-way-panel-tailscale', 'devices-tailscale'], ['#devices-way-browser', 'devices-browser'], ['#devices-new-name', 'devices-phones'], ['#way-pair-tailscale', 'devices-tailscale'], ['#way-pair-wifi', 'devices-wifi'], ['#devices-wifi-sign-in', 'devices-wifi'], ['#devices-backup-leader', 'cloud']] as const) {
+  for (const [hash, tab] of [['#devices-way-panel-tailscale', 'devices-tailscale'], ['#devices-way-browser', 'devices-browser'], ['#devices-new-name', 'devices-phones'], ['#way-pair-tailscale', 'devices-tailscale'], ['#devices-backup-leader', 'cloud']] as const) {
     await page.evaluate((h) => { window.location.hash = h }, hash)
     await expect(page.getByTestId(`pc-tab-${tab}`)).toHaveAttribute('aria-current', 'page')
   }
@@ -408,7 +334,7 @@ test('each tab holds its own way and the devices that use it; All devices holds 
 test('with nothing for away, Phones & Cloud opens Devices and says the phone cannot get in from outside', async ({ page }) => {
   await mockDevices(page, { cloud: false })
   const dev = await openPhonesCloud(page, 'devices-phones')
-  await expectTabState(page, 'cloud', 'Off')
+  await expect(page.getByTestId('pc-tab-cloud')).toContainText('Off')
   const now = dev.getByTestId('devices-now')
   await expect(now).toHaveAttribute('data-tone', 'warn')
   await expect(now).toContainText("Away from home it can't reach Walnut until the cloud companion or Tailscale is on.")
@@ -439,7 +365,7 @@ async function pressWhileItDecides(page: Page) {
   await page.getByTestId('settings-nav-devices').click()
   await expect(page).toHaveURL(/#devices$/, { timeout: 30_000 })
   const tab = page.getByTestId('pc-tab-devices-browser')
-  await expect(tab).toHaveAccessibleName(/^On: /, { timeout: 30_000 })
+  await expect(tab).toContainText('On', { timeout: 30_000 })
   // The ask that settles it has gone out (and waits): press the tab now, then let it answer.
   await expect.poll(() => reads, { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
   const box = (await tab.boundingBox())!
@@ -503,17 +429,23 @@ test('with Tailscale on, its tab pairs through the tailnet address and step 3 le
   const tsPhones = ts.getByTestId('way-devices-tailscale')
   await expect(tsPhones).toBeVisible({ timeout: 30_000 })
   await expect(tsPhones).not.toContainText("isn't running")
-  await expect(tsPhones.locator('.settings-group-heading')).toContainText('Phones paired with this Mac')
-  await expect(row(tsPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Also: Cloud companion', 'Also: Same Wi-Fi'])
-  // No new QR here: the list holds every phone paired with this Mac, and a tailnet-only code
-  // would cut off one without Tailscale; a paired phone reaches the same pairing over it.
-  await expect(tsPhones.getByTestId('devices-show-qr')).toHaveCount(0)
-  await expect(row(tsPhones, 'desk-phone').getByTestId('devices-remove')).toBeVisible()
-  expect(ctl.mints).toHaveLength(0)
+  await expect(row(tsPhones, 'pocket-phone').locator('.settings-tag')).toHaveText(['Cloud companion', 'Wi-Fi'])
+  // Show QR here carries this tab's own address.
+  await row(tsPhones, 'desk-phone').getByTestId('devices-show-qr').click()
+  await dialog(page).getByTestId('devices-show-qr-confirm').click()
+  await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
+  expect(ctl.mints[0]).toMatchObject({ name: 'desk-phone', target: 'tailnet', replace: true })
+  await dialog(page).getByTestId('devices-qr-done').click()
+  // A phone that is on the companion keeps the companion's address: a tailnet-only code
+  // would cut off a phone without Tailscale.
+  await row(tsPhones, 'pocket-phone').getByTestId('devices-show-qr').click()
+  await dialog(page).getByTestId('devices-show-qr-confirm').click()
+  await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
+  expect(ctl.mints[1]).toMatchObject({ name: 'pocket-phone', target: 'cloud', replace: true })
+  await dialog(page).getByTestId('devices-qr-done').click()
   await page.getByTestId('pc-tab-devices-phones').click()
-  await expect(page.locator('#devices-phones').getByTestId('devices-show-qr')).toHaveCount(0)
   // Tailscale on this Mac says nothing about the phone: no row is tagged Tailscale.
-  await expect(row(page.locator('#devices-phones').getByTestId('devices-phones-group'), 'desk-phone').locator('.settings-tag')).toHaveText(['Same Wi-Fi'], { timeout: 30_000 })
+  await expect(row(page.locator('#devices-phones').getByTestId('devices-phones-group'), 'desk-phone').locator('.settings-tag')).toHaveText(['Wi-Fi'], { timeout: 30_000 })
 })
 
 test('Remove on a way tab removes the whole phone, after saying so: every record, every tab', async ({ page }) => {
@@ -551,9 +483,9 @@ test('Remove on a way tab removes the whole phone, after saying so: every record
   await expect(cloud.getByTestId('way-devices-cloud')).toContainText('No phone is paired with the companion yet.')
   // Gone from every tab, and the count follows.
   await expect(page.getByTestId('pc-tab-devices-phones')).toContainText('4')
-  await page.getByTestId('pc-tab-devices-wifi').click()
-  await expect(page.locator('#devices-wifi').getByTestId('way-devices-wifi')).toBeVisible({ timeout: 30_000 })
-  expect((await rowNames(page.locator('#devices-wifi').getByTestId('way-devices-wifi'))).sort()).toEqual(['desk-phone', 'spare-phone'])
+  await page.getByTestId('pc-tab-devices-tailscale').click()
+  await expect(page.locator('#devices-tailscale').getByTestId('way-devices-tailscale')).toBeVisible({ timeout: 30_000 })
+  expect((await rowNames(page.locator('#devices-tailscale').getByTestId('way-devices-tailscale'))).sort()).toEqual(['desk-phone', 'spare-phone'])
 })
 
 test("Remove of a phone whose companion copy went with it is done, not an error", async ({ page }) => {
@@ -629,8 +561,7 @@ test('on a phone, Phones & Cloud opens the tab in use; tabs switch in place and 
 
 test('Show QR asks in a dialog, then shows the code with how to scan it', async ({ page }) => {
   const ctl = await mockDevices(page)
-  // The Cloud companion tab's row: its new code carries the companion's address.
-  const section = (await openPhonesCloud(page)).getByTestId('way-devices-cloud')
+  const section = await openDevices(page)
   const pocket = section.locator('.devices-row[data-device-name="pocket-phone"]')
   const showQr = pocket.getByTestId('devices-show-qr')
 
@@ -684,12 +615,12 @@ test('Show QR asks in a dialog, then shows the code with how to scan it', async 
   await expect(showQr).toBeFocused()
 })
 
-test('Get app pairing QR opens the code straight away; a failed code offers Try again', async ({ page }) => {
+test('Pair phone opens the code straight away; a failed code offers Try again', async ({ page }) => {
   const ctl = await mockDevices(page)
   const section = await openPhonesCloud(page)
 
   await section.locator('#devices-new-name').fill('travel phone')
-  await section.getByRole('button', { name: 'Get app pairing QR', exact: true }).click()
+  await section.getByRole('button', { name: 'Pair phone', exact: true }).click()
   await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
   await expect(dialog(page)).toHaveAttribute('data-qr-for', 'travel-phone')
   await expect(dialog(page).getByTestId('devices-show-qr-warning')).toHaveCount(0)
@@ -721,9 +652,11 @@ test('at phone width the dialog fits the screen', async ({ page }) => {
   await page.locator('#primary-sidebar').getByRole('link', { name: /settings/i }).first().click()
   await expect(page.locator('.settings-layout[data-phone-settings="list"]')).toBeVisible({ timeout: 60_000 })
   await page.getByTestId('settings-nav-devices').click()
-  const section = page.locator('#cloud')
-  await expect(section).toBeVisible({ timeout: 30_000 })
-  await section.getByTestId('way-devices-cloud').locator('.devices-row[data-device-name="pocket-phone"]').getByTestId('devices-show-qr').click({ timeout: 30_000 })
+  await expect(page.locator('#cloud')).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('pc-tab-devices-phones').click()
+  const section = page.locator('#devices-phones')
+  await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  await section.locator('.devices-row[data-device-name="pocket-phone"]').getByTestId('devices-show-qr').click()
   await dialog(page).getByTestId('devices-show-qr-confirm').click()
   await expect(dialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
   const box = (await dialog(page).boundingBox())!

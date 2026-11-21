@@ -1,7 +1,6 @@
 /**
- * Phones & Cloud's five tabs: the four ways to reach Walnut (Cloud companion,
- * Tailscale, the tunnel, and this Mac on the same Wi-Fi), each with what pairs or signs
- * in a device that way and the devices that use it, and All devices
+ * Phones & Cloud's four tabs: the three ways to reach Walnut (Cloud companion,
+ * Tailscale, the tunnel), each with the devices that use it, and All devices
  * (every phone, browser and extension). Each tab is its own pane (core-settings-registry `tabOf: 'devices'`),
  * so its address, back button and Find a setting work as for any pane; the nav
  * shows only Phones & Cloud, and the entry itself opens the tab in use. The
@@ -12,14 +11,14 @@
  * Import-free on purpose: the sections read it too, and settings-routing imports
  * the registry that imports those sections.
  */
-export const WAY_PANES = { cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser', wifi: 'devices-wifi' } as const
-/** The All devices tab: every phone, browser and Mac. Each way's tab lists its own devices and pairs a phone (2026-11-21, the user: "Put it in closest so people know"). */
+export const WAY_PANES = { cloud: 'cloud', tailscale: 'devices-tailscale', browser: 'devices-browser' } as const
+/** The All devices tab: every phone, browser and Mac. Each way's tab lists its own devices and pairs a phone. */
 export const DEVICES_TAB = 'devices-phones'
 /** The entry the tabs sit under. */
 export const PHONES_CLOUD_PANE = 'devices'
 export type PhonesCloudTab = typeof WAY_PANES[keyof typeof WAY_PANES] | typeof DEVICES_TAB
 /** Tab order, left to right. */
-export const PHONES_CLOUD_TABS: readonly PhonesCloudTab[] = [WAY_PANES.cloud, WAY_PANES.tailscale, WAY_PANES.browser, WAY_PANES.wifi, DEVICES_TAB]
+export const PHONES_CLOUD_TABS: readonly PhonesCloudTab[] = [WAY_PANES.cloud, WAY_PANES.tailscale, WAY_PANES.browser, DEVICES_TAB]
 
 const WAY_ROW_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['devices-backup-leader', WAY_PANES.cloud],
@@ -27,14 +26,10 @@ const WAY_ROW_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['companion-copies', WAY_PANES.cloud],
   ['remote-access', WAY_PANES.tailscale],
   ['browser-access', WAY_PANES.browser],
-  // Each way's pairing, and All devices' (on the companion's own console).
+  // Each way's pairing, and All devices' (Wi-Fi without a companion, or on the companion itself).
   ['way-pair-cloud', WAY_PANES.cloud],
   ['way-pair-tailscale', WAY_PANES.tailscale],
-  ['way-pair-wifi', WAY_PANES.wifi],
   ['way-pair-all', DEVICES_TAB],
-  ['way-devices-wifi', WAY_PANES.wifi],
-  ['devices-wifi-browser', WAY_PANES.wifi],
-  ['devices-wifi-sign-in', WAY_PANES.wifi],
   // The All devices tab's rows (an old `#devices-new-name` link lands where pairing was).
   ['devices-new-name', DEVICES_TAB],
   ['devices-phones-group', DEVICES_TAB],
