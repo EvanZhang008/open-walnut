@@ -23,6 +23,12 @@ export interface PermitRecord {
   holder: string
   /** The machine that wrote it. */
   by: string
+  /**
+   * The writer's incarnation: random per PermitClient (per process start). Two processes
+   * never write the same record, so a yes a witness gave a record sent before a restart
+   * is never taken for a yes to one sent after it (review round 1, B-1).
+   */
+  nonce: string
   /** handover and cancel: the old holder. */
   from?: string
   /** handover: the new holder. */
@@ -50,7 +56,13 @@ export interface PermitRecord {
    * how far it wrote on every renew; a standby compares its saved copy against it).
    * `writtenAt` is the holder's own wall clock, comparable only with other stamps it made.
    */
-  progress?: { seq: number; writtenAt: number }
+  progress?: PermitProgress
+}
+
+/** How far a holder had written: its write sequence and its own wall-clock stamp of it. */
+export interface PermitProgress {
+  seq: number
+  writtenAt: number
 }
 
 export interface PermitParams {
@@ -99,6 +111,8 @@ export interface PermitReply {
   joint: string[] | null
   /** The id of the configuration it serves (null: waiting to join). */
   cfg: string | null
+  /** The highest progress stamp (by seq) any record it accepted carried. */
+  progress: PermitProgress | null
   /** Whether this witness would grant the permission to another machine now. */
   grantable: boolean
 }
@@ -142,7 +156,7 @@ export function majorityOf(list: readonly string[]): number {
 export function recordKey(r: PermitRecord): string {
   return JSON.stringify([
     r.number, r.kind, r.holder, r.by, r.from ?? null, r.to ?? null, r.validMs,
-    r.cfg, [...r.list].sort(), r.joint ? [...r.joint].sort() : null, r.newList ? [...r.newList].sort() : null, r.stage ?? null,
+    r.nonce, r.cfg, [...r.list].sort(), r.joint ? [...r.joint].sort() : null, r.newList ? [...r.newList].sort() : null, r.stage ?? null,
     r.progress ? [r.progress.seq, r.progress.writtenAt] : null,
   ])
 }

@@ -134,6 +134,64 @@ describe('a witness that restarts', () => {
   })
 })
 
+describe('a holder process that restarts mid-renew (review round 1, B-1)', () => {
+  /**
+   * M's renew #2 reaches only w1; M restarts, reads w2 and w3, and renews #2 again (the
+   * same record when the stamp did not move). w1's earlier yes must not count for it.
+   */
+  function restartDupAck(sameIncarnation: boolean, stamped: boolean) {
+    const w = world()
+    const m = w.addMachine('M', W, { nonce: 'inc-1' })
+    const x = w.addMachine('X', W)
+    m.c.requestGrant()
+    w.run(1_000)
+    w.intercept = (from, to, msg, d) => {
+      if (from === 'M' && (to === 'w2' || to === 'w3') && 'type' in msg && msg.type === 'propose') return null
+      // (the stamped variant) w1's yes to the old #2 is slow: 7 s on the wire.
+      if (stamped && from === 'w1' && to === 'M' && !('type' in msg) && msg.re === 2) return 7_000
+      return d
+    }
+    m.c.renew(stamped ? { seq: 1, writtenAt: 1 } : undefined)
+    w.run(2_000)
+    w.restartMachine('M', W, 0, sameIncarnation ? 'inc-1' : undefined)
+    w.intercept = (from, to, msg, d) => (from === 'w1' && to === 'M' && !('type' in msg) && msg.re === 'read' ? null : d)
+    w.run(6_000)
+    m.c.read()
+    w.run(6_100)
+    w.intercept = (from, to, msg, d) => {
+      if (from === 'M' && to === 'w3') return null
+      if (stamped && from === 'M' && to === 'w1' && 'type' in msg && msg.type === 'propose') return null
+      return d
+    }
+    const again = m.c.renew(stamped ? { seq: 2, writtenAt: 6_000 } : undefined)!
+    expect(again.number).toBe(2)
+    w.run(9_000)
+    w.intercept = null
+    w.run(63_100)
+    x.c.read()
+    w.run(63_150)
+    x.c.requestGrant()
+    sample(w, 10, 70_000)
+    w.run(70_000)
+    return { w, m }
+  }
+
+  it('the same record re-sent by a new incarnation: the old yes is not counted', () => {
+    const { w } = restartDupAck(false, false)
+    expect(w.violations).toEqual([])
+  })
+
+  it('a late yes to the old record of the same number is not counted for the new one', () => {
+    const { w } = restartDupAck(false, true)
+    expect(w.violations).toEqual([])
+  })
+
+  it('negative control: an incarnation reused across the restart counts the old yes and overlaps', () => {
+    const { w } = restartDupAck(true, false)
+    expect(w.violations.length).toBeGreaterThan(0)
+  })
+})
+
 describe('clocks: a witness 30 s off, a holder 1% fast or slow', () => {
   /**
    * The worst case for a lease: A renews, then is cut from every witness at once, with
@@ -339,7 +397,7 @@ describe('changing the witness list', () => {
     expect(b.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
     expect(b.c.mayAct()).toBe(true)
     // w3 is out: it refuses everything now.
-    const r3 = w.witnesses.get('w3')!.w!.handle({ type: 'propose', record: { number: 999, kind: 'grant', holder: 'C', by: 'C', validMs: w.params.validMs, list: W, cfg: genesisConfigId(W) } })
+    const r3 = w.witnesses.get('w3')!.w!.handle({ type: 'propose', record: { number: 999, kind: 'grant', holder: 'C', by: 'C', nonce: 'c1', validMs: w.params.validMs, list: W, cfg: genesisConfigId(W) } })
     expect(r3.ok).toBe(false)
   })
 

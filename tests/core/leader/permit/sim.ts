@@ -172,30 +172,33 @@ export class World {
     this.at(n.downUntil, () => this.startWitness(n))
   }
 
-  addMachine(id: string, list: string[], opts: { drift?: number; wallOffset?: number; pureMonotonic?: boolean } = {}): MachineNode {
+  addMachine(id: string, list: string[], opts: { drift?: number; wallOffset?: number; pureMonotonic?: boolean; nonce?: string } = {}): MachineNode {
     const clock = new NodeClock(this, opts.drift ?? 0, opts.wallOffset ?? 0)
     const node = { id, clock, pureMonotonic: !!opts.pureMonotonic, downUntil: 0 } as MachineNode
-    node.c = this.newClient(node, list)
+    node.c = this.newClient(node, list, opts.nonce)
     this.machines.set(id, node)
     this.activeMs.set(id, 0)
     return node
   }
 
-  private newClient(node: MachineNode, list: string[]): PermitClient {
+  private newClient(node: MachineNode, list: string[], nonce?: string): PermitClient {
     const clock: ElapsedClock = node.pureMonotonic
       ? createWitnessClock({ monotonic: node.clock.monotonic })
       : createHolderClock({ monotonic: node.clock.monotonic, wall: node.clock.wall })
     return new PermitClient({
-      id: node.id, list, clock, params: this.params,
+      id: node.id, list, clock, params: this.params, ...(nonce ? { nonce } : {}),
       transport: { send: (w, req) => this.send(node.id, w, req) },
     })
   }
 
-  /** The machine restarts: a new client that remembers nothing (as after a process restart). */
-  restartMachine(id: string, list: string[], downMs: number): void {
+  /**
+   * The machine restarts: a new client that remembers nothing (as after a process restart).
+   * `nonce` (a negative control only) makes it reuse an incarnation.
+   */
+  restartMachine(id: string, list: string[], downMs: number, nonce?: string): void {
     const n = this.machines.get(id)!
     n.downUntil = this.now + downMs
-    n.c = this.newClient(n, list)
+    n.c = this.newClient(n, list, nonce)
   }
 
   partition(a: string, b: string, on = true): void {
@@ -299,6 +302,8 @@ export interface PilotOptions {
   onTick?: (m: MachineNode) => void
   /** Chance per tick that a machine with an open handover takes it back. */
   cancelChance?: number
+  /** Advance the progress stamp only every fourth renew, so records repeat across restarts. */
+  sparseStamps?: boolean
 }
 
 /**
@@ -323,9 +328,9 @@ export function pilot(world: World, id: string, opts: PilotOptions): void {
       return
     }
     if (c.mayAct()) {
-      progress++
+      if (!opts.sparseStamps || world.rand() < 0.25) progress++
       if (world.now - lastRenew >= world.params.renewEveryMs) {
-        c.renew({ seq: progress, writtenAt: m.clock.wall() })
+        c.renew({ seq: progress, writtenAt: opts.sparseStamps ? progress : m.clock.wall() })
         lastRenew = world.now
       }
       opts.onTick?.(m)
@@ -339,11 +344,11 @@ export function pilot(world: World, id: string, opts: PilotOptions): void {
     const mine = reads.filter((r) => r.held?.holder === id && !r.grantable).length
     const mineHeld = mine >= Math.floor(c.witnessList().length / 2) + 1
     if ((s && s.kind === 'handover' && s.holder === id) || mineHeld) {
-      c.renew({ seq: progress, writtenAt: m.clock.wall() })
+      c.renew({ seq: progress, writtenAt: opts.sparseStamps ? progress : m.clock.wall() })
       lastRenew = world.now
     } else if (opts.wantsLead && reads.length > 0) {
       const ans = mayAskForTakeover({
-        self: id, list: c.witnessList(), cfg: c.config().cfg, reads, standby: { seq: Number.MAX_SAFE_INTEGER },
+        list: c.witnessList(), cfg: c.config().cfg, reads, standby: { seq: Number.MAX_SAFE_INTEGER },
         params: world.params, maxBehindMs: 5 * 60_000,
       })
       if (ans.ok) {

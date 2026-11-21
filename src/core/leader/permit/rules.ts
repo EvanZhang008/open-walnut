@@ -2,7 +2,7 @@
  * The rules of the write permission, as pure functions: what a witness accepts, and
  * whether a set of timing parameters is safe for the assumed clock drift.
  */
-import type { PermitParams, PermitRecord } from './types.js'
+import type { PermitParams, PermitProgress, PermitRecord } from './types.js'
 import { nextConfigId, sameList } from './types.js'
 
 /** What one witness holds. `acceptedAt` is on the witness's own elapsed clock. */
@@ -15,6 +15,17 @@ export interface WitnessState {
   joint: string[] | null
   /** The id of the configuration of `list` (kept through the pair step); null while joining. */
   cfg: string | null
+  /**
+   * The highest progress stamp any record it took carried. Kept when a later record carries
+   * none or a lower one (a contending grant), so the takeover rule still sees how far the
+   * last real holder wrote (review round 1, S-2).
+   */
+  progress: PermitProgress | null
+}
+
+function higher(a: PermitProgress | null, b: PermitProgress | undefined): PermitProgress | null {
+  if (!b) return a
+  return !a || b.seq > a.seq ? { seq: b.seq, writtenAt: b.writtenAt } : a
 }
 
 /** How long the holder counts one record: from when it SENT it, on its own clock. */
@@ -70,7 +81,9 @@ function uniqueList(l: unknown): l is string[] {
 function shapeError(r: PermitRecord, p: PermitParams): string | null {
   if (!Number.isSafeInteger(r.number) || r.number < 1) return 'bad-number'
   if (r.validMs !== p.validMs) return 'bad-validity'
+  if (typeof r.nonce !== 'string' || r.nonce.length === 0) return 'bad-nonce'
   if (!uniqueList(r.list) || typeof r.cfg !== 'string' || r.cfg.length === 0) return 'bad-list'
+  if (r.progress && (!Number.isSafeInteger(r.progress.seq) || !Number.isFinite(r.progress.writtenAt))) return 'bad-progress'
   if (r.joint !== undefined && (!uniqueList(r.joint) || sameList(r.joint, r.list))) return 'bad-list'
   switch (r.kind) {
     case 'grant':
@@ -95,6 +108,34 @@ export function isMember(s: WitnessState, self: string): boolean {
 }
 
 /**
+ * Whether a members record may move this witness from where it stands:
+ * - a joining witness: only into the new list, never as a member of the old one (a witness
+ *   that left a list, or lost its disk, must not count for it again: stress seed 1309);
+ * - the pair step: from the old configuration, or the same pair again;
+ * - the final step: from the pair, or the configuration it leads to again (by id: the same
+ *   list from an earlier configuration is not it, stress seed 1754).
+ */
+function changeStartsHere(s: WitnessState, self: string, r: PermitRecord, joining: boolean): boolean {
+  if (joining) return r.newList!.includes(self) && !r.list.includes(self)
+  const fromOld = s.cfg === r.cfg && sameList(s.list, r.list)
+  const inPair = fromOld && sameList(s.joint, r.newList)
+  if (r.stage === 'joint') return fromOld && (!s.joint || inPair)
+  const finalAgain = !s.joint && s.cfg === nextConfigId(r.cfg, r.newList!) && sameList(s.list, r.newList)
+  return inPair || finalAgain
+}
+
+/**
+ * A members record from the live holder, or once the record here ran out, from anyone (as
+ * a grant): a change its holder left half done must not stay stuck. (A joining witness
+ * holds no record that counts, so it has nothing to protect.)
+ */
+function mayRewrite(s: WitnessState, r: PermitRecord, now: number, p: PermitParams): boolean {
+  const h = s.held
+  const live = holdsForHolder(s, now, p)
+  return (!!h && live && h.holder === r.by && h.kind !== 'handover') || !live
+}
+
+/**
  * Whether witness `self` in state `s` accepts `r` at time `now` (its clock). The
  * number must be above what it holds, and the record must follow what it holds:
  * the permission changes hands only by a grant once the old record ran out here
@@ -112,30 +153,14 @@ export function judge(s: WitnessState, self: string, r: PermitRecord, now: numbe
   const bad = shapeError(r, p)
   if (bad) return { ok: false, reason: bad }
   const accept = (list: string[] | null = s.list, joint: string[] | null = s.joint, cfg: string | null = s.cfg): Judgement =>
-    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg } })
+    ({ ok: true, next: { held: r, acceptedAt: now, list, joint, cfg, progress: higher(s.progress, r.progress) } })
   const joining = !isMember(s, self)
 
   if (r.kind === 'members') {
-    const target = nextConfigId(r.cfg, r.newList!)
-    const base = s.cfg === r.cfg && sameList(s.list, r.list)
-    const pair = base && sameList(s.joint, r.newList)
-    // A joining witness takes a change only into the new list, never as a member of the
-    // old one: a witness that left a list (or lost its disk) must not count for it again,
-    // or a list already replaced could gather a majority from it (stress seed 1309).
-    const from = joining
-      ? r.newList!.includes(self) && !r.list.includes(self)
-      : r.stage === 'joint'
-        ? base && (!s.joint || pair) // from the old configuration, or the same step again
-        : pair || (!s.joint && s.cfg === target && sameList(s.list, r.newList)) // from the pair, or the same step again
-    if (!from) return { ok: false, reason: joining ? 'not-a-member' : 'wrong-list' }
+    if (!changeStartsHere(s, self, r, joining)) return { ok: false, reason: joining ? 'not-a-member' : 'wrong-list' }
     if (s.held && r.number <= s.held.number) return { ok: false, reason: 'stale-number' }
-    // From the live holder, or once the record here ran out, from anyone (as a grant): a
-    // change its holder left half done must not stay stuck. A joining witness holds no
-    // record that counts, so it has nothing to protect.
-    const h = s.held
-    const live = holdsForHolder(s, now, p)
-    if (!joining && !((h && live && h.holder === r.by && h.kind !== 'handover') || !live)) return { ok: false, reason: 'not-holder' }
-    return r.stage === 'joint' ? accept([...r.list], [...r.newList!], r.cfg) : accept([...r.newList!], null, target)
+    if (!joining && !mayRewrite(s, r, now, p)) return { ok: false, reason: 'not-holder' }
+    return r.stage === 'joint' ? accept([...r.list], [...r.newList!], r.cfg) : accept([...r.newList!], null, nextConfigId(r.cfg, r.newList!))
   }
 
   if (joining) return { ok: false, reason: 'not-a-member' }

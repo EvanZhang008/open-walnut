@@ -10,6 +10,7 @@
 import type { ElapsedClock, PermitParams, PermitRecord, PermitReply, PermitTransport } from './types.js'
 import { genesisConfigId, majorityOf, nextConfigId, recordKey, sameList, sameRecord } from './types.js'
 import { holderLeaseMs } from './rules.js'
+import { randomBytes } from 'node:crypto'
 
 export interface ClientOptions {
   id: string
@@ -17,6 +18,8 @@ export interface ClientOptions {
   list: string[]
   /** The id of that list's configuration; default: the first one (genesisConfigId). */
   cfg?: string
+  /** This incarnation's nonce (tests only); default: random. */
+  nonce?: string
   transport: PermitTransport
   /** Elapsed time that never runs slow: createHolderClock(). */
   clock: ElapsedClock
@@ -45,6 +48,8 @@ export class PermitClient {
   /** During a witness list change: the new list, judged together with `list`. */
   private joint: string[] | null = null
   private cfg: string
+  /** This process's incarnation: on every record it writes. */
+  private readonly nonce: string
   /**
    * The pair step is known to stand: our own pair record reached both majorities, or a read
    * showed a majority of each list in the pair (or past it). Only then may the final step
@@ -64,6 +69,7 @@ export class PermitClient {
     this.id = opts.id
     this.list = [...opts.list].sort()
     this.cfg = opts.cfg ?? genesisConfigId(this.list)
+    this.nonce = opts.nonce ?? randomBytes(8).toString('hex')
   }
 
   witnessList(): string[] {
@@ -210,7 +216,9 @@ export class PermitClient {
     this.dropIfSuperseded(reply)
     const p = this.pending
     if (!p || reply.re !== p.record.number) return
-    if (reply.ok || sameRecord(reply.held, p.record)) {
+    // A yes is only a witness holding this very record (nonce included): never an `ok`
+    // alone, which may answer a record of the same number sent by an earlier incarnation.
+    if (sameRecord(reply.held, p.record)) {
       p.acks.add(reply.witness)
       p.refusals.delete(reply.witness)
     } else if (!p.acks.has(reply.witness)) {
@@ -219,12 +227,12 @@ export class PermitClient {
     if (this.chosen(p)) this.onChosen(p)
   }
 
-  private propose(fields: Omit<PermitRecord, 'number' | 'by' | 'validMs' | 'list' | 'joint' | 'cfg'>, joint: string[] | null = this.joint): PermitRecord {
+  private propose(fields: Omit<PermitRecord, 'number' | 'by' | 'nonce' | 'validMs' | 'list' | 'joint' | 'cfg'>, joint: string[] | null = this.joint): PermitRecord {
     if (fields.progress) this.progress = fields.progress
     const record: PermitRecord = {
       ...fields,
       ...(this.progress && !fields.progress ? { progress: this.progress } : {}),
-      number: this.top + 1, by: this.id, validMs: this.opts.params.validMs, list: [...this.list], cfg: this.cfg,
+      number: this.top + 1, by: this.id, nonce: this.nonce, validMs: this.opts.params.validMs, list: [...this.list], cfg: this.cfg,
       ...(joint ? { joint: [...joint] } : {}),
     }
     this.top = record.number

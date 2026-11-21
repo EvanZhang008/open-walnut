@@ -29,6 +29,8 @@ interface Variant {
   crashRate?: number
   /** A fourth witness waits to join; holders now and then swap one witness of the list for it. */
   members?: boolean
+  /** Most faults restart the machine that acts, mid-renew, and stamps repeat across restarts. */
+  restarts?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -54,6 +56,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     pilot(world, id, {
       wantsLead: true,
       tickMs: v.tickMs,
+      sparseStamps: v.restarts,
       cancelChance: 0.3,
       onTick: (m) => {
         // About one manual switch per machine-held 3 minutes, whatever the tick.
@@ -79,7 +82,9 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   const faults = 6 + Math.floor(r() * 8)
   for (let i = 0; i < faults; i++) {
     const at = r() * totalMs
-    const kind = v.splitsOnly ? 5 : Math.floor(r() * 7)
+    // 7 (members only): a machine out of touch with every witness for 3 to 7 minutes,
+    // across list changes, then back.
+    const kind = v.splitsOnly ? 5 : v.restarts && r() < 0.7 ? 6 : Math.floor(r() * (v.members ? 8 : 7))
     world.at(at, () => {
       if (kind === 0) world.crashWitness(pool[Math.floor(r() * pool.length)], 1_000 + r() * 60_000)
       else if (kind === 1) {
@@ -103,8 +108,12 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
         const cut = list.filter((w) => w !== keep)
         for (const w of cut) world.partition(a, w, true)
         world.after(30_000 + r() * 120_000, () => { for (const w of cut) world.partition(a, w, false) })
+      } else if (kind === 7) {
+        const a = M[Math.floor(r() * 3)]
+        for (const w of pool) world.partition(a, w, true)
+        world.after(180_000 + r() * 240_000, () => { for (const w of pool) world.partition(a, w, false) })
       } else {
-        const id = M[Math.floor(r() * 3)]
+        const id = (v.restarts && world.acting()[0]) || M[Math.floor(r() * 3)]
         world.restartMachine(id, W, 1_000 + r() * 20_000)
         if (v.reachableMajority) patchReachableMajority(world.machines.get(id)!.c)
       }
@@ -170,6 +179,12 @@ describe('write permission: random schedules', () => {
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 60_000)
 
+  it('never lets two machines act at once when the holder restarts mid-renew and its records repeat (200 seeds)', () => {
+    const r = sweep(200, { restarts: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 60_000)
+
   // Seed 12 here found the bug of a one-step list change (a witness that took a change no
   // majority of the old list had confirmed served the new list at once): two disjoint
   // majorities. The change is two steps now (rules.ts judge).
@@ -192,7 +207,7 @@ describe('write permission: random schedules', () => {
     }, 120_000)
 
     it('a witness that answers before its record is on disk: crashes turn it red', () => {
-      const r = sweep(100, { lazyStore: true, crashRate: 0.1 })
+      const r = sweep(300, { lazyStore: true, crashRate: 0.2 })
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 

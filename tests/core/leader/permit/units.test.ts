@@ -17,9 +17,9 @@ const P = DEFAULT_PERMIT_PARAMS
 const W = ['w1', 'w2', 'w3']
 const G = genesisConfigId(W)
 const rec = (number: number, kind: PermitRecord['kind'], by: string, extra: Partial<PermitRecord> = {}): PermitRecord => ({
-  number, kind, by, holder: by, validMs: P.validMs, list: W, cfg: G, ...extra,
+  number, kind, by, holder: by, nonce: 'n1', validMs: P.validMs, list: W, cfg: G, ...extra,
 })
-const empty: WitnessState = { held: null, acceptedAt: 0, list: W, joint: null, cfg: G }
+const empty: WitnessState = { held: null, acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }
 
 describe('judge: what a witness accepts', () => {
   it('a grant on nothing, then only the holder renews while it lasts', () => {
@@ -32,7 +32,7 @@ describe('judge: what a witness accepts', () => {
   })
 
   it('grants to another machine only once validMs plus the witness margin ran out on its clock', () => {
-    const s: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G }
+    const s: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }
     const edge = P.validMs + P.witnessMarginMs
     expect(judge(s, 'w1', rec(2, 'grant', 'B'), edge - 1, P).ok).toBe(false)
     expect(judge(s, 'w1', rec(2, 'grant', 'B'), edge, P).ok).toBe(true)
@@ -41,7 +41,7 @@ describe('judge: what a witness accepts', () => {
   })
 
   it('never takes a number that is not above what it holds (a replay or a duplicate)', () => {
-    const s: WitnessState = { held: rec(5, 'renew', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G }
+    const s: WitnessState = { held: rec(5, 'renew', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }
     for (const n of [1, 4, 5]) expect(judge(s, 'w1', rec(n, 'renew', 'A'), 1, P)).toEqual({ ok: false, reason: 'stale-number' })
   })
 
@@ -64,7 +64,7 @@ describe('judge: what a witness accepts', () => {
   })
 
   it('a handover comes only from the live holder; then the new holder renews and the old one cannot', () => {
-    const s: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G }
+    const s: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }
     expect(judge(s, 'w1', rec(2, 'handover', 'C', { from: 'C', to: 'B', holder: 'B' }), 1, P).ok).toBe(false)
     const h = judge(s, 'w1', rec(2, 'handover', 'A', { from: 'A', to: 'B', holder: 'B' }), 1, P)
     expect(h.ok).toBe(true)
@@ -76,9 +76,9 @@ describe('judge: what a witness accepts', () => {
   it('a cancel stands on its own handover or its own live record, never on the new holder\'s renew', () => {
     const ho = rec(2, 'handover', 'A', { from: 'A', to: 'B', holder: 'B' })
     const cancel = rec(3, 'cancel', 'A', { from: 'A' })
-    expect(judge({ held: ho, acceptedAt: 0, list: W, joint: null, cfg: G }, 'w1', cancel, 1, P).ok).toBe(true)
-    expect(judge({ held: rec(1, 'renew', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G }, 'w1', cancel, 1, P).ok).toBe(true)
-    expect(judge({ held: rec(2, 'renew', 'B'), acceptedAt: 0, list: W, joint: null, cfg: G }, 'w1', cancel, 1, P).ok).toBe(false)
+    expect(judge({ held: ho, acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }, 'w1', cancel, 1, P).ok).toBe(true)
+    expect(judge({ held: rec(1, 'renew', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }, 'w1', cancel, 1, P).ok).toBe(true)
+    expect(judge({ held: rec(2, 'renew', 'B'), acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }, 'w1', cancel, 1, P).ok).toBe(false)
   })
 
   it('refuses a record judged by another list, and a witness waiting to join takes only its members record', () => {
@@ -91,7 +91,7 @@ describe('judge: what a witness accepts', () => {
 
   it('a list change goes old list -> pair -> new list, and a pair witness takes only pair records', () => {
     const N = ['w1', 'w2', 'w4']
-    const base: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G }
+    const base: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }
     // The final step straight from the old list is refused: the pair comes first.
     expect(judge(base, 'w1', rec(2, 'members', 'A', { newList: N, joint: N, stage: 'final' }), 1, P)).toEqual({ ok: false, reason: 'wrong-list' })
     const j = judge(base, 'w1', rec(2, 'members', 'A', { newList: N, joint: N, stage: 'joint' }), 1, P)
@@ -166,9 +166,9 @@ describe('the holder clock', () => {
 })
 
 describe('mayAskForTakeover', () => {
-  const read = (witness: string, grantable: boolean, held: PermitRecord | null): PermitReply => ({ witness, re: 'read', ok: true, held, list: W, joint: null, cfg: G, grantable })
+  const read = (witness: string, grantable: boolean, held: PermitRecord | null): PermitReply => ({ witness, re: 'read', ok: true, held, list: W, joint: null, cfg: G, progress: held?.progress ?? null, grantable })
   const last = rec(7, 'renew', 'A', { progress: { seq: 100, writtenAt: 1_000_000 } })
-  const base = { self: 'B', list: W, params: P, maxBehindMs: 5 * 60_000 }
+  const base = { list: W, params: P, maxBehindMs: 5 * 60_000 }
 
   it('allows it when the old permission ran out on a majority and the copy is close enough', () => {
     const a = mayAskForTakeover({ ...base, reads: [read('w1', true, last), read('w2', true, last)], standby: { seq: 99, writtenAt: 1_000_000 - 60_000 } })
@@ -195,6 +195,23 @@ describe('mayAskForTakeover', () => {
   it('does not count a witness that serves another list', () => {
     const moved: PermitReply = { ...read('w2', true, last), list: ['w1', 'w2', 'w4'] }
     expect(mayAskForTakeover({ ...base, reads: [read('w1', true, last), moved], standby: { seq: 100 } }).ok).toBe(false)
+  })
+  it('a contending grant with an old stamp on top does not hide how far the real holder wrote (review S-2)', () => {
+    // The holder's renew carried seq 100; then C's grant (seq 5) reached w1 and w2 once it ran out.
+    const s0: WitnessState = { held: null, acceptedAt: 0, list: W, joint: null, cfg: G, progress: null }
+    const a = judge(s0, 'w1', rec(1, 'grant', 'A', { progress: { seq: 100, writtenAt: 1_000_000 } }), 0, P)
+    const s1 = (a as { next: WitnessState }).next
+    const c = judge(s1, 'w1', rec(2, 'grant', 'C', { progress: { seq: 5, writtenAt: 10 } }), 70_000, P)
+    const s2 = (c as { next: WitnessState }).next
+    expect(s2.held!.holder).toBe('C')
+    expect(s2.progress).toEqual({ seq: 100, writtenAt: 1_000_000 })
+    const grantC = rec(2, 'grant', 'C', { progress: { seq: 5, writtenAt: 10 } })
+    const reads = ['w1', 'w2'].map((id) => ({ ...read(id, true, grantC), progress: { seq: 100, writtenAt: 1_000_000 } }))
+    const ans = mayAskForTakeover({ ...base, reads, standby: { seq: 5, writtenAt: 10 } })
+    expect(ans.ok).toBe(false)
+    // A grant with no stamp at all does not block every other candidate (review S-3).
+    const bare = ['w1', 'w2'].map((id) => ({ ...read(id, true, rec(2, 'grant', 'C')), progress: { seq: 100, writtenAt: 1_000_000 } }))
+    expect(mayAskForTakeover({ ...base, reads: bare, standby: { seq: 100, writtenAt: 1_000_000 } }).ok).toBe(true)
   })
   it('reads the newest record among the answers, not the first', () => {
     const old = rec(3, 'renew', 'A', { progress: { seq: 10, writtenAt: 0 } })
@@ -261,7 +278,7 @@ describe('the file store', () => {
   ] as const) {
     it(`refuses loudly a file that is ${name}, never as "no record"`, () => {
       const file = path.join(mk(), 'witness.json')
-      fs.writeFileSync(file, text(encodeStored({ held: rec(1, 'grant', 'A'), list: W, joint: null, cfg: G })))
+      fs.writeFileSync(file, text(encodeStored({ held: rec(1, 'grant', 'A'), list: W, joint: null, cfg: G, progress: null })))
       const logs: string[] = []
       const w = new PermitWitness({ id: 'w1', store: createFilePermitStore(file), clock: { now: () => 1e9 }, params: P, log: (l, m) => logs.push(`${l} ${m}`) })
       expect(w.brokenReason()).toBeTruthy()
@@ -312,7 +329,7 @@ describe('the file store', () => {
       fsyncSync: (fd: number) => { calls.push('fsync'); fs.fsyncSync(fd) },
       renameSync: (a: fs.PathLike, b: fs.PathLike) => { calls.push('rename'); fs.renameSync(a, b) },
     } as typeof fs
-    createFilePermitStore(file, spy).save({ held: null, list: W, joint: null, cfg: G })
+    createFilePermitStore(file, spy).save({ held: null, list: W, joint: null, cfg: G, progress: null })
     expect(calls).toEqual(['fsync', 'rename', 'fsync'])
   })
 })

@@ -10,8 +10,8 @@ merge.
 ## The record
 
 One numbered record per Walnut, kept by a fixed list of witnesses (three always-on machines,
-a majority of two). A record is `{ number, kind, holder, by, from, to, validMs, list, cfg }` (`cfg`: which
-configuration of the witness list, below):
+a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, validMs, list, cfg, progress }`
+(`cfg`: which configuration of the witness list, below; `nonce`: the writer's incarnation):
 
 | kind | written by | gives the permission to | a witness takes it when |
 |---|---|---|---|
@@ -29,6 +29,12 @@ waits to join through a members record (`bootstrapWitnessStore` sets up a new wi
 refuses a store that already has a file).
 
 ## When a machine may act
+
+Every record carries its writer's **incarnation** (`nonce`, random per process start), and a
+machine counts a witness's yes only when that witness holds this very record, nonce included.
+A process that restarted proposes numbers it may have used before; without the nonce a yes a
+witness gave the old record (or a late `ok` answering the old number) would be counted from the
+new send, and the lease would outlive the witness's hold (review round 1 found it).
 
 A machine acts only on a record of its **own** that a majority of the **fixed** list accepted,
 never a majority of whoever answered. It counts that record for `validMs - holderMarginMs` from
@@ -121,21 +127,23 @@ count stuck in its pair; that is safe but needs a repair step (not built).
 `mayAskForTakeover` is a pure function of one read round, unused for now. A candidate may ask
 for the permission only when a majority of the fixed list says the old one ran out, and its
 standby copy is provably no further behind than `maxBehindMs` (design: 5 minutes). The proof is
-the old holder's progress stamp (`progress: { seq, writtenAt }`, carried on its records) against
-the copy's newest write, plus one whole lease for what it may have written after the stamp. No
-stamp means no proof: it refuses.
+the highest progress stamp (`progress: { seq, writtenAt }`, carried on the holder's records)
+against the copy's newest write, plus one whole lease for what it may have written after the
+stamp. Each witness keeps the highest stamp it ever took, so a contending grant that carries an
+older stamp, or none, neither hides how far the last real holder wrote nor blocks the other
+candidates. No stamp means no proof: it refuses.
 
 ## How it is tested
 
 `tests/core/leader/permit/`: a simulated world (one real timeline; each node its own clock with
 drift, offset, wall jumps and sleeps; a network that delays, drops, duplicates and reorders;
 witnesses that crash and restart from their file). `model-check.test.ts` runs about 700 seeded
-15-minute schedules (some with witnesses swapped in and out of the list) against one invariant (at no real instant do two machines both have
+15-minute schedules (some with witnesses swapped in and out of the list, some with the holder restarting mid-renew) against one invariant (at no real instant do two machines both have
 `mayAct()` true), plus negative controls that each remove one safety part (the margins, the
 fsync before the answer, the wall clock in the holder's clock, the fixed-list majority) and
 must find a violation. `named-cases.test.ts` holds the named schedules (the split, the 90 s
 sleep, a witness killed between accepting and answering, clocks 30 s off and 1% fast or slow,
-the drift bound's edge, late renews, the handover and cancel race, one witness reachable, the
+the drift bound's edge, late renews, a holder restarting mid-renew, the handover and cancel race, one witness reachable, the
 list change).
 
 ## Not built yet
@@ -150,9 +158,13 @@ list change).
 - **Registering an outward send's operation id with the witnesses** before it goes out, so a
   new holder lists "registered, no result" sends as unknown instead of sending them again
   (design section 6).
+- **One process per machine id** is a precondition of the wiring: the witnesses tell holders
+  apart by machine id, so two live processes with one id (a deploy that boots the new server
+  before the old one exits) would share one permission. The wiring takes an OS-level
+  single-instance lock before it makes a `PermitClient`.
 - The old holder's handover flag survives only in memory: a restarted process comes back with
-  no permission and must renew, which is safe, but the manual-switch flow must keep its own
-  "switch in progress" state on disk.
+  no permission and must renew, which is safe (its records carry a new incarnation), but the
+  manual-switch flow must keep its own "switch in progress" state on disk.
 - Repairing witnesses left in the pair of a list change that never counted (two changes
   started at once): safe, but they stay out of service until a repair step exists.
 - Liveness under contention: candidates that ask at the same instant can split the witnesses

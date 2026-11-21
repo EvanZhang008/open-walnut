@@ -13,7 +13,6 @@ import { genesisConfigId, majorityOf, sameList } from './types.js'
 import { holderLeaseMs } from './rules.js'
 
 export interface TakeoverRuleInput {
-  self: string
   /** The configured witness list. */
   list: string[]
   /** Its configuration id (PermitClient.config().cfg); default: the first configuration. */
@@ -31,9 +30,8 @@ export type TakeoverRuleAnswer = { ok: true; behindAtMostMs: number; reason: str
 
 export function mayAskForTakeover(input: TakeoverRuleInput): TakeoverRuleAnswer {
   const byWitness = new Map<string, PermitReply>()
-  // Only a witness that serves this very list counts: one that moved to another list
-  // would refuse the grant anyway.
-  // (A witness in the middle of a list change does not count either.)
+  // Only a witness that serves this very configuration counts: one that moved to another
+  // list, or stands in the middle of a change, would refuse the grant anyway.
   const cfg = input.cfg ?? genesisConfigId(input.list)
   for (const r of input.reads) {
     if (input.list.includes(r.witness) && r.cfg === cfg && sameList(r.list, input.list) && !r.joint) byWitness.set(r.witness, r)
@@ -43,12 +41,16 @@ export function mayAskForTakeover(input: TakeoverRuleInput): TakeoverRuleAnswer 
   if (ranOut < need) {
     return { ok: false, reason: `the old permission ran out on ${ranOut} of ${input.list.length} witnesses, ${need} needed` }
   }
-  // Any record a majority accepted is held (or a later one) by one of these answers.
+  // Any record a majority accepted is held (or a later one) by one of these answers, and each
+  // witness keeps the highest stamp it ever took, so the highest stamp here is at least the
+  // last real holder's, even under a contending grant that carries none or an older one.
   let newest = null as PermitReply['held']
-  for (const r of byWitness.values()) if (r.held && (!newest || r.held.number > newest.number)) newest = r.held
+  let p = null as PermitReply['progress']
+  for (const r of byWitness.values()) {
+    if (r.held && (!newest || r.held.number > newest.number)) newest = r.held
+    for (const stamp of [r.progress, r.held?.progress]) if (stamp && (!p || stamp.seq > p.seq)) p = stamp
+  }
   if (!newest) return { ok: true, behindAtMostMs: 0, reason: 'no machine ever held the permission' }
-  if (newest.holder === input.self) return { ok: true, behindAtMostMs: 0, reason: 'this machine held it last' }
-  const p = newest.progress
   if (!p) return { ok: false, reason: 'the last holder reported no progress: cannot prove how far behind the copy is' }
   let behind = holderLeaseMs(input.params)
   if (input.standby.seq < p.seq) {
