@@ -61,6 +61,7 @@ describe('audienceOf: the rule', () => {
  */
 const STORE_WRITERS: Record<string, { calls: number; what: string }> = {
   'web/server.ts': { calls: 3, what: 'publishErrorNotification (health unless its caller names a reason), the cron receipt (user), the permission ask (user)' },
+  'core/hosts/host-launcher.ts': { calls: 1, what: 'a host\'s launcher put its daemon back to the previous version (health, kind operation-error, no needsYou)' },
   'core/hooks/actions.ts': { calls: 1, what: 'a hook the person configured with a notify action (user, kind hook)' },
   'core/overview-maintainer.ts': { calls: 1, what: 'a new skill receipt (user, kind skill, never toasts)' },
   'core/routines/executors/session.ts': { calls: 1, what: 'the person\'s own routine (user, kind cron, feed only)' },

@@ -108,9 +108,11 @@ export function createLauncherControl(o: {
   const trialStillBusy = async (id: string): Promise<boolean> => {
     const s = keyValues(await fs.readFile(path.join(dir, 'state'), 'utf8').catch(() => ''))
     if (s.phase !== 'trial' || s.request !== id) return false
-    const [t, busy] = (await fs.readFile(path.join(dir, 'heartbeat'), 'utf8').catch(() => '')).trim().split(' ').map(Number)
+    const [t, busy, pid] = (await fs.readFile(path.join(dir, 'heartbeat'), 'utf8').catch(() => '')).trim().split(' ').map(Number)
+    // The trial's own beat, not one the old daemon left.
+    const trialPid = Number((await fs.readFile(path.join(dir, 'service.pid'), 'utf8').catch(() => '')).split('\n')[0])
     const nowS = Date.now() / 1000
-    return t! > 0 && nowS - t! <= STALL_SECONDS && busy! > nowS
+    return pid! > 1 && pid === trialPid && t! > 0 && nowS - t! <= STALL_SECONDS && busy! > nowS
   }
   const body = (fields: Record<string, string>) => Object.entries(fields).map(([k, v]) => `${k}=${v.replace(/[\r\n]+/g, ' ')}\n`).join('')
   return {

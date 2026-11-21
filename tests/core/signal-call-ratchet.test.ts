@@ -134,6 +134,9 @@ const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   // `kill -TERM "$tg_c"` on the cron supervisor's daemon, the pid in its own daemon.pid, proved a child of the
   // supervisor pid the boot script recorded (t_childof), so the supervisor starts it again from the new script
   'src/providers/daemon-update-tail.ts': 1,
+  // the service launcher's own sh: `kill -TERM`/`-KILL "$c_pid"` on the daemon it started itself (`$!` of its own
+  // job) or adopted after its pid AND start time matched launcher/service.pid, and on its own bounded helper (`$!`)
+  'src/providers/service-launcher-script.ts': 1,
   // `kill -TERM <pid>` on one dtach terminal master: the pid its own child recorded (else the socket's lsof owner),
   // proved by start time and argv (`<dtach> -A <this socket>`), the start time re-checked in the same script
   'src/web/terminal/dtach-master.ts': 1,

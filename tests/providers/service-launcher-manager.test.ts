@@ -283,6 +283,10 @@ describe('waiting for the launcher\'s answer', () => {
       await fs.mkdir(dir)
       const now = () => Math.floor(Date.now() / 1000)
       await fs.writeFile(`${dir}/state`, `current=${NEW}\ngood=${OLD}\nphase=trial\nsince=${now()}\nrequest=u1\n`)
+      await fs.writeFile(`${dir}/service.pid`, `77\n${NEW}\nlstart\n`)
+      // A busy beat of another pid (the old daemon's) does not hold the wait.
+      await fs.writeFile(`${dir}/heartbeat`, `${now()} ${now() + 600} 76\n`)
+      expect(await createLauncherControl({ stateDir, backend: 'systemd', sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) }).wait('u1', 200)).toBeNull()
       await fs.writeFile(`${dir}/heartbeat`, `${now()} ${now() + 600} 77\n`)
       const L = createLauncherControl({ stateDir, backend: 'systemd', sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) })
       const answer = L.wait('u1', 200)
