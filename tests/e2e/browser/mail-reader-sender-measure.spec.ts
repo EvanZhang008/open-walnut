@@ -21,7 +21,7 @@ async function header(page: Page, width: number, from: { name: string; address?:
         <span class="mail-reader-identity"><span class="mail-reader-from">${from.name}</span>${address}</span>
         <span class="mail-reader-account">reader@mail.example.invalid</span>
         <span class="mail-reader-when"><time class="mail-reader-date">Wed, Oct 14, 2026 at 11:17 AM</time>
-          <button type="button" class="btn btn-sm btn-ghost mail-reader-details-btn">Details</button></span>
+          <button type="button" class="btn btn-sm mail-reader-details-btn">Details</button></span>
       </div>
     </header></div>`)
 }

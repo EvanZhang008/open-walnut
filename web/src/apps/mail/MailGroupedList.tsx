@@ -299,7 +299,7 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
                 {markAll.total > 0 && (
                   <button
                     type="button"
-                    className="btn btn-sm btn-ghost mail-text-btn mail-mark-all"
+                    className="btn btn-sm mail-text-btn mail-mark-all"
                     data-testid="mail-not-important-mark-all"
                     disabled={recomputing}
                     title={recomputing ? GROUPS_UPDATING_TITLE : `Mark the ${formatCount(markAll.total)} unread in every group read`}

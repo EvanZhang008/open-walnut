@@ -127,8 +127,10 @@
   color: var(--fg);
 }
 
-/* ── Quiet tool: no fill until hover (Snooze, Cancel beside a main action, a row's tools).
-   Its label is --fg-secondary, never --fg-muted: a quiet key still reads at a glance. ── */
+/* ── Quiet key: no fill until hover. Only for an icon alone, the session header's and Home's
+   toolbar tools, the composer's triggers, and a dismissal beside a main action (Cancel, Close,
+   Keep). A text action anywhere else is the plain grey key: a text label with no fill reads as
+   bare text, not a button. Its label is --fg-secondary, never --fg-muted. ── */
 .btn-ghost {
   background: transparent;
   color: var(--fg-secondary);

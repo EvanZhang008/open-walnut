@@ -432,7 +432,7 @@ export function BrowserAccessGroup({ heading }: { heading?: string } = {}) {
             control={
               <span className="settings-addons-inline">
                 {status.enabled && line.retry && (
-                  <SettingsButton variant="ghost" onClick={() => { void retry(); }} data-testid="browser-access-retry">Retry</SettingsButton>
+                  <SettingsButton onClick={() => { void retry(); }} data-testid="browser-access-retry">Retry</SettingsButton>
                 )}
                 <ToggleSwitch
                   id="browser-access-enabled"

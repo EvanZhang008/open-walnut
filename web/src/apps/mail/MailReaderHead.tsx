@@ -118,7 +118,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
           {extras.length > 0 && (
             <button
               type="button"
-              className="btn btn-sm btn-ghost mail-reader-details-btn"
+              className="btn btn-sm mail-reader-details-btn"
               data-testid="mail-reader-details"
               aria-expanded={details}
               onClick={() => setDetails((was) => !was)}

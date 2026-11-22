@@ -335,7 +335,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
         // The whole row picks the address; the button is its keyboard and screen-reader handle.
         onClick={pair.canChooseTailnet ? onChooseTailnet : undefined}
         control={pair.canChooseTailnet ? (
-          <SettingsButton variant="ghost" data-testid="remote-access-use-tailnet">Pair below</SettingsButton>
+          <SettingsButton data-testid="remote-access-use-tailnet">Pair below</SettingsButton>
         ) : undefined}
       />
     </SettingsGroup>

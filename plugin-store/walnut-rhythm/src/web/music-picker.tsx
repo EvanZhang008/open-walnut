@@ -101,7 +101,7 @@ export function MusicPicker({ music, store, value, onPick, testId }: {
             {choice.kind !== 'none' && (
               <button
                 type="button"
-                className="btn btn-sm btn-ghost rhythm-preview"
+                className="btn btn-sm rhythm-preview"
                 aria-pressed={playingPreview}
                 aria-label={playingPreview ? `Stop the preview of ${option.title}` : `Preview ${option.title}${choice.kind === 'spotify' ? ' in Spotify on your Mac' : ''}`}
                 title={choice.kind === 'spotify' ? 'Plays 15 seconds in Spotify on your Mac' : 'Plays 10 seconds here'}

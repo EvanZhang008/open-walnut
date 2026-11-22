@@ -235,7 +235,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
             {showing === 'edit' && composer.draftId && (
               <button
                 type="button"
-                className="btn btn-sm btn-ghost mail-text-btn"
+                className="btn btn-sm mail-text-btn"
                 data-testid="mail-composer-show-status"
                 onClick={showMailComposerStatus}
               >

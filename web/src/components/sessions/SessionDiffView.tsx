@@ -1391,7 +1391,7 @@ export const FileDiffPane = memo(function FileDiffPane({
               <span className="session-diff-viewed-changed" title="You marked this file viewed, then it changed">Changed since viewed</span>
             )}
             {onNextUnviewed && (
-              <button type="button" className="btn btn-sm btn-ghost session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed file">
+              <button type="button" className="btn btn-sm session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed file">
                 Next<span className="session-diff-next-unviewed-text"> unviewed file</span> <span aria-hidden>{'↓'}</span>
               </button>
             )}

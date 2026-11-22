@@ -269,7 +269,7 @@ export function RemoteHostSshRow(props: Props) {
           indent
           className="rh-edit-done"
           help={linked ? 'Changes save as you type.' : undefined}
-          control={<SettingsButton variant="ghost" onClick={() => props.onEdit(false)} data-testid="rh-edit-done">Done</SettingsButton>}
+          control={<SettingsButton onClick={() => props.onEdit(false)} data-testid="rh-edit-done">Done</SettingsButton>}
         />
       )}
     </div>

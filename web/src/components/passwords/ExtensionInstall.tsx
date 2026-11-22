@@ -73,7 +73,7 @@ function ChromeSetupSteps() {
   return (
     <ol className="pw-ext-steps" data-testid="ext-steps-chrome-setup">
       <li>
-        <button type="button" className="btn btn-sm btn-ghost" data-testid="ext-setup" disabled={busy} onClick={() => void setup()}>
+        <button type="button" className="btn btn-sm" data-testid="ext-setup" disabled={busy} onClick={() => void setup()}>
           {busy ? 'Setting up…' : done ? 'Set up again' : 'Set up in Chrome'}
         </button>{' '}
         Walnut puts the extension in a folder on this computer{isMac() ? ', copies the folder\'s path' : ''} and opens Chrome&apos;s Extensions page. The rest happens in Chrome.

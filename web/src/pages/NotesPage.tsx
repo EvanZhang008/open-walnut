@@ -1076,7 +1076,7 @@ export function NotesPage() {
   const aiToggleButton = (
     <button
       type="button"
-      className="btn btn-sm btn-ghost notes-ai-toggle"
+      className="btn btn-sm notes-ai-toggle"
       onClick={toggleChat}
       aria-pressed={chatOpen}
       title={chatOpen ? 'Hide Note Agent' : 'Ask the Note Agent'}

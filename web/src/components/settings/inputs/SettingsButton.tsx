@@ -10,8 +10,9 @@ import { keepPress } from './press-keeps-target'
 import '@/styles/settings-controls.css'
 
 /**
- * Each variant is a variant of the family: ghost is the quiet tool key (a list row's Edit, Cancel,
- * Keep), text the link key (only for a link inside a sentence), danger the red label on the plain
+ * Each variant is a variant of the family: default is the grey key every text action uses (a list
+ * row's Edit, Refresh, Show all), ghost the quiet key only for a dismissal beside a main action
+ * (Cancel, Close, Keep), text the link key (only for a link inside a sentence), danger the red label on the plain
  * grey key that every destructive action uses (Remove, Delete, Disconnect, Sign out), and
  * danger-confirm the solid red key that confirms a destructive step.
  */

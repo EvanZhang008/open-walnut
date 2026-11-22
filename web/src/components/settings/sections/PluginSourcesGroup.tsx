@@ -140,13 +140,13 @@ export function UpdatesHead({ updates, slowLoad, onCheckAll }: {
       {/* After a failed GET the ONE verb is Retry: a second "Check now" next to it would be the
           same request under a second name (N9). */}
       {retry ? (
-        <button type="button" className="btn btn-sm btn-ghost" data-testid="plugin-updates-retry" onClick={() => updates.retry()}>
+        <button type="button" className="btn btn-sm" data-testid="plugin-updates-retry" onClick={() => updates.retry()}>
           Retry
         </button>
       ) : (
         <button
           type="button"
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm"
           data-testid="plugin-updates-check-now"
           disabled={checking || updates.offline}
           title={updates.offline ? OFFLINE_TITLE : undefined}

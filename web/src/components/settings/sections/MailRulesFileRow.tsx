@@ -56,9 +56,9 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
       <div className="mail-rules-file-line">
         <span className="mail-rules-file-label">Rules file</span>
         <span className="mail-rules-file-actions">
-          <CopyButton kind="ghost" label="Copy path" text={rules.path} data-testid="mail-rules-copy-path" />
+          <CopyButton label="Copy path" text={rules.path} data-testid="mail-rules-copy-path" />
           {rules.exists && (
-            <SettingsButton variant="ghost" data-testid="mail-rules-open" busy={opening} busyLabel="Opening…" onClick={open}>
+            <SettingsButton data-testid="mail-rules-open" busy={opening} busyLabel="Opening…" onClick={open}>
               Open in Walnut
             </SettingsButton>
           )}

@@ -361,7 +361,6 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
           <>
             {role === 'phone' && !armed && repairKind(d) !== null && (
               <SettingsButton
-                variant="ghost"
                 disabled={busy}
                 aria-label={`Show a new pairing QR code for ${shownName}`}
                 data-testid="devices-show-qr"

@@ -1191,8 +1191,8 @@ export function DraftSessionPanel({
               <div className="draft-walnut-suggests" role="group" aria-label="Quick actions">
                 <button
                   type="button"
-                  // A side path, so the quiet key: Work in and More are the draft's own keys.
-                  className="btn btn-sm btn-ghost session-action-chip"
+                  // A text action, so the plain grey key, as Work in and More beside it.
+                  className="btn btn-sm session-action-chip"
                   data-testid="draft-customize-walnut"
                   title="Open a session in Walnut's own source code to change or fix Walnut"
                   onClick={() => { onCustomizeWalnut(draft.id); focusComposer(); }}

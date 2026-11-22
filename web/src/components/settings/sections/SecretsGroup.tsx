@@ -294,7 +294,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
                 <>
                   {/* Open already: its form is right below. */}
                   {!s.deletedAt && editing !== s.name && (
-                    <SettingsButton variant="ghost" disabled={busy} onClick={() => open(s)} aria-label={`Edit ${s.name}`} data-secret-edit="">Edit</SettingsButton>
+                    <SettingsButton disabled={busy} onClick={() => open(s)} aria-label={`Edit ${s.name}`} data-secret-edit="">Edit</SettingsButton>
                   )}
                   <SettingsButton variant="danger" disabled={busy || !!deleting} onClick={() => setDeleting({ name: s.name, busy: false })} aria-label={`Delete ${s.name}`} data-secret-delete="">Delete</SettingsButton>
                 </>

@@ -19668,7 +19668,7 @@ a.tag-chip:hover .tag-chip-value,
    positioned: the old `position:absolute; top:9; right:56` floated it over the
    note's own header row. */
 .notes-ai-toggle {
-  /* A quiet family key (btn-sm btn-ghost); open, aria-pressed draws its on look. */
+  /* A family key (btn-sm); open, aria-pressed draws its on look. */
   flex: 0 0 auto;
   align-self: center;
 }

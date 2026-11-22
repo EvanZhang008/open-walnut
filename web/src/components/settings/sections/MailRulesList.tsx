@@ -106,7 +106,7 @@ export function MailRulesRulesList(props: RulesListProps) {
               </div>
               <MovedNote show={props.movedKey === rule.id} />
               <span className="mail-rule-actions" title={props.disabled ? props.disabledTitle : undefined}>
-                <SettingsButton variant="ghost" disabled={props.disabled || editing} data-testid="mail-rule-edit" onClick={() => props.onEdit(index)}>
+                <SettingsButton disabled={props.disabled || editing} data-testid="mail-rule-edit" onClick={() => props.onEdit(index)}>
                   Edit
                 </SettingsButton>
                 <InlineConfirmButton label="Delete" confirmLabel="Delete rule?" aria-label={`Delete rule ${rule.summary}`}

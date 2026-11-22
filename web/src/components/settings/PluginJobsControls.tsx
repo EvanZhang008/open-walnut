@@ -35,7 +35,7 @@ function JobLog({ pluginId, job, host }: { pluginId: string; job: string; host: 
     <div className="plugin-job-log" data-testid={`plugin-job-log-${pluginId}-${job}`}>
       <div className="plugin-job-log-bar">
         <span>{lines && lines.length > 0 && !error ? `Last ${lines.length} lines` : 'Log'}</span>
-        <SettingsButton variant="ghost" onClick={load} data-testid={`plugin-job-log-refresh-${pluginId}-${job}`}>Refresh</SettingsButton>
+        <SettingsButton onClick={load} data-testid={`plugin-job-log-refresh-${pluginId}-${job}`}>Refresh</SettingsButton>
       </div>
       {/* A failed refresh keeps the lines already read: the failure shows above them. */}
       {error && <UnavailableState size="row" title="Could not read the log" detail={error} onRetry={load} />}

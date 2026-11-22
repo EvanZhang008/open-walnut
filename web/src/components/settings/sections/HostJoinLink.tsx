@@ -163,7 +163,7 @@ export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: 
         data-invite-state="cancelled"
         label={<span role="status">Link cancelled.</span>}
         help="No machine can join with it now."
-        control={<SettingsButton variant="ghost" onClick={onDone} id={doneId} data-testid="host-network-closed-done">Close</SettingsButton>}
+        control={<SettingsButton onClick={onDone} id={doneId} data-testid="host-network-closed-done">Close</SettingsButton>}
       />
     );
   }
@@ -177,7 +177,7 @@ export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: 
       help="A machine that runs it still joins. Add host, Join a machine with a link, shows it again."
       error={error ?? undefined}
       control={
-        <SettingsButton variant="ghost" holdFocus busy={cancelling} busyLabel="Cancelling..." reserve={['Cancel link', 'Cancelling...']} onClick={onCancel} data-testid="host-network-cancel">
+        <SettingsButton holdFocus busy={cancelling} busyLabel="Cancelling..." reserve={['Cancel link', 'Cancelling...']} onClick={onCancel} data-testid="host-network-cancel">
           Cancel link
         </SettingsButton>
       }

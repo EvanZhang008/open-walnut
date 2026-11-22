@@ -277,7 +277,7 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
       <div className="status-item-popover-foot">
         <span>{item.pluginName}</span>
         {app && (
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => { onClose(); navigate(app.path); }}>
+          <button type="button" className="btn btn-sm" onClick={() => { onClose(); navigate(app.path); }}>
             Open {item.pluginName}
           </button>
         )}

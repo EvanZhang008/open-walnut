@@ -27,7 +27,7 @@ function CopyAddress({ address }: { address: string }) {
   return (
     <button
       type="button"
-      className="btn btn-sm btn-ghost mail-text-btn"
+      className="btn btn-sm mail-text-btn"
       data-testid="mail-unsub-copy"
       onClick={() => {
         void navigator.clipboard?.writeText(address).then(() => {
@@ -83,7 +83,7 @@ export function MailUnsubscribePlanRow({ item, ticked, onTick, disabled, run, fr
         <span className="mail-unsub-deadend">
           {address && <CopyAddress address={address} />}
           {item.mailto && (
-            <a className="btn btn-sm btn-ghost mail-text-btn" data-testid="mail-unsub-open-app" href={item.mailto.startsWith('mailto:') ? item.mailto : `mailto:${item.mailto}`}>
+            <a className="btn btn-sm mail-text-btn" data-testid="mail-unsub-open-app" href={item.mailto.startsWith('mailto:') ? item.mailto : `mailto:${item.mailto}`}>
               Open in your mail app
             </a>
           )}

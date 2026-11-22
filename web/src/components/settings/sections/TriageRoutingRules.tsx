@@ -152,7 +152,7 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
         {chosen ? (
           <span className="trr-chosen" data-testid="triage-rule-task-chosen">
             <a className="task-link" data-task-id={chosen.id} href={taskPath(chosen.id)}>{chosen.title}</a>
-            <SettingsButton variant="ghost" data-testid="triage-rule-task-change"
+            <SettingsButton data-testid="triage-rule-task-change"
               onClick={() => { setChangedFrom(taskId); setTaskId(''); setPicking(true); }}>Change</SettingsButton>
           </span>
         ) : null}
@@ -328,7 +328,7 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
               </>
             ) : (
               <span className="trr-rule-keys">
-                <SettingsButton variant="ghost" aria-label={`Edit rule: ${rule.matchText}`} data-testid="triage-rule-edit"
+                <SettingsButton aria-label={`Edit rule: ${rule.matchText}`} data-testid="triage-rule-edit"
                   onClick={() => openEditor(rule.id)}>Edit</SettingsButton>
                 <SettingsButton variant="danger" aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete"
                   onClick={() => setRemoving(rule.id)}>Remove</SettingsButton>
