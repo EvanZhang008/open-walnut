@@ -33,10 +33,11 @@ leader_switch:
   back_window_hours: 168
 ```
 
-`walnut leader witnesses init` sets up each witness directory once. A machine's id is read
-from `~/.local/state/open-walnut/machine-id` (`WALNUT_MACHINE_ID_FILE` names another file:
-the one-machine rehearsal only); it is the holder id of the permission. Until the stable
-machine id lands (`src/core/machine-id.ts`, another task) the file is read, never made.
+`walnut leader witnesses init` sets up each witness directory once. A machine's id is its one
+stable id (`src/core/machine-id.ts`, `~/.local/state/open-walnut/machine-id`, the id the daemons
+send too); it is the holder id of the permission, and the `id` of its `machines` entry.
+`WALNUT_MACHINE_ID_FILE` names another file, read as it is and never made (the one-machine
+rehearsal's two "machines" only).
 Beside it, `leader-instance/` holds the permit core's instance lock: one leader server per
 machine id asks for the permission (a second one is refused at boot).
 

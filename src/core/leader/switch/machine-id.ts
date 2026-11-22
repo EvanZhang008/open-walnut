@@ -1,33 +1,43 @@
 /**
- * Which machine this process runs on, as the write permission's holder id.
+ * Which machine this process runs on, as the write permission's holder id: the machine's one
+ * stable id (src/core/machine-id.ts, `~/.local/state/open-walnut/machine-id`, the id the daemons
+ * send in their hello), so a machine has one identity.
  *
- * Stand-in for `readMachineId()` of src/core/machine-id.ts, which another task is adding
- * (file `~/.local/state/open-walnut/machine-id`): when it lands, this function becomes that
- * import. It only READS the file; it never makes an id, so no second machine identity exists.
- *
- * `WALNUT_MACHINE_ID_FILE` names another file. It is for running two "machines" on one
- * computer (the one-machine rehearsal and its tests); nothing in production sets it.
+ * `WALNUT_MACHINE_ID_FILE` names another file, read as it is and never made or rewritten. It is
+ * for running two "machines" on one computer (the one-machine rehearsal and its tests, whose ids
+ * are readable names, not the 32-hex form the stable id has); nothing in production sets it.
  */
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { machineIdFile as stableMachineIdFile, readMachineIdSync } from '../../machine-id.js'
 
 const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 
 export function machineIdFile(env: NodeJS.ProcessEnv = process.env): string {
-  return env.WALNUT_MACHINE_ID_FILE || path.join(os.homedir(), '.local', 'state', 'open-walnut', 'machine-id')
+  return env.WALNUT_MACHINE_ID_FILE || stableMachineIdFile()
 }
 
-/** This machine's id, or null when the file is missing or does not hold one. */
+/**
+ * This machine's id, or null when it cannot be had: the named file missing or not holding one,
+ * or the stable id neither readable nor makeable. Sync: read at boot (the stable id is read from
+ * disk once per process, made once per machine).
+ */
 export function permitHolderId(env: NodeJS.ProcessEnv = process.env): string | null {
-  let text: string
+  if (env.WALNUT_MACHINE_ID_FILE) {
+    let text: string
+    try {
+      text = fs.readFileSync(env.WALNUT_MACHINE_ID_FILE, 'utf8').trim()
+    } catch {
+      return null
+    }
+    return ID_RE.test(text) ? text : null
+  }
   try {
-    text = fs.readFileSync(machineIdFile(env), 'utf8').trim()
+    return readMachineIdSync()
   } catch {
     return null
   }
-  return ID_RE.test(text) ? text : null
 }
 
 /**

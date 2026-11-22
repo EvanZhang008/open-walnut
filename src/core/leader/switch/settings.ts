@@ -8,7 +8,7 @@
  *   witnesses:                 # three, a majority of two; this phase: local directories
  *     - { id: w1, dir: /srv/walnut-witness/w1 }
  *   machines:
- *     - id: <machine id>       # src/core/leader/switch/machine-id.ts
+ *     - id: <machine id>       # this machine's stable id (src/core/machine-id.ts)
  *       home: /path/to/home    # its data home when it leads
  *       standby_dir: /path     # where the other leader's standby batches land on it
  *       port: 3456
