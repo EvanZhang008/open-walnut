@@ -4,7 +4,7 @@
  * see it. Projects and tasks are the card family's ticks (`.org-answer-check`), the picked ones
  * first and edged in blue.
  */
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { Task } from '@open-walnut/core'
 import { isHiddenFromTaskLists } from '@open-walnut/org-tree'
 import { useTaskListSelect } from '@/contexts/TasksContext'
@@ -12,9 +12,15 @@ import { useProjectRegistry } from '@/hooks/useProjectRegistry'
 import { taskUserState } from '@/utils/session-status'
 import { createFocusSpace, deleteFocusSpace, enterFocus, updateFocusSpace, useFocusSnapshot, type FocusAppMode, type FocusSpace } from './focus-store'
 import { focusAppMode } from '@open-walnut/focus-scope'
-import { MicInput } from '@/components/common/BoxMic'
+import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic'
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
 
 const NO_TASKS: readonly Task[] = []
+
+/** Enter in a find box only narrows the list: it never makes the space (the form's submit). */
+function keepEnter(e: { key: string; preventDefault(): void }): void {
+  if (e.key === 'Enter') e.preventDefault()
+}
 const MAX_MATCHES = 6
 /** More projects than this: a box to find one by name. */
 const PROJECT_FIND_AT = 8
@@ -85,6 +91,12 @@ export function SpaceForm({ space, length, onDone }: {
     } catch (err) { fail(err) } finally { setBusy(false) }
   }
 
+  // Make, Save or Enter while the name is still being dictated waits for its last words.
+  const nameMic = useRef<BoxMicHandle | null>(null)
+  const enterAfter = useRef(true)
+  const gate = useSendAfterDictation([nameMic], () => void save(enterAfter.current))
+  const submit = (enter: boolean) => { enterAfter.current = enter; gate.send() }
+
   const remove = async () => {
     if (!space || busy) return
     if (!confirmDelete) { setConfirmDelete(true); return }
@@ -93,15 +105,15 @@ export function SpaceForm({ space, length, onDone }: {
   }
 
   return (
-    <form className="focus-panel focus-form" data-testid="focus-space-form" onSubmit={(e) => { e.preventDefault(); void save(true) }}>
+    <form className="focus-panel focus-form" data-testid="focus-space-form" onSubmit={(e) => { e.preventDefault(); submit(true) }}>
       <div className="focus-panel-title">{space ? `Edit ${space.name}` : 'New focus space'}</div>
       <label className="focus-form-field">
         <span className="focus-panel-caption">Name</span>
-        <MicInput value={name} setText={setName} placeholder="Interview prep" maxLength={60} autoFocus data-no-draft="rename" data-testid="focus-form-name" />
+        <MicInput value={name} setText={setName} micRef={nameMic} placeholder="Interview prep" maxLength={60} autoFocus data-no-draft="rename" data-testid="focus-form-name" />
       </label>
       <div className="focus-panel-caption">{`Projects (${projects.length} of ${projectNames.length} picked)`}</div>
       {projectNames.length > PROJECT_FIND_AT && (
-        <MicInput value={projectQuery} setText={setProjectQuery} placeholder="Find a project" aria-label="Find a project" data-no-draft="search" data-testid="focus-form-project-search" />
+        <MicInput value={projectQuery} setText={setProjectQuery} onKeyDown={keepEnter} placeholder="Find a project" aria-label="Find a project" data-no-draft="search" data-testid="focus-form-project-search" />
       )}
       <div className="focus-form-projects" role="group" aria-label="Projects">
         <div className="ask-card">
@@ -114,7 +126,7 @@ export function SpaceForm({ space, length, onDone }: {
       </div>
       <label className="focus-form-field">
         <span className="focus-panel-caption">Tasks (their subtasks come along)</span>
-        <MicInput value={query} setText={setQuery} placeholder="Find a task by its title" data-no-draft="search" data-testid="focus-form-task-search" />
+        <MicInput value={query} setText={setQuery} onKeyDown={keepEnter} placeholder="Find a task by its title" data-no-draft="search" data-testid="focus-form-task-search" />
       </label>
       {(picked.length > 0 || matches.length > 0) && (
         <div className="ask-card"><div className="ask-card-answer focus-ticks" role="group" aria-label="Tasks">
@@ -147,8 +159,8 @@ export function SpaceForm({ space, length, onDone }: {
       {empty && <div className="focus-panel-empty">Pick at least one project or task.</div>}
       {error && <div className="focus-panel-error" role="alert">{error}</div>}
       <div className="ask-card-answer focus-actions">
-        <button type="submit" className="btn btn-sm btn-primary" disabled={busy || empty} data-testid="focus-form-enter">{space ? 'Save and enter' : 'Make and enter'}</button>
-        <button type="button" className="btn btn-sm" disabled={busy || empty} onClick={() => void save(false)} data-testid="focus-form-save">Save</button>
+        <button type="submit" className="btn btn-sm btn-primary" disabled={busy || empty} data-testid="focus-form-enter" {...dictationWaitProps(gate)}>{space ? 'Save and enter' : 'Make and enter'}</button>
+        <button type="button" className="btn btn-sm" disabled={busy || empty} onClick={() => submit(false)} data-testid="focus-form-save">Save</button>
         <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onDone(false)}>Cancel</button>
         {space && (
           <button type="button" className="btn btn-sm focus-form-delete" disabled={busy} onClick={() => void remove()}

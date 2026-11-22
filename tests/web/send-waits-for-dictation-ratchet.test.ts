@@ -209,6 +209,8 @@ const SELF_GATED: Record<string, Role> = {
   'components/drawing/DrawingWorkspace.tsx|MicInput aria-label=label': LEAVE,
   // The library catalog's search narrows the list of libraries as the words come; nothing sends them.
   'components/drawing/LibraryBrowser.tsx|MicInput aria-label="Search libraries"': FILTER,
+  'focus-spaces/SpaceForm.tsx|MicInput data-testid="focus-form-project-search"': FILTER,
+  'focus-spaces/SpaceForm.tsx|MicInput data-testid="focus-form-task-search"': FILTER,
   'components/inbox/ItemTaskSelector.tsx|MicInput id=searchId': FILTER,
   'components/notes/CommandPalette.tsx|MicInput placeholder="Jump to a note, or type to search…"': FILTER,
   'components/notes/NotesTreePanel.tsx|MicInput className="notes-tree-inline-input"': LEAVE,
