@@ -147,9 +147,17 @@ function jsonValue(v: unknown): unknown {
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A start's own key for its bundle: its preassigned session id, else one made for it (R2-M5). */
+function startIdOf(body: StartBody): string {
+  const pre = (body as { preassignedSessionId?: unknown }).preassignedSessionId
+  return typeof pre === 'string' && pre ? pre : `start-${crypto.randomBytes(8).toString('hex')}`
+}
+
 /** A session id the leader may name for a start (event-types.ts checks it at the leader's edge; a file is named by it here). */
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 export const NOT_OWN_SESSION = 'not_own_session'
+/** A session or runtime id as a file name takes it: letters, digits, '-' and '_' (acp-<hex>, a UUID). */
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes {
   const now = o.now ?? Date.now
@@ -168,6 +176,11 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     if (!body || typeof body.taskId !== 'string' || typeof body.message !== 'string') return { status: 400, body: { ok: false, error: 'taskId and message are required', why: 'bad_request' } }
     const pre = (body as { preassignedSessionId?: unknown }).preassignedSessionId
     if (pre !== undefined && (typeof pre !== 'string' || !UUID_V4.test(pre))) return { status: 400, body: { ok: false, error: 'preassignedSessionId must be a v4 UUID', why: 'bad_request' } }
+    // Ids that name files or sessions on this host: one plain name each, never a path (R2-L2).
+    for (const k of ['runtimeId', 'forkedFromSessionId', 'fromPlanSessionId'] as const) {
+      const v = (body as Record<string, unknown>)[k]
+      if (v !== undefined && v !== null && (typeof v !== 'string' || !SAFE_ID.test(v))) return { status: 400, body: { ok: false, error: `${k} is not a session id`, why: 'bad_request' } }
+    }
     const { largePrompt, largePromptPath, startBundle, busSource, ...rest } = body
     const data: Record<string, unknown> & { taskId: string; message: string } = { ...rest }
     if (typeof largePrompt === 'string' && largePrompt.length > 0) {
@@ -181,17 +194,28 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     }
     // The session runs on this host, through its own runtime: no host to dial from here.
     delete data.host
-    if (startBundle) o.bundles.put(body.taskId, startBundle, body.preassignedSessionId)
+    // The answer waits for the CLI's own word (its init, or its failure), never for a timer here:
+    // a "no" while a CLI it spawned still starts would leave a session the leader takes back (R2-H2).
+    data.waitForSpawn = true
+    const startId = startIdOf(body)
+    if (startBundle) o.bundles.put(startId, body.taskId, startBundle, body.preassignedSessionId)
+    let runner: HostRunnerLike | null = null
     try {
-      const runner = await o.runner()
-      const r = await runner.startSession(data, busSource)
+      runner = await o.runner()
+      const r = await o.bundles.run(startId, () => runner!.startSession(data, busSource))
       return { status: 200, body: { ok: true, sessionId: r.claudeSessionId, title: r.title } }
     } catch (err) {
+      // A start that threw after its session came up here is this host's: said as taken, so the
+      // leader never runs it itself (its row and facts tell the rest).
+      if (pre && runner && (runner.findSessionByClaudeId(pre) || runner.findAcpSession(pre))) {
+        o.log?.('warn', 'host sessions: a start threw after its session came up; answered as taken', { taskId: body.taskId, sessionId: pre, error: errText(err) })
+        return { status: 200, body: { ok: true, sessionId: pre, title: '' } }
+      }
       const why = typeof (err as { why?: unknown })?.why === 'string' ? (err as { why: string }).why : 'start_failed'
       o.log?.('warn', 'host sessions: a start failed', { taskId: body.taskId, error: errText(err) })
       return { status: 200, body: { ok: false, error: errText(err), why } }
     } finally {
-      o.bundles.clear(body.taskId)
+      o.bundles.clear(startId)
     }
   }
 

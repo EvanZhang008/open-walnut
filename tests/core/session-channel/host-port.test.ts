@@ -113,13 +113,13 @@ describe('tasks', () => {
   it('reads the start\'s bundle first, then this host\'s copies', async () => {
     const { p, bundles, f } = port()
     const leaderTask = { id: 'task-leader-1', title: 'Only the leader has it', project: 'Acme' } as Task
-    bundles.put('task-leader-1', { task: leaderTask, projectMetadata: { default_cwd: '/home/acme/leader' } })
+    bundles.put('start-1', 'task-leader-1', { task: leaderTask, projectMetadata: { default_cwd: '/home/acme/leader' } })
     const tm = await p.tasks.loadTaskManager()
     expect((await tm.getTask('task-leader-1')).title).toBe('Only the leader has it')
     expect((await tm.getTask('task-copy-1')).title).toBe(f.copyTask.title)
     expect(await tm.getProjectMetadata('Acme')).toEqual({ default_cwd: '/home/acme/leader' })
     expect(await tm.getProjectMetadata('Marina')).toEqual({ default_cwd: '/home/marina/copy' })
-    bundles.clear('task-leader-1')
+    bundles.clear('start-1')
     await expect(tm.getTask('task-leader-1')).rejects.toThrow(/not found/)
   })
 
@@ -160,7 +160,7 @@ describe('tasks', () => {
   it('a start in flight names its session for a write made before the row is known', async () => {
     const { api, seen } = fakeApi(() => ({ status: 200, body: {} }))
     const bundles = new StartBundles()
-    bundles.put('task-copy-1', {}, 'sid-preassigned-1')
+    bundles.put('sid-preassigned-1', 'task-copy-1', {}, 'sid-preassigned-1')
     const { p } = port({ api, bundles, sessionOfTask: () => null })
     await (await p.tasks.loadTaskManager()).updateTask('task-copy-1', { title: 'Named at the start' })
     expect(seen[0]!.sid).toBe('sid-preassigned-1')
@@ -185,7 +185,7 @@ describe('tasks', () => {
 describe('launch and messages', () => {
   it('the session context and the hints of a bundled start are the leader\'s', async () => {
     const { p, bundles } = port()
-    bundles.put('task-b', { sessionContext: { systemPrompt: 'from the leader' }, hintsApplied: true })
+    bundles.put('start-b', 'task-b', { sessionContext: { systemPrompt: 'from the leader' }, hintsApplied: true })
     const ctx = await p.launch.loadSessionContext()
     expect(await ctx.buildSessionContext('task-b')).toEqual({ systemPrompt: 'from the leader' })
     expect(await ctx.buildSessionContext('task-other')).toEqual({ systemPrompt: 'from the copy' })
@@ -195,13 +195,32 @@ describe('launch and messages', () => {
     expect((await hints.prepareStartHints({ taskId: 'task-other', message: 'm' })).data).toMatchObject({ hinted: true })
   })
 
-  it('a bundle expires', async () => {
+  it('a bundle a start never cleared goes after its safety bound, never while a start of a few minutes runs', async () => {
     let now = 1000
     const bundles = new StartBundles(() => now)
-    bundles.put('task-x', { hintsApplied: true }, 'sid-x', 100)
+    bundles.put('sid-x', 'task-x', { hintsApplied: true }, 'sid-x')
+    now += 10 * 60_000
     expect(bundles.get('task-x')).not.toBeNull()
-    now = 1200
+    now += 60 * 60_000
     expect(bundles.get('task-x')).toBeNull()
     expect(bundles.sidOf('task-x')).toBeNull()
+  })
+
+  it('two starts of one task each keep their own bundle: the end of one leaves the other (R2-M5)', async () => {
+    const bundles = new StartBundles()
+    const a = { sessionContext: { systemPrompt: 'plan context' }, hintsApplied: true }
+    const b = { sessionContext: { systemPrompt: 'exec context' }, hintsApplied: true }
+    bundles.put('sid-a', 'task-two', a, 'sid-a')
+    bundles.put('sid-b', 'task-two', b, 'sid-b')
+    // Each start reads its own bundle, whichever came last.
+    expect(await bundles.run('sid-a', async () => bundles.get('task-two'))).toBe(a)
+    expect(await bundles.run('sid-a', async () => bundles.sidOf('task-two'))).toBe('sid-a')
+    expect(await bundles.run('sid-b', async () => bundles.get('task-two'))).toBe(b)
+    // A's start ends: B's bundle is still there for B.
+    bundles.clear('sid-a')
+    expect(await bundles.run('sid-b', async () => bundles.get('task-two'))).toBe(b)
+    expect(bundles.sidOf('task-two')).toBe('sid-b')
+    bundles.clear('sid-b')
+    expect(bundles.get('task-two')).toBeNull()
   })
 })

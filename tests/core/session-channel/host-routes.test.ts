@@ -47,9 +47,10 @@ const runner: HostRunnerLike & Record<string, unknown> = {
   startSession: async (data) => {
     seenAtStart = { bundle: bundles.get(data.taskId), data }
     if (data.message === 'fail') throw Object.assign(new Error('no claude here'), { why: 'cli_missing' })
+    if (data.message === 'up-then-throw') throw new Error('a step after the spawn failed')
     return { claudeSessionId: 'sid-started-1', title: 'Started' }
   },
-  findSessionByClaudeId: (sid) => (sid === 'sid-1' ? session : undefined),
+  findSessionByClaudeId: (sid) => (sid === 'sid-1' || sid === '50000000-0000-4000-8000-0000000000b1' ? session : undefined),
   findAcpSession: (sid) => (sid === 'sid-acp' ? acp : undefined),
   syncTask: (sid: string, taskId: string) => { runnerCalls.push(`sync:${sid}:${taskId}`) },
   reinitialize: async () => 'reinit',
@@ -243,6 +244,49 @@ describe('start, send, interrupt', () => {
   it('a preassigned session id that is not a v4 UUID is refused (it names a file here)', async () => {
     expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', preassignedSessionId: '../../etc/x' })).body).toMatchObject({ ok: false, why: 'bad_request' })
     expect(seenAtStart).toBeNull()
+  })
+
+  it('R2-H2: a start waits for its CLI\'s own word, and one that threw after its session came up is answered as taken', async () => {
+    await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi' })
+    expect(seenAtStart!.data.waitForSpawn).toBe(true)
+    const up = '50000000-0000-4000-8000-0000000000b1'
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'up-then-throw', preassignedSessionId: up })).body).toEqual({ ok: true, sessionId: up, title: '' })
+    // With no session up, it is a refusal as before.
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'up-then-throw', preassignedSessionId: '50000000-0000-4000-8000-0000000000b2' })).body).toMatchObject({ ok: false })
+  })
+
+  it('R2-M5: two starts of one task at once each read their own bundle, and the end of one leaves the other', async () => {
+    const seen: Array<string | undefined> = []
+    let releaseA: () => void = () => {}
+    const slowA = new Promise<void>((r) => { releaseA = r })
+    const original = runner.startSession
+    runner.startSession = async (data) => {
+      if (data.message === 'a') await slowA
+      seen.push(`${data.message}:${bundles.get(data.taskId)?.sessionContext?.systemPrompt}`)
+      if (data.message === 'b') { releaseA(); await new Promise((r) => setTimeout(r, 20)); seen.push(`b-after-a:${bundles.get(data.taskId)?.sessionContext?.systemPrompt}`) }
+      return { claudeSessionId: String(data.preassignedSessionId), title: '' }
+    }
+    try {
+      const a = post('/host-api/sessions/start', { taskId: 'task-two', message: 'a', preassignedSessionId: '50000000-0000-4000-8000-0000000000c1', startBundle: { sessionContext: { systemPrompt: 'A' }, hintsApplied: true } })
+      await new Promise((r) => setTimeout(r, 30))
+      const b = post('/host-api/sessions/start', { taskId: 'task-two', message: 'b', preassignedSessionId: '50000000-0000-4000-8000-0000000000c2', startBundle: { sessionContext: { systemPrompt: 'B' }, hintsApplied: true } })
+      await Promise.all([a, b])
+    } finally {
+      runner.startSession = original
+    }
+    expect(seen).toContain('a:A')
+    expect(seen).toContain('b:B')
+    expect(seen).toContain('b-after-a:B')
+    expect(bundles.get('task-two')).toBeNull()
+  })
+
+  it('R2-L2: an id that names a file or a session here is one plain name, never a path', async () => {
+    for (const k of ['runtimeId', 'forkedFromSessionId', 'fromPlanSessionId']) {
+      seenAtStart = null
+      expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', [k]: '../../etc/passwd' })).body, k).toMatchObject({ ok: false, why: 'bad_request' })
+      expect(seenAtStart).toBeNull()
+    }
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', runtimeId: 'acp-0123abcd', forkedFromSessionId: '50000000-0000-4000-8000-0000000000a1' })).body).toMatchObject({ ok: true })
   })
 
   it('a failed start answers why', async () => {

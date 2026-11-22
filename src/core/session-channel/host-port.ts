@@ -24,6 +24,7 @@
  *   messages  the queue of a session runs where the session runs: this host's own.
  *   recovery  this host's own modules.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { leaderSessionPort } from '../sessions/session-port-leader.js'
 import { callThrough, type SessionPort, type SessionTrackerPort, type TaskManagerPort, type PhasePort } from '../sessions/session-port.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
@@ -31,50 +32,89 @@ import { NeedsLeaderError } from '../replication/needs-leader.js'
 import type { StartBundle } from './host-api.js'
 import type { Task } from '../types.js'
 
-/** How long a start's bundle answers for it, at most (a start that never ends lets it go). */
-const BUNDLE_TTL_MS = 3 * 60_000
+/**
+ * How long a bundle stays when its start never clears it (a lost route): a safety bound only. A
+ * start in flight clears its own entry when it ends, however long it took.
+ */
+const BUNDLE_MAX_MS = 60 * 60_000
 
-/** The bundles of the starts in flight, by task id. */
+interface BundleEntry { taskId: string; bundle: StartBundle; sid?: string; until: number }
+
+/**
+ * The bundles of the starts in flight, each under its start's own id (its preassigned session id,
+ * or one made for it: host-routes.ts startIdOf), never by task: two starts of one task each keep
+ * their own (R2-M5). A read made inside a start (`run`) answers from that start's bundle; any other
+ * read of a task answers from the newest bundle of that task.
+ */
 export class StartBundles {
-  private byTask = new Map<string, { bundle: StartBundle; sid?: string; until: number }>()
+  private byStart = new Map<string, BundleEntry>()
+  private readonly current = new AsyncLocalStorage<string>()
   constructor(private readonly now: () => number = Date.now) {}
 
-  put(taskId: string, bundle: StartBundle, sid?: string, ttlMs = BUNDLE_TTL_MS): void {
-    if (taskId) this.byTask.set(taskId, { bundle, ...(sid ? { sid } : {}), until: this.now() + ttlMs })
+  put(startId: string, taskId: string, bundle: StartBundle, sid?: string): void {
+    if (!startId || !taskId) return
+    this.byStart.delete(startId)
+    this.byStart.set(startId, { taskId, bundle, ...(sid ? { sid } : {}), until: this.now() + BUNDLE_MAX_MS })
+  }
+
+  /** Run `fn` as start `startId`: the reads it makes answer from its own bundle first. */
+  run<T>(startId: string, fn: () => Promise<T>): Promise<T> {
+    return this.current.run(startId, fn)
+  }
+
+  /** The bundle that answers for `taskId` here: the running start's, else the newest of that task. */
+  private entry(taskId: string | undefined): BundleEntry | null {
+    if (!taskId) return null
+    const at = this.now()
+    const mine = this.current.getStore()
+    if (mine) {
+      const e = this.byStart.get(mine)
+      if (e && e.until > at && (e.taskId === taskId || e.bundle.task?.id === taskId)) return e
+    }
+    let found: BundleEntry | null = null
+    for (const [id, e] of this.byStart) {
+      if (e.until <= at) { this.byStart.delete(id); continue }
+      if (e.taskId === taskId) found = e
+    }
+    return found
   }
 
   get(taskId: string | undefined): StartBundle | null {
-    if (!taskId) return null
-    const e = this.byTask.get(taskId)
-    if (!e) return null
-    if (e.until <= this.now()) { this.byTask.delete(taskId); return null }
-    return e.bundle
+    return this.entry(taskId)?.bundle ?? null
   }
 
   /** The session id the start in flight for `taskId` named (its preassigned id), if any. */
   sidOf(taskId: string): string | null {
-    return this.get(taskId) ? this.byTask.get(taskId)?.sid ?? null : null
+    return this.entry(taskId)?.sid ?? null
   }
 
   /** The bundle's task when `idPrefix` names it. */
   task(idPrefix: string): Task | null {
-    for (const [id, e] of this.byTask) {
-      if (e.until <= this.now()) continue
-      if (e.bundle.task && (id === idPrefix || e.bundle.task.id === idPrefix)) return e.bundle.task
+    const own = this.entry(idPrefix)
+    if (own?.bundle.task) return own.bundle.task
+    const at = this.now()
+    for (const e of [...this.byStart.values()].reverse()) {
+      if (e.until <= at) continue
+      if (e.bundle.task && e.bundle.task.id === idPrefix) return e.bundle.task
     }
     return null
   }
 
   /** The project metadata a bundle in flight carries for `project`; undefined: none says. */
   projectMetadata(project: string): Record<string, unknown> | null | undefined {
-    for (const e of this.byTask.values()) {
-      if (e.until <= this.now() || e.bundle.projectMetadata === undefined) continue
+    const at = this.now()
+    const mine = this.current.getStore()
+    const entries = [...this.byStart.entries()].reverse()
+    entries.sort(([a], [b]) => (a === mine ? -1 : b === mine ? 1 : 0))
+    for (const [, e] of entries) {
+      if (e.until <= at || e.bundle.projectMetadata === undefined) continue
       if ((e.bundle.task?.project ?? '') === project) return e.bundle.projectMetadata
     }
     return undefined
   }
 
-  clear(taskId: string): void { this.byTask.delete(taskId) }
+  /** The start ended: only its own entry goes. */
+  clear(startId: string): void { this.byStart.delete(startId) }
 }
 
 /** This service's own API, called as one of its sessions (null `sid`: as no session). */
