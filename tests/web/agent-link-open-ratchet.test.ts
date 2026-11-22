@@ -228,7 +228,7 @@ describe('the app-level opener', () => {
     expect(letters).toMatch(/linkPending\.current = \(event as CustomEvent\)\.detail\?\.link === true/)
     expect(panel).toMatch(/if \(linkOpened\.current\) \{ linkOpened\.current = false; onClose\(\); \}/)
     // A letter chosen from the center's own list is the center's, never closed with it.
-    expect(letters).toMatch(/const openLetter = useCallback\(\(id: string\) => \{\s*linkOpened\.current = false;/)
+    expect(letters).toMatch(/const openLetter = useLeanCallback\(\(id: string\) => \{\s*linkOpened\.current = false;/)
   })
 
   it('the notification center stays above a full-screen surface and below its letter reader', () => {
@@ -244,7 +244,11 @@ describe('the app-level opener', () => {
     const fullscreen = layer('styles/globals.css', '.open-walnut-fullscreen')
     const backdrop = layer('styles/globals.css', '.notification-panel-backdrop')
     const center = layer('styles/globals.css', '.notification-panel')
-    const reader = layer('styles/human-inbox.css', '.hib-reader-overlay')
+    // The reader sits on the overlay family's scrim, whose layer is the --z-modal token.
+    expect(read('components/inbox/LetterReader.tsx')).toMatch(/className="hib-reader-overlay wn-scrim"/)
+    const family = read('styles/overlay-family.css')
+    expect(family).toMatch(/html \.wn-scrim \{[^}]*z-index: var\(--z-modal\);/)
+    const reader = Number(family.match(/--z-modal:\s*(\d+);/)?.[1])
     expect(backdrop).toBeGreaterThan(fullscreen)
     expect(center).toBeGreaterThan(backdrop)
     expect(reader).toBeGreaterThan(center)
