@@ -28,6 +28,7 @@ import { timed } from '../../core/observability/metrics.js'
 import { followMovedDrawingCompanion, followMovedNote, pruneFavoriteNotes } from '../../core/note-moves.js'
 import { sortedByName } from '../../lib/dir-order.js'
 import { getConfig } from '../../core/config-manager.js'
+import { NOTE_ATTACHMENT_DIR } from '../../core/notes/attachment-dir.js'
 import {
   parseFrontmatter,
   readId,
@@ -524,7 +525,7 @@ export function planNoteAttachment(
     `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 6)
   const filename = `pasted-image-${ts}-${hash}.${ext}`
-  const filePath = path.join(path.dirname(noteFile), '_attachment', filename)
+  const filePath = path.join(path.dirname(noteFile), NOTE_ATTACHMENT_DIR, filename)
   return { filePath, relPath: noteRelOf(filePath), filename, buffer }
 }
 

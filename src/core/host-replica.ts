@@ -49,6 +49,7 @@ import { refusedMost } from './replication/kind.js'
 import { noteMoves } from './notes/note-path-moves.js'
 import { walnutOwnedNote } from './notes/vault-files.js'
 import { artifactsByProject, artifactsDir } from './artifacts/paths.js'
+import { NOTE_ATTACHMENT_DIR } from './notes/attachment-dir.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 export const REPLICA_KINDS: readonly ReplicaKind[] = ['notes', 'memory', 'skills']
@@ -163,7 +164,7 @@ async function walkNotes(exclude: string[], root: string, tree: boolean): Promis
       if (d.name.startsWith('.')) continue
       const rel = relDir ? `${relDir}/${d.name}` : d.name
       if (d.isDirectory()) {
-        if (d.name === '_attachment' || leftOut(rel, exclude) || (tree && walnutOwnedNote(`${rel}/`))) continue
+        if (d.name === NOTE_ATTACHMENT_DIR || leftOut(rel, exclude) || (tree && walnutOwnedNote(`${rel}/`))) continue
         await walk(path.join(dir, d.name), rel)
         continue
       }

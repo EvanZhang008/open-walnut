@@ -461,6 +461,39 @@ describe('settleRepoSize (the size card waits for the fixer)', () => {
     expect(readLastRun(gitDir).at).toBe(at);
   });
 
+  async function attach(bytes: number): Promise<void> {
+    const dir = path.join(repo, 'artifacts', 'notes', 'trip', '_attachment');
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, 'clip.bin'), Buffer.alloc(bytes, 7));
+    run('git add -A && git commit -q -m clip', repo);
+  }
+
+  it("a repo over 3GB only by the user's own files is not over, and runs no gc", async () => {
+    // 2026-11-22: 3.1GB of note attachments kept a healthy repo "over" at every
+    // 6h check. Here: 2MB of attachments, a repo 1MB past 3GB.
+    await attach(2 * 1024 * 1024);
+    start();
+    const settled = await settleRepoSize(over(3 * GB + 1024 * 1024));
+    expect(settled.over).toBe(false);
+    expect(settled.warning).toBeNull();
+    expect(settled.userBytes).toBe(2 * 1024 * 1024);
+    expect(readLastRun(gitDir).at).toBe(0);
+  });
+
+  it('a repo still over on top of the user files runs the gc and keeps the allowance in its re-measure', async () => {
+    await attach(1024 * 1024);
+    const fake = path.join(gitDir, 'objects', 'pack', 'pack-fake.pack');
+    const fd = await fsp.open(fake, 'w');
+    await fd.truncate(3.5 * GB);
+    await fd.close();
+    start();
+    const settled = await settleRepoSize(over(3.5 * GB));
+    expect(readLastRun(gitDir).at).toBeGreaterThan(0);
+    expect(settled.over).toBe(true);
+    expect(settled.userBytes).toBe(1024 * 1024);
+    expect(settled.warning).toMatch(/plus the 0\.0GB of files attached to your notes/);
+  });
+
   it('joins a pass already in flight instead of starting a second gc', async () => {
     start();
     const first = handle!.runOnce();

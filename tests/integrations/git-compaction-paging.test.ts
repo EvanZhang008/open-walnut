@@ -16,7 +16,13 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 import { collectCommitsPaged } from '../../src/integrations/git-compaction.js';
-import { checkRepoSize, resetRepoSizeCheckForTest, REPO_SIZE_RECOVERY_KEY } from '../../src/integrations/git-sync.js';
+import {
+  checkRepoSize, resetRepoSizeCheckForTest, REPO_SIZE_RECOVERY_KEY,
+  judgeRepoSize, sumDistinctBlobBytes, trackedUserFileBytes, isUserAttachmentPath, USER_FILE_DIRS,
+} from '../../src/integrations/git-sync.js';
+import { artifactsDir } from '../../src/core/artifacts/paths.js';
+import { NOTE_ATTACHMENT_DIR } from '../../src/core/notes/attachment-dir.js';
+import { WALNUT_HOME, NOTES_DIR } from '../../src/constants.js';
 
 let repoDir: string;
 
@@ -146,5 +152,88 @@ describe('checkRepoSize sentinel', () => {
     // pass under the threshold, never on `git` recovering.
     expect(REPO_SIZE_RECOVERY_KEY).toBe('git:repo-size');
     expect(REPO_SIZE_RECOVERY_KEY).not.toBe('git');
+  });
+});
+
+describe("repo-size budget: the user's own files are not the repo growing", () => {
+  const GB = 1024 * 1024 * 1024;
+  const m = (liveBytes: number) => ({ liveBytes, debrisBytes: 0, sweptBytes: 0 });
+
+  it('judges on top of the user files: the real 2026-11-22 numbers are healthy, a doubled history is not', () => {
+    // 4.7GB of live packs, 3.1GB of them files attached to the user's notes.
+    expect(judgeRepoSize(m(4.7 * GB), 3.1 * GB).over).toBe(false);
+    // Without the allowance the same repo was "over" every 6h (the alarm).
+    expect(judgeRepoSize(m(4.7 * GB), 0).over).toBe(true);
+    // A pinned backup doubling the history still alarms, and names the allowance.
+    const doubled = judgeRepoSize(m(8 * GB), 3.1 * GB);
+    expect(doubled.over).toBe(true);
+    expect(doubled.userBytes).toBe(3.1 * GB);
+    expect(doubled.warning).toMatch(/threshold 3GB plus the 3\.1GB of files attached to your notes/);
+  });
+
+  it('counts each distinct attachment blob once; skips submodules and files outside attachment folders', () => {
+    const rec = (type: string, oid: string, size: string, p: string) => `100644 ${type} ${oid} ${size.padStart(7)}\t${p}`;
+    const out = [
+      rec('blob', 'a'.repeat(40), '100', 'artifacts/x/_attachment/one photo.jpg'),
+      rec('blob', 'a'.repeat(40), '100', 'artifacts/y/_attachment/same photo.jpg'),
+      rec('blob', 'b'.repeat(40), '50', 'notes/y/_attachment/tab\there \u65e5\u672c.mov'),
+      rec('blob', 'd'.repeat(40), '7000', 'artifacts/nodes/t1/drawings/download.bin'),
+      rec('blob', 'e'.repeat(40), '9000', 'artifacts/x/_attachment'),
+      rec('commit', 'c'.repeat(40), '-', 'artifacts/x/_attachment/sub'),
+      '',
+    ].join('\0');
+    expect(sumDistinctBlobBytes(out)).toBe(150);
+    expect(sumDistinctBlobBytes('')).toBe(0);
+    expect(isUserAttachmentPath('artifacts/a/_attachment/b/c.png')).toBe(true);
+    expect(isUserAttachmentPath('artifacts/a/_attachment.png')).toBe(false);
+  });
+
+  it('measures only attachments in HEAD of a real repo; 0 with no commit or no such folder', async () => {
+    expect(await trackedUserFileBytes(repoDir)).toBe(0);
+    await fsp.writeFile(path.join(repoDir, 'cron-jobs.json'), 'x'.repeat(9000));
+    sh('git add -A && git commit -q -m json');
+    expect(await trackedUserFileBytes(repoDir)).toBe(0);
+    const att = path.join(repoDir, 'artifacts', 'notes', 'trip', NOTE_ATTACHMENT_DIR);
+    await fsp.mkdir(att, { recursive: true });
+    await fsp.mkdir(path.join(repoDir, 'notes', 'old', NOTE_ATTACHMENT_DIR), { recursive: true });
+    await fsp.mkdir(path.join(repoDir, 'artifacts', 'nodes', 't1'), { recursive: true });
+    await fsp.writeFile(path.join(att, 'v.bin'), Buffer.alloc(3000, 1));
+    await fsp.writeFile(path.join(att, 'copy of v.bin'), Buffer.alloc(3000, 1));
+    await fsp.writeFile(path.join(repoDir, 'notes', 'old', NOTE_ATTACHMENT_DIR, 'w.bin'), Buffer.alloc(500, 2));
+    await fsp.writeFile(path.join(repoDir, 'artifacts', 'nodes', 't1', 'dump.log'), Buffer.alloc(4000, 3));
+    sh('git add -A && git commit -q -m files');
+    expect(await trackedUserFileBytes(repoDir)).toBe(3500);
+  });
+
+  it('guard: every root of the notes vault is a USER_FILE_DIRS entry', () => {
+    // A new root for the vault must join USER_FILE_DIRS, or its attachments alarm as growth again.
+    for (const root of [artifactsDir(), NOTES_DIR]) {
+      const top = path.relative(WALNUT_HOME, root).split(path.sep)[0];
+      expect(USER_FILE_DIRS as readonly string[]).toContain(top);
+    }
+  });
+
+  it('guard: no source file names the attachment folder by hand', () => {
+    // Every writer and reader of note attachments names the folder through
+    // NOTE_ATTACHMENT_DIR, so a renamed or second attachment folder cannot slip
+    // past the sentinel's allowance unseen.
+    const srcDir = path.resolve(__dirname, '../../src');
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(ts|tsx|js|mjs)$/.test(e.name) && !p.endsWith(path.join('notes', 'attachment-dir.ts'))) {
+          // Code lines only (prose in comments may name the folder): a string or
+          // template literal holding the name is a writer or reader of its own.
+          const code = fs.readFileSync(p, 'utf-8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+          // The bare name as a literal, or inside a path literal (no spaces: not prose).
+          const named = (l: string) => /(['"`])_attachment\1/.test(l) || /(['"`])[^\s'"`]*\/_attachment\/?[^\s'"`]*\1/.test(l);
+          if (code.some(named)) offenders.push(path.relative(srcDir, p));
+        }
+      }
+    };
+    walk(srcDir);
+    expect(offenders).toEqual([]);
   });
 });

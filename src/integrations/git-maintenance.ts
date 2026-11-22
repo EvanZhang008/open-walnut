@@ -43,6 +43,8 @@ import {
   waitForSyncSettled,
   isSyncPaused,
   measureRepoSize,
+  judgeRepoSize,
+  trackedUserFileBytes,
   setRewriteAdoptedListener,
   type RepoSizeVerdict,
 } from './git-sync.js';
@@ -617,12 +619,17 @@ export function requestMaintenancePass(): Promise<MaintenanceResult[]> | null {
  */
 export async function settleRepoSize(verdict: RepoSizeVerdict): Promise<RepoSizeVerdict> {
   if (!verdict.over) return verdict;
+  // The user's own files are not the repo growing: judge on top of them first
+  // (2026-11-22: 3.9GB of attachments kept a healthy repo "over" for good).
+  const userBytes = await trackedUserFileBytes(WALNUT_HOME);
+  const judged = userBytes > 0 ? judgeRepoSize(verdict, userBytes) : verdict;
+  if (!judged.over) return judged;
   const pass = requestMaintenancePass();
-  if (!pass) return verdict;
+  if (!pass) return judged;
   const results = await pass;
   const worktree = results.find((r) => r.repo === WALNUT_HOME);
-  if (!worktree?.ran) return verdict;
-  return measureRepoSize(WALNUT_HOME);
+  if (!worktree?.ran) return judged;
+  return measureRepoSize(WALNUT_HOME, Date.now(), userBytes);
 }
 
 /**

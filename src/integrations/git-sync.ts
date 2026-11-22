@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CLOUD_MODE, WALNUT_HOME } from '../constants.js';
+import { NOTE_ATTACHMENT_DIR } from '../core/notes/attachment-dir.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { markCriticalSection } from '../core/event-loop-monitor.js';
 import { safeKillProcessGroup } from '../core/process-group-kill.js';
@@ -3122,8 +3123,27 @@ export function isLockContention(err: unknown): boolean {
 // sure a ballooning data repo surfaces as a warning long before it can take
 // the machine down. Checked from the sync tick, at most once per interval.
 
-/** Warn when the data repo's .git exceeds this many bytes (3GB). */
+/**
+ * Warn when the data repo's .git exceeds this many bytes (3GB) on top of the
+ * user's own files (USER_FILE_DIRS). The budget is for what Walnut itself puts
+ * in git: history, its JSON stores, pinned backups, debris.
+ */
 const REPO_SIZE_WARN_BYTES = 3 * 1024 * 1024 * 1024;
+
+/**
+ * Where the user's own files live in the data repo: the photos, videos and
+ * documents attached to notes and projects, in a NOTE_ATTACHMENT_DIR folder
+ * under artifacts/ (the one tree) or notes/ (the vault of a data dir from
+ * before it). Their bytes are the user's data, which no gc, compaction or
+ * gitignore may shrink, so the sentinel adds them to its budget. Only those
+ * folders count: a Walnut-written file elsewhere under artifacts/ (a session's
+ * memory, a drawing, a stray download) still counts as growth. 2026-11-22: the
+ * attachments held 3.1GB in HEAD alone (a 377MB video among them), so a flat
+ * 3GB fired every 6 hours on a healthy repo whose history and Walnut data were
+ * about 1.6GB. The cost: Walnut-made growth must now reach 3GB on its own, so a
+ * 2GB backup branch stays quiet until maintenance ages it out (7 days).
+ */
+export const USER_FILE_DIRS = ['artifacts', 'notes'] as const;
 const REPO_SIZE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 /**
@@ -3146,6 +3166,8 @@ export interface RepoSizeVerdict {
   sweptBytes: number;
   over: boolean;
   warning: string | null;
+  /** Bytes of the user's own files (USER_FILE_DIRS) in HEAD, added to the budget. 0 when not measured. */
+  userBytes?: number;
 }
 
 function isTransferDebris(name: string): boolean {
@@ -3195,7 +3217,7 @@ export function checkRepoSize(repoDir = WALNUT_HOME): RepoSizeVerdict | null {
 }
 
 /** One sentinel measurement, unthrottled (a re-measure after a gc uses it). */
-export function measureRepoSize(repoDir = WALNUT_HOME, now = Date.now()): RepoSizeVerdict {
+export function measureRepoSize(repoDir = WALNUT_HOME, now = Date.now(), userBytes = 0): RepoSizeVerdict {
   const before = measurePackDir(repoDir);
   let sweptBytes = 0;
   let debrisBytes = before.debrisBytes;
@@ -3203,9 +3225,21 @@ export function measureRepoSize(repoDir = WALNUT_HOME, now = Date.now()): RepoSi
     debrisBytes = measurePackDir(repoDir).debrisBytes;
     sweptBytes = before.debrisBytes - debrisBytes;
   }
-  const liveBytes = before.liveBytes;
-  const over = liveBytes >= REPO_SIZE_WARN_BYTES;
-  if (!over) return { liveBytes, debrisBytes, sweptBytes, over, warning: null };
+  return judgeRepoSize({ liveBytes: before.liveBytes, debrisBytes, sweptBytes }, userBytes);
+}
+
+/**
+ * Judge one measurement against the budget: REPO_SIZE_WARN_BYTES on top of the
+ * user's own files. The sync tick measures without them (a stat of the pack dir);
+ * the size is judged again with them before anything is raised (settleRepoSize).
+ */
+export function judgeRepoSize(
+  m: Pick<RepoSizeVerdict, 'liveBytes' | 'debrisBytes' | 'sweptBytes'>,
+  userBytes = 0,
+): RepoSizeVerdict {
+  const { liveBytes, debrisBytes, sweptBytes } = m;
+  const over = liveBytes >= REPO_SIZE_WARN_BYTES + userBytes;
+  if (!over) return { liveBytes, debrisBytes, sweptBytes, over, warning: null, userBytes };
 
   // Name the three things that have actually been behind this alert, in the
   // order they were found (2026-09-10): a compaction that ran fine but left
@@ -3215,9 +3249,61 @@ export function measureRepoSize(repoDir = WALNUT_HOME, now = Date.now()): RepoSi
   const debrisNote = debrisBytes > 0
     ? `; another ${gbText(debrisBytes)} of tmp_pack_* debris from a transfer still in flight is not counted`
     : '';
-  const warning = `data repo .git has grown to ${gbText(liveBytes)} of live packs (threshold 3GB)${debrisNote}: `
+  const threshold = userBytes > 0
+    ? `threshold 3GB plus the ${gbText(userBytes)} of files attached to your notes`
+    : 'threshold 3GB';
+  const warning = `data repo .git has grown to ${gbText(liveBytes)} of live packs (${threshold})${debrisNote}: `
     + 'check for backup-* branches pinning old history, large tracked files, or tmp_pack_* debris; see open-walnut logs -s git';
-  return { liveBytes, debrisBytes, sweptBytes, over, warning };
+  return { liveBytes, debrisBytes, sweptBytes, over, warning, userBytes };
+}
+
+/** Whether a repo path is a file the user attached to a note (inside a NOTE_ATTACHMENT_DIR folder). */
+export function isUserAttachmentPath(p: string): boolean {
+  return p.split('/').slice(0, -1).includes(NOTE_ATTACHMENT_DIR);
+}
+
+/**
+ * Bytes of the distinct attachment blobs in `git ls-tree -r -l -z` output. A file
+ * kept twice (the same photo in two notes) is one blob, stored once, so it counts once.
+ */
+export function sumDistinctBlobBytes(lsTreeZ: string): number {
+  const seen = new Set<string>();
+  let total = 0;
+  for (const rec of lsTreeZ.split('\0')) {
+    // "<mode> blob <oid> <size>\t<path>"; a submodule (commit) or tree has no size.
+    // The header holds no tab, so the first one starts the path (-z: never quoted).
+    const tab = rec.indexOf('\t');
+    if (tab < 0) continue;
+    const [, type, oid, size] = rec.slice(0, tab).trim().split(/\s+/);
+    if (type !== 'blob' || !oid || seen.has(oid) || !isUserAttachmentPath(rec.slice(tab + 1))) continue;
+    const n = Number(size);
+    if (!Number.isFinite(n)) continue;
+    seen.add(oid);
+    total += n;
+  }
+  return total;
+}
+
+/**
+ * Bytes of the user's own files (attachments under USER_FILE_DIRS) in HEAD. A
+ * child process (never a sync call on the event loop); 0 when git cannot answer,
+ * which only makes the sentinel stricter, and says so in the log.
+ */
+export async function trackedUserFileBytes(repoDir = WALNUT_HOME): Promise<number> {
+  try {
+    const { code, stdout, stderr } = await execGitArgsStatus(
+      ['ls-tree', '-r', '-l', '-z', 'HEAD', '--', ...USER_FILE_DIRS],
+      { cwd: repoDir, timeout: 60_000 },
+    );
+    if (code !== 0) {
+      log.git.warn('repo-size sentinel could not measure the user files; judging without them', { code, stderr: stderr.trim().slice(0, 300) });
+      return 0;
+    }
+    return sumDistinctBlobBytes(stdout);
+  } catch (err) {
+    log.git.warn('repo-size sentinel could not measure the user files; judging without them', { error: String(err) });
+    return 0;
+  }
 }
 
 /**

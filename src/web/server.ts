@@ -6993,8 +6993,8 @@ function startGitAutoCommit(
                 recoveryKey: REPO_SIZE_RECOVERY_KEY,
               })
             } else if (measured.over) {
-              log.git.info('repo-size sentinel: maintenance brought the data repo under the threshold', {
-                liveBytesBefore: measured.liveBytes, liveBytesAfter: size.liveBytes,
+              log.git.info('repo-size sentinel: the data repo is under its threshold once the user\'s own files and maintenance are counted', {
+                liveBytesBefore: measured.liveBytes, liveBytesAfter: size.liveBytes, userBytes: size.userBytes ?? 0,
               })
             }
             // The card retires on the size itself (a gc, an aged backup branch, a

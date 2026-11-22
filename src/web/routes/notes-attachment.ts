@@ -42,6 +42,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeNotePath, resolveNotePath } from '../../core/notes/note-paths.js'
 import { notePathBefore } from '../../core/notes/note-path-moves.js'
+import { NOTE_ATTACHMENT_DIR } from '../../core/notes/attachment-dir.js'
 
 // The attachment-type allowlist lives in notes-v2.ts (ATTACHMENT_MIME) —
 // single source of truth; this module only resolves paths.
@@ -152,7 +153,7 @@ function candidateRank(candidate: string, noteDirSegments: string[], before: boo
     if (noteDirSegments[i] !== dirSegments[i]) break
     shared++
   }
-  const inAttachmentDir = dirSegments[dirSegments.length - 1]?.toLowerCase() === '_attachment' ? 1 : 0
+  const inAttachmentDir = dirSegments[dirSegments.length - 1]?.toLowerCase() === NOTE_ATTACHMENT_DIR ? 1 : 0
   // Negative depth so a shallower path ranks higher under a plain descending sort.
   return [shared, inAttachmentDir, -dirSegments.length, candidate]
 }
