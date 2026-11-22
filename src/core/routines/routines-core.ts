@@ -211,9 +211,15 @@ function pushTriggersFor(hosts: Array<string | undefined | null>): void {
 }
 
 /** The stored job, or null. Used to learn a trigger's OLD host before a mutation. */
+/**
+ * The job as it is now, a copy: callers keep it as the "before" of a write, and the cron store
+ * keeps its jobs in memory across ops (store.ts ensureLoaded), so the store's own object would
+ * read the write's result (a trigger moved to another host would never tell the host it left).
+ */
 async function findJob(service: CronService, id: string): Promise<CronJob | null> {
   const jobs = await service.list({ includeDisabled: true, recompute: false });
-  return jobs.find((j) => j.id === id) ?? null;
+  const job = jobs.find((j) => j.id === id);
+  return job ? structuredClone(job) : null;
 }
 
 /**

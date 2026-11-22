@@ -625,6 +625,12 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   /** When `store` last matched the file (it was read or written then, under the lock); ops.listKept. */
   keptAt?: number;
+  /**
+   * The two files as `store` last matched them (store.ts diskStampOf), and when they were last
+   * read: a forced reload whose files still carry this stamp keeps `store` instead of reading and
+   * parsing them again. Cleared by an op that threw (timer.ts locked). Optional, like replayGuard.
+   */
+  disk?: { stamp: string; readAt: number; jobsText?: string; stateText?: string };
   timer: ReturnType<typeof setTimeout> | null;
   running: boolean;
   op: Promise<unknown>;

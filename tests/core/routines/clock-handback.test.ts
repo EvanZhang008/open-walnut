@@ -28,6 +28,11 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
 }))
 const cron = vi.hoisted(() => ({ service: null as unknown }))
 vi.mock('../../../src/web/routes/cron.js', () => ({ getCronService: () => cron.service }))
+// A trigger saved on a host needs that host's daemon; the move test saves on two (both "connected").
+vi.mock('../../../src/core/routines/trigger-daemon.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/routines/trigger-daemon.js')>()),
+  requireTriggerDaemon: async () => ({}),
+}))
 
 import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js'
 import * as ops from '../../../src/core/cron/ops.js'
@@ -447,5 +452,17 @@ describe('what the push carries', () => {
     await vi.waitFor(() => expect(pushed).toHaveLength(3))
     await routinesCore.deleteRoutine(job.id)
     await vi.waitFor(() => expect(pushed).toEqual([HOST, HOST, HOST, HOST]))
+  })
+
+  // The cron store keeps its jobs in memory across ops: the "before" of an edit must be a copy,
+  // or a trigger moved to another host never tells the host it left (2026-11-21 review).
+  it('a trigger moved to another host reaches both hosts, the one it left too', async () => {
+    const state = makeState()
+    cron.service = new CronService({ ...state.deps, storePath: path.join(dir, 'core-move.json') } as never)
+    const service = cron.service as CronService
+    const job = await service.add(sessionRoutine({ schedule: { kind: 'every', everyMs: 5 * 60_000 }, check: { run: 'true', host: HOST } } as never))
+    pushed.length = 0
+    await routinesCore.patchRoutine(job.id, { check: { run: 'true', host: 'otherbox' } })
+    await vi.waitFor(() => expect([...pushed].sort()).toEqual([HOST, 'otherbox'].sort()))
   })
 })

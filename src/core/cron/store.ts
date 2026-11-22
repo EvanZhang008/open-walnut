@@ -16,7 +16,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CronJob, CronStoreFile, CronStateFile, CronJobState, CronServiceState } from './types.js';
-import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
+import { jsonFileText, readJsonFile, writeJsonText } from '../../utils/fs.js';
 import { noteStoreWrite } from '../replication/store-writes.js';
 import { isHostReplicaProgram } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
@@ -54,12 +54,59 @@ async function loadStateMap(state: CronServiceState): Promise<Record<string, Cro
   return {};
 }
 
+/**
+ * A forced reload reads the files again at least this often even when their stamp held: one more
+ * net under a change the stamp could miss (a writer outside the lock in the instant after our own
+ * write, with the very size we wrote). Such a write could be lost as before this cache, when an
+ * op wrote over it between its read and its write.
+ */
+export const CRON_REREAD_MAX_MS = 30_000;
+
+/** One file's identity and version: inode, size, mtime, ctime; 'none' when it is missing. */
+async function fileStamp(p: string): Promise<string> {
+  try {
+    const s = await fs.stat(p);
+    return `${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'none';
+    return `error:${Math.random()}`; // never matches: read the file
+  }
+}
+
+/** Both files' stamps, the jobs file's first. */
+export async function diskStampOf(state: CronServiceState): Promise<string> {
+  const [jobs, sidecar] = await Promise.all([fileStamp(state.deps.storePath), fileStamp(cronStatePath(state.deps.storePath))]);
+  return `${jobs}|${sidecar}`;
+}
+
+/** The next forced reload reads the files (an op threw: memory may hold a change never written). */
+export function forgetDiskStamp(state: CronServiceState): void {
+  state.disk = undefined;
+}
+
+/**
+ * Load the store, or with `forceReload` load it again under the lock.
+ *
+ * A forced reload keeps the store in memory when both files still carry the stamp they had when
+ * this process last read or wrote them (2026-11-21, the live server: every op forced a reload, so
+ * the two files were read and parsed about 5 times a second, 6.5 GB of JSON text in 10 minutes,
+ * the largest source of the server's garbage). Any other writer (a second process, git-sync, the
+ * routines copy) changes the stamp, so the reload reads what it wrote, as before.
+ */
 export async function ensureLoaded(
   state: CronServiceState,
   opts?: { forceReload?: boolean; skipRecompute?: boolean },
 ): Promise<void> {
   if (state.store && !opts?.forceReload) return;
+  if (state.store && state.disk && Date.now() - state.disk.readAt < CRON_REREAD_MAX_MS
+    && await diskStampOf(state) === state.disk.stamp) {
+    state.keptAt = Date.now();
+    if (!opts?.skipRecompute) recomputeNextRuns(state);
+    return;
+  }
 
+  // Taken before the read: a write after it changes the stamp, so the next reload reads again.
+  const stamp = await diskStampOf(state);
   let loaded: CronStoreFile;
   try {
     loaded = await readJsonFile<CronStoreFile>(state.deps.storePath, emptyStore());
@@ -141,6 +188,7 @@ export async function ensureLoaded(
   if (loaded.version !== 2) dirty = true;
   state.store = { version: 2, jobs: loaded.jobs ?? [] };
   state.keptAt = Date.now();
+  state.disk = { stamp, readAt: Date.now() };
   if (dirty) {
     await persist(state);
   }
@@ -214,9 +262,26 @@ export async function persist(state: CronServiceState): Promise<void> {
     return definition;
   });
 
-  await writeJsonFile(state.deps.storePath, { ...state.store, jobs: jobsWithoutState });
-  const stateFile: CronStateFile = { version: 1, states };
-  await writeJsonFile(cronStatePath(state.deps.storePath), stateFile);
+  const jobsText = jsonFileText({ ...state.store, jobs: jobsWithoutState });
+  const stateText = jsonFileText({ version: 1, states } satisfies CronStateFile);
+  // A file whose text is what this process last wrote, and that nobody wrote since, is left as
+  // it is: most writes change only the runtime state, and the jobs file rides git-sync.
+  const prior = state.disk && await diskStampOf(state) === state.disk.stamp ? state.disk : undefined;
+  try {
+    if (prior?.jobsText !== jobsText) await writeJsonText(state.deps.storePath, jobsText);
+    if (prior?.stateText !== stateText) await writeJsonText(cronStatePath(state.deps.storePath), stateText);
+  } catch (err) {
+    forgetDiskStamp(state);
+    throw err;
+  }
+  // Stamped after the write, under the lock: the next reload keeps this store. A file whose size
+  // is not what was just written changed again in between (a writer outside the lock): no stamp,
+  // so the next reload reads it.
+  const stamp = await diskStampOf(state);
+  const sizes = stamp.split('|').map((one) => Number(one.split(':')[1]));
+  state.disk = sizes[0] === Buffer.byteLength(jobsText) && sizes[1] === Buffer.byteLength(stateText)
+    ? { stamp, readAt: prior?.readAt ?? Date.now(), jobsText, stateText }
+    : undefined;
   state.keptAt = Date.now();
   // The routines copy kind's watch (replication/store-writes.ts): this is the one write point.
   noteStoreWrite('routines');

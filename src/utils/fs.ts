@@ -20,7 +20,20 @@ export async function writeJsonFile(
   data: unknown,
   options: { mode?: number; durable?: boolean } = {},
 ): Promise<void> {
-  const text = JSON.stringify(data, null, 2) + '\n';
+  await writeJsonText(filePath, jsonFileText(data), options);
+}
+
+/** The text writeJsonFile writes for `data`: a caller that skips an unchanged file compares it. */
+export function jsonFileText(data: unknown): string {
+  return JSON.stringify(data, null, 2) + '\n';
+}
+
+/** writeJsonFile for text jsonFileText already made. */
+export async function writeJsonText(
+  filePath: string,
+  text: string,
+  options: { mode?: number; durable?: boolean } = {},
+): Promise<void> {
   noteJsonIo(filePath, false, text.length);
   await writeTextFile(filePath, text, options);
 }

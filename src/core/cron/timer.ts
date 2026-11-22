@@ -10,7 +10,7 @@
 
 import type { CronJob, CronServiceState, CronEvent, ExecutorRunContext, SentInfo, SentRun } from './types.js';
 import { cloudModeSkipsJob, computeJobNextRunAtMs, isClockOwned, nextWakeAtMs, recomputeNextRuns, scheduleNextRunAtMs } from './jobs.js';
-import { ensureLoaded, persist } from './store.js';
+import { ensureLoaded, forgetDiskStamp, persist } from './store.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import {
   appendAudit, auditDelivery, injectedPreview, wakeAuditEntry, TRIGGER_FIRE_LOG_MAX,
@@ -100,6 +100,10 @@ export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): 
   await prev.catch(() => {});
   try {
     return await withFileLock(state.deps.storePath, fn);
+  } catch (err) {
+    // The op may have changed the store in memory and never written it: read the files again.
+    forgetDiskStamp(state);
+    throw err;
   } finally {
     resolve();
   }
