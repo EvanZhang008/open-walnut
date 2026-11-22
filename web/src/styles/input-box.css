@@ -19,7 +19,10 @@
 :root {
   /* 12 px: rounded, never an oval pill. 2026-11-21 the user called the Threads pill box ugly;
      2026-11-22 he asked why the 8 px corners and square keys replaced the round look he had. */
-  --input-radius: var(--radius-md);
+  /* 20 px, the session card's corner before 2026-11-21: on 2026-11-22 the user found 12 px still
+     square next to the round box he had. A one-line box takes 12 px (is-line, below): 20 px on one
+     line is the oval pill he called ugly on 2026-11-21. */
+  --input-radius: 20px;
   /* A one-line field's corner, about a third of its height, so no field reads as a pill (review,
      2026-11-22: 12 px on a 28 px field did): 10 px at 34 px, 8 px small, 12 px on a phone. */
   --field-radius: 10px;
@@ -78,7 +81,7 @@
 }
 
 /* ── One row: the text, then the keys on its right ── */
-.wn-input.is-line { min-height: var(--input-line); }
+.wn-input.is-line { min-height: var(--input-line); --input-radius: var(--radius-md); }
 .wn-input.is-line :is(.chat-input-textarea, .answer-box-input, .thread-card-input, .kanban-composer-input, .quick-sort-reply-input) {
   min-height: calc(var(--input-line) - 2px);
   padding-top: var(--input-pad);

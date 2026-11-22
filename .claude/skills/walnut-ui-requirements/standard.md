@@ -106,7 +106,7 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
 
 | Part | Look |
 |---|---|
-| Box | class `wn-input`; corner `--input-radius` (`--radius-md`, 12 px: rounded, never a pill); `--input-fill` (the fields' fill, below), a transparent 1 px edge that turns `--input-focus-edge` (`--border-strong`) on focus, no shadow, no ring |
+| Box | class `wn-input`; corner `--input-radius`: 20 px (the round card the user had), 12 px for a one-line box (`is-line`), never a pill; `--input-fill` (the fields' fill, below), a transparent 1 px edge that turns `--input-focus-edge` (`--border-strong`) on focus, no shadow, no ring |
 | One line (`is-line`) | 34 px tall with its edges, a button's height; 46 px on a phone (a 44 px key and the two edges); it grows with the text |
 | Mic, attach | 28 px circles, transparent, `--fg-muted`; `--bg-hover` on hover |
 | Send (`wn-input-send`) | the same 28 px circle, solid blue (`--chat-hue-accent`, blue even inside a chat), white arrow (`ICON_SEND`); grey while there is nothing to send |
