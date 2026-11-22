@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import type { Config } from '@open-walnut/core';
 import { rebaseOnto } from '@/hooks/config-rebase';
 import {
-  currentDefaultEffort, currentDefaultModel, launchDefaultSave, NOT_SET,
+  currentDefaultEffort, currentDefaultModel, launchDefaultSave, NOT_SET, observedEffortWords,
 } from '@/components/settings/sections/claude-launch-defaults-select';
 
 /** What the stored config becomes after a page save of `patch` (sections stored as sent). */
@@ -48,5 +48,27 @@ describe('launchDefaultSave', () => {
     const c = save(legacy, launchDefaultSave(legacy, 'effort', NOT_SET));
     expect(c.agent).toEqual(base.agent);
     expect(currentDefaultEffort(c)).toBe(NOT_SET);
+  });
+});
+
+describe('observedEffortWords', () => {
+  const row = (model: string, effort: string) => ({ model, effort, at: '2026-11-22T00:00:00Z', sessionId: 's' });
+
+  // 2026-11-22, the UI audit: "Opus 5.5: High, Opus 5.5: High, Fable 5.2: Medium" (an alias and the
+  // full id of one model were seen apart).
+  it('names each model once, with the first row seen for it', () => {
+    const words = observedEffortWords([
+      row('global.anthropic.claude-opus-5-5', 'high'),
+      row('opus-5-5', 'low'),
+      row('claude-fable-5-2', 'medium'),
+    ]);
+    expect(words).toBe('Opus 5.5: High, Fable 5.2: Medium');
+  });
+
+  it('keeps at most max names, counted after merging', () => {
+    const words = observedEffortWords([
+      row('opus-5-5', 'high'), row('global.anthropic.claude-opus-5-5', 'high'), row('claude-fable-5-2', 'medium'),
+    ], 2);
+    expect(words).toBe('Opus 5.5: High, Fable 5.2: Medium');
   });
 });

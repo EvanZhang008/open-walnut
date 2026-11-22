@@ -50,7 +50,15 @@ export function effortName(e: string): string {
 
 export interface ObservedDefaultEffort { model: string; effort: string; at: string; sessionId: string }
 
-/** "Fable 5.2: Medium, Opus 5.5: High": Claude Code's own effort per model as last seen. */
+/**
+ * "Fable 5.2: Medium, Opus 5.5: High": Claude Code's own effort per model as last seen. Two ids of
+ * one model (an alias and its full id) read as one name, so each name shows once, the first row's.
+ */
 export function observedEffortWords(rows: readonly ObservedDefaultEffort[], max = 4): string {
-  return rows.slice(0, max).map((r) => `${formatModelName(r.model) || r.model}: ${effortName(r.effort)}`).join(', ');
+  const byName = new Map<string, string>();
+  for (const r of rows) {
+    const name = formatModelName(r.model) || r.model;
+    if (!byName.has(name)) byName.set(name, effortName(r.effort));
+  }
+  return [...byName].slice(0, max).map(([name, effort]) => `${name}: ${effort}`).join(', ');
 }
