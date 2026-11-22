@@ -66,4 +66,23 @@ describe('the own-row writer of a host replica', () => {
     expect(await tracker.deleteSessionRecords(['leader-row'], 'test').catch((e: Error) => e.message)).toMatch(sessionDb.NOT_OWN_ROW)
     expect(await tracker.getSessionByClaudeId('leader-row')).not.toBeNull()
   })
+
+  it('the leader\'s copy never makes an own row this host does not have (a rename the leader has not applied yet)', async () => {
+    sessionDb.allowOwnRowWrites(KEY)
+    await tracker.createSessionRecord('mine-now', '', 'p', '/tmp', own('mine-now') as never)
+    const base = { taskId: '', project: 'p', process_status: 'idle', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 }
+    const r = sessionDb.applySessionCopy({
+      ownHost: KEY,
+      rows: [
+        { claudeSessionId: 'renamed-away', host: KEY, judge: 'host', ...base } as never,
+        { claudeSessionId: 'mine-now', host: KEY, judge: 'host', human_note: 'from the leader', ...base } as never,
+        { claudeSessionId: 'leader-two', ...base } as never,
+      ],
+    })
+    expect(r.skippedOwn).toBe(1)
+    tracker._resetSessionTrackerForTesting()
+    expect(await tracker.getSessionByClaudeId('renamed-away')).toBeNull()
+    expect(await tracker.getSessionByClaudeId('mine-now')).toMatchObject({ judge: 'host', human_note: 'from the leader' })
+    expect(await tracker.getSessionByClaudeId('leader-two')).not.toBeNull()
+  })
 })

@@ -355,7 +355,7 @@ export function sessionIdentitiesInStore(): string[] {
  * commit through `PRAGMA data_version`. Off a host replica (tests) it uses the
  * shared handle.
  */
-export function applySessionCopy(change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[]; ownHost?: string }): { keptOwn: number } {
+export function applySessionCopy(change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[]; ownHost?: string }): { keptOwn: number; skippedOwn: number } {
   const shared = getDb();
   if (!shared) throw new Error('session-db: applySessionCopy() called before database was successfully opened');
   const handle = isHostReplica() ? (applyHandle ??= openCopyApplyConnection()) : shared;
@@ -375,6 +375,7 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
     return rowOwnedHere(rec, own) ? rec : null;
   };
   let keptOwn = 0;
+  let skippedOwn = 0;
   handle.transaction(() => {
     for (const id of change.removeIds ?? []) {
       if (ownRow(id)) { keptOwn++; continue; }
@@ -382,13 +383,18 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
     }
     for (const r of change.rows ?? []) {
       const mine = ownRow(r.claudeSessionId);
+      // A row the leader holds as this host's own that this host does not have (it renamed or
+      // dropped it, and the leader has not applied that yet): never stored here, or it would read
+      // as an own row and come back to the leader as a session born again. Own rows are born only
+      // through the own-row writer.
+      if (!mine && own && rowOwnedHere(r, own)) { skippedOwn++; continue; }
       const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : r);
       const bound: Record<string, unknown> = {};
       for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
       ins.run(bound);
     }
   }).immediate();
-  return { keptOwn };
+  return { keptOwn, skippedOwn };
 }
 
 // ── The cloud companion's copy of the Mac's sessions (stage 2c of
