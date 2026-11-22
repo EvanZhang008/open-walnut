@@ -37,13 +37,17 @@ describe('the rule', () => {
     for (const text of [DELEGATE_WORDS_RULE, DELEGATE_WORDS_SHORT, DELEGATE_WORDS_HAND_ON]) {
       for (const mark of DELEGATE_WORDS_MARKS) expect(text).toContain(mark)
     }
-    expect(DELEGATE_WORDS_RULE).toMatch(/quote their own words first, exactly, with every screenshot they gave/)
+    expect(DELEGATE_WORDS_RULE).toMatch(/quote their own words first, exactly, with every screenshot they gave \(its path or link\): they are the whole instruction\./)
     expect(DELEGATE_WORDS_RULE).toMatch(/each fact with its source \(else say whose word it is\)/)
-    expect(DELEGATE_WORDS_RULE).toMatch(/no plan, fix, checklist, options or pick of your own, because the task holds more context and decides/)
+    expect(DELEGATE_WORDS_RULE).toMatch(/no instruction, plan, fix, checklist, options or pick of your own, because the task holds more context and decides/)
     expect(DELEGATE_WORDS_RULE).toMatch(/the discussion with the user comes at the end/)
     expect(DELEGATE_WORDS_RULE).toMatch(/Steps the user named \(design first, ask him before building\) pass on exactly/)
     expect(DELEGATE_WORDS_RULE).toMatch(/A summary can narrow what they asked; their words cannot\./)
     expect(DELEGATE_WORDS_SHORT).toMatch(/the task decides/)
+    // 2026-11-22: a reading beside clear words dropped part of them.
+    expect(DELEGATE_WORDS_RULE).toMatch(/When their words are clear, add no reading of your own; when they can be read more than one way, name the readings and pick none\./)
+    expect(DELEGATE_WORDS_SHORT).toMatch(/no instruction, plan, fix, checklist, pick or reading of yours/)
+    expect(DELEGATE_WORDS_HAND_ON).toMatch(/no reading of yours/)
   })
 
   it('is plain ASCII English with no dash punctuation', () => {
@@ -89,7 +93,9 @@ describe('every way a session learns it', () => {
     const skill = fs.readFileSync(path.join(REPO, 'src/data/skills/walnut-session-messaging/SKILL.md'), 'utf8')
     expect(skill).toMatch(/\*\*Pass on the user's words, not your reading of them, and never steer\.\*\*/)
     expect(skill).toMatch(/add only context you checked/)
-    expect(skill).toMatch(/Never add a plan, a fix, a checklist, options or your pick: the task holds more context and decides/)
+    expect(skill).toMatch(/Never add an instruction, a plan, a fix, a checklist, options or your pick: the task holds more context and decides/)
+    expect(skill).toMatch(/their words are the whole instruction/)
+    expect(skill).toMatch(/When their words are clear, add no reading of your own/)
   })
 })
 

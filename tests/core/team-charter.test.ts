@@ -53,7 +53,7 @@ describe('the charter itself', () => {
       /the conclusion first in plain, full sentences, then the decision needed or the next owner/,
       /long evidence in a file and give its path/,
       /what needs their action or changes their picture of the work, the important point first/,
-      /When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave \(its path or link\)\. After them add only context you checked/,
+      /When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave \(its path or link\): they are the whole instruction\. After them add only context you checked/,
     ]) expect(TEAM_CHARTER).toMatch(re)
   })
 
