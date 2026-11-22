@@ -43,8 +43,11 @@ export function hostStartedSaid(sid: string): boolean {
   return said.has(sid)
 }
 
-/** Link a host-judged session to its task and move the task to IN_PROGRESS, once per session. */
-export async function noteHostSessionStarted(sid: string, taskId: string | undefined, mode?: string): Promise<void> {
+/**
+ * Link a host-judged session to its task and move the task to IN_PROGRESS, once per session.
+ * `phase: false` (a rename): only the slot and the link follow; the task's phase is the turn's.
+ */
+export async function noteHostSessionStarted(sid: string, taskId: string | undefined, mode?: string, o: { phase?: boolean } = {}): Promise<void> {
   if (!sid || !taskId || linked.has(sid)) return
   if (linked.size >= LINKED_MAX) linked.clear()
   linked.add(sid)
@@ -57,14 +60,13 @@ export async function noteHostSessionStarted(sid: string, taskId: string | undef
     await linkSessionSlot(taskId, sid, (mode ?? record?.mode) === 'plan' ? 'plan' : 'exec')
     const { task } = await linkSession(taskId, sid)
     bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-link' })
-    await updateTask(taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
+    if (o.phase !== false) await updateTask(taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
   } catch (err) {
     linked.delete(sid)
     log.session.warn('host-run session: linking it to its task failed', { sessionId: sid, taskId, error: err instanceof Error ? err.message : String(err) })
   }
 }
 
-/** A message the leader sent to a host-judged session: the task's input edge and its last update. */
 /**
  * A host session's CLI answered under another id (resume, fork) and the channel renamed its row
  * here: the task's slot and link follow the new id, as they do for a session this server runs
@@ -74,12 +76,14 @@ export async function noteHostSessionRenamed(from: string, to: string): Promise<
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')
     const row = await getSessionByClaudeId(to)
-    if (row?.taskId) await noteHostSessionStarted(to, row.taskId, row.mode)
+    // A new id of a running session, not a start: a finished task stays finished.
+    if (row?.taskId) await noteHostSessionStarted(to, row.taskId, row.mode, { phase: false })
   } catch (err) {
     log.session.warn('host-run session: moving its task link to the new id failed', { from, to, error: err instanceof Error ? err.message : String(err) })
   }
 }
 
+/** A message the leader sent to a host-judged session: the task's input edge and its last update. */
 export async function noteHostSessionSend(sid: string, source: string, endsWait: boolean): Promise<void> {
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')

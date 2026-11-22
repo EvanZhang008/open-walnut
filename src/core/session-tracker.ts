@@ -15,7 +15,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, writeChannelCursor } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -3441,6 +3441,28 @@ export interface HostChannelBatch {
   drops?: readonly string[];
   /** Sessions of the batch's other records: answered in `gone` when the leader deleted them. */
   check?: readonly string[];
+  /**
+   * A rows frame: `rows` are every row the host owns now, so a row of that host it no longer names
+   * goes (a rename or drop the log compacted away), except the sessions `keep` names (a start in
+   * flight whose born row has not come yet). Its records carry no seq.
+   */
+  snapshot?: { keep?: ReadonlySet<string> };
+}
+
+/** What one batch did: the rows it wrote, those it left out, and where the stored position stood. */
+export interface HostChannelBatchResult {
+  written: string[];
+  skipped: string[];
+  gone: string[];
+  /**
+   * The stored position of the same log when the batch began: a record at or below it was applied
+   * already (a link before this one took it), so it was skipped here and is not said again.
+   */
+  after: number;
+  /** Sessions whose row the leader could not apply as sent (no base row, a refused write): worth the host's whole row. */
+  resync: string[];
+  /** Rows a snapshot no longer named, deleted here. */
+  removed: string[];
 }
 
 /**
@@ -3451,7 +3473,7 @@ export interface HostChannelBatch {
  * and logged: a host writes only its own rows. After the commit, the status and content events a
  * normal write announces are emitted for the rows whose status or searchable text moved.
  */
-export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[]; gone: string[] }> {
+export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<HostChannelBatchResult> {
   await ensureSessionInit();
   const hostId = batch.hostId;
   const steps: Array<{ seq: number; i: number; row?: HostRowChange; rename?: HostRename }> = [
@@ -3460,6 +3482,9 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
   ].sort((a, b) => a.seq - b.seq || a.i - b.i);
   const written: string[] = [];
   const skipped: string[] = [];
+  const resync = new Set<string>();
+  const removed: string[] = [];
+  let after = 0;
   // Deleted on the leader, its host not done yet: none of its rows comes back, none of its facts is said.
   const gone = new Set<string>();
   const announce: Array<{ record: SessionRecord; status: boolean; content: boolean }> = [];
@@ -3472,15 +3497,26 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
         const raw = sel.get(id) as Record<string, any> | undefined;
         return raw ? rowToSession(raw) : null;
       };
+      // Exactly once across links: the position is read in the transaction that moves it, so a
+      // record an earlier link of this host applied (its apply still waited for the lock when the
+      // link dropped, and the next link resumed below it) is never applied, or said, twice.
+      const stored = readChannelCursor(handle, hostId);
+      after = stored && stored.logId === batch.cursor.logId ? stored.seq : 0;
       for (const sid of new Set([...batch.rows.map((r) => r.sid), ...batch.renames.map((r) => r.to), ...(batch.check ?? [])])) {
         if (leaderDroppedIn(handle, sid)) gone.add(sid);
       }
       for (const step of steps) {
+        if (step.seq > 0 && step.seq <= after) continue;
         if (step.rename) {
           const { from, to } = step.rename;
           if (gone.has(to)) continue;
           const old = read(from);
-          if (!old || old.host !== hostId || !judgedByHost(old)) { skipped.push(from); continue; }
+          if (!old || old.host !== hostId || !judgedByHost(old)) {
+            skipped.push(from);
+            // The host has `to` now: its whole row repairs what the rename could not.
+            if (!old) resync.add(to);
+            continue;
+          }
           const historyBefore = storedHistoryFields(handle, from);
           deleteSessionRowSqlite(handle, from);
           if (!read(to)) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, { before: historyBefore! });
@@ -3491,7 +3527,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
         if (gone.has(change.sid)) continue;
         const before = read(change.sid);
         if (before && (before.host !== hostId || !judgedByHost(before))) { skipped.push(change.sid); continue; }
-        if (!before && !change.born) { skipped.push(change.sid); continue; }
+        if (!before && !change.born) { skipped.push(change.sid); resync.add(change.sid); continue; }
         const next = mergeHostFacts(before, change.patch, change.born === true);
         next.claudeSessionId = change.sid;
         if (next.host !== hostId || !judgedByHost(next)) { skipped.push(change.sid); continue; }
@@ -3501,6 +3537,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
           // One row the store refuses (its history guard) never wedges the channel behind it.
           log.session.warn('host channel: a row change was refused', { hostId, sessionId: change.sid, error: err instanceof Error ? err.message : String(err) });
           skipped.push(change.sid);
+          if (!change.born) resync.add(change.sid);
           continue;
         }
         written.push(change.sid);
@@ -3511,17 +3548,40 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
           content: !before || searchContentProjection(before) !== searchContentProjection(next),
         });
       }
+      if (batch.snapshot) {
+        // The host owns exactly these rows now: one of its rows here it no longer names is gone there.
+        const named = new Set(batch.rows.map((r) => r.sid));
+        const keep = batch.snapshot.keep;
+        const ids = handle.prepare('SELECT claude_session_id FROM sessions WHERE host = ?').pluck().all(hostId) as string[];
+        for (const id of ids) {
+          if (named.has(id) || keep?.has(id) || leaderDroppedIn(handle, id)) continue;
+          const row = read(id);
+          if (!row || !judgedByHost(row)) continue;
+          deleteSessionRowSqlite(handle, id);
+          removed.push(id);
+        }
+      }
       if (batch.drops?.length) clearLeaderDrops(handle, hostId, batch.drops);
-      writeChannelCursor(handle, hostId, batch.cursor);
+      // Never back: a batch an earlier link already passed keeps the position where it is.
+      if (!(stored && stored.logId === batch.cursor.logId && stored.seq > batch.cursor.seq)) writeChannelCursor(handle, hostId, batch.cursor);
     }));
     if (lockWait instanceof Promise) await lockWait;
   });
   if (skipped.length > 0) log.session.warn('host channel: changes skipped (not this host\'s rows)', { hostId, sessionIds: skipped.slice(0, 20), count: skipped.length });
+  // After the commit: one announcement that throws never stops the others, nor the channel.
   for (const a of announce) {
-    if (a.status) emitSessionStatusChanged(a.record, {}, ['*'], { source: 'host-channel' });
-    if (a.content) bus.emit(EventNames.SESSION_CONTENT_UPDATED, { sessionId: a.record.claudeSessionId }, ['*'], { source: 'host-channel' });
+    try {
+      if (a.status) emitSessionStatusChanged(a.record, {}, ['*'], { source: 'host-channel' });
+      if (a.content) bus.emit(EventNames.SESSION_CONTENT_UPDATED, { sessionId: a.record.claudeSessionId }, ['*'], { source: 'host-channel' });
+    } catch (err) {
+      log.session.warn('host channel: announcing a row failed', { hostId, sessionId: a.record.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
+    }
   }
-  return { written, skipped, gone: [...gone] };
+  if (removed.length > 0) {
+    log.session.warn('host channel: rows the host no longer has were removed', { hostId, sessionIds: removed.slice(0, 20), count: removed.length });
+    try { bus.emit(EventNames.SESSION_DELETED, { sessionIds: removed }, ['*'], { source: 'host-channel', urgency: 'normal' }); } catch { /* announced best-effort */ }
+  }
+  return { written, skipped, gone: [...gone], after, resync: [...resync], removed };
 }
 
 export { loadChannelCursor } from './session-db.js';

@@ -76,7 +76,7 @@ function leaderStore() {
   return store
 }
 
-function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[]; gone?: string[]; drops?: string[] } = {}) {
+function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[]; gone?: string[]; drops?: string[]; owned?: string[] } = {}) {
   return createLeaderSide({
     walnutId: async () => 'w1',
     permitNumber: () => 1,
@@ -88,7 +88,8 @@ function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { o
       const refused = new Set(opts.refuse ?? [])
       const gone = new Set(opts.gone ?? [])
       return {
-        written: b.rows.map((r) => r.sid).filter((s) => !refused.has(s) && !gone.has(s)), skipped: b.rows.map((r) => r.sid).filter((s) => refused.has(s)),
+        // As the real apply (session-tracker applyHostChannelBatch): a rename writes its new id.
+        written: [...b.rows.map((r) => r.sid), ...b.renames.map((r) => r.to)].filter((s) => !refused.has(s) && !gone.has(s)), skipped: b.rows.map((r) => r.sid).filter((s) => refused.has(s)),
         gone: [...new Set([...b.rows.map((r) => r.sid), ...(b.check ?? [])])].filter((s) => gone.has(s)),
       }
     },
@@ -98,6 +99,8 @@ function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { o
     noteLive: (sid, state) => { store.live.push({ sid, turnGen: state.turnGen }) },
     noteRename: (from, to) => { store.renames.push(`${from}->${to}`) },
     noteHostJudged: (sid) => { store.judged.push(sid) },
+    // The host's own sessions here: the ones its rows wrote, and this test host's s1 family.
+    ownerOf: (sid) => (store.judged.includes(sid) || (opts.owned ?? ['s1', 's1b', 's2']).includes(sid) ? 'devbox' : null),
     backoffMs: () => 20,
     log: () => {},
   })
@@ -228,16 +231,73 @@ describe('the leader side of a host that runs its sessions', () => {
     log.append('s2', 'row', { patch: { process_status: 'idle' } })
     log.append('s3', 'row', { born: true, patch: { claudeSessionId: 's3', taskId: 'task-x', host: 'devbox', judge: 'host' } })
     log.append('s3', 'session:tool-use', { sessionId: 's3', i: 2 })
+    log.append('s2', 'session:tool-use', { sessionId: 's2', i: 3 })
     await log.flush()
     await until(() => factIs(store).length === 2)
     await side.idle('devbox')
+    // The refused row's session is not this host's here: its fact is not said either (M1).
+    expect(factIs(store)).toEqual([1, 3])
     const started = store.emitted.filter((e) => e.name === 'session:started')
     expect(started.map((e) => e.data)).toEqual([{ sessionId: 's2', claudeSessionId: 's2', taskId: 'task-h', project: 'Marina', host: 'devbox' }])
     expect(started[0]!.late).toBe(false)
     // At its row's place: before the session's first fact.
-    expect(store.emitted.filter((e) => (e.data as { sessionId?: string })?.sessionId === 's2').map((e) => e.name)).toEqual(['session:started', 'session:tool-use'])
+    expect(store.emitted.filter((e) => (e.data as { sessionId?: string })?.sessionId === 's2').map((e) => e.name)).toEqual(['session:started', 'session:tool-use', 'session:tool-use'])
     // The rows frame of the first link (s1, a resync) said no start.
     expect(store.emitted.some((e) => e.name === 'session:started' && (e.data as { sessionId?: string }).sessionId === 's1')).toBe(false)
+  })
+
+  it('says nothing a host sends of a session it does not own, nor of another session than its record names; a rename it did not apply moves nothing', async () => {
+    const { log, channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    // 'theirs' is another host's session, 'leaders' the leader's own (no host): neither is devbox's.
+    side = makeSide(port, store, { owned: ['s1'], refuse: ['leaders'] })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => side!.linked('devbox'))
+    log.append('theirs', 'session:result', { sessionId: 'theirs', i: 1 })
+    log.append('theirs', 'live', { state: { turnGen: 9 } })
+    log.append('s1', 'session:tool-use', { sessionId: 'leaders', i: 2 })
+    log.append('leaders', 'rename', { from: 'gone-old', to: 'leaders' })
+    log.append('s1', 'session:tool-use', { sessionId: 's1', i: 3 })
+    log.append('s1', 'live', { state: { turnGen: 4 } })
+    await log.flush()
+    await until(() => factIs(store).length === 1)
+    await side.idle('devbox')
+    expect(factIs(store)).toEqual([3])
+    expect(store.emitted.some((e) => e.name === 'session:result')).toBe(false)
+    expect(store.live).toEqual([{ sid: 's1', turnGen: 4 }])
+    expect(store.renames).toEqual([])
+  })
+
+  it('a record an earlier link applied is said once; a step after the apply that throws never closes the link', async () => {
+    const { log, channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    let throws = 1
+    side = createLeaderSide({
+      walnutId: async () => 'w1', permitNumber: () => 1, flagOn: async () => true,
+      openStream: async () => net.connect(port, '127.0.0.1'),
+      // The store had applied up to seq 2 already (a link before this one): the transaction says so.
+      applyBatch: async (b) => { store.cursor = b.cursor; return { written: [], skipped: [], after: 2 } },
+      loadCursor: async () => null,
+      emit: (name, data) => {
+        if (throws-- > 0) throw new Error('a subscriber threw')
+        store.emitted.push({ name, late: false, i: (data as { i?: number })?.i })
+      },
+      noteLive: () => { throw new Error('no proxy') },
+      noteRename: () => {}, noteHostJudged: () => {}, ownerOf: () => 'devbox', backoffMs: () => 20, log: () => {},
+    })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => side!.linked('devbox'))
+    for (let i = 1; i <= 5; i++) log.append('s1', 'session:tool-use', { sessionId: 's1', i })
+    log.append('s1', 'live', { state: { turnGen: 1 } })
+    log.append('s1', 'session:tool-use', { sessionId: 's1', i: 6 })
+    await log.flush()
+    await until(() => factIs(store).length === 3)
+    await side.idle('devbox')
+    // 1 and 2 were said by the earlier link; 3's emit threw (logged), and the link went on.
+    expect(factIs(store)).toEqual([4, 5, 6])
+    expect(side.linked('devbox')).toBe(true)
   })
 
   it('a delete this leader made goes to the host at each link until its drop record answers; nothing of the deleted session is said meanwhile', async () => {

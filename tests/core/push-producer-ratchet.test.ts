@@ -30,7 +30,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('push-producer-ratchet'))
 
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { reemitDestinations } from '../../src/core/session-channel/event-classes.js'
+import { REEMIT_ALLOWED, reemitDestinations } from '../../src/core/session-channel/event-classes.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const SUBSCRIBER = 'push-notifications'
@@ -194,12 +194,13 @@ describe('the source: who addresses the general push subscriber', () => {
     }
   })
 
-  it('a host fact said again on the leader goes where the host\'s emit went, never to the phone', () => {
+  it('a host fact said again on the leader goes where the host\'s emit went, the readers only, never to the phone', () => {
     // Every list a host's emit of a handled event can name is one of the literal lists scanned above.
     for (const e of emits) {
       if (!e.dest || !e.name || !handled.includes(e.name)) continue
       const dest = reemitDestinations(e.dest)
-      expect(dest, at(e)).toEqual(e.dest)
+      const readers = e.dest.filter((d) => REEMIT_ALLOWED.includes(d))
+      expect(dest, at(e)).toEqual(readers.length ? readers : ['main-ai'])
       expect(dest, at(e)).not.toContain('*')
     }
     expect(reemitDestinations([SUBSCRIBER, 'main-ai'])).toEqual(['main-ai'])

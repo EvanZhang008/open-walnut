@@ -37,9 +37,11 @@ function row(sid: string, over: Partial<SessionRecord> = {}): SessionRecord {
     messageCount: 1, host: HOST, judge: 'host', streamEpoch: 'ep1', ...over,
   } as SessionRecord
 }
-async function records(): Promise<FactRecord[]> {
+/** Where the log stood once the emitter started (its start writes each own row whole first). */
+let startHead = 0
+async function records(from = startHead): Promise<FactRecord[]> {
   await log.flush()
-  return log.read(0)
+  return log.read(from)
 }
 
 async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: number } = {}): Promise<void> {
@@ -52,6 +54,8 @@ async function make(opts: { own?: SessionRecord[]; pendingMs?: number; liveMs?: 
     liveMs: opts.liveMs ?? 30, pendingMs: opts.pendingMs ?? 200,
   })
   await emitter.start()
+  await log.flush()
+  startHead = log.head
 }
 
 beforeEach(async () => {
@@ -62,6 +66,7 @@ beforeEach(async () => {
   live = new Map()
   offset = 0
   rowFn = null
+  startHead = 0
 })
 afterEach(async () => {
   emitter?.stop()
@@ -96,7 +101,8 @@ describe('the emitter', () => {
     const recs = await records()
     expect(recs.map((r) => r.name)).toEqual(['session:tool-use', 'session:result'])
     expect(recs[0]!.line).toEqual({ epoch: 'ep1', v: 42 })
-    expect(recs.map((r) => r.sseq)).toEqual([1, 2])
+    // The start's whole row of the session took its first place in the sequence.
+    expect(recs.map((r) => r.sseq)).toEqual([2, 3])
     // Each keeps the destinations its emit named, for the leader to say it to the same subscribers.
     expect(recs.map((r) => r.to)).toEqual([['x'], ['x']])
     expect(flows).toEqual([[OWN, 'session:text-delta']])
@@ -130,6 +136,27 @@ describe('the emitter', () => {
     rowFn!(row(OWN, { messageCount: 5 }))
     const recs = await records()
     expect(recs.map((r) => r.data)).toEqual([{ patch: { messageCount: 5 } }])
+  })
+
+  it('its start writes each own row whole once (a resync, never a start), so a write before it reaches the leader', async () => {
+    await make({ own: [row(OWN, { messageCount: 9 }), row(FOREIGN, { host: 'another-box' })] })
+    const recs = await records(0)
+    expect(recs.map((r) => [r.sid, r.name])).toEqual([[OWN, 'row']])
+    expect(recs[0]!.data).toMatchObject({ resync: true, patch: { claudeSessionId: OWN, messageCount: 9 } })
+    expect((recs[0]!.data as { born?: unknown }).born).toBeUndefined()
+    // The leader asks again for a row it could not apply: the same whole row, own rows only.
+    await emitter.resync([OWN, FOREIGN])
+    expect((await records()).map((r) => [r.sid, r.name, (r.data as { resync?: unknown }).resync])).toEqual([[OWN, 'row', true]])
+  })
+
+  it('a patch the log did not take rides the next one', async () => {
+    await make({ own: [row(OWN)] })
+    const append = log.append.bind(log)
+    let fail = true
+    log.append = ((...a: Parameters<typeof log.append>) => { if (fail) { fail = false; throw new Error('disk full') } return append(...a) }) as typeof log.append
+    rowFn!(row(OWN, { process_status: 'stopped' }))
+    rowFn!(row(OWN, { process_status: 'stopped', messageCount: 3 }))
+    expect((await records()).map((r) => r.data)).toEqual([{ patch: { process_status: 'stopped', messageCount: 3 } }])
   })
 
   it('holds the events that beat their row, and keeps them after the born row in order', async () => {
@@ -185,7 +212,7 @@ describe('the emitter', () => {
     await sleep(250)
     const recs = await records()
     expect(recs.map((r) => [r.sid, r.name, r.sseq])).toEqual([
-      [OWN, 'session:result', 1], [LATE, 'rename', 2], [LATE, 'session:result', 3], [LATE, 'drop', 4],
+      [OWN, 'session:result', 2], [LATE, 'rename', 3], [LATE, 'session:result', 4], [LATE, 'drop', 5],
     ])
     expect(emitter.ownSessionOfTask('task-marina-1')).toBeNull()
   })

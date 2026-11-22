@@ -9,7 +9,7 @@ import { bus, EventNames } from '../event-bus.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from './leader-side.js'
 import { hostRunsSessionsNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
-import { forgetHostJudged, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
+import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
 
 let active: LeaderSide | null = null
@@ -42,7 +42,7 @@ export function sayHostFact(name: string, data: unknown, opts: { late: boolean; 
 
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
-  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready }] = await Promise.all([
+  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight }] = await Promise.all([
     import('../session-tracker.js'),
     import('../host-server/index.js'),
     import('../leader/primary-leader.js'),
@@ -76,6 +76,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       void import('./leader-tasks.js').then((m) => m.noteHostSessionRenamed(from, to))
     },
     noteHostJudged,
+    ownerOf: judgingHostOf,
+    startsInFlight: hostStartsInFlight,
     // Lines that did not reach a host (its link was down, an answer lost) go again when it links.
     onLinked: (host) => {
       void import('../../providers/host-judged-send.js').then((m) => m.redeliverWaitingFor(host)).catch((err: unknown) => {

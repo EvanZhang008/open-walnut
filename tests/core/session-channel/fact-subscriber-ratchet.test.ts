@@ -137,6 +137,8 @@ describe('every leader-side subscriber of a host fact asks judgeOf or is listed'
 type LateRule = 'merges' | 'skips' | 'own time' | 'gathers' | 'unreached'
 const LATE_RULES: Record<string, LateRule> = {
   'src/core/session-hooks/dispatcher.ts': 'skips',
+  // Keeps the marks of the leader's own deletes and re-emits a host's facts with their `late` mark.
+  'src/core/session-channel/leader-boot.ts': 'merges',
   'src/core/user-status-sync.ts': 'gathers',
   'src/core/push-notification.ts': 'unreached',
   'src/core/org/thread-answers.ts': 'own time',

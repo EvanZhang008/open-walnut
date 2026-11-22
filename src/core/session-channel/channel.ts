@@ -7,8 +7,9 @@
  *
  *   host -> any   hello  {walnutId, hostId, logId, floor, head, now}
  *   leader -> host resume {walnutId, hostId, permitNumber, logId, after}
- *                         after: the last seq of this log the leader applied (0: none, or a log
- *                         it does not know); a log that still holds every record after `after`
+ *                         after: the last seq of this log the leader applied (0: none; -1: the
+ *                         leader knew this host under another log, so it always gets the rows
+ *                         first); a log that still holds every record after `after`
  *                         replays them, one that trimmed some sends its rows first; the host refuses a permit number lower than the
  *                         highest it has seen (a leader that lost its permit replays nothing and
  *                         trims nothing)
@@ -24,6 +25,9 @@
  *                         how old a record is on its own clock (late facts, below)
  *   host -> reader  flow  {sid, name, data}   a text delta: only to a reader that is caught up
  *   leader -> host  ack   {logId, upTo}       the leader applied everything up to `upTo`
+ *   leader -> host  resync {sids}             rows the leader could not apply as sent (no base row, a
+ *                         refused write): the host appends each one's whole row again (a `row`
+ *                         record marked `resync`: applied whole, a repair, never a start)
  *   host -> reader  refuse {why}              and the host closes the link
  *
  * Only the leader confirms, and only it decides what the host may trim. A listener holds no
@@ -47,6 +51,7 @@ export type ChannelFrame =
   | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true; sentAt?: number }
   | { ch: 'sf'; op: 'flow'; sid: string; name: string; data: unknown; to?: string[] }
   | { ch: 'sf'; op: 'ack'; logId: string; upTo: number }
+  | { ch: 'sf'; op: 'resync'; sids: string[] }
   | { ch: 'sf'; op: 'refuse'; why: string }
 
 export interface ChannelLink {
@@ -70,6 +75,8 @@ export interface HostChannelOptions {
   hostId: string
   /** This host's own rows as they are now (rowOwnedHere), for a `rows` frame. */
   ownRows(): Promise<SessionRecord[]>
+  /** The leader asked for these rows whole again (a `resync` frame): the emitter appends them. */
+  onResync?(sids: string[]): void
   now?: () => number
   onLog?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -104,6 +111,10 @@ export class HostChannel {
         } else if (frame.op === 'ack') {
           if (reader !== this.leaderReader || frame.logId !== log.logId) return
           void log.ack(frame.upTo)
+        } else if (frame.op === 'resync') {
+          if (reader !== this.leaderReader || !Array.isArray(frame.sids)) return
+          const sids = frame.sids.filter((x): x is string => typeof x === 'string' && x !== '').slice(0, 500)
+          try { this.o.onResync?.(sids) } catch (err) { this.o.onLog?.('warn', 'session channel: a resync failed', { error: err instanceof Error ? err.message : String(err) }) }
         }
       },
       onClose: () => {
@@ -142,8 +153,10 @@ export class HostChannel {
     this.leaderReader = reader
     this.readers.add(reader)
     try {
-      const after = f.logId === log.logId && Number.isSafeInteger(f.after) ? Math.max(0, f.after) : 0
-      if (after + 1 < log.floor) await this.sendRows(reader, true)
+      // -1: a leader that does not know this log (a host set up again under a new log id): it
+      // gets this host's rows first, whatever the log still holds, so nothing it missed stays missed.
+      const after = f.logId === log.logId && Number.isSafeInteger(f.after) && f.after >= 0 ? f.after : -1
+      if (after < 0 || after + 1 < log.floor) await this.sendRows(reader, true)
       else {
         reader.sentUpTo = after
         await this.replay(reader)
@@ -227,7 +240,7 @@ export interface LeaderChannelOptions {
 }
 
 /** The leader's end of one link to one host. */
-export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions): { onFrame(frame: ChannelFrame): void; onClose(): void; idle(): Promise<void> } {
+export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions): { onFrame(frame: ChannelFrame): void; onClose(): void; resync(sids: string[]): void; idle(): Promise<void> } {
   const now = o.now ?? Date.now
   const lateMs = o.lateMs ?? 60_000
   let hostId = ''
@@ -268,8 +281,11 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
         const logId = frame.logId
         serial(async () => {
           const c = await o.loadCursor(hostId)
-          cursor = c && c.logId === logId ? c : { logId, seq: 0 }
-          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: o.permitNumber(), logId, after: cursor.seq })
+          const known = !!c && c.logId === logId
+          cursor = known ? c! : { logId, seq: 0 }
+          // A host this leader knew under another log (set up again, its log lost): -1, so it sends
+          // its rows first (channel header). A host it never heard of replays its log from the start.
+          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: o.permitNumber(), logId, after: known || !c ? cursor.seq : -1 })
         })
       } else if (frame.op === 'rows') {
         serial(async () => {
@@ -312,6 +328,9 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
     onClose() {
       open = false
       if (ackTimer) { clearTimeout(ackTimer); ackTimer = null }
+    },
+    resync(sids: string[]) {
+      if (open && sids.length > 0) link.send({ ch: 'sf', op: 'resync', sids })
     },
     idle: () => chain,
   }

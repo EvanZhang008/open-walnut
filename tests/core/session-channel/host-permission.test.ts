@@ -149,6 +149,8 @@ beforeEach(async () => {
     noteLive: () => {},
     noteRename: () => {},
     noteHostJudged: () => {},
+    // The sessions this test's host runs are its own.
+    ownerOf: () => HOST,
     backoffMs: () => 20,
     log: () => {},
   })

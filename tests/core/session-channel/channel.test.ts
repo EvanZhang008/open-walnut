@@ -74,7 +74,7 @@ function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number
     onFlow: (_h, _sid, _name, data) => { leader.flows.push(String((data as { text?: string }).text)) },
   })
   hostSide = host.attach(toLeader)
-  return { cut, get up() { return up }, idle: () => leaderSide!.idle() }
+  return { cut, get up() { return up }, idle: () => leaderSide!.idle(), resync: (sids: string[]) => leaderSide!.resync(sids) }
 }
 
 async function hostOf(over: Partial<Parameters<typeof FactLog.open>[0]> = {}) {
@@ -119,6 +119,46 @@ describe('exactly once across a cut after any record', () => {
       await log.close()
     })
   }
+})
+
+describe('a host the leader knew under another log', () => {
+  it('gets the host\'s rows first, though the new log still holds every record', async () => {
+    const { log, host } = await hostOf()
+    const leader = new Leader()
+    // The leader's position is of the log this host had before it was set up again.
+    leader.cursor = { logId: 'an-older-log', seq: 40 }
+    for (let i = 1; i <= 3; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    const link = connect(host, leader)
+    await until(() => leader.applied.length === 3)
+    await link.idle()
+    expect(leader.snapshots).toBe(1)
+    expect([...leader.rows.keys()]).toEqual(['s1'])
+    expect(seqs(leader)).toEqual([1, 2, 3])
+    link.cut()
+    await log.close()
+  })
+})
+
+describe('the leader asks for whole rows again', () => {
+  it('a resync frame reaches the host\'s handler from its leader only', async () => {
+    const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
+    const asked: string[][] = []
+    const host = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => [], onResync: (sids) => { asked.push(sids) } })
+    const leader = new Leader()
+    const link = connect(host, leader)
+    await tick(20)
+    link.resync(['s1', '', 's2'])
+    await until(() => asked.length === 1)
+    expect(asked).toEqual([['s1', 's2']])
+    // A listener (no leader) asking is ignored.
+    const other = host.attach({ send: () => {}, close: () => {} })
+    other.onFrame({ ch: 'sf', op: 'resync', sids: ['x'] })
+    await tick(5)
+    expect(asked).toHaveLength(1)
+    link.cut()
+    await log.close()
+  })
 })
 
 describe('moving to another leader', () => {

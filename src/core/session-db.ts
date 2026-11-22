@@ -295,6 +295,12 @@ export function loadChannelCursor(hostId: string): { logId: string; seq: number 
   return row ? { logId: row.log_id, seq: Number(row.seq) || 0 } : null;
 }
 
+/** Inside the caller's write transaction: the host's stored position (applyHostChannelBatch reads it there). */
+export function readChannelCursor(handle: DatabaseType, hostId: string): { logId: string; seq: number } | null {
+  const row = handle.prepare('SELECT log_id, seq FROM session_channel_cursor WHERE host_id = ?').get(hostId) as { log_id: string; seq: number } | undefined;
+  return row ? { logId: row.log_id, seq: Number(row.seq) || 0 } : null;
+}
+
 /** Inside the caller's write transaction: keep `cursor` as the host's position. */
 export function writeChannelCursor(handle: DatabaseType, hostId: string, cursor: { logId: string; seq: number }): void {
   handle.prepare('INSERT OR REPLACE INTO session_channel_cursor (host_id, log_id, seq) VALUES (?, ?, ?)').run(hostId, cursor.logId, cursor.seq);

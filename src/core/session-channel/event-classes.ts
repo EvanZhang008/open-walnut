@@ -76,6 +76,18 @@ export const SESSION_EVENT_CLASS: Readonly<Record<string, ChannelClass>> = {
 export const CHANNEL_RECORD_KINDS = ['row', 'rename', 'drop', 'turn-summary', 'live'] as const
 export type ChannelRecordKind = typeof CHANNEL_RECORD_KINDS[number]
 
+/** The session id an event names (the host keys its records by it, the leader checks them by it). */
+export function sessionIdOf(name: string, data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  if (name === 'transfer:fork-init') return typeof d.actualId === 'string' && d.actualId ? d.actualId : null
+  for (const k of ['sessionId', 'claudeSessionId']) {
+    const v = d[k]
+    if (typeof v === 'string' && v) return v
+  }
+  return null
+}
+
 /** The class of one event name; a name the table does not know is never sent. */
 export function channelClassOf(name: string): ChannelClass | null {
   return SESSION_EVENT_CLASS[name] ?? null
@@ -90,18 +102,31 @@ export const TURN_DETAIL_FACTS: ReadonlySet<string> = new Set([
 /** The fact that ends a turn (the summary goes in front of it). */
 export const TURN_END_FACT = 'session:result'
 
-/** The subscriber that turns a session's result or error into a phone notification (push-notification.ts). */
-const PHONE_PUSH = 'push-notifications'
 /** Who hears a record that names no destinations: the subscriber the leader's own start names (host-judged-runner.ts). */
 const UNNAMED_DESTINATIONS: readonly string[] = ['main-ai']
 
 /**
+ * The named subscribers a host's fact or flow event may reach on the leader: the readers of a
+ * session's events (the main agent, the web UI and its streams, the phone's feed) and the leader's
+ * side of a host's give-up (leader-retry-over.ts, sessions/held-error.ts RETRY_OVER_SUBSCRIBER).
+ * Never a command subscriber (the session runner, the subagent runner, the task outbox ...) and never
+ * the phone's push subscriber (a host session buzzes the phone no more than one here does). A host
+ * cannot choose any other. Every named subscriber of the codebase is in this list or in
+ * REEMIT_REFUSED: tests/core/session-channel/reemit-destinations-ratchet.test.ts.
+ */
+export const REEMIT_ALLOWED: readonly string[] = ['*', 'main-ai', 'web-ui', 'session-sse', 'mobile-events-feed', 'host-retry-over']
+/** The named subscribers a host's record never names on the leader (see REEMIT_ALLOWED). */
+export const REEMIT_REFUSED: readonly string[] = [
+  'session-runner', 'subagent-runner', 'task-outbox', 'setup-health', 'plugin-config-reload', 'push-notifications',
+  'human-inbox-letters', 'approvals', 'transfer',
+]
+
+/**
  * Who the leader says a host's fact or flow event to (leader-boot.ts): the destinations the host's
- * own emit named (the record's `to`), so the leader's subscribers hear it as they hear one of its
- * own sessions; never the phone's push subscriber, which no session event names (a host session
- * buzzes the phone no more than one here does). Ratchet: tests/core/push-producer-ratchet.test.ts.
+ * own emit named (the record's `to`) that REEMIT_ALLOWED holds, so the leader's readers hear it as
+ * they hear one of its own sessions. Ratchet: tests/core/push-producer-ratchet.test.ts.
  */
 export function reemitDestinations(to: readonly string[] | undefined): string[] {
-  const named = Array.isArray(to) ? to.filter((d) => typeof d === 'string' && d !== PHONE_PUSH) : []
-  return named.length > 0 ? named : [...UNNAMED_DESTINATIONS]
+  const named = Array.isArray(to) ? to.filter((d) => typeof d === 'string' && REEMIT_ALLOWED.includes(d)) : []
+  return named.length > 0 ? [...new Set(named)] : [...UNNAMED_DESTINATIONS]
 }

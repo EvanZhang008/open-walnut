@@ -99,7 +99,12 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
   const { allowOwnRowWrites } = await import('../session-db.js')
   allowOwnRowWrites(o.hostKey)
-  const channel = new HostChannel({ log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say })
+  // The emitter is made just below; the leader's resync asks reach it once it is.
+  let emitterRef: HostEmitter | null = null
+  const channel = new HostChannel({
+    log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say,
+    onResync: (sids) => { void emitterRef?.resync(sids).catch((err: unknown) => say('warn', 'host sessions: a resync failed', { error: err instanceof Error ? err.message : String(err) })) },
+  })
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
   const bundles = new StartBundles()
@@ -112,6 +117,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset,
     onLog: say,
   })
+  emitterRef = emitter
   const port = createHostSessionPort({
     hostKey: o.hostKey, bundles, api: selfOwnApi,
     sessionOfTask: (taskId) => emitter.ownSessionOfTask(taskId),

@@ -82,6 +82,8 @@ function fire(sid: string, member: string, args: unknown[]): void {
  * legacy session's event keeps its order (no await before the runner's own switch).
  */
 export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
+  // A host's record said again here (leader-side.ts) is never a command to this runner.
+  if (event.source === 'host-channel') return Promise.resolve()
   const sid = (event.data as { sessionId?: unknown } | null)?.sessionId
   if (typeof sid !== 'string' || !sid) return null
   switch (event.name) {
@@ -108,6 +110,12 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
     default:
       return null
   }
+}
+
+/** Seeded sessions whose start went to their host and has not answered: a rows snapshot keeps them (leader-side.ts). */
+const inFlight = new Set<string>()
+export function hostStartsInFlight(): ReadonlySet<string> {
+  return inFlight
 }
 
 /** Would `host`'s own service run a start there? */
@@ -183,6 +191,7 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   const tracker = await import('../core/session-tracker.js')
   let handed = false
   if (typeof seeded === 'string' && seeded) {
+    inFlight.add(seeded)
     noteHostJudged(seeded, host)
     handed = await tracker.handSeedToHost(seeded, host).catch((err: unknown) => {
       log.session.warn('host start: the seeded row was not handed to its host', { sessionId: seeded, host, error: err instanceof Error ? err.message : String(err) })
@@ -191,7 +200,12 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   }
   log.session.info('session routing', { taskId: data.taskId, type: 'host', host })
   // A start whose answer was lost may still run there: the seed stays the host's, and its channel tells.
-  const a = await side.startOnHost(host, payload)
+  let a: Awaited<ReturnType<typeof side.startOnHost>>
+  try {
+    a = await side.startOnHost(host, payload)
+  } finally {
+    if (typeof seeded === 'string') inFlight.delete(seeded)
+  }
   if (a.ok !== true || typeof a.sessionId !== 'string' || !a.sessionId) {
     // The host said no: the seed is the leader's again, and the start's failure is written on it.
     if (typeof seeded === 'string' && seeded) {

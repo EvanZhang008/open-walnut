@@ -136,7 +136,7 @@ describe('a host-judged session', () => {
       hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 2 },
       rows: [{ sid: seeded, born: true, patch: { claudeSessionId: seeded, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', title: 'Host title', startedAt: 'x', lastActiveAt: 'x', messageCount: 1 } }],
     })
-    expect(applied).toEqual({ written: [seeded], skipped: [], gone: [] })
+    expect(applied).toMatchObject({ written: [seeded], skipped: [], gone: [] })
     // The host's fields, the leader's own title.
     expect(await getSessionByClaudeId(seeded)).toMatchObject({ process_status: 'running', title: 'Seeded', judge: 'host' })
     // Another seed, a start the host refuses: the leader's again.
@@ -275,9 +275,10 @@ describe('a host-judged session', () => {
 })
 
 describe('a host session renamed by its CLI', () => {
-  it('moves its task\'s slot and link to the new id', async () => {
+  it('moves its task\'s slot and link to the new id, and never reopens a finished task', async () => {
     harness()
-    const { getTask } = await import('../../src/core/task-manager.js')
+    const { getTask, updateTask } = await import('../../src/core/task-manager.js')
+    await updateTask('gate-task-b', { phase: 'COMPLETE' })
     const { noteHostSessionRenamed } = await import('../../src/core/session-channel/leader-tasks.js')
     const from = '50000000-0000-4000-8000-0000000000f1'
     const to = '50000000-0000-4000-8000-0000000000f2'
@@ -288,6 +289,8 @@ describe('a host session renamed by its CLI', () => {
     const t = await getTask('gate-task-b')
     expect(t.exec_session_id).toBe(to)
     expect(t.session_id).toBe(to)
+    // A new id of the same session is no start: the task stays where its turns left it.
+    expect(t.phase).toBe('COMPLETE')
   })
 })
 

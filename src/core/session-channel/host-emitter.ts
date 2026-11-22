@@ -7,8 +7,10 @@
  *   bus `flow` event   -> HostChannel.flow (only to a caught-up reader, never kept)
  *   `leader`/`command` -> nothing (the leader makes those from its own data)
  *   own row written    -> `row` {born:true, patch: whole row} the first time, then {patch} with
- *                         the fields that changed since the last row seen (null: cleared); a
+ *                         the fields that changed since the last row kept (null: cleared); a
  *                         leader field never rides a patch (the host does not write them)
+ *   start, resync ask  -> `row` {resync:true, patch: whole row} for each own row (each at start,
+ *                         the ones the leader names on its `resync` frame): applied whole, never a start
  *   rename / drop      -> `rename` {from, to} (the new id continues the old id's sseq), `drop` {sid}
  *   any event or row   -> `live` {state}: the mirrored state (host-live.ts), at most every
  *                         `liveMs` per session, and only when it changed
@@ -21,7 +23,7 @@
 import type { FactLog } from './fact-log.js'
 import type { HostChannel } from './channel.js'
 import type { LiveState } from './host-api.js'
-import { channelClassOf } from './event-classes.js'
+import { channelClassOf, sessionIdOf } from './event-classes.js'
 import { setOwnRowListener } from './row-hook.js'
 import { rowOwnedHere, sessionFieldOwner } from '../sessions/session-row-owner.js'
 import type { SessionRecord } from '../types.js'
@@ -83,21 +85,13 @@ export interface HostEmitter {
   ownSessionOfTask(taskId: string): string | null
   /** Write every pending `live` record now (tests, a stop). */
   flushLive(): void
+  /** The leader asked for these rows whole (channel `resync`): each own one gets a `resync` record. */
+  resync(sids: Iterable<string>): Promise<void>
 }
 
 interface Pending { events: { name: string; data: unknown; at: number; to: string[] }[]; timer: ReturnType<typeof setTimeout> }
 
-/** The session id an event names. */
-export function sessionIdOf(name: string, data: unknown): string | null {
-  if (!data || typeof data !== 'object') return null
-  const d = data as Record<string, unknown>
-  if (name === 'transfer:fork-init') return typeof d.actualId === 'string' && d.actualId ? d.actualId : null
-  for (const k of ['sessionId', 'claudeSessionId']) {
-    const v = d[k]
-    if (typeof v === 'string' && v) return v
-  }
-  return null
-}
+export { sessionIdOf } from './event-classes.js'
 
 /** The fields of `after` that differ from `before`; a field `after` no longer has is null. */
 export function rowPatch(before: SessionRecord, after: SessionRecord): Record<string, unknown> {
@@ -134,7 +128,8 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
 
   const warn = (msg: string, data?: Record<string, unknown>): void => o.onLog?.('warn', msg, data)
 
-  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[] } = {}): void {
+  /** Keep one record; false when the log did not take it (the caller keeps what it would have sent). */
+  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[] } = {}): boolean {
     const v = name === 'row' || name === 'live' || name === 'rename' || name === 'drop' ? undefined : o.offsetOf?.(sid)
     const epoch = lastRows.get(sid)?.streamEpoch
     try {
@@ -144,9 +139,22 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
         ...(opts.continueFrom ? { continueFrom: opts.continueFrom } : {}),
         ...(opts.to ? { to: opts.to } : {}),
       })
+      return true
     } catch (err) {
       warn('session channel: a record was not kept', { sessionId: sid, name, error: err instanceof Error ? err.message : String(err) })
+      return false
     }
+  }
+
+  /**
+   * The whole row again (a boot, the leader's ask): `resync`, which a leader applies whole and never
+   * says as a start; an older leader reads it as a patch of every field (no `born`: no start either).
+   */
+  function appendWhole(row: SessionRecord): void {
+    const sid = row.claudeSessionId
+    const copy = JSON.parse(JSON.stringify(row)) as SessionRecord
+    if (append(sid, 'row', { resync: true, patch: copy })) lastRows.set(sid, copy)
+    own.add(sid)
   }
 
   function scheduleLive(sid: string): void {
@@ -185,14 +193,15 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     if (!rowOwnedHere(row, o.hostKey)) return
     const before = lastRows.get(sid)
     const copy = JSON.parse(JSON.stringify(row)) as SessionRecord
-    lastRows.set(sid, copy)
+    // The row the leader has is the one the last kept record made: a record the log did not take
+    // leaves it, so the next patch (diffed against it) still carries what this one missed.
     if (!before) {
-      append(sid, 'row', { born: true, patch: copy })
+      if (append(sid, 'row', { born: true, patch: copy })) lastRows.set(sid, copy)
       takeOwn(sid)
     } else {
       own.add(sid)
       const patch = rowPatch(before, copy)
-      if (Object.keys(patch).length > 0) append(sid, 'row', { patch })
+      if (Object.keys(patch).length === 0 || append(sid, 'row', { patch })) lastRows.set(sid, copy)
     }
     scheduleLive(sid)
   }
@@ -243,13 +252,16 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     async start() {
       if (started) return
       started = true
-      for (const row of await o.ownRows()) {
-        if (!rowOwnedHere(row, o.hostKey)) continue
-        own.add(row.claudeSessionId)
-        lastRows.set(row.claudeSessionId, JSON.parse(JSON.stringify(row)) as SessionRecord)
-      }
+      // The listener first, then the rows as they are: a write between the two is seen by the
+      // listener, and each own row goes whole once (a `resync` record, applied idempotently), so a
+      // write made before this start (boot, a record lost in the last flush window of a killed
+      // process) reaches the leader too.
       rowListener = o.rowListener ?? setOwnRowListener
       rowListener(onRow)
+      for (const row of await o.ownRows()) {
+        if (!rowOwnedHere(row, o.hostKey) || lastRows.has(row.claudeSessionId)) continue
+        appendWhole(row)
+      }
       if (o.bus !== undefined) busRef = o.bus
       else busRef = (await import('../event-bus.js')).bus
       busRef.subscribe(HOST_EMITTER_SUBSCRIBER, onEvent, { global: true, interest: ['session:', 'transfer:'] })
@@ -295,6 +307,13 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     },
     flushLive() {
       for (const [sid, t] of [...liveTimers]) { clearTimeout(t); liveTimers.delete(sid); writeLive(sid) }
+    },
+    async resync(sids) {
+      const want = new Set(sids)
+      if (want.size === 0) return
+      for (const row of await o.ownRows()) {
+        if (want.has(row.claudeSessionId) && rowOwnedHere(row, o.hostKey)) appendWhole(row)
+      }
     },
   }
 }
