@@ -74,7 +74,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
     <div className={`kanban-card-detail${inline ? ' has-session' : ''}`} data-testid="kanban-card-detail" data-task-id={card.taskId} role="region" aria-label={card.title}>
       {/* The card itself. Above an open session it is a box of its own that scrolls, Back and the
           actions held at its edges, so the chat keeps most of the pane (board-kanban.css). */}
-      <div className="kanban-detail-head" data-testid="kanban-detail-head">
+      <div className="kanban-detail-block" data-testid="kanban-detail-head">
         <div className="kanban-detail-bar">
           <button ref={backRef} type="button" className="btn btn-link kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
           <span className="kanban-detail-lane">{laneName}</span>

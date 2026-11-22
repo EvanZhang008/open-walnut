@@ -343,9 +343,9 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 /* ── The narrow card detail (it replaces the board) ── */
 .kanban-card-detail { flex: 1 1 auto; overflow-y: auto; margin: 8px 12px; cursor: default; gap: 8px; padding: 10px 12px; justify-content: flex-start; }
 /* N6: the card's status line grows in a row; in this column it would take every spare pixel. */
-.kanban-card-detail > *, .kanban-detail-head > * { flex: 0 0 auto; }
+.kanban-card-detail > *, .kanban-detail-block > * { flex: 0 0 auto; }
 /* The card itself (Back to the actions), in the detail's own column rhythm. */
-.kanban-detail-head { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.kanban-detail-block { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .kanban-card-detail .kanban-detail-bar { display: flex; align-items: center; gap: 10px; }
 .kanban-card-detail .kanban-detail-lane { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .kanban-card-detail .kanban-detail-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; }
@@ -359,15 +359,15 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
    the whole card above the session left the chat about 45px at 520x800). The box spans the card's
    edges, so its scroll bar sits at the card's edge and no focus ring is clipped. */
 .kanban-card-detail.has-session { overflow: hidden; padding: 0; gap: 0; }
-.kanban-card-detail.has-session > .kanban-detail-head {
+.kanban-card-detail.has-session > .kanban-detail-block {
   max-height: 40%; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px;
 }
-.kanban-card-detail.has-session > .kanban-detail-head > :is(.kanban-detail-bar, .kanban-detail-actions) {
+.kanban-card-detail.has-session > .kanban-detail-block > :is(.kanban-detail-bar, .kanban-detail-actions) {
   position: sticky; z-index: 1; background: var(--bg-elevated);
 }
 /* A sticky box stops at the scroll box's padding: the offsets reach into it, so no scrolled line shows past Back or the actions. */
-.kanban-card-detail.has-session > .kanban-detail-head > .kanban-detail-bar { top: -10px; padding-top: 10px; margin-top: -10px; }
-.kanban-card-detail.has-session > .kanban-detail-head > .kanban-detail-actions { bottom: -10px; padding-bottom: 10px; margin-bottom: -10px; }
+.kanban-card-detail.has-session > .kanban-detail-block > .kanban-detail-bar { top: -10px; padding-top: 10px; margin-top: -10px; }
+.kanban-card-detail.has-session > .kanban-detail-block > .kanban-detail-actions { bottom: -10px; padding-bottom: 10px; margin-bottom: -10px; }
 .kanban-card-detail > .kanban-detail-session {
   flex: 1 1 auto; min-height: 280px; display: flex; flex-direction: column; position: relative;
   border-top: 1px solid var(--border);
