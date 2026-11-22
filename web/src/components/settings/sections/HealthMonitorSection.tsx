@@ -50,6 +50,8 @@ export function Spark({ points, state }: { points: Array<number | null>; state: 
   const vals = points.filter((p): p is number => p !== null);
   // An alarm with too little data draws no line: a flat line would read as a steady reading.
   if (!vals.length || state === 'INSUFFICIENT_DATA') return <span className="health-spark-empty">No data</span>; // empty-state-ok: a table cell's value
+  // One reading is not a line: drawn as one it is a stray tick at the cell's edge.
+  if (vals.length < 2) return <span className="health-spark-empty">One reading</span>;
   const max = Math.max(...vals, 1e-9);
   const min = Math.min(...vals, 0);
   const w = 120;

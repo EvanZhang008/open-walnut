@@ -157,8 +157,8 @@
 /* Settings reads as a form of 44 px rows with hairlines between them, so a group's state is one
    such row: left, 13 px, the row's own padding (2026-11-22 review: a centred "No voice recordings
    yet" stood apart from its rows; settings N23: an empty group is a real 44 px row). */
-.settings-group > .empty-state:not([data-size='pane']),
-.settings-card-body > .empty-state:not([data-size='pane']) {
+:is(.settings-group > .empty-state, .settings-group > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']),
+:is(.settings-card-body > .empty-state, .settings-card-body > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) {
   position: relative;
   box-sizing: border-box;
   flex-direction: row;
@@ -172,20 +172,20 @@
   font-size: var(--font-size-md);
 }
 
-.settings-group > .empty-state:not([data-size='pane']) .empty-state-title,
-.settings-card-body > .empty-state:not([data-size='pane']) .empty-state-title {
+:is(.settings-group > .empty-state, .settings-group > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-title,
+:is(.settings-card-body > .empty-state, .settings-card-body > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-title {
   font-size: var(--font-size-md);
   font-weight: 400;
 }
 
-.settings-group > .empty-state:not([data-size='pane']) .empty-state-icon,
-.settings-card-body > .empty-state:not([data-size='pane']) .empty-state-icon {
+:is(.settings-group > .empty-state, .settings-group > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-icon,
+:is(.settings-card-body > .empty-state, .settings-card-body > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-icon {
   width: 12px;
   height: 12px;
 }
 
-.settings-group > .empty-state[data-kind='empty']:not([data-size='pane']) .empty-state-icon,
-.settings-card-body > .empty-state[data-kind='empty']:not([data-size='pane']) .empty-state-icon {
+:is(.settings-group > .empty-state, .settings-group > :not(.settings-row) > .empty-state:only-child)[data-kind='empty']:not([data-size='pane']) .empty-state-icon,
+:is(.settings-card-body > .empty-state, .settings-card-body > :not(.settings-row) > .empty-state:only-child)[data-kind='empty']:not([data-size='pane']) .empty-state-icon {
   display: none;
 }
 
