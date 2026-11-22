@@ -775,6 +775,15 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   border: 0;
 }
 
+/* The fieldset is always a box of its own, never display: contents (a boxless wrapper such as
+   .settings-rows-contents would make it one). In Chromium a display: contents fieldset loses its
+   rows' layout boxes once content around it changes: the rows read 0 px tall and the card shows
+   only its border (2026-11-22, Calendar Accounts' Mail accounts under a newly inserted group).
+   In a settings card, which is plain block flow, a block fieldset lays its rows out the same. */
+fieldset.wn-group {
+  display: block;
+}
+
 .wn-group-rows {
   display: contents;
 }

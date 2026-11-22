@@ -75,6 +75,38 @@ async function offMasterProblems(page: Page): Promise<{ checked: number; problem
   })
 }
 
+/** Every ControlGroup on the page keeps its rows laid out when the content around it changes:
+ *  a box of its own (never display: contents), and each row has a height. 2026-11-22: in Chromium a
+ *  display: contents fieldset lost its rows' boxes after a group was inserted above it (Calendar
+ *  Accounts' Mail accounts read 0 px tall). The insert below is that change, made by hand. */
+async function groupLayoutProblems(page: Page): Promise<{ groups: number; problems: Array<{ master: string; problem: string }> }> {
+  return page.evaluate(async () => {
+    const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const out: Array<{ master: string; problem: string }> = []
+    const groups = [...document.querySelectorAll<HTMLFieldSetElement>('.settings-pane fieldset.wn-group')]
+    const marks: HTMLElement[] = []
+    for (const g of groups) {
+      const block = (g.closest('.settings-group-block, .settings-group') ?? g) as HTMLElement
+      const mark = document.createElement('div')
+      mark.style.height = '24px'
+      block.parentElement?.insertBefore(mark, block)
+      marks.push(mark)
+    }
+    await frame()
+    for (const g of groups) {
+      if (getComputedStyle(g).display === 'contents') out.push({ master: g.id, problem: 'the group fieldset is display: contents' })
+      const rows = [...g.querySelectorAll<HTMLElement>('.settings-row, .wn-check-row')]
+        .filter((r) => getComputedStyle(r).display !== 'none' && !r.closest('[hidden]'))
+      for (const r of rows) {
+        const h = r.getBoundingClientRect().height
+        if (!r.getClientRects().length || h < 1) out.push({ master: g.id, problem: `a row has no height after content changed: ${r.outerHTML.slice(0, 80)}` })
+      }
+    }
+    for (const m of marks) m.remove()
+    return { groups: groups.length, problems: out }
+  })
+}
+
 test('every master switch that is off leaves its controls disabled and grey', async ({ page }) => {
   await answerWritesLocally(page)
   await page.goto('/')
@@ -85,6 +117,7 @@ test('every master switch that is off leaves its controls disabled and grey', as
   expect(ids.length).toBeGreaterThan(15)
   const findings: Finding[] = []
   let checked = 0
+  let laidOut = 0
   for (const id of ids) {
     const item = page.getByTestId(`settings-nav-${id}`)
     // A pane can leave the list once a master above turned off (Permissions goes when nothing
@@ -108,8 +141,12 @@ test('every master switch that is off leaves its controls disabled and grey', as
     const res = await offMasterProblems(page)
     checked += res.checked
     for (const p of res.problems) findings.push({ pane: id, ...p })
+    const lay = await groupLayoutProblems(page)
+    laidOut += lay.groups
+    for (const p of lay.problems) findings.push({ pane: id, ...p })
   }
   // Counts only masters that were really read off with their groups on screen.
   expect(checked, 'fewer than 3 masters were checked off with their groups: the check proves too little').toBeGreaterThanOrEqual(3)
+  expect(laidOut, 'no ControlGroup was found to check its layout').toBeGreaterThanOrEqual(3)
   expect(findings, findings.map((f) => `${f.pane}: ${f.master}: ${f.problem}`).join('\n')).toEqual([])
 })
