@@ -126,6 +126,9 @@ const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   // STOP_SCRIPT's `kill -TERM -"$pgid"` (then -KILL) on a detached run a newer Walnut here listed, only while
   // `ps -o lstart` shows the pid still started when the listed one did (a reused pid is left alone)
   'src/providers/detached-registry.ts': 1,
+  // Names the session member `kill` a leader may call on a session its host runs; the host's
+  // session ends its CLI through its own process manager, as on the leader today
+  'src/core/session-channel/host-calls.ts': 1,
   // `kill -TERM "$PID"` on the daemon in its own dir, after `ps` proved the pid's command and start time
   'src/providers/daemon-start-cmd.ts': 1,
   // the type check guard's refusal names `kill <pid>` as the session's way out: words for the model about the one

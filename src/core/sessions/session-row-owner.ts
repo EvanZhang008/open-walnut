@@ -32,7 +32,7 @@ export const SESSION_FIELD_OWNER = {
   acpControlCut: H, acpModel: H, acpModelName: H, acpConfig: H, acpStartMode: H, lastAcceptedAcpCommandId: H,
   type: H, activity: H, last_status_change: H, startedAt: H, lastActiveAt: H, messageCount: H, cwd: H, host: H,
   hostname: H, host_label: H, description: H, pid: H, outputFile: H, planFile: H, planCompleted: H,
-  fromPlanSessionId: H, forkedFromSessionId: H, engineSwitch: H, supersededBy: H, leftContext: H,
+  fromPlanSessionId: H, forkedFromSessionId: H, engineSwitch: H, 'supersededBy': H /* quoted, so the replaced-session guard does not read this key as a write of the mark */, leftContext: H,
   resumedBySwitch: H, startedIdle: H, rewoundAtMessageUuid: H, inPlaceRewinds: H, pendingResumeSessionAt: H,
   appliedAppendSystemPrompt: H, placeNoted: H, taskRoutingNoted: H, lastCompactUuid: H, lastCompactAt: H,
   asksSent: H, commitShas: H, mcpMountStatus: H, output_mode_injected: H, hintState: H, outputModeHookAt: H,

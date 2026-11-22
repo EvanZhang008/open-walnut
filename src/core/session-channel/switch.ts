@@ -2,11 +2,13 @@
  * The switch of phase 2 (docs/plan/one-service-every-host.md): a session on a host whose own
  * service can run it is assembled, run and judged there, and its leader keeps a copy.
  *
- * On only when set explicitly: `WALNUT_HOST_RUNS_SESSIONS=1` for one process (tests, an isolated
- * service), else `session.host_runs_sessions: true` in config. It is deliberately not an entry of
+ * The leader's choice. On only when set explicitly: `WALNUT_HOST_RUNS_SESSIONS=1` for one process
+ * (tests, an isolated service), else `session.host_runs_sessions: true` in the leader's config (not
+ * copied to hosts: an older host refuses an unknown session field). A host runs the sessions its
+ * leader hands it (`hostAnswersSessionRoutes`) unless its own process says 0. It is deliberately not an entry of
  * the experiment registry yet: a Walnut with `every_experiment` on would turn a registry entry on
- * at once, and this path is not proven on real hosts. Both sides read it: the leader before it
- * hands a start to a host, the host before it answers a session route.
+ * at once, and this path is not proven on real hosts. The leader reads it before it hands a start
+ * to a host.
  */
 import type { Config } from '../types.js'
 
@@ -28,4 +30,9 @@ export async function hostRunsSessionsNow(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** On a host: answer the session routes the leader calls (the leader decided); `WALNUT_HOST_RUNS_SESSIONS=0` refuses. */
+export function hostAnswersSessionRoutes(): boolean {
+  return process.env.WALNUT_HOST_RUNS_SESSIONS !== '0'
 }
