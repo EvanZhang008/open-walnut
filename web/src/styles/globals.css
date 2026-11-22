@@ -148,7 +148,8 @@
   --accent: #0A84FF;
   --accent-hover: #409CFF;
   --accent-subtle: rgba(10, 132, 255, 0.12);
-  --accent-text: var(--accent);
+  /* Lighter than --accent so small link text reads at 4.5:1 on the raised dark surfaces (#2C2C2E). */
+  --accent-text: #4DA3FF;
   --priority-important-text: var(--priority-important);
   --success-text: var(--success);
   /* Brighter on dark so the thin cluster outline stays visible on near-black cards. */
@@ -190,7 +191,7 @@
     --accent: #0A84FF;
     --accent-hover: #409CFF;
     --accent-subtle: rgba(10, 132, 255, 0.12);
-    --accent-text: var(--accent);
+    --accent-text: #4DA3FF;
     --priority-important-text: var(--priority-important);
     --success-text: var(--success);
     --group-outline: rgba(10, 132, 255, 0.45);
