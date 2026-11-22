@@ -27270,50 +27270,15 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 /* ── Card action row ("Ask AI to fix" / "Open fix session") ──
    Sits under the body + Details toggle and above the context chips: it is what
-   the user can DO about the error, so it reads after what the error says. Pills
-   rather than the perm card's full-width buttons — an error card's action is
-   optional, a permission's is the point of the card. */
+   the user can DO about the error, so it reads after what the error says. Small
+   family keys (.btn-sm), at most one of them .btn-primary: an error card's action
+   is optional, a permission's is the point of the card. */
 .nfc-card-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 6px;
-}
-
-.nfc-card-action {
-  padding: 3px 10px;
-  font-size: var(--font-size-sm);
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.nfc-card-action:not(:disabled):hover { opacity: 0.9; text-decoration: underline; }
-
-.nfc-card-action:disabled { opacity: 0.6; cursor: default; }
-
-/* The producer's own remedy (a plugin's "Sign in"): the one filled pill on the
-   card, because it is the thing to do, not one of several optional tools. */
-.nfc-card-action--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-
-/* The primary of the pair — starting the repair is the card's main offer. */
-.nfc-fix-start { color: var(--accent); }
-
-/* …and the secondary is a plain text button: "Fix again" only matters once a
-   session already exists, so it must not compete with "Open fix session". */
-.nfc-fix-restart {
-  border: none;
-  padding: 3px 2px;
-  color: var(--fg-muted);
 }
 
 /* Why the click did nothing, on its own line under the buttons. */

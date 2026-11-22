@@ -139,7 +139,7 @@
   gap: 6px;
 }
 .org-reorg-text { line-height: 1.35; }
-.org-reorg-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.org-reorg-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ── The detail ── */
 

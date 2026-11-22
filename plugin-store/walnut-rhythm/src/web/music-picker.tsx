@@ -88,7 +88,7 @@ export function MusicPicker({ music, store, value, onPick, testId }: {
             {choice.kind !== 'none' && (
               <button
                 type="button"
-                className={`rhythm-star${option.starred ? ' rhythm-star-on' : ''}`}
+                className="btn btn-icon btn-sm btn-ghost rhythm-star"
                 aria-pressed={option.starred}
                 aria-label={option.starred ? `Unstar ${option.title}` : `Star ${option.title} to keep it on top`}
                 title={option.starred ? 'Starred: on top of the list. Click to unstar.' : 'Star to keep it on top of the list'}
@@ -101,7 +101,7 @@ export function MusicPicker({ music, store, value, onPick, testId }: {
             {choice.kind !== 'none' && (
               <button
                 type="button"
-                className={`rhythm-preview${playingPreview ? ' rhythm-preview-on' : ''}`}
+                className="btn btn-sm btn-ghost rhythm-preview"
                 aria-pressed={playingPreview}
                 aria-label={playingPreview ? `Stop the preview of ${option.title}` : `Preview ${option.title}${choice.kind === 'spotify' ? ' in Spotify on your Mac' : ''}`}
                 title={choice.kind === 'spotify' ? 'Plays 15 seconds in Spotify on your Mac' : 'Plays 10 seconds here'}

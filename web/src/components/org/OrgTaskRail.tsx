@@ -99,17 +99,6 @@ function ModeSwitch({ mode, modes, onPick }: { mode: OrgTaskMode; modes: readonl
   );
 }
 
-const ICON_EXPAND = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
-  </svg>
-);
-const ICON_COLLAPSE = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
-  </svg>
-);
-
 /** A section's heading: its dot, name and count; a click folds it or opens it. */
 function SectionHead({ tab, count, open, onFlip }: { tab: OrgRailTab; count: number; open: boolean; onFlip: () => void }) {
   return (
@@ -450,11 +439,11 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
           </DisclosureButton>
         )}
         <span className="org-top-acts">
-          <button type="button" className="org-rail-icon" data-testid="org-rail-fullscreen" aria-pressed={isFullscreen}
+          <button type="button" className="btn btn-icon btn-sm btn-ghost" data-testid="org-rail-fullscreen" aria-pressed={isFullscreen}
             aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'} title={isFullscreen ? 'Exit full screen (Esc)' : 'Full screen'}
-            onClick={isFullscreen ? exitFullscreen : enterFullscreen}>{isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}</button>
-          <button type="button" className="org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={() => { exitFullscreen(); onClose(); }}>
-            <span aria-hidden="true">×</span>
+            onClick={isFullscreen ? exitFullscreen : enterFullscreen}>{isFullscreen ? ICONS.ICON_COLLAPSE : ICONS.ICON_EXPAND}</button>
+          <button type="button" className="btn btn-icon btn-sm btn-ghost org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={() => { exitFullscreen(); onClose(); }}>
+            {ICONS.ICON_CLOSE}
           </button>
         </span>
       </div>

@@ -309,32 +309,17 @@
 .oc-link:hover:not(:disabled) { text-decoration: underline; }
 .oc-link:disabled { color: var(--fg-muted); cursor: default; }
 
-/* The last place in the VP row: make a VP or a project. */
+/* The last place in the VP row: make a VP or a project, two family keys (buttons.css). No dashed
+   box: a dashed outline on this chart means a drop zone, and these are not one. */
 .oc-vp-new {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 9px 10px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
+  gap: 8px;
+  padding: 4px 0;
   list-style: none;
 }
-.oc-vp-new button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: var(--font-size-md);
-  text-align: left;
-  cursor: pointer;
-}
-.oc-vp-new button:hover, .oc-vp-new button:focus-visible { background: var(--bg-secondary); color: var(--fg); }
 .oc-ceo-wrap { position: relative; display: flex; justify-content: center; width: min(320px, 100%); }
 
 /* A router's card (OrgChartSheet.tsx): in the VPs' grid after them, because a router sits beside the

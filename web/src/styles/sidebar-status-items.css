@@ -168,15 +168,6 @@
   font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
-.status-item-link {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent-text);
-  font: inherit;
-  cursor: pointer;
-}
-.status-item-link:hover { text-decoration: underline; }
 /* The box takes focus only so Tab reaches its buttons (they show their own ring).
    WebKit counts that programmatic focus as :focus-visible and drew a thick ring
    around the whole popover on every mouse open. */

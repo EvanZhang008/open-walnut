@@ -6,7 +6,7 @@ import { GlobalNotesPopup } from './GlobalNotesPopup';
 import { NotesEditor } from './NotesEditor';
 import type { UseGlobalNotesReturn } from '@/hooks/useGlobalNotes';
 import type { Task } from '@open-walnut/core';
-import { ICON_EXPAND, ICON_NEW_TAB, ICON_NOTE } from '@/components/common/Icons';
+import { ICON_CLOSE, ICON_EXPAND, ICON_NEW_TAB, ICON_NOTE } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
@@ -98,7 +98,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           {saveError && <span className="global-notes-error" title={saveError}>Save failed</span>}
           {/* Open in a new browser tab (standalone, lightweight) */}
           <button
-            className="btn btn-icon btn-sm global-notes-expand-btn"
+            className="btn btn-icon btn-sm btn-ghost global-notes-expand-btn"
             onClick={e => { e.stopPropagation(); openPopout('global-notes', {}); }}
             aria-label="Open notes in a new tab"
             title="Open in new tab"
@@ -107,7 +107,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           </button>
           {/* In-app fullscreen overlay (stays in this tab) */}
           <button
-            className="btn btn-icon btn-sm global-notes-expand-btn"
+            className="btn btn-icon btn-sm btn-ghost global-notes-expand-btn"
             onClick={e => { e.stopPropagation(); openPopup(); }}
             aria-label="Expand notes to fullscreen"
             title="Fullscreen"
@@ -116,12 +116,12 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           </button>
           {onClose && (
             <button
-              className="btn btn-icon btn-sm global-notes-expand-btn"
+              className="btn btn-icon btn-sm btn-ghost global-notes-expand-btn"
               onClick={e => { e.stopPropagation(); onClose(); }}
               aria-label={`Close ${title ?? 'notes'}`}
               title={`Close ${title ?? 'notes'}`}
             >
-              ×
+              {ICON_CLOSE}
             </button>
           )}
         </div>

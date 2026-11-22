@@ -219,21 +219,9 @@ export const RHYTHM_CSS = `
 .rhythm-pick-row { display: flex; align-items: center; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .rhythm-pick-row:last-child { border-bottom: 0; }
 .rhythm-pick-row .rhythm-option { flex: 1; min-width: 0; border-bottom: 0; }
-.rhythm-preview {
-  flex: none; height: 24px; margin-right: 8px; padding: 0 8px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg); color: var(--fg-secondary); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer;
-}
-.rhythm-preview:hover { color: var(--fg); background: var(--bg-hover, var(--bg-secondary)); }
-.rhythm-preview-on { color: var(--accent); border-color: var(--accent); }
-.rhythm-star {
-  flex: none; display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; margin-right: 4px; padding: 0;
-  border: 0; border-radius: 6px; background: none; color: var(--fg-muted); cursor: pointer;
-}
-.rhythm-star:hover { color: var(--fg); background: var(--bg-hover, var(--bg-secondary)); }
-.rhythm-star-on, .rhythm-star-on:hover { color: #e0a100; }
-.rhythm-star:focus-visible, .rhythm-preview:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Preview and the star are family keys (.btn, buttons.css); these keep only their place in the row. */
+.rhythm-preview { flex: none; margin-right: 8px; }
+.rhythm-star { flex: none; margin-right: 4px; }
 .rhythm-now-head { display: flex; align-items: center; gap: 8px; }
 .rhythm-now-head .rhythm-start-plays { flex: 1; min-width: 0; }
 .rhythm-button.rhythm-pause { flex: none; min-width: 72px; }

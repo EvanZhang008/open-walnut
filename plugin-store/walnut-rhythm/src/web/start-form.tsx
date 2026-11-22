@@ -214,7 +214,7 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
       <div className="rhythm-actions">
         <button
           type="button"
-          className="rhythm-button rhythm-primary"
+          className="btn btn-sm btn-primary"
           disabled={busy || invalid !== null}
           aria-busy={busy || undefined}
           data-testid="rhythm-start-button"
@@ -224,7 +224,7 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
         </button>
         <button
           type="button"
-          className="rhythm-button"
+          className="btn btn-sm"
           disabled={busy || breakMinutes === null}
           data-testid="rhythm-start-rest"
           onClick={rest}

@@ -34,20 +34,11 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 /* A node with no Brief: the bar holds only its close, at the right. */
 .org-rail > .org-top:not(.has-switch) { justify-content: flex-end; min-height: 28px; padding: 2px 6px; }
 /* Close the panel: the chat takes its room; the header's button brings it back (OrgNodeDetail). */
-.org-rail-close {
-  flex: none; margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: var(--radius-full); background: transparent;
-  color: var(--fg-muted); font: inherit; font-size: var(--font-size-xl); line-height: 1; cursor: pointer;
-}
-.org-rail-close:hover, .org-rail-close:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+/* Close the panel (a family key, buttons.css): the chat takes its room; the header's button brings it back (OrgNodeDetail). */
+.org-rail-close { flex: none; margin-left: auto; }
 /* Full screen and close (OrgTaskRail). */
 .org-top-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; }
 .org-top-acts .org-rail-close { margin-left: 0; }
-.org-rail-icon {
-  flex: none; width: 24px; height: 24px; display: inline-grid; place-items: center; border: 0; border-radius: var(--radius-full);
-  background: transparent; color: var(--fg-muted); cursor: pointer;
-}
-.org-rail-icon:hover, .org-rail-icon:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
-.org-rail-icon[aria-pressed="true"] { color: var(--fg); }
 /* Tasks: all of them in one list, or as the Board. */
 .org-task-modes { flex: none; align-self: flex-start; margin: 8px 10px 2px; }
 /* The Board fills the side bar below the switch. */

@@ -56,7 +56,7 @@ export function NewTopicButton({ members = [], testId = 'topic-new', className =
   const on = useTopicsOn();
   if (!on) return null;
   return (
-    <button type="button" className={`btn btn-sm ${iconOnly ? 'btn-icon' : 'btn-ghost'}${className ? ` ${className}` : ''}`} data-testid={testId} title="New topic: a group chat with tasks, VPs and people"
+    <button type="button" className={`btn btn-sm btn-ghost${iconOnly ? ' btn-icon' : ''}${className ? ` ${className}` : ''}`} data-testid={testId} title="New topic: a group chat with tasks, VPs and people"
       aria-label={iconOnly ? 'New topic' : undefined} onClick={() => openNewTopic(members)}>
       {ICON_PLUS}
       {!iconOnly && <span>New topic</span>}
