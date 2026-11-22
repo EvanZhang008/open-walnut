@@ -198,11 +198,13 @@ describe('a prompt of a session its host runs', () => {
     const a = sessions.get(SID_A)!
     ask(a, 'req-a2')
     const proxy = remoteJudgedSession(SID_A, HOST, 'native')
+    // Watched, not replaced: the session's own resolve runs.
+    const asked = vi.spyOn(a, 'resolvePermissionRequest')
     const first = proxy.resolvePermissionRequest('req-a2', true)
     await until(() => writesOf(SID_A, 'req-a2').length === 1)
     const second = proxy.resolvePermissionRequest('req-a2', false)
-    // The second call reached the host and is waiting on the same write.
-    await new Promise((r) => setTimeout(r, 100))
+    // The second call passed the host's check and is waiting on the same write.
+    await until(() => asked.mock.calls.length === 2)
     writesOf(SID_A, 'req-a2')[0]!.finish(true)
     await expect(first).resolves.toBe(true)
     await expect(second).resolves.toBe(true)
