@@ -27,7 +27,7 @@
   max-width: 240px;
   height: 28px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--bg);
   color: var(--fg);
 }
@@ -67,7 +67,7 @@
   width: 22px;
   height: 22px;
   margin-right: 2px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   color: var(--fg-muted);
 }
 .session-taskbar-peek:hover,
@@ -101,12 +101,12 @@
   max-width: 150px;
   height: 22px;
   border: 1px dashed var(--border);
-  border-radius: 11px;
+  border-radius: var(--radius-full);
   color: var(--fg-muted);
 }
 .session-taskbar-recent-pill:hover { border-color: var(--fg-muted); color: var(--fg); }
 .session-taskbar-recent-pill .session-taskbar-open { gap: 5px; padding: 0 2px 0 8px; font-size: var(--font-size-sm); }
-.session-taskbar-recent-pill .session-taskbar-close { width: 18px; height: 18px; border-radius: 9px; }
+.session-taskbar-recent-pill .session-taskbar-close { width: 18px; height: 18px; border-radius: var(--radius-full); }
 .session-taskbar-recent-pill .session-taskbar-close svg { width: 9px; height: 9px; }
 .session-taskbar-recent-pill .session-taskbar-dot { width: 6px; height: 6px; }
 
@@ -152,7 +152,7 @@
   flex: 0 0 auto;
   padding: 3px 9px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--fg);
   font: inherit;
@@ -178,7 +178,7 @@
   height: 22px;
   padding: 0 9px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font-size: var(--font-size-sm);
@@ -204,6 +204,6 @@
 }
 .session-taskbar-more-row:hover { background: var(--accent-subtle); }
 .session-taskbar-more-row .session-taskbar-open { flex: 1 1 auto; min-width: 0; gap: 7px; padding: 0 4px 0 8px; font-size: var(--font-size-sm); justify-content: flex-start; }
-.session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: 11px; }
+.session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: var(--radius-full); }
 .session-taskbar-more-row .session-taskbar-close svg { width: 10px; height: 10px; }
 .session-taskbar-more-row .session-taskbar-dot { width: 6px; height: 6px; }

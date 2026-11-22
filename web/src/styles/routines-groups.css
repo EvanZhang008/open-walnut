@@ -159,7 +159,7 @@
 .routine-row-main:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -3px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
 }
 
 .routine-dot {
@@ -695,7 +695,7 @@ button.routines-summary-failing:hover {
 button.routines-summary-failing:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
 }
 
 /* Small red words on white need a deeper red to read (4.5:1). */

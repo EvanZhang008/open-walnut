@@ -10,7 +10,7 @@
   overflow-wrap: anywhere; user-select: all;
 }
 .fr-copy {
-  flex: none; font-size: var(--font-size-xs); padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  flex: none; font-size: var(--font-size-xs); padding: 3px 8px; border-radius: var(--radius-full); cursor: pointer;
   border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg);
 }
 .fr-copy:hover { background: var(--bg-tertiary); }

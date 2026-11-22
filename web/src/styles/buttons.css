@@ -9,7 +9,8 @@
    Look: the quiet grey key the user picked on the Needs you card ("I like P1 button"): a fill and
    no border, so it reads the same on a white page, a grey panel, a dark sheet or frosted glass.
    The fill is the text colour mixed into the page colour, never a fixed grey token, so it stays a
-   step away from the --bg-secondary panels it sits on. Corners from --radius-sm (8 px), never a pill. Two heights: 34 px
+   step away from the --bg-secondary panels it sits on. Round (--radius-full): a capsule, a circle when
+   it is an icon alone; a row of a list (.btn-block.btn-ghost) keeps the row corner. Two heights: 34 px
    (default: forms, dialogs, cards) and 28 px (.btn-sm: rows, toolbars, settings). */
 
 /* How strong the key's fill is: a dark page is black, so it needs more of the text colour. */
@@ -41,7 +42,7 @@
   min-height: 34px;
   padding: 4px 12px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--btn-fill);
   color: var(--fg);
   font: inherit;
@@ -197,6 +198,7 @@
 .btn-block.btn-ghost {
   justify-content: flex-start;
   text-align: left;
+  border-radius: var(--radius-sm);
 }
 
 /* ── Compound trigger slots: "Cost $2077 ▾" is .btn > label, .btn-value, .btn-caret ── */

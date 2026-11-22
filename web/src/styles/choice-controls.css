@@ -28,7 +28,7 @@
   --choice-lift: var(--shadow-sm);
   --choice-knob-lift: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   /* Corners inside a control: a segment sits 2 px inside its 8 px track; a box is half a control's. */
-  --choice-radius-inner: calc(var(--radius-sm) - 2px);
+  --choice-radius-inner: var(--radius-full);
   --choice-radius-box: var(--radius-xs);
   /* The dark palette, for a control on a surface that is dark in every theme (the camera dock). */
   --choice-dark-track: rgba(118, 118, 128, 0.24);
@@ -267,7 +267,7 @@
   flex-shrink: 1;
   padding: 2px;
   overflow-x: auto;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--choice-track);
   vertical-align: middle;
   scrollbar-width: none;
@@ -405,7 +405,7 @@
   margin: 0;
   padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--choice-chip-off);
   color: var(--fg-secondary);
   font: inherit;
@@ -708,7 +708,7 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   margin: 0 0 0 -4px;
   padding: 2px 8px 2px 4px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
@@ -737,6 +737,7 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
 .wn-disclosure.wn-disclosure-block {
   display: flex;
   width: 100%;
+  border-radius: var(--radius-sm); /* shape: a disclosure as wide as its list is a row, not a key */
 }
 
 /* In a line of small text (DisclosureButton `inline`): the line's size and height, so the row does

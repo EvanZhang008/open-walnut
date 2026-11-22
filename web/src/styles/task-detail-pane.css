@@ -249,7 +249,7 @@
   color: var(--fg);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   cursor: pointer;
 }
 .tdp-action:hover { background: var(--bg-tertiary); }
@@ -311,7 +311,7 @@
   color: var(--fg);
   background: none;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   cursor: pointer;
 }
 .tdp-dep-result:hover { background: var(--bg-secondary); }
@@ -377,7 +377,7 @@
 /* The selected design keeps the header and actions visible around independent columns. */
 .task-detail-modal .todo-detail-pane.tdp { padding: 0; overflow: hidden; height: 100%; }
 .tdp-footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--border); background: var(--bg); }
-.tdp-open-session { padding: 6px 12px; font: inherit; font-size: var(--font-size-md); color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: 6px; cursor: pointer; }
+.tdp-open-session { padding: 6px 12px; font: inherit; font-size: var(--font-size-md); color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: var(--radius-full); cursor: pointer; }
 .tdp-open-session:hover { opacity: .85; }
 .tdp-open-session:focus-visible, .tdp-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tdp-facts { border-top: 1px solid var(--border); padding-top: 16px; }

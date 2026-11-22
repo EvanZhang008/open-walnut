@@ -83,7 +83,7 @@
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -223,7 +223,7 @@
   height: 18px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;

@@ -141,7 +141,7 @@
   margin-top: 4px;
   padding: 2px 9px;
   border: 1px solid var(--bs-needs);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bs-needs);
   color: var(--on-accent);
   font: inherit;

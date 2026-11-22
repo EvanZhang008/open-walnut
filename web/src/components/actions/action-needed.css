@@ -16,7 +16,7 @@
 .ask-pager-unsent { margin: 0 4px 0 2px; color: var(--error); white-space: nowrap; }
 .ask-pager-btn {
   all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 28px; border-radius: var(--radius-sm); color: var(--fg-muted); cursor: pointer;
+  width: 24px; height: 28px; border-radius: var(--radius-full); color: var(--fg-muted); cursor: pointer;
 }
 .ask-pager-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .ask-pager-btn:disabled { opacity: 0.35; cursor: default; }

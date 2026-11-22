@@ -138,7 +138,7 @@
   margin: 0 0 8px;
   padding: 6px 8px;
   border: 1px dashed var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;

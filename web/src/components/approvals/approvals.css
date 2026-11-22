@@ -57,7 +57,7 @@
   height: 24px;
   margin: -4px -6px -4px 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg-muted);
   font: inherit;
@@ -398,7 +398,7 @@ button.approval-row { width: 100%; font: inherit; font-size: var(--font-size-md)
 
 .approval-dialog-close:focus-visible { outline-offset: 3px; }
 .approval-card-line .approval-kicker { flex: none; }
-.approval-line-more { flex: none; padding: 1px 7px; border-radius: 999px; background: var(--accent-subtle); color: var(--accent-text); font-size: var(--font-size-xs); font-weight: 600; }
+.approval-line-more { flex: none; padding: 1px 7px; border-radius: var(--radius-full); background: var(--accent-subtle); color: var(--accent-text); font-size: var(--font-size-xs); font-weight: 600; }
 
 /* What comes next, under the answer laid over the next request. */
 .approval-settled-next { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

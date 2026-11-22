@@ -63,7 +63,7 @@
 .kanban-rollup-still-open:hover, .kanban-rollup-still-open.is-active { text-decoration: underline; }
 .kanban-rollup-leader {
   border: 0; background: var(--kc-red-tint); color: var(--kc-red); font: inherit; font-weight: 600; font-size: var(--font-size-sm);
-  padding: 2px 8px; border-radius: 999px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 8px; border-radius: var(--radius-full); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .kanban-progress {
   position: relative; display: inline-block; width: 80px; height: 4px; border-radius: 2px; overflow: hidden;
@@ -101,7 +101,7 @@
 .kanban-lane-strip-needs { color: var(--kc-red); font-weight: 600; }
 .kanban-lane-strip-more {
   margin-left: 8px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-secondary); font: inherit;
-  font-size: var(--font-size-xs); padding: 0 6px; border-radius: 999px; cursor: pointer; flex: 0 0 auto;
+  font-size: var(--font-size-xs); padding: 0 6px; border-radius: var(--radius-full); cursor: pointer; flex: 0 0 auto;
 }
 
 /* ── Lane head ── */
@@ -119,7 +119,7 @@
 /* The lane's count and its needs-you count are `.badge badge-count` (styles/badge.css): only placement here. */
 .kanban-lane-count, .kanban-lane-needs { flex: 0 0 auto; }
 .kanban-lane-kebab {
-  margin-left: auto; flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
+  margin-left: auto; flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: var(--radius-full); background: none;
   color: var(--fg-secondary); cursor: pointer; font-size: var(--font-size-lg); line-height: 1; padding: 0;
 }
 .kanban-lane-kebab:hover, .kanban-lane-kebab[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg); }
@@ -141,9 +141,9 @@
 .kanban-add-lane-wrap.is-narrow { padding: 6px 12px 12px; }
 .kanban-add-lane {
   display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: var(--font-size-md); color: var(--fg-secondary); cursor: pointer;
-  background: none; border: 0; padding: 4px 6px; border-radius: 6px;
+  background: none; border: 0; padding: 4px 6px; border-radius: var(--radius-full);
 }
-.kanban-add-lane.is-wide { width: 100%; min-height: 40px; justify-content: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.kanban-add-lane.is-wide { width: 100%; min-height: 40px; justify-content: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-full); }
 .kanban-add-lane:hover { color: var(--fg); background: var(--bg-hover); }
 .kanban-add-lane[aria-disabled="true"] { color: var(--fg-muted); cursor: default; background: none; }
 .kanban-add-icon { display: inline-flex; }
@@ -188,7 +188,7 @@
 .kanban-toast-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .kanban-toast-text { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .kanban-toast-btn {
-  border: 0; background: none; padding: 2px 4px; font: inherit; font-weight: 600; color: var(--accent-text); cursor: pointer; border-radius: var(--radius-xs);
+  border: 0; background: none; padding: 2px 4px; font: inherit; font-weight: 600; color: var(--accent-text); cursor: pointer; border-radius: var(--radius-full);
 }
 .kanban-toast-btn:hover { background: var(--bg-hover); }
 /* .kanban-toasts-more takes the corner's "N more" look (.corner-more, corner-stack.css). */

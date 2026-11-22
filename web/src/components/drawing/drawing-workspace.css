@@ -42,7 +42,7 @@
   gap: 6px;
   height: 28px;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
@@ -108,7 +108,7 @@
   min-width: 0;
   padding: 6px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg);
   text-align: left;
@@ -437,4 +437,4 @@
 .drawing-assistant-intro p { margin: 0 0 8px; }
 .drawing-assistant-intro ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
 .drawing-assistant-head-gap { flex: 1 1 auto; }
-.drawing-assistant-open-task { height: 26px; padding: 0 10px; border-radius: 6px; font-size: var(--font-size-sm); }
+.drawing-assistant-open-task { height: 26px; padding: 0 10px; border-radius: var(--radius-full); font-size: var(--font-size-sm); }

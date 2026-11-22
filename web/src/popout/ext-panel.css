@@ -150,11 +150,11 @@
 .ext-ask-head { flex: none; display: flex; align-items: center; gap: 4px; min-height: 52px; padding: 6px 8px 6px 10px; border-bottom: 1px solid var(--border); }
 .ext-ask-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; padding-left: 4px; }
 .ext-ask-title { font-weight: 650; font-size: 14px; line-height: 1.3; }
-.ext-ask-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); cursor: pointer; border-radius: var(--radius-xs); }
+.ext-ask-agent { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: none; font: inherit; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); cursor: pointer; border-radius: var(--radius-full); }
 .ext-ask-agent:hover { color: var(--fg); }
 .ext-ask-agent.is-plain { cursor: default; }
 .ext-ask-titles.is-popup .ext-ask-agent { font-size: var(--font-size-lg); color: var(--fg); font-weight: 650; }
-.ext-ask-icon { flex: none; position: relative; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: none; color: var(--fg-secondary); cursor: pointer; }
+.ext-ask-icon { flex: none; position: relative; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: var(--radius-full); background: none; color: var(--fg-secondary); cursor: pointer; }
 .ext-ask-icon:hover { background: var(--hover-bg); color: var(--walnut-accent); }
 .ext-ask-icon:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 .ext-ask-key.is-pressed { background: var(--hover-bg); color: var(--walnut-accent); }
@@ -288,7 +288,7 @@
 .ext-relay-strip-what { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* A task opened from the first page: Back, its title, its state and project. */
-.ext-taskpage-back { flex: none; display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--walnut-accent); font: inherit; font-size: var(--font-size-md); font-weight: 600; cursor: pointer; }
+.ext-taskpage-back { flex: none; display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-full); background: none; color: var(--walnut-accent); font: inherit; font-size: var(--font-size-md); font-weight: 600; cursor: pointer; }
 .ext-taskpage-back:hover { background: var(--hover-bg); }
 .ext-taskpage-back:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 .ext-taskpage-line { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

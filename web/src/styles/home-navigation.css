@@ -29,7 +29,7 @@
 .sidebar-open-app-close {
   position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
   width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
+  border: 0; border-radius: var(--radius-full); background: transparent; color: var(--fg-muted); cursor: pointer;
   opacity: 0;
 }
 .sidebar-open-app-close svg { width: 14px; height: 14px; }
@@ -44,14 +44,14 @@
 .app-shell-navigation .todo-panel-toolbar { gap: 8px; padding: 7px 8px 6px 12px; flex-wrap: nowrap; }
 .todo-panel-hide, .todo-panel-board {
   width: 24px; height: 28px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
-  padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
+  padding: 0; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .todo-panel-hide:hover, .todo-panel-board:hover { color: var(--fg); background: var(--bg-hover); }
 /* One quiet toolbar, no accent colour (the user's call, 2026-09-23): New task is the family's
    quiet key (.btn-ghost; 2026-10-03: "the frame around New task is not needed, keep the UI
    consistent"), no fill until hover, the icon a plain glyph. */
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon,
-.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter { width: 24px; border-radius: 6px; color: var(--fg-muted); }
+.app-shell-navigation .todo-panel-toolbar .vd-trigger-icon.vd-has-filter { width: 24px; border-radius: var(--radius-full); color: var(--fg-muted); }
 .app-shell-navigation .todo-panel-toolbar .vd-trigger-icon:hover { color: var(--fg); background: var(--bg-hover); }
 .app-shell-navigation .todo-panel-toolbar .vd-dot { background: var(--fg-secondary); }
 .tier-solo-heading { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 8px 0 12px; flex-shrink: 0; font-size: var(--font-size-md); font-weight: 600; color: var(--fg-secondary); }
@@ -100,7 +100,7 @@
 .navigation-heading { display: flex; align-items: center; min-height: 26px; padding: 0; flex-shrink: 0; border-radius: 6px; }
 .navigation-heading:hover { background: var(--bg-hover); }
 .navigation-heading-open, .navigation-more {
-  color: var(--fg-secondary); background: transparent; border: 0; border-radius: 6px; font: inherit; cursor: pointer;
+  color: var(--fg-secondary); background: transparent; border: 0; border-radius: var(--radius-sm); /* shape: a section heading of the task list, a row not a key */ font: inherit; cursor: pointer;
 }
 .navigation-heading-open { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 0; min-height: 26px; padding: 0 4px; font-size: var(--font-size-sm); text-align: left; touch-action: pan-y; }
 .navigation-heading-open[draggable="true"] { -webkit-user-drag: element; user-select: none; }
@@ -457,7 +457,7 @@
 /* A long project draws in batches; the next batch hangs off this row (list-batch.ts). Its
    text starts on the title column. */
 .todo-list-show-more {
-  display: flex; align-items: center; width: 100%; min-height: 28px; padding: 0 6px 0 28px; border: 0; border-radius: 6px;
+  display: flex; align-items: center; width: 100%; min-height: 28px; padding: 0 6px 0 28px; border: 0; border-radius: var(--radius-full);
   background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
 .todo-list-show-more:hover { color: var(--fg); background: var(--bg-hover); }
@@ -545,14 +545,14 @@
 }
 .todo-filter-empty-title { font-size: var(--font-size-md); color: var(--fg); }
 .todo-filter-empty-clear {
-  font: inherit; font-size: var(--font-size-sm); padding: 4px 12px; border-radius: 6px; cursor: pointer;
+  font: inherit; font-size: var(--font-size-sm); padding: 4px 12px; border-radius: var(--radius-full); cursor: pointer;
   border: 1px solid var(--border); background: var(--bg-hover); color: var(--fg);
 }
 .todo-filter-empty-clear:hover { border-color: var(--accent); }
 .todo-filter-empty-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .todo-filter-footer { color: var(--fg-secondary); }
 .task-filter-override-show {
-  font: inherit; font-size: inherit; margin-left: 4px; padding: 0 2px; border: 0; border-radius: var(--radius-xs);
+  font: inherit; font-size: inherit; margin-left: 4px; padding: 0 2px; border: 0; border-radius: var(--radius-full);
   background: transparent; color: var(--accent-text); cursor: pointer; text-decoration: underline;
 }
 .task-filter-override-show:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

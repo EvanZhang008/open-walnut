@@ -99,7 +99,7 @@
    (styles/buttons.css --btn-primary-fill, darker than the accent so white text reads at 4.5:1): Acknowledge, or the recommended option
    ("Ack button shoudl be blue, or recommended optiion shoudl be blue also"); the rest are quiet. */
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) {
-  min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm);
+  min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-full);
   background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); font-weight: 500; box-shadow: none;
 }
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, var(--bg-secondary)); }
@@ -109,7 +109,7 @@
 
 /* An approval's Deny and Approve are the same keys; Approve is the card's one blue. */
 .ask-card .ask-card-answer .approval-actions .approval-btn {
-  min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm);
+  min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-full);
   background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); font-weight: 500;
 }
 /* Approve is no .btn, so the family's fill (set on .btn) falls back to the accent there. */
@@ -123,6 +123,7 @@
 .ask-card-answer .org-answer-check {
   flex: 1 1 100%; min-width: 0; justify-content: flex-start; gap: 10px; text-align: left;
   background: var(--bg); box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: var(--radius-sm); /* shape: an option is a row of the card's list, not a key */
 }
 .ask-card-answer .org-answer-options .btn:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 4%, var(--bg)); }
 .ask-card-answer .org-answer-options .btn.btn-primary { box-shadow: none; }
@@ -141,7 +142,7 @@
    the Needs you card the user picked (2026-11-21, "I lkike P1 button"). */
 .ask-card-tools .btn {
   display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px;
-  border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: var(--font-size-md); box-shadow: none;
+  border: none; border-radius: var(--radius-full); background: transparent; color: var(--fg-muted); font-size: var(--font-size-md); box-shadow: none;
 }
 .ask-card-tools .btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 /* A tool that opens something (Snooze ▾'s menu, the model picker's Cost / Speed / Details) reads

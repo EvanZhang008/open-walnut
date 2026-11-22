@@ -83,7 +83,7 @@
   height: 22px;
   padding: 0 7px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
@@ -100,7 +100,7 @@
   width: 22px;
   height: 22px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -228,7 +228,7 @@
   min-width: 0;
   padding: 1px 4px;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: none;
   color: inherit;
   font: inherit;

@@ -56,7 +56,7 @@
 .engine-settings-retry {
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--fg);
   font-size: var(--font-size-sm);
@@ -254,7 +254,7 @@
 .engine-settings-copy-path {
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--fg-muted);
   font-size: var(--font-size-xs);

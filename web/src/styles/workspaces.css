@@ -263,7 +263,7 @@
   margin-top: 2px;
   padding: 2px 9px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font-family: inherit;
@@ -319,7 +319,7 @@
 .project-scripts-link {
   padding: 3px 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font-family: inherit;
@@ -333,7 +333,7 @@
   margin-top: 8px;
   padding: 6px 12px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--accent);
   font-family: inherit;
@@ -396,7 +396,7 @@
 .draft-workspace-allow {
   padding: 0 10px;
   border: 1px solid var(--accent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font: inherit;

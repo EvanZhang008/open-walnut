@@ -62,7 +62,7 @@
 }
 .thread-drawer-summary-seg { white-space: nowrap; }
 .thread-drawer-close {
-  display: inline-grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: var(--radius-sm);
+  display: inline-grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: var(--radius-full);
   background: transparent; color: var(--fg-secondary); cursor: pointer;
 }
 .thread-drawer-close:hover { background: var(--bg-hover); color: var(--fg); }
@@ -152,13 +152,13 @@
 .thread-drawer[data-kb="true"] .thread-tree-row:focus .thread-tree-actions { display: flex; }
 .thread-drawer[data-kb="true"] .thread-tree-row:focus .thread-tree-pill { display: none; }
 .thread-tree-action {
-  display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px;
+  display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: var(--radius-full);
   background: transparent; color: var(--fg-secondary); cursor: pointer;
 }
 .thread-tree-action:hover { background: var(--bg-hover); color: var(--fg); }
 .thread-tree-action--danger:hover { color: var(--error); }
 .thread-tree-text-btn {
-  flex: none; border: 0; padding: 1px 5px; border-radius: var(--radius-xs); background: transparent;
+  flex: none; border: 0; padding: 1px 5px; border-radius: var(--radius-full); background: transparent;
   color: var(--accent-text); font: inherit; font-size: var(--font-size-sm); cursor: pointer;
 }
 .thread-tree-text-btn:hover { background: var(--accent-subtle); }
@@ -203,7 +203,7 @@
 .thread-stack-row { display: flex; align-items: center; gap: 6px; height: 36px; min-width: 0; }
 .thread-stack-back {
   display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 26px; max-width: 34%;
-  height: 26px; padding: 0 7px 0 5px; border: 0; border-radius: var(--radius-sm); background: transparent;
+  height: 26px; padding: 0 7px 0 5px; border: 0; border-radius: var(--radius-full); background: transparent;
   color: var(--accent-text); font: inherit; font-size: var(--font-size-md); cursor: pointer;
 }
 .thread-stack-back[data-icon-only="true"] { flex: none; justify-content: center; width: 26px; padding: 0; }
@@ -227,16 +227,16 @@
 .thread-stack-suggested-label { color: var(--thread-amber); font-size: var(--font-size-sm); white-space: nowrap; }
 .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet, .thread-stack-done-caret {
   display: inline-flex; align-items: center; gap: 4px; flex: none; height: 26px; padding: 0 9px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius-full); background: transparent; color: var(--fg);
   font: inherit; font-size: var(--font-size-md); white-space: nowrap; cursor: pointer;
 }
-.thread-stack-done-split[data-split="true"] .thread-stack-done { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.thread-stack-done-caret { width: 20px; padding: 0; justify-content: center; border-left: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--fg-secondary); }
+.thread-stack-done-split[data-split="true"] .thread-stack-done { border-radius: var(--radius-full) 0 0 var(--radius-full); }
+.thread-stack-done-caret { width: 20px; padding: 0; justify-content: center; border-left: 0; border-radius: 0 var(--radius-full) var(--radius-full) 0; color: var(--fg-secondary); }
 .thread-stack-done:hover, .thread-stack-reopen:hover, .thread-stack-not-yet:hover, .thread-stack-done-caret:hover,
 .thread-stack-back:hover, .thread-stack-more:hover { background: var(--bg-hover); }
 .thread-stack-more {
   display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border: 0;
-  border-radius: var(--radius-sm); background: transparent; color: var(--fg-secondary); cursor: pointer;
+  border-radius: var(--radius-full); background: transparent; color: var(--fg-secondary); cursor: pointer;
 }
 .thread-stack-more-slot { display: inline-block; flex: none; width: 26px; height: 26px; }
 /* In the session header the root menu (and its blank slot) are born with the
@@ -284,14 +284,14 @@
 .thread-strip--failed .thread-strip-label { color: var(--error); text-transform: none; letter-spacing: 0; font-size: var(--font-size-md); }
 .thread-strip--failed .thread-strip-waiting { flex: 1; min-width: 0; }
 .thread-strip-text {
-  flex: 1; min-width: 0; padding: 2px 4px; border: 0; border-radius: var(--radius-xs); background: transparent;
+  flex: 1; min-width: 0; padding: 2px 4px; border: 0; border-radius: var(--radius-full); background: transparent;
   color: var(--fg); font: inherit; text-align: left; cursor: text;
 }
 .thread-strip-text:hover { background: var(--bg-hover); }
 .thread-strip-waiting { color: var(--fg-muted); font-style: italic; }
 .thread-strip-input { flex: 1; }
 .thread-strip-btn {
-  height: 24px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+  height: 24px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--bg);
   color: var(--fg); font: inherit; font-size: var(--font-size-md); cursor: pointer;
 }
 .thread-strip-btn--primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }

@@ -61,7 +61,7 @@
    a button with a caret; only needs-you, working and done colour the word. */
 button.task-status-badge {
   border: none;
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-full) var(--radius-full);
   background: none;
   color: var(--fg-secondary);
   font: inherit;
@@ -93,7 +93,7 @@ button.task-status-badge:hover { background: var(--bg-hover); }
   gap: 6px;
   padding: 3px 4px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg);
   font: inherit;
@@ -117,7 +117,7 @@ button.task-status-badge:hover { background: var(--bg-hover); }
   flex: none;
   padding: 1px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;

@@ -234,7 +234,7 @@
     height: 32px;
     padding: 0 8px 0 2px;
     border: 0;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--accent);
     font-size: var(--font-size-lg);

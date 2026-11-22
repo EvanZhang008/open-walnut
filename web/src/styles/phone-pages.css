@@ -83,7 +83,7 @@
     align-items: center;
     height: 22px;
     padding: 0 8px;
-    border-radius: 11px;
+    border-radius: var(--radius-full);
     background: var(--error-subtle);
     color: var(--error);
     font-size: var(--font-size-sm);

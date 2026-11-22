@@ -59,7 +59,7 @@ html .wn-notice.wn-notice.wn-notice-pill { padding: 0; }
   text-align: left;
 }
 button.wn-notice-open { cursor: pointer; }
-button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-full); }
 
 .wn-notice-avatar {
   flex: none;
@@ -175,7 +175,7 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
   min-height: 26px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font: inherit;

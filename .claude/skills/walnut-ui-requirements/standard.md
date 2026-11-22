@@ -41,10 +41,10 @@ card's answer row and tool row in `web/src/components/actions/ask-card.css`, use
 
 | Role | Where | Use | Look |
 |---|---|---|---|
-| Option | `.ask-card-answer .org-answer-options .btn` (`AskOptions`) | each choice of a question, a letter's actions, a Board choice | a row of its own, full width: `--bg` fill, 1 px `--border` hairline, corner 8 px, height 34 px, padding 4 px 12 px, 13 px weight 500 label, then its line of why (`data-detail`) in 12 px `--fg-muted`, cut to the row; a multi choice's ticks are the same rows (`.org-answer-check`), edged in `--accent` when ticked |
+| Option | `.ask-card-answer .org-answer-options .btn` (`AskOptions`) | each choice of a question, a letter's actions, a Board choice | a row of its own, full width: `--bg` fill, 1 px `--border` hairline, corner 8 px (a row, not a key: standard "Shapes"), height 34 px, padding 4 px 12 px, 13 px weight 500 label, then its line of why (`data-detail`) in 12 px `--fg-muted`, cut to the row; a multi choice's ticks are the same rows (`.org-answer-check`), edged in `--accent` when ticked |
 | Main action | `.ask-card-answer .btn.btn-primary` | the one main action of a card, at most one: Acknowledge, or the recommended option | solid blue: `--accent` fill, white text, the same size as its neighbours; a recommended option row keeps its "Recommended" word at the right |
-| Action | `.ask-card-answer .btn` | any other button on the card (Close, Reopen, Retry) | grey: `--bg-secondary`, no border, corner 8 px, height 34 px, padding 4 px 12 px, 13 px weight 500; hover mixes 8% `--fg` into the fill; disabled at 0.5 opacity |
-| Tool | `.ask-card-tools .btn` | Snooze, pin, paging arrows | transparent, no border, `--fg-muted`, corner 8 px, height 28 px, padding 0 6 px, 13 px; hover `--bg-hover` and `--fg`; Snooze reads "Snooze ▾"; an on pin turns `--accent` |
+| Action | `.ask-card-answer .btn` | any other button on the card (Close, Reopen, Retry) | grey: `--bg-secondary`, no border, round (`--radius-full`), height 34 px, padding 4 px 12 px, 13 px weight 500; hover mixes 8% `--fg` into the fill; disabled at 0.5 opacity |
+| Tool | `.ask-card-tools .btn` | Snooze, pin, paging arrows | transparent, no border, `--fg-muted`, round (`--radius-full`), height 28 px, padding 0 6 px, 13 px; hover `--bg-hover` and `--fg`; Snooze reads "Snooze ▾"; an on pin turns `--accent` |
 | Send | inside the answer box | send a reply | 28 px circle, `var(--chat-hue-accent, var(--accent))`, white arrow; grey while the box is empty |
 
 Order in every card: the options or buttons first, then the answer box (34 px, corner 12 px,
@@ -59,20 +59,20 @@ beside `btn` carries only layout (margin, flex, width).
 
 | Class | Use | Look |
 |---|---|---|
-| `.btn` | any action (Save draft, Edit, Retry) | the text colour mixed into the page colour, 8 % (18 % in dark), as a solid fill (never see-through), no border, corner `--radius-sm` (8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle` with a half-accent hairline and `--accent-text` label, kept under the pointer, so even in a chat, whose accent is grey, an on key never reads as merely hovered; `data-on="true"` is the same look), and so is a menu trigger whose menu is open (`aria-haspopup` with `aria-expanded="true"`) |
+| `.btn` | any action (Save draft, Edit, Retry) | the text colour mixed into the page colour, 8 % (18 % in dark), as a solid fill (never see-through), no border, round: a capsule (`--radius-full`; a row of a list, `.btn-block.btn-ghost`, keeps 8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle` with a half-accent hairline and `--accent-text` label, kept under the pointer, so even in a chat, whose accent is grey, an on key never reads as merely hovered; `data-on="true"` is the same look), and so is a menu trigger whose menu is open (`aria-haspopup` with `aria-expanded="true"`) |
 | `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this; a settings page's header action too) | min-height 28 px, padding 2 px 10 px, 12 px |
 | `.btn-sm.btn-tight` | a small key in a row that must give up room before a control leaves it (the composer's condensed row) | the sides narrow to 4 px |
 | `.btn-primary` | the one main action of a view | `--btn-primary-fill` (the accent 86 % toward black, so white reads at 4.5:1 in both themes), `--on-accent` text, hover `--btn-primary-fill-hover` (74 %) |
 | `.btn-danger` | a destructive action | `--btn-danger-text` label (the error red 70 % toward the text colour, 4.5:1 on the grey key) on the plain key; with `.btn-primary` the solid red confirm (Yes, delete, `--btn-danger-fill`) |
 | `.btn-ghost` | a quiet tool: Cancel beside a main action, Snooze, a row's tools | no fill until hover, `--fg-secondary` (never `--fg-muted`: a quiet key still reads at a glance); with `.btn-danger` a red label |
-| `.btn-icon` | an icon alone | the quiet tool, square: 28 px (24 px with `.btn-sm`), its svg 16 px (14 px) |
+| `.btn-icon` | an icon alone | the quiet tool, a circle: 28 px (24 px with `.btn-sm`), its svg 16 px (14 px) |
 | `.btn-link` | an action inside text or at a row's end | `--accent-text`, no box, underline on hover |
 | `.btn-block` | a key that takes the whole line | full width, label centred; `.btn-block.btn-ghost` is a menu or list row, label at the left |
 
 Slots inside a key: `.btn-value` (a bold value) and `.btn-caret` (▾, turns over when
 `aria-expanded`) make a compound trigger such as "Cost $2,077 ▾"; `.btn-reserve` with `data-r1` and
 `data-r2` keeps a key's width when its label flips (Refresh / Refreshing...). Copy is always
-`components/common/CopyButton.tsx`. Pills are not buttons: no `999px` corner on a key.
+`components/common/CopyButton.tsx`. Every key is round (standard "Shapes"); write `--radius-full`, never a `999px` of its own.
 
 A header row (a title and buttons in one line) follows the header rule in
 `components/common/HeaderFit.tsx`: as it narrows, a subtitle gives way, then the buttons' words
@@ -97,6 +97,32 @@ scroller and resting 8 px above the scroller's bottom edge, shown only while the
 its end. A count of rows that arrived below is a small `--accent` badge on its corner. Source: the
 user, 2026-11-22, of the old grey ellipse at the lower right: "need to be round and in middle, and
 glass". `tests/web/scroll-jump-button-guard.test.ts` fails on a jump button drawn on its own.
+
+## Shapes
+
+One shape family (2026-11-22, the user, of the 8 px corners every key had taken on: "我之前这样圆圆的多可爱！你现在把我变成什么都是方块块 ... 我想变成圆形"; and on 11-21: "所有东西都应该统一啊"):
+
+- **Everything you press is round, and so is a number alone**: a key (`.btn`, every variant), a
+  chip, a segmented control and its thumb, a tab that draws a box, a rail icon, a count. A label
+  with words (Trigger, Leader · 1, Wait until ...) keeps a soft 4 px corner, `--label-radius`
+  (the user, 11-22: "the tag the squae like this is fine, as it is kind of long, but for the
+  smaller change round please"). Round is
+  `--radius-full`: a capsule, which is a circle when the thing is square (an icon key, a one-digit
+  count). The input box's mic, attach and send keys were already circles.
+- **What you type in or read stays a soft rectangle**: the message box (20 px), a one-line box and
+  a field, a card (16 px), a menu or popover (12 px), a dialog (16 px), a row of a list (8 px,
+  the ask card's option rows and a `.btn-block.btn-ghost` included), a code block, a thumbnail. A
+  row is not a key even when it is a button: it keeps its container's corner.
+- Never a corner between the two (6 px, 10 px, 4 px) on a key: there are two shapes, not a scale.
+- `tests/web/ui-standard-ratchet.test.ts` counts `squareKey` (`isSquareKey` in
+  `tests/web/ui-standard-scan.ts`): a rule whose element is a key (a class on a `<button>`, on a
+  `role="button"` or `"tab"` element, beside `btn`, or named `-btn`, `-button`, `-pill`, `-chip`,
+  `-toggle`, `-tab`, `-badge`, `-tag`, `-count`) and whose corner is short of round. Rows, cards,
+  rails, bars and menus are told by their names (`-row`, `-card`, `-item`, ...); a row whose class
+  is named like a key (`.org-channel`, `.todo-row-pill`) says so on its corner:
+  `border-radius: var(--radius-sm); /* shape: <why> */`. A label with words takes `--label-radius`
+  (4 px); a number alone (`badge-count`, `badge-alert`, `badge-corner`) is round. Its count is 0
+  in every file; a new one fails.
 
 ## Inputs
 
@@ -195,9 +221,9 @@ width); it never gives them a fill, border, corner or size of its own, and never
 | Kind | Component | Use it for | Look | On state |
 |---|---|---|---|---|
 | Tabs | `Tabs` (items), or `TabList` + `Tab` for tabs that carry a close button | switching between the panels or pages of one view, at the top of a pane | text tabs on one line, 12 px apart, 32 px, padding 0 4 px, 13 px weight 500 `--fg-secondary`; the selected one `--fg` with a 2 px `--accent` underline; a 1 px `--border` line under the strip (`flush` drops it on a header that has its own); a count in 11 px `--fg-muted` | `aria-selected` on `role=tab`; arrows, Home and End move and select |
-| Segmented | `SegmentedControl` (also exported as `Segmented`) | one of 2 to 6 values of a setting or a view mode, inline in a row or a toolbar | a 28 px `--choice-track` (`--bg-tertiary`) track, corner 8 px (`--radius-sm`), 2 px inset; segments 24 px, padding 0 12 px, corner 6 px (`--radius-sm` less the 2 px inset), 12 px weight 500 `--fg-secondary`; the selected one a lifted thumb (`--bg-elevated`, a white tint in dark) with a 1 px shadow and `--fg` text; `fill` makes equal segments across the line; `size="sm"` (segments padded 0 8 px) in a menu row or a popover; it never runs past its container (it shrinks and scrolls); icon segments are 28 px square | `aria-checked` on `role=radio` in a `role=radiogroup`; arrows move and select |
-| Chip | `Chip`, several in a `ChipGroup` | a filter over a list (one or many on), or a pick among options that wrap | 24 px, corner 8 px (a rounded rectangle, never a pill), padding 0 8 px, 12 px weight 500; off `--bg-secondary` fill and `--fg-secondary` text, hover `--bg-tertiary`; on `--accent-subtle` fill, `--accent-text` text and an accent hairline; a count in 11 px `--fg-muted` | `aria-pressed` (or `aria-checked` on a `role=radio` chip) |
-| Switch | `ToggleSwitch` | an on/off setting that takes effect at once | 38 x 22 track (`size="sm"`: 28 x 16 in a menu row or a dense toolbar), off `--choice-switch-off`, on `--accent`, white round thumb; the only round control besides a radio | `aria-checked` on `role=switch` |
+| Segmented | `SegmentedControl` (also exported as `Segmented`) | one of 2 to 6 values of a setting or a view mode, inline in a row or a toolbar | a 28 px `--choice-track` (`--bg-tertiary`) track, round (`--radius-full`), 2 px inset; segments 24 px, padding 0 12 px, round, 12 px weight 500 `--fg-secondary`; the selected one a lifted thumb (`--bg-elevated`, a white tint in dark) with a 1 px shadow and `--fg` text; `fill` makes equal segments across the line; `size="sm"` (segments padded 0 8 px) in a menu row or a popover; it never runs past its container (it shrinks and scrolls); icon segments are 28 px circles | `aria-checked` on `role=radio` in a `role=radiogroup`; arrows move and select |
+| Chip | `Chip`, several in a `ChipGroup` | a filter over a list (one or many on), or a pick among options that wrap | 24 px, round (`--radius-full`), padding 0 8 px, 12 px weight 500; off `--bg-secondary` fill and `--fg-secondary` text, hover `--bg-tertiary`; on `--accent-subtle` fill, `--accent-text` text and an accent hairline; a count in 11 px `--fg-muted` | `aria-pressed` (or `aria-checked` on a `role=radio` chip) |
+| Switch | `ToggleSwitch` | an on/off setting that takes effect at once | 38 x 22 track (`size="sm"`: 28 x 16 in a menu row or a dense toolbar), off `--choice-switch-off`, on `--accent`, white round thumb; round, as every key | `aria-checked` on `role=switch` |
 | Checkbox, Radio | `Checkbox`, `Radio` (`SettingsCheckbox` for a Settings list row) | picking items of a list, or a choice a form applies on Save; a radio for one of a few choices that each need a line of words | the native input drawn: 16 px, corner 4 px (half of `--radius-sm`; a radio is round), 1 px `--choice-box-border`; checked `--accent` with a white tick (a radio a 5 px accent ring); with `label` the box and words are one clickable row, 8 px apart, 13 px, an optional 12 px `--fg-muted` detail line | `:checked` (`:indeterminate` for "some") |
 | Disclosure | `DisclosureButton`, or `DisclosureChevron` inside a header that is its own button | showing or hiding what is under it | a 12 px chevron in `--fg-muted` that points right when closed and turns down when open (one rotation rule), the label 13 px weight 500 `--fg-secondary`; transparent, hover `--bg-hover`, corner 8 px; `inline` takes the size of a line of small text it sits in (16 px) | `aria-expanded` |
 
@@ -343,7 +369,7 @@ drawn by its own class (565 class names, 155 looks).
   (`web/src/styles/badge.css`, class list from `badge()` in `web/src/components/common/badge.ts`).
   Settings' `SettingsTag` follows it: a state tone (success, warning, error: Ready, Needs setup,
   Failed) draws the dot and word, neutral and accent (Built-in, Recommended) the badge.
-- One look: 18 px tall, a soft rectangle (`--radius-xs`, 4 px, never a pill), padding 0 6 px, 11 px
+- One look: 18 px tall, a soft 4 px corner (`--label-radius`; a number alone, `badge-count`, is round: standard "Shapes"), padding 0 6 px, 11 px
   weight 500, normal case. A member class keeps only its place (flex, margin, max-width), never a
   fill, words colour, edge, corner, padding or type size.
 - Four tones from tokens: neutral (default, a grey tint, `--fg-secondary`), `badge-accent` (on, yours,
@@ -456,7 +482,7 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
 | Accent | `--accent`, `--accent-hover`, `--accent-subtle`, `--accent-text` |
 | Lines | `--border`, `--border-strong` |
 | State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle` |
-| Corners | `--radius-xs` 4 px (labels), `--radius-sm` 8 px (controls), `--radius-md` 12 px (inputs), `--radius-lg` 16 px (cards) |
+| Corners | `--radius-full` (every key, chip, segment, tab and label: standard "Shapes"), `--radius-xs` 4 px (kbd, checkboxes), `--radius-sm` 8 px (rows, small boxes), `--radius-md` 12 px (inputs, menus), `--radius-lg` 16 px (cards) |
 | Type | `--font-size-xs` 11 px (labels, badges), `--font-size-sm` 12 px (secondary text), `--font-size-md` 13 px (body, controls), `--font-size-lg` 15 px (card titles), `--font-size-xl` 17 px (section and dialog headings), `--font-size-2xl` 20 px (page titles); families `--font-sans`, `--font-mono` |
 | Depth | on a surface: `--shadow-sm` (a raised chip), `--shadow-md` (a hovered card), `--card-shadow`, `--card-shadow-hover`; floating: the overlay family's `--overlay-shadow`, `--dialog-shadow`; glass: `--glass-frost-*`, `--glass-legible-*` |
 | Layers | the overlay family's `--z-*` (`styles/overlay-family.css`) and its scrim `--overlay-scrim` |

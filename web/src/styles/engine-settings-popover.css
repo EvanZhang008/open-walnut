@@ -96,7 +96,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -118,7 +118,7 @@
   height: 26px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -165,7 +165,7 @@
 .engine-settings-about-close {
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--fg);
   font-size: var(--font-size-sm);

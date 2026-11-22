@@ -155,7 +155,7 @@
   height: 18px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg-muted);
   font-size: var(--font-size-md);
@@ -331,7 +331,7 @@
   /* 4px, so the glyph lands in the pane's one glyph column at 12px. See the hierarchy note below. */
   padding: 6px 8px 6px 4px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs); /* shape: a mailbox row of the mail sidebar, a row not a key */
   background: none;
   color: var(--fg-secondary);
   font-size: var(--font-size-md);
@@ -412,7 +412,7 @@
 /* The empty state offers the same control, centred with the copy above it. */
 .mail-app > .empty-state .mail-add-account {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   margin-top: 12px;
   padding: 8px 14px;
   text-align: center;
@@ -719,7 +719,7 @@
      a gesture whose whole promise is that it selects nothing. */
   box-shadow: inset 0 0 0 2px var(--border-strong);
   background: var(--bg-hover);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-xs); /* shape: a mail row or mailbox row with its menu open, a row not a key */
 }
 
 /* BOTH at once. Two rules setting `box-shadow` at equal specificity meant the later one won outright, so
@@ -975,7 +975,7 @@
   height: 24px;
   padding: 0 0 0 4px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg-muted);
   cursor: pointer;

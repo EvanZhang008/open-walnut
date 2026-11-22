@@ -62,7 +62,7 @@
   width: 100%;
   padding: 7px 8px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm); /* shape: a channel row of the Org list, a row not a key */
   background: transparent;
   color: var(--fg);
   font: inherit;
@@ -76,7 +76,7 @@
   margin: 2px 0 4px;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md); /* shape: the CEO card at the top of the Org list, a card not a key */
   background: var(--bg);
 }
 .org-channel.is-main.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
@@ -120,7 +120,7 @@
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border-radius: 10px;
+  border-radius: var(--label-radius);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -282,7 +282,7 @@
 .org-detail-chat-tools:empty { display: none; }
 .org-rail-toggle {
   position: relative; flex: none; width: 28px; height: 28px; display: inline-grid; place-items: center;
-  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); cursor: pointer;
+  border: 0; border-radius: var(--radius-full); background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .org-rail-toggle:hover, .org-rail-toggle:focus-visible { background: var(--bg-secondary); color: var(--fg); }
 .org-rail-toggle.is-on { background: var(--bg-secondary); color: var(--fg); }
@@ -435,7 +435,7 @@
   margin-right: 4px;
   flex: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -495,7 +495,7 @@
   padding: 0 3px;
   margin: 0 -3px;
   border: 1px solid transparent;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: none;
   color: inherit;
   font: inherit;

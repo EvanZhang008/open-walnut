@@ -138,7 +138,7 @@
 .thread-asked-inline-btn {
   padding: 1px 6px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: none;
   color: var(--accent-text);
   font: inherit;

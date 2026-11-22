@@ -55,7 +55,7 @@
 }
 .island-result-send,
 .island-result-secondary {
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 4px 12px;
   font-size: var(--font-size-md);
   cursor: pointer;

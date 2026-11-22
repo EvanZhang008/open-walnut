@@ -14,7 +14,7 @@
   align-items: center;
   gap: 10px;
   padding-right: 14px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   /* The rail's hover tint, laid over an opaque surface: the page under it must not show through. */
   background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--bg);
   color: var(--fg);

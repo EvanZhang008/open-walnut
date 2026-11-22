@@ -91,7 +91,7 @@
   font-weight: 500;
   color: var(--accent);
   border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   padding: 3px 10px;
 }
 .corner-stack .kanban-toast-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
@@ -104,7 +104,7 @@
   background: none;
   padding: 2px 6px;
   margin: -2px 0 -2px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   font: inherit;
   font-size: var(--font-size-sm);
   font-weight: 500;

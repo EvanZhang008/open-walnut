@@ -10,7 +10,7 @@
 :root .step-icon { width: 16px; height: 16px; flex: 0 0 16px; color: var(--fg-muted); }
 
 /* ── The fold line: chevron first, the words, nothing under it ── */
-:root .process-fold > .tool-run-toggle { gap: 6px; min-height: 26px; padding: 2px 4px 2px 0; font-size: 14px; border-radius: 6px; }
+:root .process-fold > .tool-run-toggle { gap: 6px; min-height: 26px; padding: 2px 4px 2px 0; font-size: 14px; border-radius: var(--radius-sm); /* shape: the Worked for line of a turn, a row not a key */ }
 :root .process-fold > .tool-run-toggle .process-fold-chevron { display: inline-flex; color: var(--fg); }
 :root .process-fold > .tool-run-toggle .process-fold-chevron .step-icon { width: 16px; height: 16px; flex-basis: 16px; color: inherit; }
 :root .process-fold-body {
@@ -90,7 +90,7 @@
 
 /* ── Runs, reasoning, runtime lines: the tool-run row family ── */
 :root .session-history .tool-run-row { margin: 0; }
-:root .session-history .tool-run-row > .tool-run-toggle { min-height: 26px; padding: 1px 4px 1px 0; font-size: 14px; border-radius: 6px; max-width: 100%; min-width: 0; }
+:root .session-history .tool-run-row > .tool-run-toggle { min-height: 26px; padding: 1px 4px 1px 0; font-size: 14px; border-radius: var(--radius-sm); /* shape: the Worked for line of a turn, a row not a key */ max-width: 100%; min-width: 0; }
 :root .session-history .tool-run-row--step > .tool-run-toggle { padding-left: 4px; gap: 8px; width: 100%; }
 /* The turn's line: quiet, yet plainly something to open (2026-11-21, the UI audit: the line
    "reads like a grey footnote; its small arrow does not look expandable"): the words a step
@@ -101,7 +101,7 @@
   padding: 2px 8px 2px 4px;
   font-size: var(--font-size-md);
   color: var(--fg-secondary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm); /* shape: the Worked for line of a turn, a row not a key */
   transition: background-color .12s, color .12s;
 }
 :root .session-history .process-fold > .tool-run-toggle:hover { color: var(--fg); background: var(--bg-hover); }

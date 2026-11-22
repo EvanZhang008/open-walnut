@@ -11,7 +11,7 @@
 .session-background-working:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
 }
 
 /* The working line with the session's background work beside it (SessionWorkingIndicator). */
@@ -28,7 +28,7 @@
   padding: 2px 4px;
   margin: 0 -4px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   font: inherit;
   font-size: var(--font-size-md);

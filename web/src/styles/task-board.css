@@ -195,7 +195,7 @@
   flex-shrink: 0;
   padding: 0 6px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font-size: 16px;

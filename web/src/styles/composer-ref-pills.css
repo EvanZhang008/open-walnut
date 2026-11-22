@@ -32,7 +32,7 @@
 
 .composer-ref-pill {
   --pill-fg: var(--accent);
-  border-radius: var(--radius-xs);
+  border-radius: var(--label-radius);
   background: var(--accent-subtle);
   color: var(--pill-fg);
   -webkit-box-decoration-break: clone;

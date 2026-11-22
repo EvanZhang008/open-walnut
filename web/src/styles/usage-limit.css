@@ -45,7 +45,7 @@
 .usage-limit-note .usage-limit-banner-icon { align-self: center; margin-top: 0; color: var(--success); }
 .usage-limit-note-close {
   display: flex; align-items: center; justify-content: center; flex: none;
-  width: 22px; height: 22px; margin-left: auto; border: 0; border-radius: var(--radius-xs);
+  width: 22px; height: 22px; margin-left: auto; border: 0; border-radius: var(--radius-full);
   background: transparent; color: var(--fg-muted); cursor: pointer;
 }
 .usage-limit-note-close:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }

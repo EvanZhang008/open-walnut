@@ -163,7 +163,7 @@ html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
   flex: none;
   padding: 3px 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--accent);
   font: inherit;
@@ -247,7 +247,7 @@ html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
   height: 22px;
   padding: 0 9px 0 7px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--fg-secondary);
   font: inherit;
@@ -271,7 +271,7 @@ html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
   margin: 10px 0 2px;
   padding: 2px 4px 2px 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font: inherit;

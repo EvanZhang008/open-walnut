@@ -88,7 +88,7 @@
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -146,7 +146,7 @@
 
 .tp-link:focus-visible {
   outline: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   box-shadow: var(--settings-focus-ring);
 }
 

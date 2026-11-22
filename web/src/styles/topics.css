@@ -94,7 +94,7 @@
 /* Inline-block, its parts inline: a selection copies it as "@Name" on the line, with no breaks. */
 .topic-mention {
   display: inline-block; max-width: 100%; margin: 0 1px; padding: 1px 6px 1px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  border: 0; border-radius: 999px; vertical-align: -4px; cursor: pointer; text-align: left;
+  border: 0; border-radius: var(--radius-full); vertical-align: -4px; cursor: pointer; text-align: left;
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
   font: inherit; font-size: var(--font-size-md); font-weight: 500; line-height: 18px;
 }
@@ -154,7 +154,7 @@
 /* Remove: shown on the row's hover or focus, never a permanent column of crosses. */
 .topic-member-remove {
   display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none;
-  border: none; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer; opacity: 0;
+  border: none; border-radius: var(--radius-full); background: transparent; color: var(--fg-muted); cursor: pointer; opacity: 0;
   transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
 }
 .topic-member-remove svg { width: 12px; height: 12px; }
@@ -200,7 +200,7 @@
 .topic-picker .app-modal-input { margin-top: 4px; }
 .topic-picked { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .topic-chip {
-  display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 3px; border-radius: 14px;
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 3px; border-radius: var(--radius-full);
   border: 1px solid var(--border); font-size: var(--font-size-md); max-width: 100%;
 }
 .topic-chip.is-host { border-color: var(--accent); }
@@ -231,7 +231,7 @@
 .topic-thread-badge { display: flex; margin: 4px 0; }
 .topic-thread-open {
   display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 6px; max-width: 100%;
-  border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--fg); font: inherit; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-full); background: transparent; color: var(--fg); font: inherit; cursor: pointer;
   transition: background-color 120ms ease;
 }
 .topic-thread-open:hover { background: var(--bg-hover); }

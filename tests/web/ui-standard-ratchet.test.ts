@@ -42,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
+import { countAll, isSquareKey, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -90,7 +90,7 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'ownLabel', 'cardBg', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'ownLabel', 'cardBg', 'squareKey', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
       const { grew } = compare(kind, now[kind], was[kind] ?? {});
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);
@@ -100,6 +100,30 @@ describe('UI standard: one look per kind of control', () => {
       expect(fell, `Fewer exceptions than recorded: good. Lower the baseline with\nUI_STANDARD_RECORD=1 bun --bun vitest run tests/web/ui-standard-ratchet.test.ts\n${fell.join('\n')}`).toEqual([]);
     });
   }
+
+  // standard.md, "Shapes" (2026-11-22, the user: "我想变成圆形"): every key is round, in every file.
+  it('squareKey: no key, chip, tab or count has a corner short of round', () => {
+    const files = Object.entries(now.squareKey).map(([f, n]) => `web/src/${f}: ${n}`);
+    expect(files, `Draw a key round (border-radius: var(--radius-full)); a row named like a key says so: /* shape: <why> */\n${files.join('\n')}`).toEqual([]);
+  });
+
+  it('tells a square key from a row, a label and the input box', () => {
+    const keys = new Set(['org-ask-tool']);
+    expect(isSquareKey('.my-thing-btn', '6px', keys)).toBe(true);
+    expect(isSquareKey('.org-ask-tool:hover', 'var(--radius-sm)', keys)).toBe(true);
+    expect(isSquareKey('.scope .btn', '8px', keys)).toBe(true);
+    expect(isSquareKey('.my-count', 'var(--radius-xs)', keys)).toBe(true);
+    expect(isSquareKey('.my-thing-btn', 'var(--radius-full)', keys)).toBe(false);
+    expect(isSquareKey('.my-thing-btn', '50%', keys)).toBe(false);
+    expect(isSquareKey('.split-btn', 'var(--radius-full) 0 0 var(--radius-full)', keys)).toBe(false);
+    expect(isSquareKey('.my-tag', 'var(--label-radius)', keys)).toBe(false);
+    expect(isSquareKey('.my-thing-row', '8px', keys)).toBe(false);
+    expect(isSquareKey('.my-thing-card', '16px', keys)).toBe(false);
+    expect(isSquareKey('.my-thing-btn::after', '2px', keys)).toBe(false);
+    expect(isSquareKey('.wn-input > .box-mic .mic-btn', 'var(--input-key-radius)', keys)).toBe(false);
+    expect(isSquareKey(".wn-tabs[aria-orientation='vertical'] > .wn-tab", 'var(--radius-md)', keys)).toBe(false);
+    expect(isSquareKey('.page-title', '8px', keys)).toBe(false);
+  });
 
   it('finds each shape of a second style', () => {
     const companions = new Set(['org-ask-tool']);

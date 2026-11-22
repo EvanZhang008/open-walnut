@@ -70,7 +70,7 @@
    audit: the name was cut at the chip's right end). The icon keeps the first line. */
 .org-thread-task {
   display: inline-flex; align-items: flex-start; gap: 4px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--border);
-  border-radius: 6px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-xs); line-height: 16px;
+  border-radius: var(--radius-sm); /* shape: a task chip whose title wraps onto lines, a block not a capsule */ background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-xs); line-height: 16px;
   text-align: left; cursor: pointer;
 }
 .org-thread-task > .wn-fixed { margin-top: 4px; }

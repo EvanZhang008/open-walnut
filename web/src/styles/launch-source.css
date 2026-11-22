@@ -40,7 +40,7 @@
   color: var(--accent);
   background: none;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   cursor: pointer;
 }
 .launch-source-note-action:hover { background: var(--bg-hover); }
@@ -75,7 +75,7 @@
 .project-launch-defaults-clear {
   font-size: var(--font-size-xs);
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
   background: var(--bg);
   color: var(--fg);

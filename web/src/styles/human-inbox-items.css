@@ -11,7 +11,7 @@
 .hii-item summary, .hii-selector summary { cursor: pointer; color: var(--fg-secondary); }
 .hii-item code, .hii-selector code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .hii-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; }
-.hii-action { font: inherit; font-size: var(--font-size-xs); color: var(--fg); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px; min-height: 28px; max-width: 100%; }
+.hii-action { font: inherit; font-size: var(--font-size-xs); color: var(--fg); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-full); padding: 6px; min-height: 28px; max-width: 100%; }
 .hii-action-read { width: 120px; }
 .hii-action-task { width: 150px; }
 .hii-action-ai { width: 180px; }
@@ -48,7 +48,7 @@
 .hii-selector footer { border-top: 1px solid var(--border); padding-top: 8px; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .hii-selector footer > div { flex: 1 0 100%; }
 .hii-candidate { padding: 8px 0; border-bottom: 1px solid var(--border); }
-.hii-candidate-pick { display: block; text-align: left; padding: 8px; width: 100%; color: var(--fg); background: var(--bg-secondary); border: 1px solid transparent; border-radius: var(--radius-sm); font: inherit; }
+.hii-candidate-pick { display: block; text-align: left; padding: 8px; width: 100%; color: var(--fg); background: var(--bg-secondary); border: 1px solid transparent; border-radius: var(--radius-full); font: inherit; }
 .hii-candidate-pick[aria-pressed="true"] { border-color: var(--accent); }
 .hii-candidate-pick span, .hii-candidate-pick small { display: block; white-space: normal; overflow-wrap: anywhere; }
 .hii-candidate-pick small { margin-top: 4px; color: var(--fg-secondary); }

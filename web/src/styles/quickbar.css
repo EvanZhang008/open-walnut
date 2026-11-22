@@ -100,7 +100,7 @@
   gap: 7px;
   height: 34px;
   padding: 0 10px 0 7px;
-  border-radius: 10px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--qb-line);
   background: transparent;
   color: var(--qb-fg);
@@ -188,7 +188,7 @@
 .qb-count {
   height: 2px;
   margin: 0 16px;
-  border-radius: 2px;
+  border-radius: var(--radius-full);
   background: var(--accent);
   transform-origin: left center;
   animation-name: qb-count;
@@ -436,7 +436,7 @@ html.qb-panel-doc #root {
 .qb-foot-retry {
   flex: none;
   padding: 1px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   border: 1px solid currentColor;
   background: transparent;
   color: inherit;

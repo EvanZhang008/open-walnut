@@ -39,7 +39,7 @@
   height: 24px;
   max-width: 100%;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bg-elevated);
   color: var(--fg);
   font-size: var(--font-size-sm);
@@ -60,7 +60,7 @@
   font-family: inherit;
   cursor: pointer;
 }
-.fb-chip-body { gap: 3px; min-width: 0; padding: 0 5px 0 8px; border-radius: var(--radius-xs) 0 0 var(--radius-xs); }
+.fb-chip-body { gap: 3px; min-width: 0; padding: 0 5px 0 8px; border-radius: var(--radius-full) 0 0 var(--radius-full); }
 .fb-chip-dim { flex: none; color: var(--tp-muted); }
 .fb-chip-val {
   min-width: 0;
@@ -82,7 +82,7 @@
   width: 22px;
   padding: 0;
   border-left: 1px solid var(--border);
-  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
   color: var(--fg-muted);
 }
 .fb-chip-x svg { width: 11px; height: 11px; }
@@ -102,7 +102,7 @@
   gap: 4px;
   height: 24px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   color: var(--fg-secondary);
 }

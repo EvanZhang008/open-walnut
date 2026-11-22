@@ -247,7 +247,7 @@
   margin: 12px 0 0;
   padding: 0 16px;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -297,7 +297,7 @@
   margin: 8px 0 0 -8px;
   padding: 0 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   display: inline-flex;
   align-items: center;
   gap: 8px;

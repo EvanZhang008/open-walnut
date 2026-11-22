@@ -44,7 +44,7 @@
   height: 24px;
   margin-left: auto;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;

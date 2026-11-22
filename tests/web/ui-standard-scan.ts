@@ -186,6 +186,50 @@ export function drawsBox(decls: { prop: string; value: string }[]): boolean {
 const NO_PAINT = /^(none|transparent|inherit|initial|unset|0|currentColor)$/i;
 
 /**
+ * The round family (standard.md, "Shapes"; 2026-11-22, the user: "我想变成圆形"): every key, chip,
+ * segment, tab and label is round, a capsule (`--radius-full`) or a circle (50%). A pressable is a
+ * class written on a `<button>`, on an element with `role="button"` or `"tab"`, beside
+ * `btn`, or named like a control. Rows, cards, rails, bars and menus that a person presses keep the
+ * soft corner of their container, so a name ending in one of those is not a key.
+ */
+const KEY_NAME = /-(btn|button|pill|chip|toggle|tab|badge|tag|count)$/;
+const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|drop|panel|menu|list|option|opt|seg|segs|entry|tile|line|section|preview|thumb|frame|daynum|title|result|link|caption|value|marker|text|checkbox|dir|file|attach)|^wn-(field|notice|overlay|dialog|input))$/;
+/** A corner that is round, flat or the parent's: everything else on a key is a square key. */
+const ROUND_CORNER = /^(var\(--radius-full\)|var\(--label-radius\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
+/** `border-radius: 8px; /* shape: <why, 10+ characters> *\/`: a class named like a key that is not one (a row's highlight). */
+export const SHAPE_MARK = /\/\*\s*shape:\s*[^*]{10,}\*\//;
+export function pressableClasses(): Set<string> {
+  const out = new Set<string>(btnCompanions());
+  for (const file of walk(WEB_SRC, ['.tsx'])) {
+    const src = fs.readFileSync(file, 'utf8');
+    for (const name of ['button', 'a', 'div', 'span', 'label', 'li']) {
+      for (const tag of openingTags(src, name)) {
+        if (name !== 'button' && !/\brole=["'{`]*(button|tab)\b/.test(tag)) continue;
+        const at = tag.search(/\bclassName=/);
+        if (at < 0) continue;
+        const start = at + 'className='.length;
+        // Every quoted piece of the value: a static string, a template's parts, a ternary's branches.
+        const value = tag.slice(start, valueEnd(tag, start)).replace(/\$\{/g, ' ');
+        for (const m of value.matchAll(/[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+|\bbtn\b/g)) out.add(m[0]);
+      }
+    }
+  }
+  return out;
+}
+/** `.my-key { border-radius: 6px }`: a key, chip, tab or label drawn with a corner short of round. */
+export function isSquareKey(selector: string, radius: string, pressables: Set<string>): boolean {
+  const v = radius.replace(/\s*!important$/, '').trim();
+  if (v.split(/\s+/).every((x) => ROUND_CORNER.test(x))) return false;
+  if (/(input-key|input-radius|choice-radius-box)/.test(v)) return false; // the input box's own keys and the tab's focus ring
+  if (/\[aria-orientation=['"]?vertical/.test(selector)) return false; // a vertical tab list is a list of rows
+  if (selector.includes('::')) return false; // a mark drawn inside the key (a tick, a ring), not the key
+  const parts = compounds(selector);
+  const cls = classesOf(parts[parts.length - 1] ?? '');
+  if (cls.some((c) => NOT_A_KEY.test(c))) return false;
+  return cls.some((c) => c === 'btn' || c === 'badge' || pressables.has(c) || KEY_NAME.test(c));
+}
+
+/**
  * A card whose fill is the page's (`--bg`) or a floating layer's (`--bg-elevated`) instead of the
  * one card fill, `--card-bg` (standard.md, "Cards"). 2026-11-21: in the dark theme the cards of one
  * list drifted between black, #1C1C1E and #2C2C2E, so the question card, the thread card and the
@@ -304,6 +348,7 @@ export type Counts = {
   restyledField: Record<string, number>;
   ownLabel: Record<string, number>;
   cardBg: Record<string, number>;
+  squareKey: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
@@ -357,11 +402,12 @@ export function isBareButton(tag: string): boolean {
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, ownLabel: {}, cardBg: {} } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, ownLabel: {}, cardBg: {}, squareKey: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   const parts = inputParts();
   const fields = fieldClasses();
+  const pressables = pressableClasses();
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
@@ -371,6 +417,7 @@ export function countAll(): Counts {
       const key = d.selectors.join(', ');
       rules.set(key, [...(rules.get(key) ?? []), d]);
       for (const kind of tokenBreaks(d)) bump(out[kind], rel);
+      if (d.prop === 'border-radius' && !SHAPE_MARK.test(lines[d.line - 1] ?? '') && d.selectors.some((x) => isSquareKey(x, d.value, pressables))) bump(out.squareKey, rel);
     }
     for (const [, decls] of rules) {
       const sels = decls[0].selectors;

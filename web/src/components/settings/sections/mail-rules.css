@@ -111,7 +111,7 @@
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   cursor: pointer;
 }
 .mail-rules-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

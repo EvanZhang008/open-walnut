@@ -277,7 +277,7 @@
   height: 1.6em;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -613,7 +613,7 @@ mark.notes-search-mark {
   margin-top: 4px;
   padding: 8px 16px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font-size: 14px;
@@ -626,7 +626,7 @@ mark.notes-search-mark {
   margin-top: 4px;
   padding: 8px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg);
   font-size: 14px;
@@ -751,7 +751,7 @@ mark.notes-search-mark {
   height: 16px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -770,7 +770,7 @@ mark.notes-search-mark {
   padding: 0;
   margin: 0 2px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -822,7 +822,7 @@ mark.notes-search-mark {
   height: 18px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;

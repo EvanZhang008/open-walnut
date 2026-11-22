@@ -92,7 +92,7 @@
   height: 26px;
   padding: 0 2px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -136,7 +136,7 @@
   height: 22px;
   margin-left: 2px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -259,7 +259,7 @@
   width: 26px;
   height: 26px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   cursor: pointer;
@@ -313,7 +313,7 @@
   height: 24px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bg);
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);

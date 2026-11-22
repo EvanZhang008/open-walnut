@@ -18,7 +18,7 @@
   min-height: 28px;
   padding: 0 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg);
   font: inherit;
@@ -59,7 +59,7 @@
 .dm-action {
   width: 100%;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg);
   font: inherit;
@@ -85,7 +85,7 @@
 .dm-text-btn {
   padding: 2px 6px;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--accent-text);
   font: inherit;

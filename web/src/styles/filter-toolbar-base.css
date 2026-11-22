@@ -24,7 +24,7 @@
   min-width: 28px;
   padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);

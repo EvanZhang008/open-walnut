@@ -50,7 +50,7 @@
   height: 24px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--card-bg);
   color: var(--fg);
   font-size: var(--font-size-sm);

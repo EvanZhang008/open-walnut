@@ -76,7 +76,7 @@ html .scroll-to-bottom-btn.wn-glass-frost {
   height: 18px;
   padding: 0 4px;
   box-sizing: border-box;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--font-size-xs);

@@ -56,11 +56,19 @@
   /* The UI's text stack (body and every control that sets a font). */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'SFMono-Regular', 'Menlo', 'Cascadia Code', 'Fira Code', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
-  /* Corners: 4 small marks (badges, kbd, checks), 8 controls, 12 inputs and small cards, 16 the cards of a list (--ask-card-radius). */
+  /* Corners: 4 small marks (kbd, checks), 8 rows and small boxes, 12 inputs and small cards, 16 the cards of a list (--ask-card-radius). */
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* The round family (standard.md, "Shapes"; 2026-11-22, the user: "我想变成圆形"): every key, chip,
+     segment, tab and label is round: a capsule, or a circle when it is square. What you type in or
+     read (a box, a card, a menu, a row) keeps a soft corner from the scale above. */
+  --radius-full: 999px;
+  /* A label with words (Trigger, Leader · 1, Wait until ...): a soft 4 px corner (2026-11-22, the
+     user: "the tag the squae like this is fine, as it is kind of long, but for the smaller change
+     round please"). A number alone is round (badge.css). */
+  --label-radius: var(--radius-xs);
   /* The cards of one list (the ask card, the thread and review cards, approvals, side questions)
      share one corner and one padding (standard.md, "Cards"). */
   --ask-card-radius: var(--radius-lg);
@@ -406,7 +414,7 @@ textarea::placeholder { max-width: 100%; }
   transition: color 0.15s, background 0.15s;
   font-size: 14px;
   font-weight: 500;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   margin-bottom: 2px;
 }
 
@@ -806,7 +814,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   padding: 4px 10px;
   font-size: var(--font-size-sm);
   font-weight: 500;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: var(--card-bg);
   color: var(--fg);
@@ -1115,7 +1123,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; flex-shrink: 0;
   background: none; border: none; padding: 0; cursor: pointer;
-  color: var(--fg-muted); border-radius: var(--radius-xs);
+  color: var(--fg-muted); border-radius: var(--radius-full);
 }
 .task-phase-icon-btn:hover { background: var(--bg-tertiary); }
 .phase-picker-inline { display: inline-flex; flex-shrink: 0; }
@@ -2117,7 +2125,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .session-notes-action {
   padding: 2px 6px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg-muted);
   font: inherit;
@@ -2590,7 +2598,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   align-items: center;
   padding: 1px 7px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
   font-family: inherit;
   line-height: 1.6;
@@ -2979,7 +2987,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 .permission-request-btn {
   padding: 4px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border-strong);
   font-size: var(--font-size-sm);
   font-weight: 500;
@@ -3225,7 +3233,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   box-sizing: border-box;
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--card-bg);
   color: var(--fg);
   font: inherit;
@@ -3555,7 +3563,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   flex: none;
   background: none;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   color: var(--fg-muted);
   cursor: pointer;
 }
@@ -3625,7 +3633,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   color: var(--accent);
   background: none;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 1px 8px;
   cursor: pointer;
 }
@@ -3704,7 +3712,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   color: var(--accent);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   cursor: pointer;
 }
 .wf-transcript-toggle:hover { background: var(--bg); }
@@ -4275,7 +4283,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .team-chat-send-btn {
   padding: 6px 12px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--font-size-sm);
@@ -4542,7 +4550,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   margin: 1px 4px;
   max-width: calc(100% - 8px);
 }
@@ -4886,7 +4894,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   cursor: pointer;
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   margin: 0 auto;
 }
 
@@ -5575,7 +5583,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   align-items: center;
   justify-content: center;
   padding: 3px 5px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, background 0.15s;
@@ -6978,7 +6986,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   padding: 0;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   color: var(--fg-muted);
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
@@ -7127,7 +7135,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   color: var(--on-accent);
   background: var(--accent);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   cursor: pointer;
 }
 .mic-error-retry:hover {
@@ -7866,7 +7874,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   justify-content: center;
   font-size: 1rem;
   color: var(--fg-muted);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
 }
 .stt-model-delete-btn:hover { color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); }
 
@@ -8948,7 +8956,7 @@ body.walnut-dragging {
   gap: 3px;
   padding: 1px 6px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   font-size: var(--font-size-xs);
   cursor: pointer;
@@ -9151,7 +9159,7 @@ body.walnut-dragging {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 10px; font-size: var(--font-size-sm); font-weight: 500;
   color: var(--fg-secondary); background: var(--bg-secondary);
-  border: 1px solid var(--border); border-radius: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-full);
   cursor: pointer; white-space: nowrap;
   transition: border-color 0.15s, background 0.15s;
 }
@@ -9206,7 +9214,7 @@ body.walnut-dragging {
 }
 .vd-search-clear {
   background: none; border: none; color: var(--fg-muted); cursor: pointer;
-  font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+  font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: var(--radius-full);
 }
 .vd-search-clear:hover { color: var(--fg); background: var(--bg-secondary); }
 
@@ -9230,7 +9238,7 @@ body.walnut-dragging {
 .vd-sc-label { padding: 1px 2px 1px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vd-sc-x {
   background: none; border: none; color: inherit; opacity: 0.6; cursor: pointer;
-  font-size: var(--font-size-md); line-height: 1; padding: 1px 6px 1px 3px; border-radius: var(--radius-xs);
+  font-size: var(--font-size-md); line-height: 1; padding: 1px 6px 1px 3px; border-radius: var(--radius-full);
 }
 .vd-sc-x:hover { opacity: 1; color: var(--error); }
 
@@ -9275,7 +9283,7 @@ body.walnut-dragging {
 }
 .vd-cat {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 5px 10px; font-size: var(--font-size-sm); border-radius: 6px;
+  padding: 5px 10px; font-size: var(--font-size-sm); border-radius: var(--radius-full);
   background: var(--bg-secondary); border: 1px solid transparent;
   color: var(--fg-secondary); cursor: pointer;
   transition: all 0.1s; text-align: left;
@@ -9320,7 +9328,7 @@ body.walnut-dragging {
 .vd-query .vd-field:first-child { margin-top: 0; }
 .vd-clear {
   font-size: var(--font-size-xs); color: var(--fg-muted); background: none;
-  border: none; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-xs);
+  border: none; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-full);
 }
 .vd-clear:hover { color: var(--error); background: var(--hover-bg, rgba(0,0,0,0.04)); }
 
@@ -9345,7 +9353,7 @@ body.walnut-dragging {
   border: none;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -10173,7 +10181,7 @@ body.walnut-dragging {
   padding: 3px 8px;
   margin-top: 2px;
   border: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font-size: var(--font-size-sm);
@@ -10357,7 +10365,7 @@ body.walnut-dragging {
   bottom: 0;
   left: 14px;
   right: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm); /* shape: the row highlight behind a task row, a row not a key */
   background: var(--row-pill-bg, transparent);
   pointer-events: none;
   z-index: -1;
@@ -10481,7 +10489,7 @@ body.walnut-dragging {
   font-weight: 600;
   color: var(--fg-secondary);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   user-select: none;
 }
@@ -11105,7 +11113,7 @@ body.walnut-dragging {
   cursor: pointer;
   padding: 2px 6px;
   line-height: 1;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   opacity: 0.6;
   transition: opacity 0.15s, background 0.15s;
 }
@@ -11145,7 +11153,7 @@ body.walnut-dragging {
 .todo-detail-badges .badge-phase {
   font-size: var(--font-size-xs);
   padding: 2px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   font-weight: 500;
   line-height: 1.4;
 }
@@ -11917,7 +11925,7 @@ body.walnut-dragging {
   font-size: 16px;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   line-height: 1;
 }
 
@@ -12080,7 +12088,7 @@ body.walnut-dragging {
 
 .todo-panel-tab {
   padding: 4px 12px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--fg-muted);
@@ -12211,7 +12219,7 @@ body.walnut-dragging {
   min-width: 0;
   text-align: left;
   padding: 2px 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   transition: color 0.15s, background 0.15s;
 }
 
@@ -12413,7 +12421,7 @@ body.walnut-dragging {
   line-height: 1;
   color: var(--fg-muted);
   padding: 2px 5px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.15s, color 0.15s, background 0.15s;
@@ -12711,7 +12719,7 @@ body.walnut-dragging {
   height: 16px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   opacity: 0;
@@ -12747,7 +12755,7 @@ body.walnut-dragging {
   height: 16px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   opacity: 0;
@@ -12894,7 +12902,7 @@ body.walnut-dragging {
 .sort-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   overflow: hidden;
 }
 
@@ -13452,7 +13460,7 @@ a.task-kebab-info:hover {
 .task-kebab-tier-btn {
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: none;
   font-size: var(--font-size-xs);
   font-weight: 500;
@@ -13506,7 +13514,7 @@ a.task-kebab-info:hover {
   font-weight: 500;
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg);
   cursor: pointer;
@@ -13617,7 +13625,7 @@ a.task-kebab-info:hover {
   font-size: var(--font-size-xs);
   font-weight: 500;
   padding: 2px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: none;
   color: var(--fg-secondary);
@@ -13674,7 +13682,7 @@ a.task-kebab-info:hover {
 .dp-month-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; }
 .dp-month-name { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg); }
 .dp-month-step {
-  width: 24px; height: 24px; border: none; border-radius: 6px; background: none;
+  width: 24px; height: 24px; border: none; border-radius: var(--radius-full); background: none;
   color: var(--fg-secondary); font-size: 16px; line-height: 1; cursor: pointer;
 }
 .dp-month-step:hover { background: var(--bg-tertiary); color: var(--fg); }
@@ -14236,7 +14244,7 @@ a.task-kebab-info:hover {
 
 .cron-filter-tab {
   padding: 6px 14px;
-  border-radius: 20px;
+  border-radius: var(--radius-full);
   font-size: var(--font-size-md);
   font-weight: 500;
   color: var(--fg-muted);
@@ -14359,7 +14367,7 @@ a.task-kebab-info:hover {
   color: var(--accent);
   background: none;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   padding: 4px 12px;
   cursor: pointer;
   transition: background 0.15s;
@@ -14545,7 +14553,7 @@ a.task-kebab-info:hover {
   background: var(--error);
   color: var(--on-accent);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 4px 12px;
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -14559,7 +14567,7 @@ a.task-kebab-info:hover {
   background: var(--accent);
   color: var(--on-accent);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 4px 12px;
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -15230,7 +15238,7 @@ a.task-kebab-info:hover {
   flex-shrink: 0;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   color: var(--fg-muted);
   cursor: pointer;
   font-size: var(--font-size-xs);
@@ -15368,7 +15376,7 @@ a.task-kebab-info:hover {
 .qtc-chip {
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
@@ -15454,7 +15462,7 @@ a.task-kebab-info:hover {
 .qtc-confirm-primary {
   padding: 5px 11px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
   cursor: pointer;
   background: var(--accent);
@@ -15510,7 +15518,7 @@ a.task-kebab-info:hover {
   height: 22px;
   padding: 0 7px;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   font-weight: 700;
   cursor: pointer;
@@ -16100,7 +16108,7 @@ a.task-kebab-info:hover {
 .provider-rail-more {
   margin-top: auto;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font: inherit;
@@ -17000,7 +17008,7 @@ a.task-kebab-info:hover {
 
 .usage-daterange-apply {
   padding: 7px 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--font-size-md);
@@ -17484,7 +17492,7 @@ td.usage-share-col {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bg-tertiary);
   color: var(--fg-muted);
   border: 1px solid var(--border);
@@ -19167,7 +19175,7 @@ a.tag-chip:hover .tag-chip-value,
 .draft-fallback-use {
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
@@ -19916,7 +19924,7 @@ a.tag-chip:hover .tag-chip-value,
   font-size: var(--font-size-sm);
   font-weight: 600;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--bg);
   color: var(--fg-secondary);
   cursor: pointer;
@@ -20020,7 +20028,7 @@ a.tag-chip:hover .tag-chip-value,
   color: var(--fg);
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 3px 8px;
   cursor: pointer;
   max-width: 100%;
@@ -20139,7 +20147,7 @@ a.tag-chip:hover .tag-chip-value,
   font-size: 14px;
   line-height: 1;
   padding: 0 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   cursor: pointer;
   flex: 0 0 auto;
 }
@@ -20534,7 +20542,7 @@ a.tag-chip:hover .tag-chip-value,
   border: none;
   padding: 0;
   cursor: pointer;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
 }
 .notes-breadcrumb-link:hover {
   color: var(--accent);
@@ -21123,7 +21131,7 @@ a.file-link:hover {
 .fv-search-close {
   padding: 2px 7px;
   border: 1px solid transparent;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   font-size: var(--font-size-sm);
@@ -21214,7 +21222,7 @@ a.file-link:hover {
   font-size: var(--font-size-md);
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
 }
 .ref-panel-close:hover { background: var(--bg-hover); color: var(--fg); }
 .ref-panel-body {
@@ -21923,7 +21931,7 @@ a.file-link:hover {
   height: 20px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   opacity: 0.6;
@@ -21982,7 +21990,7 @@ a.file-link:hover {
   height: 20px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -23049,7 +23057,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 3px 7px 3px 8px;
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -23150,7 +23158,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   padding: 1px 8px;
   font-size: var(--font-size-xs);
   cursor: pointer;
@@ -23432,7 +23440,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 3px 7px;
   cursor: pointer;
   display: inline-flex;
@@ -23455,7 +23463,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 3px 10px;
   font-size: var(--font-size-sm);
   font-weight: 600;
@@ -23731,7 +23739,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: none;
   cursor: pointer;
   padding: 0.35em 4px 0 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   transition: background 0.1s, color 0.1s, opacity 0.1s;
 }
 .session-diff-rendered-lineno:hover {
@@ -24401,7 +24409,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-comment-sendnow,
 .session-diff-comment-add {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 4px 12px;
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -24456,7 +24464,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-pending-copy,
 .session-diff-pending-remove {
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: var(--bg);
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
@@ -24501,7 +24509,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-reviewbar-copy,
 .session-diff-reviewbar-submit {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   padding: 5px 14px;
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -24622,7 +24630,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   font-size: 14px;
   cursor: pointer;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
 }
 
 .routine-modal-close:hover {
@@ -25126,7 +25134,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 /* Custom labels rename inline — the label itself is the affordance. */
 button.focus-tiers-label-editable {
   background: transparent; border: none; color: var(--fg); cursor: text;
-  padding: 2px 4px; margin: -2px -4px; border-radius: var(--radius-xs);
+  padding: 2px 4px; margin: -2px -4px; border-radius: var(--radius-full);
   font: inherit; font-size: 14px; font-weight: 400;
 }
 button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
@@ -25633,7 +25641,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--card-bg);
   color: var(--fg);
   font-size: var(--font-size-md);
@@ -25789,7 +25797,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding: 6px 8px;
   margin-bottom: 4px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm); /* shape: a two-line calendar entry in the rail, a row not a key */
   background: var(--card-bg);
   font-size: var(--font-size-md);
   line-height: 1.3;
@@ -25934,7 +25942,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   display: flex;
   flex-direction: column;
   gap: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-xs); /* shape: an event block on the calendar grid, content not a key */
   padding: 2px 6px;
   background: color-mix(in srgb, var(--cal-chip-tint) 17%, var(--bg));
   color: color-mix(in srgb, var(--cal-chip-tint) 45%, var(--fg));
@@ -26729,7 +26737,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 26px;
   padding: 0 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -26820,7 +26828,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 28px;
   padding: 0 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--card-bg);
   color: var(--fg);
   font-size: var(--font-size-md);
@@ -26882,7 +26890,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--card-bg);
   color: var(--fg);
   font-size: var(--font-size-md);
@@ -27093,7 +27101,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   pointer-events: none;
   max-width: 220px;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--cal-chip-tint) 28%, var(--card-bg));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   font-size: var(--font-size-sm);
@@ -27432,7 +27440,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding: 6px 8px;
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   font-size: var(--font-size-md);
   color: var(--fg-muted);
 }
@@ -27761,7 +27769,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .nfc-card-action {
   padding: 3px 10px;
   font-size: var(--font-size-sm);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--fg);
@@ -27935,7 +27943,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding: 4px 10px;
   font-size: var(--font-size-sm);
   font-weight: 500;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border: 1px solid var(--border);
   background: var(--card-bg);
   color: var(--fg);
@@ -28377,7 +28385,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   display: inline-block;
   margin-top: 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: none;
   cursor: pointer;
   padding: 4px 10px;
@@ -28459,7 +28467,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   align-items: center;
   gap: 4px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: none;
   color: var(--accent);
   cursor: pointer;
@@ -28760,7 +28768,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   background: none;
   color: var(--fg-muted);
   cursor: pointer;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   font-size: 14px;
   line-height: 1;
   opacity: 0;
@@ -28823,7 +28831,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   overscroll-behavior: contain;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 /* The bar is one row of buttons, never a scrolling strip (its placement is never
@@ -28895,7 +28903,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   height: 24px;
   padding: 0 9px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);
@@ -28937,7 +28945,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding: 4px 8px;
   border: none;
   background: none;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   color: var(--accent);
   cursor: pointer;
   font-size: var(--font-size-sm);
@@ -29380,7 +29388,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: var(--fg-secondary);
   background: var(--card-bg);
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
   animation: stale-build-pill-in 0.2s ease-out;
 }
@@ -29508,7 +29516,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   max-width: none;
   margin: 0 0 4px;
   padding: 0 0 0 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border-color: var(--border);
   box-shadow: none;
 }
@@ -29532,7 +29540,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex-direction: column;
   gap: 2px;
   padding: 7px 0 5px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   font-size: var(--font-size-xs);
   line-height: 1.1;
 }

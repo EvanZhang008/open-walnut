@@ -50,7 +50,7 @@
   width: 24px;
   height: 24px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -240,7 +240,7 @@
 .trigger-picker-primary,
 .trigger-picker-secondary {
   padding: 5px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   font: inherit;
   font-weight: 600;
   cursor: pointer;

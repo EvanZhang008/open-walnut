@@ -92,7 +92,7 @@
 }
 .camera-shutter.is-video { background: var(--error); }
 .camera-shutter.is-stop { background: #111; display: inline-flex; align-items: center; justify-content: center; }
-.camera-shutter.is-stop::after { content: ''; width: 14px; height: 14px; border-radius: var(--radius-xs); background: var(--error); }
+.camera-shutter.is-stop::after { content: ''; width: 14px; height: 14px; border-radius: var(--radius-full); background: var(--error); }
 .camera-shutter:disabled { opacity: 0.4; cursor: default; }
 .camera-dock-refused {
   display: flex;

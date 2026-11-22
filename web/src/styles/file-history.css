@@ -54,7 +54,7 @@
 .fh-close {
   flex: 0 0 auto;
   border: 1px solid transparent;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: none;
   padding: 2px 6px;
   font-size: var(--font-size-xs);
@@ -180,7 +180,7 @@
   flex: 0 0 auto;
   padding: 3px 10px;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-full);
   background: var(--accent);
   font-size: var(--font-size-xs);
   font-weight: 600;
