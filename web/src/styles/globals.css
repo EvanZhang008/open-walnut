@@ -29488,6 +29488,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 /* --- time grid ---------------------------------------------------------------- */
 .cal-grid {
+  /* The hour ruler's width: the hour labels and the time now ("10:20 AM") fit in it. */
+  --cal-ruler-w: 60px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -29509,7 +29511,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-grid-gutter {
-  width: 52px;
+  width: var(--cal-ruler-w);
   flex-shrink: 0;
 }
 
@@ -29654,7 +29656,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-grid-ruler {
-  width: 52px;
+  width: var(--cal-ruler-w);
   flex-shrink: 0;
 }
 
@@ -29816,7 +29818,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   background: var(--error);
 }
 
-/* The time now, in the hour ruler, on the line (the hour label it covers hides). */
+/* The time now, in the hour ruler, on the line (the hour label it covers hides), clear of the
+   line's dot. The ruler (--cal-ruler-w) is wide enough for the widest time, "10:20 AM": at 52 px
+   it stuck out of the Agenda side bar's left edge and was cut (UI audit, 2026-11-21). */
 .cal-now-label {
   position: absolute;
   right: 5px;
@@ -29969,69 +29973,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   text-overflow: ellipsis;
 }
 
-.cal-side-nav {
-  display: inline-flex;
-  gap: 2px;
-}
-
-.cal-side-nav button {
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card-bg);
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  cursor: pointer;
-}
-
-.cal-side-today {
-  font-size: var(--font-size-sm);
-}
-
-.cal-side-expand {
-  display: inline-flex;
-  align-items: center;
-  color: var(--fg-muted);
-}
-
-.cal-side-calendars {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.cal-side-calendars svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
+/* The header's buttons are one quiet square each (.cal-side-tool, grid-controls.css). */
 .cal-side-calendars svg circle {
   fill: currentColor;
   stroke: none;
-}
-
-.cal-side-calendars:hover {
-  color: var(--accent);
-  background: var(--bg-hover);
-}
-
-.cal-side-expand:hover {
-  color: var(--accent);
 }
 
 .cal-side-body {
@@ -30041,10 +29986,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   flex-direction: column;
 }
 
-.cal-side-panel .cal-grid-gutter,
-.cal-side-panel .cal-grid-ruler {
-  width: 44px;
-}
+/* The side panel's ruler is as wide as the page's (52px): at 44px the red time now ("10:38 PM")
+   lost its first digit to the panel's edge (UI audit, 2026-11-21). */
 
 /* --- G4 milky glass on the sticky chrome (page toolbar only; ::before layer so
    backdrop-filter doesn't become a containing block for fixed descendants) ----- */

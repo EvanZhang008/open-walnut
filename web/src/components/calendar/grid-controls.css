@@ -23,6 +23,37 @@
 .cal-side-header { flex-wrap: wrap; }
 .cal-side-header .cal-grid-controls { margin-left: auto; }
 .cal-side-header .cal-side-title { margin-right: 0; min-width: 40px; }
+/* The Agenda header: every button the same quiet 24 px square (the time scale's own buttons too),
+   in three groups: the day, the time scale, the panel. */
+.cal-side-tools { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.cal-side-tool,
+.cal-side-header .cal-grid-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+  cursor: pointer;
+}
+.cal-side-tool:hover,
+.cal-side-header .cal-grid-controls button:hover:not(:disabled) { background: var(--bg-secondary); color: var(--fg); }
+.cal-side-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cal-side-tool svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.cal-side-tool.cal-side-today { font-weight: 600; }
+.cal-side-header .cal-grid-controls .cal-zoom-value { font-size: var(--font-size-xs); }
+.cal-side-header .cal-grid-controls .cal-hours-toggle { font-size: var(--font-size-xs); }
+.cal-side-header .cal-grid-controls .cal-hours-toggle[aria-pressed='true'] { color: var(--accent); }
+/* Why the day is empty: one quiet line under the header (it wraps; never cut). */
+.cal-side-status { padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--font-size-xs); line-height: 1.4; color: var(--fg-muted); }
+.cal-side-status-head { font-weight: 600; }
+.cal-side-status.is-warn { background: color-mix(in srgb, var(--warning) 10%, transparent); color: color-mix(in srgb, var(--warning) 70%, var(--fg)); }
 /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
 .cal-grid-scroll { padding: 6px 0 6px; padding-bottom: max(6px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
 .cal-grid .cal-grid-cols {

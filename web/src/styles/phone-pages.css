@@ -816,6 +816,9 @@
     min-height: 44px;
   }
 
+  /* Its larger type needs a wider hour ruler for the time now. */
+  .app-shell-navigation .cal-grid { --cal-ruler-w: 66px; }
+
   .app-shell-navigation .cal-grid-controls .cal-zoom-value,
   .app-shell-navigation .cal-grid-controls .cal-hours-toggle,
   .app-shell-navigation .cal-grid-gutter,

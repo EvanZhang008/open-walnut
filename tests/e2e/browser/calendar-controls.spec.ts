@@ -128,12 +128,48 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("the Agenda header: its time stays inside the panel, one kind of button, and an empty day says why", async ({ page }) => {
+  // The widest time of the day, inside the default 7 AM to 1 AM range (UI audit, 2026-11-21: the red
+  // "10:20 AM" stuck out of the side bar's left edge and was cut).
+  const now = new Date(); now.setHours(10, 20, 0, 0);
+  await page.clock.setFixedTime(now);
+  let sources = [{ id: 'eventkit', available: true, enabled: true }] as Record<string, unknown>[];
+  await page.route('**/api/calendar/events?**', (route) => route.fulfill({ json: { sources, events: [] } }));
+  await page.route('**/api/calendar/sources', (route) => route.fulfill({ json: { sources, calendars: [] } }));
+  const panel = await openAgenda(page);
+  const label = panel.getByTestId('cal-now-label');
+  await expect(label).toHaveText('10:20 AM');
+  const [box, edge, ruler] = await Promise.all([label.boundingBox(), panel.boundingBox(), panel.locator('.cal-grid-ruler').boundingBox()]);
+  expect(box!.x).toBeGreaterThanOrEqual(edge!.x);
+  // ...and clear of the line's dot, which reaches 4 px into the ruler.
+  expect(box!.x + box!.width).toBeLessThanOrEqual(ruler!.x + ruler!.width - 4);
+  // Every header button is the same quiet square, the time scale's own included.
+  const sizes = await panel.locator('.cal-side-header button, .cal-side-header a').evaluateAll((els) =>
+    els.map((el) => Math.round(el.getBoundingClientRect().height)));
+  expect(new Set(sizes)).toEqual(new Set([24]));
+  // The hours toggle is named, not "7-1"; pressed means all 24 hours.
+  await expect(panel.getByRole('button', { name: 'Show full day' })).toHaveText('24h');
+  // An empty day says it is empty; calendars that could not be read say so instead.
+  await expect(panel.getByTestId('cal-side-status')).toHaveText('Nothing scheduled.');
+  sources = [{ id: 'eventkit', available: false, enabled: true, reason: 'permission-denied', message: 'Not allowed to read calendars.' }];
+  await page.reload();
+  // This file's prefs are its own (isolateUiPrefs), so a reload may come back with the side bar shut.
+  await expect(page.getByTestId('sidebar-toggle-calendar')).toBeVisible();
+  if (!(await panel.count())) await page.getByTestId('sidebar-toggle-calendar').click();
+  // ...with the reason, whole, on its own line.
+  await expect(panel.getByTestId('cal-side-status')).toHaveText('Calendars not read. Not allowed to read calendars.', { timeout: 15_000 });
+  await expect.poll(() => panel.getByTestId('cal-side-status').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+});
+
 test('default hours, zoom bounds, persistence, and both surfaces share the settings', async ({ page }) => {
   const panel = await openAgenda(page);
   await expectFittedGrid(panel, 1);
   await expect(panel.locator('.cal-grid-hourlabel').first()).toHaveText('12 AM');
   await expect(panel.locator('.cal-grid-range-end')).toHaveText('7 AM');
-  await expect(panel.locator('.cal-hours-toggle')).toHaveText('7–1');
+  // The toggle is named ("7-1" read as nothing, UI audit 2026-11-21) on every surface; its
+  // pressed state says when all 24 hours show.
+  await expect(panel.locator('.cal-hours-toggle')).toHaveText('24h');
+  await expect(panel.locator('.cal-hours-toggle')).toHaveAttribute('aria-pressed', 'false');
   await expectTopMinute(panel, 7 * 60);
   await panel.getByRole('button', { name: 'Zoom in calendar' }).click();
   await expect(panel.getByRole('button', { name: 'Reset calendar zoom' })).toHaveText('125%');

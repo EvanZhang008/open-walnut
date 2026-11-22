@@ -107,6 +107,14 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   const step = (dir: 1 | -1) => setDay(formatDateOnly(addDays(anchor, dir)));
   const isToday = day === formatDateOnly(new Date());
 
+  // What an empty grid means, said beside the title (an agenda with items says nothing).
+  const unread = calendar.sources.length > 0 && !calendar.sources.some((s) => s.available && s.enabled)
+  const status: { text: string; tone: 'quiet' | 'warn'; why?: string } | null = calendar.loading && items.length === 0
+    ? { text: 'Loading...', tone: 'quiet' }
+    : unread
+      ? { text: 'Calendars not read.', tone: 'warn', why: calendar.sources.find((s) => s.message)?.message ?? 'Mac calendars are off or not allowed. Calendar Accounts on the Apps page turns them on.' }
+      : items.length === 0 ? { text: 'Nothing scheduled.', tone: 'quiet' } : null
+
   // Same optimistic-while-unresolved gate as CalendarPage (see its comment).
   const canCreateEvent = calendar.sources.length === 0
     ? calendar.loading
@@ -123,42 +131,58 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
         <span className="cal-side-title">
           {isToday ? 'Today' : anchor.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}
         </span>
-        <div className="cal-side-nav">
-          <button onClick={() => step(-1)} aria-label="Previous day">‹</button>
+        {/* Three groups of the same quiet buttons: the day, the time scale, the panel. */}
+        <div className="cal-side-tools" role="group" aria-label="Day">
+          <button type="button" className="cal-side-tool" onClick={() => step(-1)} aria-label="Previous day" title="Previous day">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
           {!isToday && (
-            <button className="cal-side-today" onClick={() => setDay(formatDateOnly(new Date()))}>
+            <button type="button" className="cal-side-tool cal-side-today" onClick={() => setDay(formatDateOnly(new Date()))}>
               Today
             </button>
           )}
-          <button onClick={() => step(1)} aria-label="Next day">›</button>
+          <button type="button" className="cal-side-tool" onClick={() => step(1)} aria-label="Next day" title="Next day">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+          </button>
         </div>
-        <button
-          className="cal-side-calendars"
-          onClick={(event) => setCalsAnchor(event.currentTarget)}
-          aria-label="Choose calendars"
-          title="Choose which calendars to show"
-          data-testid="cal-side-cals-btn"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="17" rx="2" />
-            <line x1="3" y1="9" x2="21" y2="9" />
-            <line x1="8" y1="2" x2="8" y2="6" />
-            <line x1="16" y1="2" x2="16" y2="6" />
-            <circle cx="8.5" cy="14" r="1.4" />
-            <circle cx="12" cy="14" r="1.4" />
-            <circle cx="15.5" cy="14" r="1.4" />
-          </svg>
-        </button>
         <CalendarGridControls />
-        <Link to={`/calendar?view=day&d=${day}`} className="cal-side-expand" title="Open calendar">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 3h6v6" /><path d="M10 14L21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          </svg>
-        </Link>
-        <button className="btn btn-sm" onClick={onClose} title="Close calendar panel">
-          ✕
-        </button>
+        <div className="cal-side-tools" role="group" aria-label="Panel">
+          <button
+            type="button"
+            className="cal-side-tool cal-side-calendars"
+            onClick={(event) => setCalsAnchor(event.currentTarget)}
+            aria-label="Choose calendars"
+            title="Choose which calendars to show"
+            data-testid="cal-side-cals-btn"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="17" rx="2" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <circle cx="8.5" cy="14" r="1.4" />
+              <circle cx="12" cy="14" r="1.4" />
+              <circle cx="15.5" cy="14" r="1.4" />
+            </svg>
+          </button>
+          <Link to={`/calendar?view=day&d=${day}`} className="cal-side-tool cal-side-expand" title="Open in Calendar" aria-label="Open in Calendar">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 3h6v6" /><path d="M10 14L21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            </svg>
+          </Link>
+          <button type="button" className="cal-side-tool" onClick={onClose} title="Close calendar panel" aria-label="Close calendar panel">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
+          </button>
+        </div>
       </div>
+      {/* An empty grid says why, on its own line so it never truncates: nothing on the day, still
+          reading, or the calendars were not read (and why). */}
+      {status && (
+        <div className={`cal-side-status${status.tone === 'warn' ? ' is-warn' : ''}`} role="status" data-testid="cal-side-status">
+          <span className="cal-side-status-head">{status.text}</span>
+          {status.why && <span> {status.why}</span>}
+        </div>
+      )}
       <div className="cal-side-body">
         <DndContext>
           <TimeGrid
