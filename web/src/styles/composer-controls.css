@@ -178,7 +178,7 @@
 .permission-mode-menu .permission-mode-hint {
   margin-left: auto;
   padding-left: 12px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   font-weight: 400;
   white-space: nowrap;
