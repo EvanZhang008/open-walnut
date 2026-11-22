@@ -58,6 +58,21 @@ const SITES = ['http://*/*', 'https://*/*']
  * The agent window's own tab (agent-groups.ts): in front while every task's group is folded, so
  * the window says what it is. No script.
  */
+const KEEP_WINDOW_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Walnut keeps agents running</title>
+<style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;margin:48px;max-width:560px;color:#3b2f25;background:#faf7f2}h1{font-size:20px;margin:0 0 12px}@media (prefers-color-scheme:dark){body{color:#eadfd2;background:#1d1a17}}</style>
+</head>
+<body>
+<h1>Walnut keeps agents running</h1>
+<p>Chrome stops its extensions when the last window of this profile closes, and Walnut's agents then lose this browser. So while agents are on and only one other window is open, Walnut keeps this window in the Dock.</p>
+<p>It goes away by itself as soon as you open another window. You can close it: agents then stop when the last window closes, until you open Chrome again.</p>
+</body>
+</html>
+`
+
 const AGENT_WINDOW_PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -242,6 +257,7 @@ async function main() {
   h.update(readFileSync(join(SRC, 'ui.css')))
   for (const name of Object.keys(PAGES)) h.update(page(name))
   h.update(AGENT_WINDOW_PAGE)
+  h.update(KEEP_WINDOW_PAGE)
   const build = h.digest('hex').slice(0, 12)
   for (const browser of ['chrome', 'firefox']) {
     const dir = join(OUT, browser)
@@ -250,6 +266,7 @@ async function main() {
     copyFileSync(join(SRC, 'ui.css'), join(dir, 'ui.css'))
     for (const name of Object.keys(PAGES)) writeFileSync(join(dir, `${name}.html`), page(name))
     writeFileSync(join(dir, 'agent-window.html'), AGENT_WINDOW_PAGE)
+    writeFileSync(join(dir, 'keep-window.html'), KEEP_WINDOW_PAGE)
     writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifestFor(browser, build), null, 2)}\n`)
     await icons(dir)
     if (zip) writeZip(dir, join(ZIP_DIR, `walnut-extension-${browser}.zip`))

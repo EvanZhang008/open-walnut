@@ -14,7 +14,7 @@
  * (the save bar), bg-fill.ts (fills), bg-clipboard.ts (copy and clear), bg-autolock.ts,
  * bg-badge.ts (the toolbar count).
  */
-import { ext, type Sender } from './ext'
+import { ext, isFirefox, type Sender } from './ext'
 import { ApiError, DEFAULT_SERVER, api, call, cleanServerUrl, connection, disconnect, pair, vaultSession } from './walnut-api'
 import { displayHost, matchItem } from '../../../src/core/vault/url-match'
 import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/core/vault/generator'
@@ -22,6 +22,7 @@ import { cursorUp, frameHelloBox } from './agent-cursor'
 import { pageOpen } from './agent-opened'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseAllTabs, releaseTab, relayState, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
+import { initProfileKeeper, type KeeperApi } from './profile-keeper'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
 import { CODE_PAGE_MS, PENDING_MS, activeTab, fail, forget, insecureFor, isWalnutPage, liveState, matchesFor, originOf, pendingAlive, siteOf, state, stores, summaries, tiersOf, view, walletItems, type Reply } from './bg-vault'
 import { domainOf, frameOnSite } from './login-pick'
@@ -513,6 +514,8 @@ ext.commands?.onCommand.addListener((name, tab) => {
 
 initAgent({ isWalnutPage })
 initSelfUpdate()
+// Closing the profile's last window must not stop agents (profile-keeper.ts).
+initProfileKeeper(ext as unknown as KeeperApi, agentOn, !isFirefox)
 initClipboard()
 initBadge()
 initAutoLock(lockNow)

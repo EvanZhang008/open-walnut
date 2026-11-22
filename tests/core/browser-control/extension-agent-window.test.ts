@@ -189,6 +189,8 @@ describe('the agent window', () => {
       ['agent-window.ts: await api.windows.update?.(agentWindow, { ...plain, width, height })', 'agent window size only'],
       ['agent-leave.ts: if (docked !== undefined) await ext.windows.update?.(docked, { state: \'minimized\' }).catch(() => undefined)', 'the agent window back to the Dock a "Leave site?" of Chrome\'s took it out of'],
       ['agent-popups.ts: return !!(await ext.windows.update?.(t.windowId, { state: \'minimized\' }).catch(() => null))', 'a popup window an agent\'s own page opened: to the Dock at once (minimizeAgentPopup)'],
+      ['profile-keeper.ts: const w = await api.windows.create({ url: api.runtime.getURL(KEEPER_PAGE), type: \'normal\', focused: false, state: \'minimized\' })', 'the keeper window: in the Dock, unfocused, so closing the last window keeps the extension (profile-keeper.ts)'],
+      ['profile-keeper.ts: if (w.id !== undefined && w.state !== \'minimized\') await api.windows.update?.(w.id, { state: \'minimized\' }).catch(() => undefined)', 'the keeper window to the Dock: Chrome on a Mac makes it normal all the same'],
       ['agent-window.ts: const tab = await api.tabs.create({ url: \'about:blank\', windowId, active: false })', 'agent window, in the background (newAgentTab)'],
       ['agent-groups.ts: const t = await api.tabs.create({ url: api.runtime.getURL(AGENT_PAGE), windowId, active: false, index: 0 }).catch(() => null)', 'agent window page, not active'],
       ['agent-opened.ts: const t = await more.tabs.create({ url: href, windowId: tab.windowId, active: false, openerTabId: tabId }).finally(() => linking.delete(tabId))', 'a link the page opened, in its own window, in the background'],

@@ -24,6 +24,8 @@ export const SESSION_KEYS = {
   agentTampered: { kept: 'pages an agent\'s script touched: no sign in there until the page loads again' },
   agentDownloads: { kept: 'whose downloads are whose (download ids, which a reload keeps)' },
   debuggerCancelledAt: { kept: 'the person\'s Cancel on the debugging bar: nothing attaches by itself for a while' },
+  keeperWindows: { lost: 'the keeper windows made (profile-keeper.ts): after a reload each is found again by its own page' },
+  keeperDeclined: { lost: 'the person closed the keeper: after a reload one may be made again, once' },
   agentAlive: { lost: 'the mark that storage.session was not cleared: a reload clearing it is what it tells' },
   vaultSession: { lost: 'the unlock mark: a token an earlier run left counts only under Walnut\'s own setting (walnut-api.ts)' },
   lastActive: { lost: 'the auto-lock clock, which starts again with the next use' },

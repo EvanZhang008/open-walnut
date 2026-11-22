@@ -22,6 +22,7 @@ import { more } from './agent-api'
 import { agentWindowId } from './agent-shared'
 import { revealForPerson } from './agent-window'
 import { debuggerGranted, livePicturesOn } from './trusted-switch'
+import { keeperWindowIds, type KeeperApi } from './profile-keeper'
 
 export const GRANT_PAGE = 'grant.html'
 /** After the person closed the page without allowing, an agent's ask opens no new one for this long. */
@@ -59,18 +60,19 @@ async function closedAt(): Promise<number | undefined> {
 }
 
 /** A window the page may open in: a normal, not private one that is not the agent's. */
-async function usable(windowId: number | undefined, agent: number | undefined): Promise<boolean> {
-  if (windowId === undefined || windowId === agent) return false
+async function usable(windowId: number | undefined, agent: number | undefined, keepers: Set<number>): Promise<boolean> {
+  if (windowId === undefined || windowId === agent || keepers.has(windowId)) return false
   const w = await more.windows.get(windowId).catch(() => null)
   return !!w && (w.type === undefined || w.type === 'normal') && w.incognito !== true
 }
 
-/** The person's window: the last focused one, else any other normal window that is not the agent's. */
+/** The person's window: the last focused one, else any other normal window that is not the agent's (nor the keeper, profile-keeper.ts). */
 async function personsWindow(): Promise<number | undefined> {
   const agent = await agentWindowId()
+  const keepers = await keeperWindowIds(ext as unknown as KeeperApi).catch(() => new Set<number>())
   const [last] = await ext.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => [] as Tab[])
-  if (await usable(last?.windowId, agent)) return last!.windowId
-  for (const t of await ext.tabs.query({ active: true }).catch(() => [] as Tab[])) if (await usable(t.windowId, agent)) return t.windowId
+  if (await usable(last?.windowId, agent, keepers)) return last!.windowId
+  for (const t of await ext.tabs.query({ active: true }).catch(() => [] as Tab[])) if (await usable(t.windowId, agent, keepers)) return t.windowId
   return undefined
 }
 
