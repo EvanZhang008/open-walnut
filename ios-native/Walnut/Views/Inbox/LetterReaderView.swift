@@ -481,15 +481,13 @@ struct LetterReaderView: View {
                 refocus: { decisionNoteFocused = true },
                 revealID: Self.decisionNoteRevealId
             ) {
+                // The message box (MessageBox), as the reply box under it; its picture key sits
+                // inside the box, so the recording ring around the field follows the box's corner.
                 HStack(alignment: .center, spacing: 2) {
-                    TextField("Add a note with your choice (optional)", text: $decisionNote, axis: .vertical)
+                    TextField("Add a note (optional)", text: $decisionNote, axis: .vertical)
                         .lineLimit(1...3)
                         .font(.callout)
-                        // The message box (MessageBox), as the reply box under it.
-                        .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .frame(minHeight: MessageBox.lineHeight)
-                        .background(Color(.secondarySystemBackground), in: MessageBox.shape)
                         .focused($decisionNoteFocused)
                         .accessibilityIdentifier("inbox.letter.decisionNote")
                     ReplyPictureButton(
@@ -498,6 +496,10 @@ struct LetterReaderView: View {
                         onWillPresent: { decisionNoteFocused = false }
                     )
                 }
+                .padding(.leading, 12)
+                .padding(.trailing, 4)
+                .frame(minHeight: MessageBox.lineHeight)
+                .background(Color(.secondarySystemBackground), in: MessageBox.shape)
             }
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
                 decisionGeometry.boxBottom = $0
