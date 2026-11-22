@@ -1119,7 +1119,7 @@ export async function draftEngineButton(page: Page, panel: Locator, engineId: st
 /** The picker's ACP pane has its list (no "Loading <engine> models…"), so the picker is not
  *  about to be re-placed under the pointer. */
 async function waitForModelPickerSettled(picker: Locator): Promise<void> {
-  await expect(picker.locator('.model-picker-status', { hasText: /^Loading .* models/ })).toHaveCount(0, { timeout: 30_000 })
+  await expect(picker.getByTestId('model-picker-loading')).toHaveCount(0, { timeout: 30_000 })
 }
 
 /**

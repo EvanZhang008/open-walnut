@@ -171,7 +171,7 @@ export function TaskList({
   }, [onRenameGroup, prompt]);
 
   if (tasks.length === 0) {
-    return <EmptyState message="No tasks found" actionLabel={onAdd ? 'Add Task' : undefined} onAction={onAdd} />;
+    return <EmptyState title="No tasks found" action={onAdd ? { label: 'Add task', onClick: () => onAdd() } : undefined} />;
   }
 
   const toggleProject = (key: string) => {

@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, type KeyboardEvent, type ReactNode } 
 import type { Config } from '@open-walnut/core';
 import { useLocation } from 'react-router-dom';
 import {
-  SettingsDisclosure, SettingsGroup, SettingsLoadingRow, SettingsRow, SettingsSection, SettingsTag,
+  SettingsDisclosure, SettingsGroup, SettingsRow, SettingsSection, SettingsTag,
 } from '../SettingsSection';
+import { LoadingState } from '../../common/EmptyState';
 import { SecretInput } from '../inputs/SecretInput';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -175,7 +176,7 @@ function CredentialTraceRows() {
           label={<code className="settings-mono-value">{s.location}</code>}
           help={s.outcome === 'won' && s.found
             ? `Used: ${s.found.method}${s.found.keyHint ? ` (${s.found.keyHint})` : ''}${s.found.value ? `, ${s.found.value}` : ''}`
-            : s.outcome === 'empty' ? `Nothing set; looks for ${s.checkedFor.join(', ')}.`
+            : s.outcome === 'empty' ? `Nothing set; looks for ${s.checkedFor.join(', ')}.` // empty-state-ok: row help text
             : 'Not checked; a higher source already won.'}
           control={
             <span className="settings-control-cluster">
@@ -631,7 +632,7 @@ export function ProvidersSection({ config, onSave }: Props) {
           forceOpen={mode === 'custom' || location.hash === '#providers'}
         >
           <div className="settings-rows-contents" data-testid="provider-modes">
-            {loading ? <SettingsLoadingRow /> : (
+            {loading ? <LoadingState title="Loading providers…" /> : (
               <>
                 <SettingsRow indent label="Background jobs run on" error={modeError}
                   help={mode === 'claude' ? claudeHelp : 'Task titles, notes and memory upkeep use the provider below.'}

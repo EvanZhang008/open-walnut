@@ -196,7 +196,7 @@ test('with the chat closed, an empty board opens with one New task draft', async
   await expect(navigation(page).locator('.new-launcher-btn')).toBeVisible()
   await expect(page.getByRole('button', { name: /new project/i })).toHaveCount(0)
   await expect(page.locator('.todo-new-project-btn')).toHaveCount(0)
-  await expect(page.getByText('No tasks found')).toHaveCount(0)
+  await expect(page.getByText('No tasks in this view')).toHaveCount(0)
   // The Pinned section is there to be learned, with nothing pinned and no tier under it;
   // the tab bar is a choice, not a default.
   await expect(navigation(page).locator('.navigation-heading[data-navigation-id="pinned"]')).toBeVisible()

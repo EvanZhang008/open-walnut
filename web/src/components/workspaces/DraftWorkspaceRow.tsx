@@ -29,6 +29,7 @@ import { useDraftValue } from '@/hooks/useDraft';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useProjectEntry } from '@/hooks/useProjectRegistry';
 import { draftKey } from '@/utils/drafts';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import {
   isPickable, selectedCandidate, setDraftWorkspace, useDraftWorkspace, getDraftWorkspace,
   type DraftWorkspaceChoice,
@@ -220,8 +221,8 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
               </button>
             </span>
           )}
-          {choice.loading && <span className="draft-workspace-note" data-testid="draft-workspace-loading">Checking this folder…</span>}
-          {!choice.loading && choice.error && <span className="draft-workspace-note is-error">{choice.error}</span>}
+          {choice.loading && <LoadingState size="row" title="Checking this folder…" testId="draft-workspace-loading" />}
+          {!choice.loading && choice.error && <UnavailableState size="row" title="Couldn't check this folder" detail={choice.error} />}
           {!choice.loading && pickable.length > 0 && (
             <ChipGroup className="draft-workspace-providers" role="radiogroup" aria-label="Workspace provider">
               {pickable.map((c) => (
@@ -240,9 +241,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
             </ChipGroup>
           )}
           {!choice.loading && pickable.length === 0 && !choice.error && (
-            <span className="draft-workspace-note is-warn" data-testid="draft-workspace-none">
-              {unpickable[0]?.reason ? `No way to isolate this folder: ${unpickable[0].reason}` : 'No way to isolate this folder'}
-            </span>
+            <UnavailableState size="row" title="No way to isolate this folder" hint={unpickable[0]?.reason} testId="draft-workspace-none" />
           )}
           {!choice.loading && choice.degraded && pickable.length > 0 && unpickable[0]?.reason && (
             <span className="draft-workspace-note">{unpickable[0].reason}</span>

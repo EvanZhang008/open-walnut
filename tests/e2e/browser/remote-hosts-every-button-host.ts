@@ -102,7 +102,7 @@ export async function checkAlphaThisHost(ctx: StepCtx, details: Locator): Promis
   await pressWhileTheRowShrinks(ctx, details, part.getByRole('button', { name: 'Revoke Nightly build on Alpha box' }))
   await routes.nth('DELETE', '/api/v1/host-exec/grants/g-1', 1)
   await expect(grant).toHaveCount(0)
-  await expect(part).toContainText('No task from another host has used it yet.')
+  await expect(part).toContainText('No task from another host has used it yet')
   ran('Hosts/button:Revoke <task> on <host>')
 
   // Walnut on this host: its address, what it keeps (one line until opened), its tunnel.

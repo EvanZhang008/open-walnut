@@ -25,10 +25,6 @@
   word-break: break-all;
 }
 
-
-
-
-
 .browser-access-qr {
   flex: 0 0 auto;
   border-radius: var(--radius-sm);
@@ -46,8 +42,6 @@
   font-size: var(--font-size-sm);
   overflow-wrap: anywhere;
 }
-
-
 
 .browser-access-code-inline {
   font-weight: 600;

@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { fetchHooks, patchHook, type HookInfo, type HookSetting } from '@/api/hooks';
 import {
-  SettingsEmpty, SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow, SettingsSection, SettingsTag,
+  SettingsGroup, SettingsNotice, SettingsRow, SettingsSection, SettingsTag,
 } from '../SettingsSection';
+import { EmptyState, LoadingState, UnavailableState } from '../../common/EmptyState';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { NumberInput } from '@/components/settings/inputs/NumberInput';
-import { SettingsButton } from '@/components/settings/inputs/SettingsButton';
 import { couldntSave } from '@/components/settings/inputs/useOptimisticSetting';
 import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
 import { CloseGlyph } from '../settings-glyphs';
@@ -264,11 +264,9 @@ export function HooksSection() {
     return (
       <SettingsSection id="hooks" title="Hooks">
         {loading ? (
-          <SettingsGroup><SettingsLoadingRow /></SettingsGroup>
+          <SettingsGroup><LoadingState title="Loading hooks…" /></SettingsGroup>
         ) : (
-          <SettingsNotice kind="error" role="alert" action={<SettingsButton onClick={reload}>Retry</SettingsButton>}>
-            Couldn&apos;t load hooks: {error}
-          </SettingsNotice>
+          <UnavailableState title="Couldn't load hooks" detail={error ?? undefined} onRetry={reload} />
         )}
       </SettingsSection>
     );
@@ -305,7 +303,7 @@ export function HooksSection() {
         if (groupHooks.length === 0) {
           return (
             <SettingsGroup key={group.key} heading={group.title} footer={footer} data-testid={`hooks-group-${group.key}`}>
-              <SettingsEmpty>No hooks of your own yet.</SettingsEmpty>
+              <EmptyState title="No hooks of your own yet" />
             </SettingsGroup>
           );
         }

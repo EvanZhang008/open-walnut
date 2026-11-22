@@ -27,6 +27,7 @@
  * front in Chrome, and the agent keeps it (Take over is the one that makes the agent wait).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { apiGet, apiPost } from '@/api/client';
 import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
@@ -173,7 +174,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
           epoch = undefined;
           wait = FRAME_RETRY_MS;
         } else {
-          setTrouble(status === 409 ? 'The browser does not answer right now. The picture comes back when it does.' : 'No picture right now. Trying again.');
+          setTrouble(status === 409 ? 'The browser does not answer right now. The picture comes back when it does.' : 'No picture right now. Trying again.'); // empty-state-ok: a line kept in state, drawn by the EmptyState below
           wait = FRAME_RETRY_MS;
         }
       }
@@ -331,7 +332,9 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
       <div className="session-browser-shot" ref={setShotEl} data-testid="session-browser-shot">
         {picture
           ? <img src={picture.image} alt={`The agent's tab: ${title ?? ''}`} className={live ? '' : 'is-stale'} data-testid="session-browser-picture" draggable={false} />
-          : <div className="session-browser-empty" data-testid="session-browser-why">{late ? `${late} ` : ''}{noPicture ?? 'Taking the first picture…'}{liveOffer}</div>}
+          : noPicture
+            ? <EmptyState size="section" title={noPicture} hint={late} testId="session-browser-why">{liveOffer}</EmptyState>
+            : <LoadingState size="section" title="Taking the first picture…" hint={late} testId="session-browser-why">{liveOffer}</LoadingState>}
       </div>
       <div className="session-browser-foot" data-testid="session-browser-foot">
         {picture && (live ? <span>Live · {agoLine(picture.at, now)}</span> : <span>Last picture {agoLine(picture.at, now)}</span>)}

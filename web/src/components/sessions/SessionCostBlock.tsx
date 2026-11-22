@@ -5,6 +5,7 @@
  * rates it was priced at and where those rates came from.
  */
 import React from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { fetchSessionCostComparison, type SessionCost, type SessionCostComparison, type SessionCostModel } from '@/api/session-cost';
 import { useSessionCost } from '@/hooks/useSessionCost';
 import { log } from '@/utils/log';
@@ -121,10 +122,13 @@ function CostComparison({ sessionId, models, actualUsd }: { sessionId: string; m
       </button>
       {open && (
         <div className="session-cost-compare-body" data-status={data?.status ?? (error ? 'error' : 'loading')}>
-          {error ? <div className="session-cost-warn">The comparison {error}.</div>
-            : !data ? <div className="session-cost-muted">Pricing every model…</div>
-            : data.status === 'pending' ? <div className="session-cost-muted">{gaveUp ? 'The transcript is still being read; open this again in a minute.' : 'Reading the transcript…'}</div>
-            : data.status !== 'ok' ? <div className="session-cost-muted">{data.reason ?? 'Nothing to compare yet.'}</div>
+          {error ? <UnavailableState size="row" title={`The comparison ${error}`} />
+            : !data ? <LoadingState size="row" title="Pricing every model…" />
+            : data.status === 'pending'
+              ? (gaveUp
+                ? <EmptyState size="row" title="The transcript is still being read" hint="Open this again in a minute." />
+                : <LoadingState size="row" title="Reading the transcript…" />)
+            : data.status !== 'ok' ? <EmptyState size="row" title={data.reason ?? 'Nothing to compare yet'} />
             : (
               <>
                 <table className="session-cost-table session-cost-compare-table" data-testid="session-cost-compare-table">

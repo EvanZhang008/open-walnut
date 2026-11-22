@@ -458,7 +458,7 @@ for (const total of [0, 1, 20, 21, 59, 60, 61]) {
     const panel = await openSession(page, baseURL!);
     const history = panel.locator('.session-history');
     if (total) await expect(history.locator(`[data-msg-index="${total - 1}"]`)).toBeAttached();
-    else await expect(history).toContainText('No conversation history found');
+    else await expect(history).toContainText('No messages yet');
     const button = history.locator('.session-show-earlier-btn');
     const firstTurn = Math.max(0, total % 2 === 0 ? total - 20 : total - 19);
     if (firstTurn === 0) {

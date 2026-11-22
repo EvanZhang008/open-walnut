@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
-import { SettingsGroup, SettingsLoadingRow, SettingsNotice } from '../SettingsSection';
+import { SettingsGroup, SettingsNotice } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { ControlGroup } from '@/components/controls';
@@ -170,7 +171,9 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
               setText={(text) => { query.setText(text); setPicking(true); setActive(0); setError(null); }} />
             {listOpen && (
               <div className="trr-picks" role="listbox" aria-label="Tasks" id={`trr-picks-${id}`}>
-                {matches.length === 0 && <div className="trr-pick-empty">No open task matches.</div>}
+                {matches.length === 0 && (query.text.trim()
+                  ? <EmptyState size="row" role="presentation" title={`No open task matches “${query.text.trim()}”`} />
+                  : <EmptyState size="row" role="presentation" title="No open tasks" />)}
                 {matches.map((t, i) => (
                   <button data-peek-row="" key={t.id} type="button" tabIndex={-1} role="option" aria-selected={i === active} id={`trr-pick-${id}-${t.id}`}
                     className={`trr-pick${i === active ? ' trr-pick-active' : ''}`} data-testid="triage-rule-task-option"
@@ -270,13 +273,13 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
       )}
       {actionError && <SettingsNotice kind="error">{actionError}</SettingsNotice>}
       {off && rules && rules.length > 0 && <p className="trr-off" data-testid="triage-rules-off">{ROUTING_COPY.off}</p>}
-      {!rules && !loadError && <SettingsLoadingRow />}
+      {!rules && !loadError && <LoadingState title="Loading routing rules…" />}
       {editing === NEW && (
         <RuleEditor rule={null} tasks={pickable} onCancel={() => { setEditing(null); focusOpener(NEW); }}
           onSaved={() => { setEditing(null); focusOpener(NEW); void load(); }} />
       )}
       {rules && rules.length === 0 && editing !== NEW && (
-        <p className="trr-empty" data-testid="triage-rules-empty">{ROUTING_COPY.empty}</p>
+        <EmptyState title={ROUTING_COPY.emptyTitle} hint={ROUTING_COPY.emptyHint} testId="triage-rules-empty" />
       )}
       {rules?.map((rule, index) => editing === rule.id ? (
         <RuleEditor key={rule.id} rule={rule} tasks={pickable} onCancel={() => { setEditing(null); focusOpener(rule.id); }}

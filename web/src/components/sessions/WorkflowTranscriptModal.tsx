@@ -23,6 +23,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
@@ -261,9 +262,9 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
           <LaneHistoryTimeline messages={shown} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
         </>
       ) : loading ? (
-        <div className="wf-modal-loading">Loading transcript…</div>
+        <LoadingState size="section" title="Loading transcript…" />
       ) : failed ? (
-        <div className="wf-modal-loading">Failed to load transcript. Close and reopen to retry.</div>
+        <UnavailableState size="section" title="Failed to load transcript" hint="Close and reopen to retry." />
       ) : target.fallbackResult ? (
         <div className="task-group-result">
           <div className="task-group-result-label">Result</div>
@@ -271,7 +272,9 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
           <AgentText compact sessionId={sessionId} text={target.fallbackResult} />
         </div>
       ) : (
-        <div className="wf-modal-loading">{live ? 'Waiting for the agent\u2019s first output…' : 'No transcript available'}</div>
+        live
+          ? <LoadingState size="section" title={'Waiting for the agent\u2019s first output…'} />
+          : <EmptyState size="section" title="No transcript available" />
       )}
       </RowDisclosureScope.Provider>
     </>

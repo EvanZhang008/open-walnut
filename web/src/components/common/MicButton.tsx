@@ -11,6 +11,7 @@ import { MicPopover, ownsMicControl } from '@/components/common/MicPopover';
 import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { SttDiffModal } from '@/components/common/SttDiffModal';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { useSttStatus, sttBlocksMic } from '@/hooks/useSttStatus';
 import { fetchSttDetection, fetchVocab, addVocabWord, fetchRecordings, retranscribeRecording, MODEL_CATALOG, type GgmlModel, type VoiceRecording } from '@/api/stt';
 import { registerVoiceInsertTarget } from '@/utils/voice-status';
@@ -598,7 +599,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
         <MicPopover anchor={wrapperRef} owner={popupOwner} className="mic-retry-dropdown" onClose={() => setDropdownOpen(false)}>
           {/* Model retry */}
           <div className="mic-retry-header">Retry with model</div>
-          {modelsLoading && <div className="mic-retry-item mic-retry-loading">Loading...</div>}
+          {modelsLoading && <LoadingState size="row" title="Loading models…" />}
           {downloadedModels.map(m => {
             const name = MODEL_CATALOG.find(c => c.filename === m.name)?.name ?? m.name;
             return (
@@ -609,7 +610,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
             );
           })}
           {!modelsLoading && downloadedModels.length === 0 && (
-            <div className="mic-retry-item mic-retry-empty">No models downloaded</div>
+            <EmptyState size="row" title="No models downloaded" />
           )}
 
           {/* Vocabulary */}
@@ -672,7 +673,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                       <span className="mic-history-time">{time}</span>
                       {!expanded && (
                         <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : partial ? `Only part was transcribed. ${rec.error}` : text}>
-                          {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : shown}
+                          {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : shown}{/* empty-state-ok: one recording's text in a history row */}
                         </span>
                       )}
                     </div>
@@ -720,7 +721,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                             )}
                           </div>
                           <div className={`mic-history-full-text${failed ? ' mic-history-alt-error' : ''}`}>
-                            {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : shown}
+                            {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : shown}{/* empty-state-ok: one recording's text in a history row */}
                           </div>
                         </div>
                         {rec.secondary ? (

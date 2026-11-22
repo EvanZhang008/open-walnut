@@ -144,3 +144,16 @@ test('with the tab bar hidden, Include Complete lives in the filter row (C56)', 
   await expect(hit(page, DONE)).toBeVisible();
   await expect(page.locator('.todo-section-tabs')).toHaveCount(0);
 });
+
+// 2026-11-22 proof video: the empty answer's Clear search brought the list back but left the
+// typed text in the field (the bar keeps its own draft), so the field and the list disagreed.
+test('the no-match state says so and its Clear search empties the field', async ({ page, baseURL }) => {
+  await boot(page, baseURL!);
+  await search(page, 'zzqqxx-no-such-task');
+  const empty = page.getByTestId('todo-search-empty');
+  await expect(empty).toBeVisible({ timeout: 10_000 });
+  await expect(empty).toContainText('zzqqxx-no-such-task');
+  await empty.getByTestId('todo-search-clear').click();
+  await expect(page.locator('.todo-search-input')).toHaveValue('');
+  await expect(empty).toHaveCount(0);
+});

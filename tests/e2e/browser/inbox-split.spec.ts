@@ -23,7 +23,7 @@ test('split inbox keeps both panels, density, selection and per-letter reply dra
     await panel.getByRole('button', { name: 'Split', exact: true }).click()
     const pane = panel.locator('.hib-inbox-pane')
     await expect(pane).toHaveAttribute('data-layout', 'split')
-    await expect(pane.locator('.hib-split-empty')).toContainText('Select a letter')
+    await expect(pane.getByTestId('inbox-reader-empty')).toContainText('No letter open')
     const row = (id: string) => pane.locator(`[data-letter-id="${id}"]`)
     const reader = pane.locator('.hib-inbox-reader')
     await row(ids[29]).locator('.hib-subject').click()

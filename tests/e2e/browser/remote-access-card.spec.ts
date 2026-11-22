@@ -87,7 +87,7 @@ async function openDevices(page: Page, way: DeviceWay | null = 'tailscale') {
   // The Tailscale steps and its pairing are the Tailscale tab; every phone is on All devices.
   if (way) return openWay(page, way)
   const section = await backToDevices(page)
-  await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  await expect(section).not.toContainText('Loading paired phones…', { timeout: 30_000 })
   return section
 }
 

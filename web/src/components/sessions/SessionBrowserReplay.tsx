@@ -23,6 +23,7 @@
  * last step follows them.
  */
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { apiGet } from '@/api/client';
 import { BrowserRevealButton } from './BrowserRevealButton';
@@ -325,9 +326,12 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
           <div className="session-browser-shot" data-testid="session-browser-replay-shot">
             {picture
               ? <img src={picture} alt={`Step ${shownAt + 1}: ${shownStep?.label ?? ''}`} className={shownAt !== i ? 'is-stale' : ''} data-testid="session-browser-replay-picture" data-step={shownStep?.id} draggable={false} />
-              : <div className="session-browser-empty" data-testid="session-browser-replay-why">
-                  {trouble ?? (steps === null ? 'Reading the steps…' : !count ? NO_REPLAY : shownAt < 0 || (shownStep && missing.current.has(shownStep.id)) ? 'No picture of this step.' : 'Loading the picture…')}
-                </div>}
+              : trouble ? <UnavailableState size="section" title={trouble} testId="session-browser-replay-why" />
+                : steps === null ? <LoadingState size="section" title="Reading the steps…" testId="session-browser-replay-why" />
+                  : !count ? <EmptyState size="section" title={NO_REPLAY} testId="session-browser-replay-why" />
+                    : shownAt < 0 || (shownStep && missing.current.has(shownStep.id))
+                      ? <EmptyState size="section" title="No picture of this step" testId="session-browser-replay-why" />
+                      : <LoadingState size="section" title="Loading the picture…" testId="session-browser-replay-why" />}
           </div>
           {step && said && (
             <div className={`session-browser-replay-step${step.ok ? '' : ' is-failed'}`} data-testid="session-browser-replay-step" title={step.label}>

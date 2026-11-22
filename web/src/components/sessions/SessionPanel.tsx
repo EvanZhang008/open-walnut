@@ -1,4 +1,5 @@
 import { countRender } from '@/utils/render-count';
+import { LoadingState } from '@/components/common/EmptyState';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
@@ -3454,7 +3455,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                       </div>
                       <div className="plan-popup-body">
                         {planLoading && !plan && (
-                          <div style={{ fontSize: '12px', color: 'var(--fg-muted)', padding: '20px 0', textAlign: 'center' }}>Loading plan...</div>
+                          <LoadingState size="section" title="Loading the plan…" />
                         )}
                         {plan?.content && (
                           <PlanPopoverContent content={plan.content} writerSessionId={plan.sourceSessionId || sessionId} cwd={session?.cwd} sessionId={sessionId} sessionHost={session?.host} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />
@@ -3644,7 +3645,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   joins this row: tests/web/session-header-labels-guard.test.ts. */}
               {!loading && !hostHeader && headerPills}
               {!loading && !hostHeader && <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>}
-              {loading && <span className="badge session-panel-badge">Loading...</span>}
+              {loading && <span className="badge session-panel-badge">Loading...</span> /* empty-state-ok: header badge beside the title */}
               {!loading && sessionId && !kebabSlot && !hostHeader && renderSessionKebab()}
               {/* The host's header (headerSlot): the same pills, the folded link tags and the
                   kebab, the kebab led by the view rows the hidden header held. */}

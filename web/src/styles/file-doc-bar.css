@@ -276,26 +276,12 @@
   flex: 0 1 clamp(184px, 26%, 288px);
   border-left: 1px solid var(--border);
 }
-.session-file-explorer-body.is-no-file .sfe-preview-empty-wrap .sfe-preview-empty { padding-left: 16px; padding-right: 16px; }
+.session-file-explorer-body.is-no-file .sfe-preview-empty-wrap > .empty-state { padding-left: 16px; padding-right: 16px; }
 .sfe-preview-empty-wrap {
   height: 100%;
   display: flex;
   flex-direction: column;
 }
-/* One left-aligned column, centred in the pane, starting a third of the way down
-   (the picked design): title, hint, then the recent files. */
-.sfe-preview-empty-wrap .sfe-preview-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 4px;
-  padding: clamp(28px, 22%, 180px) 24px 24px max(24px, calc(50% - 190px));
-  text-align: left;
-}
-.sfe-preview-empty-title { font-size: var(--font-size-2xl); font-weight: 600; color: var(--fg); }
-.sfe-preview-empty-hint { font-size: var(--font-size-md); color: var(--fg-muted); }
 
 /* ── Fitting a narrow pane (data-fit, measured by FileContentView) ────────── */
 /* The lead gives way first, and never to nothing: the tree toggle and ‹ › keep
@@ -475,7 +461,6 @@ html body .sfe-path-suggest.sfe-path-suggest-floating {
 .session-file-explorer-node .sfe-size:not(.sfe-changed-badge) { display: none; }
 .session-file-explorer-node:hover .sfe-size:not(.sfe-changed-badge) { display: inline; }
 
-
 /* compact: the arrows and gaps tighten so a usual file name stays whole. */
 .fv-doc-bar[data-fit='compact'] { gap: 4px; padding-right: 6px; }
 /* The Terminal dock toggle is its icon, as Preview and Source are: its word took the room the
@@ -501,3 +486,6 @@ html body .sfe-path-suggest.sfe-path-suggest-floating {
 .file-content-view:not(.fv-fullscreen) .fv-md-preview > :not(table, pre) {
   max-width: 880px;
 }
+
+/* A folder's "Loading files…" / "Empty folder" row lines up with the tree's rows (layout only). */
+.empty-state.sfe-tree-state { padding-left: 22px; }

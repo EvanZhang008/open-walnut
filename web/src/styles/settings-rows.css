@@ -310,30 +310,6 @@
 }
 
 /* ── Empty, notice, loading ── */
-/* An empty row is a row: same 44px, same hairline between it and its
-   neighbours (N23). */
-.settings-group .settings-empty:not(:first-child)::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: var(--settings-row-pad-x);
-  right: 0;
-  height: 1px;
-  background: var(--settings-hairline);
-  pointer-events: none;
-}
-
-.settings-empty {
-  position: relative;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 10px var(--settings-row-pad-x);
-  font-size: var(--font-size-md);
-  line-height: 18px;
-  color: var(--fg-muted);
-}
 
 /* A notice is the one notice card (SettingsNotice draws NoticeCard, solid inside the pane): its frame
    and padding are the card's (notice-card.css), never a tinted block; its kind colours its words. */
@@ -377,15 +353,6 @@ html .settings-group .wn-notice.wn-notice.settings-notice {
 
 .settings-group .wn-notice:is(.settings-notice-info, .settings-notice-success) {
   color: var(--fg-secondary);
-}
-
-.settings-loading-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-size-md);
-  line-height: 18px;
-  color: var(--fg-muted);
 }
 
 .settings-stack {

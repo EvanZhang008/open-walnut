@@ -202,7 +202,7 @@ test('a note the page already holds paints from cache before the server answers'
     const w = window as unknown as { __spinnerSeen: boolean }
     w.__spinnerSeen = false
     new MutationObserver(() => {
-      if (document.querySelector('.notes-editor-body .loading-spinner')) w.__spinnerSeen = true
+      if (document.querySelector('.notes-editor-body [data-kind="loading"]')) w.__spinnerSeen = true
     }).observe(document.body, { subtree: true, childList: true })
   })
 

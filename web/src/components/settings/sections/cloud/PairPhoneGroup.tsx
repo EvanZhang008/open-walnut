@@ -30,7 +30,7 @@ const PAIR_HELP_HERE = 'The QR code points the phone at this server, so it works
 /** Why a tab cannot pair its way right now (Wi-Fi always can: the QR then carries only the token). */
 const PAIR_UNOFFERED: Partial<Record<PairTargetKind, string>> = {
   cloud: "The companion's address isn't available right now, so a code can't point at it yet. Phones paired with this Mac can still use it once it is back.",
-  lan: "No address for this Mac can be detected, so the QR carries only the token and you type the server address in the app.",
+  lan: "No address for this Mac can be detected, so the QR carries only the token and you type the server address in the app.", // empty-state-ok: string map of reasons
 };
 
 interface Props {

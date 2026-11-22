@@ -6,6 +6,7 @@
  * act on. A sent draft is not here at all: it is in Sent, which is the mailbox that means "gone".
  */
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import type { MailDraftDto } from '@/api/mail';
 import { formatMailTime } from '../mail-format';
 import { draftRowMenuItems } from '../mail-draft-context-items';
@@ -26,11 +27,9 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
   // row it is about). See `mail-draft-context-items.ts` for why the items are not the message menu's.
   const menu = useContextMenu<MailDraftDto>({ ignorePressSelection: true });
   if (drafts.length === 0) {
-    return (
-      <p className="mail-pane-empty" data-testid="mail-drafts-empty">
-        {loading ? 'Loading…' : 'No drafts. Start one with New message.'}
-      </p>
-    );
+    return loading
+      ? <LoadingState title="Loading drafts…" testId="mail-drafts-empty" />
+      : <EmptyState title="No drafts yet" hint="Start one with New message." testId="mail-drafts-empty" />;
   }
   return (
     <>
@@ -48,7 +47,7 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
         >
           <span className="mail-row-top">
             <span className="mail-row-from">
-              {draft.to.map((one) => one.name || one.address).join(', ') || 'No recipient yet'}
+              {draft.to.map((one) => one.name || one.address).join(', ') || 'No recipient yet'}{/* empty-state-ok: a field fallback inside a row */}
             </span>
             <span className="mail-row-time">{formatMailTime(draft.updatedAt)}</span>
           </span>
@@ -59,7 +58,7 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
             </span>
           </span>
           <span className="mail-row-snippet">
-            {draft.error || firstLine(draft.bodyMarkdown) || 'Nothing written yet'}
+            {draft.error || firstLine(draft.bodyMarkdown) || 'Nothing written yet'}{/* empty-state-ok: a field fallback inside a row */}
           </span>
         </button>
       ))}

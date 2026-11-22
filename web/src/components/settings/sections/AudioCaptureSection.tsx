@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
-import { SettingsEmpty, SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { EmptyState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { NumberInput } from '../inputs/NumberInput';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
@@ -150,7 +151,7 @@ export function AudioCaptureSection({ config, onSave }: Props) {
 
       <SettingsGroup heading="Excluded apps" footer="Audio from these apps is never recorded.">
         {excludeApps.length === 0 && (
-          <SettingsEmpty>Nothing excluded; all system audio is recorded.</SettingsEmpty>
+          <EmptyState size="row" title="No apps excluded" hint="All system audio is recorded." />
         )}
         {excludeApps.map(app => (
           <SettingsRow

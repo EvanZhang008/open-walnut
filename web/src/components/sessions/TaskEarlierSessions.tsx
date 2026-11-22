@@ -6,6 +6,7 @@
  * A divider says where the engine changed and what the new session got.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { apiGet } from '@/api/client';
 import { fetchTaskSessions, type TaskSessionRow } from '@/api/engine-switch';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -73,8 +74,8 @@ function EarlierSessionBlock({ row, onOpen }: { row: TaskSessionRow; onOpen?: (s
       </div>
       {open && (
         <div className="task-earlier-body chat-earlier">
-          {!msgs && !failed && <div className="chat-earlier-steps">Loading…</div>}
-          {failed && <div className="chat-earlier-steps">This session could not be read.</div>}
+          {!msgs && !failed && <LoadingState size="row" title="Loading this session…" />}
+          {failed && <UnavailableState size="row" title="This session could not be read" />}
           {parts.map((part) => part.kind === 'steps' ? (
             <div key={`steps-${part.key}`} className="chat-earlier-steps">
               {part.count === 1 ? '1 step' : `${part.count} steps`}

@@ -40,7 +40,6 @@
 @keyframes engine-settings-skeleton-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
 .engine-settings-popover-error-block,
-.engine-settings-popover-empty,
 .engine-settings-popover-nomatch {
   margin: 8px 4px;
   font-size: var(--font-size-sm);

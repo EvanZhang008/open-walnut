@@ -65,7 +65,7 @@ test('Org: the router settings open in a dialog, the folder list loads (and reco
   expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(8);
   const error = dialog.getByTestId('org-router-folders-error');
   await expect(error).toBeVisible({ timeout: 30000 });
-  await expect(error).toContainText('Could not read the folders of marina@example.invalid.');
+  await expect(error).toContainText('Could not read the folders of marina@example.invalid');
   await page.waitForTimeout(800);
   failing = false;
   await glide(page, error.getByTestId('org-router-folders-retry'));

@@ -31,6 +31,7 @@ import { markHostConnectAsked } from '@/components/hosts/background-connect';
 import type { FirstRunStep } from '@/api/first-run';
 import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
 import { addedRowState, firstRunHostRows, type FirstRunHostRow } from './first-run-model';
+import { EmptyState } from '@/components/common/EmptyState';
 import '@/styles/first-run.css';
 
 export type FirstRunMode = 'first-run' | 'picker';
@@ -256,7 +257,7 @@ function HostsStep({ hosts, saidYes, onSaidYes, onUndone, onAddByHand }: {
         ))}
       </ul>
       {rows.length === 0 && (
-        <p className="fr-empty" data-testid="first-run-hosts-empty">No machines found in ~/.ssh/config.</p>
+        <EmptyState title="No machines found in ~/.ssh/config" hint="Add one that is not listed below." testId="first-run-hosts-empty" />
       )}
       <div className="fr-hosts-foot">
         <button type="button" tabIndex={0} className="fr-link" onClick={onAddByHand} data-testid="first-run-add-by-hand">

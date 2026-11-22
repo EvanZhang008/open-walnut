@@ -202,7 +202,6 @@ html :is(.fb-group-title, .fb-layout-title).wn-menu-heading { padding: 4px 8px 2
   .fb-opt-body .tp-count,
   .fb-opt:has(.fb-only) .fb-opt-default { visibility: hidden; }
 }
-.fb-empty { padding: 10px 8px; color: var(--tp-muted); font-size: var(--font-size-sm); }
 
 /* Time window: the basis segments above the rows, the Custom editor under them. */
 .fb-time-basis { flex: none; }

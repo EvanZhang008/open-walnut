@@ -30,22 +30,6 @@
   place-items: center;
 }
 
-.mail-reader-nothing {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  color: var(--fg-muted);
-}
-
-.mail-reader-nothing-glyph { opacity: 0.4; }
-
-.mail-reader-nothing-text {
-  margin: 0;
-  font-size: var(--font-size-md);
-  letter-spacing: 0.01em;
-}
-
 .mail-reader-back-bar { background: var(--bg); }
 
 /* ── the reading column ── */

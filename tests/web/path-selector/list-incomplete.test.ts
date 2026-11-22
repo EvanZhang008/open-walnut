@@ -58,7 +58,7 @@ function render(hostStates: Map<string, HostLiveState>, pathMode = true) {
   return renderToStaticMarkup(createElement(PathList, {
     sections: [], selectedIdx: -1, expandSelected: false, loading: false, loadError: null,
     hostStates, hostLabels: new Map([['devbox', 'Big dev box'], ['builder', 'Builder']]), pathMode,
-    activeHostLabel: 'Big dev box', createOption: null, emptyHint: 'No paths match your search.',
+    activeHostLabel: 'Big dev box', createOption: null, emptyHint: { title: 'No paths match your search' },
     onItemClick: () => {}, onItemHover: () => {}, onCreate: () => {},
   }));
 }

@@ -14,6 +14,7 @@ import { memo, useMemo } from 'react';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { GenericToolCall } from '../sessions/SessionMessage';
 import { AgentText } from '@/components/common/AgentText';
+import { LoadingState } from '@/components/common/EmptyState';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { useSelectionFrozen } from '@/utils/selection-guard';
 
@@ -71,9 +72,8 @@ export const ClaudeStreamView = memo(function ClaudeStreamView({
 
   if (grouped.length === 0 && isStreaming) {
     return (
-      <div className="claude-stream-view claude-stream-view--empty">
-        <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, display: 'inline-block', verticalAlign: 'middle' }} />
-        <span style={{ marginLeft: 6, opacity: 0.6, fontSize: 12 }}>Running...</span>
+      <div className="claude-stream-view">
+        <LoadingState size="row" title="Running…" />
       </div>
     );
   }

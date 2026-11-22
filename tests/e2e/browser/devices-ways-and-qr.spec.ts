@@ -160,7 +160,7 @@ async function openDevices(page: Page) {
   await page.getByTestId('pc-tab-devices-phones').click()
   const section = page.locator('#devices-phones')
   await expect(section).toBeVisible({ timeout: 30_000 })
-  await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  await expect(section).not.toContainText('Loading paired phones…', { timeout: 30_000 })
   return section
 }
 
@@ -536,7 +536,7 @@ test('Remove on a way tab removes the whole phone, after saying so: every record
   await pocket.getByTestId('devices-remove-confirm').click()
   await expect(pocket).toHaveCount(0, { timeout: 30_000 })
   expect(ctl.deletes).toEqual(['pocket-phone', 'pocket-phone?target=cloud'])
-  await expect(cloud.getByTestId('way-devices-cloud')).toContainText('No phone is paired with the companion yet.')
+  await expect(cloud.getByTestId('way-devices-cloud')).toContainText('No phone is paired with the companion yet')
   // Gone from every tab, and the count follows.
   await expect(page.getByTestId('pc-tab-devices-phones')).toContainText('4')
   await page.getByTestId('pc-tab-devices-wifi').click()

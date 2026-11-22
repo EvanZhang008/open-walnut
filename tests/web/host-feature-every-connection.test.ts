@@ -133,7 +133,7 @@ describe('a terminal the host cannot open yet: the tab stays and says why', () =
     await render(createElement(TerminalUnavailableView, { host: 'studio', why: WHY }))
     expect(q('[data-testid="terminal-unavailable"] .session-code-label')?.textContent).toBe('Terminal')
     expect(q('[data-testid="host-feature-why"]')?.textContent).toBe(`${WHY}.`)
-    expect(q('.session-code-error-title')?.textContent).toBe('No terminal on Studio yet')
+    expect(q('[data-testid="terminal-unavailable-card"] .empty-state-title')?.textContent).toBe('No terminal on Studio yet')
     await click(q('[data-testid="host-feature-update-daemon"]'))
     expect(state.updates).toEqual(['studio'])
     expect(q('[data-testid="host-feature-update-answer"]')?.textContent).toBe('Updating the daemon on Studio')

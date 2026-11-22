@@ -153,7 +153,7 @@ test('PDF survives narrow and fullscreen layouts, file changes and failure retry
     ? route.fulfill({ status: 503, body: 'Unavailable' })
     : route.continue());
   const explorer = await openPdf(page);
-  await expect(explorer.locator('.fv-pdf-error')).toContainText('Retry', { timeout: 20_000 });
+  await expect(explorer.getByTestId('pdf-error')).toContainText('Retry', { timeout: 20_000 });
   fail = false;
   await explorer.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(explorer.locator('.fv-pdf-text')).toContainText('WALNUT PDF', { timeout: 20_000 });
@@ -373,9 +373,9 @@ test('a stalled PDF load reaches Retry and the next attempt renders', async ({ p
   await page.clock.install();
   try {
     const explorer = await openPdf(page);
-    await expect(explorer.locator('.fv-pdf-status')).toBeVisible();
+    await expect(explorer.getByTestId('pdf-loading')).toBeVisible();
     await page.clock.fastForward(120_001);
-    await expect(explorer.locator('.fv-pdf-error')).toContainText('too long');
+    await expect(explorer.getByTestId('pdf-error')).toContainText('too long');
     stalled = false;
     release();
     await explorer.getByRole('button', { name: 'Retry', exact: true }).click();

@@ -19,6 +19,7 @@ import { Checkbox } from '@/components/controls';
 import { allowScriptsFile, fetchScripts, saveProjectScripts, type ProjectScript, type ScriptsAnswer } from '@/api/workspaces';
 import { log } from '@/utils/log';
 import '@/styles/workspaces.css';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ICON_CLOSE } from '../common/Icons';
@@ -283,12 +284,12 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
           workspace, and a teardown script when its task completes.
         </div>
 
-        {loadError && <div className="project-scripts-error">{loadError}</div>}
-        {!answer && !loadError && <div className="project-scripts-empty">Loading…</div>}
+        {loadError && <UnavailableState title="Couldn't load scripts" detail={loadError} />}
+        {!answer && !loadError && <LoadingState title="Loading scripts…" />}
 
         {answer && (
           <div className="project-scripts-list" data-testid="project-scripts-list">
-            {list.length === 0 && !draft && <div className="project-scripts-empty">No scripts yet.</div>}
+            {list.length === 0 && !draft && <EmptyState title="No scripts yet" />}
             {list.map((s) => (draft?.id === s.id ? <Fragment key={s.id}>{form}</Fragment> : (
               <div key={s.id} className="project-scripts-row" data-testid="project-script-row" data-name={s.name}>
                 <div className="project-scripts-row-main">

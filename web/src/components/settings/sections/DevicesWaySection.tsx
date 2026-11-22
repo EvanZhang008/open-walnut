@@ -6,7 +6,8 @@
  * whether this Mac has a tailnet address to pair with). Under the way's own
  * settings, the devices that use it (cloud/DeviceList.tsx).
  */
-import { SettingsGroup, SettingsEmpty } from '../SettingsSection';
+import { SettingsGroup } from '../SettingsSection';
+import { UnavailableState } from '../../common/EmptyState';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
@@ -44,7 +45,7 @@ export function DevicesWaySection({ way }: { way: SubWay }) {
       {replica ? (
         // A replica answering without the Mac: these ways are set up on the Mac.
         <SettingsGroup>
-          <SettingsEmpty>This is set up on the Mac itself; open these settings there.</SettingsEmpty>
+          <UnavailableState title="This is set up on the Mac itself" hint="Open these settings there." />
         </SettingsGroup>
       ) : (
         <div className="devices-way-panel" id={`devices-way-panel-${way}`} data-testid={`devices-way-panel-${way}`}>

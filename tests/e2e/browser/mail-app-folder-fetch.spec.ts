@@ -244,7 +244,7 @@ test('a folder that was never fetched says so, and offers to fetch it', async ({
   await expect(failed).toContainText('will not open')
   // On its own line, not run onto the end of Walnut's own sentence: a provider writes this text and
   // nothing can promise it starts with a capital letter.
-  await expect(failed.locator('.mail-folder-detail')).toHaveCount(1)
+  await expect(failed.locator('.empty-state-hint')).toHaveCount(1)
   const retry = page.getByTestId('mail-folder-fetch')
   await expect(retry).toBeVisible()
   await page.locator('.mail-list-pane').screenshot({ path: `${SHOT_DIR}/never-fetched.png` })

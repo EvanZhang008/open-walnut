@@ -1,11 +1,14 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
+import type { Editor } from '@tiptap/react';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { GlobalNotesPopup } from './GlobalNotesPopup';
 import { NotesEditor } from './NotesEditor';
 import type { UseGlobalNotesReturn } from '@/hooks/useGlobalNotes';
 import type { Task } from '@open-walnut/core';
-import { ICON_EXPAND, ICON_NEW_TAB } from '@/components/common/Icons';
+import { ICON_EXPAND, ICON_NEW_TAB, ICON_NOTE } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 const LS_NOTES_HEIGHT_KEY = 'open-walnut-global-notes-height';
 const DEFAULT_HEIGHT = 180;
@@ -40,6 +43,12 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
   // so a stale `collapsed` from the drawer era would render an empty Notes tab.
   const collapsed = fill ? false : collapsedProp;
   const [height, setHeight] = useState(readHeight);
+  // An empty scratchpad says it is loaded and empty (2026-11-21 UI audit: a blank pane with a faint
+  // placeholder looked unloaded). It goes with the first character typed, without moving the text.
+  const [blank, setBlank] = useState(() => content.trim() === '');
+  useEffect(() => { setBlank(content.trim() === ''); }, [content]);
+  const onDirty = useLeanCallback((editor: Editor) => { setBlank(editor.isEmpty); onEditorUpdate(editor); }, [onEditorUpdate]);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const heightRef = useRef(height);
   const startH = useRef(height);
   const handleRef = useRef<HTMLDivElement>(null);
@@ -117,28 +126,43 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           )}
         </div>
         {!collapsed && (
-          <div className="global-notes-body" style={fill ? undefined : { height }}>
+          <div ref={bodyRef} className="global-notes-body" style={fill ? undefined : { height }}>
             {/* Deliberate compact opt-out of MarkdownEditorPanel: this inline
                 panel has its own header row and no room for the shell's
                 toolbar/grip rail. The fullscreen popup/pop-out use the shell. */}
             {loaded ? (
-              <NotesEditor
-                content={content}
-                onDirty={onEditorUpdate}
-                className="global-notes-editor-inline"
-                tasks={tasks}
-                focusedTaskId={focusedTaskId}
-              />
+              <>
+                <NotesEditor
+                  content={content}
+                  onDirty={onDirty}
+                  // The empty state over it says what the place is; no second line under it.
+                  placeholder=""
+                  className="global-notes-editor-inline"
+                  tasks={tasks}
+                  focusedTaskId={focusedTaskId}
+                />
+                {blank && (
+                  // Over the empty editor, never in its flow; a click on it puts the caret in the editor (and
+                  // goes straight through while it has focus: globals.css).
+                  <div
+                    className="global-notes-empty-cover"
+                    onMouseDown={(e) => { e.preventDefault(); bodyRef.current?.querySelector<HTMLElement>('.tiptap')?.focus(); }}
+                  >
+                    <EmptyState
+                      size="pane"
+                      testId="global-notes-empty"
+                      icon={ICON_NOTE}
+                      title={`Your ${(title ?? 'notes').toLowerCase()} is empty`}
+                      hint="Click to write. Markdown works, and it saves as you go."
+                    />
+                  </div>
+                )}
+              </>
             ) : (
               // No editor before the note is read: typing into an empty one would save over it.
-              <div className="global-notes-loading" role="status" data-testid="global-notes-loading">
-                {loadError ? (
-                  <>
-                    <span>Could not load the scratchpad.</span>
-                    <button type="button" className="btn btn-sm" onClick={retryLoad}>Retry</button>
-                  </>
-                ) : 'Loading the scratchpad…'}
-              </div>
+              loadError
+                ? <UnavailableState size="section" title="Couldn't load the scratchpad" onRetry={retryLoad} testId="global-notes-loading" />
+                : <LoadingState size="section" title="Loading the scratchpad…" testId="global-notes-loading" />
             )}
           </div>
         )}

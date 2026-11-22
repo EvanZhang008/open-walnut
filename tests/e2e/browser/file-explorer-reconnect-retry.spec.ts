@@ -149,7 +149,7 @@ for (const sentence of ['Reconnecting to Cloud', "Can't reach Cloud right now."]
     await row('report').click()
     await expect(explorer.locator('.sfe-error')).toHaveText(sentence, { timeout: 10_000 })
     await row('sync-controller.go').click()
-    await expect(page.locator('.file-viewer-error').first()).toHaveText(sentence, { timeout: 10_000 })
+    await expect(page.getByTestId('file-viewer-error').first()).toContainText(sentence, { timeout: 10_000 })
     // Every "Reloading…" badge the page draws from here on is counted, however
     // briefly it shows (a retry's answer comes back in milliseconds here).
     await page.evaluate(() => {
@@ -176,7 +176,7 @@ for (const sentence of ['Reconnecting to Cloud', "Can't reach Cloud right now."]
     await expect(row('summary.html')).toBeVisible({ timeout: 10_000 })
     await expect(viewer(page)).toContainText(MARKER, { timeout: 10_000 })
     await expect(explorer.locator('.sfe-error')).toHaveCount(0)
-    await expect(page.locator('.file-viewer-error')).toHaveCount(0)
+    await expect(page.getByTestId('file-viewer-error')).toHaveCount(0)
     await expect(explorer).not.toContainText(sentence)
     // Listed and shown: the clocks stop.
     await page.waitForTimeout(1_000)

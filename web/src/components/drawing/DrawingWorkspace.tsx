@@ -24,6 +24,7 @@ import { log } from '@/utils/log';
 import { DRAFT_FLUSH_EVENT } from '@/utils/unsaved-work';
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { DrawingConflictError, drawingApi, drawingErrorMessage, requestDiagram, type DrawingApi } from './drawing-api';
 import { exportFileName, otherDrawings, sceneElementCount, sceneHasContent, sceneText, type DrawingListItem, type DrawingScene } from './drawing-scene';
 import { DrawingSync, NOT_SAVED_YET, hasUnsavedSketch, newSketchKey, sketchDraftKey, type DrawingSnapshot, type DrawingSource } from './drawing-sync';
@@ -343,7 +344,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setCanvasError(null);
     loadCanvas().then((C) => { if (mounted.current) setCanvas(() => C); }).catch((err) => {
       log.warn('drawing', 'the drawing editor could not load', { error: String(err) });
-      if (mounted.current) setCanvasError('The drawing editor could not load. Check the connection and try again.');
+      if (mounted.current) setCanvasError('Check the connection and try again.');
     });
   }, []);
   useEffect(() => { loadEditor(); }, [loadEditor]);
@@ -558,7 +559,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     } catch (err) {
       if (abort.signal.aborted || !mounted.current) return;
       log.warn('drawing', 'a diagram could not be made', { mode, error: String(err) });
-      setDiagram({ phase: 'error', message: `No diagram was made: ${drawingErrorMessage(err)}`, retry: () => void makeDiagram(mode, prompt) });
+      setDiagram({ phase: 'error', message: `No diagram was made: ${drawingErrorMessage(err)}`, retry: // empty-state-ok: an error notice's text, shown in the diagram status bar
+        () => void makeDiagram(mode, prompt) });
     } finally {
       if (diagramRun.current === abort) diagramRun.current = null;
     }
@@ -689,9 +691,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <Icon d={ICON.plus} /><span>New drawing</span>
             </button>
           </div>
-          {listError && <p className="drawing-workspace-files-note" role="alert">{listError}</p>}
-          {list && list.length === 0 && !listError && <p className="drawing-workspace-files-note">{scoped ? 'No drawings in this task yet' : 'No drawings here yet'}</p>}
-          {list === null && !listError && <p className="drawing-workspace-files-note">Loading…</p>}
+          {listError && <UnavailableState size="section" title="Couldn't load the drawings" detail={listError} onRetry={refreshList} />}
+          {list && list.length === 0 && !listError && <EmptyState size="section" title={scoped ? 'No drawings in this task yet' : 'No drawings here yet'} />}
+          {list === null && !listError && <LoadingState size="section" title="Loading drawings…" />}
           {list && list.length > 0 && (
             <ul className="drawing-workspace-file-list">
               {list.map((item) => (
@@ -767,18 +769,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         )}
         <div className="drawing-workspace-canvas">
           {!source && (
-            <div className="drawing-workspace-empty">
-              <p>{filesShown ? 'Open a drawing from the list, or start a new one' : 'Start a new drawing, or show the list to open one'}</p>
-              <button type="button" className="drawing-quiet-button" onClick={() => void createNew()} disabled={!!busy}>New drawing</button>
-            </div>
+            <EmptyState size="pane" className="drawing-canvas-host" title="No drawing open"
+              hint={filesShown ? 'Open a drawing from the list, or start a new one.' : 'Start a new drawing, or show the list to open one.'}
+              action={{ label: 'New drawing', primary: true, disabled: !!busy, onClick: () => { void createNew(); } }} />
           )}
           {source && canvasError && (
-            <div className="drawing-workspace-empty" role="alert">
-              <p>{canvasError}</p>
-              <button type="button" className="drawing-quiet-button" onClick={loadEditor}>Try again</button>
-            </div>
+            <UnavailableState size="pane" className="drawing-canvas-host" title="Couldn't load the drawing editor" detail={canvasError} onRetry={loadEditor} retryLabel="Try again" />
           )}
-          {source && !canvasError && (!Canvas || !shown?.scene) && state !== 'missing' && state !== 'error' && <div className="drawing-workspace-loading" role="status">Loading drawing…</div>}
+          {source && !canvasError && (!Canvas || !shown?.scene) && state !== 'missing' && state !== 'error' && <LoadingState size="pane" className="drawing-canvas-host" title="Loading drawing…" />}
           {source && Canvas && shown?.scene && (
             <Canvas key={id} scene={shown.scene} sceneKey={shown.sceneKey} theme={theme} autoFocus={!!draftId}
               menu={menu} diagramBusy={diagram?.phase === 'running'}
@@ -826,7 +824,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         </footer>
       </section>
       {assistantShown && currentPath && (
-        <Suspense fallback={<aside className="drawing-assistant" aria-label="Drawing assistant"><p className="drawing-workspace-files-note">Loading…</p></aside>}>
+        <Suspense fallback={<aside className="drawing-assistant" aria-label="Drawing assistant"><LoadingState size="section" title="Loading the drawing assistant…" /></aside>}>
           <DrawingAssistant path={currentPath} title={title} onLeave={() => canvas.current?.focus()} request={assistantRequest}
             onRequestDone={(id, error) => {
               if (!mounted.current) return;

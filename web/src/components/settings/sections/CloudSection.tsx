@@ -38,7 +38,8 @@ import {
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import { SectionCard } from '../inputs/SectionCard';
-import { SettingsGroup, SettingsRow, SettingsTag, SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsGroup, SettingsRow, SettingsTag, SettingsNotice } from '../SettingsSection';
+import { LoadingState } from '../../common/EmptyState';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { CompanionUpdatesRow } from './cloud/CompanionUpdatesRow';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -356,7 +357,7 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
         <ReplicaRemovalGroup only="companion" />
         {view === 'loading' && (
           <SettingsGroup>
-            <SettingsLoadingRow>Checking for an existing setup...</SettingsLoadingRow>
+            <LoadingState title="Checking for an existing setup…" />
           </SettingsGroup>
         )}
 
@@ -382,7 +383,7 @@ export function CloudSection({ config, onSave }: { config?: Config; onSave?: (pa
           <div className="cloud-picker">
             {providers === null && !error && (
               <SettingsGroup heading="Where should the companion live?">
-                <SettingsLoadingRow>Checking your credentials...</SettingsLoadingRow>
+                <LoadingState title="Checking your credentials…" />
               </SettingsGroup>
             )}
             {providers !== null && (

@@ -25,6 +25,7 @@ import { shownFolderName } from '@/utils/home-folder';
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FileAskNotice } from '@/components/common/FileAskNotice';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
@@ -2469,14 +2470,17 @@ export function FileContentView({
       onContextMenu={!raw && !data?.binary ? handleContextMenu : undefined}
     >
       {docBar(tight ? null : mediaControls)}
-      {loading && <div className="file-viewer-loading">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Loading file...'}</div>}
+      {loading && <LoadingState size="pane" testId="file-viewer-loading" title={loadingFrom ? 'Still loading from ' + loadingFrom + '…' : 'Loading file…'} />}
       {reloading && <div className="badge badge-accent fv-reloading-badge"><span>{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Reloading…'}</span></div>}
       {!loading && !reloading && loadingFrom && <div className="badge badge-accent fv-reloading-badge"><span>Still loading from {loadingFrom}…</span></div>}
-      {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
+      {!loading && data?.error && <UnavailableState size="pane" testId="file-viewer-error" title="Couldn't open this file" detail={data.error} />}
       {!loading && !raw && data?.binary && (
-        <div className="file-viewer-error">
-          Binary file ({formatSize(data.size)}) cannot be shown here. Download it from the ⋯ menu.
-        </div>
+        <EmptyState
+          size="pane"
+          testId="file-viewer-binary"
+          title="This file can't be shown here"
+          hint={`It is a binary file (${formatSize(data.size)}). Download it from the ⋯ menu.`}
+        />
       )}
       {!loading && raw === 'doc' && (
         <>
@@ -2496,21 +2500,18 @@ export function FileContentView({
         <>
           {officeChunkFailed ? (
             <div className="fv-office-preview" data-testid="office-chunk-error">
-              <div className="file-viewer-error">
-                The document preview couldn’t load because this page is running an
-                older version of the app (a deploy replaced it).
-                {' '}
-                <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>
-                  Reload the page
-                </button>
-                {' '}
-                or use Download to open the file locally.
-              </div>
+              <UnavailableState
+                size="pane"
+                title="The document preview couldn’t load"
+                hint="This page runs an older version of the app (a deploy replaced it). Reload the page, or use Download to open the file locally."
+                onRetry={() => window.location.reload()}
+                retryLabel="Reload the page"
+              />
             </div>
           ) : OfficeComp ? (
             <OfficeComp path={filePath} host={host} kind={office} reloadToken={reloadToken} />
           ) : (
-            <div className="file-viewer-loading">Loading preview…</div>
+            <LoadingState size="pane" title="Loading preview…" />
           )}
         </>
       )}
@@ -2735,7 +2736,7 @@ export function FileContentView({
         <pre className="file-viewer-code" dangerouslySetInnerHTML={stableHtml(lineNumberedHtml)} />
       )}
       {!loading && !editing && data && !data.error && !data.binary && data.content === '' && (
-        <div className="file-viewer-loading">Empty file</div>
+        <EmptyState size="pane" testId="file-viewer-empty" title="This file is empty" />
       )}
       {!loading && data?.truncated && (
         <div className="file-viewer-truncated">

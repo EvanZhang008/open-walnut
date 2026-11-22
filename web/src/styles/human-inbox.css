@@ -102,7 +102,6 @@
   gap: 6px;
 }
 
-
 .hib-subject-open { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .hib-card-expand:not(.is-expanded) { margin-top: -5px; }
 .hib-card-content .hib-md-body { overscroll-behavior: contain; }
@@ -497,14 +496,6 @@
   min-height: 0;
   overflow-y: auto;
   padding: 12px 14px;
-}
-
-.session-inbox-empty {
-  padding: 24px 4px;
-  font-size: var(--font-size-sm);
-  line-height: 1.6;
-  color: var(--fg-muted);
-  max-width: 46em;
 }
 
 /* Embedded in the tab there is no 88vh box above the body, so the document gets

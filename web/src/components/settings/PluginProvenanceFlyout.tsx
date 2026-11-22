@@ -155,7 +155,7 @@ export function PluginProvenanceFlyout(props: PluginProvenanceFlyoutProps) {
             : props.rows.branch,
         },
         { label: 'Commit', value: <code>{props.rows.sha.slice(0, 7)}</code> },
-        { label: 'Remote', value: props.rows.remote ? shortRemote(props.rows.remote) : 'No remote' },
+        { label: 'Remote', value: props.rows.remote ? shortRemote(props.rows.remote) : 'No remote' }, // empty-state-ok: a field value
       ]
     : [
         {

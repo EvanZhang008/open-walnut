@@ -16,6 +16,7 @@
  * pane; the store resolves it forward through any rename since.
  */
 
+import { EmptyState } from '@/components/common/EmptyState';
 import { useState, useEffect, useMemo, useCallback, type CSSProperties } from 'react';
 import { INBOX_PROJECT, isInboxProject, projectOrInbox, type Task } from '@open-walnut/core';
 import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
@@ -301,7 +302,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
         {(() => {
           const list = Array.isArray(metadata.scripts) ? (metadata.scripts as ProjectScript[]) : [];
           if (!list.length) {
-            return <p className="detail-memory-text text-muted">No scripts. Add the commands this project's sessions run (tests, a dev server, a setup for new workspaces).</p>;
+            return <EmptyState title="No scripts yet" hint="Add the commands this project's sessions run (tests, a dev server, a setup for new workspaces)." />;
           }
           return (
             <div className="project-scripts-mini">
@@ -359,7 +360,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
         </div>
         {metadata.summary
           ? <AgentText compact unknownSource className="detail-memory-text" text={metadata.summary} />
-          : <p className="detail-memory-text text-muted">No summary yet — generated automatically as tasks accumulate, or click ↻.</p>}
+          : <EmptyState title="No summary yet" hint="It is written automatically as tasks accumulate, or click ↻." />}
       </div>}
 
       {/* Tracking note — the project's living status note in the vault. Absent

@@ -12,6 +12,7 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { COPY, provenanceLine, summaryParts } from './mail-rules-model';
+import { EmptyState } from '../../common/EmptyState';
 
 export interface MoveFocus { list: 'rule'; key: string; dir: 'up' | 'down'; at: number }
 
@@ -77,7 +78,7 @@ export function MailRulesRulesList(props: RulesListProps) {
   const root = useRef<HTMLOListElement>(null);
   useFollowFocus(root, props.focus?.list === 'rule' ? props.focus : null);
   if (props.rules.length === 0 && !props.editingId) {
-    return <p className="mail-rules-empty" data-testid="mail-rules-empty">{COPY.empty}</p>;
+    return <EmptyState title={COPY.emptyTitle} hint={COPY.emptyHint} testId="mail-rules-empty" />;
   }
   return (
     <ol className="mail-rules-rules" ref={root}>

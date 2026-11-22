@@ -11,6 +11,7 @@
  * Push and PR sit behind an inline confirm naming the remote and the branch.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import {
@@ -81,18 +82,16 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
 
   const body = (() => {
     if (loading && !plan) {
-      return <div className="scd-status">Reading the repositories this session changed…</div>;
+      return <LoadingState size="section" title="Reading the repositories this session changed…" />;
     }
     if (loadError && !plan) {
       return (
-        <div className="scd-status scd-status-error" data-testid="scd-load-error">
-          <div>{loadError}</div>
-          <button type="button" className="btn" onClick={() => void load()}>Try again</button>
-        </div>
+        <UnavailableState size="section" testId="scd-load-error" title="Couldn't read this session's changes" detail={loadError}
+          onRetry={() => void load()} retryLabel="Try again" />
       );
     }
     if (!plan || plan.repos.length === 0) {
-      return <div className="scd-status">This session has no uncommitted changes in a git repository.</div>;
+      return <EmptyState size="section" title="Nothing to commit" hint="This session has no uncommitted changes in a git repository." />;
     }
     return (
       <>

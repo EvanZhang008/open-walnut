@@ -9,6 +9,7 @@
  * App, because the menu that opens it closes at once.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { fetchSessionHistory } from '@/api/sessions';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
@@ -45,7 +46,7 @@ function Turn({ turn, index }: { turn: RawTurn; index: number }) {
       <div className="raw-turn-label">Input (as the model received it)</div>
       <pre className="raw-turn-pre" data-testid="raw-turn-input">{turn.input || '(this window starts mid-turn)'}</pre>
       <div className="raw-turn-label">Output</div>
-      {turn.output.length === 0 && <pre className="raw-turn-pre raw-turn-empty">(no output yet)</pre>}
+      {turn.output.length === 0 && <EmptyState size="row" title="No output yet" />}
       {turn.output.map((p, i) => (
         <div key={i} className={`raw-part raw-part-${p.kind}`} data-testid="raw-turn-output">
           {p.kind === 'tool' ? (
@@ -110,9 +111,9 @@ function RawViewDialog({ sessionId }: { sessionId: string }) {
               Earlier turns
             </button>
           )}
-          {state.error && <div className="raw-view-error">Could not load the history: {state.error}</div>}
-          {state.loading && rows.length === 0 && <div className="raw-view-note">Loading…</div>}
-          {!state.loading && !state.error && rows.length === 0 && <div className="raw-view-note">No turns yet.</div>}
+          {state.error && <UnavailableState size="section" title="Could not load the history" detail={state.error} />}
+          {state.loading && rows.length === 0 && <LoadingState size="pane" title="Loading the turns…" />}
+          {!state.loading && !state.error && rows.length === 0 && <EmptyState size="pane" title="No turns yet" hint="Each turn's raw input and output shows here once the session runs." />}
           {rows.map((t, i) => <Turn key={t.key} turn={t} index={i} />)}
         </div>
       </div>

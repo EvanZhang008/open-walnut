@@ -5,8 +5,10 @@
  * thirds of the window is left (standard.md "Panes": an empty area says what it is for).
  * Its button has its own name ("Start a task"): the toolbar's New task stays the one
  * control by that name, which the shortcut hint and every finder of it rely on.
+ * The words are the shared pane state's (standard.md "Empty, loading and unavailable states").
  */
-import { ICON_PLUS } from '@/components/common/Icons';
+import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_CHAT } from '@/components/common/Icons';
 
 interface HomeEmptyPaneProps {
   onNewTask: () => void;
@@ -14,15 +16,14 @@ interface HomeEmptyPaneProps {
 
 export function HomeEmptyPane({ onNewTask }: HomeEmptyPaneProps) {
   return (
-    <section className="home-empty-pane" data-testid="home-empty-pane" aria-labelledby="home-empty-pane-title">
-      <div className="home-empty-pane-inner">
-        <h2 className="home-empty-pane-title" id="home-empty-pane-title">No session open</h2>
-        <p className="home-empty-pane-hint">Pick a task on the left to open its session, or start a new one.</p>
-        <button type="button" className="btn btn-sm home-empty-pane-start" onClick={onNewTask}>
-          {ICON_PLUS}
-          <span>Start a task</span>
-        </button>
-      </div>
+    <section className="home-empty-pane" data-testid="home-empty-pane" aria-label="No session open">
+      <EmptyState
+        size="pane"
+        icon={ICON_CHAT}
+        title="No session open"
+        hint="Pick a task on the left to open its session, or start a new one."
+        action={{ label: 'Start a task', onClick: onNewTask, testId: 'home-empty-pane-start' }}
+      />
     </section>
   );
 }

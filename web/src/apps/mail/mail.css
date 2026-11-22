@@ -18,10 +18,8 @@
   overflow: hidden;
 }
 
-/* The states that are not the three panes (loading, stand-in, empty) still need page padding,
-   which fullBleed took away. */
-.mail-app > .page-header,
-.mail-app > .empty-state {
+/* The page header still needs page padding, which fullBleed took away. */
+.mail-app > .page-header {
   padding-left: 24px;
   padding-right: 24px;
 }
@@ -240,14 +238,6 @@
 
 .mail-text-btn:hover { text-decoration: underline; }
 
-.mail-pane-empty {
-  margin: 0;
-  padding: 24px 16px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  text-align: center;
-}
-
 .mail-inline-error {
   margin: 0;
   padding: 8px 12px;
@@ -409,14 +399,6 @@
 
 .mail-add-account:hover { background: var(--bg-hover); }
 
-/* The empty state offers the same control, centred with the copy above it. */
-.mail-app > .empty-state .mail-add-account {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  margin-top: 12px;
-  padding: 8px 14px;
-  text-align: center;
-}
 
 /* ── message list ── */
 
@@ -479,14 +461,6 @@
   flex: 0 0 auto;
   letter-spacing: 0;
   text-transform: none;
-}
-
-/* The filter hid everything: one line, and the way back on the same line. */
-.mail-unread-empty {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 8px;
 }
 
 /* A sentence, an optional second line from the provider, and the button that answers them. A COLUMN
@@ -1137,15 +1111,6 @@
   font-family: inherit;
   font-size: var(--font-size-md);
   line-height: 20px;
-}
-
-/* Aligned to the folder text column: this line stands in for the rows it replaced, so it starts where
-   their names do rather than 19px to their left. */
-.mail-tail-empty {
-  margin: 2px 0 6px;
-  padding: 4px 8px 4px 23px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
 }
 
 /* Drawn INSIDE the row (`outline-offset: -2px`), because the pane scrolls with `overflow-y: auto` and

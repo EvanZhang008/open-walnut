@@ -72,6 +72,7 @@ import { fetchSession, peekSessionRecord } from '@/api/sessions';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { linkAgentHtml } from '../../../../src/lib/agent-html-refs';
 import { parseAgentRef } from '@/utils/agent-ref-open';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/task-board.css';
 import '@/styles/header-fit.css';
 
@@ -706,10 +707,7 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
         </div>
       </div>
       {error && (payload || !loading) && (
-        <div className="task-board-error" role="alert" data-testid="board-error">
-          <span>Couldn't load the board: {error}</span>
-          <button type="button" className="btn btn-sm" onClick={reload}>Retry</button>
-        </div>
+        <UnavailableState size="row" testId="board-error" title="Couldn't load the board" detail={error} onRetry={reload} />
       )}
       <div className={`task-board-body${dockAnchor ? ' has-inline-dock' : ''}`}>
         {srcDoc !== null && hasPage && (shownView === 'custom' || frameOwner === ownerId) && (
@@ -757,7 +755,7 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
           <BoardEmptyState taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />
         ) : loading && !payload ? (
           // R3-06: the Cards view loads as skeleton lanes, never a line of text.
-          store && shownView === 'cards' ? <KanbanSkeleton /> : <div className="task-board-loading">Loading the board…</div>
+          store && shownView === 'cards' ? <KanbanSkeleton /> : <LoadingState size="pane" title="Loading the board…" />
         ) : null}
         {/* Inside the body: inline over the frame's slot, or (no slot) a bar under the frame. */}
         {reply && board && shownView === 'custom' && (
@@ -783,15 +781,14 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
 /** No board yet and no team to show (a pop-out window): say what one is, and let the user ask the leader for one. */
 function BoardEmptyState(props: Pick<TaskBoardPaneProps, 'taskId' | 'onSendToSession'>) {
   return (
-    <div className="task-board-empty" data-testid="board-empty">
-      <div className="task-board-empty-card">
-        <div className="task-board-empty-title">No board yet.</div>
-        <p className="task-board-empty-text">
-          The leader of this task writes one with the walnut-board skill; the user reads it here instead of the chat.
-        </p>
-        <AskLeaderRow {...props} />
-      </div>
-    </div>
+    <EmptyState
+      size="pane"
+      testId="board-empty"
+      title="No board yet"
+      hint="This task's leader writes one with the walnut-board skill, and you read it here instead of the chat."
+    >
+      <AskLeaderRow {...props} />
+    </EmptyState>
   );
 }
 

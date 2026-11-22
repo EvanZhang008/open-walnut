@@ -145,7 +145,7 @@ test('a page that forbids framing gets a card with a way out, not a blank pane',
   const locked = chat(panel).locator('a', { hasText: /^http:\/\/localhost:\d+\/$/ }).first()
   // The fixture prints two bare-root links (locked, then not-started); the locked one is first.
   await locked.click()
-  const card = webView(panel).locator('.session-code-error-card')
+  const card = webView(panel).getByTestId('session-web-blocked')
   await expect(card).toContainText('does not allow being shown inside another page', { timeout: 15_000 })
   await expect(card).toContainText('X-Frame-Options')
   await expect(card.getByRole('link', { name: 'Open in tab' })).toHaveAttribute('href', await locked.getAttribute('href') ?? '')
@@ -162,7 +162,7 @@ test('a service that is not up yet explains itself, and Retry recovers once it s
   const pending = chat(panel).locator('a', { hasText: /^http:\/\/localhost:\d+\/$/ }).nth(1)
   const port = await portOf(pending)
   await pending.click()
-  const card = webView(panel).locator('.session-code-error-card')
+  const card = webView(panel).getByTestId('session-web-error')
   await expect(card).toContainText(`Can't open localhost:${port}`, { timeout: 15_000 })
   await expect(card).toContainText(`Nothing this session started is listening on :${port}.`)
   await expect(card).toContainText('reloads by itself when this session starts a server')

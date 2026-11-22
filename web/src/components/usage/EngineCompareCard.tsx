@@ -7,7 +7,8 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { SettingsGroup, SettingsLoadingRow, SettingsEmpty, SettingsNotice } from '@/components/settings/SettingsSection';
+import { SettingsGroup, SettingsNotice } from '@/components/settings/SettingsSection';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
 import { fetchEngineCompare, type EngineCompare, type EngineCompareRow, type EngineCompareTask, type ReviewScore } from '@/api/usage';
 import { usePageView } from '@/utils/view-memory';
@@ -152,7 +153,7 @@ function verdictOf(rows: EngineCompareRow[], best: Map<string, string | null>, l
     ? ` Reviewer score: too few scored yet (${rows.map((r) => `${label(r.key)} ${r.scoredDone ?? 0}`).join(', ')}; ${FEW} each needed).` : '';
   if (wins.length) return `${wins.join('. ')}.${scoreNote}`;
   const short = rows.filter((r) => r.done < FEW).length;
-  return (short ? `Too few finished tasks to call a winner yet: each engine needs ${FEW} finished tasks behind a value.` : 'No engine is clearly ahead on any row yet.') + scoreNote;
+  return (short ? `Too few finished tasks to call a winner yet: each engine needs ${FEW} finished tasks behind a value.` : 'No engine is clearly ahead on any row yet.') + scoreNote; // empty-state-ok: verdict sentence, not an empty place
 }
 
 /** The column holding a row's best value, when there is a contest: two engines with enough finished work. */
@@ -231,8 +232,8 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
           )}
         </div>
         {error && <SettingsNotice kind="error" role="alert">{`Couldn't compare engines: ${error}`}</SettingsNotice>}
-        {!data ? (!error && <SettingsLoadingRow>Comparing engines...</SettingsLoadingRow>) : !data.rows.length ? (
-          <SettingsEmpty>No task finished or started in this period.</SettingsEmpty>
+        {!data ? (!error && <LoadingState title="Comparing engines…" />) : !data.rows.length ? (
+          <EmptyState title="No task finished or started in this period" />
         ) : (
           <>
             {(() => {

@@ -489,7 +489,7 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, i
           disabled={asked}
           onClick={() => { setAsked(true); handlers.onLoadMore?.(); }}
         >
-          {asked ? 'Loading older completed tasks…' : 'Show older completed tasks'}
+          {asked ? 'Loading older completed tasks…' : 'Show older completed tasks'}{/* empty-state-ok: button label */}
         </button>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import {
   fetchSessionTurns, fetchTurnFileDiff,
   type SessionTurns, type TurnSnapshot, type TurnFileDiff, type TurnRestoreResult,
@@ -8,7 +9,6 @@ import { FileDiffPane, type PendingComment } from './SessionDiffView';
 import { TurnRestoreDialog } from './TurnRestoreDialog';
 import { buildReviewMessage, buildCommentMessage } from './diffPrefill';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 
@@ -227,42 +227,22 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
 
   let body: ReactNode;
   if (!data && loading) {
-    body = <div className="session-diff-loading"><LoadingSpinner /></div>;
+    body = <LoadingState size="pane" title="Loading the turns…" />;
   } else if (!data && error) {
-    body = (
-      <div className="session-diff-error-box">
-        {ICON_WARNING} <span>Couldn't load the turns: {error}</span>
-        <button type="button" className="btn btn-sm" onClick={() => load()}>Retry</button>
-      </div>
-    );
+    body = <UnavailableState size="pane" title="Couldn't load the turns" detail={error} onRetry={() => load()} />;
   } else if (data && !data.supported) {
-    body = (
-      <div className="session-diff-empty turns-empty">
-        <p>
-          {data.reason === 'no_cwd' ? 'This session has no working folder.'
-            : data.reason === 'daemon_upgrade' ? 'This host’s session daemon needs an update before it can record turns.'
-            : 'The host for this session is not connected.'}
-        </p>
-      </div>
-    );
+    body = data.reason === 'no_cwd'
+      ? <EmptyState size="pane" title="This session has no working folder" hint="Turns are recorded for a session's folder." />
+      : data.reason === 'daemon_upgrade'
+        ? <UnavailableState size="pane" title="Turns can't be recorded on this host yet" hint="This host’s session daemon needs an update before it can record turns." />
+        : <UnavailableState size="pane" title="The host for this session is not connected" hint="Its turns show here once it is back." onRetry={() => load()} />;
   } else if (data && !data.repoRoot) {
-    body = (
-      <div className="session-diff-empty turns-empty">
-        <p>Turns are recorded for folders inside a git repository, and this session’s folder is not in one.</p>
-      </div>
-    );
+    body = <EmptyState size="pane" title="Not a git repository" hint="Turns are recorded for folders inside a git repository, and this session’s folder is not in one." />;
   } else if (data && snapshots.length === 0) {
     body = (
-      <div className="session-diff-empty turns-empty">
-        {data.enabled === false
-          ? <p>Turn snapshots are off. Turn them on in Settings, under Sessions.</p>
-          : (
-            <>
-              <p>No turns recorded yet.</p>
-              <p className="text-muted">When a turn ends, Walnut records this repository’s files so you can see and restore that turn.</p>
-            </>
-          )}
-      </div>
+      data.enabled === false
+        ? <EmptyState size="pane" title="Turn snapshots are off" hint="Turn them on in Settings, under Sessions." />
+        : <EmptyState size="pane" title="No turns recorded yet" hint="When a turn ends, Walnut records this repository’s files so you can see and restore that turn." />
     );
   } else {
     const lastSkip = (data?.skipped ?? []).slice(-1)[0];
@@ -364,13 +344,15 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
               </div>
             )}
             {!snap || !effective?.path ? (
-              <div className="session-diff-file-empty">{snap ? 'This snapshot changed no files.' : 'Select a turn.'}</div>
+              snap
+                ? <EmptyState size="pane" title="This snapshot changed no files" />
+                : <EmptyState size="pane" title="No turn selected" hint="Select a turn." />
             ) : diff?.key !== diffKey ? (
-              <div className="session-diff-file-empty"><LoadingSpinner /></div>
+              <LoadingState size="section" title="Loading this diff…" />
             ) : diff?.error ? (
-              <div className="session-diff-file-empty">{ICON_WARNING} Couldn't load this diff: {diff.error}</div>
+              <UnavailableState size="section" title="Couldn't load this diff" detail={diff.error} />
             ) : diff?.diff?.binary || diff?.diff?.tooLarge ? (
-              <div className="session-diff-file-empty">{diff.diff.binary ? 'Binary file: no text diff.' : 'This file is too large to show.'}</div>
+              <EmptyState size="section" title={diff.diff.binary ? 'Binary file: no text diff' : 'This file is too large to show'} />
             ) : change ? (
               <FileDiffPane
                 key={`${snap.n}:${change.filePath}`}

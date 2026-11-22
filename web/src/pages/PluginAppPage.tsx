@@ -19,6 +19,7 @@ import { wsClient } from '@/api/ws';
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/api/client';
 import { createPluginAppBridge, type ApiMethod, type PluginAppBridge } from './pluginAppBridge';
 import { log } from '@/utils/log';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 /** The iframe must fire onload within this, or the user gets a Retry card. */
 const LOAD_TIMEOUT_MS = 20_000;
@@ -114,10 +115,7 @@ export function PluginAppPage() {
   if (!app && loading) {
     return (
       <div className="plugin-app-page" data-testid="plugin-app-page">
-        <div className="plugin-app-loading">
-          <div className="plugin-app-spinner" />
-          <span>Loading apps…</span>
-        </div>
+        <LoadingState size="pane" title="Loading apps…" />
       </div>
     );
   }
@@ -125,14 +123,16 @@ export function PluginAppPage() {
   if (!app) {
     return (
       <div className="plugin-app-page" data-testid="plugin-app-page">
-        <div className="plugin-app-message-card" data-testid="plugin-app-not-found">
-          <div className="plugin-app-message-title">App not found</div>
-          <p className="plugin-app-message-body">
-            No installed plugin provides an app called <code>{appId}</code>. It may have been
-            removed, or its plugin may be disabled.
-          </p>
-          <Link className="btn" to="/">Back to Walnut</Link>
-        </div>
+        <UnavailableState
+          size="pane"
+          title="App not found"
+          hint={<>No installed plugin provides an app called <code>{appId}</code>. It may have been
+            removed, or its plugin may be disabled.</>}
+          testId="plugin-app-not-found"
+        >
+          {/* A real link (the reader's way out), so it stays one rather than an action button. */}
+          <Link className="btn btn-sm" to="/">Back to Walnut</Link>
+        </UnavailableState>
       </div>
     );
   }
@@ -140,20 +140,19 @@ export function PluginAppPage() {
   return (
     <div className="plugin-app-page" data-testid="plugin-app-page">
       {phase === 'error' ? (
-        <div className="plugin-app-message-card" data-testid="plugin-app-load-error">
-          <div className="plugin-app-message-title">{app.title} didn't finish loading</div>
-          <p className="plugin-app-message-body">
-            The page took more than {Math.round(LOAD_TIMEOUT_MS / 1000)} seconds to load. Retry
-            reloads it from the plugin.
-          </p>
-          <button type="button" className="btn" onClick={handleRetry}>Retry</button>
-        </div>
+        <UnavailableState
+          size="pane"
+          title={`${app.title} didn't finish loading`}
+          hint={`The page took more than ${Math.round(LOAD_TIMEOUT_MS / 1000)} seconds to load. Retry reloads it from the plugin.`}
+          onRetry={handleRetry}
+          testId="plugin-app-load-error"
+        />
       ) : (
         <>
           {phase === 'loading' && (
-            <div className="plugin-app-loading">
-              <div className="plugin-app-spinner" />
-              <span>Loading {app.title}…</span>
+            // Laid over the frame while it loads, so the page never flashes an empty frame.
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--bg)' }}>
+              <LoadingState size="pane" title={`Loading ${app.title}…`} />
             </div>
           )}
           <iframe

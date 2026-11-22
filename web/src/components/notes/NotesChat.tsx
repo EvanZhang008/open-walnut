@@ -3,7 +3,7 @@ import { useChat } from '@/hooks/useChat';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import type { ImageAttachment } from '@/api/chat';
 
 export const NOTE_AGENT_ID = 'note-agent';
@@ -54,19 +54,23 @@ export function NotesChat({ activeNotePath, headerLeft, conversationId }: {
       </div>
 
       {!conversationId ? (
-        <div className="notes-chat-loading"><LoadingSpinner /></div>
+        <LoadingState size="pane" title="Loading the notes chat…" />
       ) : (
         <>
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
             {chat.messages.length === 0 && !chat.isStreaming && (
-              <div className="notes-chat-empty">
-                <p>Ask about your notes, or have the assistant create and edit them.</p>
+              <EmptyState
+                size="pane"
+                title="No messages yet"
+                hint="Ask about your notes, or have the assistant create and edit them."
+                testId="notes-chat-empty"
+              >
                 <ul>
                   <li>“What did I write about X?”</li>
                   <li>“Summarize my reading-list note.”</li>
                   <li>“Add a todo to today's note.”</li>
                 </ul>
-              </div>
+              </EmptyState>
             )}
             {chat.messages.map((msg) => (
               <ChatMessage

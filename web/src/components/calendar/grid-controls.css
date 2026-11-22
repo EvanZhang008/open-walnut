@@ -45,10 +45,6 @@
 .cal-side-header .cal-grid-controls .cal-zoom-value { font-size: var(--font-size-xs); }
 .cal-side-header .cal-grid-controls .cal-hours-toggle { font-size: var(--font-size-xs); }
 .cal-side-header .cal-grid-controls .cal-hours-toggle[aria-pressed='true'] { color: var(--accent); }
-/* Why the day is empty: one quiet line under the header (it wraps; never cut). */
-.cal-side-status { padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--font-size-xs); line-height: 1.4; color: var(--fg-muted); }
-.cal-side-status-head { font-weight: 600; }
-.cal-side-status.is-warn { background: color-mix(in srgb, var(--warning) 10%, transparent); color: color-mix(in srgb, var(--warning) 70%, var(--fg)); }
 /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
 .cal-grid-scroll { padding: 6px 0 6px; padding-bottom: max(6px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }
 .cal-grid .cal-grid-cols {

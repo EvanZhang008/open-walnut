@@ -113,6 +113,7 @@ export function CreatePluginPage() {
           <p>
             The list holds the plugin apps you already have. Yours joins it the moment its
             first build succeeds, with no restart or refresh.
+          {/* empty-state-ok: a sentence of a paragraph */}
           </p>
           <div className="create-plugin-live" data-testid="create-plugin-live">
             {pluginApps.length === 0 ? (

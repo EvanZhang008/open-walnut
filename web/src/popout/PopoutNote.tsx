@@ -4,7 +4,8 @@ import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { VAULT_RAW_IO } from '@/components/notes/vault-raw-io';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { NoteMissingState } from '@/components/notes/NoteMissingState';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import { ICON_NOTE } from '@/components/common/Icons';
 import { openPopout } from './openPopout';
 
 /**
@@ -54,7 +55,7 @@ export function PopoutNote() {
   }, []);
 
   if (!notePath) {
-    return <div style={{ padding: 24, color: 'var(--fg-muted)' }}>No note path provided.</div>;
+    return <EmptyState size="pane" icon={ICON_NOTE} title="No note to show" hint="This window was opened without a note path." />;
   }
   if (missing) return <NoteMissingState path={notePath} onCreate={createMissing} onClose={() => window.close()} closeLabel="Close window" />;
 
@@ -81,7 +82,7 @@ export function PopoutNote() {
         onApplyExternal={applyExternalChange}
         onDismissExternal={dismissExternalChange}
         rawFlushIO={VAULT_RAW_IO}
-        loadingFallback={<LoadingSpinner />}
+        loadingFallback={<LoadingState size="pane" title="Loading note…" />}
       />
     </div>
   );

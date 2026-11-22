@@ -69,7 +69,7 @@ export function QuickSortFilter({ filter, setFilter, tiers, counts, showProject 
         onClick={e => openAt(projectMenu, e.currentTarget)}>{projectLabel} ▾</Chip>}
       <Chip className="quick-sort-pick" data-sort-filter="folder" aria-haspopup="listbox" pressed={filter.folder !== null}
         onClick={e => openAt(folderMenu, e.currentTarget)}>{folderLabel} ▾</Chip>
-      <span className="quick-sort-chips-label">No action for</span>
+      <span className="quick-sort-chips-label">No action for</span>{/* empty-state-ok: a chip group's label */}
       <ChipGroup className="quick-sort-chips" role="group" aria-label="No action for">
         {IDLE_STEPS.map(n => <Chip key={n} pressed={filter.idleDays === n} data-sort-filter-idle={n}
           onClick={() => setFilter({ ...filter, idleDays: n })}>{n ? `${n}+ days` : 'Any time'}</Chip>)}

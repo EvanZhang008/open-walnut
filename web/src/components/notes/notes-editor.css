@@ -478,12 +478,6 @@
   overflow-y: auto;
   padding: 6px;
 }
-.notes-cmdk-empty {
-  padding: 24px 14px;
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}
 .notes-cmdk-item {
   display: flex;
   flex-direction: column;
@@ -574,65 +568,6 @@ mark.notes-search-mark {
 }
 
 /* ── /notes empty state — newcomer on-ramp (§3.6½) ─────────────────────── */
-.notes-empty-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  padding: 24px;
-}
-.notes-empty-state-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  max-width: 360px;
-  text-align: center;
-}
-.notes-empty-state-title {
-  margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: 600;
-  color: var(--fg);
-}
-.notes-empty-state-hint {
-  margin: 0;
-  font-size: var(--font-size-md);
-  line-height: 1.5;
-  color: var(--fg-muted);
-}
-.notes-empty-state-hint kbd {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 1px 5px;
-}
-.notes-empty-state-cta {
-  margin-top: 4px;
-  padding: 8px 16px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.notes-empty-state-cta:hover { background: var(--accent-hover); }
-/* The quiet second choice beside the CTA (NoteMissingState's Close). */
-.notes-empty-state-secondary {
-  margin-top: 4px;
-  padding: 8px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--fg);
-  font-size: 14px;
-  cursor: pointer;
-}
-.notes-empty-state-secondary:hover { background: var(--bg-hover); }
 
 /* ── External/AI-write reload banner (§6.2 dirty-guard) ────────────────── */
 .notes-reload-banner {

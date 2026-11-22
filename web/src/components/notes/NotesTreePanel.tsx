@@ -13,6 +13,7 @@ import { copyTextDeferred } from '@/utils/clipboard';
 import { MicInput } from '@/components/common/BoxMic';
 import { SearchField } from '@/components/common/SearchField';
 import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /**
  * Folder expand/collapse persistence (Feature 3). The expanded-folders set is
@@ -1031,7 +1032,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           <div className="notes-search-results">
             {searchPartial && <div className="notes-search-partial" data-testid="notes-search-partial">{searchPartial}</div>}
             {searchGroups.length === 0 ? (
-              <div className="notes-tree-empty">No results</div>
+              <EmptyState size="row" title="No notes match this search" />
             ) : (
               searchGroups.map((g, gi) => (
                 // Index-keyed: run-grouping can legitimately repeat a folder.
@@ -1106,9 +1107,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           <>
             {creatingIn === '' && renderNewItemInput(0)}
             {tree.length === 0 ? (
-              <div className="notes-tree-empty">
-                No notes yet. Click + to create one.
-              </div>
+              <EmptyState size="section" title="No notes yet" hint="Click + to create one." />
             ) : (
               tree.map(node => renderNode(node, 0))
             )}

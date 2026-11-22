@@ -273,7 +273,7 @@ test('C31: hooks are roomy rows with a level chevron; the label discloses Fires 
   const height = await hooks.locator('.settings-card-body').evaluate((el) => el.getBoundingClientRect().height)
   const rowHeights = await hooks.locator('.hook-row').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
   // N23: an empty "Your hooks" is a real 44px empty row in a group, like every pane's.
-  const emptyRows = await hooks.locator('.settings-empty').count()
+  const emptyRows = await hooks.locator('.empty-state').count()
   // A help that wraps (it is never cut: 2026-11-22 audit) adds its second 16px line, and only that.
   const wrapped = await hooks.locator('.hook-row .settings-row-help').evaluateAll((els) => els.filter((e) => e.getBoundingClientRect().height > 20).length)
   expect(height, `rows ${rowHeights.join(',')}`).toBeLessThanOrEqual(140 + 60 * (n + emptyRows) + 16 * wrapped)
@@ -315,7 +315,7 @@ test('C31: hooks are roomy rows with a level chevron; the label discloses Fires 
   await disclose.click()
   await expect(disclose).toHaveAttribute('aria-expanded', 'false')
   if (await hooks.getByTestId('hooks-group-yours').locator('.hook-row').count() === 0) {
-    await expect(hooks.getByTestId('hooks-group-yours')).toContainText('No hooks of your own yet.')
+    await expect(hooks.getByTestId('hooks-group-yours')).toContainText('No hooks of your own yet')
   }
 })
 

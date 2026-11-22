@@ -200,7 +200,7 @@ test('commit only this session\'s hunk, push it, and commit the other session\'s
   expect(git(fx.project, ['show', `HEAD:${file}`])).toBe(work)
   expect(git(fx.project, ['status', '--porcelain', '--', file]).trim()).toBe('')
   // The view reloads: nothing of B's is left.
-  await expect(dialog.getByText('Nothing this session changed is left uncommitted here.')).toBeVisible({ timeout: 30_000 })
+  await expect(dialog.getByTestId('scd-nothing-left')).toBeVisible({ timeout: 30_000 })
   await expect(dialog.locator('.scd-reload')).toHaveText('Reload')
   await shot(dialog, `${browserName}-5-retry-committed.png`)
   await page.keyboard.press('Escape')

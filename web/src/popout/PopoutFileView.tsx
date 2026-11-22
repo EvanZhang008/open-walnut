@@ -1,5 +1,7 @@
 import { useSearchParams } from 'react-router-dom';
 import { FileContentView } from '@/components/common/FileContentView';
+import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_FILE } from '@/components/common/Icons';
 
 /**
  * Pop-out file view. Reads path/host/line/endLine from the query string and renders the
@@ -20,10 +22,7 @@ export function PopoutFileView() {
 
   if (!path) {
     return (
-      <div className="popout-stub">
-        <h2>No file</h2>
-        <code>(no path)</code>
-      </div>
+      <EmptyState size="pane" icon={ICON_FILE} title="No file to show" hint="This window was opened without a file path." />
     );
   }
 

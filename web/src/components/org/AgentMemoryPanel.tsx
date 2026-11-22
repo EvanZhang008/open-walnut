@@ -28,6 +28,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { log } from '@/utils/log';
 import { instructionsSource } from './instructions-source';
 import { NodeDuties } from './NodeDuties';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/agent-memory.css';
 import { ICON_CLOSE } from '../common/Icons';
 
@@ -51,8 +52,8 @@ function Fold({ summary, testId, children }: { summary: ReactNode; testId: strin
 }
 
 function OwnMemory({ load }: { load: Load<AgentMemory> }) {
-  if (load.state === 'loading') return <p className="am-hint">Reading…</p>;
-  if (load.state === 'error') return <p className="am-hint am-error" role="alert">Could not read it. {load.message}</p>;
+  if (load.state === 'loading') return <LoadingState size="row" title="Reading its memory…" />;
+  if (load.state === 'error') return <UnavailableState size="row" title="Could not read its memory" detail={load.message} />;
   const { memory, chars, soft_limit: soft } = load.value;
   return (
     <Fold testId="am-own-memory" summary={<>Its own MEMORY.md <span className="am-count">· {kChars(chars)} of {kChars(soft)}</span></>}>
@@ -101,9 +102,9 @@ function WalnutMemory({ onOpen, held }: { onOpen: (path: string) => void; held: 
                 data-testid={`am-edit-${doc.id}`}
               >Edit in Memory</button>
             </div>
-            {load.state === 'loading' && <p className="am-hint">Reading…</p>}
-            {load.state === 'error' && <p className="am-hint am-error" role="alert">Could not read it. {load.message}</p>}
-            {load.state === 'ready' && (load.value.trim() ? <pre className="am-text">{load.value}</pre> : <p className="am-hint">Empty.</p>)}
+            {load.state === 'loading' && <LoadingState size="row" title="Reading this file…" />}
+            {load.state === 'error' && <UnavailableState size="row" title="Could not read this file" detail={load.message} />}
+            {load.state === 'ready' && (load.value.trim() ? <pre className="am-text">{load.value}</pre> : <EmptyState size="row" title="This file is empty" />)}
           </div>
         );
       })}
@@ -248,10 +249,8 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
           </button>
         )}
         {readError && (
-          <p className="am-note am-error" role="alert" data-testid="am-read-error">
-            Could not read the stored instructions. {readError}{' '}
-            <button type="button" className="am-link" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
-          </p>
+          <UnavailableState size="row" title="Could not read the stored instructions" detail={readError} testId="am-read-error"
+            onRetry={() => setAttempt((n) => n + 1)} retryLabel="Try again" />
         )}
         {note && <p className={`am-note${note.ok ? '' : ' am-error'}`} role={note.ok ? 'status' : 'alert'} data-testid="am-note">{note.text}</p>}
 

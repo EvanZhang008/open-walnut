@@ -396,7 +396,7 @@ test('the button survives a failed AI lane and an AI lane switched off, and neve
   await openHome(page);
 
   await page.locator('.todo-search-input').fill(QUERY);
-  await expect(panel(page).locator('.agent-search-error')).toBeVisible({ timeout: 15_000 });
+  await expect(panel(page).locator('[data-testid="agent-search-error"]')).toBeVisible({ timeout: 15_000 });
   await expect(openBtn(page)).toBeVisible();
   await expect(openBtn(page)).toBeEnabled();
 

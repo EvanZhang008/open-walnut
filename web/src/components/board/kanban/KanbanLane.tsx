@@ -19,6 +19,7 @@ import { KanbanCard } from './KanbanCard';
 import { KanbanLaneHead } from './KanbanLaneHead';
 import { KanbanAddTask } from './KanbanAddTask';
 import type { PendingAdd } from './useKanbanWrites';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export interface KanbanLaneProps {
   lane: KanbanLaneVM;
@@ -127,7 +128,7 @@ function KanbanLaneInner(p: KanbanLaneProps) {
             </div>
           ))}
           {!p.loading && drawn.length === 0 && p.pending.length === 0 && !p.filterEmpty && (
-            <div className="kanban-lane-empty" data-testid="kanban-lane-empty">{p.visible ? 'No matching cards' : 'Nothing here'}</div>
+            <EmptyState size="row" testId="kanban-lane-empty" title={p.visible ? 'No matching cards' : 'No cards in this lane'} />
           )}
           {done && !p.visible && shownIds.length > DONE_LANE_PREVIEW && (
             <button type="button" className="btn btn-link btn-sm kanban-text-btn kanban-lane-show-all" data-testid="kanban-lane-show-all"

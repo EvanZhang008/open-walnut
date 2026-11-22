@@ -438,7 +438,7 @@ test.describe('the merged lists at production density', () => {
     await accountFolderRow(page, A, 'INBOX').click()
     await expect(rows(page)).toHaveCount(PAGE_SIZE, { timeout: 60_000 })
     await smartRow(page, 'inbox').click()
-    await expect(page.getByTestId('mail-smart-empty')).toHaveText('No mail in these inboxes yet.', { timeout: 60_000 })
+    await expect(page.getByTestId('mail-smart-empty')).toContainText('No mail in these inboxes yet', { timeout: 60_000 })
 
     // Now with one of the participating inboxes never fetched, which is the state a fresh install is
     // in for most of its folders. Re-read from the server, because that is where `lastSyncAt` lives.
@@ -451,7 +451,7 @@ test.describe('the merged lists at production density', () => {
     await openMail(page)
     await smartRow(page, 'inbox').click()
     const unfetched = page.getByTestId('mail-smart-unfetched')
-    await expect(unfetched).toContainText('Walnut has not fetched every inbox yet.', { timeout: 60_000 })
+    await expect(unfetched).toContainText('Walnut has not fetched every inbox yet', { timeout: 60_000 })
     posts.length = 0
     fetched.length = 0
     await unfetched.getByTestId('mail-smart-refresh').click()

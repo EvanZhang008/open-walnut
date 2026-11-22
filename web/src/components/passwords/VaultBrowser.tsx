@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import { vaultApi, VaultApiError, isLockedError, type SecurityReport, type VaultItem, type VaultItemSummary, type VaultStatus } from '@/api/vault'
 import { usePageView } from '@/utils/view-memory'
 import { log } from '@/utils/log'
+import { EmptyState, LoadingState } from '@/components/common/EmptyState'
 import type { VaultItemType } from '../../../../src/core/vault/types'
 import { displayHost } from '../../../../src/core/vault/url-match'
 import {
@@ -71,7 +72,7 @@ function SecurityView({ items, onOpen }: { items: VaultItemSummary[]; onOpen: (i
   const [report, setReport] = useState<SecurityReport | null>(null)
   useEffect(() => { void vaultApi.report().then(setReport).catch(() => setReport(null)) }, [items])
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
-  if (!report) return <div className="pw-detail pw-empty"><p>Checking…</p></div>
+  if (!report) return <div className="pw-detail"><LoadingState size="pane" title="Checking your passwords…" /></div>
   const groups: Array<{ key: string; title: string; why: string; ids: string[] }> = [
     { key: 'weak', title: 'Weak passwords', why: 'Easy to guess. Change them to a generated password.', ids: report.weak },
     { key: 'reused', title: 'Reused passwords', why: 'One leak opens every site that shares it.', ids: report.reused.flat() },
@@ -84,7 +85,7 @@ function SecurityView({ items, onOpen }: { items: VaultItemSummary[]; onOpen: (i
       <div className="pw-detail-head">
         <span className={`pw-shield ${total ? 'warn' : 'ok'}`}><ShieldIcon size={28} /></span>
         <div className="pw-detail-title">
-          <h2>{total ? `${total} item${total === 1 ? '' : 's'} to look at` : 'No problems found'}</h2>
+          <h2>{total ? `${total} item${total === 1 ? '' : 's'} to look at` : 'No problems found'}</h2>{/* empty-state-ok: report heading beside its tiles */}
           <span className="pw-detail-type">Checked by Walnut on its own computer. No password or site leaves it.</span>
         </div>
       </div>
@@ -221,7 +222,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
           {(status.hasRecovery === false || status.recoveryUnsaved) && (
             // No working kit in the person's hands: a forgotten master password would lock the vault for good.
             <div className="pw-side-warn" role="note" data-testid="pw-no-recovery">
-              <b>{status.recoveryUnsaved ? 'Recovery kit not saved' : 'No recovery code yet'}</b>
+              <b>{status.recoveryUnsaved ? 'Recovery kit not saved' : 'No recovery code yet'}</b>{/* empty-state-ok: warning heading */}
               <span>{status.recoveryUnsaved ? 'Your recovery code changed and the new kit was never saved. Make a new one.' : 'Forget your master password and nothing opens this vault.'}</span>
               <button type="button" className="btn btn-sm" onClick={() => navigate('/settings#passwords')}>Make a recovery kit</button>
             </div>
@@ -252,7 +253,11 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
         <div className="pw-rows" role="listbox" aria-label="Items">
           {loadError && <div className="pw-hint pw-hint-bad">{loadError}</div>}
           {items && shownItems.length === 0 && (
-            <div className="pw-rows-empty">{query ? 'Nothing matches.' : section === 'trash' ? 'Nothing deleted.' : 'No items yet. Add one with + or import from another app.'}</div>
+            query
+              ? <EmptyState role="presentation" title={`Nothing matches “${query.trim()}”`} action={{ label: 'Clear search', onClick: () => setQuery('') }} />
+              : section === 'trash'
+                ? <EmptyState role="presentation" title="Nothing deleted" />
+                : <EmptyState role="presentation" title="No items yet" hint="Add one with + or import from another app." />
           )}
           {shownItems.map((i) => (
             <button key={i.id} type="button" role="option" aria-selected={selectedId === i.id} className={`pw-row${selectedId === i.id ? ' on' : ''}`} onClick={() => select(i.id)} data-testid="pw-row">
@@ -275,15 +280,18 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
           <ItemView key={opened.id} item={opened} onEdit={() => setEditing({ kind: 'edit', item: opened })} onChanged={changed} />
         )}
         {!editing && !isViewSection(section) && !selectedId && (
-          <div className="pw-detail pw-empty">
-            <KeyIcon size={40} />
-            <p>{items?.length ? 'Pick an item to see it.' : 'Your vault is empty.'}</p>
-            {!!items?.length && <RecentAgentUse onSeeAll={() => pickSection('agents')} />}
-            {!items?.length && (
-              <div className="pw-gate-actions-row">
-                <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing({ kind: 'new', type: 'login' })}><PlusIcon size={15} /> New login</button>
-                <button type="button" className="btn btn-sm" onClick={() => setImportDialogOpen(true)}><ImportIcon /> Import</button>
-              </div>
+          <div className="pw-detail">
+            {items?.length ? (
+              <EmptyState size="pane" icon={<KeyIcon size={32} />} title="Pick an item to see it">
+                <RecentAgentUse onSeeAll={() => pickSection('agents')} />
+              </EmptyState>
+            ) : (
+              <EmptyState size="pane" icon={<KeyIcon size={32} />} title="Your vault is empty" hint="Add a login, or import from another app.">
+                <div className="pw-gate-actions-row">
+                  <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing({ kind: 'new', type: 'login' })}><PlusIcon size={15} /> New login</button>
+                  <button type="button" className="btn btn-sm" onClick={() => setImportDialogOpen(true)}><ImportIcon /> Import</button>
+                </div>
+              </EmptyState>
             )}
           </div>
         )}

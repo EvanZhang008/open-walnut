@@ -28,7 +28,7 @@ const LIVE_SESSION_ID = 'pw-hist-launch-session';
 const DEAD_SESSION_ID = 'pw-hist-dead-session';
 const FORK_SESSION_ID = 'pw-hist-fork-session';
 
-const UNAVAILABLE_CARD = '.session-history-unavailable';
+const UNAVAILABLE_CARD = '[data-testid="session-history-unavailable"]';
 
 function sessionPayload(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -197,7 +197,7 @@ test.describe('History unavailable card on a freshly launched session', () => {
 
     const card = page.locator(UNAVAILABLE_CARD);
     await expect(card).toBeVisible({ timeout: 15000 });
-    await expect(card).toContainText('History unavailable');
+    await expect(card).toContainText("Can't show this conversation's history");
     await expect(card).toContainText('Session history file not found');
   });
 });

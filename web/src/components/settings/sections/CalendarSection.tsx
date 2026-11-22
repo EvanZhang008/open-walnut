@@ -8,7 +8,8 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
-import { SettingsGroup, SettingsRow, SettingsNotice, SettingsTag, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsGroup, SettingsRow, SettingsNotice, SettingsTag } from '../SettingsSection';
+import { EmptyState, LoadingState, UnavailableState } from '../../common/EmptyState';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
@@ -214,15 +215,9 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
       {!status ? (
         <SettingsGroup heading={heading}>
           {loadError ? (
-            <SettingsNotice
-              kind="error"
-              role="alert"
-              action={<SettingsButton variant="text" onClick={load}>Retry</SettingsButton>}
-            >
-              {`Couldn't load calendars: ${loadError}`}
-            </SettingsNotice>
+            <UnavailableState title="Couldn't load calendars" detail={loadError} onRetry={() => { void load(); }} />
           ) : (
-            <SettingsLoadingRow />
+            <LoadingState title="Loading calendars…" />
           )}
         </SettingsGroup>
       ) : (
@@ -339,7 +334,7 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
 
           {status.available && calendars.length === 0 && (
             <SettingsGroup>
-              <SettingsRow label="No calendars on this Mac yet." />
+              <EmptyState title="No calendars on this Mac yet" />
             </SettingsGroup>
           )}
 

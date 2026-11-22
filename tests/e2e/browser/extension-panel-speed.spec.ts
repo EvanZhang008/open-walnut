@@ -173,6 +173,7 @@ async function settleWatch(p: Page, view: string, t0: number): Promise<{ settled
       const root = document.querySelector('[data-testid="ext-panel"]')
       const shown = (sel: string) => Array.from(document.querySelectorAll(sel)).some((e) => (e as HTMLElement).offsetParent !== null)
       const spinner = shown('.ext-continue-empty') || shown('.ext-home-loading')
+        || shown('[data-testid="ext-continue-loading"], [data-testid="ext-home-loading"]')
       // A conversation's messages are on screen; or a new chat's Continue rows, with nothing
       // loading; or the first page's task rows. A build before `data-asks` (an A/B baseline) is
       // judged by what shows alone.

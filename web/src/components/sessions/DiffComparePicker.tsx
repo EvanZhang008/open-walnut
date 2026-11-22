@@ -4,6 +4,7 @@ import {
   fetchSessionGitRefs,
   type GitCompareInfo, type SessionDiffCompare, type SessionGitRefs,
 } from '@/api/session-changes';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -440,18 +441,13 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
             ))}
             {refHidden > 0 && <div className="sdc-note">{refHidden} more branches: type to narrow</div>}
             {error && (
-              <div className="sdc-note sdc-error">
-                Couldn't list branches and commits: {error}
-                <button type="button" className="sdc-retry" onClick={() => loadRefs(true)}>Retry</button>
-              </div>
+              <UnavailableState size="row" role="presentation" title="Couldn't list branches and commits" detail={error} onRetry={() => loadRefs(true)} />
             )}
-            {!error && loading && !refs && <div className="sdc-note">Loading branches and commits…</div>}
-            {noRepo && <div className="sdc-note">This session's folder is not a git repository, so there are no branches or commits to compare with.</div>}
+            {!error && loading && !refs && <LoadingState size="row" role="presentation" title="Loading branches and commits…" />}
+            {noRepo && <EmptyState size="row" role="presentation" title="Not a git repository" hint="This session's folder has no branches or commits to compare with." />}
             {q && items.length === 0 && !loading && (
-              <div className="sdc-note">
-                No branch or commit matches “{query.trim()}”.
-                {(refs?.commits.length ?? 0) >= COMMITS_LISTED && ` Only the newest ${COMMITS_LISTED} commits${refs?.current ? ` on ${refs.current}` : ''} are listed.`}
-              </div>
+              <EmptyState size="row" role="presentation" title={`No branch or commit matches “${query.trim()}”`}
+                hint={(refs?.commits.length ?? 0) >= COMMITS_LISTED ? `Only the newest ${COMMITS_LISTED} commits${refs?.current ? ` on ${refs.current}` : ''} are listed.` : undefined} />
             )}
           </div>
         </div>,

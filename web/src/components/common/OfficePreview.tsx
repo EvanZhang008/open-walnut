@@ -25,6 +25,7 @@ import { rawFileContentUrl } from '@/api/files';
 import { formatSize } from '@/utils/format';
 import { log } from '@/utils/log';
 import { Tabs } from '@/components/controls';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export type OfficeKind = 'word' | 'sheet' | 'slides';
 
@@ -278,8 +279,8 @@ export function OfficePreview({ path, host, kind, reloadToken = 0 }: OfficePrevi
 
   return (
     <div className={`fv-office-preview fv-office-${kind}`}>
-      {phase === 'loading' && <div className="file-viewer-loading">Loading preview…</div>}
-      {phase === 'error' && <div className="file-viewer-error">{error}</div>}
+      {phase === 'loading' && <LoadingState size="pane" title="Loading preview…" />}
+      {phase === 'error' && <UnavailableState size="pane" testId="office-preview-error" title="Couldn't preview this document" detail={error} />}
       {kind === 'sheet' && sheetDoc && phase === 'ready' && (
         <>
           {sheetDoc.names.length > 1 && (

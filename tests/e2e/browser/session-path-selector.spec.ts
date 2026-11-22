@@ -284,7 +284,7 @@ test('explicit empty state when the typed directory does not exist', async ({ pa
 
   await input(page).fill(`${fixtureRoot}/nope/deeper/`)
   // Explicit "does not exist" note — history must not impersonate live results
-  await expect(page.locator('.sps-live-note')).toContainText('does not exist')
+  await expect(page.getByTestId('sps-live-note')).toContainText('does not exist')
 })
 
 test('keyboard matrix: Enter drills into a live dir, Esc backs out, ⇧Enter confirms', async ({ page }) => {

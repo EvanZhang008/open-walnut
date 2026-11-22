@@ -23,6 +23,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from 'react';
 import type { MailAccountDto, MailboxDto } from '@/api/mail';
+import { EmptyState } from '@/components/common/EmptyState';
 import { formatCount } from './mail-format';
 import { selectMailbox } from './mail-actions';
 import {
@@ -196,7 +197,7 @@ export function MailAccountFolders({
       {/* `rows`, not the filtered ones: an account whose only folder is Drafts has been listed, and
           the merged row below is showing it. */}
       {rows.length === 0 && (
-        <p className="mail-account-hint">No folders yet. The first sync lists them.</p>
+        <EmptyState size="row" title="No folders yet" hint="The first sync lists them." />
       )}
 
       <ul className="mail-mailboxes">
@@ -262,7 +263,11 @@ export function MailAccountFolders({
         )}
         {expanded && tail.map((mailbox) => row(mailbox, false))}
         {nothingMatched && (
-          <li className="mail-tail-empty" data-testid="mail-tail-empty">No folder matches that.</li>
+          // The margin lines the words up with the folder names' column (23px from the pane's edge, less
+          // the row state's own 12px), so the line reads down the same column it stands in for.
+          <li style={{ marginLeft: 11 }}>
+            <EmptyState size="row" title={`No folder matches “${filter.trim()}”`} testId="mail-tail-empty" />
+          </li>
         )}
         {/* The collapse row itself, ALWAYS the last li of this list, collapsed or expanded: that position
             is what the spec and the checklist name, and it is the one a person scrolling to the end of an

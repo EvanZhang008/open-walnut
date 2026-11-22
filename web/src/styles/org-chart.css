@@ -25,7 +25,6 @@
 }
 .org-sheet-title { margin: 0; font-size: var(--font-size-xl); font-weight: 650; }
 .org-sheet-hint { margin: 2px 0 0; font-size: var(--font-size-md); color: var(--fg-muted); }
-.org-empty { margin: 32px auto; color: var(--fg-muted); font-size: var(--font-size-md); }
 
 .oc-done {
   align-self: center;
@@ -232,7 +231,6 @@
 .oc-task-icon.is-working { color: var(--success); }
 .oc-task-icon.is-done { color: var(--accent); }
 .oc-task-title { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-size-sm); line-height: 1.35; }
-.oc-task-empty { padding: 3px 4px; color: var(--fg-muted); font-size: var(--font-size-sm); }
 
 /* What a drop would do, over the bottom of the card it is over (never over the next card). */
 .oc-hint {
@@ -337,7 +335,6 @@
   cursor: pointer;
 }
 .oc-vp-new button:hover, .oc-vp-new button:focus-visible { background: var(--bg-secondary); color: var(--fg); }
-.oc-vp-empty { margin: 0; padding: 4px 2px 0; border-top: 1px solid var(--border); font-size: var(--font-size-sm); color: var(--fg-muted); }
 .oc-ceo-wrap { position: relative; display: flex; justify-content: center; width: min(320px, 100%); }
 
 /* A router's card (OrgChartSheet.tsx): in the VPs' grid after them, because a router sits beside the

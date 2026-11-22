@@ -13,6 +13,7 @@ import { getLetterSnapshot, loadLetters, subscribeLetters } from '@/components/i
 import { OrgInlineAnswer, type AnswerFailure } from './OrgInlineAnswer';
 import { openLetterFor } from './org-answer-shape';
 import type { OrgAlertView } from './org-channels-model';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
 /** The thread waits on him for its letter: its card answers the letter (core: letter-thread-model.ts holdsLetter). */
 export const answersLetter = (t: Pick<OrgThread, 'letter' | 'closed' | 'state'>): boolean =>
@@ -33,9 +34,9 @@ export function ThreadLetterAnswer({ t }: { t: OrgThread }) {
   if (sent) return <p className="org-thread-stand-in-note" data-testid="org-thread-letter-sent">Answer sent.</p>;
   if (!open) {
     return (
-      <p className="org-thread-stand-in-note" role="status" data-testid="org-thread-letter-gone">
-        {fresh ? 'This letter no longer waits for an answer (answered or closed in the inbox). The thread updates in a moment.' : 'Loading the letter…'}
-      </p>
+      fresh
+        ? <EmptyState size="row" title="This letter no longer waits for an answer" hint="It was answered or closed in the inbox. The thread updates in a moment." testId="org-thread-letter-gone" />
+        : <LoadingState size="row" title="Loading the letter…" testId="org-thread-letter-gone" />
     );
   }
   const ask = t.ask?.trim() || t.title;

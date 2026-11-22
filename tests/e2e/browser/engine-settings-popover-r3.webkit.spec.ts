@@ -76,7 +76,7 @@ test('webkit: stable filter top through every state; both sentences from the res
   await filterBox(dialog).fill('')
   await expect.poll(() => groupOpen(terminal)).toBe(false)
   await filterBox(dialog).fill('zzzz')
-  await expect(dialog.locator('.engine-settings-popover-nomatch')).toBeVisible()
+  await expect(dialog.getByTestId('engine-settings-popover-nomatch')).toBeVisible()
   const g2 = await geometry()
   await filterBox(dialog).fill('')
   await expect(popoverRow(dialog, 'alwaysThinkingEnabled')).toBeVisible()

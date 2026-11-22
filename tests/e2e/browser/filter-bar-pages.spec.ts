@@ -109,7 +109,7 @@ test('keys: ArrowDown/Up walk every row, ArrowRight and Enter open a page, Backs
   await search.fill('work')
   await expect(filterPage(page, 'status').locator('.fb-opt-label')).toHaveText(['Working'])
   await search.fill('xyz')
-  await expect(filterPage(page, 'status').locator('.fb-empty')).toHaveText('No match for "xyz"')
+  await expect(filterPage(page, 'status').getByTestId('fb-empty')).toHaveText('No match for \u201cxyz\u201d')
   await page.keyboard.press('Backspace')
   await expect(search).toHaveValue('xy')
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'status')

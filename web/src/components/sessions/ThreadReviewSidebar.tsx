@@ -53,7 +53,7 @@ const STATE_WORDS: Record<ThreadMarkState, string> = {
   waiting: 'Waiting',
   answering: 'Answering…',
   unread: 'New answer',
-  failed: 'No answer',
+  failed: 'No answer', // empty-state-ok: status word map
   read: 'Answered',
   resolved: 'Archived',
 };
@@ -189,7 +189,7 @@ const FOLLOW_ANSWER_MS = 5 * 60_000;
 function answerLine(e: ReviewEntry): string {
   if (e.state === 'waiting') return 'Waiting for an answer…';
   if (e.state === 'failed' && !e.answer) return 'No answer came back.';
-  return e.answer || (e.state === 'answering' ? 'Answering…' : 'No answer text.');
+  return e.answer || (e.state === 'answering' ? 'Answering…' : 'No answer text.'); // empty-state-ok: a card's answer line
 }
 
 export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadReviewSidebarProps) {

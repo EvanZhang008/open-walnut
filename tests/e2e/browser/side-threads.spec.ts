@@ -693,7 +693,7 @@ test('permanent delete lives in the shelf and asks first', async ({ page, reques
   // A filed thread is not in the chip row, and the pill counts only live ones.
   await expect(liveChips(popover)).toHaveCount(0)
   await expect(btwPill(panel).locator('.side-question-count')).toHaveCount(0)
-  await expect(popover.locator('.side-question-empty')).toContainText('reopen one from Archived')
+  await expect(popover.getByTestId('side-question-empty')).toContainText('reopen one from Archived')
 
   await popover.locator('.side-thread-chip-archived-toggle').click()
   const shelf = popover.locator('.side-thread-archived')

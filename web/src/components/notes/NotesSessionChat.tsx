@@ -9,6 +9,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { SessionRecord } from '@/types/session';
 import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
+import { UnavailableState } from '@/components/common/EmptyState';
 
 /**
  * NotesSessionChat — the PENDING shell for a REAL Claude Code session launched
@@ -196,10 +197,12 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
 
       <div className="notes-session-chat-body">
         {error ? (
-          <div className="notes-chat-empty">
-            <p style={{ color: 'var(--error)' }}>{error}</p>
-            <p>Verify that the Claude CLI is installed, then start a new session from the notes tree.</p>
-          </div>
+          <UnavailableState
+            size="pane"
+            title={error}
+            hint="Verify that the Claude CLI is installed, then start a new session from the notes tree."
+            testId="notes-chat-error"
+          />
         ) : pending ? (
           /* Optimistic shell — full chat look from the first paint. No kickoff
              turn is sent: the CLI spawns + inits (MCP/skills) and idles. */

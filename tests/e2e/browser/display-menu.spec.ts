@@ -293,7 +293,7 @@ test('page one keeps its height and every row in place in every view; the View p
   await expect(viewsPage(page).locator('.dm-view')).toHaveCount(1)
   await filterSearch(page).fill('no such lane')
   await expect(viewsPage(page).locator('.dm-view')).toHaveCount(0)
-  await expect(viewsPage(page).locator('.fb-empty')).toHaveText('No view matches "no such lane"')
+  await expect(viewsPage(page).getByTestId('fb-empty')).toHaveText('No view matches \u201cno such lane\u201d')
   await filterSearch(page).fill('')
   // C19: a pick in the long tail lands; page one is the same size in that view too.
   await viewChoice(page, 'ct_pw_display_29').scrollIntoViewIfNeeded()

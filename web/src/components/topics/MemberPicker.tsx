@@ -8,6 +8,7 @@ import { useMemo, useRef, useState } from 'react';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { ICON_PLUS } from '@/components/common/Icons';
 import { Checkbox } from '@/components/controls';
+import { EmptyState } from '@/components/common/EmptyState';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { PickedMember } from './topic-dialogs';
 import { useMemberCandidates } from './member-candidates';
@@ -94,7 +95,7 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
           ))}
         </ul>
       )}
-      {query.trim() && rows.length === 0 && <p className="topic-muted">No task or VP matches “{query.trim()}”.</p>}
+      {query.trim() && rows.length === 0 && <EmptyState size="row" title={`No task or VP matches “${query.trim()}”`} />}
       {person ? (
         <div className="topic-person" data-testid="topic-person-form">
           <MicInput data-no-draft="picker" className="app-modal-input" placeholder="Name" aria-label="Their name" data-testid="topic-person-name" value={person.name} micRef={nameMic} setText={(name) => setPerson((p) => (p ? { ...p, name } : p))} />

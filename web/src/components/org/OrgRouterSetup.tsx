@@ -16,6 +16,7 @@ import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { useRevealWhen } from './use-reveal';
 import { LINK_FILTER_FROM, ROUTER_LINK_NOTE, ROUTER_NAME_MAX, ROUTER_PURPOSE, isOpenVp, linkFilterMatches } from './OrgRouterSettings';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const SETUP_KEY = draftKey('org-router-setup', 'new');
 export const ROUTER_SETUP_AREAS = [{ id: 'personal', name: 'Personal' }, { id: 'work', name: 'Work' }] as const;
@@ -79,13 +80,13 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
       <label>Name<MicInput value={draft.value.name} maxLength={ROUTER_NAME_MAX} data-draft-key={draft.key ?? undefined} setText={(name) => draft.setValue((value) => ({ ...value, name }))} micRef={nameMic} data-testid="router-name" disabled={busy} /></label>
       <fieldset><legend>Works closely with (optional)</legend>
         <p className="org-router-hint">{ROUTER_LINK_NOTE}</p>
-        {leads.length === 0 && <p data-testid="router-setup-no-vps">No open VP yet. A router works on its own.</p>}
+        {leads.length === 0 && <EmptyState size="row" title="No open VP yet" hint="A router works on its own." testId="router-setup-no-vps" />}
         {leads.length > LINK_FILTER_FROM && (
           <MicInput type="search" className="org-router-link-filter" fieldClassName="org-router-link-filter-field" data-testid="router-setup-vp-filter" data-no-draft="search"
             placeholder="Find a VP" aria-label="Find a VP" value={vpQuery} disabled={busy} setText={setVpQuery} />
         )}
         <div className="org-router-link-list">
-          {shownLeads.length === 0 && leads.length > 0 && <p className="org-router-hint" data-testid="router-setup-vp-none">No VP matches “{vpQuery.trim()}”.</p>}
+          {shownLeads.length === 0 && leads.length > 0 && <EmptyState size="row" title={`No VP matches “${vpQuery.trim()}”`} testId="router-setup-vp-none" />}
           {shownLeads.map((lead) => <label key={lead.id} className="org-router-check" data-testid="router-setup-vp" data-task-id={lead.id}>
             <Checkbox checked={draft.value.links.includes(lead.id)} data-draft-key={draft.key ?? undefined} disabled={busy} onChange={() => draft.setValue((value) => ({ ...value, links: value.links.includes(lead.id) ? value.links.filter((id) => id !== lead.id) : [...value.links, lead.id] }))} />{lead.org_name || lead.title}
           </label>)}

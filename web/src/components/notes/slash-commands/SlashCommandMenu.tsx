@@ -9,6 +9,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import type { NoteSlashCommand, SlashCommandGroup } from './types';
 import { NOTE_SLASH_COMMANDS, GROUP_LABELS } from './types';
+import { EmptyState } from '@/components/common/EmptyState';
 
 interface SlashCommandMenuProps {
   query: string;
@@ -119,7 +120,7 @@ export function SlashCommandMenu({ query, atBlockStart, onSelect, onClose }: Sla
   if (filtered.length === 0) {
     return (
       <div className="notes-slash-panel wn-overlay wn-menu">
-        <div className="notes-slash-empty">No matching commands</div>
+        <EmptyState size="row" title="No matching commands" />
       </div>
     );
   }

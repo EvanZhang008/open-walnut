@@ -122,7 +122,7 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
         <span className="mail-row-from wn-title" data-field={outbound ? 'to' : 'from'}>
           {/* `To` only in front of somebody. A live sent folder does hold rows whose cached envelope never
               carried recipients (they live in the provider's payload, not in a column), and the stand-in
-              has to say that WE do not know rather than that the mail had nobody: `No recipient` was a
+              has to say that WE do not know rather than that the mail had nobody. The old `No recipient` was a
               claim about the message, `Unknown recipient` is a claim about the cache, which is the true one
               and the same word `senderLabel` already uses for a missing sender. */}
           {outbound && recipient && <span className="mail-row-to">To </span>}

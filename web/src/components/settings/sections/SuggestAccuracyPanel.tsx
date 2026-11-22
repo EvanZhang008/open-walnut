@@ -24,7 +24,8 @@ import {
   type SuggestField,
   type SuggestFieldStats,
 } from '@/api/tasks';
-import { SettingsGroup, SettingsRow, SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsGroup, SettingsRow, SettingsNotice } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import '@/styles/settings-sections-addons.css';
@@ -147,15 +148,12 @@ export function SuggestAccuracyPanel({ standalone = false }: { standalone?: bool
         {/* Only while a read is actually in flight. Before that the panel shows
             just its row: "Reading..." while nothing is being read is a lie, and
             "nothing recorded" before the read is a different lie. */}
-        {loading && !summary && <SettingsLoadingRow>Reading the recorded guesses...</SettingsLoadingRow>}
+        {loading && !summary && <LoadingState title="Reading the recorded guesses…" />}
         {error && (
           <SettingsNotice kind="error" role="alert">{`Couldn't read it: ${error}`}</SettingsNotice>
         )}
         {summary && !error && rows.length === 0 && (
-          <SettingsRow
-            label="Nothing recorded yet."
-            help="Type a message in a new session, let Walnut suggest a project and folder, then start it. The first result shows here."
-          />
+          <EmptyState title="Nothing recorded yet" hint="Type a message in a new session, let Walnut suggest a project and folder, then start it. The first result shows here." />
         )}
         {summary && !error && rows.length > 0 && (
           <div className="settings-row settings-row-stacked" data-wide="true">

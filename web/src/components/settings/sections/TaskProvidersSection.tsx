@@ -35,6 +35,7 @@ import '@/styles/settings-task-providers.css'
 import '@/styles/settings-mic.css'
 import { MicInput } from '@/components/common/BoxMic'
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
+import { EmptyState } from '@/components/common/EmptyState';
 
 export { wordsFromText }
 
@@ -57,10 +58,7 @@ export function TaskProvidersSection({ config, onSave }: { config: Config; onSav
     <SettingsSection id="task-providers" title="Task providers">
       {providers === null ? null : providers.length === 0 ? (
         <SettingsGroup data-testid="task-providers-empty">
-          <SettingsRow
-            label="No task provider is connected"
-            help="A plugin that syncs tasks, a to-do list or a team tracker, shows here once it is set up in Plugins"
-          />
+          <EmptyState title="No task provider is connected" hint="A plugin that syncs tasks, a to-do list or a team tracker, shows here once it is set up in Plugins." />
         </SettingsGroup>
       ) : providers.map((p) => (
         <ProviderCard
@@ -131,7 +129,7 @@ function ProviderCard({ provider: p, tint, save }: {
     const settle = (v: AiAnswer) => { if (asked.current === n) setAnswer(v) }
     setAnswer('asking')
     testProviderRules({ text: sample, provider: p.id, ai: true, ai_rule: ruleText })
-      .then((r) => settle(r.ai ?? { error: 'No answer' }))
+      .then((r) => settle(r.ai ?? { error: 'No answer' })) // empty-state-ok: error value, not rendered as a state
       .catch((err) => settle({ error: err instanceof Error ? err.message : String(err) }))
   }
   // Ask AI (the button, or Enter in the title) waits for words still being dictated into the title

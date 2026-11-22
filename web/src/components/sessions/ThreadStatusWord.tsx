@@ -37,7 +37,7 @@ export const STATUS_WORDS: Record<StatusWordKind, string> = {
   answered: 'Answered',
   check: 'To check',
   done: 'Archived',
-  failed: 'No answer',
+  failed: 'No answer', // empty-state-ok: status word map
   draft: 'Draft',
   none: '',
 };

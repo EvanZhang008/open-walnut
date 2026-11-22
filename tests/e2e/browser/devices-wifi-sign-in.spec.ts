@@ -49,7 +49,7 @@ async function openWifiTab(page: Page) {
   await page.getByTestId('settings-nav-devices').click()
   await expect(page.getByTestId('pc-tabs')).toBeVisible({ timeout: 30_000 })
   const section = await openWay(page, 'wifi')
-  await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  await expect(section).not.toContainText('Loading paired phones…', { timeout: 30_000 })
   return section
 }
 

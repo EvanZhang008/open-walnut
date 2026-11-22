@@ -23,6 +23,7 @@ import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { parseDateLocal } from '@/components/common/DatePicker';
+import { EmptyState } from '@/components/common/EmptyState';
 import {
   formatDateOnly,
   addDays,
@@ -297,7 +298,7 @@ export function CalendarPage() {
           onOpenCalendars={setCalsAnchor}
         />
         {dayEmpty && (
-          <p className="cal-empty-day" role="status" data-testid="cal-empty-day">{emptyDayLine(from, formatDateOnly(new Date()))}</p>
+          <EmptyState size="row" testId="cal-empty-day" title={emptyDayLine(from, formatDateOnly(new Date())).replace(/\.$/, '')} />
         )}
         <CalendarAlert calendar={calendar} onRetry={calendar.refetch} />
         <div className="cal-body">

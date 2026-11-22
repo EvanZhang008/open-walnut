@@ -140,7 +140,6 @@
 .board-kanban .kanban-kind-done { --kb-kind: var(--kb-green); }
 .board-kanban .kanban-lane-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 8px 10px; min-height: 48px; }
 .board-kanban .kanban-lane-incoming { font-size: var(--font-size-xs); color: var(--kb-muted); font-style: italic; white-space: nowrap; }
-.board-kanban .kanban-lane-empty { font-size: var(--font-size-sm); color: var(--kb-muted); padding: 6px 2px; }
 .board-kanban .kanban-lane-show-all, .board-kanban .kanban-done-fold { align-self: flex-start; }
 .board-kanban .kanban-drop-line { height: 2px; margin: -5px 2px; border-radius: 1px; background: var(--accent); flex: 0 0 auto; }
 /* N3, R3-15: the card a keyboard drag holds, drawn lifted at its line in the target lane: the pointer
@@ -188,16 +187,7 @@
 .board-kanban .kanban-done-rail-text { writing-mode: vertical-rl; white-space: nowrap; }
 
 /* ── Empty, filter empty, skeleton ── */
-.board-kanban .kanban-empty {
-  margin: 12px auto 0; max-width: 420px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px;
-  background: var(--bg-elevated); text-align: center;
-}
-.board-kanban .kanban-empty-title { font-weight: 600; }
-.board-kanban .kanban-empty-text { margin: 4px 0 8px; color: var(--fg-secondary); font-size: var(--font-size-sm); }
 .board-kanban .kanban-ask-row { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.board-kanban .kanban-filter-empty {
-  display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 12px; color: var(--fg-secondary);
-}
 .board-kanban .kanban-skeleton { min-height: 64px; pointer-events: none; }
 .board-kanban .kanban-skeleton-bar {
   height: 10px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 9%, transparent); margin: 4px 0;
@@ -386,7 +376,6 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-detail-text { margin: 0; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .kanban-detail-subtasks { margin: 0; padding-left: 18px; line-height: 20px; }
 .kanban-detail-subtasks li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kanban-detail-none { margin: 0; color: var(--fg-secondary); }
 
 /* G9: the hovered card keeps its place through useHoverAnchor on every engine, so the
    browser's own scroll anchoring (Chromium only) must not add a second correction. */

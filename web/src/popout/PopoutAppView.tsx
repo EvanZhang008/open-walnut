@@ -23,7 +23,7 @@ import { ensureCoreAppsRegisteredLazily, preloadCoreScreen } from '@/apps/core-a
 import { useAppCatalog } from '@/apps/hooks';
 import type { RegisteredApp } from '@/apps/registry';
 import { useWebPluginRuntime } from '@/plugins/runtime-store';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { contentAreaStyle } from '@/components/layout/content-area-style';
 import { NotificationToaster } from '@/components/common/NotificationToaster';
 import { OperationErrorBridge } from '@/components/common/OperationErrorBridge';
@@ -71,12 +71,14 @@ function AppWindow({ appKey }: { appKey: string }) {
 
   if (!app) {
     // Plugin Apps (and Mail, which waits on its plugin) arrive once the plugins have loaded.
-    if (!runtime.ready || runtime.loading || catalog.loadingWebviews) return <LoadingSpinner />;
+    if (!runtime.ready || runtime.loading || catalog.loadingWebviews) return <LoadingState size="pane" title="Loading apps…" />;
     return (
-      <div className="popout-stub" data-testid="popout-app-missing">
-        <h2>This app is not available</h2>
-        <p>It may be turned off or uninstalled. The Apps page in Walnut lists what is installed.</p>
-      </div>
+      <UnavailableState
+        size="pane"
+        title="This app is not available"
+        hint="It may be turned off or uninstalled. The Apps page in Walnut lists what is installed."
+        testId="popout-app-missing"
+      />
     );
   }
   return (

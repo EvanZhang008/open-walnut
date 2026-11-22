@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { quickAsk, startAskTask } from '@/api/quick';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { AgentText } from '@/components/common/AgentText';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** What one quick question or the chat a task starts with may hold (MAX_TEXT_CHARS, quick-input-v1.ts). */
 const ASK_MAX_CHARS = 20_000;
@@ -68,7 +69,13 @@ export function QuickBarAsk({ turns, onTask }: { turns: readonly AskTurn[]; onTa
       .catch((err: unknown) => setMaking(err instanceof Error ? err.message : 'Not started.'));
   }, [turns, onTask]);
 
-  if (turns.length === 0) return <div className="qb-ask qb-ask-empty">A quick answer here, with no task made. Ask again to go on.</div>;
+  if (turns.length === 0) {
+    return (
+      <div className="qb-ask">
+        <EmptyState size="row" testId="qb-ask-empty" title="No question asked yet" hint="A quick answer shows here, with no task made. Ask again to go on." />
+      </div>
+    );
+  }
   const last = turns[turns.length - 1];
   return (
     <div className="qb-ask" data-testid="qb-ask">

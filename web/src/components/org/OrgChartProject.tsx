@@ -15,6 +15,7 @@ import * as ICONS from '../common/Icons';
 import type { VpProject } from './org-chart-model';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { domId, useChartOpen } from './OrgChartVp';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export interface ProjectTaskLine {
   id: string;
@@ -125,7 +126,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
       </div>
       {open && (
         <ul className="oc-tasks" id={detailId} data-testid="org-chart-tasks">
-          {lines.length === 0 && <li className="oc-task-empty">Nothing open</li>}
+          {lines.length === 0 && <li><EmptyState size="row" title="Nothing open" /></li>}
           {lines.map((t) => (
             <li key={t.id}>
               <button

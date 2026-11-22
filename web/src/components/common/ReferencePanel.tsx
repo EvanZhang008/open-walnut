@@ -7,6 +7,7 @@
  */
 import { useMemo } from 'react';
 import type { ReferencesResponse, ReferenceMatch } from '@/api/files';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 interface ReferencePanelProps {
   /** null = loading (the header still names the symbol). */
@@ -116,10 +117,10 @@ export function ReferencePanel({ result, symbol, currentFile, loading, error, on
         <button type="button" className="ref-panel-close" onClick={onClose} title="Close (Esc)" aria-label="Close references">✕</button>
       </div>
       <div className="ref-panel-body">
-        {loading && <div className="ref-panel-status">Searching…</div>}
-        {!loading && error && <div className="ref-panel-status ref-panel-error">{error}</div>}
+        {loading && <LoadingState size="section" title="Searching for references…" />}
+        {!loading && error && <UnavailableState size="section" title="Couldn't search for references" detail={error} />}
         {!loading && !error && result && result.matches.length === 0 && (
-          <div className="ref-panel-status">No matches for <code>{symbol}</code>{result.error ? ` — ${result.error}` : ''}</div>
+          <EmptyState size="section" title={<>No matches for <code>{symbol}</code></>} hint={result.error || undefined} />
         )}
         {!loading && defGroups.length > 0 && (
           <>

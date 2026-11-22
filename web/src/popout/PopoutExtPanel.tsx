@@ -61,6 +61,7 @@ import { markNotAPhone } from '@/hooks/usePhoneLayout';
 import { markStatusLinesOn } from '@/components/tasks/useTaskStatusLines';
 import { takeBrowserKey, useExtBrowserKey } from './ext-browser-key';
 import { ExtControl } from './ExtControl';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import './ext-panel.css';
 import '@/styles/walnut-agent.css';
 
@@ -767,8 +768,8 @@ function ExtPanel() {
   if (!ctx) {
     return <div ref={rootRef} className="ext-panel ext-panel-empty" data-testid="ext-panel">
       {orphan
-        ? <p>This is Walnut&apos;s browser side panel. Open it from the Walnut extension, next to a web page.</p>
-        : <p className="muted"><span className="spinner" /> Connecting to the page…</p>}
+        ? <EmptyState size="pane" title="Not opened from the extension" hint="This is Walnut's browser side panel. Open it from the Walnut extension, next to a web page." />
+        : <LoadingState size="pane" title="Connecting to the page…" />}
     </div>;
   }
 

@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { NoteListItem } from '@/api/notes-v2';
 import { MicInput } from '@/components/common/BoxMic';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const MAX_RESULTS = 15;
 
@@ -102,7 +103,7 @@ export function NoteLinkPanel({ notes, onSelect, onBack }: NoteLinkPanelProps) {
       </div>
       <div className="notes-task-search-list" ref={listRef}>
         {rowCount === 0 ? (
-          <div className="notes-slash-empty">No notes found</div>
+          <EmptyState size="row" title="No notes found" />
         ) : (
           <>
             {results.map((note, i) => (

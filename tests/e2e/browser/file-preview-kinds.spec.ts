@@ -24,6 +24,8 @@ import { goToSessionFolder } from './todo-panel-helpers'
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
 const SCREENSHOT_DIR = 'test-results/file-preview-kinds'
+/** Every way the viewer says it could not show a file (the shared UnavailableState, the binary state, a sheet's own error). */
+const FILE_ERRORS = '.file-viewer-error, [data-testid="file-viewer-error"], [data-testid="file-viewer-binary"], [data-testid="office-preview-error"]'
 
 /**
  * Open the fixture session's panel from the homepage and switch to the Files tab.
@@ -112,7 +114,7 @@ test('PDF renders with document zoom controls, not a download dead-end', async (
   await selectFile(explorer, 'contract.pdf')
   await expect(explorer.locator('.fv-pdf-text')).toContainText('WALNUT PDF', { timeout: 20_000 })
   await expect(explorer.getByRole('button', { name: 'Zoom in', exact: true })).toBeEnabled()
-  await expect(explorer.locator('.file-viewer-error, .fv-pdf-error')).toHaveCount(0)
+  await expect(explorer.locator(FILE_ERRORS + ', .fv-pdf-error, [data-testid="pdf-error"]')).toHaveCount(0)
   // ⋯ → Download hands the browser the attachment URL; fetch the same URL to
   // prove the server labels the bytes as a PDF.
   const menu = await openMoreMenu(page, explorer)
@@ -158,7 +160,7 @@ test('DOCX renders as a readable document (docx-preview), not a binary dead-end'
   // The lazy office chunk fetches the raw bytes and paints the document body.
   // The old code fell through to "Binary file — cannot display".
   await expect(explorer.locator('.fv-office-word')).toContainText('WALNUT DOCX MARKER', { timeout: 20_000 })
-  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
+  await expect(explorer.locator(FILE_ERRORS)).toHaveCount(0)
   await expectDownloadOffered(page, explorer)
 
   const res = await rawRes
@@ -177,7 +179,7 @@ test('XLSX renders as tables with a tab per sheet (SheetJS)', async ({ page }) =
   await expect(pane.locator('.fv-sheet-table')).toContainText('WALNUT XLSX MARKER', { timeout: 20_000 })
   await expect(pane.locator('.fv-sheet-table')).toContainText('apples')
 
-  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
+  await expect(explorer.locator(FILE_ERRORS)).toHaveCount(0)
 
   // Multi-sheet workbook → tab bar; switching tabs SWAPS the table (asserting
   // the old sheet is gone, not merely that the new text appeared — concatenated
@@ -198,7 +200,7 @@ test('PPTX renders slides (pptx-preview)', async ({ page }) => {
   await selectFileExact(explorer, 'office-slides.pptx')
 
   await expect(explorer.locator('.fv-office-slides')).toContainText('WALNUT PPTX MARKER', { timeout: 20_000 })
-  await expect(explorer.locator('.file-viewer-error')).toHaveCount(0)
+  await expect(explorer.locator(FILE_ERRORS)).toHaveCount(0)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/pptx-preview.png`, fullPage: false })
 })
@@ -210,7 +212,7 @@ test('a corrupt .docx degrades to a readable error, not a blank pane', async ({ 
   const explorer = await openFilesPanel(page)
   await selectFileExact(explorer, '~$office-doc.docx')
 
-  const err = explorer.locator('.fv-office-word .file-viewer-error')
+  const err = explorer.locator('.fv-office-word [data-testid="office-preview-error"]')
   await expect(err).toBeVisible({ timeout: 20_000 })
   await expect(err).toContainText('Download')
   await expectDownloadOffered(page, explorer)

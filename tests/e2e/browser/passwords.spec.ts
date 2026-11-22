@@ -123,7 +123,7 @@ test('search, favorites, trash and restore', async ({ page }) => {
   await page.getByLabel('Search passwords').fill(`git ${stamp}`)
   await expect(page.getByTestId('pw-row')).toHaveCount(1)
   await page.getByLabel('Search passwords').fill('no such thing anywhere')
-  await expect(page.getByText('Nothing matches.')).toBeVisible()
+  await expect(page.getByText('Nothing matches “no such thing anywhere”')).toBeVisible()
   await page.getByLabel('Search passwords').fill(stamp)
   await page.getByTestId('pw-row').filter({ hasText: SITE }).click()
 

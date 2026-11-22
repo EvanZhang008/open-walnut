@@ -1,3 +1,4 @@
+import { EmptyState } from '@/components/common/EmptyState';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
@@ -103,7 +104,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
       )}
       {error && <div className="adopt-worker-error" role="alert">{error}</div>}
       {shown.length === 0 && (
-        <div className="adopt-worker-empty">{filter.trim() ? 'No matching worker' : 'No worker left to release'}</div>
+        <EmptyState size="row" title={filter.trim() ? 'No worker matches “' + filter.trim() + '”' : 'No worker left to release'} />
       )}
       <ul className="adopt-worker-list" role="listbox">
         {shown.map((t, i) => {

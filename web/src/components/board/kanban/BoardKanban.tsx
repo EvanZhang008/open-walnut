@@ -36,6 +36,7 @@ import { KanbanLeaderRow } from './KanbanLeaderRow';
 import { KanbanAddLane } from './KanbanAddLane';
 import { KanbanToasts, useKanbanToasts } from './KanbanToasts';
 import { keepClearOfCorner } from '@/components/common/corner-stack';
+import { EmptyState } from '@/components/common/EmptyState';
 import '@/styles/board-kanban.css';
 import '@/styles/board-kanban-controls.css';
 
@@ -456,10 +457,10 @@ export function BoardKanban({
               {showLeaderRow && vm.leader && <KanbanLeaderRow leader={vm.leader} />}
             </div>
             {filter.emptyText && (
-              <div className="kanban-filter-empty" data-testid="kanban-filter-empty">
-                <span>{filter.emptyText}</span>
-                <button type="button" className="btn btn-link btn-sm kanban-text-btn" data-testid="kanban-show-all-cards" onClick={() => filter.setChip(null)}>Show all cards</button>
-              </div>
+              <EmptyState
+                testId="kanban-filter-empty" title={filter.emptyText}
+                action={{ label: 'Show all cards', testId: 'kanban-show-all-cards', onClick: () => filter.setChip(null) }}
+              />
             )}
             {vm.empty && <KanbanEmpty>{emptyExtra}</KanbanEmpty>}
             <div

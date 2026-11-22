@@ -19,6 +19,7 @@ import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
 import { timeAgo } from '@/utils/time';
 import * as ICONS from '@/components/common/Icons';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
@@ -50,13 +51,13 @@ export interface BoardStatusViewProps {
 
 const ago = (ms: number): string => (ms ? timeAgo(new Date(ms).toISOString()) : '');
 
-const EMPTY_TEXT: Record<StatusFilter, string> = {
-  open: 'No open tasks on this team.',
-  needs: 'Nothing needs you right now.',
-  working: 'Nothing is working right now.',
-  waiting: 'Nothing is waiting right now.',
-  notstarted: 'Every task here has started.',
-  done: `Nothing was done in the last ${RECENT_COMPLETED_DAYS} days.`,
+const EMPTY_TEXT: Record<StatusFilter, { title: string }> = {
+  open: { title: 'No open tasks on this team' },
+  needs: { title: 'Nothing needs you right now' },
+  working: { title: 'Nothing is working right now' },
+  waiting: { title: 'Nothing is waiting right now' },
+  notstarted: { title: 'Every task here has started' },
+  done: { title: `Nothing was done in the last ${RECENT_COMPLETED_DAYS} days` },
 };
 
 function StatusPill({ row }: { row: StatusRow }) {
@@ -95,7 +96,7 @@ function WhereCell({ row }: { row: StatusRow }) {
       {resultIsPartial(row.task.result_report) && (
         <AgentText compact inline {...taskTextSource(row.task, 'partial')} className="bs-partial" testId="board-partial" text={`Not done: ${row.task.result_report!.not_done!.join('; ')}`} />
       )}
-      {s.stale && <span className="bs-stale" title="Its session has not written an update for a day or more">No update in {compactDays(s.at)}</span>}
+      {s.stale && <span className="bs-stale" title="Its session has not written an update for a day or more">No update in {compactDays(s.at)}</span>}{/* empty-state-ok: a row's stale pill */}
     </>
   );
 }
@@ -261,7 +262,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
     log.info('board', 'status filter picked', { taskId: ownerId, filter: f });
   };
 
-  if (loading && !tasks.length) return <div className="task-board-loading">Loading the board…</div>;
+  if (loading && !tasks.length) return <LoadingState size="pane" title="Loading the board…" />;
 
   return (
     <div className="board-status" data-testid="board-status">
@@ -270,7 +271,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
         <h2 className="bs-h">{owner ? orgDisplayTitle(owner) : ownerTitle}</h2>
         <p className="bs-brief" data-testid="board-status-brief">
           {brief.needs.length === 0 ? (
-            <b className="bs-brief-none">Nothing needs you.</b>
+            <b className="bs-brief-none">Nothing needs you.{/* empty-state-ok: the brief's opening sentence, counts follow */}</b>
           ) : (
             <>
               <b className="bs-brief-needs">{stateCountLabel('needs', brief.needs.length)}:</b>{' '}
@@ -309,9 +310,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
         </ChipGroup>
       </div>
       {rows.length === 0 ? (
-        <p className="bs-empty" data-testid="board-status-empty">
-          {EMPTY_TEXT[filter]}
-        </p>
+        <EmptyState testId="board-status-empty" title={EMPTY_TEXT[filter].title} />
       ) : (
         <table className="bs-table">
           <thead>
@@ -324,8 +323,9 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
       )}
       {solo && (
         <div className="bs-solo" data-testid="board-status-solo">
-          <p className="bs-empty">No other tasks on this team yet. Subtasks show here as they start.</p>
-          {soloExtra}
+          <EmptyState title="No other tasks on this team yet" hint="Subtasks show here as they start.">
+            {soloExtra}
+          </EmptyState>
         </div>
       )}
       {filter === 'open' && board.counts.done > 0 && (

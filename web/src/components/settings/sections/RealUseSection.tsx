@@ -22,6 +22,7 @@ import { NotesBlock, WatchesBlock } from './RealUseWatches';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/health-monitor.css';
 import '@/styles/real-use.css';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const RANGE_OPTIONS: ReadonlyArray<{ value: UsageRange; label: string; testId: string }> = [
   { value: '24h', label: '24 hours', testId: 'real-use-range-24h' },
@@ -70,9 +71,11 @@ function Body({ view }: { view: UsageWatchView }) {
         </SettingsNotice>
       )}
       {view.rows.length === 0 ? (
-        <p className="ru-empty ru-empty-all" data-testid="real-use-empty">
-          No real use recorded yet. Walnut records every tool call, request and page error from now on; the first hour shows when it ends.
-        </p>
+        <EmptyState
+          testId="real-use-empty"
+          title="No real use recorded yet"
+          hint="Walnut records every tool call, request and page error from now on; the first hour shows when it ends."
+        />
       ) : (
         <>
           <ToolsBlock rows={view.rows} range={view.range} now={now} />

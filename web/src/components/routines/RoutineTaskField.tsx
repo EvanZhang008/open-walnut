@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { MicInput } from '@/components/common/BoxMic';
+import { EmptyState } from '@/components/common/EmptyState';
 
 interface TaskHit {
   id: string;
@@ -79,9 +80,9 @@ export function RoutineTaskField({ id, value, onChange }: { id: string; value: s
             </span>
           </>
         ) : value.trim() ? (
-          <span className="routine-task-complete">No task has the id {value.trim()}: pick one below</span>
+          <span className="routine-task-complete">No task has the id {value.trim()}: pick one below</span> /* empty-state-ok: the form field's current value */
         ) : (
-          <span className="text-muted">No task chosen yet</span>
+          <span className="text-muted">No task chosen yet</span> /* empty-state-ok: the form field's current value */
         )}
       </div>
       {!listing && (
@@ -116,7 +117,9 @@ export function RoutineTaskField({ id, value, onChange }: { id: string; value: s
           </li>
         ))}
         {hits && choices.length === 0 && !searching && (
-          <li className="routine-task-none text-muted">{query.trim() ? 'No open task has that in its title.' : 'No open tasks.'}</li>
+          <li>
+            <EmptyState size="row" title={query.trim() ? 'No open task has that in its title' : 'No open tasks'} />
+          </li>
         )}
       </ul>
       </>)}

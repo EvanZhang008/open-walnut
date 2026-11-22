@@ -314,9 +314,9 @@ function CalendarPicker({ calendars, value, onChange }: { calendars: CalendarInf
   useFlyoutEscape(open, useLeanCallback(() => setOpen(false), []));
   const current = calendars?.find((c) => c.id === value);
   const label = calendars === null
-    ? 'Loading calendars…'
+    ? 'Loading calendars…' // empty-state-ok: picker button label
     : calendars.length === 0
-      ? 'No writable calendar'
+      ? 'No writable calendar' // empty-state-ok: picker button label
       : current
         ? `${current.title} (${current.account})${current.default ? ' · default' : ''}`
         : 'Pick a calendar';

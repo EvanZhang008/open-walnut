@@ -15,6 +15,7 @@ import { Radio } from '@/components/controls'
 import { saveErrorMessage } from '../../settings-pane-context'
 import { apiGet, apiPost } from '@/api/client'
 import { fmtBytes, type BackupDestinationConfig } from './backup-model'
+import { EmptyState } from '@/components/common/EmptyState';
 
 export interface RestoreStatus {
   running: boolean
@@ -288,7 +289,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           }
         />
       )}
-      {items && items.length === 0 && <SettingsRow indent label={locked ? 'No unencrypted backups here yet.' : 'No backups here yet.'} />}
+      {items && items.length === 0 && <EmptyState size="row" title={locked ? 'No unencrypted backups here yet' : 'No backups here yet'} />}
       {items && locked && (
         <SettingsRow indent state="warning" label="Encrypted backups are here too"
           help="No key on this computer opens them. Turn on Encrypt backups above and enter the key you saved to restore them."

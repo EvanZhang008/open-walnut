@@ -12,7 +12,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
-import { SettingsGroup, SettingsRow, SettingsTag, SettingsLoadingRow, SettingsNotice } from '../SettingsSection';
+import { SettingsGroup, SettingsRow, SettingsTag, SettingsNotice } from '../SettingsSection';
+import { LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { saveErrorMessage } from '../settings-pane-context';
 import { PermissionFixDialog } from '@/components/common/PermissionFixDialog';
@@ -122,7 +123,7 @@ export function PermissionsSection() {
               {`Couldn't load permissions: ${loadError}`}
             </SettingsNotice>
           ) : (
-            <SettingsLoadingRow>Checking permissions...</SettingsLoadingRow>
+            <LoadingState title="Checking permissions…" />
           )
         ) : (
           <>

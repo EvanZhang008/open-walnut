@@ -134,7 +134,7 @@ test('tabs: All, Tasks, Notes, then the plugin sources; All searches every sourc
   await expect(input).toHaveValue('@deploy')
   await page.keyboard.press('Tab')
   await expect(activeTab(page)).toHaveText('Stuck')
-  await expect(page.locator(`${PALETTE} .mention-empty`)).toHaveText('Stuck did not answer in time.', { timeout: 10_000 })
+  await expect(page.locator(`${PALETTE} [data-testid="mention-empty"]`)).toHaveText('Stuck did not answer in time', { timeout: 10_000 })
 
   // ←/→ switch tabs only at the edges of the query.
   await retype(page, input, '@depl')
@@ -285,9 +285,9 @@ test('a source search that fails while the server restarts is asked again: its t
   const input = await openComposer(page)
   await page.keyboard.type('@chat ali')
   await expect(activeTab(page)).toHaveText('Chat')
-  await expect(page.locator(`${PALETTE} .mention-empty`).filter({ hasText: 'not available' })).toHaveCount(0)
+  await expect(page.locator(`${PALETTE} [data-testid="mention-empty"]`).filter({ hasText: 'not available' })).toHaveCount(0)
   await expect(selectedTitle(page)).toHaveText('Alice Chen', { timeout: 20_000 })
   expect(failed).toBe(2)
-  await expect(page.locator(`${PALETTE} .mention-empty`).filter({ hasText: 'not available' })).toHaveCount(0)
+  await expect(page.locator(`${PALETTE} [data-testid="mention-empty"]`).filter({ hasText: 'not available' })).toHaveCount(0)
   await expect(input).toHaveValue('@chat ali')
 })

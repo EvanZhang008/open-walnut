@@ -7,6 +7,7 @@
  * live from the provider (`GET /api/tasks/:id/changes/stage`, the server answers within its own
  * deadline). Which rows are open is a moment's look, kept by nothing.
  */
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeBlocker, ChangeDeploy, ChangeStage, ChangeStageDetail } from '../../../../src/core/changes/model';
 import { apiGet } from '@/api/client';
@@ -42,11 +43,11 @@ function Blocker({ blocker }: { blocker: ChangeBlocker }) {
 }
 
 function StageDetail({ state }: { state: DetailState }) {
-  if (state.kind === 'loading') return <div className="change-card-detail change-card-muted" role="status" data-testid="change-stage-loading">Reading the stage…</div>;
-  if (state.kind === 'error') return <div className="change-card-detail change-card-detail-error" role="status" data-testid="change-stage-error">{state.text}</div>;
+  if (state.kind === 'loading') return <div className="change-card-detail"><LoadingState size="row" testId="change-stage-loading" title="Reading the stage…" /></div>;
+  if (state.kind === 'error') return <div className="change-card-detail"><UnavailableState size="row" testId="change-stage-error" title={state.text} /></div>;
   const d = state.detail;
   if (!d || (d.steps.length === 0 && d.blockers.length === 0)) {
-    return <div className="change-card-detail change-card-muted" data-testid="change-stage-empty">Nothing more on this stage</div>;
+    return <div className="change-card-detail"><EmptyState size="row" testId="change-stage-empty" title="Nothing more on this stage" /></div>;
   }
   return (
     <div className="change-card-detail" data-testid="change-stage-detail">

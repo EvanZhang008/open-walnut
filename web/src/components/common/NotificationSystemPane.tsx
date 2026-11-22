@@ -23,6 +23,7 @@ import { openHostSettings } from '@/utils/host-settings-nav';
 import { NotificationHostRow } from './NotificationHostRow';
 import { HostFixButton } from './HostFixButton';
 import { NotificationUpdateCard } from './NotificationUpdateCard';
+import { LoadingState } from './EmptyState';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import '@/styles/attention-banner.css';
 import '@/styles/attention-banner-dense.css';
@@ -117,12 +118,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
   }, [navigate, onLeave]);
 
   if (loading) {
-    return (
-      <div className="notification-card">
-        <span className="notification-card-icon loading">...</span>
-        <span>Loading...</span>
-      </div>
-    );
+    return <LoadingState size="section" title="Loading system status…" />;
   }
 
   const gitOk = !gitSyncNeedsLook(gitSync);

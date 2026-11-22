@@ -9,6 +9,7 @@
  * scrolls itself, so a long template or option list never pushes it off screen.
  */
 import { useDraft, useDraftValue } from '@/hooks/useDraft';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { draftKey } from '@/utils/drafts';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -168,15 +169,12 @@ function TriggerList({ loaded, onRetry, onPick, onDescribe, onIdea }: {
     <>
       <section className="trigger-picker-section" aria-label="From your plugins">
         <h3 className="trigger-picker-section-title">From your plugins</h3>
-        {loaded.state === 'loading' && <p className="trigger-picker-note">Looking for plugin triggers…</p>}
+        {loaded.state === 'loading' && <LoadingState size="row" role="presentation" title="Looking for plugin triggers…" />}
         {loaded.state === 'error' && (
-          <p className="trigger-picker-note is-error">
-            Could not list plugin triggers: {loaded.message}{' '}
-            <button type="button" className="trigger-picker-link" onClick={onRetry}>Try again</button>
-          </p>
+          <UnavailableState size="row" role="presentation" title="Could not list plugin triggers" detail={loaded.message} onRetry={onRetry} retryLabel="Try again" />
         )}
         {loaded.state === 'ready' && loaded.templates.length === 0 && (
-          <p className="trigger-picker-note">No installed plugin offers a ready-made trigger. Describe it below and the AI sets it up.</p>
+          <EmptyState size="row" role="presentation" title="No plugin offers a ready-made trigger" hint="Describe it below and the AI sets it up." />
         )}
         {loaded.state === 'ready' && loaded.templates.map((t) => (
           <button key={t.id} type="button" className="trigger-picker-row" data-template={t.id} onClick={() => onPick(t)}>
@@ -407,9 +405,9 @@ function ParamField({ param, template, value, inputRef, onType, onChoose, draftK
             // blur would name no target, close the list and drop the click.
             onMouseDown={(e) => e.preventDefault()}
           >
-            {optionsError && <p className="trigger-picker-note is-error">{optionsError}</p>}
-            {!optionsError && options === null && <p className="trigger-picker-note">Loading…</p>}
-            {!optionsError && options?.length === 0 && <p className="trigger-picker-note">No match. You can still type a name.</p>}
+            {optionsError && <UnavailableState size="row" role="presentation" title="Couldn't list the choices" detail={optionsError} />}
+            {!optionsError && options === null && <LoadingState size="row" role="presentation" title={`Loading ${param.label.toLowerCase()} choices…`} />}
+            {!optionsError && options?.length === 0 && <EmptyState size="row" role="presentation" title="No match" hint="You can still type a name." />}
             {options?.map((option) => (
               <button
                 key={option.value}

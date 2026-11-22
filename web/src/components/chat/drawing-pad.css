@@ -107,5 +107,4 @@
   /* Full screen on a phone: square corners over the family radius. */
   html body .drawing-app-dialog { border-radius: 0; }
 }
-.drawing-app-loading { margin: auto; display: flex; align-items: center; gap: 8px; color: var(--fg-muted); }
 .drawing-app-beside-note { font-size: var(--font-size-sm); color: var(--fg-muted); }

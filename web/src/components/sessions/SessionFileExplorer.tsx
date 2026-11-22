@@ -18,6 +18,7 @@
  * network fetch always still runs and overwrites them.
  */
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { timeAgo } from '@/utils/time';
 import { usePhoneLayerWithBar } from './phone-session-layer';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode, type RefObject } from 'react';
@@ -1808,10 +1809,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                 {/* A create straight into this root: first row under the header. */}
                 {isOpen && editRowHere && renderEditRow(1)}
                 {isOpen && !rootError && isRootLoading && rows.length === 0 && (
-                  <div className="sfe-loading" style={{ paddingLeft: '22px' }}>Loading…</div>
+                  <LoadingState size="row" className="sfe-tree-state" title="Loading files…" />
                 )}
                 {isOpen && childrenMap.has(section.path) && rows.length === 0 && !editRowHere && (
-                  <div className="sfe-empty" style={{ paddingLeft: '22px' }}>Empty directory</div>
+                  <EmptyState size="row" className="sfe-tree-state" title="Empty folder" />
                 )}
                 {isOpen && rows.map((node) => {
                   const isExpanded = expanded.has(node.path);
@@ -1935,9 +1936,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                 <div className="fv-doc-bar-tools" />
                 {barRightSlot}
               </div>
-              <div className="sfe-preview-empty">
-                <span className="sfe-preview-empty-title">No file open</span>
-                <span className="sfe-preview-empty-hint">Choose a file from the folder on the left.</span>
+              <EmptyState size="pane" icon={ICON_FILE} title="No file open" hint="Choose a file from the folder on the left." testId="sfe-preview-empty">
                 {recentFiles.length > 0 && (
                   <div className="sfe-recent" data-testid="sfe-recent">
                     <span className="sfe-recent-label">Recent</span>
@@ -1959,7 +1958,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                     </div>
                   </div>
                 )}
-              </div>
+              </EmptyState>
             </div>
           )}
         </div>

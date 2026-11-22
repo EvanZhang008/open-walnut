@@ -496,8 +496,8 @@ export function BackupSection({ config, onSave }: Props) {
           ? (status.error ? '' : status.dueNow ? '. Next: within a minute.' : `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + Math.max(1, saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`)
           : '')
       : otherWriter ? 'Another computer writes these backups. Move them to this computer first.'
-        : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.'
-          : !blocked && enabled ? 'No backup yet. Next: within a minute.' : 'No backup yet.'
+        : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.' // empty-state-ok: row help text
+          : !blocked && enabled ? 'No backup yet. Next: within a minute.' : 'No backup yet.' // empty-state-ok: row help text
   const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
   const inUse = savedDest ? labelOf(savedDest.type) : null
@@ -507,7 +507,7 @@ export function BackupSection({ config, onSave }: Props) {
   const loading = !status || (!legacyMode && !!savedDest && encrypted && !keyKnown)
   const lastHelp = loading ? 'Checking...' : status?.notice
     // The first row of the group says why nothing can run yet; this one does not repeat it.
-    ?? (runBlocked && !status?.running && !status?.lastBackupAt ? (blocked ? 'No backup yet.' : `No backup yet. ${runBlocked}`)
+    ?? (runBlocked && !status?.running && !status?.lastBackupAt ? (blocked ? 'No backup yet.' : `No backup yet. ${runBlocked}`) // empty-state-ok: row help text
       : inUse && !legacyMode && !status?.running ? `${inUse}: ${lastBackupHelp}` : lastBackupHelp)
   const serviceHelp = !inUse
     ? 'Pick one, then connect it.'

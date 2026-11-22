@@ -10,6 +10,7 @@
  * section label.
  */
 import { tildePath } from '@/utils/home-folder';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { forwardRef, type ReactNode } from 'react';
 import { type HostDot, shownFailureSummary } from '@open-walnut/host-problem';
 import type { DirListingPending } from '@/api/sessions';
@@ -75,7 +76,8 @@ interface Props {
   activeHostLabel: string;
   /** Non-null → render the "create & start" row for this path. */
   createOption: string | null;
-  emptyHint: string;
+  /** What the list says when it has nothing to show (and what Enter does then). */
+  emptyHint: PathListEmpty;
   onItemClick: (item: RankedItem) => void;
   onItemHover: (flatIdx: number) => void;
   onCreate: () => void;
@@ -97,6 +99,15 @@ type LiveNote =
   | { key: string; kind: 'missing' | 'empty'; label: string }
   | { key: string; kind: 'connecting'; label: string; pending: DirListingPending }
   | { key: string; kind: 'down'; label: string; message: string; hint?: string };
+
+/** A live listing's note: the folder is not on that host, or has no folder in it. */
+function liveNoteTitle(kind: 'missing' | 'empty', label: string): string {
+  if (kind === 'missing') return `Directory does not exist on ${label}`;
+  return `No subdirectories on ${label}`;
+}
+
+/** The list's empty line: a title, what Enter does (hint), or a listing still on its way. */
+export interface PathListEmpty { title: string; hint?: string; loading?: boolean }
 
 export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   {
@@ -149,11 +160,11 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   return (
     <div className="sps-path-list" ref={ref}>
       {topNote}
-      {showGenericLoading && <div className="sps-empty">Loading paths...</div>}
-      {/* A stale history error next to a live "Loading paths..." reads as a
+      {showGenericLoading && <LoadingState size="row" title="Loading paths…" testId="sps-loading" />}
+      {/* A stale history error next to a live "Loading paths…" reads as a
           contradiction (both rendered in the 2026-07-19 freeze incident) —
           suppress the error while a load is in flight. */}
-      {loadError && !loading && <div className="sps-error">{loadError}</div>}
+      {loadError && !loading && <UnavailableState size="row" testId="sps-error" title="Couldn't list these paths" detail={loadError} />}
 
       {/* A host still connecting says so first, above every folder: under them it sat at
           the bottom of a long list (2026-11-12). With several hosts listed (All), one line each. */}
@@ -262,10 +273,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
           return state && renderHostNote ? <div key={note.key}>{renderHostNote(note.key, state)}</div> : null;
         }
         return (
-          <div key={note.key} className="sps-live-note">
-            {note.kind === 'missing' && `Directory does not exist on ${note.label}`}
-            {note.kind === 'empty' && `No subdirectories on ${note.label}`}
-          </div>
+          <EmptyState key={note.key} size="row" testId="sps-live-note" data={{ 'live-note': note.kind }} title={liveNoteTitle(note.kind, note.label)} />
         );
       })}
 
@@ -281,7 +289,9 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
           "does not exist" / "no subdirectories" note; a host still connecting or
           down speaks for itself. */}
       {!loading && !loadError && totalItems === 0 && liveNotes.every(n => n.kind === 'empty' || n.kind === 'missing') && (
-        <div className="sps-empty">{emptyHint}</div>
+        emptyHint.loading
+          ? <LoadingState size="row" title={emptyHint.title} testId="sps-empty" />
+          : <EmptyState size="row" title={emptyHint.title} hint={emptyHint.hint} testId="sps-empty" />
       )}
 
       {incompleteNotes.map(note => (

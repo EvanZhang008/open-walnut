@@ -82,7 +82,7 @@ async function watchBox(page: Page): Promise<void> {
     w.__seen = []
     const box = document.querySelector('[data-testid="org-side"] .session-history')!
     new MutationObserver(() => {
-      if (/No conversation history found/.test(box.textContent ?? '')) w.__seen.push('empty')
+      if (/No messages yet/.test(box.textContent ?? '')) w.__seen.push('empty')
     }).observe(box, { childList: true, subtree: true })
   })
 }

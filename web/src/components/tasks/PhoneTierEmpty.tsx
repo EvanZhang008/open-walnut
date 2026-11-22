@@ -10,6 +10,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Task } from '@open-walnut/core';
 import { taskUserState } from '@/utils/session-status';
 import { useHomeTasksById } from './phone-row-behavior';
+import { EmptyState } from '../common/EmptyState';
 
 export const PHONE_SHOW_SECTION_EVENT = 'phone:show-section';
 
@@ -33,15 +34,14 @@ export function PhoneTierEmpty() {
   if (!phone) return null;
   const hint = phoneTierEmptyHint(countNeedingYou(tasksById.values()));
   return (
-    <div className="phone-tier-empty" data-testid="phone-tier-empty">
-      <p className="phone-tier-empty-line">Nothing here yet.{hint ? ` ${hint}` : ''}</p>
-      <button
-        type="button"
-        className="btn phone-tier-empty-btn"
-        onClick={() => window.dispatchEvent(new CustomEvent(PHONE_SHOW_SECTION_EVENT, { detail: { section: 'recent' } }))}
-      >
-        Show recent tasks
-      </button>
-    </div>
+    <EmptyState
+      testId="phone-tier-empty"
+      title="Nothing in this tier yet"
+      hint={hint || undefined}
+      action={{
+        label: 'Show recent tasks',
+        onClick: () => window.dispatchEvent(new CustomEvent(PHONE_SHOW_SECTION_EVENT, { detail: { section: 'recent' } })),
+      }}
+    />
   );
 }

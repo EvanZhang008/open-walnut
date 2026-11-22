@@ -3,7 +3,8 @@ import { usePersistentState, oneOf } from '@/hooks/usePersistentState';
 import { useAgents } from '@/hooks/useAgents';
 import { AgentCard } from '@/components/agents/AgentCard';
 import { AgentForm } from '@/components/agents/AgentForm';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { ICON_ROBOT } from '@/components/common/Icons';
 import { Chip, ChipGroup } from '@/components/controls';
 import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/agents';
 
@@ -17,7 +18,7 @@ const FILTER_LABEL: Record<FilterTab, string> = { all: 'All', builtin: 'Built-in
 const isConsoleAgent = (a: AgentDefinition) => a.id === 'general' || a.console === true;
 
 export function AgentsPage() {
-  const { agents, loading, error, create, update, remove } = useAgents();
+  const { agents, loading, error, refetch, create, update, remove } = useAgents();
   const [filter, setFilter] = usePersistentState<FilterTab>(
     'walnut-agents-page-filter', 'all', oneOf(['all', 'builtin', 'config']),
   );
@@ -81,8 +82,8 @@ export function AgentsPage() {
     await remove(id);
   }, [remove]);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
+  if (loading) return <LoadingState size="pane" title="Loading agents…" />;
+  if (error) return <UnavailableState size="pane" title="Couldn't load agents" detail={error} onRetry={refetch} />;
 
   return (
     <div className="page-readable">
@@ -123,13 +124,9 @@ export function AgentsPage() {
       </ChipGroup>
 
       {filtered.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-state-icon">&#129302;</div>
-          <p>{filter === 'all' ? 'No agents defined yet' : `No ${FILTER_LABEL[filter].toLowerCase()} agents`}</p>
-          {filter === 'all' && (
-            <p className="text-sm mt-2">Create an agent to define specialized AI assistants</p>
-          )}
-        </div>
+        filter === 'all'
+          ? <EmptyState size="pane" icon={ICON_ROBOT} title="No agents defined yet" hint="Create an agent to define specialized AI assistants." />
+          : <EmptyState size="pane" icon={ICON_ROBOT} title={`No ${FILTER_LABEL[filter].toLowerCase()} agents`} action={{ label: 'Show all agents', onClick: () => setFilter('all') }} />
       ) : (
         <>
           {renderAgentSection('Home chat agents', 'you can pick these in the Home chat', consoleAgents)}

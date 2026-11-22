@@ -392,7 +392,7 @@ test.describe('ctx: paragraphs, the keyboard, and a long title', () => {
     const folder = folderRow(page, CTX_WRITER, 'ctx-fetch-unknown')
     await expect(folder, 'the uncached folder is not in the sidebar').toBeVisible({ timeout: 20_000 })
     await folder.click()
-    const settled = page.locator('.mail-pane-empty').first()
+    const settled = page.locator('.mail-list-pane .empty-state').first()
     await expect(settled).toBeVisible({ timeout: 60_000 })
     // A folder with nothing cached shows `Loading…` FIRST, and measuring that frame checks the loading
     // line twice while never reaching the sentence this half is about.
@@ -414,7 +414,7 @@ test.describe('ctx: paragraphs, the keyboard, and a long title', () => {
       await route.continue().catch(() => undefined)
     }, { times: 1 })
     await folderRow(page, CTX_WRITER, 'Archive').click()
-    const loading = page.locator('.mail-pane-empty').filter({ hasText: 'Loading' }).first()
+    const loading = page.locator('.mail-list-pane .empty-state').filter({ hasText: 'Loading' }).first()
     if (await loading.count()) {
       await loading.click({ button: 'right' })
       expect(await menuCount(page), 'the Loading line is not an object').toBe(0)

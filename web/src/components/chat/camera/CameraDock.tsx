@@ -196,7 +196,7 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
           <div className="camera-dock-refused" role="alert" data-testid="camera-refused">
             {ICON.camOff}
             <b>{cam.state === 'denied' ? (inMacApp() ? 'macOS is not letting Walnut use the camera' : 'Walnut can’t use the camera')
-              : cam.state === 'missing' ? 'No camera found' : cam.state === 'busy' ? 'The camera is in use by another app' : 'The camera did not start'}</b>
+              : cam.state === 'missing' ? 'No camera found' : cam.state === 'busy' ? 'The camera is in use by another app' : 'The camera did not start'}</b>{/* empty-state-ok: the camera viewfinder's notice, on its fixed dark surface (EmptyState's colours are for the page) */}
             <span>{cam.state === 'denied'
               ? (inMacApp() ? 'Open System Settings › Privacy & Security › Camera and turn on Walnut, then try again.'
                 : 'Your browser blocked it. Allow the camera for this site (the camera icon or the site settings in the address bar), then try again.')

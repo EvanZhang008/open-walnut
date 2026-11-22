@@ -249,7 +249,7 @@ test('connecting row shows the step list; a WS frame advances it with no extra l
   // Full contrast, never the old whisper.
   expect(await row.evaluate(el => parseFloat(getComputedStyle(el).opacity))).toBe(1)
   // One wait, one indicator.
-  await expect(list(page).locator('.sps-empty', { hasText: 'Loading paths' })).toHaveCount(0)
+  await expect(list(page).getByTestId('sps-loading')).toHaveCount(0)
 
   // Two more phases arrive over the socket. The row follows each frame on its
   // own: the step has moved by the time the frame is dispatched, and the

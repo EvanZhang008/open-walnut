@@ -42,7 +42,7 @@ const MATCH_TAG: Readonly<Record<MailCalendarMatch['kind'], string>> = {
   here: 'Calendar here',
   likely: 'Likely here',
   'kind-here': 'Not verified',
-  missing: 'No match found',
+  missing: 'No match found', // empty-state-ok: a match tag's label
 }
 
 interface Props {

@@ -4,6 +4,7 @@ import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { getLetter, type LetterDetail, type LetterEnvelope } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 /** Body-only view. Replies and decisions stay in the shared full reader. */
 export function LetterCardBody({ letter, expanded, onOpen, onNavigate }: { letter: LetterEnvelope; expanded: boolean; onOpen: () => void; onNavigate: (to: string) => void }) {
@@ -31,14 +32,13 @@ export function LetterCardBody({ letter, expanded, onOpen, onNavigate }: { lette
 
   return (
     <div className="hib-card-content" onClick={(event) => event.stopPropagation()}>
-      {failed ? <div className="hib-note hib-note-error" role="alert">
-        Could not load this letter. <button className="btn btn-sm hib-row-btn" onClick={() => setAttempt((value) => value + 1)}>Retry</button>
-      </div> : detail ? <>
-        {detail.bodyMissing ? <div className="hib-note">The letter body is unavailable.</div> :
+      {failed ? <UnavailableState size="section" title="Couldn't load this letter" onRetry={() => setAttempt((value) => value + 1)} />
+        : detail ? <>
+        {detail.bodyMissing ? <UnavailableState size="section" title="The letter body is unavailable" testId="letter-body-missing" /> :
           <LetterBody body={detail.body ?? ''} format={detail.bodyFormat} subject={detail.subject} bodyUrl={detail.bodyUrl} source={source} onClick={onBodyClick}
             onRefOpen={(ref) => { if (ref.kind === 'file') file.onFileOpen?.(ref.path, ref.line, undefined, ref.endLine); else openAgentRef(ref, navigate); }} />}
 
-      </> : <div className="hib-note" role="status">Loading letter…</div>}
+      </> : <LoadingState size="section" title="Loading letter…" />}
       <button className="btn btn-sm hib-row-btn hib-card-open" onClick={onOpen}>Open full letter</button>
     </div>
   );

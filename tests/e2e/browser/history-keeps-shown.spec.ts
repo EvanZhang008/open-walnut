@@ -5,7 +5,7 @@
  * Reported (gate review, 2026-10-02): on a slow but live link the first full
  * read answered at its 60s bound "still loading" with 0 messages, and the
  * column cleared what it showed: "Showing cached history ... Reconnecting..."
- * over "No conversation history found", for 10s, until a retry came after the
+ * over "No conversation history found" (now "No messages yet"), for 10s, until a retry came after the
  * read had finished. The hook now keeps what it shows on such an answer, says
  * the history is still loading, and asks again at once (joining the read), and
  * a stale answer with fewer messages than shown keeps the shown ones under the
@@ -91,7 +91,7 @@ async function watch(page: Page, done: (text: string) => boolean, ms: number): P
       text.includes('Answer read from the host') ? 'full' : '',
       text.includes('Still loading this conversation from Cloud') ? 'loading-line' : '',
       text.includes('Showing cached history') ? 'stale-banner' : '',
-      text.includes('No conversation history found') ? 'EMPTY' : '',
+      text.includes('No messages yet') ? 'EMPTY' : '',
     ].filter(Boolean);
     note(parts.join('+'));
     if (done(text)) break;
@@ -186,10 +186,10 @@ test('a stale answer with fewer messages than shown: what is shown stays, under 
   // Several retries come and go (500ms here); none of them takes the history away.
   await expect.poll(() => fullAsks, { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
   await expect(history).toContainText('Answer the column already shows', SHOWN);
-  await expect(history).not.toContainText('No conversation history found');
+  await expect(history).not.toContainText('No messages yet');
 });
 
-test('nothing shown yet and the history still loading: the column says so, never "No conversation history found"', async ({ page }) => {
+test('nothing shown yet and the history still loading: the column says so, never "No messages yet"', async ({ page }) => {
   const sid = 'pw-history-cold-loading';
   let fullAsks = 0;
   await page.route(`**/api/sessions/${sid}/history**`, async (route) => {
@@ -260,7 +260,7 @@ test('a turn-end delta cut while the host still sends: the column says it is loa
   expect(fullAsks).toBeGreaterThanOrEqual(3);
 });
 
-test('an empty column and a turn-end delta cut while the host still sends: the loading line, never "No conversation history found" beside it', async ({ page }) => {
+test('an empty column and a turn-end delta cut while the host still sends: the loading line, never "No messages yet" beside it', async ({ page }) => {
   // The delta path hands over to the full read it joins and clears its own
   // loading flags; only the loading line's own state keeps the empty state away
   // then (gate review 2026-10-03, mutant M22: nothing caught its removal).
@@ -289,7 +289,7 @@ test('an empty column and a turn-end delta cut while the host still sends: the l
   await mockSessionDetail(page, sid, 0);
   await page.goto(`/sessions?id=${sid}`);
   const history = columnHistory(page);
-  await expect(history).toContainText('No conversation history found', { ...SHOWN, timeout: 30_000 });
+  await expect(history).toContainText('No messages yet', { ...SHOWN, timeout: 30_000 });
   await expect.poll(() => fullAsks, { timeout: 30_000 }).toBe(1);
   await endTurn(page, sid);
   const seen = await watch(page, (text) => text.includes('Answer read from the host'), 30_000);

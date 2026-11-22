@@ -283,7 +283,7 @@ test('Tasks: Add to Focus from the row; a reply leaves the row in place with wha
   await expect(t.getByTestId('ext-tasks-needs').getByTestId('ext-task-infocus')).toHaveCount(0)
   const focusRows = await focus.getByTestId('ext-task').count()
   await expect(focus.locator('.ext-tasks-count')).toHaveText(String(focusRows))
-  await expect(focus.locator('.ext-tasks-empty')).toHaveCount(0)
+  await expect(focus.getByTestId('ext-tasks-focus-empty')).toHaveCount(0)
   const task = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${otherId}`)).json() as Record<string, any>
   const tk = (task.task ?? task) as { pinned?: boolean; focus_tier?: string }
   expect(tk.pinned).toBe(true)

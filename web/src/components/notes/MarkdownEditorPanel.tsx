@@ -17,6 +17,7 @@ import {
   scrollFraction,
   applyScrollFraction,
 } from './scroll-memory';
+import { UnavailableState } from '@/components/common/EmptyState';
 import './notes-width.css';
 
 /** A link drawn as missing: the shared notes list looks again (it can lag a bulk write). */
@@ -461,9 +462,7 @@ export function MarkdownEditorPanel({
   if (content === null) {
     return (
       <>{loadingFallback ?? (
-        <div className="notes-editor-empty">
-          <div className="notes-editor-empty-content"><p>Failed to load</p></div>
-        </div>
+        <UnavailableState size="pane" title="Couldn't load this document" />
       )}</>
     );
   }

@@ -138,7 +138,6 @@
 .thread-card-body .session-msg-content > :last-child { margin-bottom: 0; }
 .thread-card-body .markdown-body > :first-child { margin-top: 0; }
 .thread-card-body .markdown-body > :last-child { margin-bottom: 0; }
-.thread-card-empty { color: var(--fg-muted); font-size: var(--font-size-sm); padding: 2px 0; }
 /* A finished turn whose reply had tool calls and no words. */
 .thread-card-noanswer { color: var(--fg-muted); font-size: var(--font-size-sm); font-style: italic; padding: 2px 0 4px; }
 .thread-card-answering {

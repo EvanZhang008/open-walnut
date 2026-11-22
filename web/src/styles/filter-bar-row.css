@@ -152,7 +152,6 @@
   .fb-chip-val { max-width: 120px; }
 }
 
-
 /* ── Board pieces the filters own ── */
 /* 5.3 / F25: zero matches under chips: the empty state is the only thing in the list. */
 .home-navigation-scroll.is-filter-empty > * { display: none; }

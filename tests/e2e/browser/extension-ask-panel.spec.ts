@@ -1154,7 +1154,7 @@ test('the selection quote follows the page and stays with its agent; the compose
     // Its list, still open, says when it has no asks, its words where the drawer's title starts (round 4, #7).
     const drawer = v.getByTestId('ask-walnut-drawer')
     if (await drawer.isVisible()) {
-      const empty = drawer.locator('.ask-walnut-drawer-empty').first()
+      const empty = drawer.getByTestId('ask-walnut-drawer-empty').first()
       if (await empty.isVisible()) {
         // Where each one's words start (a button's box starts at its padding, not its text).
         const textX = (l: typeof empty) => l.evaluate((e) => { const r = document.createRange(); r.selectNodeContents(e); return r.getClientRects()[0]?.left ?? -1 })

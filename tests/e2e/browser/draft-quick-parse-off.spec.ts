@@ -327,8 +327,8 @@ test('the folder picker opens and populates, and the Quick folders row renders',
 
   // The incident's visible symptom must not render: a stale error beside a live
   // loading state (see quick-session-path-load.spec.ts, the 2026-07-19 repro).
-  await expect(list.locator('.sps-empty', { hasText: 'Loading paths...' })).toHaveCount(0)
-  await expect(list.locator('.sps-error')).toHaveCount(0)
+  await expect(list.getByTestId('sps-loading')).toHaveCount(0)
+  await expect(list.getByTestId('sps-error')).toHaveCount(0)
 
   // Opening the picker is still not a reason to parse anything.
   expect(parses, 'opening the picker must not reach the parse route').toEqual([])

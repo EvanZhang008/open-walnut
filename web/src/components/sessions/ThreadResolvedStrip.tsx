@@ -39,7 +39,7 @@ export function ThreadResolvedStrip({ threadKey, meta, viewStatus, takeawayWaiti
   if (viewStatus === 'failed') {
     return (
       <div className="thread-strip thread-strip--failed" data-thread-strip="failed" role="status">
-        <span className="thread-strip-label">No answer</span>
+        <span className="thread-strip-label">No answer</span>{/* empty-state-ok: status label of a strip */}
         <span className="thread-strip-waiting">{FAILED_TURN_HINT}</span>
         {onRetry && (
           <button type="button" className="thread-strip-btn thread-strip-btn--primary" onClick={onRetry}>Retry</button>

@@ -167,7 +167,7 @@ test('Branch vs the default branch: every file the branch changes since it left 
   try {
     await panel.locator('.session-diff-refresh').click()
     await panel.locator('.session-diff-tree-file', { hasText: 'logo.png' }).click({ timeout: 15_000 })
-    await expect(panel.locator('.session-diff-main')).toContainText('Binary file: no line diff to show.')
+    await expect(panel.locator('.session-diff-main')).toContainText('Binary file: no line diff to show')
     await expect(panel.locator('.session-diff-main .diff-line')).toHaveCount(0)
   } finally {
     fs.rmSync(bin, { force: true })
@@ -224,7 +224,7 @@ test('a remembered branch that was deleted: back to the default branch, with a n
   await page.reload()
   const again = await openChanged(page)
   await expect(again.locator('.session-diff-notice')).toContainText('Branch pw-gone is no longer in this repository', { timeout: 15_000 })
-  await expect(again.locator('.session-diff-error-box')).toHaveCount(0)
+  await expect(again.getByTestId('session-diff-error-box')).toHaveCount(0)
   await expect(again.locator('.session-diff-compare-trigger')).toContainText('Branch vs origin/main')
   await expect.poll(() => treeNames(again), { timeout: 15_000 }).toEqual(BRANCH_FILES)
 })
@@ -232,7 +232,7 @@ test('a remembered branch that was deleted: back to the default branch, with a n
 test('Not yet pushed on a branch never pushed: everything since it left the default branch, for the session\'s files', async ({ page }) => {
   const panel = await openChanged(page)
   await pick(page, panel, /Not yet pushed/)
-  await expect(panel.locator('.session-diff-error-box')).toHaveCount(0)
+  await expect(panel.getByTestId('session-diff-error-box')).toHaveCount(0)
   await expect.poll(() => treeNames(panel), { timeout: 15_000 }).toEqual(['index.ts'])
   // The list says it holds only the session's files (the branch has more).
   await expect(panel.locator('.session-diff-compare-strip[data-compare="remote"]')).toContainText('Only the files this session edited')
@@ -270,7 +270,7 @@ test('one commit: only its files, its own content, named in the strip; Ignore wh
   if ((await ws.getAttribute('aria-pressed')) === 'true') await ws.click()
   await ws.click()
   await expect(ws).toHaveAttribute('aria-pressed', 'true')
-  await expect(panel.locator('.session-diff-main')).toContainText('Only whitespace changed in this file.')
+  await expect(panel.locator('.session-diff-main')).toContainText('Only whitespace changed in this file')
   await panel.getByRole('button', { name: 'Show whitespace (all files)' }).click()
   await expect(ws).toHaveAttribute('aria-pressed', 'false')
   await expect(panel.locator('.session-diff-main')).toContainText('const out: string[] = []')

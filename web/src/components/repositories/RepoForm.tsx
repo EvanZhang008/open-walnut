@@ -4,6 +4,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { fetchRepository } from '@/api/repositories';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
+import { LoadingState } from '@/components/common/EmptyState';
 
 interface RepoFormProps {
   editSlug: string | null;
@@ -346,7 +347,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
     gate.send();
   };
 
-  if (loading) return <p className="text-muted">Loading...</p>;
+  if (loading) return <LoadingState title="Loading the repository…" />;
 
   return (
     <form className="repo-form" onSubmit={handleSubmit}>

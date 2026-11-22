@@ -15,6 +15,7 @@ import { OrgAvatar } from './OrgAvatar';
 import { VP_LABEL } from '@open-walnut/org-tree';
 import { theVp, type NowLine, type VpCard } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** A clickable div: Enter and Space press it too. */
 export function pressable(onPress: () => void) {
@@ -135,7 +136,7 @@ export function OrgChartVp({ card: c, line, className, zone, draggable, onDragSt
       {leaders}
       {open && (
         <div className="oc-detail" id={detailId} data-testid="org-chart-vp-detail">
-          {c.projects.length === 0 && <p className="oc-detail-line is-muted" data-testid="org-chart-vp-empty">{c.line}</p>}
+          {c.projects.length === 0 && <EmptyState size="row" title={c.line} testId="org-chart-vp-empty" />}
           <div className="oc-detail-actions">
             <button type="button" className="btn btn-sm" data-testid="org-chart-vp-open" onClick={onOpenChat}>Open chat</button>
             {more}

@@ -25,7 +25,7 @@ import { ApprovalPrompts } from './components/approvals/ApprovalPrompts';
 import { HostConnectCard } from './components/hosts/HostConnectCard';
 import { PluginBoundary } from './components/common/PluginBoundary';
 import { PluginBounds } from './plugins/PluginBounds';
-import { LoadingSpinner } from './components/common/LoadingSpinner';
+import { LoadingState } from './components/common/EmptyState';
 import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { LinkCaptureHost } from './plugins/LinkCaptureHost';
 import { PluginDialogHost } from './plugins/PluginDialogHost';
@@ -249,7 +249,7 @@ export function App() {
             />
           );
         })}
-        <Route path="*" element={pluginRuntime.ready ? <Navigate to="/" replace /> : <LoadingSpinner />} />
+        <Route path="*" element={pluginRuntime.ready ? <Navigate to="/" replace /> : <LoadingState size="pane" title="Loading plugins…" />} />
       </Routes>
     </AppShell>
   );

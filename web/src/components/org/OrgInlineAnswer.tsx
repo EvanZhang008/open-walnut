@@ -37,6 +37,7 @@ import { openLetterFor } from './org-answer-shape';
 import { answerMessage, formOptions, inlineShape, type AskOption } from './org-ask-form';
 import type { OrgAlertView } from './org-channels-model';
 import '@/styles/inline-answer.css';
+import { LoadingState } from '@/components/common/EmptyState';
 
 /** Where an answer failed: the reason (the words and pictures stay in the box's own draft). */
 export interface AnswerFailure { message: string; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
@@ -163,7 +164,8 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   }, []);
   const letter = useMemo(() => openLetterFor(snap.letters, alert.taskId, Date.now(), alert.itemId), [snap.letters, alert.taskId, alert.itemId]);
   useEffect(() => { if (fresh && !letter) onWords(); }, [fresh, letter, onWords]);
-  if (!letter) return <div className="org-answer-note" role="status">{fresh ? '' : 'Loading the letter…'}</div>;
+  // Fresh with no letter: the words box takes over (onWords), so nothing shows meanwhile.
+  if (!letter) return fresh ? <div className="org-answer-note" role="status" /> : <LoadingState size="row" title="Loading the letter…" />;
   // Words written back answer the letter as a pick does (the server's one rule, awaitsUserDecision).
   const replyWords: WordsSend = (text, images) => {
     if (!text.trim()) return kept;
@@ -262,7 +264,7 @@ function ChoiceAnswer({ alert, failure, onSend, onWords, known }: FormProps & { 
     return () => { alive = false; };
   }, [alert.taskId, known]);
   useEffect(() => { if (found === null) onWords(); }, [found, onWords]);
-  if (!found) return <div className="org-answer-note" role="status">{found === undefined ? 'Loading the choice…' : ''}</div>;
+  if (!found) return found === undefined ? <LoadingState size="row" title="Loading the choice…" /> : <div className="org-answer-note" role="status" />;
   const answer = (body: { option?: string; text?: string }, images?: ImageAttachment[]): Promise<boolean> => {
     // A choice's words are its answer: a picture goes with words, never alone ('' clears the words).
     if (images?.length && !body.option && !body.text) { onSend()({ message: 'Add a few words to go with the picture.' }); return kept; }

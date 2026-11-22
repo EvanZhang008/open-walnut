@@ -25,6 +25,8 @@ import { CalendarGridControls } from './CalendarGridControls';
 import { useCalendarItemActions } from './calendar-item-actions';
 import { gridLocalIso, gridSnappedMinuteAt } from './calendar-grid-settings';
 import { CalendarAlert, calendarAlertOf, canCreateEventOf } from './CalendarAlert';
+import { emptyDayLine, isDayEmpty } from './phone-empty-day';
+import { EmptyState, LoadingState, UnavailableState } from '../common/EmptyState';
 
 interface Props {
   onClose: () => void;
@@ -106,19 +108,35 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   const step = (dir: 1 | -1) => setDay(formatDateOnly(addDays(anchor, dir)));
   const isToday = day === formatDateOnly(new Date());
 
-  // What an empty grid means, said beside the title (an agenda with items says nothing). A load
-  // that failed, or access lost, is the alert's to say, never "Nothing scheduled".
-  const alerted = calendarAlertOf(calendar) !== null
-  const unread = calendar.sources.length > 0 && !calendar.sources.some((s) => s.available && s.enabled)
-  const status: { text: string; tone: 'quiet' | 'warn'; why?: string } | null = calendar.loading && items.length === 0
-    ? { text: 'Loading...', tone: 'quiet' }
+  const canCreateEvent = canCreateEventOf(calendar);
+
+  // An empty grid looks exactly like a free day, so the agenda says which it is (2026-11-21 UI
+  // audit), on its own line under the header: the events still loading (tasks of the day may
+  // already be on the grid), calendars that were not read (why, and Retry when a read failed),
+  // or nothing on the day. A load that failed, or access lost, is the alert's to say.
+  const alerted = calendarAlertOf(calendar) !== null;
+  const unread = calendar.sources.length > 0 && !calendar.sources.some((s) => s.available && s.enabled);
+  const why = calendar.sources.find((s) => s.enabled && !s.available) ?? calendar.sources.find((s) => s.message);
+  const status = calendar.loading
+    ? <LoadingState size="row" testId="cal-side-status" title="Loading events…" />
     : alerted
       ? null
       : unread
-        ? { text: 'Calendars not read.', tone: 'warn', why: calendar.sources.find((s) => s.message)?.message ?? 'Mac calendars are off or not allowed. Calendar Accounts on the Apps page turns them on.' }
-        : items.length === 0 ? { text: 'Nothing scheduled.', tone: 'quiet' } : null
-
-  const canCreateEvent = canCreateEventOf(calendar);
+      ? (
+        <UnavailableState
+          size="row"
+          testId="cal-side-status"
+          title="Calendars not read"
+          hint={why?.reason === 'permission-denied' && !why.message
+            ? 'Re-grant Walnut under System Settings → Privacy & Security → Calendars.'
+            : why?.message ? undefined : 'Mac calendars are off or not allowed. Calendar Accounts on the Apps page turns them on.'}
+          detail={why?.message}
+          onRetry={why?.reason === 'fetch-error' ? calendar.refetch : undefined}
+        />
+      )
+      : isDayEmpty(items, day)
+        ? <EmptyState size="row" testId="cal-side-status" title={emptyDayLine(day, formatDateOnly(new Date())).replace(/\.$/, '')} />
+        : null;
 
   return (
     <div
@@ -176,34 +194,27 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
         </div>
       </div>
       <CalendarAlert calendar={calendar} onRetry={calendar.refetch} />
-      {/* An empty grid says why, on its own line so it never truncates: nothing on the day, still
-          reading, or the calendars were not read (and why). */}
-      {status && (
-        <div className={`cal-side-status${status.tone === 'warn' ? ' is-warn' : ''}`} role="status" data-testid="cal-side-status">
-          <span className="cal-side-status-head">{status.text}</span>
-          {status.why && <span> {status.why}</span>}
-        </div>
-      )}
+      {status}
       <div className="cal-side-body">
-        <DndContext>
-          <TimeGrid
-            days={1}
-            anchor={anchor}
-            items={items}
-            dropPreview={busPreview}
-            metricsRef={metricsRef}
-            onMoveItem={actions.moveItem}
-            onCopyItem={actions.copyItem}
-            onResizeItem={actions.resizeItem}
-            onChipDragging={setChipDragging}
-            onCreate={setCreateSeed}
-            onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
-            onItemClick={(item, anchorEl) => setOpenItem({ item, anchorEl })}
-            resizableAllDay
-            canCreateEvent={canCreateEvent}
-          />
-        </DndContext>
-      </div>
+      <DndContext>
+        <TimeGrid
+          days={1}
+          anchor={anchor}
+          items={items}
+          dropPreview={busPreview}
+          metricsRef={metricsRef}
+          onMoveItem={actions.moveItem}
+          onCopyItem={actions.copyItem}
+          onResizeItem={actions.resizeItem}
+          onChipDragging={setChipDragging}
+          onCreate={setCreateSeed}
+          onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
+          onItemClick={(item, anchorEl) => setOpenItem({ item, anchorEl })}
+          resizableAllDay
+          canCreateEvent={canCreateEvent}
+        />
+      </DndContext>
+    </div>
       {active && createSeed && (
         <QuickCreatePopover
           seed={createSeed}

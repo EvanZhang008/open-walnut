@@ -39,6 +39,7 @@ import { latestReplies } from './ask-words-read';
 import { useAskWords } from './useExtAsks';
 import type { AgentTextSource } from '@/utils/agent-text-source';
 import { TaskOpenerContext } from '@/hooks/useOpenTask';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import './ext-panel.css';
 
 export function PopoutExtTasks() {
@@ -138,14 +139,14 @@ function ExtTasks() {
       {saving?.state === 'error' && <span className="ext-tasks-note ext-panel-error" role="alert">Could not save the page.</span>}
     </div>
     {!lists ? (
-      <p className="ext-tasks-loading muted" data-testid="ext-tasks-loading" role="status"><span className="spinner" /> Loading your tasks…</p>
+      <LoadingState title="Loading your tasks…" testId="ext-tasks-loading" />
     ) : (
       <div className="ext-tasks-lists">
         {!fresh && <p className="ext-tasks-updating" data-testid="ext-tasks-updating" role="status">Updating…</p>}
         {/* Focus first: it is a few tasks, and below a long Needs you list it was out of reach. */}
-        <Section section="focus" title="Focus" testid="ext-tasks-focus" rows={lists.focus} empty={fresh ? 'No Focus tasks. Open a task below and add it to Focus.' : ''} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies} />
+        <Section section="focus" title="Focus" testid="ext-tasks-focus" rows={lists.focus} empty={fresh ? { title: 'No Focus tasks', hint: 'Open a task below and add it to Focus.' } : null} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies} />
         {/* Approvals first: a script or an agent's step in this browser is blocked on each. */}
-        <Section section="needs" title="Needs you" testid="ext-tasks-needs" rows={lists.needs} extra={approvals.length} empty={fresh && approvals.length === 0 ? 'Nothing needs you.' : ''} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies}>
+        <Section section="needs" title="Needs you" testid="ext-tasks-needs" rows={lists.needs} extra={approvals.length} empty={fresh && approvals.length === 0 ? { title: 'Nothing needs you' } : null} open={open} onOpen={setOpen} replies={replies} setReplies={setReplies}>
           {approvals.map((a) => <PanelApproval key={a.id} a={a} alike={alike.get(a.id)} />)}
         </Section>
       </div>
@@ -179,11 +180,11 @@ function PanelApproval({ a, alike }: { a: Approval; alike?: string }) {
   </div>;
 }
 
-function Section(p: { section: 'focus' | 'needs'; title: string; testid: string; rows: ExtTaskRow[]; extra?: number; empty: string; open: string; onOpen: (id: string) => void; children?: ReactNode } & Replies) {
+function Section(p: { section: 'focus' | 'needs'; title: string; testid: string; rows: ExtTaskRow[]; extra?: number; empty: { title: string; hint?: string } | null; open: string; onOpen: (id: string) => void; children?: ReactNode } & Replies) {
   return <section className="ext-tasks-section" data-testid={p.testid}>
     <h3 className="ext-tasks-heading">{p.title} <span className="ext-tasks-count">{p.rows.length + (p.extra ?? 0)}</span></h3>
     {p.children}
-    {p.rows.length === 0 && p.empty && <p className="ext-tasks-empty">{p.empty}</p>}
+    {p.rows.length === 0 && p.empty && <EmptyState size="row" title={p.empty.title} hint={p.empty.hint} testId={`${p.testid}-empty`} />}
     {p.rows.map((r) => <TaskRow key={r.task.id} section={p.section} row={r} open={p.open === r.task.id} onToggle={() => p.onOpen(p.open === r.task.id ? '' : r.task.id)} replies={p.replies} setReplies={p.setReplies} />)}
   </section>;
 }
@@ -306,7 +307,7 @@ function TaskReply({ task, line, rowState, reply, onChange }: { task: Task; line
         </div>
       </>
       : <div className="ext-task-actions">
-        <span className="ext-tasks-note">No conversation yet.</span>
+        <span className="ext-tasks-note">No conversation yet.</span>{/* empty-state-ok: a note beside the task's actions */}
         <button type="button" className="btn btn-sm" onClick={() => openTask(task.id)}>Open in Walnut</button>
         <FocusButton task={task} />
       </div>}

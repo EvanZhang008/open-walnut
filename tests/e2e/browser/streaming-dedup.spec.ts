@@ -81,7 +81,7 @@ async function openNoteAgentChat(page: Page): Promise<Record<string, string>> {
   const conversationId = new URL((await statsReq).url()).searchParams.get('conversationId')!
 
   // The turn starts in an empty chat: nothing earlier can absorb its blocks.
-  await expect(page.locator('.notes-chat-empty')).toBeVisible()
+  await expect(page.getByTestId('notes-chat-empty')).toBeVisible()
   await expect(page.locator('.notes-chat .chat-message')).toHaveCount(0)
   return { agentId: NOTE_AGENT_ID, conversationId, turnId: `pw-turn-${Date.now()}` }
 }

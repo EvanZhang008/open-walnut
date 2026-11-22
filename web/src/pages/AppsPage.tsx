@@ -29,7 +29,7 @@ import { usePluginStore } from '@/components/apps-page/usePluginStore'
 import { PluginAskDrawer } from '@/components/apps-page/PluginAskDrawer'
 import { useExperimental } from '@/hooks/useExperimental'
 import { useLeanCallback } from '@/hooks/useLeanCallback'
-import { SettingsLoadingRow } from '@/components/settings/SettingsSection'
+import { EmptyState, LoadingState } from '@/components/common/EmptyState'
 import {
   SettingsPaneProvider,
   SettingsSavedIndicator,
@@ -175,7 +175,7 @@ function AppsPageBody() {
           {detailPlugin && config ? (
             <PluginDetail store={store} pluginId={detailPlugin} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} focusPanel={params.get('panel')} onConfigureWithAi={aiConfigure ? () => setAsk(!askRow) : undefined} askOpen={!!askRow} />
           ) : detailPlugin ? (
-            <SettingsLoadingRow>Loading plugin...</SettingsLoadingRow>
+            <LoadingState title="Loading plugin…" />
           ) : (
             <BuiltinDetail entryKey={appKey!} onBack={closeDetail} />
           )}
@@ -216,10 +216,11 @@ function AppsPageBody() {
         </ChipGroup>
 
         {nothing && (
-          <div className="apps-empty" data-testid="apps-no-match">
-            Nothing matches &ldquo;{query.trim()}&rdquo;.
-            <button type="button" onClick={() => setQuery('')}>Clear search</button>
-          </div>
+          <EmptyState
+            title={`Nothing matches “${query.trim()}”`}
+            action={{ label: 'Clear search', onClick: () => setQuery('') }}
+            testId="apps-no-match"
+          />
         )}
 
         {filter === 'all' && !searching && <AppQuickOpen activity={activity} />}

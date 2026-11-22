@@ -22,13 +22,15 @@
  */
 import { useMemo } from 'react';
 import type { MailAccountDto, MailProviderSummary } from '@/api/mail';
+import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_MAIL } from '@/components/common/Icons';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { MailReaderHead } from './MailReaderHead';
 import { MailReaderBody } from './MailReaderBody';
 import { closeMailMessage } from './mail-actions';
 import type { MailOpenMessage } from './mail-store';
-import { BackIcon, ReaderEmptyIcon } from './mail-icons';
+import { BackIcon } from './mail-icons';
 import './mail-reader.css';
 
 interface ReaderProps {
@@ -49,10 +51,13 @@ export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
   if (!open) {
     return (
       <section className="mail-reader-pane mail-reader-blank" data-testid="mail-reader">
-        <div className="mail-reader-nothing">
-          <span className="mail-reader-nothing-glyph" aria-hidden="true"><ReaderEmptyIcon /></span>
-          <p className="mail-reader-nothing-text" data-testid="mail-no-message">Pick a message</p>
-        </div>
+        <EmptyState
+          size="pane"
+          icon={ICON_MAIL}
+          title="No message open"
+          hint="Pick one from the list to read it here."
+          testId="mail-no-message"
+        />
       </section>
     );
   }

@@ -42,6 +42,7 @@ import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroup
 import { MailViewMenu } from './MailGroupedHeader';
 import { SearchField } from '@/components/common/SearchField';
 import { Chip } from '@/components/controls';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
 interface Props {
   snapshot: MailSnapshot;
@@ -309,27 +310,22 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             menu={menu}
           />
         ) : !snapshot.selected && !search.active ? (
-          <p className="mail-pane-empty" data-testid="mail-no-mailbox">
-            Pick a mailbox on the left to read it.
-          </p>
+          <EmptyState title="No mailbox open" hint="Pick a mailbox on the left to read it." testId="mail-no-mailbox" />
         ) : busy && rows.length === 0 ? (
-          <p className="mail-pane-empty" data-testid="mail-list-empty">Loading…</p>
+          <LoadingState title={search.active ? 'Searching mail…' : 'Loading messages…'} testId="mail-list-empty" />
         ) : filtering && visible.length === 0 ? (
-          <p className="mail-pane-empty mail-unread-empty" data-testid="mail-unread-empty">
-            <span>No unread messages</span>
-            <button
-              type="button"
-              className="mail-text-btn"
-              data-testid="mail-unread-show-all"
-              onClick={() => toggleFilter(false)}
-            >
-              Show all
-            </button>
-          </p>
+          <EmptyState
+            title="No unread messages"
+            action={{ label: 'Show all', onClick: () => toggleFilter(false), testId: 'mail-unread-show-all' }}
+            testId="mail-unread-empty"
+          />
         ) : visible.length === 0 && search.active ? (
-          <p className="mail-pane-empty" data-testid="mail-list-empty">
-            Nothing matched. Cached search only sees mail Walnut has already fetched.
-          </p>
+          <EmptyState
+            title="No mail matches this search"
+            hint="Cached search only sees mail Walnut has already fetched."
+            action={{ label: 'Clear search', onClick: clear }}
+            testId="mail-list-empty"
+          />
         ) : visible.length === 0 ? (
           <EmptyFolder snapshot={snapshot} section={section} smart={smart} />
         ) : visible.map((message) => (
@@ -358,7 +354,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           disabled={snapshot.olderLoading}
           onClick={() => { void loadOlderMailMessages(); }}
         >
-          {snapshot.olderLoading ? 'Loading…' : 'Load older'}
+          {snapshot.olderLoading ? 'Loading…' : 'Load older'}{/* empty-state-ok: button label */}
         </button>
       )}
 
@@ -493,9 +489,9 @@ function DraftsSections({ snapshot, serverName, serverRows, menu }: {
       {local}
       <GroupHeader group="on-the-server" name="On the server" count={serverRows.length} />
       {serverRows.length === 0 ? (
-        <p className="mail-pane-empty" data-testid="mail-server-drafts-empty">
-          {snapshot.listLoading ? 'Loading…' : `Nothing in the ${serverName} folder on the server.`}
-        </p>
+        snapshot.listLoading
+          ? <LoadingState title="Loading server drafts…" testId="mail-server-drafts-empty" />
+          : <EmptyState title={`Nothing in the ${serverName} folder on the server`} testId="mail-server-drafts-empty" />
       ) : serverRows.map((message) => (
         <MailRow
           key={`${message.accountId} ${message.messageId}`}

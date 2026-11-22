@@ -16,6 +16,7 @@ import { taskPageTitle } from './ext-home-model';
 import { firstQuestionOf, type PanelPage, type VaultState } from './ext-panel-model';
 import { taskHead } from './ext-tasks-model';
 import { projectGroupKey } from '@/utils/project-display';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 /** A task with no conversation, opened from the first page: Home's detail, loaded when first needed. */
 const ExtTaskDetail = lazy(() => import('./ExtTaskDetail'));
@@ -135,13 +136,13 @@ export function ExtTaskPageDetail({ taskId, tasks, onOpenSession, onOpenTask, on
   onOpenTask: OpenTask; onClose: () => void;
 }) {
   const task = tasks.find((t) => t.id === taskId);
-  const loading = <p className="ext-home-loading muted" role="status"><span className="spinner" /> Loading the task…</p>;
+  const loading = <LoadingState size="pane" title="Loading the task…" testId="ext-home-loading" />;
   return (
     <div className="ext-panel-detail" data-testid="ext-task-detail">
       <Suspense fallback={loading}>
         {task
           ? <ExtTaskDetail task={task} onOpenSession={(sid) => onOpenSession(task.id, sid)} onOpenTask={onOpenTask} onClose={onClose} />
-          : tasks.length ? <p className="ext-home-loading muted" role="status">This task is not on your board any more.</p> : loading}
+          : tasks.length ? <UnavailableState size="pane" title="This task is not on your board any more" /> : loading}
       </Suspense>
     </div>
   );

@@ -92,7 +92,6 @@
   user-select: none;
 }
 .session-browser-shot img.is-stale { opacity: 0.55; filter: grayscale(0.4); }
-.session-browser-empty { color: var(--fg-muted); padding: 12px 16px; text-align: center; }
 .session-browser-foot {
   display: flex;
   flex-wrap: wrap;
@@ -130,7 +129,6 @@
 
 /* "Show it live" beside a covered window's line (SessionBrowserCard.tsx). */
 .session-browser-live-btn { margin-left: 8px; vertical-align: baseline; }
-.session-browser-empty .session-browser-live-btn { display: inline-flex; margin: 8px auto 0; }
 
 /* The Browser replay (SessionBrowserReplay.tsx), the user's pick of 20 designs (2026-11-15): the
    picture, the step in plain words, the filmstrip with Play and the speed, the time ruler, and the

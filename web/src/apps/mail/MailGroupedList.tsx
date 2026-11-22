@@ -16,6 +16,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { mailFailure } from '@/api/mail';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import { ICON_CHECK } from '@/components/common/Icons';
 import { getMailUnsubscribePlan, type MailGroupItem, type MailGroupsScope, type MailUnsubscribePlan } from '@/api/mail-groups';
 import { MailGroupLine, type GroupNumbers } from './MailGroupLine';
 import { groupBusy, startBulkRead } from './mail-bulk-read';
@@ -283,8 +285,8 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
           <>
             <Skeleton />
             {view.retrying
-              ? <p className="mail-pane-empty" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
-              : <p className="mail-pane-empty" data-testid="mail-list-empty">Loading…</p>}
+              ? <LoadingState title={RETRYING_LINE} testId="mail-load-retrying" />
+              : <LoadingState title="Loading mail groups…" testId="mail-list-empty" />}
           </>
         ) : (
           <>
@@ -327,10 +329,12 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
               </div>
             )}
             {caughtUp && (
-              <div className="mail-caught-up" data-testid="mail-caught-up">
-                <strong>{ALL_CAUGHT_UP}</strong>
-                <span>{important.rows.length > 0 ? ALL_CAUGHT_UP_DETAIL : ALL_CAUGHT_UP_EMPTY}</span>
-              </div>
+              <EmptyState
+                title={ALL_CAUGHT_UP}
+                hint={important.rows.length > 0 ? ALL_CAUGHT_UP_DETAIL : ALL_CAUGHT_UP_EMPTY}
+                icon={ICON_CHECK}
+                testId="mail-caught-up"
+              />
             )}
             <div className="mail-important">
               <p className="mail-list-section mail-important-head" data-testid="mail-important-head" title={numbers?.explain}>
@@ -342,13 +346,11 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
               {important.rows.length === 0 ? (
                 important.loaded ? (
                   caughtUp ? null : (
-                    <p className="mail-pane-empty mail-important-empty" data-testid="mail-important-empty">
-                      {unreadOnly ? IMPORTANT_EMPTY_UNREAD : IMPORTANT_EMPTY}
-                    </p>
+                    <EmptyState title={unreadOnly ? IMPORTANT_EMPTY_UNREAD : IMPORTANT_EMPTY} testId="mail-important-empty" />
                   )
                 ) : important.retrying
-                  ? <p className="mail-pane-empty" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
-                  : <p className="mail-pane-empty" data-testid="mail-important-loading">Loading…</p>
+                  ? <LoadingState title={RETRYING_LINE} testId="mail-load-retrying" />
+                  : <LoadingState title="Loading important mail…" testId="mail-important-loading" />
               ) : important.rows.map((message) => (
                 <MailRow
                   key={`${message.accountId} ${message.messageId}`}
@@ -371,7 +373,7 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
                   disabled={important.olderLoading}
                   onClick={() => { void loadGroupPage(scope, IMPORTANT_ID, '', 'older', unreadOnly); }}
                 >
-                  {important.olderLoading ? 'Loading…' : 'Load older'}
+                  {important.olderLoading ? 'Loading…' : 'Load older'}{/* empty-state-ok: button label */}
                 </button>
               )}
             </div>

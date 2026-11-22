@@ -16,6 +16,7 @@
  * row, and host menus must exempt `.task-kebab-project-flyout` clicks — this
  * flyout reuses that class family so existing outside-click guards cover it.
  */
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { useCallback, useState, useEffect, useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { apiGet } from '@/api/client';
@@ -182,13 +183,13 @@ export function PluginFieldFlyout({ open, anchorRef, anchorPoint, field, current
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {options === null && <div className="task-kebab-project-empty">Loading…</div>}
+      {options === null && <LoadingState size="row" title="Loading options…" />}
       {options !== null && (
         <>
           {field.clearable !== false && row(null, 'None')}
           {options.map(o => row(o.value, o.label ?? o.value, o.hint, o.value === suggested))}
           {options.length === 0 && (
-            <div className="task-kebab-project-empty">No options available</div>
+            <EmptyState size="row" title="No options available" />
           )}
         </>
       )}

@@ -8,6 +8,7 @@ import { OutsidePress } from '@/components/drawing/drawing-overlay';
 import { useSessionPaneApps } from '@/components/sessions/SessionPluginAppPane';
 import { openSessionApp } from '@/components/sessions/session-app-open';
 import { DRAFT_FLUSH_EVENT } from '@/utils/unsaved-work';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { ClassicDrawingPad, type ClassicDrawingPadProps } from './ClassicDrawingPad';
 import './drawing-pad.css';
 
@@ -114,8 +115,10 @@ function DrawingAppDialog({ draftId, taskId, sessionId, onClose, onAttach, canAt
                   title="Open this drawing in a tab beside the chat, so you can chat while you draw">Beside the chat</button>
               </> : undefined} />
           : failed
-            ? <div className="drawing-app-loading" role="alert">The drawing editor could not load. <button type="button" onClick={load}>Try again</button> <button type="button" onClick={onClose} aria-label="Close drawing">Close</button></div>
-            : <div className="drawing-app-loading" role="status">Loading drawing…</div>}
+            ? <UnavailableState size="pane" title="The drawing editor could not load" onRetry={load} retryLabel="Try again">
+                <button type="button" className="btn btn-sm" onClick={onClose} aria-label="Close drawing">Close</button>
+              </UnavailableState>
+            : <LoadingState size="pane" title="Loading drawing…" />}
       </div>
     </div>, document.body,
   );

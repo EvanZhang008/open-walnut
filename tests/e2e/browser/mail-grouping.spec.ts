@@ -510,7 +510,7 @@ test.describe('the model down from the start', () => {
     // A sender group opens like any other (its id carries the sender's address).
     const group = await openGroupLine(page, pager.id)
     await expect(group.locator('[data-testid="mail-row"]')).toHaveCount(Math.min(3, pager.unread))
-    await expect(page.locator('.mail-inline-error')).toHaveCount(0)
+    await expect(page.locator('.mail-inline-error, [data-testid="mail-group-error"]')).toHaveCount(0)
     // A name-only sender's group too (spaces and a colon in the id).
     const named = groups.groups.find((one: { id: string }) => one.id.startsWith('s:name:'))
     expect(named, 'a name-only sender group').toBeTruthy()

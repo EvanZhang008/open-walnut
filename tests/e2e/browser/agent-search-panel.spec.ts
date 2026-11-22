@@ -156,8 +156,8 @@ test('transient 502 shows error with Retry; Retry succeeds', async ({ page }) =>
 
   await page.locator('.todo-search-input').fill(QUERY);
   const panel = page.getByTestId('agent-search-panel');
-  await expect(panel.locator('.agent-search-error')).toBeVisible({ timeout: 10_000 });
-  await panel.locator('.agent-search-retry').click();
+  await expect(panel.locator('[data-testid="agent-search-error"]')).toBeVisible({ timeout: 10_000 });
+  await panel.locator('[data-testid="agent-search-error"]').getByRole('button', { name: 'Retry' }).click();
   await expect(panel.locator(`.agent-search-row[data-task-id="${TARGET_TASK_ID}"]`))
     .toBeVisible({ timeout: 10_000 });
 });

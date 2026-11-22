@@ -211,7 +211,7 @@ test.describe('tree drawer', () => {
     await expect.poll(() => drawer.locator('.thread-tree-row[data-ancestor-only="true"]').count()).toBeGreaterThanOrEqual(3)
     expect(await drawer.locator('.thread-tree-row[data-ancestor-only="true"]').first().evaluate((el) => getComputedStyle(el).opacity)).toBe('0.55')
     await search.fill('zebra crossing')
-    await expect(drawer.locator('.thread-tree-empty')).toContainText('No questions match “zebra crossing”.')
+    await expect(drawer.getByTestId('thread-tree-empty')).toContainText('No questions match “zebra crossing”.')
     await drawer.getByRole('button', { name: 'Show all' }).click()
     await expect(search).toHaveValue('')
     await expect(await chip(drawer, 'All')).toHaveAttribute('aria-pressed', 'true')

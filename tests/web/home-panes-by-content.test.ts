@@ -48,7 +48,7 @@ describe("Home's panes go by content", () => {
     const pane = read('pages/HomeEmptyPane.tsx')
     expect(pane).toContain('No session open')
     // One New task, one look: the toolbar's own button, never a second one beside it.
-    expect(pane).toMatch(/className="btn btn-sm home-empty-pane-start" onClick=\{onNewTask\}/)
+    expect(pane).toMatch(/action=\{\{ label: 'Start a task', onClick: onNewTask, testId: 'home-empty-pane-start' \}\}/)
     // One control named New task on Home: the empty pane's button has its own name.
     expect(pane).not.toContain('NewLauncherButton')
     expect(rule(globals, '.home-empty-pane')).toMatch(/flex:\s*1/)

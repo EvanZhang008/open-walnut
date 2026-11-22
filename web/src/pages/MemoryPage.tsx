@@ -5,7 +5,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { memoryDocKey, wasSavedHere, isDocSaveInFlight } from '@/stores/file-save-signal';
 import { MemoryTreePanel } from '@/components/memory/MemoryTreePanel';
 import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { visibleInterval } from '@/utils/page-visibility';
 import type { MemoryBrowseTree } from '@/api/memory';
@@ -186,8 +186,8 @@ export function MemoryPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree]);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
+  if (loading) return <LoadingState size="pane" title="Loading memory…" />;
+  if (error) return <UnavailableState size="pane" title="Couldn't load memory" detail={error} />;
 
   return (
     <div className="memory-split-view">
@@ -205,7 +205,7 @@ export function MemoryPage() {
       <div className="memory-resize-handle" onPointerDown={resizePointerDown} />
       <div className="memory-detail-pane">
         {contentLoading ? (
-          <LoadingSpinner />
+          <LoadingState size="pane" title="Loading this file…" />
         ) : (
           <MemoryContentPanel
             content={content}

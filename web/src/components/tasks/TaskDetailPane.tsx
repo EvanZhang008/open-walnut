@@ -5,6 +5,7 @@
  * Narrow windows stack the columns without remounting either editor.
  * Every related task/session leaves the popup before opening on Home.
  */
+import { LoadingState } from '@/components/common/EmptyState';
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
@@ -234,7 +235,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
           <Section label="Description" className="tdp-doc" testId="task-detail-description">
             {descriptionReady
               ? <TaskFieldEditor taskId={task.id} field="description" value={descriptionContent ?? ''} save={updateDescription} placeholder="What is this task about? Why does it exist?" />
-              : <div className="tdp-muted">Loading…</div>}
+              : <LoadingState size="row" title="Loading the description…" />}
           </Section>
 
           <Section label="Note" className="tdp-doc" testId="task-detail-note">
@@ -245,7 +246,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
             )}
             {noteReady
               ? <TaskFieldEditor taskId={task.id} field="note" value={noteContent ?? ''} save={updateNote} placeholder="Working notes, findings, context…" />
-              : <div className="tdp-muted">Loading…</div>}
+              : <LoadingState size="row" title="Loading the note…" />}
             <TaskNoteAdd key={`note-add:${task.id}`} taskId={task.id} onAdded={() => reloadDetail()} onError={reportError} />
           </Section>
         </div>

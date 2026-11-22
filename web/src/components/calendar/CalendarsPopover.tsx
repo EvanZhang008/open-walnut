@@ -16,6 +16,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useCalendarVisibility } from '@/hooks/useCalendarEvents';
 import type { CalendarEvent, CalendarInfo } from '@/api/calendar';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import './visibility.css';
 
 interface Props {
@@ -53,7 +54,7 @@ function HiddenEventsFlyout({ anchorRef, events, onShow, onClose }: {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="cal-cals-account">Hidden events</div>
-      {events.length === 0 && <div className="cal-cals-empty">No hidden events here.</div>}
+      {events.length === 0 && <EmptyState size="row" role="presentation" title="No hidden events here" />}
       {events.map((ev) => (
         <div key={ev.id} className="cal-hidden-events-row">
           <span className="cal-settings-dot" style={{ background: ev.color ?? 'var(--accent)' }} />
@@ -101,15 +102,13 @@ export function CalendarsPopover({ anchorEl, onClose, hiddenEvents = [], onShowE
         aria-label="Visible calendars"
         onPointerDown={(event) => event.stopPropagation()}
       >
-        {calendars === null && !unavailable && <div className="cal-cals-empty">Loading…</div>}
+        {calendars === null && !unavailable && <LoadingState size="row" role="presentation" title="Loading calendars…" />}
         {unavailable && (
-          <div className="cal-cals-empty">
-            External calendars are off or unavailable — check{' '}
-            <Link to="/settings#calendar" onClick={onClose}>
-              Settings → Calendar Accounts
-            </Link>
-            .
-          </div>
+          <UnavailableState
+            size="row" role="presentation"
+            title="External calendars are off or unavailable"
+            hint={<>Check <Link to="/settings#calendar" onClick={onClose}>Settings → Calendar Accounts</Link>.</>}
+          />
         )}
         {[...byAccount.entries()].map(([account, list]) => (
           <div key={account} className="cal-cals-group">

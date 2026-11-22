@@ -52,6 +52,7 @@ import { fetchDirList, type DirEntry } from '@/api/files';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { formatSize } from '@/utils/format';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { log } from '@/utils/log';
 import { recordRecentFolder } from '@/utils/recentFolders';
 import { sourceRefTag, taskRefTag } from '@/utils/entity-ref-tags';
@@ -545,17 +546,21 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           {tabLoading && <span className="mention-searching" title="Searching…" />}
         </div>
         {tabAnswer?.error && sourceRows.length === 0 && (
-          <div className="mention-empty">
-            {tabAnswer.error === 'timeout' ? `${activeSource.label} did not answer in time.` : `${activeSource.label} is not available right now.`}
-          </div>
+          <UnavailableState
+            size="row" role="presentation"
+            testId="mention-empty"
+            title={tabAnswer.error === 'timeout' ? `${activeSource.label} did not answer in time` : `${activeSource.label} is not available right now`}
+          />
         )}
         {!tabAnswer && tabLoading && (
           <div className="mention-skeleton"><span className="sk-icon" /><span className="sk-line" /></div>
         )}
         {tabAnswer && !tabAnswer.error && !tabLoading && sourceRows.length === 0 && (
-          <div className="mention-empty">
-            {sourceQuery.trim() ? `No match in ${activeSource.label}` : `Nothing in ${activeSource.label} yet`}
-          </div>
+          <EmptyState
+            size="row" role="presentation"
+            testId="mention-empty"
+            title={sourceQuery.trim() ? 'No match in ' + activeSource.label : 'Nothing in ' + activeSource.label + ' yet'}
+          />
         )}
         {sourceRows.map((row) => row.kind === 'source' ? renderSourceRow(row) : null)}
       </div>
@@ -575,11 +580,13 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           </div>
         )}
         {taskRows.length === 0 && (taskQuery.trim() || !filesEnabled || onTasks) && (
-          <div className="mention-group-head">
-            <span className="mention-group-name">{GROUP_LABEL.task}</span>
-            <span className="mention-group-verb">
-              {search.loading ? 'Searching…' : 'No matching task'}
-            </span>
+          <div data-group="task">
+            <div className="mention-group-head">
+              <span className="mention-group-name">{GROUP_LABEL.task}</span>
+            </div>
+            {search.loading
+              ? <LoadingState size="row" role="presentation" title="Searching tasks…" />
+              : <EmptyState size="row" role="presentation" testId="mention-empty" title="No matching task" />}
           </div>
         )}
       </div>
@@ -594,12 +601,12 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
             {GROUP_VERB.files}{atRoot ? '' : ` · in ${relativeTo(rootPath, browseDir)}`}
           </span>
         </div>
-        {filesError && <div className="mention-empty">{filesError}</div>}
+        {filesError && <UnavailableState size="row" role="presentation" testId="mention-empty" title="Couldn't list files here" detail={filesError} />}
         {!filesError && filesLoading && entries.length === 0 && (
           <div className="mention-skeleton"><span className="sk-icon" /><span className="sk-line" /></div>
         )}
         {!filesError && !filesLoading && fileRows.length === 0 && (
-          <div className="mention-empty">No matching file</div>
+          <EmptyState size="row" role="presentation" testId="mention-empty" title="No matching file" />
         )}
         {fileRows.map(({ entry, positions }) =>
           renderEntryRow({ key: `f:${entry.type}:${entry.name}`, kind: 'entry', group: 'files', entry, positions }))}

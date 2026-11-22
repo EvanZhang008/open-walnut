@@ -149,7 +149,7 @@
   cursor: pointer;
 }
 
-.board-status .bs-empty, .board-status .bs-foot { color: var(--fg-muted); margin: 14px 2px; }
+.board-status .bs-foot { color: var(--fg-muted); margin: 14px 2px; }
 .board-status .bs-solo .kanban-ask-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin: 0 2px; }
 
 /* A narrow pane: each row stacks (status and time on top, then task, where, next). */

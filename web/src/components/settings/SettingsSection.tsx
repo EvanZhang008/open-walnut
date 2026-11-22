@@ -37,8 +37,8 @@ import {
   useSettingsPane,
   useSettingsPaneChrome,
 } from './settings-pane-context'
-import { SpinnerGlyph } from './settings-glyphs'
 import { DisclosureChevron } from '@/components/controls'
+import { LoadingState } from '../common/EmptyState'
 import { CopyButton } from './inputs/CopyButton'
 import { SettingsButtonSize } from './inputs/SettingsButton'
 import '@/styles/settings-shell.css'
@@ -537,11 +537,6 @@ export function SettingsDisclosure({
 // Small pieces
 // ---------------------------------------------------------------------------
 
-/** The single empty state. A section says what is missing, in one line. */
-export function SettingsEmpty({ children }: { children: ReactNode }) {
-  return <div className="settings-empty">{children}</div>
-}
-
 /**
  * The single notice (info / success / warn / error), optional trailing action. It is the app's one
  * notice card (NoticeCard, solid inside the pane: the same frame as every notice, never a tinted
@@ -603,18 +598,9 @@ export function SettingsTag({
   )
 }
 
-/** In-place loading line for a group (44px, spinner, muted text). */
-export function SettingsLoadingRow({ children = 'Loading...' }: { children?: ReactNode }) {
-  return (
-    <div className="settings-row settings-loading-row" aria-busy="true">
-      <span className="settings-row-copy">
-        <span className="settings-loading-text">
-          <SpinnerGlyph size={12} />
-          {children}
-        </span>
-      </span>
-    </div>
-  )
+/** A group's loading line: the shared LoadingState, saying what loads (Loading tags). */
+export function SettingsLoadingRow({ children }: { children: ReactNode }) {
+  return <LoadingState size="section" title={children} />
 }
 
 /** Read-only mono text (Raw config, Setup log): a row, not a box, with Copy. */

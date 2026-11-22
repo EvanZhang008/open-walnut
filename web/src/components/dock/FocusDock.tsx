@@ -15,6 +15,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { ICON_CHAT } from '@/components/common/Icons';
+import { EmptyState } from '@/components/common/EmptyState';
 import { readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -175,7 +176,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
             onBatchCompleted={handleBatchCompleted}
           />
         ) : (
-          <span className="dock-task-no-session">No active session</span>
+          <EmptyState size="row" title="No active session on this task" />
         )}
       </div>
       {sessionId && (

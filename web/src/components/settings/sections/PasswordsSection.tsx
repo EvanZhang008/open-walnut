@@ -242,7 +242,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           <SettingsRow
             label="Recovery kit"
             help={!status.hasRecovery
-              ? 'No recovery code yet: if you forget your master password, nothing opens this vault. Make a kit now.'
+              ? 'No recovery code yet: if you forget your master password, nothing opens this vault. Make a kit now.' // empty-state-ok: row help text
               : status.recoveryUnsaved && !newKit
                 ? 'Your recovery code changed and the new kit was never saved: make a new one now.'
                 : 'Makes a new recovery code (and a new vault key). The one in your old kit stops working.'}

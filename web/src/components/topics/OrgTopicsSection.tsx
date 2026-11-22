@@ -8,6 +8,7 @@
 import { OrgListRow } from '@/components/org/OrgListRow';
 import { timeAgo } from '@/utils/time';
 import type { TopicSummary } from '@/api/topics';
+import { UnavailableState } from '@/components/common/EmptyState';
 import { openTopics, shortName, topicKey } from './topic-model';
 import { GroupAvatar } from './TopicAvatars';
 import { NewTopicButton } from './topic-entry';
@@ -19,15 +20,15 @@ function matches(t: TopicSummary, words: string[]): boolean {
   return words.every((w) => hay.includes(w));
 }
 
-export interface OrgTopicRows { on: boolean; rows: TopicSummary[]; error: string | null }
+export interface OrgTopicRows { on: boolean; rows: TopicSummary[]; error: string | null; reload: () => void }
 
 /** The open topics the Org list shows for `query`, newest first (none while the experiment is off). */
 export function useOrgTopicRows(query: string): OrgTopicRows {
   const on = useTopicsOn();
-  const { list, error } = useTopicList(on);
-  if (!on) return { on, rows: [], error: null };
+  const { list, error, reload } = useTopicList(on);
+  if (!on) return { on, rows: [], error: null, reload };
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return { on, rows: openTopics(list ?? []).filter((t) => matches(t, words)), error };
+  return { on, rows: openTopics(list ?? []).filter((t) => matches(t, words)), error, reload };
 }
 
 /** A topic row's hover: its title, when it last moved, and its last line. */
@@ -43,7 +44,7 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
   now: number;
   onSelect: (key: string) => void;
 }) {
-  const { on, rows, error } = topics;
+  const { on, rows, error, reload } = topics;
   if (!on) return null;
   return (
     <div className="org-topics" role="group" aria-label="Topics" data-testid="org-topics" data-count={rows.length}>
@@ -51,7 +52,12 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
         <span>Topics · {rows.length}</span>
         <NewTopicButton testId="org-topic-new" iconOnly />
       </div>
-      {error && <p className="org-empty-note" data-testid="org-topics-error">{error}</p>}
+      {/* In the Org list's listbox: no live region of its own, and its Retry keeps the arrow keys. */}
+      {error && (
+        <div role="presentation" onKeyDown={(e) => e.stopPropagation()}>
+          <UnavailableState size="row" role="presentation" title="Couldn't load topics" detail={error} onRetry={reload} testId="org-topics-error" />
+        </div>
+      )}
       {rows.map((t) => {
         const key = topicKey(t.id);
         const selected = selectedKey === key;

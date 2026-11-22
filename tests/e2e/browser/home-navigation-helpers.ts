@@ -35,7 +35,7 @@ export async function openHome(page: Page, baseURL: string, timeout = 45_000): P
  * The list's loading spinner goes in the same commit that brings the rows.
  */
 export async function waitForBoardList(page: Page): Promise<void> {
-  await expect(page.locator('.todo-panel-list > .empty-state .spinner')).toHaveCount(0, { timeout: 30_000 })
+  await expect(page.locator('.todo-panel-list').getByTestId('todo-loading')).toHaveCount(0, { timeout: 30_000 })
 }
 
 /** Opens the Display menu (filters, sort, group, view, layout) on its first page. */

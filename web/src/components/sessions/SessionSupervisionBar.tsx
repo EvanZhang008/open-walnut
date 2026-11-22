@@ -15,7 +15,7 @@ const STATE_LABELS = {
   restarting: 'Restarting session',
   checking: 'Checking cron recovery',
   disabled: 'Automatic recovery off',
-  inactive: 'No recoverable cron',
+  inactive: 'No recoverable cron', // empty-state-ok: status label map
   blocked: 'Automatic recovery blocked',
 };
 
@@ -39,7 +39,7 @@ const REASONS: Record<string, string> = {
   'unsupported-launch-arguments': 'The original launch options cannot be restored automatically.',
   'retry-backoff': 'Waiting before the next restart attempt.',
   'launch-failed': 'The last start attempt failed. Recovery will retry within its limit.',
-  'no-active-cron': 'No unexpired session-only cron can be restored.',
+  'no-active-cron': 'No unexpired session-only cron can be restored.', // empty-state-ok: reason text map
   'user-disabled': 'Running CLI processes are left alone. Use Terminate to end the session.',
 };
 

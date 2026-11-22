@@ -8,6 +8,7 @@
  */
 import { type ReactNode } from 'react';
 import { usePageView } from '@/utils/view-memory';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { LetterEnvelopeRow } from './LetterEnvelopeRow';
 import type { LetterEnvelope } from '@/api/human-inbox';
 import '@/styles/human-inbox.css';
@@ -44,11 +45,6 @@ export function InboxPane({
 }) {
   const [density, setDensity] = usePageView<InboxDensity>('inbox', 'density', 'roomy', isInboxDensity);
   const split = layout === 'split';
-  const emptyText = !loaded
-    ? 'Loading letters…'
-    : unreadOnly
-      ? (showArchived ? 'Nothing unread in the archive' : 'No unread letters')
-      : (showArchived ? 'Nothing archived' : 'No letters yet');
   return (
     <div className={`notification-feed hib-inbox-pane${split ? ' hib-inbox-split' : ''}`} data-density={density} data-layout={layout}>
       <div className="hib-toolbar">
@@ -78,7 +74,11 @@ export function InboxPane({
       <div className="hib-inbox-columns">
         <div className="hib-inbox-index" aria-label="Letters">
       {letters.length === 0 ? (
-        <div className="notification-feed-empty">{emptyText}</div>
+        !loaded
+          ? <LoadingState size="section" title="Loading letters…" testId="inbox-empty" />
+          : <EmptyState size="section"
+              title={unreadOnly ? (showArchived ? 'Nothing unread in the archive' : 'No unread letters') : (showArchived ? 'Nothing archived' : 'No letters yet')} testId="inbox-empty"
+              action={unreadOnly ? { label: 'Show all letters', onClick: onToggleUnreadOnly } : undefined} />
       ) : (
         <div className="hib-list">
           {letters.map(letter => (
@@ -98,7 +98,7 @@ export function InboxPane({
       )}
         </div>
         {split && <div className="hib-inbox-reader" aria-label="Letter reader">
-          {reader ?? <div className="hib-split-empty">Select a letter to read and reply</div>}
+          {reader ?? <EmptyState size="pane" title="No letter open" hint="Pick a letter from the list to read and reply." testId="inbox-reader-empty" />}
         </div>}
       </div>
     </div>

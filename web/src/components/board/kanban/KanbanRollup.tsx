@@ -39,7 +39,7 @@ export function KanbanRollup({ board, filter, mode }: KanbanRollupProps) {
         >The leader needs you: {leaderReason(leader.status.text)}</button>
       )}
       <span className="kanban-rollup" data-testid="kanban-rollup">
-        {board.loading ? 'Loading the team...' : rollup.text}
+        {board.loading ? 'Loading the team…' : rollup.text}{/* empty-state-ok: the rollup summary line's own words while it loads */}
         {!board.loading && rollup.stillOpenText && (
           <>
             {', '}

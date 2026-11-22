@@ -214,7 +214,7 @@ test('C23: no match shows the empty line and Clear search; Esc clears then blurs
   const filter = page.getByTestId('settings-filter')
   const before = (await visibleNavKeys(page)).length
   await filter.fill('zzzq')
-  await expect(page.getByTestId('settings-filter-empty')).toContainText('No settings match "zzzq".')
+  await expect(page.getByTestId('settings-filter-empty')).toContainText('No settings match “zzzq”')
   await expect.poll(() => visibleNavKeys(page)).toEqual([])
   await page.getByRole('button', { name: 'Clear search' }).click()
   await expect(filter).toHaveValue('')

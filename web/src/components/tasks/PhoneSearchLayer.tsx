@@ -9,6 +9,7 @@
  * note opens the Notes page. It stands in for the
  * desktop's Cmd+Shift+O session finder, which a phone has no way to reach.
  */
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -205,9 +206,9 @@ export function PhoneSearchLayer({ open, onClose }: PhoneSearchLayerProps) {
         />
       </form>
       <div className="phone-search-results" data-phase={phase}>
-        {phase === 'loading' && <p className="phone-search-note" role="status">Searching...</p>}
-        {phase === 'failed' && <p className="phone-search-note" role="alert">Search did not answer. Try again.</p>}
-        {empty && <p className="phone-search-note" role="status">No matches.</p>}
+        {phase === 'loading' && <LoadingState title="Searching…" />}
+        {phase === 'failed' && <UnavailableState title="Search did not answer" hint="Try again." />}
+        {empty && <EmptyState testId="phone-search-empty" title={`No matches for “${query.trim()}”`} />}
         {phase === 'done' && groups.tasks.length > 0 && (
           <SearchGroup label="Tasks">
             {groups.tasks.map((r) => (

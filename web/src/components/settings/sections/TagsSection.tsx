@@ -14,13 +14,12 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
-  SettingsEmpty,
   SettingsGroup,
-  SettingsLoadingRow,
   SettingsNotice,
   SettingsRow,
   SettingsSection,
 } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SegmentedControl, type SegmentedOption } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { TagLinkEditor, inheritedLink, linkOwner } from './TagLinkEditor';
@@ -187,7 +186,7 @@ export function TagsSection() {
       description="How tags show on tasks. Every tag is key:value; Value shows only what follows the key (a ticket's id). A hidden tag still works in search and filters, and the task's tag editor still lists it. A link makes a pill open a page, with the tag's value in place of {value}."
     >
       <SettingsGroup data-testid="tags-settings">
-        {counts === null ? <SettingsLoadingRow /> : (
+        {counts === null ? <LoadingState title="Loading tags…" /> : (
           <>
             {rows.length > FILTER_FROM && (
               <SettingsRow
@@ -253,8 +252,10 @@ export function TagsSection() {
                 </Fragment>
               );
             })}
-            {rows.length === 0 && <SettingsEmpty>No tags yet.</SettingsEmpty>}
-            {rows.length > 0 && visible.length === 0 && <SettingsEmpty>No tag matches "{filter.trim()}".</SettingsEmpty>}
+            {rows.length === 0 && <EmptyState title="No tags yet" hint="Tags appear here once a task has one." />}
+            {rows.length > 0 && visible.length === 0 && (
+              <EmptyState title={`No tag matches “${filter.trim()}”`} action={{ label: 'Clear search', onClick: () => setFilter('') }} />
+            )}
           </>
         )}
       </SettingsGroup>

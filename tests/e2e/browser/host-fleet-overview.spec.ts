@@ -871,7 +871,7 @@ test('a reopened page shows the last readings at once, before the server answers
   await openRemoteHosts(page)
   await expect(devState).toHaveText(DEV_LIVE, { timeout: 10_000 })
   await expect(fleetStat(page, 'online')).toHaveText('2/2')
-  await see(page, { 'host-fleet-reading': 0, '.hf-loading': 0 })
+  await see(page, { 'host-fleet-reading': 0 })
   await see(cardOf(page, 'devbox'), { '[data-gauge="cpu"] .hf-gauge-value': '25%', '[data-testid="host-fleet-sessions"] .hf-big': /^\d+$/ })
   release()
   hold = null
@@ -1015,7 +1015,7 @@ test('opening a host\'s Details reads it again, What Walnut knows inside them; c
   await expect.poll(() => asks).toEqual([['__local__']]) // this computer's 12 minute old reading
   // What Walnut knows moved from under Edit into Details: the one read is the opening of Details.
   const box = await openDetails(page, 'fixture-remote')
-  await see(box, { 'host-profile-heading-fixture-remote': 'What Walnut knows', '.rh-details-empty': 'Walnut has no reading of Big remote host yet: it reads a host once it connects.' })
+  await see(box, { 'host-profile-heading-fixture-remote': 'What Walnut knows', 'host-details-no-reading': /^Walnut has no reading of Big remote host yet\s*It reads a host once it connects\.$/ })
   await expect.poll(() => asks).toEqual([['__local__'], ['fixture-remote']])
   await pick(page, row(page, 'fixture-remote'), 'Hide details')
   await expect(box).toHaveCount(0)

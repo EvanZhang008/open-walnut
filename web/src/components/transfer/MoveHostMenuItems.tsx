@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { DisclosureChevron } from '@/components/controls';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { apiGet, apiPost } from '@/api/client';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
@@ -107,9 +108,9 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
       </button>
       {open && (
         <div className="task-kebab-team-rows">
-          {error && <div className="task-kebab-item task-kebab-info" data-testid="kebab-move-host-error">Could not read the hosts: {error}</div>}
-          {!error && !rows && <div className="task-kebab-item task-kebab-info">Reading each host&apos;s load…</div>}
-          {!error && rows && others.length === 0 && <div className="task-kebab-item task-kebab-info">No other host is set up</div>}
+          {error && <UnavailableState size="row" title="Could not read the hosts" detail={error} testId="kebab-move-host-error" />}
+          {!error && !rows && <LoadingState size="row" title="Reading each host's load…" />}
+          {!error && rows && others.length === 0 && <EmptyState size="row" title="No other host is set up" />}
           {refused && <div className="task-kebab-item task-kebab-info task-kebab-move-host-refused" role="alert" data-testid="kebab-move-host-refused">The move did not start: {refused}</div>}
           {others.map((h) => (
             <button

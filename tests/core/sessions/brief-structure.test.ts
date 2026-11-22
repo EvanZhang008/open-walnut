@@ -175,6 +175,7 @@ describe('the Brief view is the letter alone', () => {
     const src = fs.readFileSync(path.join(import.meta.dirname, '../../../web/src/components/org/OrgBrief.tsx'), 'utf8')
     const ids = [...src.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]).sort()
     expect(ids).toEqual(['org-brief', 'org-brief', 'org-brief-body', 'org-brief-head', 'org-brief-moved', 'org-brief-updating'])
-    expect(src).not.toMatch(/<[A-Z]\w*(?<!Fragment)\s/)
+    // The shared EmptyState draws its empty state; no other component is drawn.
+    expect(src).not.toMatch(/<(?!EmptyState\s)[A-Z]\w*(?<!Fragment)\s/)
   })
 })

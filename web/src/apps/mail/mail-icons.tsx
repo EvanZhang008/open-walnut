@@ -253,14 +253,6 @@ export function CalendarIcon({ size = 18 }: IconProps) {
   </>);
 }
 
-/** The reader with nothing in it: an open envelope with a page rising out of it. */
-export function ReaderEmptyIcon({ size = 34 }: IconProps) {
-  return frame(size, <>
-    <path d="M3 9.5l9-6 9 6V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    <path d="M3.5 10l8.5 5.6 8.5-5.6" />
-  </>);
-}
-
 export function AttachmentIcon({ size = 13 }: IconProps) {
   return frame(size, <path d="M21 11.5l-8 8a5 5 0 0 1-7-7l8-8a3.5 3.5 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7" />);
 }

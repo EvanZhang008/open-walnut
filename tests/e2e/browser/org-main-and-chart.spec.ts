@@ -367,7 +367,7 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
     await page.route(url, (route) => { failed++; return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"down for the test"}' }) })
     await page.getByTestId('org-detail-chat-tools').locator('.task-kebab-btn').click()
     await page.locator('.task-kebab-menu').getByTestId('kebab-memory-instructions').click()
-    await expect(panel.getByTestId('am-read-error')).toContainText('Could not read the stored instructions.')
+    await expect(panel.getByTestId('am-read-error')).toContainText('Could not read the stored instructions')
     expect(failed).toBeGreaterThan(0)
     await expect(box).toHaveAttribute('readonly', '')
     await expect(panel.getByTestId('am-save')).toBeDisabled()

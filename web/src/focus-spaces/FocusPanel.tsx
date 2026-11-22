@@ -11,6 +11,7 @@ import type { Task } from '@open-walnut/core'
 import { taskInScope } from '@open-walnut/focus-scope'
 import { useTaskListSelect } from '@/contexts/TasksContext'
 import { useOpenTask } from '@/hooks/useOpenTask'
+import { EmptyState } from '@/components/common/EmptyState'
 import { enterFocus, leaveFocus, useFocusSnapshot, type ActiveFocus, type FocusSpace } from './focus-store'
 import { FOCUS_LENGTHS, durationWords, outsideCounts, outsideWords, scopeLine, summarize, untilWords, type FocusSummary } from './focus-model'
 import { SpaceForm } from './SpaceForm'
@@ -107,7 +108,7 @@ export function FocusPanel() {
           </div>
         </>
       )}
-      {!active && spaces.length === 0 && <div className="focus-panel-empty">No spaces yet. Make one with the projects or tasks you want in front of you.</div>}
+      {!active && spaces.length === 0 && <EmptyState title="No focus spaces yet" hint="Make one with the projects or tasks you want in front of you." testId="focus-no-spaces" />}
       {error && <div className="focus-panel-error" role="alert">{error}</div>}
       <div className="ask-card-answer focus-actions">
         {active && <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={leave} data-testid="focus-leave">Leave focus</button>}
@@ -143,7 +144,7 @@ function ActiveHead({ active, tasks, byId, titleOf }: {
         {active.by === 'block' ? ' · from your focus block' : ''}
       </div>
       <div className="focus-panel-outside" data-testid="focus-outside">
-        {outside.open === 0 ? 'Nothing open outside.' : `${outsideWords(outside.open)}. You see them when you leave.`}
+        {outside.open === 0 ? 'Nothing open outside.' : `${outsideWords(outside.open)}. You see them when you leave.`}{/* empty-state-ok: a detail line of the focus head */}
       </div>
     </div>
   )
@@ -157,7 +158,7 @@ export function SummaryView({ summary, onClose }: { summary: FocusSummary; onClo
         <div className="focus-panel-title">Back from {summary.name}</div>
         <div className="focus-panel-detail">
           {`You focused for ${durationWords(summary.minutes)}. `}
-          {summary.changed === 0 ? 'Nothing changed outside meanwhile.' : `${summary.changed} ${summary.changed === 1 ? 'task' : 'tasks'} outside changed meanwhile.`}
+          {summary.changed === 0 ? 'Nothing changed outside meanwhile.' : `${summary.changed} ${summary.changed === 1 ? 'task' : 'tasks'} outside changed meanwhile.`}{/* empty-state-ok: part of a summary sentence */}
         </div>
       </div>
       {summary.needs.length > 0 && (

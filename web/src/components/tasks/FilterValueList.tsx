@@ -5,6 +5,7 @@
  * `Only` on hover; a single-select row (Date, Blocked, a Time window) replaces.
  * The caller owns the search text (the menu's one search box filters the rows).
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { useLayoutEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { ICON_CHECK } from '../common/Icons';
 import type { TaskPhase } from '@open-walnut/core';
@@ -220,7 +221,7 @@ export function FilterValueList({ dim, options, state, counts, query = '', onPic
   }
   return (
     <div ref={listRef} className="fb-list-rows" role="group" aria-label={`${dim} values`} onKeyDown={onKeyDown}>
-      {shown.length === 0 && lead.length === 0 && <div className="fb-empty">{query.trim() ? `No match for "${query.trim()}"` : 'Nothing to pick'}</div>}
+      {shown.length === 0 && lead.length === 0 && <EmptyState size="row" testId="fb-empty" title={query.trim() ? 'No match for “' + query.trim() + '”' : 'No values to pick'} />}
       {lead.map((r) => <ValueRow key={r.value} {...r} />)}
       {shown.map((opt) => {
         const sel = isValueSelected(state, dim, opt.value);

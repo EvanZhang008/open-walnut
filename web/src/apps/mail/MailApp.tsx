@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState, UnavailableState, type EmptyStateAction } from '@/components/common/EmptyState';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { AppComponentProps } from '../registry';
 import { AddAccountDialog } from './AddAccountDialog';
@@ -51,18 +51,14 @@ const NARROW_QUERY = '(max-width: 1099px)';
  * idea, and both states this appears in (the cache still opening, a read that failed) are usually
  * over by the time it is read.
  */
-function RetryButton({ busy }: { busy: boolean }) {
-  return (
-    <button
-      type="button"
-      className="mail-add-account"
-      data-testid="mail-retry"
-      disabled={busy}
-      onClick={() => { void refreshMailAll(); }}
-    >
-      {busy ? 'Trying…' : 'Try again'}
-    </button>
-  );
+/** Ask every mail route again; a press while the last ask still runs does nothing. */
+function retryAction(busy: boolean): EmptyStateAction {
+  return {
+    label: busy ? 'Trying…' : 'Try again',
+    testId: 'mail-retry',
+    disabled: busy,
+    onClick: () => { void refreshMailAll(); },
+  };
 }
 
 /**
@@ -160,7 +156,7 @@ export function MailApp(props: AppComponentProps) {
     return (
       <div className="mail-app" data-testid="mail-app">
         <MailHeader />
-        <LoadingSpinner />
+        <LoadingState size="pane" title="Loading mail…" />
       </div>
     );
   }
@@ -169,11 +165,13 @@ export function MailApp(props: AppComponentProps) {
     return (
       <div className="mail-app" data-testid="mail-app">
         <MailHeader />
-        <div className="empty-state" data-testid="mail-app-stand-in">
-          <p>{mail.stand.title}</p>
-          <p>{mail.stand.detail}</p>
-          {mail.stand.retryable && <RetryButton busy={mail.loading} />}
-        </div>
+        <UnavailableState
+          size="pane"
+          title={mail.stand.title}
+          hint={mail.stand.detail}
+          action={mail.stand.retryable ? retryAction(mail.loading) : undefined}
+          testId="mail-app-stand-in"
+        />
       </div>
     );
   }
@@ -182,10 +180,13 @@ export function MailApp(props: AppComponentProps) {
     return (
       <div className="mail-app" data-testid="mail-app">
         <MailHeader />
-        <div className="empty-state" data-testid="mail-app-error">
-          <p>Mail is not answering right now: {mail.error}</p>
-          <RetryButton busy={mail.loading} />
-        </div>
+        <UnavailableState
+          size="pane"
+          title="Mail is not answering right now"
+          hint={mail.error}
+          action={retryAction(mail.loading)}
+          testId="mail-app-error"
+        />
       </div>
     );
   }
@@ -194,20 +195,18 @@ export function MailApp(props: AppComponentProps) {
     return (
       <div className="mail-app" data-testid="mail-app">
         <MailHeader />
-        <div className="empty-state" data-testid="mail-app-empty">
-          <p>No mail accounts yet</p>
-          <p>
-            {mail.providers.length === 0
-              ? 'Install a provider plugin (IMAP, for example) and it will add accounts here.'
-              : 'A provider plugin adds accounts here. Ready to use: '
-                + mail.providers.map((provider) => provider.label).join(', ')}
-          </p>
-          {mail.providers.length > 0 && (
-            <button type="button" className="mail-add-account" data-testid="mail-add-account" onClick={openAdd}>
-              + Add account
-            </button>
-          )}
-        </div>
+        <EmptyState
+          size="pane"
+          title="No mail accounts yet"
+          hint={mail.providers.length === 0
+            ? 'Install a provider plugin (IMAP, for example) and it will add accounts here.'
+            : 'A provider plugin adds accounts here. Ready to use: '
+              + mail.providers.map((provider) => provider.label).join(', ') + '.'}
+          action={mail.providers.length > 0
+            ? { label: 'Add account', onClick: openAdd, primary: true, testId: 'mail-add-account' }
+            : undefined}
+          testId="mail-app-empty"
+        />
         {dialog}
       </div>
     );

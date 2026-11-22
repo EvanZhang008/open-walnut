@@ -84,8 +84,8 @@ export const NO_UNREAD_NOW = 'This group has no unread mail now.';
 export const ALL_CAUGHT_UP = 'All caught up';
 export const ALL_CAUGHT_UP_DETAIL = 'No unread mail. Important mail you have read is below.';
 export const ALL_CAUGHT_UP_EMPTY = 'No unread mail.';
-export const IMPORTANT_EMPTY = 'Nothing needs you right now.';
-export const IMPORTANT_EMPTY_UNREAD = 'No unread important mail.';
+export const IMPORTANT_EMPTY = 'Nothing needs you right now';
+export const IMPORTANT_EMPTY_UNREAD = 'No unread important mail';
 
 /**
  * The `Mark N read` action (the ✓ button's title, the open group's footer and its menu). `unread` is

@@ -27,20 +27,20 @@ test('the draft column opens the path selector and paths load', async ({ page })
   // but NEVER the stale-error-next-to-loading contradiction.
   await expect
     .poll(async () => {
-      const loading = await list.locator('.sps-empty', { hasText: 'Loading paths...' }).count()
+      const loading = await list.getByTestId('sps-loading').count()
       return loading
     }, { timeout: 20_000 })
     .toBe(0)
 
   // The incident's visible symptom must not render: an error row while loading.
-  const errorRows = await list.locator('.sps-error').count()
-  const loadingRows = await list.locator('.sps-empty', { hasText: 'Loading paths...' }).count()
+  const errorRows = await list.getByTestId('sps-error').count()
+  const loadingRows = await list.getByTestId('sps-loading').count()
   expect(loadingRows).toBe(0)
   expect(errorRows).toBe(0)
 
   // Something useful rendered: path items, a live-state note, create row, or empty hint.
   const items = await list.locator('.sps-path-item').count()
-  const notes = await list.locator('.sps-live-note, .sps-host-note, .sps-create-row, .sps-empty').count()
+  const notes = await list.locator('[data-testid="sps-live-note"], .sps-host-note, .sps-create-row, [data-testid="sps-empty"], [data-testid="sps-loading"]').count()
   expect(items + notes).toBeGreaterThan(0)
 
   await page.screenshot({ path: '/tmp/quick-session-verify/selector-loaded.png' })

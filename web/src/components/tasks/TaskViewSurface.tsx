@@ -1,3 +1,4 @@
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Task } from '@open-walnut/core'
 import { projectIdentity } from '@/utils/project-display'
@@ -13,7 +14,6 @@ import { useFavorites } from '@/hooks/useFavorites'
 import { useOrdering } from '@/hooks/useOrdering'
 import { useProjectRegistry } from '@/hooks/useProjectRegistry'
 import { visibleInterval } from '@/utils/page-visibility'
-import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { TasksPageTable } from './TasksPageTable'
 import { buildTaskQueryContext, safeNormalizeTaskQuery } from './task-query-state'
 import type { TpSort } from './tasks-page-sort'
@@ -66,7 +66,7 @@ export function TaskViewSurface({
   toolbar = false,
   persistenceKey,
 }: TaskViewSurfaceProps) {
-  const { tasks, loading, error, create, update } = useTasksContext()
+  const { tasks, loading, error, refetch, create, update } = useTasksContext()
   const { toggleComplete, deleteTask } = useUndoableTaskActions()
   const { projectOrder } = useOrdering()
   const { sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry()
@@ -146,8 +146,8 @@ export function TaskViewSurface({
     void toggleFavoriteProject(name).then(refreshRegistry).catch(() => undefined)
   }, [refreshRegistry, toggleFavoriteProject])
 
-  if (loading) return <div className="plugin-task-view plugin-task-view-loading"><LoadingSpinner /></div>
-  if (error) return <div className="plugin-task-view plugin-task-view-error">{error}</div>
+  if (loading) return <div className="plugin-task-view"><LoadingState size="pane" title="Loading tasks…" /></div>
+  if (error) return <div className="plugin-task-view"><UnavailableState size="pane" title="Couldn't load tasks" detail={error} onRetry={refetch} /></div>
 
   return (
     <div className="plugin-task-view" data-testid="plugin-task-view">

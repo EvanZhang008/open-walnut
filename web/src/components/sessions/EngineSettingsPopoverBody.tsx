@@ -10,6 +10,7 @@
  * the row's wrapper so the shared component stays untouched.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
 import type { EngineSettingView, EngineSettingsView, EngineSettingsWriteScope } from '@/api/engine-settings';
 import type { EngineSettingsHook, EngineSettingsLastWrite } from '@/hooks/useEngineSettings';
 import { otherGroups, rowHonoredHere, rowLacksProjectLayer, sessionsGroup } from '@/hooks/engine-settings-model';
@@ -185,13 +186,12 @@ export function EngineSettingsRowsArea(props: RowsAreaProps) {
     body = <Skeleton hostText={hostText} />;
   } else if (loadError) {
     body = (
-      <div className="engine-settings-popover-error-block" role="alert">
-        <p className="engine-settings-popover-error">{loadError.message}</p>
-        <button type="button" className="engine-settings-retry" onClick={settings.reload}>Retry</button>
-      </div>
+      <UnavailableState size="section" title="Couldn't read the settings"
+        hint={<span data-testid="engine-settings-popover-error">{loadError.message}</span>}
+        action={{ label: 'Retry', onClick: () => settings.reload(), testId: 'engine-settings-retry' }} />
     );
   } else if (!view || ((group?.items.length ?? 0) === 0 && others.length === 0)) {
-    body = <p className="engine-settings-popover-empty">{emptySentence(displayName)}</p>;
+    body = <EmptyState size="section" title={emptySentence(displayName)} testId="engine-settings-popover-empty" />;
   } else {
     // ONE filter over every row, so a name hit anywhere wins over a help hit
     // anywhere; the rows then go back to their own group, in order.
@@ -211,7 +211,7 @@ export function EngineSettingsRowsArea(props: RowsAreaProps) {
       />
     );
     body = items.length === 0
-      ? <p className="engine-settings-popover-nomatch">{noMatchSentence(filter.trim())}</p>
+      ? <EmptyState size="row" title={noMatchSentence(filter.trim())} testId="engine-settings-popover-nomatch" />
       : (
         <>
           {(group?.items ?? []).filter((i) => shown.has(i.key)).map(renderRow)}

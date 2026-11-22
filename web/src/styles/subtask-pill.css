@@ -175,7 +175,6 @@
   font-size: var(--font-size-xs);
 }
 
-.adopt-worker-empty,
 .adopt-worker-more {
   padding: 6px;
   color: var(--fg-muted);

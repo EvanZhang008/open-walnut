@@ -10,7 +10,8 @@
 import type { Config } from '@open-walnut/core'
 import { useSettingsConfig } from '@/hooks/useSettingsConfig'
 import { PluginConfigCards } from './sections/PluginConfigCards'
-import { SettingsGroup, SettingsLoadingRow, SettingsNotice } from './SettingsSection'
+import { SettingsGroup } from './SettingsSection'
+import { EmptyState, LoadingState, UnavailableState } from '../common/EmptyState'
 import '@/styles/settings-plugin-form.css'
 
 export function PluginSettingsForm({ pluginId }: { pluginId: string }) {
@@ -19,7 +20,7 @@ export function PluginSettingsForm({ pluginId }: { pluginId: string }) {
     return (
       <div className="plugin-settings-form" data-testid={`plugin-settings-form-${pluginId}`} data-state={loading ? 'loading' : 'error'}>
         <SettingsGroup>
-          {loading ? <SettingsLoadingRow /> : <SettingsNotice kind="error">{error ?? 'Settings did not load.'}</SettingsNotice>}
+          {loading ? <LoadingState title="Loading settings…" /> : <UnavailableState title="Settings did not load" detail={error ?? undefined} />}
         </SettingsGroup>
       </div>
     )
@@ -33,10 +34,10 @@ export function PluginSettingsForm({ pluginId }: { pluginId: string }) {
           onlyIds={[pluginId]}
           bare
           renderEmpty={(why) => why === 'loading'
-            ? <SettingsLoadingRow />
+            ? <LoadingState title="Loading the settings form…" />
             : why === 'failed'
-              ? <SettingsNotice kind="error">The settings form did not load. Reload the page to try again.</SettingsNotice>
-              : <SettingsNotice>This plugin has no settings to change right now. Check that it is on in Apps.</SettingsNotice>}
+              ? <UnavailableState title="The settings form did not load" hint="Reload the page to try again." />
+              : <EmptyState title="This plugin has no settings to change right now" hint="Check that it is on in Apps." />}
         />
       </SettingsGroup>
     </div>

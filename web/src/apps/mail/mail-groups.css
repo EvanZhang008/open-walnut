@@ -345,7 +345,6 @@
 }
 
 .mail-important .mail-row:first-of-type { border-top: 1px solid var(--border); }
-.mail-important-empty { display: flex; flex-direction: column; gap: 2px; }
 
 .mail-row-leaving {
   overflow: hidden;

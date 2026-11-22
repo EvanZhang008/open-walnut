@@ -12,6 +12,10 @@
  *   2. the Ask drawer's "Loading your asks" line;
  *   3. Mail's Ask drawer while its session starts.
  *
+ * Since 2026-11-21 the slot's and the drawer's loading lines are the shared LoadingState
+ * (components/common/EmptyState.tsx), whose ring is its size's: the slot is a whole pane
+ * (32px), the drawer a row inside a list (12px).
+ *
  * The Ask slot's pending view (a New chat launch is in flight) draws no ring at all since
  * 3b4b4403a: it says "Starting ..." over a SetupProgress sweep, a 6px bar (AskWalnutSlot.tsx).
  * Its case pins that no ring of either size is back there, and the bar's height.
@@ -55,7 +59,7 @@ type Box = { x: number; y: number; width: number; height: number } | null
  * the boxes of the things around it (the sentence, the container, `others`).
  */
 async function record(page: Page, name: string, status: Locator, container: Locator, others: Record<string, Locator>): Promise<{ w: number; h: number }> {
-  const spinner = status.locator('.spinner')
+  const spinner = status.locator('.spinner, .empty-state-spinner')
   await expect(spinner).toBeVisible()
   // The slot can redraw its loading view while the board loads, replacing the ring between
   // the locator's find and the read: measure a ring still on the page, not the one removed.
@@ -97,7 +101,7 @@ test.describe('the Ask slot and drawer', () => {
     await page.goto('/')
     const loadingView = page.getByTestId('ask-walnut-loading')
     await expect(loadingView).toBeVisible({ timeout: 60_000 })
-    const slotSize = await record(page, 'slot-loading', loadingView.locator('.ask-walnut-pending-status'), loadingView, {
+    const slotSize = await record(page, 'slot-loading', loadingView.locator('.empty-state'), loadingView, {
       menu: loadingView.getByTestId('ask-walnut-menu'),
     })
 
@@ -108,7 +112,7 @@ test.describe('the Ask slot and drawer', () => {
       search: page.getByTestId('ask-walnut-search'), title: page.locator('.ask-walnut-drawer-title'),
     })
     board.open()
-    expect(slotSize).toEqual({ w: 12, h: 12 })
+    expect(slotSize).toEqual({ w: 32, h: 32 })
     expect(drawerSize).toEqual({ w: 12, h: 12 })
   })
 

@@ -26,7 +26,8 @@ import { listMailAccounts, type MailAccountDto } from '@/api/mail';
 import { wsClient } from '@/api/ws';
 import { useWebPluginRuntime } from '@/plugins/runtime-store';
 import { log } from '@/utils/log';
-import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsSection } from '../SettingsSection';
+import { SettingsGroup, SettingsNotice, SettingsSection } from '../SettingsSection';
+import { LoadingState, UnavailableState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { createRulesSaveQueue, RulesQueueCancelled, type RulesDoc } from './mail-rules-save-queue';
 import { COPY, moveItem, newRuleId, storedRule } from './mail-rules-model';
@@ -71,7 +72,7 @@ export function MailRulesSection() {
   if (!runtime.ready) {
     return (
       <SettingsSection id="mail-rules" title="Mail rules">
-        <SettingsLoadingRow />
+        <LoadingState title="Loading mail rules…" />
       </SettingsSection>
     );
   }
@@ -278,8 +279,8 @@ function MailRulesPanel() {
     return (
       <SettingsSection id="mail-rules" title="Mail rules">
         {loadError ? (
-          <SettingsNotice kind="error" action={<SettingsButton onClick={() => { void load(); }}>Try again</SettingsButton>}>{loadError}</SettingsNotice>
-        ) : <SettingsLoadingRow />}
+          <UnavailableState title="Couldn't load mail rules" detail={loadError} onRetry={() => { void load(); }} retryLabel="Try again" />
+        ) : <LoadingState title="Loading mail rules…" />}
       </SettingsSection>
     );
   }

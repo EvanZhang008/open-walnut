@@ -340,7 +340,7 @@ test('pending folder listings recover without losing the query', async ({ page }
   const input = await openComposer(page, '/fixture/', 'test-host')
   await input.fill('@?recovered')
   const picker = page.locator('.file-mention-popup')
-  await expect(picker.locator('.fmp-empty')).toContainText('Searching nearby folders')
+  await expect(picker.getByTestId('fmp-empty')).toContainText('Searching nearby folders')
   await expect(picker.locator('.fmp-error')).toHaveCount(0)
   await expect(picker.locator('.fmp-recent-path')).toHaveText(['/fixture/RecoveredFolder'], { timeout: 10_000 })
   await expect(input).toHaveValue('@?recovered')

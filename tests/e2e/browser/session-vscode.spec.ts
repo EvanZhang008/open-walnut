@@ -205,7 +205,7 @@ test('Code prefetch is cancelled with the menu and a failed open can retry', asy
   await openKebabGroup(menu, 'session-kebab-open')
   await menu.getByRole('button', { name: 'Code', exact: true }).click()
   const codePanel = panel.locator('.session-code-panel')
-  await expect(codePanel.locator('.session-code-error-body')).toHaveText('Editor unavailable')
+  await expect(codePanel.getByTestId('session-code-error-body')).toHaveText('Editor unavailable')
   fail = false
   await codePanel.getByRole('button', { name: 'Retry', exact: true }).click()
   await expect(panel.frameLocator('.session-code-iframe').locator('body')).toHaveText('Recovered editor')

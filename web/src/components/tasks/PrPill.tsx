@@ -14,6 +14,7 @@
  * Overlay rules (web/src/AGENTS.md): the card is portalled to <body>, placed by useMenuPlacement,
  * stops pointerdown (rows are dnd-kit draggables), and closes on an outside pointerdown or Escape.
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -210,7 +211,7 @@ function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitin
             <span className="pr-card-number">#{pr.number}</span> {pr.repo}
           </a>
         </div>
-        {pr.error ? (errorAbove ? null : <PrError error={pr.error} />) : <div className="pr-card-muted pr-card-empty">Not read yet.</div>}
+        {pr.error ? (errorAbove ? null : <PrError error={pr.error} />) : <EmptyState size="row" title="Not read yet" />}
       </section>
     );
   }
@@ -261,7 +262,7 @@ function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitin
             </dd>
             <dt>Review</dt>
             <dd data-tone={pr.review === 'changes_requested' ? 'changes' : pr.review === 'approved' ? 'passed' : undefined}>
-              {pr.review ? PR_REVIEW_WORDS[pr.review] : 'No review needed yet'}
+              {pr.review ? PR_REVIEW_WORDS[pr.review] : 'No review needed yet'}{/* empty-state-ok: a review field's value */}
               {pr.reviewBy && (pr.review === 'changes_requested' || pr.review === 'approved') && (
                 <> by {pr.reviewBy.url
                   ? <a className="pr-card-review-by" href={pr.reviewBy.url} target="_blank" rel="noreferrer" title={`Open ${pr.reviewBy.author}'s review`}>{pr.reviewBy.author}</a>
@@ -590,7 +591,7 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
               // task and would swallow a press meant for a switch here.
               onKeyDown={(e) => e.stopPropagation()}
             >
-              {cardPrs.length === 0 && <div className="pr-card-muted pr-card-empty">Not read yet.</div>}
+              {cardPrs.length === 0 && <EmptyState size="row" title="Not read yet" />}
               {/* One read error for all of them (signed out, gh gone) is said once. */}
               {sharedError && <PrError error={sharedError} seen={cardPrs.map((p) => p.lastGoodAt ?? p.checkedAt).filter((x): x is string => !!x).sort().at(-1)} />}
               {cardPrs.map((pr) => (

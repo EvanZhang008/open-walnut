@@ -17,6 +17,7 @@ import { formatRelative, useNotifications } from '@/contexts/notifications';
 import { taskPath } from '@/utils/task-path';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import { SectionCard } from '../inputs/SectionCard';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { groupHealthErrors, type HealthErrorGroup, type HealthErrorRow } from './health-error-log-model';
 import { HealthHostProblems, useHealthProblemHosts } from './HealthHostProblems';
@@ -54,7 +55,9 @@ export function HealthErrorLog() {
       <div className="health-errors" data-testid="health-errors">
         <HealthHostProblems hosts={hosts} />
         {groups.length === 0 && hosts.length === 0
-          ? <p className="health-detail-desc" data-testid="health-errors-empty">{loaded ? 'No background errors.' : 'Reading them...'}</p>
+          ? loaded
+            ? <EmptyState title="No background errors" testId="health-errors-empty" />
+            : <LoadingState title="Reading background errors…" testId="health-errors-empty" />
           : groups.map(g => <ErrorGroup key={g.category} group={g} canFix={canFix} onClear={(key) => dismissFeed([key])} />)}
       </div>
     </SectionCard>

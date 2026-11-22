@@ -18,7 +18,8 @@
  * exactly once (only its hash is stored server-side).
  */
 import { useState, useEffect, useRef } from 'react';
-import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../../SettingsSection';
+import { SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../../SettingsSection';
+import { EmptyState, LoadingState, UnavailableState } from '../../../common/EmptyState';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { InlineConfirmButton, isRepeatClick } from '../../inputs/InlineConfirmButton';
 import { useSettingsSaved } from '../../settings-pane-context';
@@ -58,13 +59,13 @@ interface QrDialogState {
 }
 
 /** The heading of a tab's phone list, and what it says with none. */
-const PHONES_GROUP: Record<DeviceScope, { heading: string; empty: string }> = {
-  all: { heading: 'Phones with the Walnut app', empty: 'No phone has the Walnut app signed in yet. Pair one on the tab of the way it will use.' },
-  cloud: { heading: 'Phones on this companion', empty: 'No phone is paired with the companion yet.' },
-  tailscale: { heading: 'Phones paired with this Mac', empty: 'No phone is paired with this Mac yet.' },
-  wifi: { heading: 'Phones paired with this Mac', empty: 'No phone is paired with this Mac yet.' },
-  browser: { heading: '', empty: '' },
-  advanced: { heading: '', empty: '' },
+const PHONES_GROUP: Record<DeviceScope, { heading: string; empty: { title: string; hint?: string } }> = {
+  all: { heading: 'Phones with the Walnut app', empty: { title: 'No phone has the Walnut app signed in yet', hint: 'Pair one on the tab of the way it will use.' } },
+  cloud: { heading: 'Phones on this companion', empty: { title: 'No phone is paired with the companion yet' } },
+  tailscale: { heading: 'Phones paired with this Mac', empty: { title: 'No phone is paired with this Mac yet' } },
+  wifi: { heading: 'Phones paired with this Mac', empty: { title: 'No phone is paired with this Mac yet' } },
+  browser: { heading: '', empty: { title: '' } },
+  advanced: { heading: '', empty: { title: '' } },
 };
 
 /** What "a phone with the Walnut app" is, once, where All devices lists them (2026-11-18, the user: "what is a paired phone?"). */
@@ -403,17 +404,17 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
       {phones.length === 0 && (scope !== 'all' || listState !== 'ready' || browsers.length === 0)
         // The cloud tab's error notice below already says the companion's list could not be read.
         && !(scope === 'cloud' && cloudError && listState === 'ready') && (
-        <SettingsEmpty>
-          {listState === 'loading' ? 'Loading paired phones...'
-            : listState === 'failed' ? "Couldn't load paired phones."
-              // The cloud's half is unknown: say only what is known.
-              // A caller away from this Mac is not shown the companion's phones (it says so, not "none").
-              : scope === 'cloud' && cloudWithheld ? "The companion's phones are listed only on this Mac itself."
-              : scope !== 'tailscale' && scope !== 'wifi' && (cloudError || cloudUnpaired)
-                ? (scope === 'cloud' ? "Couldn't read the companion's phones." : 'No phones paired with this Mac.')
-                : scope === 'all' && fixedTarget !== null ? 'No phone has the Walnut app signed in yet. Pair one below.'
-                  : phonesWords.empty}
-        </SettingsEmpty>
+        listState === 'loading' ? <LoadingState title="Loading paired phones…" testId="devices-phones-empty" />
+          : listState === 'failed' ? <UnavailableState title="Couldn't load paired phones" onRetry={() => { void refresh(); }} testId="devices-phones-empty" />
+            // The cloud's half is unknown: say only what is known.
+            // A caller away from this Mac is not shown the companion's phones (it says so, not "none").
+            : scope === 'cloud' && cloudWithheld ? <EmptyState title="The companion's phones are listed only on this Mac itself" testId="devices-phones-empty" />
+            : scope !== 'tailscale' && scope !== 'wifi' && (cloudError || cloudUnpaired)
+              ? (scope === 'cloud'
+                ? <UnavailableState title="Couldn't read the companion's phones" testId="devices-phones-empty" />
+                : <EmptyState title="No phones paired with this Mac" testId="devices-phones-empty" />)
+              : scope === 'all' && fixedTarget !== null ? <EmptyState title="No phone has the Walnut app signed in yet" hint="Pair one below." testId="devices-phones-empty" />
+                : <EmptyState title={phonesWords.empty.title} hint={phonesWords.empty.hint} testId="devices-phones-empty" />
       )}
       {phones.map(renderRow)}
       {scope !== 'tailscale' && scope !== 'wifi' && cloudUnpaired && <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>}
@@ -437,7 +438,7 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
     <SettingsGroup heading="Web browser: sign in" id="devices-wifi-browser" data-testid="devices-wifi-browser">
       {wifiOrigin
         ? <WifiSignInRow origin={wifiOrigin} />
-        : <SettingsEmpty>This Mac&apos;s address on the network can&apos;t be detected right now, so there is no address to open.</SettingsEmpty>}
+        : <UnavailableState title="This Mac's address on the network can't be detected right now" hint="Until it is, there is no address to open." />}
     </SettingsGroup>
   );
 
@@ -480,11 +481,9 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
       {scope !== 'wifi' && browsersGroup}
       {scope === 'browser' && linkBrowsers.length === 0 && extensions.length === 0 && (
         <SettingsGroup heading="Browsers signed in to this Walnut" data-testid="devices-browsers-group">
-          <SettingsEmpty>
-            {listState === 'loading' ? 'Loading signed-in browsers...'
-              : listState === 'failed' ? "Couldn't load signed-in browsers."
-                : 'No browser is signed in with a link yet.'}
-          </SettingsEmpty>
+          {listState === 'loading' ? <LoadingState title="Loading signed-in browsers…" />
+            : listState === 'failed' ? <UnavailableState title="Couldn't load signed-in browsers" onRetry={() => { void refresh(); }} />
+              : <EmptyState title="No browser is signed in with a link yet" />}
         </SettingsGroup>
       )}
       {/* Said where the browsers were, even when none is left to list. */}

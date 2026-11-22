@@ -17,6 +17,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Topic, TopicMessage } from '@/api/topics';
 import { ICON_CHEVRON_LEFT } from '@/components/common/Icons';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { AgentText } from '@/components/common/AgentText';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -163,7 +164,9 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
     return (
       <div className="topic-chat is-empty" data-testid="topic-chat" data-topic-id={topicId}>
         {onBack && <button type="button" className="btn btn-sm btn-ghost" onClick={onBack}>Back</button>}
-        <p className="topic-muted" aria-busy={!error}>{error ?? 'Loading the topic…'}</p>
+        {error
+          ? <UnavailableState size="pane" title="Couldn't load the topic" detail={error} />
+          : <LoadingState size="pane" title="Loading the topic…" />}
       </div>
     );
   }
@@ -197,7 +200,7 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
           <ol ref={listRef} className="topic-messages" data-testid="topic-messages"
             onScroll={(e) => { const el = e.currentTarget; nearEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
             {!!topic.droppedMessages && <li className="topic-msg is-walnut">{topic.droppedMessages} older messages are no longer kept</li>}
-            {topic.messages.length === 0 && <li className="topic-msg is-walnut">No messages yet. Say what this topic is for; @Name wakes only that member.</li>}
+            {topic.messages.length === 0 && <li><EmptyState size="pane" title="No messages yet" hint="Say what this topic is for; @Name wakes only that member." testId="topic-messages-empty" /></li>}
             {topic.messages.map((m: TopicMessage) => {
               const at = Date.parse(m.at) || 0;
               const gap = at - prevAt > GAP_MS;

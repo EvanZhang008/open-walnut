@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useReducer, useState } from 'react';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { LoadingState } from '@/components/common/EmptyState';
 
 const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })));
 import { attachmentUrl, revealNote } from '@/api/notes-v2';
@@ -50,7 +50,7 @@ export function AttachmentPreview({ notePath, findQuery }: { notePath: string; f
   const isPdf = ext === 'pdf' && browserCanInlinePdf();
 
   if (ext === 'excalidraw') {
-    return <Suspense fallback={<LoadingSpinner />}><DrawingWorkspace key={notePath} documentPath={notePath} preview /></Suspense>;
+    return <Suspense fallback={<LoadingState size="pane" title="Loading the drawing…" />}><DrawingWorkspace key={notePath} documentPath={notePath} preview /></Suspense>;
   }
 
   return (

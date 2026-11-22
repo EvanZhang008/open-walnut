@@ -4,10 +4,15 @@
  */
 import { isLeaderWords, leaderReasonText } from '@/api/leader-presence';
 
-/** A failed load: a host replica's "Needs your Mac. ..." is already the words (api/leader-presence.ts). */
-export function historyErrorText(error: unknown): string {
+/**
+ * The words under "Couldn't load this conversation": a host replica's "Needs your Mac. ..." is
+ * already plain words (api/leader-presence.ts); anything else is a raw error, folded as the detail
+ * under a plain hint.
+ */
+export function historyErrorWords(error: unknown): { hint: string; detail?: string } {
   const text = String(error);
-  return isLeaderWords(text) ? text : `Failed to load history: ${text}`;
+  if (isLeaderWords(text)) return { hint: text };
+  return { hint: 'Its machine did not answer. Retry in a moment.', detail: text.replace(/^Error:\s*/, '') };
 }
 
 /** The older part cannot be paged: a host replica's reason (its pages are built on the Mac), else the size note. */

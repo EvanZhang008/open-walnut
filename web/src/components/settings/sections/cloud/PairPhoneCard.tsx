@@ -65,7 +65,7 @@ export function PairPhoneCard({ domain }: Props) {
     ? <>Pairing against <code>{cloudTarget.origin.replace(/^https?:\/\//, '')}</code>; this QR works from anywhere, including cellular.</>
     : targets === null
       ? 'Checking which addresses are reachable...'
-      : `No cloud address is registered yet; give sync a moment, then reload, because pairing needs the companion${domain ? ` at ${domain}` : ''} to be reachable.`;
+      : `No cloud address is registered yet; give sync a moment, then reload, because pairing needs the companion${domain ? ` at ${domain}` : ''} to be reachable.`; // empty-state-ok: note line under the QR
 
   return (
     <SettingsGroup heading="Connect your phone" className="cloud-pair-card">

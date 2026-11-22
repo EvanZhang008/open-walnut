@@ -17,9 +17,6 @@
 .ext-panel-empty {
   justify-content: center;
   align-items: center;
-  text-align: center;
-  padding: 24px;
-  gap: 4px;
 }
 
 .ext-panel-note {
@@ -74,7 +71,6 @@
 .ext-tasks-section { padding: 6px 0; }
 .ext-tasks-heading { display: flex; align-items: baseline; gap: 6px; margin: 6px 12px 4px; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); }
 .ext-tasks-count { font-weight: 400; }
-.ext-tasks-empty { margin: 2px 12px 6px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-task { border-radius: var(--radius-sm); margin: 0 6px; }
 .ext-task.is-open { background: var(--bg-secondary); }
 .ext-task-head { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
@@ -90,7 +86,6 @@
    second border inside it). */
 .ext-task-input { font-size: var(--font-size-md); }
 .ext-task-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ext-tasks-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: var(--font-size-md); color: var(--fg-muted); }
 .ext-tasks-updating { margin: 4px 12px 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-task-asked { font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow: auto; }
 .ext-task-asked p { margin: 0; overflow-wrap: anywhere; }
@@ -198,7 +193,6 @@
 .ext-popup-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .ext-continue { flex: 1; min-height: 0; overflow: auto; padding: 8px 0 4px; }
 .ext-continue-label { margin: 6px 12px 4px; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-muted); }
-.ext-continue-empty { margin: 8px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
 .ext-continue-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 12px 7px 10px; border: 0; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
 .ext-continue-row:hover { background: var(--hover-bg); }
 .ext-continue.is-panel { flex: 0 1 auto; max-height: 45%; padding-top: 4px; }
@@ -253,7 +247,6 @@
 .ext-home-tasks > .todo-panel { flex: 1; min-height: 0; }
 /* Home's own controls for Home's layout have no place here: the panel is the only list. */
 .ext-home .todo-panel-hide, .ext-home .todo-panel-board { display: none; }
-.ext-home-loading { display: flex; align-items: center; gap: 8px; margin: 14px 12px; font-size: var(--font-size-md); }
 .ext-panel-detail { flex: 1; min-height: 0; overflow: auto; }
 
 /* The relay key in the header: its dot says the state, green while agents may use the browser,

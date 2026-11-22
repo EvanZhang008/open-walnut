@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
 import {
-  SettingsEmpty, SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow, SettingsSection, SettingsTag,
+  SettingsGroup, SettingsNotice, SettingsRow, SettingsSection, SettingsTag,
 } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
@@ -222,7 +223,7 @@ export function SearchSection({ config, onSave }: Props) {
   return (
     <SettingsSection id="search" title="Search">
       <SettingsGroup heading="Index">
-        {loading && !indexStatus ? <SettingsLoadingRow /> : (
+        {loading && !indexStatus ? <LoadingState title="Loading the search index…" /> : (
           <>
             <SettingsRow
               label="Status"
@@ -317,7 +318,7 @@ export function SearchSection({ config, onSave }: Props) {
         footer="Hidden from results with their subfolders; content stays indexed, so removing one restores it at once."
         data-testid="search-excluded-folders"
       >
-        {excluded.value.length === 0 && <SettingsEmpty>Nothing excluded.</SettingsEmpty>}
+        {excluded.value.length === 0 && <EmptyState size="row" title="No folders excluded" />}
         {excluded.value.map((folder) => (
           <SettingsRow
             key={folder}

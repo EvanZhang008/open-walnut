@@ -137,7 +137,8 @@ import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
 import { useQuotePinPaint } from '@/hooks/useQuotePinPaint';
 import { flashRange } from '@/utils/pin-highlights';
 import { WorkflowProgress } from './WorkflowProgress';
-import { LoadingSpinner } from '../common/LoadingSpinner';
+import { EmptyState, LoadingState, UnavailableState, stateWords } from '../common/EmptyState';
+import { ICON_CHAT } from '../common/Icons';
 import { Lightbox } from '../common/Lightbox';
 import type {
   SessionEngine, SessionHistoryMessage, SessionHistoryTool, SessionPinnedQuote, SessionThreadAnchor,
@@ -152,7 +153,7 @@ import { claimFileCardEscape } from '@/utils/file-card-escape';
 import { isFolderGoneReason, goneFolderOf } from '@/utils/folder-gone';
 import { ContinueInNewFolderButton } from './FolderGoneBanner';
 import type { ContinueInNewFolderResult } from '@/api/sessions';
-import { historyErrorText, olderUnavailableText } from './history-notice-text';
+import { historyErrorWords, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { PartIdentity } from './part-identity';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
@@ -359,7 +360,7 @@ const NEVER_RESET = () => false;
 
 interface SessionChatHistoryProps {
   sessionId: string;
-  /** What an empty conversation says instead of "No conversation history found". */
+  /** What an empty conversation says instead of "No messages yet" (a string is its title). */
   emptyHistory?: ReactNode;
   /** Whether the conversation has anything to show, said once its history has answered (content,
    *  or the empty, unavailable or error state), never while it still loads. */
@@ -6947,37 +6948,51 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {/* Not over a launch prompt: a fresh session has nothing to load, and the
             spinner would push the first message down, then let it jump back up. */}
-        {loading && messages.length === 0 && timeline.length === 0 && launchHead.length === 0 && <LoadingSpinner />}
+        {loading && messages.length === 0 && timeline.length === 0 && launchHead.length === 0 && (
+          <LoadingState size="pane" className="session-history-empty" title="Loading conversation…" testId="session-history-loading" />
+        )}
         {/* Gate on the RAW flag: when an unavailable answer is suppressed because
             the session has content, it must not fall through to this generic
             banner and print the internal "HISTORY_UNAVAILABLE:" string. */}
         {error && !historyUnavailableRaw && (
           isPhoneLayout() && /not found/i.test(String(error)) ? (
             // N2-34: say what to do, and the panel drops its composer (phone-fixes-r2.css).
-            <div className="session-history-empty" data-session-gone="true">
-              <p className="text-muted">This session is no longer available. Open its task from Home to start a new one.</p>
-            </div>
+            <UnavailableState
+              size="pane"
+              className="session-history-empty"
+              data={{ 'session-gone': 'true' }}
+              title="This session is no longer available"
+              hint="Open its task from Home to start a new one."
+            />
           ) : (
-            <div className="session-history-empty">
-              {/* A host replica's "Needs your Mac. ..." is already the words (history-notice-text.ts). */}
-              <p className="text-muted">{historyErrorText(error)}</p>
-            </div>
+            <UnavailableState
+              size="pane"
+              className="session-history-empty"
+              testId="session-history-error"
+              title="Couldn't load this conversation"
+              // A host replica's "Needs your Mac. ..." is already the words (history-notice-text.ts).
+              {...historyErrorWords(error)}
+              onRetry={() => bumpHistory()}
+            />
           )
         )}
         {historyUnavailable && (
-          <div className="session-history-unavailable" role="status">
-            <strong>History unavailable</strong>
-            <span>{historyUnavailable}</span>
-          </div>
+          <UnavailableState
+            size="pane"
+            className="session-history-empty"
+            testId="session-history-unavailable"
+            title="Can't show this conversation's history"
+            hint="Its saved record could not be read. New messages you send still work."
+            detail={historyUnavailable}
+            onRetry={() => bumpHistory()}
+          />
         )}
         {/* Degraded connectivity: content below is the last-good parse; the
             live read (SSH/daemon) is failing. Auto-clears on next healthy fetch. */}
         {/* The host is still sending this history (slow, but answering): what
             is shown stays, and the content swaps in once the read is in. */}
         {loadingFrom && !error && (
-          <div className="session-history-loading-line" role="status">
-            Still loading this conversation from {loadingFrom}…
-          </div>
+          <LoadingState size="row" className="session-history-loading-line" testId="session-history-loading-line" title={`Still loading this conversation from ${loadingFrom}…`} />
         )}
         {stale && !error && !loadingFrom && (
           <div className="session-history-stale-banner" role="status">
@@ -6986,15 +7001,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {/* A session an engine switch started idle shows its task's earlier sessions instead. */}
         {showsEmpty && (
-          <div className="session-history-empty">
-            {emptyHistory ?? <p className="text-muted">No conversation history found</p>}
-          </div>
+          emptyHistory === undefined || typeof emptyHistory === 'string' ? (
+            <EmptyState
+              size="pane"
+              className="session-history-empty"
+              testId="session-history-empty"
+              icon={ICON_CHAT}
+              {...stateWords(emptyHistory ?? 'No messages yet. Send a message below to start this conversation.')}
+            />
+          ) : (
+            <div className="session-history-empty">{emptyHistory}</div>
+          )
         )}
-        {/* Show a subtle loading indicator when Phase 2 (SSH) is still fetching */}
+        {/* Phase 2 (SSH) is still fetching */}
         {!hasContent && !loading && phase2Pending && !loadingFrom && (
-          <div className="session-history-empty">
-            <p className="text-muted">Loading remote session...</p>
-          </div>
+          <LoadingState size="pane" className="session-history-empty" testId="session-history-loading-remote" title="Loading conversation from its machine…" />
         )}
         {!onQuestionPage && hiddenOnPage === 0 && chatEarlier.length > 0 && (
           <ChatEarlierBlock rows={chatEarlier} />
@@ -7060,9 +7081,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               loadFullHistory();
             }}
           >
-            {olderLoading
-              ? 'Loading earlier turns…'
-              : 'Load earlier turns'}
+            {olderLoading ? 'Loading earlier turns…' : 'Load earlier turns'}{/* empty-state-ok: button label */}
           </button>
         )}
         {/* The older part of this transcript cannot be paged (a fork, a journal, a

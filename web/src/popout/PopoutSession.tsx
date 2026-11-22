@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_CHAT } from '@/components/common/Icons';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { draftComposerKey, type DraftColumn } from '@/components/sessions/draft-column';
 import { discardDraft } from '@/utils/drafts';
@@ -82,7 +84,7 @@ function PopoutSessionPanel() {
     } finally { setForking(false); }
   }, [fork, forking, navigate, notify]);
 
-  if (!id) return <div className="popout-stub"><h2>No session</h2></div>;
+  if (!id) return <EmptyState size="pane" icon={ICON_CHAT} title="No session to show" hint="This window was opened without a session id." />;
 
   return <div className="popout-session popout-session-interactive">
     <SessionPanel

@@ -9,7 +9,7 @@ export function HistoryGapDivider({ state, onLoad }: { state?: GapFillState; onL
   return (
     <div className="session-gap-divider" data-testid="session-history-gap" data-state={state ?? 'idle'}>
       <span className="session-gap-divider-label">
-        {state === 'loading' ? 'Loading the messages here…'
+        {state === 'loading' ? 'Loading the messages here…' // empty-state-ok: label of a divider between loaded messages
           : state === 'unavailable' ? 'The messages here are too large to load.'
             : state === 'failed' ? 'Could not load the messages here.'
               : 'Some messages here are not loaded.'}

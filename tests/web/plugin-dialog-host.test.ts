@@ -425,7 +425,7 @@ describe('plugin dialog host boundaries', () => {
 
   it('never leaves a null-rendering slot blank', async () => {
     await act(async () => { slot('sample', 'record', (() => null) as never); openPluginDialog('sample', 'record') })
-    expect(text()).toContain('The plugin has no dialog content to show.')
+    expect(text()).toContain('The plugin has no dialog content to show')
   })
 
   it('reports a render failure without breaking the host or rendering another slot', async () => {

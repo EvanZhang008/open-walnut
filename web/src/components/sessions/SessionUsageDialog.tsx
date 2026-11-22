@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { ApiError } from '@/api/client';
 import type { SessionUsage } from '@/api/session-usage';
@@ -115,7 +116,9 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
           </div>
           <button type="button" className="btn btn-icon session-usage-close wn-dialog-close" aria-label="Close Usage & Budget" onClick={onClose}>{ICON_CLOSE}</button>
         </header>
-        {!data && <p role="status">{usage.loading ? 'Checking the budget…' : 'The budget is unavailable.'}</p>}
+        {!data && (usage.loading
+          ? <LoadingState size="section" title="Checking the budget…" />
+          : <UnavailableState size="section" title="The budget is unavailable" />)}
         {usage.error && (
           <div className="session-usage-error" role="alert">
             <span>{data ? 'The budget could not be refreshed. Showing the last check. ' : ''}{usage.error}</span>
@@ -126,7 +129,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
           <>
             <section className="session-usage-total" aria-label="Spent so far">
               <span className="session-usage-label">Spent so far</span>
-              <strong>{data.budget.limitUsd === null ? 'No budget set' : formatUsageCost(spent)}</strong>
+              <strong>{data.budget.limitUsd === null ? 'No budget set' : formatUsageCost(spent)}</strong>{/* empty-state-ok: a value in a fact row */}
               {data.budget.limitUsd !== null && <span className="session-usage-hint">{data.budget.responses} {data.budget.responses === 1 ? 'request' : 'requests'}{data.budget.unpricedResponses > 0 ? ` · ${data.budget.unpricedResponses} without a price` : ''}</span>}
             </section>
             <form className="session-usage-budget" onSubmit={event => { event.preventDefault(); void save(); }}>
@@ -139,7 +142,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
               <p id={helpId} className="session-usage-hint">Counts every request the session made, priced like the cost in the model picker. Never resets. At the limit, or on a request with no price, the session is stopped and you get an inbox letter. Leave blank for no limit.</p>
               {draft?.dirty && parsed?.valid === false && <p className="session-usage-error-text">{parsed.error}</p>}
               <div className="session-usage-budget-facts">
-                <span>Saved limit: {data.budget.limitUsd === null ? 'No limit' : formatUsageCost(data.budget.limitUsd)}</span>
+                <span>Saved limit: {data.budget.limitUsd === null ? 'No limit' : formatUsageCost(data.budget.limitUsd)}</span>{/* empty-state-ok: a value in a fact row */}
                 {remaining !== null && <span>Remaining: {formatUsageCost(remaining)}</span>}
                 {data.budget.limitUsd !== null && <button type="button" className="session-usage-text-button" disabled={usage.saving || conflictPending} onClick={() => void save(true)}>Remove limit</button>}
               </div>

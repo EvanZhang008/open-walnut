@@ -278,7 +278,7 @@ function RecoverFlow({ status, onBack, onKit, onBusy }: { status: VaultStatus; o
       <div className="pw-gate">
         <div className="pw-gate-card" data-testid="pw-recover">
           <div className="pw-gate-icon pw-gate-icon-lock"><LockIcon size={28} /></div>
-          <h1>No recovery code yet</h1>
+          <h1>No recovery code yet</h1>{/* empty-state-ok: gate screen heading */}
           <p className="pw-gate-sub">This vault was set up before recovery codes, so only the master password opens it. Once you are in, make a recovery kit in Settings, Passwords.</p>
           <button type="button" className="btn btn-primary btn-block pw-btn-block" onClick={onBack}>Back to unlock</button>
         </div>

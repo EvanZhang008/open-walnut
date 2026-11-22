@@ -53,6 +53,7 @@ import { useShiftClickGuard } from './useShiftClickGuard';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
+import { EmptyState } from './EmptyState';
 
 interface NotificationPanelProps {
   open: boolean;
@@ -457,7 +458,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 onToggleRead={(l) => letters.markLetterRead(l.id, !l.read)}
               />
             ) : groups.length === 0 && !problems ? (
-              (section === 'action' || section === 'all') && approvals.length > 0 ? null : <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
+              (section === 'action' || section === 'all') && approvals.length > 0 ? null : <EmptyState size="pane" testId="notification-feed-empty" title={EMPTY_STATE[section].title} />
             ) : errorBlocks ? (
               /* Errors: one block per root cause, then one per family (NotificationErrorBlocks). */
               <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-feed">
@@ -489,10 +490,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   );
 }
 
-const EMPTY_TEXT: Record<NotificationSection, string> = {
-  action: 'No session is asking you anything',
-  inbox: 'No letters yet',
-  errors: 'No errors',
-  automation: 'No automation activity',
-  all: 'No notifications yet',
+const EMPTY_STATE: Record<NotificationSection, { title: string }> = {
+  action: { title: 'No session is asking you anything' },
+  inbox: { title: 'No letters yet' },
+  errors: { title: 'No errors' },
+  automation: { title: 'No automation activity' },
+  all: { title: 'No notifications yet' },
 };

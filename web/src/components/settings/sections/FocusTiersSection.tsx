@@ -8,14 +8,13 @@
 
 import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
 import {
-  SettingsEmpty,
   SettingsGroup,
-  SettingsLoadingRow,
   SettingsNotice,
   SettingsRow,
   SettingsSection,
   SettingsTag,
 } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { useSettingsSaved } from '../settings-pane-context';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -168,7 +167,7 @@ export function FocusTiersSection() {
   return (
     <SettingsSection id="focus-tiers" title="Focus Tiers" description="The tiers pinned tasks are sorted into.">
       <SettingsGroup>
-        {loading ? <SettingsLoadingRow /> : (
+        {loading ? <LoadingState title="Loading focus tiers…" /> : (
           <>
             {BUILTIN_ROWS.map((b) => (
               <SettingsRow
@@ -221,7 +220,7 @@ export function FocusTiersSection() {
                 }
               />
             ))}
-            {tiers.length === 0 && <SettingsEmpty>No custom tiers yet.</SettingsEmpty>}
+            {tiers.length === 0 && <EmptyState size="row" title="No custom tiers yet" />}
             <SettingsRow
               className="focus-tiers-add-row"
               label="New tier"

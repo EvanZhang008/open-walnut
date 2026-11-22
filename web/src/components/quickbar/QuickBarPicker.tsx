@@ -12,6 +12,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { filterPeople, personLine, type PeopleSection, type QuickPerson } from './quickbar-people';
 import { PersonAvatar } from './PersonAvatar';
 import { MicInput } from '@/components/common/BoxMic';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import type { ModeSpec, QuickMode } from './quickbar-modes';
 import { ModeGlyph } from './quickbar-glyphs';
 
@@ -131,7 +132,9 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
         spellCheck={false}
       />
       <div className="qb-picker-list" id="qb-picker-list" ref={listRef} role="listbox">
-        {rows.length === 0 && <div className="qb-picker-empty">{query.trim() ? 'Nothing by that name' : 'Loading…'}</div>}
+        {rows.length === 0 && (query.trim()
+          ? <EmptyState size="row" role="presentation" testId="qb-picker-empty" title="Nothing by that name" />
+          : <LoadingState size="row" role="presentation" testId="qb-picker-empty" title="Loading people and tasks…" />)}
         {shownModes.length > 0 && (
           <div className="qb-section qb-section-modes">
             <div className="qb-section-label">Search and ask</div>

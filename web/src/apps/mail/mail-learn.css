@@ -39,7 +39,6 @@
 .mail-correct-why-label { color: var(--fg-secondary); margin-top: 4px; }
 .mail-correct-counter { align-self: flex-end; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .mail-correct-field-error { margin: 0; color: var(--error); overflow-wrap: anywhere; }
-.mail-correct-loading { margin: 0; color: var(--fg-muted); }
 
 .mail-correct-actions {
   display: flex;

@@ -1,3 +1,4 @@
+import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
@@ -114,9 +115,9 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
         autoFocus
       />
       {error && <div className="adopt-worker-error" role="alert">{error}</div>}
-      {!store && <div className="adopt-worker-empty">The task list is not loaded here.</div>}
+      {!store && <UnavailableState size="row" title="The task list is not loaded here" />}
       {store && shown.length === 0 && (
-        <div className="adopt-worker-empty">{filter.trim() ? 'No matching open task' : 'No open task to adopt'}</div>
+        <EmptyState size="row" title={filter.trim() ? 'No open task matches “' + filter.trim() + '”' : 'No open task to adopt'} />
       )}
       <ul className="adopt-worker-list" role="listbox">
         {shown.map((t, i) => {

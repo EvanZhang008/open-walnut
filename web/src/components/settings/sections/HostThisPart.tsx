@@ -15,6 +15,7 @@ import { NumberInput } from '../inputs/NumberInput';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { HostServerPart } from './HostServersGroup';
 import { useHostSettings } from './host-settings-data';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** The limit a host has when config.yaml names none (src/core/session-tracker.ts). */
 export const DEFAULT_LIMIT = { local: 7, remote: 20, cloudBox: 2 } as const;
@@ -173,7 +174,7 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
             );
           })}
           {open && grants.length === 0 && denied.length === 0 && (
-            <SettingsRow indent label="No task from another host has used it yet." />
+            <EmptyState size="row" title="No task from another host has used it yet" />
           )}
         </>
       )}

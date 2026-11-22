@@ -25,6 +25,7 @@
 
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
@@ -167,9 +168,9 @@ function CommandDetail({ row, source }: { row: Row; source: ToolSource }) {
   const running = RUNNING.has(row.status);
   if (!view) {
     return (
-      <div className="wf-modal-loading">
-        {running ? 'The command is running; its call has not reached this conversation yet.' : 'The command and its output are not in this conversation.'}
-      </div>
+      running
+        ? <LoadingState size="section" title="Waiting for the command…" hint="It is running; its call has not reached this conversation yet." />
+        : <EmptyState size="section" title="This command is not in this conversation" hint="Its call and its output were not recorded here." />
     );
   }
   const output = commandOutput(view);
@@ -205,7 +206,9 @@ function LightSubagentDetail({ task, sessionId }: { task: BackgroundTask; sessio
       <div className="bg-tasks-light-label">{running ? 'Saying' : failed ? 'Why it ended' : 'Answer'}</div>
       {task.summary
         ? <AgentText compact sessionId={sessionId} text={task.summary} />
-        : <div className="wf-modal-loading">{running ? (task.lastTool ? `Running ${task.lastTool}` : 'Starting…') : 'It answered nothing.'}</div>}
+        : running
+          ? <LoadingState size="row" title={task.lastTool ? `Running ${task.lastTool}…` : 'Starting…'} />
+          : <EmptyState size="row" title="It answered nothing" />}
     </div>
   );
 }
@@ -218,7 +221,7 @@ function LightSubagentDetail({ task, sessionId }: { task: BackgroundTask; sessio
 function WalnutSubagentChat({ walnutSessionId }: { walnutSessionId: string }) {
   return (
     <div className="bg-tasks-subagent-chat" data-testid="walnut-subagent-chat">
-      <Suspense fallback={<div className="wf-modal-loading">Loading the conversation…</div>}>
+      <Suspense fallback={<LoadingState size="pane" title="Loading the conversation…" />}>
         <SessionPanel key={walnutSessionId} sessionId={walnutSessionId} viewPlace="subagent-pane" embedded inset plainChat
           emptyHistory="The subagent has not written anything yet." />
       </Suspense>
@@ -426,7 +429,7 @@ export function BackgroundTasksPanel({
               </TabList>
             )}
             <div className="bg-tasks-list" role={present.length > 1 ? 'tabpanel' : undefined} data-kind={tab}>
-              {rows.length === 0 && <div className="wf-modal-loading">No background tasks yet</div>}
+              {rows.length === 0 && <EmptyState size="section" title="No background tasks yet" hint="Agents, commands and workflows this session runs in the background show here." />}
               {running.length > 0 && (
                 <TaskSection title="Running" count={running.length} compact={tab !== 'agents'}>
                   {running.map(r => <TaskListRow key={r.key} row={r} now={now} selected={r.key === selected?.key} onSelect={select} />)}
@@ -465,12 +468,13 @@ export function BackgroundTasksPanel({
                 <WalnutSubagentChat walnutSessionId={selected.task.walnutSessionId} />
               ) : selected?.task && isWalnutSubagent(selected.task) ? (
                 <LightSubagentDetail task={selected.task} sessionId={sessionId} />
+              ) : selected?.task?.summary ? (
+                <AgentText compact sessionId={sessionId} text={selected.task.summary} />
               ) : selected ? (
-                <div className="wf-modal-loading">
-                  {selected.task?.summary ? <AgentText compact sessionId={sessionId} text={selected.task.summary} /> : (selected.isAgent ? 'No transcript is available for this agent in this session.' : selected.title)}
-                </div>
+                <EmptyState size="pane" title={selected.isAgent ? 'No transcript for this agent' : selected.title}
+                  hint={selected.isAgent ? 'This session did not record what this agent said.' : undefined} />
               ) : (
-                <div className="wf-modal-loading">Select a task to read its transcript</div>
+                <EmptyState size="pane" title="No task selected" hint="Select a task on the left to read its transcript." />
               )}
             </div>
           </div>

@@ -235,7 +235,7 @@ for (const area of AREAS) {
     await expect(page.getByTestId('org-router-overview-what')).toContainText(`reads the mail and messages that reach ${area.label}`);
     await expect(page.getByTestId('org-router-overview-state')).toHaveText(/^Paused: it reads nothing/);
     await expect(page.getByTestId('org-router-overview-routed')).toHaveText('No messages so far.');
-    await expect(page.getByText('No conversation history found')).toHaveCount(0);
+    await expect(page.getByText('No messages yet')).toHaveCount(0);
 
     // Settings: an empty name cannot be saved, Discard brings the saved name back, a rename is saved.
     await expect(page.getByTestId('org-router-settings')).toBeVisible();

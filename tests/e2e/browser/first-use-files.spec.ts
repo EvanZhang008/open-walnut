@@ -179,7 +179,7 @@ for (const choice of ['click', 'history', 'none']) {
       const after = await stored();
       await testInfo.attach('late-selection-prune', { body: JSON.stringify({ choice, dead, live, after }), contentType: 'application/json' });
       if (choice === 'none') {
-        await expect(explorer.locator('.sfe-preview-empty')).toBeVisible();
+        await expect(explorer.getByTestId('sfe-preview-empty')).toBeVisible();
         expect(after.selected).toBeNull();
       } else {
         await expect(preview).toHaveAttribute('data-time-file', live);
@@ -188,7 +188,7 @@ for (const choice of ['click', 'history', 'none']) {
       await panel.getByRole('button', { name: 'Files', exact: true }).click();
       await expect(explorer).toHaveCount(0);
       await panel.getByRole('button', { name: 'Files', exact: true }).click();
-      if (choice === 'none') await expect(explorer.locator('.sfe-preview-empty')).toBeVisible();
+      if (choice === 'none') await expect(explorer.getByTestId('sfe-preview-empty')).toBeVisible();
       else {
         await expect(preview).toHaveAttribute('data-time-file', live);
         await expect(explorer.locator('.file-content-view')).toContainText('Current selection B must keep its memory');

@@ -142,8 +142,8 @@ describe('the question card hands its live answer over in place', () => {
         turns: [{ user: user('q1'), replies: [] }, { user: user('q2'), replies: [] }],
       } as never))
     })
-    expect(host.querySelectorAll('.thread-card-noanswer').length).toBe(1)
-    expect(host.querySelectorAll('.thread-card-turn')[0].querySelector('.thread-card-noanswer')).not.toBeNull()
+    expect(host.querySelectorAll('[data-testid="thread-card-noanswer"]').length).toBe(1)
+    expect(host.querySelectorAll('.thread-card-turn')[0].querySelector('[data-testid="thread-card-noanswer"]')).not.toBeNull()
     await act(async () => { root.unmount() })
   })
 })

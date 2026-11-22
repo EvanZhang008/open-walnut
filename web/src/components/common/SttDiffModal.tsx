@@ -72,7 +72,7 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
                 <button type="button" className="btn btn-sm" onClick={() => onInsert(primaryText)}>Insert</button>
               )}
             </div>
-            <div className="stt-diff-panel-text">{primaryText || (rec.error ? `Failed: ${rec.error}` : 'No transcription')}</div>
+            <div className="stt-diff-panel-text">{primaryText || (rec.error ? `Failed: ${rec.error}` : 'No transcription')}</div>{/* empty-state-ok: one engine's text of a recording */}
           </div>
           <div className="stt-diff-panel">
             <div className="stt-diff-panel-head">

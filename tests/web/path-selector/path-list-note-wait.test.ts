@@ -23,7 +23,7 @@ function render(hostStates: Map<string, HostLiveState>, noteHosts?: Set<string>)
   return renderToStaticMarkup(createElement(PathList, {
     sections: [], selectedIdx: -1, expandSelected: false, loading: true, loadError: null,
     hostStates, hostLabels: new Map([['devbox', 'Dev box']]), pathMode: true,
-    activeHostLabel: 'Dev box', createOption: null, emptyHint: 'No matches.',
+    activeHostLabel: 'Dev box', createOption: null, emptyHint: { title: 'No matches' },
     onItemClick: () => {}, onItemHover: () => {}, onCreate: () => {},
     topNote: createElement('div', { className: 'note-stub' }), noteHosts,
   }));
@@ -31,10 +31,10 @@ function render(hostStates: Map<string, HostLiveState>, noteHosts?: Set<string>)
 
 describe('PathList: the generic loading line next to a host note', () => {
   it('is left out while the note host is connecting', () => {
-    expect(render(new Map([['devbox', connecting]]), new Set(['devbox']))).not.toContain('Loading paths...');
+    expect(render(new Map([['devbox', connecting]]), new Set(['devbox']))).not.toContain('Loading paths…');
   });
 
   it('still shows for a plain listing in flight (the note host is up, nothing to join)', () => {
-    expect(render(new Map([['devbox', loading]]), new Set(['devbox']))).toContain('Loading paths...');
+    expect(render(new Map([['devbox', loading]]), new Set(['devbox']))).toContain('Loading paths…');
   });
 });

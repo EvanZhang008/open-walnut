@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPut } from '@/api/client'
 import { SettingsRow, SettingsTag } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
+import { EmptyState, LoadingState, UnavailableState } from '../common/EmptyState'
 import {
   formatLogLine, hostOptionLabel, jobHelp, jobTag, placementHelp, placementTone, readPluginJobsState,
   type PluginJobsState,
@@ -33,10 +34,16 @@ function JobLog({ pluginId, job, host }: { pluginId: string; job: string; host: 
   return (
     <div className="plugin-job-log" data-testid={`plugin-job-log-${pluginId}-${job}`}>
       <div className="plugin-job-log-bar">
-        <span>{error ? `Could not read the log: ${error}` : lines === null ? 'Reading...' : lines.length === 0 ? 'Nothing logged yet.' : `Last ${lines.length} lines`}</span>
+        <span>{lines && lines.length > 0 && !error ? `Last ${lines.length} lines` : 'Log'}</span>
         <SettingsButton variant="text" onClick={load} data-testid={`plugin-job-log-refresh-${pluginId}-${job}`}>Refresh</SettingsButton>
       </div>
-      {lines && lines.length > 0 && <pre ref={pre} className="plugin-job-log-text">{lines.map(formatLogLine).join('\n')}</pre>}
+      {/* A failed refresh keeps the lines already read: the failure shows above them. */}
+      {error && <UnavailableState size="row" title="Could not read the log" detail={error} onRetry={load} />}
+      {lines === null
+        ? !error && <LoadingState size="row" title="Reading the log…" />
+        : lines.length === 0
+          ? !error && <EmptyState size="row" title="Nothing logged yet" />
+          : <pre ref={pre} className="plugin-job-log-text">{lines.map(formatLogLine).join('\n')}</pre>}
     </div>
   )
 }

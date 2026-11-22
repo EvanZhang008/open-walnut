@@ -29,7 +29,8 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { apiGet, apiPost, apiPut } from '@/api/client';
 import { answerFoundHost } from '@/api/hosts';
 import { log } from '@/utils/log';
-import { SettingsEmpty, SettingsGroup, SettingsNotice, SettingsRow } from '../../SettingsSection';
+import { SettingsGroup, SettingsNotice, SettingsRow } from '../../SettingsSection';
+import { LoadingState, UnavailableState } from '../../../common/EmptyState';
 import { BROWSER_SIGNED_IN_EVENT, usedCode } from './devices-list';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { ToggleSwitch } from '../../inputs/ToggleSwitch';
@@ -297,7 +298,9 @@ export function BrowserAccessGroup({ heading }: { heading?: string } = {}) {
   if (!data) {
     return (
       <SettingsGroup heading={heading} data-testid="browser-access">
-        <SettingsEmpty>{loadFailed ? "Couldn't read the tunnel state." : 'Loading...'}</SettingsEmpty>
+        {loadFailed
+          ? <UnavailableState size="row" title="Couldn't read the tunnel state" onRetry={() => { void load(); }} />
+          : <LoadingState size="row" title="Loading the tunnel state…" />}
       </SettingsGroup>
     );
   }
@@ -471,7 +474,7 @@ export function BrowserAccessGroup({ heading }: { heading?: string } = {}) {
               : !code
                 ? (codeError ? undefined : 'Making the link...')
                 : !address
-                  ? <>No address reaches this computer from outside yet. Meanwhile, type <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span> into Walnut on the other device; it works until {until}.</>
+                  ? <>No address reaches this computer from outside yet. Meanwhile, type <span className="browser-access-code-inline settings-addons-mono" data-testid="browser-access-code-value">{code.code}</span> into Walnut on the other device; it works until {until}.</> // empty-state-ok: row help text
                   : (
                     <SignInWays
                       open={<span className="settings-addons-mono" data-testid="browser-access-link">{address.url.replace(/^https?:\/\//, '').replace(/\/+$/, '')}</span>}

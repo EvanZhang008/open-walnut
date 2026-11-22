@@ -8,16 +8,16 @@
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { historyErrorText, olderUnavailableText } from '../../web/src/components/sessions/history-notice-text'
+import { historyErrorWords, olderUnavailableText } from '../../web/src/components/sessions/history-notice-text'
 import { sourceCountOf } from '../../web/src/hooks/history-merge'
 import { leaderErrorMessage } from '../../web/src/api/leader-presence'
 
 describe('the history notices', () => {
-  it('a "Needs your Mac" answer is shown as it is; any other error keeps the prefix', () => {
+  it('a "Needs your Mac" answer is shown as it is; any other error reads as its reason', () => {
     const words = leaderErrorMessage({ error: { code: 'needs_leader', why: 'session_on_mac' } })!
-    expect(historyErrorText(words)).toBe('Needs your Mac. This session runs through your Mac; its conversation is there.')
-    expect(historyErrorText(new Error('HTTP 502'))).toBe('Failed to load history: Error: HTTP 502')
-    expect(historyErrorText('Session not found')).toBe('Failed to load history: Session not found')
+    expect(historyErrorWords(words)).toEqual({ hint: 'Needs your Mac. This session runs through your Mac; its conversation is there.' })
+    expect(historyErrorWords(new Error('HTTP 502'))).toEqual({ hint: 'Its machine did not answer. Retry in a moment.', detail: 'HTTP 502' })
+    expect(historyErrorWords('Session not found').detail).toBe('Session not found')
   })
 
   it('older pages only the Mac can build say so; any other reason keeps the size note', () => {

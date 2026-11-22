@@ -256,7 +256,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const menuChip = chipMenu ? chips.find((ch) => ch.dim === chipMenu.dim) : undefined;
 
   if (!visible) return null;
-  const countText = c.archiveLoading ? 'Loading completed tasks' : c.count === null ? '' : filterCountText(c.count);
+  const countText = c.archiveLoading ? 'Loading completed tasks' : c.count === null ? '' : filterCountText(c.count); // empty-state-ok: the row tail's count word
   const inc = c.search.active ? c.search.includeComplete : null;
   // Where the search looks (every task, whatever the view), said the same while it runs and
   // after it ends: completed tasks join only through Include completed.
@@ -319,7 +319,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
           </button>
         )}
         {chips.length === 0 && !c.search.active && !c.viewItem && (
-          <span className="fb-row-empty">No filters</span>
+          <span className="fb-row-empty">No filters{/* empty-state-ok: the chip box's placeholder, like an input's */}</span>
         )}
       </div>
       {/* The tail sits outside the chip box at the top right: the count, then Clear. Its

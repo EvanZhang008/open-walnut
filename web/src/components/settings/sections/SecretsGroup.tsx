@@ -28,6 +28,7 @@ import { useHostSettings } from './host-settings-data';
 import { mergeSecretHosts, tickSecretHost } from './secret-hosts';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { dictationWaitProps, useSendAfterDictation } from '@/hooks/useSendAfterDictation';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const LOCAL = '__local__';
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -281,7 +282,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
       <div ref={group} className="settings-rows-contents">
         {error && editing === null && <p className="hf-error" role="status">{error.text}</p>}
         {state.active && state.secrets.length === 0 && editing === null && (
-          <SettingsRow label="No secret yet" help="Add one (a read-only GitHub token, say) and pick the hosts that may use it." />
+          <EmptyState title="No secret yet" hint="Add one (a read-only GitHub token, say) and pick the hosts that may use it." />
         )}
         {state.secrets.map((s) => (
           <Fragment key={s.name}>

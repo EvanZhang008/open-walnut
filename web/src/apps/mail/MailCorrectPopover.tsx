@@ -27,6 +27,7 @@ import {
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import {
   closeMailLearnRequest,
   markMailMovedOut,
@@ -302,12 +303,15 @@ export function MailCorrectPopover({ request }: { request: MailCorrectRequest })
   const body = !rules ? (
     <div className="mail-correct-step" data-step="loading">
       {rulesError ? (
-        <p className="mail-correct-field-error" role="alert" data-testid="mail-correct-load-error">
-          {rulesError}{' '}
-          <button type="button" className="mail-correct-link" onClick={() => { void loadRules(); }}>Try again</button>
-        </p>
+        <UnavailableState
+          size="row"
+          title={rulesError.replace(/\.$/, '')}
+          retryLabel="Try again"
+          onRetry={() => { void loadRules(); }}
+          testId="mail-correct-load-error"
+        />
       ) : (
-        <p className="mail-correct-loading" data-testid="mail-correct-loading">Loading…</p>
+        <LoadingState size="row" title="Loading your groups…" testId="mail-correct-loading" />
       )}
       <div className="mail-correct-actions">
         <button type="button" className="btn btn-sm" onClick={() => close(true)}>Cancel</button>

@@ -5,6 +5,7 @@
  * then the shared checklist. The menu's search box filters the rows; the
  * caller decides what a pick does to the menu (a single-select pick closes it).
  */
+import { LoadingState } from '@/components/common/EmptyState';
 import { ICON_CHEVRON_LEFT } from '../common/Icons';
 import { dimLabel, isDimDefault, pickValue, resetDim } from './filter-bar-model';
 import type { FilterBarController, FilterDim, FilterPickMode, FilterValueOption } from './filter-bar-types';
@@ -47,7 +48,7 @@ export function FilterValuesPage({ controller: c, writer: w, dim, options, query
         )}
       </div>
       {dim === 'time' && <div className="fb-page-sub"><TimeBasis c={c} w={w} origin="menu" /></div>}
-      {loading ? <div className="fb-empty">Loading projects</div> : <FilterValueList
+      {loading ? <LoadingState size="row" testId="fb-empty" title="Loading projects…" /> : <FilterValueList
         dim={dim}
         options={options}
         state={c.state}

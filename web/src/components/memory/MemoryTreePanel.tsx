@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react';
+import { EmptyState } from '@/components/common/EmptyState';
 import { usePersistentState, isString, isStringArray } from '@/hooks/usePersistentState';
 import type { MemoryBrowseTree, BrowseItem, BrowseDailyItem } from '@/api/memory';
 import { SearchField } from '@/components/common/SearchField';
@@ -315,7 +316,7 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
           filteredCompaction.length === 0 &&
           filteredRepos.length === 0 &&
           filteredSpecial.length === 0 && (
-            <div className="memory-tree-empty">No matching files</div>
+            <EmptyState size="section" title="No matching files" />
           )}
       </div>
     </div>

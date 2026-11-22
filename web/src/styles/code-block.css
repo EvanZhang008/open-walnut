@@ -187,7 +187,6 @@
 .md-code-why { color: inherit; }
 .md-code-step { white-space: nowrap; }
 
-
 /* Copy's outcome for screen readers; on screen only when a copy failed. */
 .md-code-status {
   margin-left: auto;

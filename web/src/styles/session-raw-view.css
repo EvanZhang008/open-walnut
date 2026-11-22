@@ -103,10 +103,6 @@
   overflow: auto;
 }
 
-.raw-turn-empty {
-  color: var(--fg-muted);
-}
-
 .raw-part + .raw-part {
   margin-top: 6px;
 }

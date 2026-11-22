@@ -117,7 +117,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
     <aside className={`org-side org-side-card${locked ? ' is-locked' : ''}`} data-testid="org-side" data-target={sideTargetParam(target)} aria-label="Opened task">
       <header className="org-side-card-head">
         <h3 className="org-side-card-title" data-testid="org-side-title">
-          {loading ? 'Loading…' : task ? task.title : 'That task is gone.'}
+          {loading ? 'Loading…' : task ? task.title : 'That task is gone.'}{/* empty-state-ok: the card's heading while its task loads */}
         </h3>
         {onToggleLock && (
           <button
@@ -138,7 +138,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
         <div className="org-side-card-body">
           <p className="org-muted">{[projectDisplayName(task.project), task.phase.replace(/_/g, ' ').toLowerCase()].join(' · ')}</p>
           {task.description && <p className="org-side-card-desc">{task.description}</p>}
-          <p className="org-muted">No session yet.</p>
+          <p className="org-muted">No session yet.</p>{/* empty-state-ok: one fact line in a filled task card, above its Start a chat button */}
           <div className="org-side-card-actions">
             <button type="button" className="btn btn-sm btn-primary" data-testid="org-side-start" onClick={() => onStartChat(task.id)}>Start a chat</button>
             <button type="button" className="btn btn-sm" data-testid="org-side-find" onClick={() => locateTaskOnHome(task.id, navigate)}>Find on Home</button>

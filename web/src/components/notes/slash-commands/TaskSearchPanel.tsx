@@ -10,6 +10,7 @@ import { taskStatusLabel } from '@/utils/session-status';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { MicInput } from '@/components/common/BoxMic';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const MAX_RESULTS = 15;
 
@@ -125,7 +126,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
       </div>
       <div className="notes-task-search-list" ref={listRef}>
         {results.length === 0 ? (
-          <div className="notes-slash-empty">No tasks found</div>
+          <EmptyState size="row" title="No tasks found" />
         ) : (
           results.map((task, i) => {
             // Its status in the user's words; a task nobody started shows nothing.

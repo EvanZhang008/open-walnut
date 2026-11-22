@@ -394,6 +394,32 @@ long item builders run the check in their own tests; `tests/web/menu-row-icons.t
 menu row icon slot from the source and fails on a typed character; `tests/e2e/browser/big-menu-shape.spec.ts`
 measures the hand-built big menus as drawn, icons included.
 
+## Empty, loading and unavailable states
+
+Every place with nothing to show is `EmptyState` (`web/src/components/common/EmptyState.tsx`, its
+look in `components/common/empty-state.css`), or its two forms `LoadingState` and `UnavailableState`.
+Never a `*-empty` / `*-loading` class with its own type, colour or padding, and never a bare
+"No ..." or "Loading..." line: `tests/web/empty-state-ratchet.test.ts` counts both per file.
+
+- **Words:** a title that says what this place is and why it is empty ("No messages yet",
+  "No tasks match ‘foo’", "Loading events…", "Couldn't load tasks"), then at most one hint
+  sentence: the next step, or what still works ("New messages you send still work."). Loading
+  says what loads. A failure says it failed and why, never as an empty list. A raw error (a file
+  name, "HTTP 502") goes in `detail`, never in the hint: it shows when it reads as a plain sentence
+  and folds behind "Details" otherwise. A failure's icon is the root warning colour everywhere.
+- **One next step** when the place has one: Clear search, Retry, the first create, with no "+"
+  glyph. A `.btn` at `pane` size, `.btn btn-sm` in a section or row (`btn-primary` only when it is
+  the page's main action); a rare second one beside it.
+- **Three sizes, one look:** `pane` for a whole pane or reader (centred, 32 px icon, 15 px title,
+  13 px hint), `section` for a list, panel or card body (centred, 20 px icon, 13 px title, 12 px hint),
+  `row` for a line in a list, menu, picker or form (left, no icon, 12 px). Muted text, no box, no
+  border, no fill. Inside a Settings group (a form of 44 px rows) a state is drawn as one such row: left,
+  13 px, the row padding and hairline (`empty-state.css` does it; never a class of the pane's own).
+- An agenda or grid that stays usable when empty gets a `row` state above it (no events, still
+  loading, or a calendar that could not be read, with Retry), never a silent empty grid.
+- A line that only looks like a state (a button's "Loading…", an option "No limit") carries
+  `empty-state-ok` in a comment on that line.
+
 ## Status labels
 
 Why (2026-11-21, the user, of the pill-shaped controls): "什么鬼东西都要是圆形的呀？所有东西都应该统一啊"

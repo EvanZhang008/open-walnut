@@ -11,6 +11,7 @@
  * is only the fallback for an older server that sends no sentence.
  */
 import { useState, type ReactNode } from 'react';
+import { UnavailableState } from '@/components/common/EmptyState';
 import { requestHostDaemonUpdate } from '@/api/hosts';
 import { ApiError } from '@/api/api-error';
 import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
@@ -72,11 +73,10 @@ export function HostFeatureUnavailable({ host, title, why, fix = 'daemon-update'
   testId?: string;
 }) {
   return (
-    <div className="session-code-error-card" data-testid={testId ?? 'host-feature-unavailable'}>
-      <div className="session-code-error-title">{title}</div>
-      <p className="session-code-error-body" data-testid="host-feature-why">{/[.!?]$/.test(why) ? why : `${why}.`}</p>
+    <UnavailableState size="pane" testId={testId ?? 'host-feature-unavailable'} title={title}
+      hint={<span data-testid="host-feature-why">{/[.!?]$/.test(why) ? why : `${why}.`}</span>}>
       {fix === 'daemon-update' && <DaemonUpdateFix host={host} />}
-    </div>
+    </UnavailableState>
   );
 }
 

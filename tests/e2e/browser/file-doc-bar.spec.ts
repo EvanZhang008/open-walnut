@@ -124,7 +124,7 @@ test('one quiet line, no Save, and typing reaches disk on its own', async ({ pag
   const explorer = await openFilesPanel(page)
 
   // Nothing open: the same line, and the empty state says what to do.
-  await expect(explorer.locator('.sfe-preview-empty-title')).toHaveText('No file open')
+  await expect(explorer.getByTestId('sfe-preview-empty').locator('.empty-state-title')).toHaveText('No file open')
   await expect(explorer.locator('.sfe-empty-bar .sfe-tree-toggle')).toBeVisible()
   await page.waitForTimeout(800) // the panel's fade-in, so the picture is the settled page
   await page.screenshot({ path: `${SHOTS}/1-nothing-open.png` })
@@ -316,7 +316,7 @@ test('nothing open lists the files read last; the tree has line icons', async ({
   await page.reload()
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 45_000 })
   const again = await filesPanelAgain(page)
-  await expect(again.locator('.sfe-preview-empty-title')).toHaveText('No file open', { timeout: 15_000 })
+  await expect(again.getByTestId('sfe-preview-empty').locator('.empty-state-title')).toHaveText('No file open', { timeout: 15_000 })
   const recent = again.getByTestId('sfe-recent')
   await expect(recent.getByRole('button', { name })).toBeVisible()
   // Each row says where the file is and when it was read.
@@ -1396,7 +1396,7 @@ test('Close file in ⋯ goes back to No file open, with the file first in Recent
   await expect(page.locator('.fv-wysiwyg-editor .ProseMirror')).toContainText('Body.')
   await bar(page).getByRole('button', { name: 'More file actions' }).click()
   await page.getByTestId('fv-more-menu').getByRole('menuitem', { name: 'Close file' }).click()
-  await expect(explorer.locator('.sfe-preview-empty-title')).toHaveText('No file open')
+  await expect(explorer.getByTestId('sfe-preview-empty').locator('.empty-state-title')).toHaveText('No file open')
   const recent = explorer.getByTestId('sfe-recent')
   await expect(recent.getByRole('button').first()).toContainText(name)
   await recent.getByRole('button', { name }).click()

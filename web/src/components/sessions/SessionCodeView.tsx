@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { type VscodeEmbedInfo } from '@/api/sessions';
 import { consumeVscodeEmbed } from './vscodeEmbedPrefetch';
 import { ApiError } from '@/api/client';
@@ -119,21 +120,15 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
       </div>
 
       {phase === 'error' && error ? (
-        <div className="session-code-error-card">
-          <div className="session-code-error-title">Can't open embedded VS Code</div>
-          <p className="session-code-error-body">{error.message}</p>
-          {error.hint && <p className="session-code-error-hint">{error.hint}</p>}
-          <button type="button" className="btn btn-sm" onClick={handleRetry}>Retry</button>
-        </div>
+        <UnavailableState size="pane" testId="session-code-error" title="Can't open embedded VS Code" onRetry={handleRetry}
+          hint={<><span data-testid="session-code-error-body">{error.message}</span>{error.hint && <> {error.hint}</>}</>} />
       ) : (
         <div className="session-code-body">
           {phase === 'ensuring' && (
+            // The wrapper lays the state over the editor while it starts underneath.
             <div className="session-code-loading">
-              <div className="session-code-spinner" />
-              <span>
-                Starting code-server{remote ? ` on ${hostName}` : ''}…
-                first use downloads it (~100MB), which can take a minute
-              </span>
+              <LoadingState size="pane" title={`Starting code-server${remote ? ` on ${hostName}` : ''}…`}
+                hint="The first use downloads it (about 100 MB), which can take a minute." />
             </div>
           )}
           {info && (

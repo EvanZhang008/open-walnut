@@ -90,6 +90,7 @@ import { onMinimizeToTaskbar } from '@/utils/taskbar-minimize';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { FirstUseSetup } from '@/components/common/FirstUseSetup';
 import { FoundHostPrompts } from '@/components/common/FoundHostPrompts';
+import { EmptyState } from '@/components/common/EmptyState';
 import { firstUseCanStartMain, firstUseNeedsSetup } from '@/utils/first-use';
 import { firstUseCardPlace } from './home-first-use-card';
 import type { DraftGateError } from '@/components/sessions/HostGateErrorBar';
@@ -443,7 +444,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   countRender('MainPage');
   const { health, loading: healthLoading } = useSystemHealth();
   const { notify, dismissToast } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, setFolderParent, moveFolderToProject } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, refetch: refetchTasks, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, setFolderParent, moveFolderToProject } = useTasksContext();
   // A completed task's workspace cleanup says when its script runs and whether the workspace went.
   useCleanupNotices(tasks);
   // A focus space shows only its tasks on Home (experiment focus_workspace; null = no focus).
@@ -1864,7 +1865,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const pins = current.filter(c => c.locked).length;
       showOperationError(pins >= MAX_PANELS
         ? `All ${MAX_PANELS} session panels are locked. Unlock or close one to open another session.`
-        : 'No session slot is free. Close the triage panel or raise the panel count.');
+        : 'No session slot is free. Close the triage panel or raise the panel count.'); // empty-state-ok: an error toast
       return;
     }
     // A fullscreen panel would cover the column this opens (useFullscreen explains).
@@ -3806,6 +3807,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         <TodoPanel
           tasks={focusTasks}
           loading={loading}
+          loadError={tasksError}
+          onRetryLoad={refetchTasks}
           onComplete={handleComplete}
           onSetPhase={handleSetPhase}
           onCreate={handleCreate}
@@ -3964,9 +3967,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 <div className="context-inspector-header">
                   <span className="context-inspector-title">Agent Context Inspector</span>
                 </div>
-                <div className="text-sm" style={{ color: 'var(--fg-muted)', padding: '12px 16px' }}>
-                  Select an ask to inspect its launch context.
-                </div>
+                <EmptyState title="No ask selected" hint="Select an ask to inspect its launch context." />
               </div>
             ) : (
               <ContextInspectorPanel

@@ -105,7 +105,7 @@ export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLi
   const typed = normalizeTagLink(text.trim());
   const sample = example ?? (probe.endsWith(':*') ? undefined : probe);
   const help = own?.link === '' && inherited?.link
-    ? `No link: you turned ${linkOwner(inherited)} off.`
+    ? `No link: you turned ${linkOwner(inherited)} off.` // empty-state-ok: help line under a field
     : typed && sample
       ? `${sample} opens ${tagHref(typed, sample)}`
       : !text.trim() && inherited?.link

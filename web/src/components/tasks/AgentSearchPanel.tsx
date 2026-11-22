@@ -6,6 +6,7 @@
 
  */
 
+import { UnavailableState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { peekAgentSearch, type AdoptSearchSessionOptions } from '@/api/agentSearch';
 import { isAgentSearchEligible } from '@/hooks/agentSearchTrigger';
@@ -247,10 +248,7 @@ export function AgentSearchPanel({ query, onOpenSession }: {
         </div>
       )}
       {state === 'error' && (
-        <div className="agent-search-error">
-          AI search unavailable ·{' '}
-          <button type="button" className="agent-search-retry" onClick={retry}>Retry</button>
-        </div>
+        <UnavailableState size="row" testId="agent-search-error" title="AI search unavailable" onRetry={retry} />
       )}
       {state === 'done' && data && !noMatches && !followUpSessionId && (
         <>

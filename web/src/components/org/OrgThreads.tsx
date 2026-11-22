@@ -88,6 +88,7 @@ import '@/styles/notice-card.css';
 
 /** No fold opened: how every node's Threads come up. */
 const NO_FOLDS: ReadonlySet<ThreadGroup> = new Set();
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
 /** What Walnut's stand-in summary line says it is (core/org/thread-view.ts SummaryLine). */
 const STAND_IN_NOTE: Record<Exclude<NonNullable<SummaryLine['from']>, 'none'>, (name: string) => string> = {
@@ -172,9 +173,7 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
       {x.answer ? (
         <Answer text={x.answer.text} about={x.answer.about} at={x.answer.at} by={shared ? `${name} \u00b7 one reply to this and another thread` : name} known={x.known} now={now} source={threadAnswerSource(x.answer)} />
       ) : (
-        <div className="org-thread-answer is-waiting" data-testid="org-thread-unanswered">
-          {closed ? 'No answer' : `${name} has not answered yet`}
-        </div>
+        <EmptyState size="row" title={closed ? 'No answer' : `${name} has not answered yet`} testId="org-thread-unanswered" />
       )}
     </li>
   );
@@ -470,17 +469,13 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   return (
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
-      {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
+      {all === null && !state.error && <LoadingState size="section" title="Loading threads…" />}
       {groups && all !== null && <OrgThreadsByState watching={watchingList} groups={groups} opened={opened} onOpen={openFold} card={(t) => card(t)} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
       {watchingList}
       {all !== null && !open.length && (hidden.length || snoozed.length
-        ? (
-          <p className="org-threads-empty" data-testid="org-threads-empty">
-            {`Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`}
-          </p>
-        )
-        : <ThreadsEmpty name={name} />)}
+        ? <EmptyState size="section" title="Nothing for you now" hint={`${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`} testId="org-threads-empty" />
+            : <ThreadsEmpty name={name} />)}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map((t) => card(t))}</ul>}
       {snoozed.length > 0 && (
         <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>

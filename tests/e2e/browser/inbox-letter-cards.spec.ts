@@ -90,7 +90,7 @@ test('body failure retries and a late response cannot reopen a collapsed card', 
   });
   try {
     await row.getByRole('button', { name: 'Read letter', exact: true }).click();
-    await expect(row.getByRole('alert')).toContainText('Could not load');
+    await expect(row.getByRole('alert')).toContainText("Couldn't load");
     fail = false;
     await row.getByRole('button', { name: 'Retry', exact: true }).click();
     await row.getByRole('button', { name: 'Collapse', exact: true }).click();
@@ -153,7 +153,7 @@ test('missing bodies show one notice and deferred HTML streams in the card', asy
   });
   try {
     await row.getByRole('button', { name: 'Read letter', exact: true }).click();
-    await expect(row.locator('.hib-note')).toHaveText('The letter body is unavailable.');
+    await expect(row.getByTestId('letter-body-missing')).toContainText('The letter body is unavailable');
     await expect(row.locator('.hib-md-body')).toHaveCount(0);
   } finally { await page.unroute(`**/api/v1/human-inbox/${id}`); }
   const sent = await request.post('/api/v1/human-inbox', { data: {

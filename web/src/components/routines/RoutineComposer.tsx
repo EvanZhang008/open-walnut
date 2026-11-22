@@ -97,7 +97,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual, autoFocus = 
       </div>
       {error && (
         <div className="cron-form-error text-xs" title={error}>
-          {/credential|provider|api key|not configured/i.test(error) ? 'No AI model is set up here to draft it.' : 'Could not draft it.'}{' '}
+          {/credential|provider|api key|not configured/i.test(error) ? 'No AI model is set up here to draft it.' : 'Could not draft it.'}{' '}{/* empty-state-ok: a form error message */}
           Your words are in the form as its instructions: give it a name and say when it runs.
         </div>
       )}

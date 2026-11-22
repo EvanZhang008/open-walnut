@@ -223,7 +223,7 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
         label={written ? 'Imported' : preview.upToDate ? 'Up to date' : 'Ready to import'}
         data-testid={`cc-import-apply-row-${engine}`}
         help={written
-          ? (written.length > 0 ? `Wrote ${written.join(', ')}. New ${name} sessions use it.` : 'Nothing needed writing.')
+          ? (written.length > 0 ? `Wrote ${written.join(', ')}. New ${name} sessions use it.` : 'Nothing needed writing.') // empty-state-ok: row help text
           : preview.upToDate
             ? `${name} on this host already uses your Claude Code setup; it reads changes to Claude Code's files each time it starts.`
             : blocked

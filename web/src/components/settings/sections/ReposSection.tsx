@@ -1,10 +1,10 @@
 import { useState, useMemo, useCallback } from 'react';
-import { SettingsSection, SettingsEmpty } from '../SettingsSection';
+import { SettingsSection } from '../SettingsSection';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useRepositories } from '@/hooks/useRepositories';
 import { RepoCard } from '@/components/repositories/RepoCard';
 import { RepoForm } from '@/components/repositories/RepoForm';
 import { RepoDetail } from '@/components/repositories/RepoDetail';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { RepoSummary } from '@/api/repositories';
 
@@ -82,14 +82,14 @@ export function ReposSection() {
   if (loading) {
     return (
       <SettingsSection id="repositories" title="Repositories" description={REPOS_DESCRIPTION}>
-        <LoadingSpinner />
+        <LoadingState title="Loading repositories…" />
       </SettingsSection>
     );
   }
   if (error) {
     return (
       <SettingsSection id="repositories" title="Repositories" description={REPOS_DESCRIPTION}>
-        <SettingsEmpty>Error: {error}</SettingsEmpty>
+        <UnavailableState title="Couldn't load repositories" detail={error} onRetry={() => { void refresh(); }} />
       </SettingsSection>
     );
   }
@@ -143,11 +143,9 @@ export function ReposSection() {
       </div>
 
       {filtered.length === 0 ? (
-        <SettingsEmpty>
-          {repos.length === 0
-            ? 'No repositories registered yet. Use "+ Add Repository" to get started.'
-            : 'No repositories match your search.'}
-        </SettingsEmpty>
+        repos.length === 0
+          ? <EmptyState title="No repositories yet" hint="Add one to tell Walnut what it is and where it lives." action={{ label: 'Add repository', onClick: handleCreate }} />
+          : <EmptyState title={`No repositories match “${search.trim()}”`} action={{ label: 'Clear search', onClick: () => setSearch('') }} />
       ) : (
         <div className="repos-grid">
           {filtered.map((repo) => (

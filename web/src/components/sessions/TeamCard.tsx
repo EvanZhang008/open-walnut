@@ -6,6 +6,7 @@
  */
 
 import { useDraft } from '@/hooks/useDraft';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { draftKey } from '@/utils/drafts';
 import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { useTeamStream, type TeamMember, type TeamAgentEvent } from '@/hooks/useTeamStream';
@@ -187,17 +188,16 @@ function AgentPanel({
 
   if (loading) {
     return (
-      <div className="team-agent-panel team-agent-loading">
-        <div className="team-agent-loading-spinner" />
-        Loading conversation...
+      <div className="team-agent-panel">
+        <LoadingState size="section" title="Loading the conversation…" />
       </div>
     );
   }
 
   if (events.length === 0) {
     return (
-      <div className="team-agent-panel team-agent-empty">
-        No conversation yet
+      <div className="team-agent-panel">
+        <EmptyState size="section" title="No conversation yet" />
       </div>
     );
   }
@@ -233,7 +233,7 @@ export const TeamCard = memo(function TeamCard({
   } = useTeamStream(sessionId, teamName);
 
   if (!loaded || members.length === 0) {
-    if (!loaded) return <div className="team-card team-card-loading">Loading team info...</div>;
+    if (!loaded) return <div className="team-card"><LoadingState size="section" title="Loading the team…" /></div>;
     return null;
   }
 

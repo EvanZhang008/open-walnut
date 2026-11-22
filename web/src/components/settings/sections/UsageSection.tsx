@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow, SettingsLoadingRow, SettingsEmpty } from '../SettingsSection';
+import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { usePersistentState } from '@/hooks/usePersistentState';
@@ -131,12 +132,12 @@ export function UsageSection() {
       {shown && !shown.ready && <SettingsNotice kind="info">Adding up past usage. The numbers fill in within a minute.</SettingsNotice>}
 
       {!shown ? (
-        <SettingsGroup><SettingsLoadingRow>Loading usage...</SettingsLoadingRow></SettingsGroup>
+        <SettingsGroup><LoadingState title="Loading usage…" /></SettingsGroup>
       ) : (
         <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view}>
           <Headline report={shown} days={days} origin={origin} />
           {shown.totals.requests === 0 ? (
-            <SettingsGroup><SettingsEmpty>No model calls in this period.</SettingsEmpty></SettingsGroup>
+            <SettingsGroup><EmptyState title="No model calls in this period" /></SettingsGroup>
           ) : (
             <>
               <UsageBreakdownCard report={shown} days={days} loading={loading}
@@ -252,7 +253,7 @@ function HowCounted({ report }: { report: CostReport }) {
         <SettingsRow label="Sources" help="Claude Code from each host's transcripts, Codex and OpenCode from their session records, Walnut from its own records." />
         <SettingsRow label="Up to date" help={report.countedUntil.length
           ? report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')
-          : 'Nothing read yet. Update now reads every host.'} />
+          : 'Nothing read yet. Update now reads every host.'} />{/* empty-state-ok: row help text */}
         {report.checks.filter((c) => c.source === 'Canonical transcript' || c.source === 'Upstream token log' || c.source === 'Host collection').map((c) => (
           <SettingsRow key={`${c.host}:${c.source}`} label={`${c.source} · ${hostName(c.host)}`}
             help={`${c.status === 'matched' ? 'Matched' : c.status === 'partial' ? 'Partly matched' : 'Not checked'}. ${c.detail}`} />

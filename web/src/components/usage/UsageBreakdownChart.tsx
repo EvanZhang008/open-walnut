@@ -30,7 +30,7 @@ function labelIndexes(n: number, plotW: number): Set<number> {
  * that day (or week) as the period.
  */
 const COVERAGE_NOTE: Record<Coverage, string | null> = {
-  none: 'No data: these transcripts were gone before Walnut kept usage',
+  none: 'No data: these transcripts were gone before Walnut kept usage', // empty-state-ok: a legend label
   partial: 'Partly recorded: only the days Walnut holds',
   imported: 'Imported from the usage bill: the whole account, no sessions or projects',
   mixed: 'Part imported from the usage bill, part recorded by Walnut',
@@ -114,7 +114,7 @@ export function UsageBreakdownChart({ data, loading, onPick, coverage }: {
               <g className="usage-bd-unrecorded" data-testid="usage-breakdown-unrecorded">
                 <rect x={x0} y={PAD.top} width={x1 - x0} height={plotH} />
                 {/* The same day the note above the chart names, so the band and the note agree. */}
-                {x1 - x0 > 60 && <text x={(x0 + x1) / 2} y={PAD.top + plotH / 2} textAnchor="middle">{upto < n && x1 - x0 > 150 ? `No data before ${buckets[upto].short}` : 'No data'}</text>}
+                {x1 - x0 > 60 && <text x={(x0 + x1) / 2} y={PAD.top + plotH / 2} textAnchor="middle">{upto < n && x1 - x0 > 150 ? `No data before ${buckets[upto].short}` : 'No data'}</text> /* empty-state-ok: a label on the chart's gap */}
               </g>
             );
           })()}
@@ -146,7 +146,7 @@ export function UsageBreakdownChart({ data, loading, onPick, coverage }: {
           {series.filter((s) => s.values[hover] > 0).sort((a, b) => b.values[hover] - a.values[hover]).map((s) => (
             <div key={s.key} className="usage-bd-tip-row"><i style={{ background: s.color }} /><span>{s.label}</span><b>{money(s.values[hover])}</b></div>
           ))}
-          {totals[hover] === 0 && coverage?.[hover] !== 'none' && <div className="usage-bd-tip-row muted">No model calls</div>}
+          {totals[hover] === 0 && coverage?.[hover] !== 'none' && <div className="usage-bd-tip-row muted">No model calls</div>}{/* empty-state-ok: a row in a chart tooltip */}
           {coverage && COVERAGE_NOTE[coverage[hover]] && <div className="usage-bd-tip-note" data-coverage={coverage[hover]}>{COVERAGE_NOTE[coverage[hover]]}</div>}
         </div>
       )}

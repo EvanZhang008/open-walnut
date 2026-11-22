@@ -16,6 +16,7 @@ import { StackedAvatars } from './TopicAvatars';
 import { useOpenTopic } from './topic-entry';
 import { useTopicsOn } from './topics-flag';
 import { useTopicList } from './useTopics';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export function TopicDialogsHost() {
   const on = useTopicsOn();
@@ -29,7 +30,7 @@ export function TopicDialogsHost() {
 
 function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember[]; onClose: () => void; onAdded: (topicId: string) => void }) {
   const modalOwner = useModalOverlay(onClose);
-  const { list, error: listError } = useTopicList(true);
+  const { list, error: listError, reload } = useTopicList(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const shown = openTopics(list ?? []);
@@ -57,9 +58,9 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
       <div className="app-modal-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Add to topic" data-testid="topic-add-dialog" onMouseDown={onClose}>
         <div className="app-modal topic-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <div className="app-modal-title">Add {who} to a topic</div>
-          {list === null && !listError && <p className="topic-muted" aria-busy="true">Loading…</p>}
-          {listError && <p className="topic-error">{listError}</p>}
-          {list !== null && shown.length === 0 && <p className="topic-muted">No open topic yet.</p>}
+          {list === null && !listError && <LoadingState size="section" title="Loading topics…" />}
+          {listError && <UnavailableState size="section" title="Couldn't load topics" detail={listError} onRetry={reload} />}
+          {list !== null && shown.length === 0 && <EmptyState size="section" title="No open topics yet" />}
           {shown.length > 0 && (
             <ul className="topic-candidates topic-add-list" data-testid="topic-add-list">
               {shown.map((t) => {

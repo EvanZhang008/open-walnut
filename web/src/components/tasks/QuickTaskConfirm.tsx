@@ -83,7 +83,7 @@ export function QuickTaskConfirm({
   const createWaiting = fieldsGate.waiting || dictation?.waiting;
 
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
-  const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
+  const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority'; // empty-state-ok: button label
   // Badge a project the AI invented, but only while it's still absent from the
   // known list — the moment the user picks an existing name it isn't new anymore.
   const showNewProjectBadge = !!draft.projectIsNew
@@ -134,7 +134,7 @@ export function QuickTaskConfirm({
             disabled={submitting}
             onClick={() => { setDatePickerOpen(false); setEndPickerOpen(false); setStartPickerOpen((open) => !open); }}
           >
-            {draft.start ? `Start ${formatDateTimeDisplay(draft.start)}` : 'No start'} <AiBadge visible={draft.aiFields.has('start')} />
+            {draft.start ? `Start ${formatDateTimeDisplay(draft.start)}` : 'No start'}{/* empty-state-ok: button label */} <AiBadge visible={draft.aiFields.has('start')} />
           </button>
           <button
             type="button"

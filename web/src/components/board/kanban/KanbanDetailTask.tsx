@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchTask } from '@/api/tasks';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const isOpen = (phase: string | undefined) => phase !== 'COMPLETE';
 
@@ -57,7 +58,7 @@ export function KanbanDetailTask({ taskId }: { taskId: string }) {
           </ul>
         </section>
       )}
-      {empty && <p className="kanban-detail-none" data-testid="kanban-detail-none">No session yet, and no description. Start worker gives it one.</p>}
+      {empty && <EmptyState testId="kanban-detail-none" title="No session yet, and no description" hint="Start worker gives it one." />}
     </div>
   );
 }

@@ -279,24 +279,24 @@ test('C74: Phones & Cloud claims nothing before the devices list answers', async
   await clickNav(page, 'devices')
   // Phones & Cloud waits for the list to know which tab is in use: it says it is checking.
   const landing = page.locator('#devices')
-  await expect(landing).toContainText('Checking how your phone reaches Walnut...')
+  await expect(landing).toContainText('Checking how your phone reaches Walnut…')
   await expect(landing.getByTestId('pc-tabs')).toBeVisible()
-  await expect(landing).not.toContainText('No phone has the Walnut app signed in yet.')
+  await expect(landing).not.toContainText('No phone has the Walnut app signed in yet')
   await expect(landing).not.toContainText('No phone is paired yet')
   // The Devices tab, opened while the list is out, claims nothing either.
   const devices = await backToDevices(page)
-  await expect(devices).toContainText('Loading paired phones...')
+  await expect(devices).toContainText('Loading paired phones…')
   // No "no address" notice, no "no phone" claim and no pairing (All devices on this Mac
   // never pairs: each way's tab does).
   await expect(devices).not.toContainText('No address for this machine')
-  await expect(devices).not.toContainText('No phone has the Walnut app signed in yet.')
+  await expect(devices).not.toContainText('No phone has the Walnut app signed in yet')
   await expect(devices.getByTestId('way-pair-all')).toHaveCount(0)
   release()
-  await expect(devices).not.toContainText('Loading paired phones...', { timeout: 20_000 })
+  await expect(devices).not.toContainText('Loading paired phones…', { timeout: 20_000 })
   // The Cloud companion it once guarded is its own tab now, so nothing deep-linked sits
   // below this list (settings-panes.spec.ts C74 holds a deep link through content that grows).
   // Once the list has answered, All devices still pairs nothing: the Same Wi-Fi tab does.
-  await expect(devices).not.toContainText('No phone has the Walnut app signed in yet. Pair one below.')
+  await expect(devices).not.toContainText('Pair one below.')
   await expect(devices.getByTestId('way-pair-all')).toHaveCount(0)
   await expect(devices.getByTestId('devices-show-qr')).toHaveCount(0)
   const wifi = await openWay(page, 'wifi')

@@ -526,11 +526,6 @@
 /* The filter with its mic (MicInput): the wrapper keeps the box's place. */
 .tp-proj-filter-field { margin: 2px 2px 4px; flex: none; }
 .tp-proj-filter-field > .tp-proj-filter { margin: 0; }
-.tp-proj-empty {
-  padding: 8px 10px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-}
 
 /* due cell hosts the shared DatePicker trigger — keep it row-height compact */
 .tp-due-picker .dp-trigger {
@@ -607,9 +602,3 @@
 /* The title box with its mic (MicField) takes the cell's free width, as the bare box did. */
 .tp-ghost-field { flex: 1; min-width: 0; }
 
-.tp-empty {
-  padding: 40px;
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}

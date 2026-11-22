@@ -1,4 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import type { WorkflowPhase, WorkflowAgent } from '@/hooks/useBackgroundTasks';
 import { buildLayout, NO_PHASE_OPEN, preferredPhase, visibleWorkflowAgents } from './workflow-layout';
 import { buildStages } from './workflow-stages';
@@ -82,7 +83,9 @@ const AgentRow = memo(function AgentRow({ agent, expanded, onToggle, onOpenTrans
             <div className="wf-agent-block-label">Result</div>
             {agent.resultPreview
               ? <div className="wf-agent-result">{agent.resultPreview}</div>
-              : <div className="wf-agent-result wf-agent-result-empty">{agent.status === 'running' ? 'Running…' : 'No result available'}</div>}
+              : agent.status === 'running'
+                ? <LoadingState size="row" title="Running…" />
+                : <EmptyState size="row" title="No result available" />}
           </div>
           <button className="wf-transcript-toggle" onClick={() => onOpenTranscript(agent)}>View full transcript →</button>
         </div>
@@ -139,12 +142,12 @@ export const WorkflowGraph = memo(function WorkflowGraph({ phases, agents, finis
   const stagePhase = (index: number | undefined) => stages.flatMap(s => s.phases).find(p => p.index === index);
   const linkInto = (index: number | undefined) => stages.find(s => s.phases.some(p => p.index === index))?.link;
 
-  const list = (agentsShown: WorkflowAgent[], empty: string) => (
+  const list = (agentsShown: WorkflowAgent[], emptyTitle: string, emptyHint?: string) => (
     <div className="wf-overview-list">
       {agentsShown.length ? agentsShown.map(agent => (
         <AgentRow key={agent.agentId} agent={agent} expanded={expandedAgent === agent.agentId}
           onToggle={() => onToggleAgent(agent.agentId)} onOpenTranscript={onOpenTranscript} />
-      )) : <div className="wf-empty">{empty}</div>}
+      )) : <EmptyState size="section" title={emptyTitle} hint={emptyHint} testId="wf-empty" />}
     </div>
   );
   const results = visibleWorkflowAgents(layout, undefined, query);
@@ -173,11 +176,11 @@ export const WorkflowGraph = memo(function WorkflowGraph({ phases, agents, finis
             <span className="wf-overview-count">{openPhase?.total ?? 0} agents</span>
             {openLink && openLink.kind !== 'next' && <span className="wf-overview-link">{openLink.long}</span>}
           </div>
-          {list(visibleWorkflowAgents(layout, openIndex, ''), 'No agents yet: they appear when this phase starts')}
+          {list(visibleWorkflowAgents(layout, openIndex, ''), 'No agents yet', 'They appear when this phase starts.')}
         </div>
       ) : (
         <StageColumn stages={stages} openIndex={openIndex} onChoose={choose}
-          renderList={phase => list(visibleWorkflowAgents(layout, phase.index, ''), 'No agents yet: they appear when this phase starts')} />
+          renderList={phase => list(visibleWorkflowAgents(layout, phase.index, ''), 'No agents yet', 'They appear when this phase starts.')} />
       )}
     </div>
   );

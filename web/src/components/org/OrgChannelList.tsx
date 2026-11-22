@@ -36,6 +36,7 @@ import { useOrgSettings } from './useOrgSettings';
 import { SearchField } from '@/components/common/SearchField';
 import { OrgDirectorSection } from './OrgDirectorSection';
 import type { OrgDirectorsView } from './useOrgLeaders';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** What a right-click is on: a row of the list, or a project under "Archived". */
 export type ChannelMenuTarget = { row: ChannelRow } | { moved: MovedRow };
@@ -216,8 +217,8 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         <OrgTopicsSection topics={topics} selectedKey={selectedKey} now={now} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
-      {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}
-      {total > 0 && rows.length === 0 && routers.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No VP or router matches “{query}”.</p>}
+      {total === 0 && <EmptyState size="section" title="No open work yet" hint="Ask the CEO to start something." testId="org-empty" />}
+      {total > 0 && rows.length === 0 && routers.length === 0 && <EmptyState size="section" title={`No VP or router matches “${query}”`} testId="org-no-match" />}
       {menu.state && rowMenu && (
         <ContextMenu
           point={menu.state.point}

@@ -137,7 +137,7 @@ test('reopening the Files panel restores the file AND the reading position', asy
   // file had to be found in the tree and clicked again on every single open.
   preview = mdPreview(explorer)
   await expect(preview).toBeVisible({ timeout: 10_000 })
-  await expect(explorer.locator('.sfe-preview-empty')).toHaveCount(0)
+  await expect(explorer.getByTestId('sfe-preview-empty')).toHaveCount(0)
   await expect(explorer.getByText('No file open')).toHaveCount(0)
   // The tree row is shown as selected too, not just the pane content.
   await expect(

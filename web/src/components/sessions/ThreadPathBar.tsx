@@ -19,6 +19,7 @@
  * bans arrow and dash glyphs in visible text).
  */
 import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { EmptyState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { THREAD_OVERLAY_ATTR, THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
 import { ThreadChevronIcon } from '@/components/sessions/ThreadIcons';
@@ -189,7 +190,7 @@ function LevelMenu({ anchorEl, heading, items, onPick, onClose }: {
       onKeyDown={onKey}
     >
       <div className="tree-path-menu-heading">{heading}</div>
-      {items.length === 0 && <div className="tree-path-menu-empty">No questions here yet.</div>}
+      {items.length === 0 && <EmptyState size="row" role="presentation" title="No questions here yet" />}
       {items.map((it) => (
         <button data-peek-row="" key={it.key} type="button" role="menuitemradio" aria-checked={it.current}
           className="thread-menu-item tree-path-menu-item" data-current={it.current ? 'true' : undefined}

@@ -131,13 +131,13 @@ test('N1, N2-05: letters alone count on both bells alike, and Needs Action says 
   await expect(bell(page).locator('.phone-bell-count')).toHaveText('3')
   await openCenter(page)
   await page.locator('.notification-panel .nfc-rail-btn', { hasText: 'Needs you' }).first().tap()
-  const empty = page.locator('.notification-panel .notification-feed-empty').first()
+  const empty = page.locator('.notification-panel [data-testid="notification-feed-empty"]').first()
   await expect(empty).toBeVisible()
   const e = (await empty.boundingBox())!
   const vw = page.viewportSize()!.width
   // Centered across the screen, readable size.
   expect(Math.abs(e.x + e.width / 2 - vw / 2)).toBeLessThan(24)
-  expect(await empty.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(15)
+  expect(await empty.locator('.empty-state-title').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(15)
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-n1-empty.png` })
   expect(errors).toEqual([])
 })
@@ -346,7 +346,7 @@ test('C19: a decision letter in the center takes a finger (Pin, Mark read, Archi
   await openCenter(page)
   // Needs Action holds only live session asks: the decision letter is not there…
   await center(page).getByRole('button', { name: /^Needs you/ }).tap()
-  await expect(center(page).locator('.notification-feed-empty').first()).toBeVisible({ timeout: 15_000 })
+  await expect(center(page).getByTestId('notification-feed-empty').first()).toBeVisible({ timeout: 15_000 })
   await expect(center(page).locator('.hib-row')).toHaveCount(0)
   // …it sits in the Inbox.
   await center(page).getByRole('button', { name: /^Inbox/ }).tap()

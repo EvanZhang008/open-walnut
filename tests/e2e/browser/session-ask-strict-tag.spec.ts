@@ -134,7 +134,7 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
       await expect(body).toContainText(ANSWER)
     }
     await expect(card(panel).locator('.thread-status-word')).not.toHaveAttribute('data-kind', /failed|waiting/)
-    await expect(card(panel).locator('.thread-card-noanswer')).toHaveCount(0)
+    await expect(card(panel).getByTestId('thread-card-noanswer')).toHaveCount(0)
     await noTagShown(panel)
     await shot(page, '1-tag-answer', panel)
 
@@ -221,7 +221,7 @@ test.describe('Ask here: the answer is the text inside its tag', () => {
     }
     // Waiting for its answer: never "Answered", never "No answer".
     await expect(card(panel).locator('.thread-status-word')).toHaveAttribute('data-kind', 'waiting', { timeout: 15_000 })
-    await expect(card(panel).locator('.thread-card-noanswer')).toHaveText('Waiting for its answer…')
+    await expect(card(panel).getByTestId('thread-card-noanswer')).toHaveText('Waiting for its answer…')
     await expect(card(panel)).not.toContainText('Answered')
     await expect(card(panel)).not.toContainText('No answer')
     await shot(page, '5-no-tag', panel)

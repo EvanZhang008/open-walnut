@@ -7,6 +7,7 @@
  */
 import { useId } from 'react';
 import { Radio } from '@/components/controls';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import {
   COPY,
   matchesLine,
@@ -124,12 +125,15 @@ export function MailCorrectStepRule(props: StepRuleProps) {
     <div className="mail-correct-step" data-step="rule">
       <p className="mail-correct-title" id={titleId}>{COPY.step2Title}</p>
       {props.loading ? (
-        <p className="mail-correct-loading" data-testid="mail-correct-loading">Loading…</p>
+        <LoadingState size="row" title="Loading rule drafts…" testId="mail-correct-loading" />
       ) : props.loadError ? (
-        <p className="mail-correct-field-error" role="alert" data-testid="mail-correct-load-error">
-          {props.loadError}{' '}
-          <button type="button" className="mail-correct-link" onClick={props.onRetryLoad}>Try again</button>
-        </p>
+        <UnavailableState
+          size="row"
+          title={props.loadError.replace(/\.$/, '')}
+          retryLabel="Try again"
+          onRetry={props.onRetryLoad}
+          testId="mail-correct-load-error"
+        />
       ) : (
         <div className="mail-correct-choices" role="group" aria-labelledby={titleId}>
           {props.modelState !== 'none' && (

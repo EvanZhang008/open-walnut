@@ -186,7 +186,7 @@ function wifiWay(i: WaysInput): Way {
 }
 
 function nowLine(i: WaysInput, cloud: Way, tailscale: Way): NowLine {
-  if (i.listState === 'loading') return { tone: 'none', title: 'Checking how your phone reaches Walnut...', detail: '' };
+  if (i.listState === 'loading') return { tone: 'none', title: 'Checking how your phone reaches Walnut…', detail: '' };
   if (i.listState === 'failed') return { tone: 'warn', title: "Couldn't load your phones", detail: 'The list of paired phones did not load; reopen this page to try again.' };
   if (i.phoneUses.length === 0) {
     // Pairing lives in each way's tab (device-scope.ts): the companion's when there is one, else Wi-Fi's.

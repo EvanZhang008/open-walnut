@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SettingsRow } from '../SettingsSection';
+import { EmptyState } from '../../common/EmptyState';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { APPROVALS_SWITCH_LABEL, listApprovals, type Approval } from '@/api/approvals';
@@ -93,7 +94,7 @@ function UnaskedList({ off }: { off: boolean }) {
   return (
     <SettingsRow indent label="Went ahead without asking" help={off ? undefined : 'While approvals were off. Each one asks you now.'} data-testid="settings-approvals-unasked">
       {items.length === 0
-        ? <p className="settings-row-help">Nothing yet.</p>
+        ? <EmptyState size="row" title="Nothing went ahead yet" />
         : (
           <ul className="approvals-unasked-list">
             {shown.map(({ lead: a, all: same }) => (

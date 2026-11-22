@@ -12,6 +12,7 @@
  */
 import { useMemo } from 'react';
 import { LinkifiedText } from '@/components/common/LinkifiedText';
+import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
 import { truncatedNotice } from './mail-format';
 import { allowRemoteImagesForOpenMessage, retryOpenMessageBody } from './mail-actions';
 import type { MailOpenMessage } from './mail-store';
@@ -42,13 +43,13 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
 
   if (open.error) {
     return (
-      <Notice testId="mail-reader-error" text={open.error} />
+      <Notice testId="mail-reader-error" title="Couldn't open this message" text={open.error} />
     );
   }
 
   if (open.bodyError) {
     return (
-      <Notice testId="mail-body-error" text={bodyErrorSentence(open.bodyError)} />
+      <Notice testId="mail-body-error" title="Couldn't load this message's body" text={bodyErrorSentence(open.bodyError)} />
     );
   }
 
@@ -58,11 +59,10 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
   if (!body) {
     return (
       <div className="mail-reader-body mail-reader-column">
-        <p className="mail-pane-empty" data-testid="mail-body-missing">
-          {open.message?.hasBody
-            ? 'Walnut has not fetched this body yet.'
-            : 'This message has no body.'}
-        </p>
+        <EmptyState
+          title={open.message?.hasBody ? 'Walnut has not fetched this body yet' : 'This message has no body'}
+          testId="mail-body-missing"
+        />
       </div>
     );
   }
@@ -72,11 +72,9 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
   if (!hasBodyContent(body)) {
     return (
       <div className="mail-reader-body mail-reader-column">
-        <p className="mail-pane-empty" data-testid="mail-body-empty">
-          {body.html?.trim()
-            ? 'This message arrived with no readable content: its markup has no text and no images.'
-            : 'No text content.'}
-        </p>
+        {body.html?.trim()
+          ? <EmptyState title="This message has no readable content" hint="Its markup has no text and no images." testId="mail-body-empty" />
+          : <EmptyState title="This message has no text" testId="mail-body-empty" />}
       </div>
     );
   }
@@ -138,15 +136,16 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
  * again, too-large and not-found included: an older release can mark a big mail too-large again after
  * the one-time sweep, and a folder the server would not open reads as not-found.
  */
-function Notice({ testId, text }: { testId: string; text: string }) {
+function Notice({ testId, title, text }: { testId: string; title: string; text: string }) {
   return (
     <div className="mail-reader-body mail-reader-column">
-      <div className="mail-body-notice" data-testid={testId}>
-        <p>{text}</p>
-        <button type="button" className="mail-text-btn" onClick={() => { void retryOpenMessageBody(); }}>
-          Try again
-        </button>
-      </div>
+      <UnavailableState
+        title={title}
+        hint={text}
+        retryLabel="Try again"
+        onRetry={() => { void retryOpenMessageBody(); }}
+        testId={testId}
+      />
     </div>
   );
 }

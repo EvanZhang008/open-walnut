@@ -23,7 +23,7 @@ const PLACE: Record<KeyEnv, string> = {
 };
 
 function Keys({ row }: { row: ShortcutRow }) {
-  return row.keys.length === 0 ? <span className="shortcuts-settings-none">No key</span> : <ShortcutKeys row={row} />;
+  return row.keys.length === 0 ? <span className="shortcuts-settings-none">No key</span> : <ShortcutKeys row={row} />; // empty-state-ok: a table cell value
 }
 
 export function KeyboardShortcutsSection() {

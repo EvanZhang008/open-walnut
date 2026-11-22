@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core';
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
 import { VAULT_RAW_IO } from './vault-raw-io';
+import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
+import { ICON_NOTE } from '@/components/common/Icons';
 import type { PendingExternalChange } from '@/hooks/useNoteContent';
 
 /**
@@ -59,12 +61,12 @@ export function NotesEditorPanel({
 }: NotesEditorPanelProps) {
   if (!notePath) {
     return (
-      <div className="notes-editor-empty">
-        <div className="notes-editor-empty-content">
-          <NotepadIcon />
-          <p>Select a note or create a new one</p>
-        </div>
-      </div>
+      <EmptyState
+        size="pane"
+        icon={ICON_NOTE}
+        title="No note open"
+        hint="Pick a note from the list, or create one."
+      />
     );
   }
 
@@ -102,22 +104,9 @@ export function NotesEditorPanel({
       rawFlushIO={VAULT_RAW_IO}
       findPrimary
       loadingFallback={
-        <div className="notes-editor-empty">
-          <div className="notes-editor-empty-content"><p>Failed to load note</p></div>
-        </div>
+        <UnavailableState size="pane" title="Couldn't load this note" />
       }
     />
   );
 }
 
-function NotepadIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="48" height="48" opacity="0.3">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-      <polyline points="10 9 9 9 8 9" />
-    </svg>
-  );
-}

@@ -6,6 +6,7 @@
  */
 import { CopyButton } from './CopyButton';
 import { ConfirmDialog } from './ConfirmDialog';
+import { EmptyState } from './EmptyState';
 
 export interface UpdateCommand { note: string | null; command: string }
 
@@ -36,7 +37,11 @@ export function HowToUpdateDialog({ version, commands, packageUrl, onClose }: {
       <p>This copy of Walnut cannot update itself. Run this in a terminal, then restart Walnut:</p>
       {commands.length
         ? commands.map((cmd, i) => <CommandRow key={cmd.command} cmd={cmd} index={i} />)
-        : <p>No package manager was found for this install{packageUrl ? <>; see <a href={packageUrl} target="_blank" rel="noreferrer">{packageUrl}</a></> : null}.</p>}
+        : <EmptyState
+            size="row"
+            title="No package manager was found for this install"
+            hint={packageUrl ? <>See <a href={packageUrl} target="_blank" rel="noreferrer">{packageUrl}</a>.</> : undefined}
+          />}
     </div>}
   />;
 }

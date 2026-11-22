@@ -10,6 +10,7 @@
  * Enter opens it, Escape clears the query first and closes when already empty.
  */
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { EmptyState } from '@/components/common/EmptyState';
 import { searchSessions } from '@/api/sessions';
 import type { SessionRecord } from '@open-walnut/core';
 import { ICON_SEARCH } from '@/components/common/Icons';
@@ -155,9 +156,9 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
       </div>
       <div className="session-search-results" role="listbox">
         {!loading && results.length === 0 && (
-          <div className="session-search-empty">
-            {query ? `No sessions match '${query}'` : 'No sessions yet'}
-          </div>
+          query
+            ? <EmptyState size="row" role="presentation" title={`No sessions match ‘${query}’`} action={{ label: 'Clear search', onClick: () => setQuery('') }} />
+            : <EmptyState size="row" role="presentation" title="No sessions yet" />
         )}
         {results.map((s, i) => (
           <button

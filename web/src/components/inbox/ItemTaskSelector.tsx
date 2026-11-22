@@ -9,6 +9,7 @@ import { projectDisplayName } from '@/utils/project-display';
 import { itemDraftKey, useItemDraft } from './item-drafts';
 import { MicInput } from '@/components/common/BoxMic';
 import { ICON_CLOSE } from '../common/Icons';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, onNavigate }: {
   open: boolean; letterId: string; itemId: string; onClose: () => void; onChoose: (task: InboxTaskCandidate) => void;
@@ -81,9 +82,10 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
       {preview ? <div className="hii-selector-list"><ItemTaskPreview letterId={letterId} itemId={itemId} task={preview}
         onBack={() => setPreview(undefined)} onNavigate={onNavigate} /></div>
         : <div className="hii-selector-list" ref={list} onScroll={() => { if (page && !loading) { scroll.current = list.current?.scrollTop ?? 0; setScrollTop(scroll.current); } }}>
-          {loading && <p>Loading tasks…</p>}
-          {error && <p>Could not load tasks <button type="button" className="btn btn-sm hib-row-btn" onClick={() => setRetry(n => n + 1)}>Try again</button></p>}
-          {!loading && !error && page?.tasks.length === 0 && <p>No matching tasks<br />Try another search</p>}
+          {loading && <LoadingState size="section" title="Loading tasks…" />}
+          {error && <UnavailableState size="section" title="Couldn't load tasks" onRetry={() => setRetry(n => n + 1)} retryLabel="Try again" />}
+          {!loading && !error && page?.tasks.length === 0 && <EmptyState size="section" title="No matching tasks" hint="Try another search."
+            action={query ? { label: 'Clear search', onClick: () => setQuery('') } : undefined} />}
           {page?.tasks.map((task, index) => <div className="hii-candidate" key={task.id}>
             <button type="button" className="hii-candidate-pick" aria-pressed={selected?.id === task.id}
               onClick={() => setSelected(task)} onKeyDown={e => {
@@ -97,7 +99,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
             <details><summary>Task ID</summary><code>{task.id}</code></details>
           </div>)}
           {page && page.tasks.length > 0 && <p>Showing {page.tasks.length} of {page.total}.{page.hasMore ? ' Refine your search.' : ''}</p>}
-          {page?.hasMore && <button type="button" className="btn btn-sm hib-row-btn" disabled={moreLoading} onClick={() => void more()}>{moreLoading ? 'Loading more…' : 'Load more'}</button>}
+          {page?.hasMore && <button type="button" className="btn btn-sm hib-row-btn" disabled={moreLoading} onClick={() => void more()}>{moreLoading ? 'Loading more…' : 'Load more'}</button>}{/* empty-state-ok: button label */}
         </div>}
       <footer className="wn-dialog-foot"><div>Selected task: {selected?.title ?? 'None'}
         {selected?.phase === 'COMPLETE' && <p>This task is completed. Open it to review or choose an open task.</p>}</div>

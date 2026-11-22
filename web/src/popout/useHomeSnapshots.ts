@@ -20,7 +20,8 @@ export function useHomeSnapshots(rootRef: RefObject<HTMLDivElement | null>, acti
     const listUp = () => {
       const list = el.querySelector('.ext-home-tasks');
       if (!list) return true;
-      return !!list.querySelector('.todo-panel') && !list.querySelector('.ext-home-loading, .todo-panel-list .spinner');
+      return !!list.querySelector('.todo-panel')
+        && !list.querySelector('[data-testid="ext-home-loading"], [data-testid="todo-loading"], .todo-panel-list .spinner');
     };
     const tellShown = () => {
       if (shownTold.current || !el.querySelector('.chat-input-textarea') || !listUp()) return;

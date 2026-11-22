@@ -7,6 +7,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { searchQuickNotes, searchQuickTasks } from '@/api/quick';
 import { NoteGlyph, TaskGlyph } from './quickbar-glyphs';
 import { log } from '@/utils/log';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { taskPath } from '@/utils/task-path';
 
 export interface QuickResult { key: string; title: string; sub: string; to: string }
@@ -64,15 +65,16 @@ export const QuickBarResults = forwardRef<QuickBarResultsHandle, {
     listRef.current?.querySelector<HTMLElement>(`[data-row="${cursor}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [cursor]);
 
+  const words = query.trim();
   const empty = state === 'failed'
-    ? 'Search did not answer. Type again to retry.'
-    : state === 'searching' && rows.length === 0 ? 'Searching…'
-      : mode === 'notes' && !query.trim() ? 'Type words from a note’s title or text.'
-        : rows.length === 0 ? `No ${mode} match.` : null;
+    ? <UnavailableState size="row" role="presentation" testId="qb-results-empty" title="Search did not answer" hint="Type again to retry." />
+    : state === 'searching' && rows.length === 0 ? <LoadingState size="row" role="presentation" testId="qb-results-empty" title={`Searching ${mode}…`} />
+      : mode === 'notes' && !words ? <EmptyState size="row" role="presentation" testId="qb-results-empty" title="Search your notes" hint="Type words from a note’s title or text." />
+        : rows.length === 0 ? <EmptyState size="row" role="presentation" testId="qb-results-empty" title={words ? `No ${mode} match \u2018${words}\u2019` : `No ${mode} to show`} /> : null;
 
   return (
     <div className="qb-results" ref={listRef} role="listbox" aria-label={mode === 'tasks' ? 'Tasks' : 'Notes'} data-testid={`qb-results-${mode}`}>
-      {empty && <div className="qb-results-empty">{empty}</div>}
+      {empty}
       {rows.map((row, i) => (
         <button
           type="button"

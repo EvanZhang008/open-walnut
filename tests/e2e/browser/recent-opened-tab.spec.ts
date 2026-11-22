@@ -131,7 +131,7 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   // Nothing opened yet in this browser: the list says what it is for. (An empty Recent stays on
   // the tab bar under "Hide empty tabs": tests/web/tab-bar-model.test.ts; this fixture shows no bar.)
   await chooseViewOption(page, 'recent')
-  await expect(page.getByTestId('todo-recent-empty')).toHaveText('Tasks you create, open or write in show up here, newest first.')
+  await expect(page.getByTestId('todo-recent-empty')).toContainText('Tasks you create, open or write in show up here, newest first.')
   await chooseViewOption(page, 'all')
 
   // An automatic locate can show a task, but it is not the person's input.

@@ -2377,7 +2377,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                         type="button"
                         role="menuitem"
                         aria-disabled={off || undefined}
-                        title={!any ? 'Nothing sent in this session yet'
+                        title={!any ? 'Nothing sent in this session yet' // empty-state-ok: tooltip
                           : oldest ? 'This is the first message you sent here'
                             : untouched ? 'Bring back the message you sent before this one. \u2191 and \u2193 step through them too'
                             : empty ? 'Bring back your last message here. In an empty box, \u2191 and \u2193 step through your earlier ones'

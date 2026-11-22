@@ -58,9 +58,6 @@ button.quick-sort-card-title:hover { color: var(--accent); }
 .quick-sort-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; font-size: var(--font-size-md); }
 .quick-sort-confirm span { flex: 1 0 100%; }
 .quick-sort-confirm .quick-sort-btn { flex: 1; }
-.quick-sort-empty { padding: 40px 12px; text-align: center; color: var(--fg-muted); }
-.quick-sort-empty h2 { margin: 0 0 6px; color: var(--fg); font-size: var(--font-size-xl); }
-.quick-sort-empty button { margin-top: 10px; padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-md); }
 .quick-sort-foot { display: flex; flex-direction: column; gap: 8px; }
 .quick-sort-tally { display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .quick-sort-tally span + span { padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); }

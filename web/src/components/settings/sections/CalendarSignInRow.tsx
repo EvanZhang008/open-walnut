@@ -181,7 +181,7 @@ export function CalendarSignInRow({ account, label, provider, tag, own, calendar
   )
   const waitingHelp = (
     <>{`Finish signing in on the ${provider} page that opened. This row updates by itself.`}{status?.authUrl
-      ? <> No page? <a href={status.authUrl} target="_blank" rel="noreferrer" data-testid={`calendar-mail-sign-in-link-${id}`}>{`Open ${provider} sign-in`}</a>.</>
+      ? <> No page? <a href={status.authUrl} target="_blank" rel="noreferrer" data-testid={`calendar-mail-sign-in-link-${id}`}>{`Open ${provider} sign-in`}</a>.</> /* empty-state-ok: a link hint, not a state */
       : null}</>
   )
   const pasteRow = waiting && (

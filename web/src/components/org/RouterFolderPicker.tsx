@@ -20,6 +20,7 @@ import { listMailboxes, type MailboxDto } from '@/api/mail';
 import '@/styles/router-settings.css';
 import { MicInput } from '@/components/common/BoxMic';
 import { Checkbox } from '@/components/controls';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export const ROUTER_NO_INBOX_LINE = 'Inbox is not ticked: new Inbox mail of these mailboxes goes to no one. Tick Inbox to keep it.';
 export const ROUTER_NO_FOLDER_LINE = 'Pick at least one folder.';
@@ -213,14 +214,14 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
             {unlisted.map((entry) => row({ token: entry, label: entry, depth: 0, aliases: [] }, 'unlisted'))}
           </div>
         )}
-        {loading && <p className="router-folder-note" role="status" data-testid={`${testId}-loading`}>Reading the folders…</p>}
+        {loading && <LoadingState size="row" title="Reading the folders…" testId={`${testId}-loading`} />}
         {failed.map((a) => (
-          <p key={a.account} className="router-folder-note is-error" role="alert" data-testid={`${testId}-error`} data-account={a.account}>
-            Could not read the folders of {a.label}.{' '}
-            <button type="button" className="router-folder-retry" data-testid={`${testId}-retry`} onClick={() => load([a.account])}>Try again</button>
-          </p>
+          <UnavailableState
+            key={a.account} size="row" title={`Could not read the folders of ${a.label}`} testId={`${testId}-error`} data={{ account: a.account }}
+            action={{ label: 'Try again', onClick: () => load([a.account]), testId: `${testId}-retry` }}
+          />
         ))}
-        {words && shownGroups.length === 0 && <p className="router-folder-note">No folder matches “{filter.trim()}”.</p>}
+        {words && shownGroups.length === 0 && <EmptyState size="row" title={`No folder matches “${filter.trim()}”`} />}
       </div>
       {skips && <p className="router-folder-warn" role="status" data-testid={`${testId}-no-inbox`}>{ROUTER_NO_INBOX_LINE}</p>}
       {empty && <p className="router-folder-warn" role="status" data-testid={`${testId}-none`}>{ROUTER_NO_FOLDER_LINE}</p>}

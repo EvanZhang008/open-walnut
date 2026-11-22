@@ -4,6 +4,7 @@
  * running job's progress, hook output and result. See SessionCommitDialog.
  */
 import { useDraft, useDraftValue } from '@/hooks/useDraft';
+import { EmptyState } from '@/components/common/EmptyState';
 import { draftKey } from '@/utils/drafts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -258,7 +259,7 @@ export function SessionCommitRepo(props: {
       {blocked && <div className="scd-blocked" data-testid="scd-blocked">{blocked.message}</div>}
 
       {sessionFiles.length === 0
-        ? <div className="scd-muted">Nothing this session changed is left uncommitted here.</div>
+        ? <EmptyState size="row" title="Nothing this session changed is left uncommitted here" testId="scd-nothing-left" />
         : <div className="scd-files">{sessionFiles.map((f) => <FileRow key={f.path} file={f} sel={sel} onSel={setSel} />)}</div>}
 
       {otherFiles.length > 0 && (

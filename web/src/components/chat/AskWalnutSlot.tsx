@@ -44,6 +44,7 @@ import { fetchAskWalnutLaunch, fetchWorkingDirs, quickStartSession } from '@/api
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { SetupProgress } from '@/components/common/SetupProgress';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import type { DraftColumn } from '@/components/sessions/draft-column';
 import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
@@ -745,12 +746,11 @@ export function AskWalnutSlot({
 
       <div className="ask-walnut-slot-body">
         {setup ?? (view === 'loading' ? (
-          <div className="ask-walnut-loading" data-testid="ask-walnut-loading">
+          // `.ask-walnut-pending` is the slot's frame (it anchors the bare header's ≡);
+          // the words are the shared state's.
+          <div className="ask-walnut-pending" data-testid="ask-walnut-loading">
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
-            <p className="ask-walnut-pending-status">
-              <span className="spinner ask-walnut-pending-spinner" />
-              Loading your quick questions…
-            </p>
+            <LoadingState size="pane" title="Loading your quick questions…" />
           </div>
         ) : view === 'new' ? (
           <div className="ask-walnut-draft" data-testid="ask-walnut-draft">
@@ -774,7 +774,7 @@ export function AskWalnutSlot({
             />
           </div>
         ) : view === 'main' && (preparingMain || mainTask?.org_start?.state === 'starting' || (setupReady && orgSettingsLoaded && orgSettings.enabled !== false && !mainSetupAsked.current)) ? (
-          <div className="ask-walnut-loading" data-testid="ask-walnut-main-starting">
+          <div className="ask-walnut-pending" data-testid="ask-walnut-main-starting">
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             <SetupProgress label="Starting the CEO..." />
           </div>
@@ -841,10 +841,13 @@ export function AskWalnutSlot({
             />
           </div>
         ) : (
-          <div className="ask-walnut-empty">
+          <div className="ask-walnut-pending" data-testid="ask-walnut-no-session">
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
-            <p>This quick question has no session yet.</p>
-            <button className="btn btn-sm btn-primary" onClick={startNew}>New quick question</button>
+            <EmptyState
+              size="pane"
+              title="This quick question has no session yet"
+              action={{ label: 'New quick question', onClick: startNew, primary: true }}
+            />
           </div>
         ))}
       </div>

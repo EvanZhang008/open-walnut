@@ -40,7 +40,7 @@ import { FoundHostNote, HostNote, HostTabBar, RemoteOffNote, RemovedHostsNote } 
 import { capHistorySections, isMoreRow } from './path-selector/history-cap';
 import { useHistoryCap } from './path-selector/useHistoryCap';
 import { GhostTextInput } from './path-selector/GhostTextInput';
-import { PathList } from './path-selector/PathList';
+import { PathList, type PathListEmpty } from './path-selector/PathList';
 import { freshLauncherMeta } from './task-meta-constants';
 
 export interface QuickStartPath {
@@ -837,17 +837,19 @@ export function SessionPathSelector({
       dot={hostView.dots.get(hostKey)} onRelist={retryHost} onOpenSettings={openSettingsFor} />
   );
 
-  const emptyHint = homeWord
-    ? `No history or home folder matches "${homeWord}". Type a path (e.g. ~/projects) to browse.`
+  const emptyHint: PathListEmpty = homeWord
+    ? { title: `No history or home folder matches ‘${homeWord}’`, hint: 'Type a path (e.g. ~/projects) to browse.' }
     : editMode
-    ? (anyLoading ? 'Listing directories...'
-      : validity === 'valid' ? 'No matches. Press Enter to use this path.'
+    ? (anyLoading ? { title: 'Listing folders…', loading: true }
+      : validity === 'valid' ? { title: 'No matches', hint: 'Press Enter to use this path.' }
       : validity === 'missing'
-        ? (createOption && createTarget ? 'Folder does not exist. Press Enter to create it and start here.' : 'Folder not found. Pick a host tab to create it.')
-      : 'No matches. Press ⇧Enter to use this path.')
+        ? (createOption && createTarget
+          ? { title: 'Folder does not exist', hint: 'Press Enter to create it and start here.' }
+          : { title: 'Folder not found', hint: 'Pick a host tab to create it.' })
+      : { title: 'No matches', hint: 'Press ⇧Enter to use this path.' })
     : dirs.length === 0
-      ? 'No session history yet. Type a path (e.g. ~/projects) to browse.'
-      : 'No paths match your search.';
+      ? { title: 'No session history yet', hint: 'Type a path (e.g. ~/projects) to browse.' }
+      : { title: 'No paths match your search' };
 
   const panel = (
     <div

@@ -88,7 +88,7 @@ async function openDevices(page: Page, { waitForList = true } = {}) {
   await expect(nav).toHaveAttribute('aria-current', 'page')
   // Phones & Cloud opens the tab in use; every phone is on All devices.
   const section = await backToDevices(page)
-  if (waitForList) await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  if (waitForList) await expect(section).not.toContainText('Loading paired phones…', { timeout: 30_000 })
   return section
 }
 
@@ -375,6 +375,6 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect.poll(() => firstAnswered, { timeout: 15_000 }).toBe(true)
     await page.waitForTimeout(500)
     await expect(section.locator('.devices-row[data-device-name="Early-phone"]')).toHaveCount(1)
-    await expect(section).not.toContainText('No phone is paired with this Mac yet.')
+    await expect(section).not.toContainText('No phone is paired with this Mac yet')
   })
 })

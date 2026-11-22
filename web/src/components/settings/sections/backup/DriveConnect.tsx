@@ -252,7 +252,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
         label="Google account"
         help={waiting
           ? <>Finish signing in on the Google page that opened. This row updates by itself.{authUrl
-            ? <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</>
+            ? <> No page? <a href={authUrl} target="_blank" rel="noreferrer" data-testid="backup-gdrive-open-link">Open Google sign-in</a>.</> // empty-state-ok: sentence inside row help
             : <> Closed it? Choose Cancel, then Connect again.</>}</>
           : halfClient
             ? `Add the client ${hasId ? 'secret' : 'ID'} too: Google needs both.`

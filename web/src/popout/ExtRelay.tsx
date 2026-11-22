@@ -15,6 +15,7 @@ import { taskHead } from './ext-tasks-model';
 import { taskPageTitle } from './ext-home-model';
 import { firstQuestionOf } from './ext-panel-model';
 import { toParent } from './ext-frame';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export function RelayPill({ kind, label, open, onToggle, pillRef }: { kind: RelayPillKind; label: string; open: boolean; onToggle: () => void; pillRef: RefObject<HTMLButtonElement | null> }) {
   return (
@@ -102,7 +103,7 @@ export function RelayPanel({ relay, here, tasks, anchorRef, onClose, settings }:
           {now.map((t) => <RelayRow key={t.tab} t={t} here={here} task={byId.get(taskOfOwner(t.owner))} action="Stop" onAction={() => stop(t)} />)}
           {earlier.length > 0 && <div className="ext-relay-label">Shared earlier</div>}
           {earlier.map((t) => <RelayRow key={t.tab} t={t} here={here} task={byId.get(taskOfOwner(t.owner))} action="Unshare" onAction={() => stop(t)} />)}
-          {now.length + earlier.length === 0 && <p className="ext-relay-note" data-testid="ext-relay-none">No agent is using a tab now.</p>}
+          {now.length + earlier.length === 0 && <EmptyState size="row" title="No agent is using a tab now" testId="ext-relay-none" />}
           {now.length + earlier.length > 0 && (
             <div className="ext-relay-foot">
               <span>Stop all agents</span>

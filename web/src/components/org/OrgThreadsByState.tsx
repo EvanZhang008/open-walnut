@@ -22,6 +22,10 @@ import type { Task } from '@open-walnut/core';
 import type { OrgThread } from '@/api/org-threads';
 import { FOLDED_GROUPS, FOR_HIM_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
 import { MOVE_NOTE_MS, shownGroups, useThreadMoves, type ThreadMove } from './thread-moves';
+import { EmptyState } from '@/components/common/EmptyState';
+
+/** What an empty threads list says it is for (both list layouts). */
+export const threadsEmptyHint = (name: string) => `Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`;
 
 /** One move of one card: a rename keeps it, a new move from another place is another line. */
 const moveKey = (m: ThreadMove) => `moved-${m.id}-${m.from}-${m.index}`;
@@ -61,10 +65,8 @@ function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove
  */
 export function ThreadsEmpty({ name }: { name: string }) {
   return (
-    <div className="org-threads-empty-row" data-testid="org-threads-empty-row">
-      <p className="org-threads-empty" data-testid="org-threads-empty" title={`Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread`}>
-        Nothing open yet
-      </p>
+    <div className="org-threads-empty-row" data-testid="org-threads-empty-row" title={threadsEmptyHint(name)}>
+      <EmptyState size="row" title="Nothing open yet" testId="org-threads-empty" />
     </div>
   );
 }

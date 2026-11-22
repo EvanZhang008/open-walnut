@@ -49,7 +49,7 @@ export function TaskRefLink({ taskId }: { taskId: string }) {
         openTask(taskId);
       }}
     >
-      {title ?? 'Loading…'}
+      {title ?? 'Loading…'}{/* empty-state-ok: link text until the title arrives */}
     </a>
   );
 }

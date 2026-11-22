@@ -1,3 +1,4 @@
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { createPortal } from 'react-dom';
@@ -72,7 +73,9 @@ function BoardColumn({ column, mode, doneLimit, onMoreDone, ...props }: { column
         <h3>{projectDisplayName(project.label)}<span>{project.count}</span></h3>
         {project.families.map(family => <BoardTask key={family.task.id} family={family} mode={mode} {...props} />)}
       </section>)}
-      {!column.projects.length && <p className="home-board-empty">{mode === 'pin' ? 'Drop tasks here' : 'No tasks'}</p>}
+      {!column.projects.length && (mode === 'pin' && column.id !== 'unpinned'
+        ? <EmptyState title="Nothing pinned here" hint="Drop tasks here." />
+        : <EmptyState title="No tasks in this column" />)}
       {column.id === 'done' && column.count > doneLimit && <button type="button" className="home-board-more" onClick={onMoreDone}>Show more completed tasks</button>}
     </div>
   </section>;
@@ -335,7 +338,7 @@ export function HomeBoardSheet() {
       if (moveError && retry && mode === 'pin') sendMove(retry.ids, retry.tier);
       else refetch();
     }}>Retry</button></div> : lastDone && mode !== 'sort' ? <div className="home-board-done-note" role="status"><span>Marked "{lastDone.label}" done.</span><button type="button" onClick={() => { const { id, phase, write } = lastDone; setLastDone(null); void write.then(ok => { if (ok) void setPhase(id, phase); }); }}>Undo</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier, snooze or mark done. Subtasks in the same tier move with their leader, across projects.' : mode === 'sort' ? 'Decide each card in one tap. Keys: 1 to 9 pin tier, R reply, S snooze, D done, X skip, ← → pick a card, ⌘Z undo.' : 'Grouped by project. Status follows each task’s live state.'}</div>
-    {loading ? <p className="home-board-empty">Loading your tasks…</p> : mode === 'sort' ? <QuickSortView query={query} tiers={sortTiers} onOpen={onOpen} active={shown} /> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
+    {loading ? <LoadingState title="Loading your tasks…" /> : mode === 'sort' ? <QuickSortView query={query} tiers={sortTiers} onOpen={onOpen} active={shown} /> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
       <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={boardMode} onOpen={onOpen} onMove={onMove} onSnooze={onSnoozeCard} onDone={onDoneCard} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozedNow} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
       <DragOverlay dropAnimation={null} modifiers={previewModifiers} style={{ pointerEvents: 'none' }}>{dragging && <div ref={previewRef} className="home-board-card home-board-drag-preview">{orgDisplayTitle(dragging.task)}</div>}</DragOverlay>
     </DndContext>}

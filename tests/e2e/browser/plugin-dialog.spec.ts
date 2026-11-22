@@ -243,9 +243,9 @@ test('owns one dialog, keeps duplicate work, closes cleanly and handles reloads 
     await expect(page.locator('.notification-panel')).toHaveCount(0)
 
     for (const [button, message] of [
-      ['Open missing dialog', 'This dialog is unavailable.'],
-      ['Open empty dialog', 'The plugin has no dialog content to show.'],
-      ['Open failing dialog', 'The plugin could not render this dialog.'],
+      ['Open missing dialog', 'This dialog is unavailable'],
+      ['Open empty dialog', 'The plugin has no dialog content to show'],
+      ['Open failing dialog', 'The plugin could not render this dialog'],
     ]) {
       await page.getByRole('button', { name: button, exact: true }).click()
       await expect(dialog).toContainText(message)
@@ -278,7 +278,7 @@ test('owns one dialog, keeps duplicate work, closes cleanly and handles reloads 
     await trigger.click()
     await note.fill('Discard on same-module reload')
     await reload(page)
-    await expect(dialog.getByRole('alert')).toContainText(/changed|unavailable/)
+    await expect(dialog.getByTestId('plugin-dialog-unavailable')).toContainText(/changed|unavailable/)
     await expect(note).toHaveCount(0)
     await page.keyboard.press('Escape')
     await trigger.click()
@@ -286,7 +286,7 @@ test('owns one dialog, keeps duplicate work, closes cleanly and handles reloads 
     await note.fill('Discard on reload')
     await fs.writeFile(webFile, web.replace('Fixture record', 'Updated record').replace('Fixture app version 1', 'Fixture app version 2'))
     await reload(page)
-    await expect(dialog.getByRole('alert')).toContainText('changed or became unavailable')
+    await expect(dialog.getByTestId('plugin-dialog-unavailable')).toContainText('changed or became unavailable')
     await expect(note).toHaveCount(0)
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('dialog-fixture-version')).toHaveText('Fixture app version 2')
@@ -334,7 +334,7 @@ test('owns one dialog, keeps duplicate work, closes cleanly and handles reloads 
 
     const popout = await context.newPage()
     await enter(popout, '/popout?view=unknown')
-    await expect(popout.getByRole('heading', { name: 'Unknown view' })).toBeVisible({ timeout: 90_000 })
+    await expect(popout.getByTestId('popout-unknown-view')).toBeVisible({ timeout: 90_000 })
     await expect.poll(async () => (await popout.request.get(`http://127.0.0.1:${fixture.port}/api/plugin-runtime`)).ok()).toBe(true)
     // Wait for the popout's plugin activation before broadcasting through its real socket.
     await expect(popout.locator('style[data-walnut-plugin="walnut-demo"]')).toHaveCount(1, { timeout: 30_000 })
@@ -343,12 +343,12 @@ test('owns one dialog, keeps duplicate work, closes cleanly and handles reloads 
     await expect(popDialog).toContainText('popout-record', { timeout: 30_000 })
     await popDialog.getByRole('button', { name: 'Close dialog' }).click()
     await expect(popDialog).toHaveCount(0)
-    await expect(popout.getByRole('heading', { name: 'Unknown view' })).toBeVisible()
+    await expect(popout.getByTestId('popout-unknown-view')).toBeVisible()
     await popout.close()
     await expect(dialog).toBeVisible()
     const disabled = await page.request.post(`http://127.0.0.1:${fixture.port}/api/plugin-runtime/walnut-demo/disable`)
     expect(disabled.ok()).toBe(true)
-    await expect(dialog.getByRole('alert')).toContainText('changed or became unavailable')
+    await expect(dialog.getByTestId('plugin-dialog-unavailable')).toContainText('changed or became unavailable')
     await expect(note).toHaveCount(0)
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)

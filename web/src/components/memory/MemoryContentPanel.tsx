@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react';
+import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_FILE } from '@/components/common/Icons';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { useFieldContent } from '@/hooks/useFieldContent';
 import { saveGlobalMemory, saveUserMemory, saveMemory } from '@/api/memory';
@@ -107,11 +109,7 @@ export function MemoryContentPanel({
 
   if (!content || !path) {
     return (
-      <div className="memory-content-empty">
-        <div className="empty-state">
-          <p>Select a memory file to view</p>
-        </div>
-      </div>
+      <EmptyState size="pane" icon={ICON_FILE} title="No file open" hint="Pick a memory file from the list." />
     );
   }
 

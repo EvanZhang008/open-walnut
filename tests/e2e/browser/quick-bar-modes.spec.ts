@@ -227,7 +227,7 @@ test('the Notes pill searches notes and Enter opens the note; Cmd-K on the Notes
   await page.locator('.qb-mode-pill[data-mode="notes"]').click()
   await expect(bar(page)).toHaveAttribute('data-mode', 'notes')
   await expect(box(page)).toBeFocused()
-  await expect(page.locator('.qb-results-empty')).toHaveText('Type words from a note’s title or text.')
+  await expect(page.getByTestId('qb-results-empty')).toContainText('Type words from a note’s title or text.')
   await box(page).pressSequentially('sand')
   await expect(results(page).locator('.qb-result-title')).toHaveText(['Spring beds', 'Tile samples'])
   expect(seen.notes.at(-1)).toContain('mode=string')

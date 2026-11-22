@@ -209,7 +209,7 @@ export function SetupLog({ lines, defaultOpen = false }: { lines: string[]; defa
     >
       <SettingsMonoBlock
         label="Last 60 lines"
-        text={lines.slice(-60).join('\n') || 'No output yet.'}
+        text={lines.slice(-60).join('\n') || 'No output yet.'} // empty-state-ok: text inside a log box that keeps its label
         maxHeight={240}
         data-testid="cloud-log-body"
       />

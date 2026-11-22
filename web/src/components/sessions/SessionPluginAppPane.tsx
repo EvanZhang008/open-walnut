@@ -17,6 +17,7 @@
  * kept view mounts it again on a reload, so a restore never pulls the caret out of the composer.
  */
 import { useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useNavigate } from 'react-router-dom';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
@@ -189,13 +190,12 @@ export function SessionPluginAppPane({
           </PluginBounds>
         </PluginBoundary>
       ) : (
-        <div className="session-app-pane-empty" role="status" data-testid="session-app-pane-empty">
-          {!key
-            ? 'No App offers a pane beside a session.'
-            : loading
-              ? 'Loading the App…'
-              : 'This App is not available: its plugin is off, or it no longer offers a pane beside a session.'}
-        </div>
+        !key
+          ? <EmptyState size="pane" title="No App offers a pane beside a session" testId="session-app-pane-empty" />
+          : loading
+            ? <LoadingState size="pane" title="Loading the App…" testId="session-app-pane-empty" />
+            : <UnavailableState size="pane" title="This App is not available" testId="session-app-pane-empty"
+                hint="Its plugin is off, or it no longer offers a pane beside a session." />
       )}
     </div>
   );

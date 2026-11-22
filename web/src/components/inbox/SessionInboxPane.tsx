@@ -22,6 +22,7 @@ import {
 } from '@/api/human-inbox';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import { LetterEnvelopeRow } from './LetterEnvelopeRow';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { LetterView, type LetterFileTarget } from './LetterView';
 import '@/styles/human-inbox.css';
 import '@/styles/header-fit.css';
@@ -144,12 +145,10 @@ export function SessionInboxPane({
         <div className="session-inbox-body">
           {error && <div className="hib-note hib-note-error">{error}</div>}
           {letters.length === 0 ? (
-            <div className="session-inbox-empty">
-              {!loaded
-                ? 'Loading letters…'
-                : 'This session hasn’t written you a letter yet. An agent sends one when it '
-                  + 'finishes something, needs a decision, or has a report worth reading later.'}
-            </div>
+            !loaded
+              ? <LoadingState size="pane" title="Loading letters…" testId="session-inbox-empty" />
+              : <EmptyState size="pane" title="No letters from this session yet" testId="session-inbox-empty"
+                  hint="An agent sends one when it finishes something, needs a decision, or has a report worth reading later." />
           ) : (
             <div className="hib-list">
               {letters.map(letter => (

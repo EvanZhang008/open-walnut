@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { fetchRepository } from '@/api/repositories';
 import type { RepoSummary } from '@/api/repositories';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 interface RepoDetailProps {
   repo: RepoSummary;
@@ -70,9 +71,9 @@ export function RepoDetail({ repo, onBack, onEdit, onDelete }: RepoDetailProps) 
       <div className="repo-detail-section">
         <h4>Raw YAML</h4>
         {loading ? (
-          <p className="text-muted">Loading...</p>
+          <LoadingState title="Loading the YAML…" />
         ) : error ? (
-          <p className="text-muted" style={{ color: 'var(--error)' }}>Failed to load: {error}</p>
+          <UnavailableState title="Couldn't load the YAML" detail={error} />
         ) : (
           <pre className="repo-yaml-content">{content}</pre>
         )}

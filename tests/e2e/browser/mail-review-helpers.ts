@@ -326,7 +326,7 @@ export async function filterShape(page: Page): Promise<Record<string, number | s
     const pane = document.querySelector('.mail-accounts-pane') as HTMLElement
     const left = pane.getBoundingClientRect().left
     const input = document.querySelector('.mail-tail-filter') as HTMLElement
-    const empty = document.querySelector('.mail-tail-empty') as HTMLElement | null
+    const empty = document.querySelector('[data-testid="mail-tail-empty"]') as HTMLElement | null
     const name = document.querySelector('.mail-account .mail-mailbox .mail-mailbox-name') as HTMLElement
     const style = getComputedStyle(input)
     return {

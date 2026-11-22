@@ -29,6 +29,7 @@ import { fetchDirList, type DirEntry } from '@/api/files';
 import { apiGet } from '@/api/client';
 import { getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { formatSize } from '@/utils/format';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { recordRecentFolder, getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
@@ -461,9 +462,12 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
               {searchError && (
                 <div className="fmp-error">Nearby results may be incomplete. <button type="button" onMouseDown={(e) => { e.preventDefault(); setRetrySearch((n) => n + 1); }}>Retry</button></div>
               )}
-              {searching && recentMatches.length > 0 && <div className="fmp-loading">Searching nearby folders…</div>}
-              {recentMatches.length === 0 && !searchError && (
-                <div className="fmp-empty">{searching ? 'Searching nearby folders…' : recentQuery.trim() ? 'No folders match here. Type @/path to browse elsewhere.' : 'No recent folders yet. Type a name to search nearby folders.'}</div>
+              {searching && recentMatches.length > 0 && <LoadingState size="row" title="Searching nearby folders…" />}
+              {recentMatches.length === 0 && !searchError && (searching
+                ? <LoadingState size="row" title="Searching nearby folders…" testId="fmp-empty" />
+                : recentQuery.trim()
+                  ? <EmptyState size="row" title="No folders match here" hint="Type @/path to browse elsewhere." testId="fmp-empty" />
+                  : <EmptyState size="row" title="No recent folders yet" hint="Type a name to search nearby folders." testId="fmp-empty" />
               )}
               {recentMatches.map((r, i) => {
                 const name = r.path.slice(r.path.lastIndexOf('/') + 1) || r.path;
@@ -494,10 +498,10 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
           ) : (
             <>
               <div className="file-mention-list" ref={listRef}>
-                {error && <div className="fmp-error">{error}</div>}
-                {!error && loading && <div className="fmp-loading">Loading…</div>}
+                {error && <UnavailableState size="row" title="Couldn't list this folder" detail={error} testId="fmp-list-error" />}
+                {!error && loading && <LoadingState size="row" title="Loading this folder…" />}
                 {!error && !loading && filtered.length === 0 && (
-                  <div className="fmp-empty">No matches</div>
+                  <EmptyState size="row" title={filterTerm.trim() ? `Nothing here matches ‘${filterTerm.trim()}’` : 'This folder is empty'} testId="fmp-empty" />
                 )}
                 {!error &&
                   filtered.map((entry, i) => (
@@ -532,15 +536,13 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
 
               <div className="file-mention-preview">
                 {previewFile ? (
-                  <Suspense fallback={<div className="fmp-preview-empty">Loading…</div>}>
+                  <Suspense fallback={<LoadingState size="row" title="Loading preview…" />}>
                     <FileContentView key={previewFile} path={previewFile} host={host} />
                   </Suspense>
                 ) : (
-                  <div className="fmp-preview-empty">
-                    {filtered[selectedIndex]?.type === 'dir'
-                      ? 'Folder — →/⏎ to open, ⌘⏎ to select'
-                      : 'Select a file to preview'}
-                  </div>
+                  filtered[selectedIndex]?.type === 'dir'
+                    ? <EmptyState size="row" title="This is a folder" hint="Press → or ⏎ to open it, ⌘⏎ to select it." />
+                    : <EmptyState size="row" title="Select a file to preview" />
                 )}
               </div>
             </>

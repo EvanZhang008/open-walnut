@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useInRouterContext } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { listMailAccounts, type MailAccountDto } from '@/api/mail';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { folderList } from '@/components/org/RouterFolderPicker';
 import { RouterSettingsDialog } from '@/components/org/RouterSettingsDialog';
@@ -89,18 +90,18 @@ export function MailRouterSettings() {
     [accounts, areaNames, tasks],
   );
 
-  if (failed) return <p className="mail-router-empty" data-testid="mail-router-settings">Could not read the mailboxes. Reload the page to try again.</p>;
+  if (failed) return <UnavailableState title="Couldn't read the mailboxes" hint="Reload the page to try again." testId="mail-router-settings" />;
   // Until the routers are read, no mailbox is called unrouted.
-  if (areasRead === 'failed' && !Object.keys(areaNames).length) return <p className="mail-router-empty" data-testid="mail-router-settings">Could not read the routers. Reload the page to try again.</p>;
-  if (!accounts || areasRead === 'pending') return <p className="mail-router-empty" data-testid="mail-router-settings">Reading the mailboxes…</p>;
+  if (areasRead === 'failed' && !Object.keys(areaNames).length) return <UnavailableState title="Couldn't read the routers" hint="Reload the page to try again." testId="mail-router-settings" />;
+  if (!accounts || areasRead === 'pending') return <LoadingState title="Reading the mailboxes…" testId="mail-router-settings" />;
   return (
     <div className="mail-router-settings" data-testid="mail-router-settings">
       <p className="mail-router-lead">Each mailbox comes with a router. It reads the new mail in the folders it watches and hands each one to the task that owns it.</p>
-      {blocks.length === 0 && unrouted.length === 0 && <p className="mail-router-empty">No mailbox yet. Add one in Mail.</p>}
+      {blocks.length === 0 && unrouted.length === 0 && <EmptyState title="No mailbox yet" hint="Add one in Mail." />}
       {blocks.map((block) => <MailRouterBlockView key={block.routerId} block={block} router={(tasks ?? []).find((t) => t.id === block.routerId)} tasks={tasks ?? []} tasksLoading={!tasks} />)}
       {unrouted.length > 0 && (
         <div className="mail-router-block is-unrouted" data-testid="mail-router-unrouted">
-          <div className="mail-router-head"><span className="mail-router-name">No router yet</span></div>
+          <div className="mail-router-head"><span className="mail-router-name">No router yet</span></div>{/* empty-state-ok: the heading of a block that lists accounts */}
           <ul className="mail-router-accounts">{unrouted.map((a) => <li key={a.accountId} data-account={a.accountId}>{a.label}</li>)}</ul>
           <p className="mail-router-hint">Its router is set up with its next new mail.</p>
         </div>

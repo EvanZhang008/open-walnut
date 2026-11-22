@@ -46,7 +46,7 @@ function PropRow({ c, dim, onOpen }: { c: FilterBarController; dim: FilterDim; o
     >
       <span className="fb-item-icon" aria-hidden="true">{dimIcon(dim)}</span>
       <span className="fb-item-text">{dimLabel(dim)}</span>
-      <span className={`fb-prop-summary${summary.isDefault ? ' is-default' : ''}`}>{loading ? 'Loading' : summary.text}</span>
+      <span className={`fb-prop-summary${summary.isDefault ? ' is-default' : ''}`}>{loading ? 'Loading' : summary.text}</span>{/* empty-state-ok: a menu item's value word */}
       <DisclosureChevron className="fb-item-chevron" />
     </Item>
   );

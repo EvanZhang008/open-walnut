@@ -367,7 +367,7 @@ function WebServersCount({ sessionId }: { sessionId: string }) {
   if (!summary && state !== 'ok') return null;
   return (
     <span className="session-menu-servers-count" data-testid="session-menu-servers-count"
-      title={summary ? `${summary} this session started ${summary.startsWith('1 ') ? 'is' : 'are'} listening; Web preview lists every one` : 'No server of this session is listening'}>
+      title={summary ? `${summary} this session started ${summary.startsWith('1 ') ? 'is' : 'are'} listening; Web preview lists every one` : 'No server of this session is listening'}>{/* empty-state-ok: tooltip of a menu row */}
       <span className={summary ? undefined : 'session-menu-servers-none'}>{summary ? ` · ${summary}` : ' · none running'}</span>
     </span>
   );

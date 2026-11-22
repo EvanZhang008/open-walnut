@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import type { RawFlushIO } from '@/components/notes/MarkdownEditorPanel';
@@ -39,9 +40,9 @@ export function PopoutGlobalNotes() {
   // No editor before the note is read: typing into an empty one would save over it.
   if (!loaded) {
     return (
-      <div className="global-notes-loading" role="status" data-testid="global-notes-loading">
-        {loadError ? (<><span>Could not load the scratchpad.</span><button type="button" className="btn btn-sm" onClick={retryLoad}>Retry</button></>) : 'Loading the scratchpad…'}
-      </div>
+      loadError
+        ? <UnavailableState size="pane" testId="global-notes-loading" title="Couldn't load the scratchpad" onRetry={retryLoad} />
+        : <LoadingState size="pane" testId="global-notes-loading" title="Loading the scratchpad…" />
     );
   }
   return (

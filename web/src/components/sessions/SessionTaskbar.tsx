@@ -22,6 +22,7 @@
  * The rules of what is a chip live in pages/sessionTaskbar.ts; this file only draws.
  */
 import '@/styles/session-taskbar.css';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
@@ -401,8 +402,8 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
           task or letter in them opens; the card's CSS keeps the reply to a few lines. */}
       {line && <div className="session-taskbar-card-line" data-testid="session-taskbar-card-line"><AgentText compact inline {...lineSource} text={line} /></div>}
       <div className="session-taskbar-card-reply" data-testid="session-taskbar-card-reply">
-        {lastReply === null ? <span className="session-taskbar-card-muted">Loading…</span>
-          : lastReply ? <AgentText compact inline sessionId={sessionId} text={lastReply} /> : <span className="session-taskbar-card-muted">No reply yet.</span>}
+        {lastReply === null ? <LoadingState size="row" title="Loading the last reply…" />
+          : lastReply ? <AgentText compact inline sessionId={sessionId} text={lastReply} /> : <EmptyState size="row" title="No reply yet" />}
       </div>
       <AnswerBox
         className="session-taskbar-card-composer"

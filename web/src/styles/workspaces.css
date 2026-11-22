@@ -343,7 +343,6 @@
   text-align: left;
 }
 .project-scripts-add:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-subtle); }
-.project-scripts-empty { margin-top: 10px; font-size: var(--font-size-md); color: var(--fg-muted); }
 .project-scripts-form {
   margin-top: 12px;
   padding: 12px;

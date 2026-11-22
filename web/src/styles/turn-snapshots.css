@@ -8,8 +8,6 @@
 .session-turns-view .turns-toolbar { justify-content: flex-start; }
 .session-turns-view .turns-toolbar .session-diff-toolbar-title { flex: 1 1 auto; min-width: 0; }
 
-.turns-empty p { margin: 0 0 6px; }
-
 .turns-strip {
   display: flex;
   align-items: center;

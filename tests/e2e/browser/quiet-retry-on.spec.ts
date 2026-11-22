@@ -42,7 +42,7 @@ test('a test browser sends a failed read once: the error and its Retry show', as
   const stub = await failFirstAgentSearch(page)
   await search(page)
   const panel = page.getByTestId('agent-search-panel')
-  await expect(panel.locator('.agent-search-error')).toBeVisible({ timeout: 10_000 })
+  await expect(panel.getByTestId('agent-search-error')).toBeVisible({ timeout: 10_000 })
   await page.waitForTimeout(3_000) // past both retry waits: nothing was sent again
   expect(stub.calls).toBe(1)
 })
@@ -53,6 +53,6 @@ test('with the retry on, as in a person\'s browser, the same 502 is retried and 
   await search(page)
   const panel = page.getByTestId('agent-search-panel')
   await expect(panel.locator(`.agent-search-row[data-task-id="${TASK_ID}"]`)).toBeVisible({ timeout: 15_000 })
-  await expect(panel.locator('.agent-search-error')).toHaveCount(0)
+  await expect(panel.getByTestId('agent-search-error')).toHaveCount(0)
   expect(stub.calls).toBe(2)
 })

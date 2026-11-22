@@ -43,7 +43,7 @@ test('first open shows the latest preview while the ten-turn refresh is still he
     await expect(panel).toContainText('Newest preview answer');
     expect(pageErrors).toEqual([]);
     await expect.poll(() => fullReads).toBeGreaterThan(0);
-    await expect(panel.getByText('Loading remote session...', { exact: true })).toHaveCount(0);
+    await expect(panel.getByText('Loading conversation from its machine…', { exact: true })).toHaveCount(0);
     await expect(panel.locator('.chat-input-textarea')).toBeEnabled();
     // The first paint must precede completion, not merely make the same full fetch faster.
     expect(held.length).toBeGreaterThan(0);

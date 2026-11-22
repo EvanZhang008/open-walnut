@@ -4,6 +4,7 @@
  * the View page (every view, a hairline between the bar's tabs and the rest).
  * Presentational; PanelMenu (FilterMenu.tsx) wires them to DisplayMenuProps.
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { ICON_CHECK } from '../common/Icons';
 import { DisclosureChevron } from '@/components/controls';
@@ -200,7 +201,7 @@ export function DisplayViewsPage({ views, active, query, onPick, onBack, onExitT
     <div className="fb-page" data-filter-dim="view" data-view-group="Show">
       {head}
       <div ref={listRef} className="fb-list-rows dm-views" role="group" aria-label="Views" onKeyDown={onKeyDown}>
-        {first.length === 0 && more.length === 0 && <div className="fb-empty">{`No view matches "${query.trim()}"`}</div>}
+        {first.length === 0 && more.length === 0 && <EmptyState size="row" testId="fb-empty" title={`No view matches “${query.trim()}”`} />}
         {first.map(row)}
         {first.length > 0 && more.length > 0 && <div className="dm-flyout-sep" aria-hidden="true" />}
         {more.map(row)}

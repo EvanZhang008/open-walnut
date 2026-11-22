@@ -36,6 +36,7 @@ import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 import { MicInput } from '@/components/common/BoxMic';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -379,12 +380,17 @@ export function AskWalnutDrawer({
             ? <div className="ask-walnut-drawer-label" role="separator">Quick questions</div>
             : <div className="ask-walnut-drawer-sep" role="separator" aria-hidden="true" />)}
           {rows.length === 0 && !loading && !main && !query.trim() && (
-            <p className="ask-walnut-drawer-empty">No quick questions{forAgent} yet.</p>
+            <EmptyState size="row" testId="ask-walnut-drawer-empty" title={`No quick questions${forAgent} yet`} />
           )}
           {/* role=status: a screen reader typing in the search box hears when the
               list filtered down to nothing. */}
           {query.trim() && !loading && visible.length === 0 && !mainMatches && (
-            <p className="ask-walnut-drawer-empty" role="status" data-testid="ask-walnut-search-empty">No quick questions match &ldquo;{query.trim()}&rdquo;.</p>
+            <EmptyState
+              size="row"
+              testId="ask-walnut-search-empty"
+              title={`No quick questions match \u2018${query.trim()}\u2019`}
+              action={{ label: 'Clear search', onClick: () => setQuery('') }}
+            />
           )}
           {visible.map((row) => (
             <DrawerItem
@@ -399,10 +405,7 @@ export function AskWalnutDrawer({
           {/* Until the board has loaded, an empty or short list is not the
               answer: say it is still coming rather than "no sessions yet". */}
           {loading && (
-            <p className="ask-walnut-drawer-empty ask-walnut-drawer-loading" role="status" data-testid="ask-walnut-drawer-loading">
-              <span className="spinner ask-walnut-pending-spinner" aria-hidden="true" />
-              Loading your quick questions…
-            </p>
+            <LoadingState size="row" testId="ask-walnut-drawer-loading" title="Loading your quick questions…" />
           )}
         </div>
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { useInRouterContext, useNavigate } from 'react-router-dom';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import {
   SESSION_EFFORTS,
   DEFAULT_SESSION_EFFORT,
@@ -50,6 +51,12 @@ const CONTEXT_WARN_PCT = 90;
  *  value/resolvedModel carries the full ID, so derive the versioned name from
  *  it. Falls back to displayName when no version is derivable (legacy alias
  *  rows like 'opus', GPT rows whose displayName is already right). */
+/** The ACP list's empty line: a filter that matches nothing, or an engine that lists no model. */
+function acpEmptyLine(needle: string, engineName: string, inSession: boolean): string {
+  if (needle) return `No models match “${needle}”`;
+  return `${engineName} reports no models${inSession ? ' for this session' : ''}`;
+}
+
 export function catalogRowLabel(m: SessionModelCatalogEntry): string {
   const derived = formatModelName(m.resolvedModel ?? m.value);
   const versioned = /^(Opus|Sonnet|Haiku|Fable) \d/.test(derived) ? derived : null;
@@ -792,6 +799,7 @@ export function ModelPicker({
     },
   });
   const acpNeedle = acpQuery.trim();
+  const acpEmptyTitle = acpEmptyLine(acpNeedle, engineUi.displayName, !!sessionId);
   const acpFilterable = acpGrouped || acpAllFamilies.length > 8;
   const acpMatches = React.useMemo(() => {
     if (!acpNeedle) return null;
@@ -940,9 +948,9 @@ export function ModelPicker({
   const claudeDetailsBody = sessionId && (
         <div className="model-picker-details" data-testid="picker-live-details">
           {detailsPulling ? (
-            <div className="model-picker-details-loading">Pulling live details from the CLI… (can take ~15s — it tokenizes the full tool surface)</div>
+            <LoadingState size="row" title="Pulling live details from the CLI…" hint="This can take about 15 seconds: it counts the tokens of every tool." />
           ) : !details || (!details.contextUsage && !details.usage && !details.binaryVersion) ? (
-            <div className="model-picker-details-loading">Not available — session not live (or CLI too old).</div>
+            <UnavailableState size="row" title="Live details not available" hint="The session is not live, or its CLI is too old." />
           ) : (
             <>
               {details.contextUsage && (() => {
@@ -1108,29 +1116,18 @@ export function ModelPicker({
               )}
               {acpDefaultRow}
               {acpError && (
-                <div className="model-picker-status">
-                  <div>{acpListedFamilies.length ? `Couldn't refresh ${engineUi.displayName} models. Showing the last list: ${acpError}` : `Couldn't list ${engineUi.displayName} models: ${acpError}`}</div>
-                  {!sessionId && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary model-picker-retry"
-                      data-testid="acp-catalog-retry"
-                      title="Probe the engine again (bypasses the cached failure)"
-                      onClick={() => { acpRetryRef.current = true; setAcpRetryNonce((n) => n + 1); }}
-                    >
-                      Retry
-                    </button>
-                  )}
-                </div>
+                <UnavailableState
+                  size="row"
+                  title={acpListedFamilies.length ? `Couldn't refresh ${engineUi.displayName} models` : `Couldn't list ${engineUi.displayName} models`}
+                  hint={acpListedFamilies.length ? `Showing the last list. ${acpError}` : acpError}
+                  // Retry probes the engine again, past the cached failure.
+                  action={!sessionId ? { label: 'Retry', testId: 'acp-catalog-retry', tooltip: 'Probe the engine again (bypasses the cached failure)', onClick: () => { acpRetryRef.current = true; setAcpRetryNonce((n) => n + 1); } } : undefined}
+                />
               )}
               {acpLoading ? (
-                <div className="model-picker-status">Loading {engineUi.displayName} models…</div>
+                <LoadingState size="row" title={`Loading ${engineUi.displayName} models…`} testId="model-picker-loading" />
               ) : acpListedFamilies.length === 0 ? (
-                !acpError && <div className="model-picker-status">
-                  {acpNeedle
-                    ? `No models match “${acpQuery.trim()}”.`
-                    : `No ${engineUi.displayName} models ${sessionId ? 'reported by this session' : 'reported by the engine'}.`}
-                </div>
+                !acpError && <EmptyState size="row" title={acpEmptyTitle} />
               ) : (
                 <>
                   {acpListedFamilies.map((fam) => {

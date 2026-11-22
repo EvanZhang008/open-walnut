@@ -10,7 +10,7 @@ import { ICON_INFO } from '@/components/common/Icons';
 export function FileAskNotice({ text, onClose }: { text: string; onClose: () => void }) {
   return (
     <CornerSlot order={CORNER_ORDER.fileAsk} className="corner-slot-file-ask">
-      <NoticeCard className="fv-ask-notice" role="status" testId="file-ask-notice" avatar={{ glyph: ICON_INFO, tone: 'warn' }} who="Ask here" status={{ tone: 'warn', text: 'No card opened' }} onClose={onClose}>
+      <NoticeCard className="fv-ask-notice" role="status" testId="file-ask-notice" avatar={{ glyph: ICON_INFO, tone: 'warn' }} who="Ask here" status={{ tone: 'warn', text: 'No card opened' }} onClose={onClose}>{/* empty-state-ok: a notice card's status chip */}
         {/* Whole, never cut: it says why the press did nothing. */}
         <div className="fv-ask-notice-text">{text}</div>
       </NoticeCard>

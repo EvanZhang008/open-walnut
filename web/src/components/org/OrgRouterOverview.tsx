@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '@/api/client';
 import { timeAgo } from '@/utils/time';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export interface RouterSummary {
   areaId: string;
@@ -161,7 +162,9 @@ export function OrgRouterOverview({ routerId, title, links, paused }: { routerId
   if (!s) {
     return (
       <section className="org-router-overview" data-testid="org-router-overview" data-loading="true">
-        <p className="org-router-hint">{failed ? 'Could not read this router\'s state. It retries every minute.' : 'Reading its state…'}</p>
+        {failed
+          ? <UnavailableState size="row" title="Could not read this router's state" hint="It retries every minute." />
+          : <LoadingState size="row" title="Reading its state…" />}
       </section>
     );
   }

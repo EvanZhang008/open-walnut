@@ -432,11 +432,12 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await wifiRow.getByTestId('devices-remove').click()
   await wifiRow.getByTestId('devices-remove-confirm').click()
   await expect.poll(() => deletes).toEqual(['DELETE /api/devices/Test%20phone'])
-  await expect(wifi.getByTestId('way-devices-wifi')).toContainText('No phone is paired with this Mac yet.')
+  await expect(wifi.getByTestId('way-devices-wifi')).toContainText('No phone is paired with this Mac yet')
   await expect(wifi.getByTestId('way-pair-wifi')).toBeVisible()
   // All devices pairs nothing on this Mac: its empty list points at the way tabs.
   const all = await backToDevices(page)
-  await expect(all).toContainText('No phone has the Walnut app signed in yet. Pair one on the tab of the way it will use.')
+  await expect(all.getByTestId('devices-phones-empty')).toContainText('No phone has the Walnut app signed in yet')
+  await expect(all.getByTestId('devices-phones-empty')).toContainText('Pair one on the tab of the way it will use.')
   await expect(all.getByTestId('way-pair-all')).toHaveCount(0)
 })
 
@@ -450,7 +451,7 @@ test('Remote Hosts: Add host lives in the header, the empty state says so', asyn
     route.fulfill({ status: 202, json: { started: [], refreshing: [] } }))
   await openSettings(page)
   await clickNav(page, 'remote-hosts')
-  await expect(page.locator('#remote-hosts')).toContainText('No remote hosts yet.')
+  await expect(page.locator('#remote-hosts')).toContainText('No remote hosts yet')
   await expect(page.locator('#remote-hosts .settings-pane-header').getByTestId('remote-hosts-add')).toBeVisible()
   await page.locator('#remote-hosts .settings-pane-header').getByTestId('remote-hosts-add').click()
   await page.getByRole('menuitem', { name: /^Add an SSH host/ }).click()

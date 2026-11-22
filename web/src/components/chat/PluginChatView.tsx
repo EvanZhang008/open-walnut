@@ -3,7 +3,7 @@ import type { ImageAttachment } from '@/api/chat'
 import { ChatInput } from '@/components/chat/ChatInput'
 import { ChatMessage } from '@/components/chat/ChatMessage'
 import { ChatPanel } from '@/components/chat/ChatPanel'
-import { LoadingSpinner } from '@/components/common/LoadingSpinner'
+import { EmptyState, LoadingState } from '@/components/common/EmptyState'
 import { useChat } from '@/hooks/useChat'
 import type { ChatViewProps } from '@/plugins/types'
 // The verdict lives next to the latch it decides (and is graded without a DOM there): `autoSend`
@@ -42,7 +42,7 @@ export function PluginChatView({
   draftStorageKey,
   title = 'Chat',
   placeholder = 'Message this agent…',
-  emptyText = 'Start a conversation.',
+  emptyText,
   transformMessage,
   autoSend,
   onAutoSent,
@@ -123,12 +123,18 @@ export function PluginChatView({
         )}
       </div>
       {!conversationId || chat.isLoading ? (
-        <div className="plugin-chat-view-loading"><LoadingSpinner /></div>
+        <LoadingState size="pane" title="Loading this conversation…" testId="plugin-chat-view-loading" />
       ) : (
         <>
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
             {chat.messages.length === 0 && !chat.isStreaming && (
-              <div className="plugin-chat-view-empty">{emptyText}</div>
+              // A plugin's own words are its title; without them, the standard pair.
+              <EmptyState
+                size="pane"
+                testId="plugin-chat-view-empty"
+                title={emptyText ?? 'No messages yet'}
+                {...(emptyText ? {} : { hint: 'Send a message below to start.' })}
+              />
             )}
             {chat.messages.map((message) => (
               <ChatMessage

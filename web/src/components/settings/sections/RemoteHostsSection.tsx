@@ -46,6 +46,7 @@ import '@/styles/host-picker-settings.css';
 import '@/styles/host-status.css';
 import '@/styles/host-fleet.css';
 import '@/styles/remote-hosts.css';
+import { EmptyState } from '@/components/common/EmptyState';
 
 interface Props {
   config: Config;
@@ -298,7 +299,7 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
             {others.map((h) => (
               <FleetHostRow key={h.host} card={h} now={fleet.now} {...detailsOf(`fleet:${h.host}`, h.host)} boot={fleet.boot[h.host]} onBootStart={() => fleet.bootStart(h.host)} />
             ))}
-            {empty && <SettingsRow label="No remote hosts yet." help="Add host, at the top of the page, adds one." />}
+            {empty && <EmptyState title="No remote hosts yet" hint="Add host, at the top of the page, adds one." />}
             {network.loadError && !network.net && <SettingsRow state="warning" label="Could not read the machines that joined with a link" help={network.loadError} />}
             {network.net?.error && <SettingsRow state="warning" data-testid="host-network-sync-error" label="Machines that joined with a link" help={network.net.error} />}
           </SettingsGroup>

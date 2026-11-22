@@ -16,6 +16,7 @@ import { addCatalogLibrary, drawingLibraryApi, searchCatalog, tabLibrary, type C
 import { OutsidePress } from './drawing-overlay';
 import { drawingErrorMessage } from './drawing-api';
 import { ICON_CLOSE } from '../common/Icons';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export interface LibraryBrowserProps {
   onClose(): void;
@@ -100,14 +101,13 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
         </header>
         <div className="drawing-library-body">
           {error && (
-            <div className="drawing-library-note" role="alert">
-              <span>{error}</span>
-              <button type="button" className="drawing-quiet-button" onClick={load}>Try again</button>
-            </div>
+            <UnavailableState size="section" title="Couldn't load the libraries" detail={error} onRetry={load} retryLabel="Try again" />
           )}
-          {!error && items === null && <p className="drawing-library-note" role="status">Loading libraries…</p>}
+          {!error && items === null && <LoadingState size="section" title="Loading libraries…" />}
           {stale && <p className="drawing-library-note" role="status">The catalog site is not answering, so this is the last copy Walnut saw</p>}
-          {items && shown.length === 0 && <p className="drawing-library-note">No library matches “{query}”</p>}
+          {items && shown.length === 0 && (query.trim()
+            ? <EmptyState size="section" title={`No library matches “${query.trim()}”`} action={{ label: 'Clear search', onClick: () => setQuery('') }} />
+            : <EmptyState size="section" title="No libraries in the catalog" />)}
           {items && shown.length > 0 && (
             <ul className="drawing-library-list">
               {shown.map((item) => {

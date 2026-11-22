@@ -12,6 +12,7 @@ import { memo, type PointerEvent, type MouseEvent } from 'react';
 import type { FilterDim } from './filter-bar-types';
 import { hiddenByText, type HiddenReason } from './filter-predicate';
 import { ICON_CLOSE } from '../common/Icons';
+import { EmptyState } from '../common/EmptyState';
 
 export interface TodoFilterEmptyProps {
   onClear(): void;
@@ -19,12 +20,12 @@ export interface TodoFilterEmptyProps {
 
 export const TodoFilterEmpty = memo(function TodoFilterEmpty({ onClear }: TodoFilterEmptyProps) {
   return (
-    <div className="todo-filter-empty" data-testid="todo-filter-empty" role="status">
-      <div className="todo-filter-empty-title">No tasks match these filters</div>
-      <button type="button" className="todo-filter-empty-clear" onClick={onClear}>
-        Clear filters
-      </button>
-    </div>
+    <EmptyState
+      testId="todo-filter-empty"
+      title="No tasks match these filters"
+      hint="Clear them to see every task in this tab."
+      action={{ label: 'Clear filters', onClick: onClear }}
+    />
   );
 });
 

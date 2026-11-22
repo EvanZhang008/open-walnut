@@ -14,6 +14,7 @@ import { RobotIcon } from './pw-icons'
 import { ago } from './passwords-model'
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel'
 import { Radio } from '@/components/controls'
+import { EmptyState, LoadingState } from '@/components/common/EmptyState'
 
 export const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }> = [
   { value: 'allow', label: 'Any', help: 'Agents see the list and use what they need. Items marked sensitive still ask you; items set to never stay never.' },
@@ -137,8 +138,13 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
 
       <div className="pw-card" data-testid="pw-agent-log">
         <div className="pw-f-label pw-card-label">Recent</div>
-        {log === null && <p className="pw-hint">Loading…</p>}
-        {log?.length === 0 && <p className="pw-hint">No agent has asked for anything yet. A task asks with <code>walnut pass</code> or the password ops, and you approve it here, on your Mac, or on your phone.</p>}
+        {log === null && <LoadingState title="Loading agent activity…" />}
+        {log?.length === 0 && (
+          <EmptyState
+            title="No agent has asked for anything yet"
+            hint={<>A task asks with <code>walnut pass</code> or the password ops, and you approve it here, on your Mac, or on your phone.</>}
+          />
+        )}
         {log?.map((e, i) => {
           const it = e.itemId ? byId.get(e.itemId) : undefined
           const l = line(e)

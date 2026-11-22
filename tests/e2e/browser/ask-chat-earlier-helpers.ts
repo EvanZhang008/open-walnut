@@ -101,10 +101,10 @@ export async function oldChatOpensWithItsHistory(page: Page, engine: string): Pr
   const block = session.locator('[data-testid="chat-earlier"]')
   await expect(block).toBeVisible({ timeout: 20_000 })
   await expect(block.locator('.chat-earlier-label')).toHaveText('Earlier in this chat')
-  // The blank page this replaces said exactly this.
-  await expect(session.getByText('No conversation history found')).toHaveCount(0)
+  // The blank page this replaces said "No conversation history found" (its words are now these).
+  await expect(session.getByText('No messages yet')).toHaveCount(0)
   // …or, for a warm session with no transcript file, this: false over a readable chat.
-  await expect(session.getByText('History unavailable')).toHaveCount(0)
+  await expect(session.getByText("Can't show this conversation's history")).toHaveCount(0)
   await expect(block.locator('.chat-earlier-divider')).toHaveText('This session')
 
   // Ten recent turns first, with twenty older turns one click away.

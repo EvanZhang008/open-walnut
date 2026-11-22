@@ -72,10 +72,3 @@
   outline: none;
 }
 
-.session-app-pane-empty {
-  padding: 24px 18px;
-  font-size: var(--font-size-sm);
-  line-height: 1.6;
-  color: var(--fg-muted);
-  max-width: 46em;
-}

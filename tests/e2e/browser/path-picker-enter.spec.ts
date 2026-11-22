@@ -102,8 +102,9 @@ test('(i) Enter on a trailing-slash folder uses the folder, not its first child'
   await expect(input(page)).toHaveValue(`${existing}/inner/`)
   await expect(picker(page)).toBeVisible()
   // An empty folder: its note, plus the hint that says what Enter does.
-  await expect(list.locator('.sps-live-note')).toContainText('No subdirectories')
-  await expect(list.locator('.sps-empty')).toHaveText('No matches. Press Enter to use this path.')
+  await expect(list.getByTestId('sps-live-note')).toContainText('No subdirectories')
+  await expect(list.getByTestId('sps-empty').locator('.empty-state-title')).toHaveText('No matches')
+  await expect(list.getByTestId('sps-empty').locator('.empty-state-hint')).toHaveText('Press Enter to use this path.')
   await input(page).press('Enter')
   await expect(picker(page)).toBeHidden()
   await expectPill(panel, path.join(existing, 'inner'))
@@ -115,7 +116,8 @@ test('(ii) Enter on a folder that does not exist takes the create row; the launc
   await input(page).fill(fresh)
   const list = picker(page).locator('.sps-path-list')
   await expect(list.locator('.sps-create-row')).toContainText(path.basename(fresh))
-  await expect(list.locator('.sps-empty')).toHaveText('Folder does not exist. Press Enter to create it and start here.')
+  await expect(list.getByTestId('sps-empty').locator('.empty-state-title')).toHaveText('Folder does not exist')
+  await expect(list.getByTestId('sps-empty').locator('.empty-state-hint')).toHaveText('Press Enter to create it and start here.')
   await expect(picker(page).locator('.sps-status-btn.sps-status-missing')).toBeVisible()
   await picker(page).screenshot({ path: `${SHOTS}/enter-missing-create.png` })
 

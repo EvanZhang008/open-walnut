@@ -29,6 +29,7 @@ import { freshnessWords, type BriefFreshness } from '@open-walnut/brief-fresh';
 import { applyBriefDecorations, applyBriefMoves, type BriefMoveView } from './org-brief-model';
 import { BRIEF_RENDER, useBriefFileOpener } from './useBriefFileOpener';
 import '@/styles/org-brief.css';
+import { EmptyState } from '@/components/common/EmptyState';
 
 interface Props {
   owner: Task | undefined;
@@ -111,7 +112,7 @@ export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: P
   if (!brief?.text || !html) {
     return (
       <div className="org-brief is-empty" data-testid="org-brief">
-        <p className="org-muted">No brief yet. {name} writes one when its next turn ends.</p>
+        <EmptyState size="row" title="No brief yet" hint={`${name} writes one when its next turn ends.`} />
       </div>
     );
   }

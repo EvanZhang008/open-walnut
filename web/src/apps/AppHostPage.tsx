@@ -1,4 +1,5 @@
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { LoadingState } from '@/components/common/EmptyState'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { PluginAppPage } from '@/pages/PluginAppPage'
 import { PluginBounds } from '@/plugins/PluginBounds'
@@ -38,10 +39,7 @@ export function AppHostPage() {
     if (!runtime.ready || runtime.loading || catalog.loadingWebviews) {
       return (
         <div className="plugin-app-page" data-testid="plugin-app-page">
-          <div className="plugin-app-loading">
-            <div className="plugin-app-spinner" />
-            <span>Loading apps…</span>
-          </div>
+          <LoadingState size="pane" title="Loading apps…" />
         </div>
       )
     }

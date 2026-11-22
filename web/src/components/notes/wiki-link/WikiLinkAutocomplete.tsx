@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { EmptyState } from '@/components/common/EmptyState';
 import type { Editor } from '@tiptap/core';
 import type { WikiLinkState } from './WikiLinkExtension';
 import type { NoteListItem } from '@/api/notes-v2';
@@ -127,7 +128,7 @@ export function WikiLinkAutocomplete({
       }}
     >
       {filtered.length === 0 && !showCreateOption ? (
-        <div className="notes-wikilink-empty">No notes found</div>
+        <EmptyState size="row" title="No notes found" />
       ) : (
         <>
           {filtered.map((note, i) => (

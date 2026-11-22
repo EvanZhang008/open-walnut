@@ -132,14 +132,14 @@ test('grants read in words under their own host, and Revoke drops one', async ({
   await expect(rows).toHaveCount(1)
   await part.getByRole('button', { name: `Revoke CI health on ${REMOTE_NAME}` }).click()
   await expect(rows).toHaveCount(0)
-  await expect(part).toContainText('No task from another host has used it yet.')
+  await expect(part).toContainText('No task from another host has used it yet')
   await part.screenshot({ path: `${SHOTS}/${engine}-2-empty.png`, scale: 'css' })
 
   // Back on This Mac: its one grant revoked the same way.
   const macAgain = await thisHost(page, '__local__')
   await macAgain.getByRole('button', { name: 'Revoke Run the iOS tests on This Mac' }).click()
   await expect(macAgain.locator('[data-grant-id]')).toHaveCount(0)
-  await expect(macAgain).toContainText('No task from another host has used it yet.')
+  await expect(macAgain).toContainText('No task from another host has used it yet')
   expect(deleted).toEqual(['DELETE xg-bbbb', 'DELETE xg-cccc', 'DELETE xg-aaaa'])
   expect(errors).toEqual([])
 })

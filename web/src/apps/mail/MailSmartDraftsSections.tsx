@@ -18,6 +18,7 @@
  */
 import type { ReactNode } from 'react';
 import type { MailAccountDto, MailDraftDto, MailMessageDto } from '@/api/mail';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { serverDraftsMailbox, type MailSnapshot } from './mail-store';
 
@@ -124,9 +125,9 @@ function OnTheServer({ account, rows, loading, renderRow }: {
         count={rows.length}
       />
       {rows.length === 0 ? (
-        <p className="mail-pane-empty" data-testid="mail-server-drafts-empty">
-          {loading ? 'Loading…' : `Nothing in the Drafts folder of ${nameOf(account)}.`}
-        </p>
+        loading
+          ? <LoadingState title="Loading server drafts…" testId="mail-server-drafts-empty" />
+          : <EmptyState title={`Nothing in the Drafts folder of ${nameOf(account)}`} testId="mail-server-drafts-empty" />
       ) : rows.map(renderRow)}
     </>
   );

@@ -411,7 +411,6 @@
   background: var(--card-bg); color: var(--fg);
   border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
-.global-notes-loading { display: flex; align-items: center; gap: 8px; padding: 12px 2px; font-size: var(--font-size-md); color: var(--fg-secondary); }
 .home-companion-scratchpad .global-notes-header { justify-content: flex-start; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .home-companion-scratchpad .global-notes-label { font-size: var(--font-size-md); font-weight: 700; color: var(--fg); text-transform: none; letter-spacing: 0; }
 .home-companion-scratchpad .global-notes-body { padding: 8px 14px; }
@@ -546,17 +545,6 @@
 /* The toolbar and the filter row share one container-query scope; the panel
    root keeps container-type normal (its fixed drag overlays need the viewport). */
 .fb-toolbar-scope { flex-shrink: 0; }
-.todo-filter-empty {
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 28px 12px; text-align: center; flex-shrink: 0;
-}
-.todo-filter-empty-title { font-size: var(--font-size-md); color: var(--fg); }
-.todo-filter-empty-clear {
-  font: inherit; font-size: var(--font-size-sm); padding: 4px 12px; border-radius: var(--radius-full); cursor: pointer;
-  border: 1px solid var(--border); background: var(--bg-hover); color: var(--fg);
-}
-.todo-filter-empty-clear:hover { border-color: var(--accent); }
-.todo-filter-empty-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .todo-filter-footer { color: var(--fg-secondary); }
 .task-filter-override-show {
   font: inherit; font-size: inherit; margin-left: 4px; padding: 0 2px; border: 0; border-radius: var(--radius-full);

@@ -6,6 +6,7 @@
  * Enter adds a filter or picks a view); this component draws the rows and
  * handles clicks (a click toggles a filter hit, so it can be removed too).
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { ICON_CHECK } from '../common/Icons';
 import { pickValue } from './filter-bar-model';
 import type { FilterSearchHit } from './filter-bar-search';
@@ -98,7 +99,7 @@ export function FilterSearchResults({
         );
       })}
       {items.length === 0 && (
-        <div className="fb-empty">{`Nothing matches "${query.trim()}"`}</div>
+        <EmptyState size="row" role="presentation" testId="fb-empty" title={`Nothing matches “${query.trim()}”`} />
       )}
     </div>
   );

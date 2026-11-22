@@ -145,7 +145,7 @@ test.describe('Workflow overview at real fan-out density', () => {
     await expect(card.locator('.wf-gnode-head')).toHaveCount(1)
     await expect(card.locator('.wf-gnode-failed')).toHaveCount(1)
     await card.locator('.wf-search').fill('no matching agent')
-    await expect(card.locator('.wf-empty')).toContainText('No matching agents')
+    await expect(card.getByTestId('wf-empty')).toContainText('No matching agents')
     await card.locator('.wf-search').fill('')
     await expect(card.locator('.wf-gnode-head')).toHaveCount(75)
     await card.locator('.wf-script-toggle').click()

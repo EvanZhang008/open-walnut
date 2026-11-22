@@ -63,6 +63,7 @@ import type { ImageAttachment } from '@/api/chat';
 import {
   areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export type OrgTab = 'board' | 'team' | 'chat';
 
@@ -164,7 +165,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   onPick: (item: TeamColumn['items'][number]) => void;
   emptyText: string;
 }) {
-  if (!columns.length) return <p className="org-empty-note" data-testid="org-team-empty">{emptyText}</p>;
+  if (!columns.length) return <EmptyState size="section" title={emptyText} testId="org-team-empty" />;
   return (
     <div className="org-team" data-testid="org-team">
       {columns.map((c) => (
@@ -226,10 +227,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const routerAreaId = routerTask?.router_area_id || '';
   const routerAreaNames = useRouterAreaNames(routerAreaId ? [routerAreaId] : []);
   const routerAreaLabel = routerAreaId ? (routerAreaNames[routerAreaId] || areaIdWords(routerAreaId)) : 'its area';
-  const routerEmptyChat = useMemo(
-    () => (isRouterNode ? <p className="text-muted" data-testid="org-router-empty-chat">{routerEmptyChatLine(routerAreaLabel)}</p> : undefined),
-    [isRouterNode, routerAreaLabel],
-  );
+  // A string: the chat draws it as its own pane state (title, then hint).
+  const routerEmptyChat = isRouterNode ? routerEmptyChatLine(routerAreaLabel) : undefined;
   const columns = useMemo(
     () => (row.kind === 'main' ? mainTeamColumns(rows) : isRouter ? [] : teamColumns(row, tasks)),
     [row, rows, tasks, isRouter],
@@ -449,7 +448,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const renderTeam = () => (
     <TeamBoard
       columns={columns}
-      emptyText={row.kind === 'main' ? 'No project has open work yet.' : 'Nothing open here.'}
+      emptyText={row.kind === 'main' ? 'No project has open work yet' : 'Nothing open here'} // empty-state-ok: title handed to EmptyState in TeamBoard
       // A project's row is a node of this page (the page's own navigation); a task opens beside the page.
       onPick={(it) => { if (it.rowKey) onSelect(it.rowKey); else openTask(it.id); }}
     />

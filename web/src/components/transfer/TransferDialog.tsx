@@ -23,6 +23,7 @@ import {
 import { TransferLaunchRows } from './TransferLaunchRows';
 import { TransferChoice } from './TransferChoice';
 import { Checkbox } from '@/components/controls';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/transfer.css';
 import { ICON_CLOSE } from '../common/Icons';
 
@@ -88,15 +89,12 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
   let body: ReactNode;
   if (loadError) {
     body = (
-      <div className="xfer-status xfer-status-error" role="alert">
-        <span>{loadError}</span>
-        <button type="button" className="btn" onClick={onRetryLoad}>Try again</button>
-      </div>
+      <UnavailableState title="Couldn't read where this task can go" detail={loadError} onRetry={onRetryLoad} retryLabel="Try again" />
     );
   } else if (!options) {
-    body = <div className="xfer-status">Reading where this task can go…</div>;
+    body = <LoadingState title="Reading where this task can go…" />;
   } else if (!source || !form) {
-    body = <div className="xfer-status">This task has no conversation to move.</div>;
+    body = <EmptyState title="This task has no conversation to move" />;
   } else {
     body = (
       <fieldset className="xfer-fields" disabled={busy}>

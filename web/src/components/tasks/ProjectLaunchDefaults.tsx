@@ -134,7 +134,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
           title={engine ? undefined : 'Pick an engine for this project first: a model belongs to one engine'}
           onChange={(e) => { void save({ default_model: e.target.value || null }); }}
         >
-          <option value="">{!engine ? 'Engine default' : models.loading ? 'Loading models…' : `${engineLabel} default`}</option>
+          <option value="">{!engine ? 'Engine default' : models.loading ? 'Loading models…' : `${engineLabel} default`}</option>{/* empty-state-ok: option label */}
           {engine && modelRows.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
         {/* An engine's own default model is no global setting: no tag then, the row keeps its place. */}

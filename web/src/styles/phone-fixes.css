@@ -259,16 +259,6 @@
   html body .notification-panel.nfc-panel-wide .nfc-detail-toggle {
     min-height: 44px;
   }
-  html body .notification-panel.nfc-panel-wide .notification-feed-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 40vh;
-    padding: 24px 16px;
-    text-align: center;
-    color: var(--fg-secondary);
-    font-size: 16px;
-  }
   html body .notification-panel.nfc-panel-wide .nfc-rail {
     scrollbar-width: none;
   }
@@ -516,15 +506,6 @@
   }
   .app-shell-navigation .cal-toolbar .cal-view-switch {
     margin-left: auto;
-  }
-  .app-shell-navigation .cal-empty-day {
-    margin: 0;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    color: var(--fg-secondary);
-    font-size: var(--font-size-lg);
-    line-height: 20px;
-    text-align: center;
   }
 }
 

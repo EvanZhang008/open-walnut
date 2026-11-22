@@ -532,7 +532,7 @@ function ReplySenderChip({ sender, addressedBy }: {
     ? 'Reading the message for the sender\'s address'
     : state === 'provider'
       ? `${addressedBy} sends a reply to the original sender itself; it gave Walnut no address for them`
-      : 'No address is known for the sender. Add one to send this reply';
+      : 'No address is known for the sender. Add one to send this reply'; // empty-state-ok: tooltip
   return (
     <span
       className={`mail-chip mail-chip-implied${state === 'missing' ? ' invalid' : ''}`}

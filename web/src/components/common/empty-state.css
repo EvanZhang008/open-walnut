@@ -1,0 +1,253 @@
+/* The one look of empty, loading and unavailable states (EmptyState.tsx; standard.md,
+   "Empty, loading and unavailable states"). Tokens and the standard's type sizes only:
+   15 px pane titles, 13 px body, 12 px secondary; spacing on the 4 px grid. */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1.45;
+}
+
+.empty-state-words {
+  display: flex;
+  flex-direction: column;
+  align-items: inherit;
+  gap: 4px;
+  max-width: 44ch;
+  min-width: 0;
+}
+
+.empty-state-title {
+  color: var(--fg-secondary);
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.empty-state-hint {
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+  /* Lines of even length: no lone last word ("... as you / go."). */
+  text-wrap: balance;
+}
+
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--fg-muted);
+}
+
+.empty-state-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* The page's warning colour, read at the root: a surface that tones its own --warning down (the
+   chat palette greys it) still draws a failure the same as everywhere else. */
+:root { --empty-state-warning: var(--warning); }
+
+.empty-state[data-kind='unavailable'] .empty-state-icon {
+  color: var(--empty-state-warning);
+}
+
+.empty-state-spinner {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: inherit;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.empty-state-extra {
+  display: flex;
+  flex-direction: column;
+  align-items: inherit;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* A whole pane or page: centred in the space it has. */
+.empty-state[data-size='pane'] {
+  flex: 1 1 auto;
+  min-height: 160px;
+  padding: 48px 24px;
+  gap: 12px;
+}
+
+.empty-state[data-size='pane'] .empty-state-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.empty-state[data-size='pane'] .empty-state-title {
+  color: var(--fg);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.empty-state[data-size='pane'] .empty-state-hint {
+  font-size: var(--font-size-md);
+}
+
+/* One line inside a list, a menu or a picker. */
+.empty-state[data-size='row'] {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: var(--font-size-sm);
+}
+
+.empty-state[data-size='row'] .empty-state-words {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  max-width: none;
+}
+
+.empty-state[data-size='row'] .empty-state-title {
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+
+.empty-state[data-size='row'] .empty-state-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.empty-state[data-size='row'] .empty-state-actions,
+.empty-state[data-size='row'] .empty-state-extra {
+  margin-top: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-state-spinner { animation-duration: 2.4s; }
+}
+
+/* A key named in a hint ("Press ⌘K"). */
+/* Settings reads as a form of 44 px rows with hairlines between them, so a group's state is one
+   such row: left, 13 px, the row's own padding (2026-11-22 review: a centred "No voice recordings
+   yet" stood apart from its rows; settings N23: an empty group is a real 44 px row). */
+.settings-group > .empty-state:not([data-size='pane']),
+.settings-card-body > .empty-state:not([data-size='pane']) {
+  position: relative;
+  box-sizing: border-box;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 44px;
+  padding: 10px var(--settings-row-pad-x, 16px);
+  gap: 8px;
+  text-align: left;
+  font-size: var(--font-size-md);
+}
+
+.settings-group > .empty-state:not([data-size='pane']) .empty-state-title,
+.settings-card-body > .empty-state:not([data-size='pane']) .empty-state-title {
+  font-size: var(--font-size-md);
+  font-weight: 400;
+}
+
+.settings-group > .empty-state:not([data-size='pane']) .empty-state-icon,
+.settings-card-body > .empty-state:not([data-size='pane']) .empty-state-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.settings-group > .empty-state[data-kind='empty']:not([data-size='pane']) .empty-state-icon,
+.settings-card-body > .empty-state[data-kind='empty']:not([data-size='pane']) .empty-state-icon {
+  display: none;
+}
+
+.settings-group > .empty-state:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x, 16px);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline, var(--border));
+  pointer-events: none;
+}
+
+/* The raw reason behind a failure, folded: plain words above, the exact text for whoever asks. */
+.empty-state-detail {
+  max-width: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+}
+
+.empty-state-detail > summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.empty-state-detail-text {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.empty-state kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius-sm) / 2);
+  background: var(--bg-secondary);
+  font-family: var(--font-mono, 'SF Mono', Menlo, monospace);
+  font-size: var(--font-size-xs);
+}
+
+/* Inside a card's answer row (ask-card.css orders its parts): a state line goes after the tools,
+   on a line of its own, like the row's other notes. */
+.ask-card-answer > .empty-state {
+  order: 5;
+  flex: 1 1 100%;
+}
+
+/* A phone: a finger's 44 px target for every next step (phone-fixes.spec.ts N22), and the phone's
+   reading sizes (15 px text, 13 px secondary). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .empty-state-actions > button {
+    min-height: 44px;
+    padding-inline: 16px;
+  }
+  .empty-state-title,
+  .empty-state[data-size='pane'] .empty-state-title { font-size: var(--font-size-lg); }
+  .empty-state-hint,
+  .empty-state[data-size='pane'] .empty-state-hint,
+  .empty-state[data-size='row'] .empty-state-title { font-size: var(--font-size-md); }
+}

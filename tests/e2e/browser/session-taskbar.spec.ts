@@ -391,7 +391,7 @@ test('the chips survive a reload, and a chip opens a card with the last reply', 
   await expect(card).toBeVisible()
   const reply = card.getByTestId('session-taskbar-card-reply')
   await expect(reply).not.toHaveText(/Loading/, { timeout: 15_000 })
-  await expect(reply).not.toHaveText('No reply yet.')
+  await expect(reply).not.toHaveText('No reply yet')
   await expect(card.getByTestId('session-taskbar-card-input')).toBeVisible()
 
   await page.keyboard.press('Escape')

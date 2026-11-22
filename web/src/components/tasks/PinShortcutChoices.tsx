@@ -22,6 +22,7 @@
  * before the hosts' document capture listeners and stops there, so one Escape closes the flyout
  * and the menu stays.
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
@@ -236,7 +237,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
           </button>
         );
       })}
-      {more.length === 0 && <div className="task-kebab-project-empty">Every tier is on the menu</div>}
+      {more.length === 0 && <EmptyState size="row" title="Every tier is on the menu" />}
       <div className="task-pin-flyout-sep" />
       <button
         type="button"

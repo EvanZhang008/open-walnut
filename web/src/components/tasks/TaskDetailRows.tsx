@@ -39,7 +39,7 @@ interface SessionRowProps {
 export function SessionRow({ sessionId, record, processStatus, isPlan, owner, onOpen }: SessionRowProps) {
   const title = record
     ? (record.title ? sessionDisplayName(record.title, owner ?? { project: record.project }) : 'Untitled session')
-    : 'Loading…';
+    : 'Loading…'; // empty-state-ok: a session row's title while its record loads
   const ago = record ? timeAgo(record.lastActiveAt || record.startedAt || '') : '';
   const running = processStatus === 'running';
   const tip = [title, PROCESS_LABELS[processStatus], record?.cwd ? shortCwd(record.cwd) : '']

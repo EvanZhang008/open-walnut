@@ -108,7 +108,6 @@ html body .wn-context-menu.rh-add-menu {
   padding: 2px var(--settings-row-pad-x, 14px) 16px var(--settings-row-indent, 36px);
   min-width: 0;
 }
-.rh-details-empty { margin: 0; font-size: var(--font-size-md); line-height: 17px; color: var(--fg-muted); }
 .rh-details-heading { margin: 0 0 -6px; font-size: var(--font-size-md); line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
 .rh-details .rh-host-detail { margin-top: 0; }
 .rh-readiness-block { display: flex; flex-direction: column; gap: 6px; min-width: 0; }

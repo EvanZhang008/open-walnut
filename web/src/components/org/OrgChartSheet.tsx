@@ -43,6 +43,7 @@ import { cardOf, ceoLine, dropPlan, nowLine, theVp, vpCards, type DropPlan, type
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
 import { ICON_CLOSE } from '../common/Icons';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** A question the sheet opens on: put `project` (a project row key) under `to`'s VP (a card key; null = its own). */
 export interface ChartStart {
@@ -345,7 +346,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
             </div>
           )}
           {cards.length === 0 && routers.length === 0 && (
-            <p className="org-empty" data-testid="org-chart-empty">No open work yet. Ask the CEO to start something, or make a VP or a project here.</p>
+            <EmptyState size="pane" title="No open work yet" hint="Ask the CEO to start something, or make a VP or a project here." testId="org-chart-empty" />
           )}
           <ul ref={vpsRef} className="oc-vps" data-testid="org-chart-vps">
             {cards.map((c) => {

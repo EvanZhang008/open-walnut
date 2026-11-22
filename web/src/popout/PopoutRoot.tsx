@@ -3,6 +3,7 @@ import type { ComponentType, ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { isPopoutView, loadPopoutView, loadedPopoutView } from './popout-views';
 import { setUpdateNoticeDock, useUpdateNoticeOccupied } from '@/components/common/update-notice-dock';
+import { UnavailableState } from '@/components/common/EmptyState';
 
 /**
  * Theme persistence — must stay in sync with web/src/hooks/useTheme.ts.
@@ -66,10 +67,12 @@ export function PopoutRoot() {
     content = <Suspense fallback={null}><View /></Suspense>;
   } else {
     content = (
-      <div className="popout-stub">
-        <h2>Unknown view</h2>
-        <code>{view || '(none)'}</code>
-      </div>
+      <UnavailableState
+        size="pane"
+        title="Unknown view"
+        hint={view ? <>This window asked for <code>{view}</code>, which this Walnut cannot show.</> : 'This window was opened without a view.'}
+        testId="popout-unknown-view"
+      />
     );
   }
 

@@ -5,7 +5,7 @@ import { RoutineComposer } from './RoutineComposer';
 import { RoutineForm } from './RoutineForm';
 import { RoutineRow } from './RoutineRow';
 import { changedSince, editKey, groupKeyOf, groupRoutines, keepShownOrder, routineHealth } from './routine-groups';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { discardDraft, draftKey, readDraft } from '@/utils/drafts';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { getRoutinesSnapshot, loadRoutines } from '@/stores/routines-store';
@@ -216,7 +216,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
     setEditing(undefined);
   }, []);
 
-  if (loading) return <LoadingSpinner />;
+  if (loading) return <LoadingState size="section" title="Loading routines…" />;
 
   const empty = routines.length === 0;
 
@@ -224,7 +224,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
     <div className={`routines-view${compact ? ' routines-view-compact' : ''}`}>
       <div className="routines-toolbar">
         <span className="routines-summary">
-          {empty ? 'No routines yet' : `${routines.length} ${routines.length === 1 ? 'routine' : 'routines'}`}
+          {empty ? 'No routines yet' : `${routines.length} ${routines.length === 1 ? 'routine' : 'routines'}`}{/* empty-state-ok: the toolbar's count label */}
           {failing > 0 && (
             <button type="button" className="routines-summary-failing" onClick={showFirstFailing} title="Show the first failing routine">
               {failing} failing
@@ -263,11 +263,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
       {error && <div className="cron-form-error">{error}</div>}
 
       {empty ? (
-        <div className="empty-state">
-          <div className="empty-state-icon">&#9889;</div>
-          <p>No routines yet</p>
-          <p className="text-sm mt-2">Describe what you want automated above</p>
-        </div>
+        <EmptyState size="section" title="No routines yet" hint="Describe what you want automated above." testId="routines-empty" />
       ) : (
         <div className="routine-groups routine-list" ref={listRef}>
           {groups.map((group) => {

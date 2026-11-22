@@ -368,7 +368,7 @@ test('C76: no matches says so, and Cancel closes the layer through history', asy
   const errors = await boot(page)
   await openSearch(page)
   await page.locator('.phone-search-input').fill('zzz nothing')
-  await expect(page.getByTestId('phone-search-layer').getByText('No matches.')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId('phone-search-layer').getByTestId('phone-search-empty')).toBeVisible({ timeout: 10_000 })
   const before = await page.evaluate(() => history.length)
   await page.locator('.phone-topbar').getByRole('button', { name: 'Cancel' }).tap()
   await expect(page.getByTestId('phone-search-layer')).toHaveCount(0)
@@ -577,7 +577,7 @@ for (const size of SIZES) {
       const line = page.getByTestId('cal-empty-day')
       if (chips === 0) {
         await expect(line).toBeVisible()
-        await expect(line).toHaveText(/^Nothing scheduled (today|on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2})\.$/)
+        await expect(line).toHaveText(/^Nothing scheduled (today|on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2})$/)
         found = true
       } else {
         await expect(line).toHaveCount(0)

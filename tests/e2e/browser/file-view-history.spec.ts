@@ -171,7 +171,7 @@ test('a file opened from a chat link is remembered by the Files chip (the report
   explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 10_000 })
   await expect(explorer.locator('.sfe-root-section').first()).toHaveAttribute('data-root-path', home)
-  await expect(explorer.locator('.sfe-preview-empty')).toHaveCount(0, { timeout: 15_000 })
+  await expect(explorer.getByTestId('sfe-preview-empty')).toHaveCount(0, { timeout: 15_000 })
   await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
 
   // 4. "go there automatically" — the tree expands from HOME through the file's ancestors so the

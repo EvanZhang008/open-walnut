@@ -12,7 +12,8 @@
  */
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { SettingsSection, SettingsGroup, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsSection, SettingsGroup } from '../SettingsSection';
+import { LoadingState } from '../../common/EmptyState';
 import { PHONES_CLOUD_PANE } from '../settings-way-panes';
 import { PRESS_MAX_MS } from '../inputs/press-keeps-target';
 import { PANE_TITLE, TabBar, usePhonesCloudView } from './cloud/PhonesCloudTabs';
@@ -70,7 +71,7 @@ export function PhonesCloudLanding() {
         <TabBar tabs={view.tabs} current={null} />
       </div>
       <SettingsGroup>
-        <SettingsLoadingRow>{view.now.title}</SettingsLoadingRow>
+        <LoadingState title={view.now.title} />
       </SettingsGroup>
     </SettingsSection>
   );

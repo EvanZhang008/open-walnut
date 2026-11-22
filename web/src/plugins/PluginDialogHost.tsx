@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useSt
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { wsClient } from '@/api/ws'
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { closeModalOverlays, ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay'
 import { overlayTabStops, useOverlayLayer } from '@/hooks/useOverlayLayer'
@@ -116,17 +117,17 @@ function PluginDialog({ request }: { request: PluginDialogRequest }) {
           </button>
         </header>
         <div className="plugin-dialog-body">
-          {unavailable ? <p role="alert">{unavailableReason.current === 'timeout' ? 'The dialog content did not finish loading. Close it and try again.' : unavailableReason.current === 'changed' ? 'This plugin changed or became unavailable. Close this dialog and open it again.' : unavailableReason.current === 'failed' ? 'The plugin could not load this dialog. Close it and try again.' : 'This dialog is unavailable. Its plugin may be disabled or no longer provide it.'}</p>
+          {unavailable ? <UnavailableState {...UNAVAILABLE_WORDS[unavailableReason.current ?? 'missing']} testId="plugin-dialog-unavailable" />
             : Component && entry ? (
               <PluginBoundary key={`${entry.key}:${entry.generation}`} pluginId={entry.pluginId} pluginName={entry.pluginName} resetKey={entry.generation}
-                fallback={<p role="alert">The plugin could not render this dialog. Close it and try again.</p>}>
+                fallback={<UnavailableState title="The plugin could not render this dialog" hint="Close it and try again." />}>
                 <Suspense fallback={<DialogLoading onTimeout={expireContent} />}>
                   <ModalOverlayOwner.Provider value={modalOwner}>
                     <DialogContent args={request.args} Component={Component} close={close} navigate={navigate} />
                   </ModalOverlayOwner.Provider>
                 </Suspense>
               </PluginBoundary>
-            ) : <p role="status">Loading plugin dialog...</p>}
+            ) : <LoadingState title="Loading plugin dialog…" />}
           {navigationError && <p role="alert">This dialog can only open paths within Walnut.</p>}
         </div>
       </div>
@@ -139,7 +140,15 @@ function DialogLoading({ onTimeout }: { onTimeout(): void }) {
     const timer = setTimeout(onTimeout, 30_000)
     return () => clearTimeout(timer)
   }, [onTimeout])
-  return <p role="status">Loading dialog content...</p>
+  return <LoadingState title="Loading dialog content…" />
+}
+
+/** Why a dialog cannot show, as a title and the next step. */
+const UNAVAILABLE_WORDS: Record<'changed' | 'failed' | 'missing' | 'timeout', { title: string; hint: string }> = {
+  timeout: { title: 'This dialog did not finish loading', hint: 'Close it and try again.' },
+  changed: { title: 'This plugin changed or became unavailable', hint: 'Close this dialog and open it again.' },
+  failed: { title: 'The plugin could not load this dialog', hint: 'Close it and try again.' },
+  missing: { title: 'This dialog is unavailable', hint: 'Its plugin may be disabled or no longer provide it.' },
 }
 
 /** A null-rendering slot must not leave an unexplained empty modal. */
@@ -161,5 +170,5 @@ function DialogContent({ args, Component, close, navigate }: {
     return () => observer.disconnect()
   }, [])
   return <><div ref={ref}><Component args={args} close={close} navigate={navigate} /></div>
-    {empty && <p role="status">The plugin has no dialog content to show.</p>}</>
+    {empty && <EmptyState title="The plugin has no dialog content to show" />}</>
 }

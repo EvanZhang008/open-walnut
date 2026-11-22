@@ -19,7 +19,7 @@
  *     Chromium, "Fetch is aborted" in WebKit);
  *   - a long history on a slow link that answers: the column keeps what it
  *     shows, says it is still loading from Cloud, and the history arrives,
- *     never "No conversation history found" or the stale banner meanwhile;
+ *     never "No messages yet" or the stale banner meanwhile;
  *   - the operator removes this Mac on the companion: the Cloud card stops
  *     saying "Connected".
  *
@@ -319,7 +319,7 @@ test('a long history on a slow link that answers: the column keeps what it shows
     while (Date.now() - t0 < 330_000) {
       const text = await column.innerText().catch(() => '')
       const at = Math.round((Date.now() - t0) / 1000)
-      if (text.includes('No conversation history found')) seen.push(`empty at ${at}s`)
+      if (text.includes('No messages yet')) seen.push(`empty at ${at}s`)
       if (text.includes('Showing cached history')) seen.push(`stale banner at ${at}s`)
       if (text.includes('Still loading this conversation from Cloud')) {
         if (!sawLoadingLine) await column.screenshot({ path: path.join(SHOTS, `silent-link-history-loading-${browserName}.png`) })

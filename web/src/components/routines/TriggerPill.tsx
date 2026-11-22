@@ -40,6 +40,7 @@ import { openSessionOnHome } from '@/utils/open-session';
 import '@/styles/routine-description.css';
 import { log } from '@/utils/log';
 import { badge } from '@/components/common/badge';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export interface TriggerPillProps {
   taskId: string | null | undefined;
@@ -220,12 +221,10 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
             onClick={() => setShowHistory((v) => !v)}
             data-testid="trigger-audit-toggle"
           >
-            {`History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`}
+            {`History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`}{/* empty-state-ok: the history toggle button's label */}
           </DisclosureButton>
         ) : (
-          <p className="trigger-jobs-fold-empty" data-testid="trigger-audit-toggle">
-            {clock ? 'No runs recorded yet' : 'No checks recorded yet'}
-          </p>
+          <EmptyState size="row" testId="trigger-audit-toggle" title={clock ? 'No runs recorded yet' : 'No checks recorded yet'} />
         )}
         {showHistory && history.length > 0 && (
           <ul className="trigger-audit-list" data-testid="trigger-audit-list">

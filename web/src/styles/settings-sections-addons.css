@@ -293,12 +293,6 @@ span.plugin-store-why {
 
 .settings-usage-via { color: var(--fg-muted); }
 
-.settings-usage-empty {
-  margin: 0;
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
-}
-
 /* The daily chart draws straight on the group: no card of its own (F10). */
 .settings-group .usage-chart-wrapper,
 .settings-group .usage-chart-placeholder {

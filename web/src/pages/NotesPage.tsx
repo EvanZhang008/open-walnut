@@ -16,8 +16,8 @@ import { useConversations } from '@/hooks/useConversations';
 import { NotesSessionChat } from '@/components/notes/NotesSessionChat';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { ICON_EXPAND } from '@/components/common/Icons';
+import { ICON_EXPAND, ICON_NOTE } from '@/components/common/Icons';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { openPopout } from '@/popout/openPopout';
 import { createNote, moveNote, treeFilePaths, fetchNoteContent, type NoteTreeNode } from '@/api/notes-v2';
 import { quickStartSession, fetchSession } from '@/api/sessions';
@@ -1101,8 +1101,8 @@ export function NotesPage() {
     </button>
   );
 
-  if (treeLoading) return <LoadingSpinner />;
-  if (treeError && tree.length === 0 && !activeTab) return <div className="empty-state"><p>Error: {treeError}</p><button type="button" onClick={() => void refreshTree()}>Retry</button></div>;
+  if (treeLoading) return <LoadingState size="pane" title="Loading notes…" />;
+  if (treeError && tree.length === 0 && !activeTab) return <UnavailableState size="pane" title="Couldn't load your notes" detail={treeError} onRetry={() => void refreshTree()} />;
 
   return (
     <div className={`notes-split-view${activeTab ? ' notes-has-active' : ''}${chatOpen ? ' notes-chat-open' : ''}`}>
@@ -1165,13 +1165,13 @@ export function NotesPage() {
           {activeTab?.kind === 'attachment' ? (
             <AttachmentPreview notePath={activeTab.path} findQuery={attachmentFind?.path === activeTab.path ? attachmentFind.query : undefined} />
           ) : holding ? (
-            <LoadingSpinner />
+            <LoadingState size="pane" title="Opening note…" />
           ) : !activeNotePath ? (
             <NotesEmptyState onNewNote={() => void handleNewNote('')} />
           ) : missing ? (
             <NoteMissingState path={activeNotePath} onCreate={() => { existedRef.current.delete(activeNotePath); createMissing(); }} onClose={() => handleCloseTab(activeNotePath)} />
           ) : contentLoading ? (
-            <LoadingSpinner />
+            <LoadingState size="pane" title="Loading note…" />
           ) : (
             // position:relative so the floating pop-out button anchors to the
             // editor pane's top-right (NotesEditorPanel owns its own header, so we
@@ -1238,10 +1238,11 @@ export function NotesPage() {
                   return (
                     <div className="notes-chat">
                       <div className="notes-chat-header">{tabs}</div>
-                      <div className="notes-chat-empty">
-                        <p style={{ color: 'var(--error)' }}>Failed to start session: {activeCcTab.error}</p>
-                        <p>Close this tab, fix the issue, then retry from the notes tree's context menu.</p>
-                      </div>
+                      <UnavailableState
+                        size="pane"
+                        title="Couldn't start this session"
+                        hint={<>{activeCcTab.error}<br />Close this tab, fix the issue, then retry from the notes tree's context menu.</>}
+                      />
                     </div>
                   );
                 }
@@ -1306,17 +1307,14 @@ export function NotesPage() {
  */
 function NotesEmptyState({ onNewNote }: { onNewNote: () => void }) {
   return (
-    <div className="notes-empty-state">
-      <div className="notes-empty-state-content">
-        <h2 className="notes-empty-state-title">Your notes</h2>
-        <p className="notes-empty-state-hint">
-          Type to capture; search finds it later. Press <kbd>⌘K</kbd> to jump to a note or search.
-        </p>
-        <button className="notes-empty-state-cta" onClick={onNewNote}>
-          + New note
-        </button>
-      </div>
-    </div>
+    <EmptyState
+      size="pane"
+      icon={ICON_NOTE}
+      title="No note open"
+      hint={<>Pick one from the list, or press <kbd>⌘K</kbd> to find one.</>}
+      action={{ label: 'New note', onClick: onNewNote, primary: true }}
+      testId="notes-empty-state"
+    />
   );
 }
 

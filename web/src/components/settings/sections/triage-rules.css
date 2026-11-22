@@ -1,7 +1,5 @@
 /* Settings > Inbox Triage > Routing rules (TriageRoutingRules.tsx). */
 
-.trr-empty { margin: 0; padding: 10px 14px; font-size: var(--font-size-md); color: var(--fg-muted); }
-
 .trr-rule {
   display: flex;
   align-items: flex-start;
@@ -67,7 +65,6 @@
 }
 .trr-pick:hover, .trr-pick:focus-visible { background: var(--bg-hover); }
 .trr-pick-project { flex: 0 0 auto; font-size: var(--font-size-xs); color: var(--fg-muted); }
-.trr-pick-empty { padding: 8px 10px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .trr-editor-actions { display: flex; gap: 8px; }
 
 /* A phone-width settings page: the actions go under the rule instead of squeezing it. */

@@ -16,6 +16,7 @@ import { insertVoiceText, setVoiceStatus } from '@/utils/voice-status';
 import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 import { NoticeStatus } from '@/components/common/NoticeCard';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import '@/styles/voice-history.css';
 
 
@@ -119,12 +120,10 @@ export function VoiceHistoryList() {
   return (
     <div className="voice-history-list" data-testid="voice-history-list">
       {loading && recordings.length === 0 && (
-        <div className="voice-panel-empty">Loading…</div>
+        <LoadingState size="section" title="Loading recordings…" />
       )}
       {!loading && recordings.length === 0 && (
-        <div className="voice-panel-empty">
-          No voice recordings yet. Use the mic in any text box.
-        </div>
+        <EmptyState size="section" title="No voice recordings yet" hint="Use the mic in any text box." />
       )}
       {recordings.map(rec => {
         const text = rec.result?.text ?? '';
@@ -169,7 +168,7 @@ export function VoiceHistoryList() {
               </span>
             </div>
             <div className="voice-panel-text">
-              {failed ? (rec.error ? `${rec.error}` : 'No transcription') : text}
+              {failed ? (rec.error ? `${rec.error}` : 'No transcription') : text}{/* empty-state-ok: one recording's text in a history row */}
             </div>
           </div>
         );

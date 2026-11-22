@@ -286,7 +286,7 @@ test.describe('a phone signed in through a tunnel', () => {
     await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('The sign-in link shows on the computer Walnut runs on.')
     // The All devices tab holds the list of devices.
     await backToDevices(phone)
-    await expect(devices).not.toContainText('No phone has the Walnut app signed in yet.')
+    await expect(devices).not.toContainText('No phone has the Walnut app signed in yet')
     const group = devices.getByTestId('devices-browsers-group')
     await expect(group).toContainText('Browsers signed in to this Walnut')
     const rows = group.locator('[data-device-name]')

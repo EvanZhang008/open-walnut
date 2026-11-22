@@ -32,6 +32,7 @@ import { keepPress } from '../inputs/press-keeps-target';
 import { DisclosureChevron } from '@/components/controls';
 import { readDisclosureOpen, sessionStore, writeDisclosureOpen } from '../SettingsSection';
 import { hostKindLabel } from '@/components/transfer/transfer-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export type HostKind = 'local' | 'ssh' | 'net' | 'fleet';
 export type DetailsPartId = 'status' | 'this-host' | 'knows';
@@ -134,7 +135,7 @@ function DetailsBody({ alias, name, card, now, linked, kind, rowProblem, system,
             {live
               ? <FleetVitals host={card!} now={now} system={system} />
               : <SystemOnly system={system ?? (card ? { text: systemLine(card) } : undefined)} />}
-            {!card && <p className="rh-details-empty">Walnut has no reading of {name} yet: it reads a host once it connects.</p>}
+            {!card && <EmptyState title={`Walnut has no reading of ${name} yet`} hint="It reads a host once it connects." testId="host-details-no-reading" />}
             {card && <FleetProblems host={card} now={now} skip={skip} />}
             {failure}
             {card && <FleetFacts host={card} now={now} omit={omit} fit={live} />}

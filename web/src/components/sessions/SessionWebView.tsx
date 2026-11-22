@@ -18,6 +18,7 @@
  * to a real browser tab.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { resolveSessionServicePreview, type ServicePreviewInfo } from '@/api/sessions';
 import { ApiError } from '@/api/client';
 import { normalizeServiceInput } from '@/utils/service-link';
@@ -83,6 +84,11 @@ function stoppedError(port: number): ErrorState {
 /** Two spellings of one address (a trailing slash, the case of the host). */
 function sameAddress(a: string, b: string): boolean {
   try { return new URL(a).href === new URL(b).href; } catch { return a === b; }
+}
+
+/** The error line when the port waits for a server this session has not started yet. */
+function notListeningLine(port: number | null): string {
+  return `Nothing this session started is listening on :${port}.`;
 }
 
 /** `host:port` for the loading line and the host badge. */
@@ -278,6 +284,11 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
   // "Open in tab" uses the address this machine can actually reach.
   const tabUrl = info?.url ?? requestedUrl;
   const busy = phase === 'resolving' || phase === 'loading';
+  // The words of the loading and error states below.
+  const busyTitle = phase === 'resolving'
+    ? `Connecting to ${hostPort(requestedUrl)}${host && host !== '__local__' ? ` through ${hostName(host)}` : ''}…`
+    : `Loading ${hostPort(requestedUrl)}…`; // empty-state-ok: words handed to the LoadingState below
+  const errorBody = waitsForServer && !goneRef.current ? notListeningLine(activePort) : error?.message;
   const serverList = (variant: 'strip' | 'list', extra?: Partial<SessionServerListProps>) => servers && listed.length > 0 && (
     <SessionServerList
       variant={variant}
@@ -391,41 +402,30 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
         </div>
       )}
       {phase === 'error' && error ? (
-        <div className="session-code-error-card">
-          <div className="session-code-error-title" data-testid="session-web-error-title">{error.title ?? `Can't open ${hostPort(requestedUrl)}`}</div>
-          {notWeb ? (
-            <>
-              <p className="session-code-error-body" data-testid="session-web-not-web">:{notWeb.port} ({notWeb.title || serverLabel(notWeb)}) is running, but it does not serve a web page.</p>
-              <p className="session-code-error-hint">See it, or stop it, in this session's server list.</p>
-              <button type="button" className="btn btn-sm" onClick={() => { setShowAll(true); setPointOthers(true); }}>Show in Servers</button>
-            </>
-          ) : (
-            <>
-              <p className="session-code-error-body">{waitsForServer && !goneRef.current ? `Nothing this session started is listening on :${activePort}.` : error.message}</p>
-              {(waitsForServer ? WAITS_HINT : error.hint) && <p className="session-code-error-hint">{waitsForServer ? WAITS_HINT : error.hint}</p>}
-              <button type="button" className="btn btn-sm" onClick={handleRetry}>Retry</button>
-            </>
-          )}
-        </div>
+        notWeb ? (
+        <UnavailableState size="pane" testId="session-web-error"
+          title={<span data-testid="session-web-error-title">{error.title ?? `Can't open ${hostPort(requestedUrl)}`}</span>}
+          hint={<><span data-testid="session-web-not-web">:{notWeb.port} ({notWeb.title || serverLabel(notWeb)}) is running, but it does not serve a web page.</span> See it, or stop it, in this session's server list.</>}
+          action={{ label: 'Show in Servers', onClick: () => { setShowAll(true); setPointOthers(true); } }} />
+      ) : (
+        <UnavailableState size="pane" testId="session-web-error" onRetry={handleRetry}
+          title={<span data-testid="session-web-error-title">{error.title ?? `Can't open ${hostPort(requestedUrl)}`}</span>}
+          hint={<>
+            <span data-testid="session-web-error-body">{errorBody}</span>
+            {(waitsForServer ? WAITS_HINT : error.hint) && <> {waitsForServer ? WAITS_HINT : error.hint}</>}
+          </>} />
+      )
       ) : phase === 'blocked' && info ? (
-        <div className="session-code-error-card">
-          {info.embedBlockedBy === 'certificate' ? (
-            <>
-              <div className="session-code-error-title">This page's certificate is not trusted here</div>
-              <p className="session-code-error-body">
-                {hostPort(requestedUrl)} is served over https with a certificate the browser will not accept inside a frame. Open it in a tab to review the warning.
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="session-code-error-title">This page does not allow being shown inside another page</div>
-              <p className="session-code-error-body">
-                {hostPort(requestedUrl)} sends {info.embedBlockedBy === 'frame-ancestors' ? 'a frame-ancestors policy' : 'X-Frame-Options'}, so it can only open in its own tab.
-              </p>
-            </>
-          )}
+        <UnavailableState size="pane" testId="session-web-blocked"
+          title={info.embedBlockedBy === 'certificate'
+            ? "This page's certificate is not trusted here"
+            : 'This page does not allow being shown inside another page'}
+          hint={info.embedBlockedBy === 'certificate'
+            ? `${hostPort(requestedUrl)} is served over https with a certificate the browser will not accept inside a frame. Open it in a tab to review the warning.`
+            : `${hostPort(requestedUrl)} sends ${info.embedBlockedBy === 'frame-ancestors' ? 'a frame-ancestors policy' : 'X-Frame-Options'}, so it can only open in its own tab.`}>
+          {/* A link, not the state's button: the Mac app opens a native link in the browser. */}
           <a className="btn btn-sm" href={info.url} target="_blank" rel="noreferrer" data-native-link>Open in tab</a>
-        </div>
+        </UnavailableState>
       ) : phase === 'empty' && listed.length > 0 ? (
         <div className="session-web-empty session-web-empty-servers">
           {serverList('list')}
@@ -434,43 +434,24 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
           </p>
         </div>
       ) : phase === 'empty' ? (
-        <div className="session-code-error-card session-web-empty">
-          {servers?.state === 'ok' ? (
-            <>
-              <div className="session-code-error-title" data-testid="session-servers-none">No servers started by this session are running</div>
-              <p className="session-code-error-body">Any server this session starts shows up here, to open or stop.</p>
-              <p className="session-code-error-hint">
-                Or click a localhost or host:port link in the chat, or type an address above. {remotePortHint}
-              </p>
-            </>
-          ) : serversWhy ? (
-            <>
-              <div className="session-code-error-title" data-testid="session-servers-unavailable">Can't list the servers this session started</div>
-              <p className="session-code-error-body" data-testid="session-servers-why">{serversWhy}.</p>
-              {servers?.state === 'unsupported' && <DaemonUpdateFix host={servers.host} />}
-              <p className="session-code-error-hint">
-                You can still open one: click a localhost or host:port link in the chat, or type an address above. {remotePortHint}
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="session-code-error-title">Open a service this session started</div>
-              <p className="session-code-error-body">
-                Click a localhost or host:port link in the chat, or type an address above. {remotePortHint}
-              </p>
-            </>
-          )}
-        </div>
+        servers?.state === 'ok' ? (
+          <EmptyState size="pane" testId="session-servers-none" title="No servers started by this session are running"
+            hint={`Any server this session starts shows up here, to open or stop. Or click a localhost or host:port link in the chat, or type an address above. ${remotePortHint}`} />
+        ) : serversWhy ? (
+          <UnavailableState size="pane" testId="session-servers-unavailable" title="Can't list the servers this session started"
+            hint={<><span data-testid="session-servers-why">{serversWhy}.</span> You can still open one: click a localhost or host:port link in the chat, or type an address above. {remotePortHint}</>}>
+            {servers?.state === 'unsupported' && <DaemonUpdateFix host={servers.host} />}
+          </UnavailableState>
+        ) : (
+          <EmptyState size="pane" testId="session-web-open-hint" title="Open a service this session started"
+            hint={`Click a localhost or host:port link in the chat, or type an address above. ${remotePortHint}`} />
+        )
       ) : (
         <div className={`session-code-body${stoppingShown ? ' session-web-body-stopping' : ''}`}>
           {busy && (
+            // The wrapper lays the state over the page while it loads underneath.
             <div className="session-code-loading session-web-loading">
-              <div className="session-code-spinner" />
-              <span>
-                {phase === 'resolving'
-                  ? `Connecting to ${hostPort(requestedUrl)}${host && host !== '__local__' ? ` through ${hostName(host)}` : ''}…`
-                  : `Loading ${hostPort(requestedUrl)}…`}
-              </span>
+              <LoadingState size="pane" title={busyTitle} />
             </div>
           )}
           {info && info.embeddable && phase !== 'resolving' && (

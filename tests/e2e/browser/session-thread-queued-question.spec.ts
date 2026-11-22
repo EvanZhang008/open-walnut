@@ -76,7 +76,7 @@ test.describe('a question the CLI took mid-turn keeps its number, and its follow
     await expect(card.locator('.thread-status-word')).toHaveAttribute('data-kind', 'failed')
     await expect(card.locator('.thread-status-word')).toHaveText('No answer')
     await expect(card.locator('.thread-card-body')).toContainText(QUEUED_QUESTION)
-    await expect(card.locator('.thread-card-noanswer')).toHaveText('No answer')
+    await expect(card.getByTestId('thread-card-noanswer')).toHaveText('No answer')
     await shot(page, 'card-before', panel)
 
     // A follow-up from the card goes out under question 2 and is answered there.
@@ -89,7 +89,7 @@ test.describe('a question the CLI took mid-turn keeps its number, and its follow
     await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
     await expect(card.locator('.thread-card-body')).toContainText('And for a burst of retries?')
     // The first turn still says it got no answer; the new one has its answer.
-    await expect(card.locator('.thread-card-noanswer')).toHaveCount(1)
+    await expect(card.getByTestId('thread-card-noanswer')).toHaveCount(1)
     await expect(map.locator('.thread-map-row[data-status="answering"]')).toHaveCount(0, { timeout: 30_000 })
     // Answered now: the status is not `No answer` any more; question 1 stays archived and folded.
     await expect(card.locator('.thread-status-word')).not.toHaveAttribute('data-kind', 'failed')

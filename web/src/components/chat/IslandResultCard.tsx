@@ -85,7 +85,7 @@ export function IslandResultCard({ storeKey, result, onChange, sendResult }: {
     <div className="island-result" data-sent={result.sent ? 'true' : 'false'} role="group" aria-label="Result from this block">
       <div className="island-result-head">
         <span className="island-result-title">{result.sent ? 'Sent to the AI' : 'Result for the AI'}</span>
-        {!result.sent && <span className="island-result-note">Nothing is sent until you press Send.</span>}
+        {!result.sent && <span className="island-result-note">Nothing is sent until you press Send.</span>}{/* empty-state-ok: a help line beside the result's title */}
       </div>
       <pre className="island-result-text">{result.text}</pre>
       <div className="island-result-actions">

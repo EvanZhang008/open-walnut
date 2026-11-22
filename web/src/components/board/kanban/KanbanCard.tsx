@@ -404,7 +404,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
               onClick={(e) => { e.stopPropagation(); ctx.markSeen(vm.taskId); ctx.openSession(vm.taskId, vm.sessionId); }}>{ICON_NEW_TAB}</button>
             <button type="button" className="btn btn-icon btn-sm kanban-icon-btn" data-testid="kanban-card-message" aria-label="Message"
               aria-disabled={ro || !vm.hasSession || undefined}
-              title={ro ? READ_ONLY_TITLE : vm.hasSession ? `Message ${cutAt(vm.title, 30)}` : 'No session yet. Use Start worker.'}
+              title={ro ? READ_ONLY_TITLE : vm.hasSession ? `Message ${cutAt(vm.title, 30)}` : 'No session yet. Use Start worker.'} // empty-state-ok: tooltip
               onClick={(e) => { e.stopPropagation(); if (!ro && vm.hasSession) setComposer(true); }}>{ICON_CHAT}</button>
             {!vm.isComplete && (
               <button type="button" className="btn btn-icon btn-sm kanban-icon-btn" data-testid="kanban-card-complete" aria-label="Complete"

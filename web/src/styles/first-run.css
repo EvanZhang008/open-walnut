@@ -54,7 +54,6 @@
 
 .fr-hosts-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .fr-hosts-foot .fr-add-all.btn { margin-top: 10px; }
-.fr-empty { margin: 10px 0 0; font-size: var(--font-size-md); color: var(--fg-muted); }
 .fr-link {
   margin-top: 10px; padding: 2px 0; border: none; background: none; cursor: pointer;
   font-size: var(--font-size-md); color: var(--accent);

@@ -146,7 +146,7 @@ test.describe('a question taken mid-turn is not answered by the main turn\'s rep
       await expect(body).not.toContainText(REPLY)
     }
     await expect(card(panel).locator('.thread-status-word')).toHaveAttribute('data-kind', 'waiting', { timeout: 30_000 })
-    await expect(card(panel).locator('.thread-card-noanswer')).toHaveText('Waiting for its answer…')
+    await expect(card(panel).getByTestId('thread-card-noanswer')).toHaveText('Waiting for its answer…')
     await shot(page, '3-no-answer', panel)
 
     // A reload reads the transcript only.

@@ -61,7 +61,6 @@
 .mail-rule-hint[data-warn='true'] { font-size: var(--font-size-sm); color: color-mix(in srgb, var(--warning) 60%, var(--fg)); overflow-wrap: anywhere; }
 .mail-rule-actions { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .mail-rule-toggle-wrap { display: inline-flex; }
-.mail-rules-empty { margin: 0; padding: 10px; color: var(--fg-muted); font-size: var(--font-size-md); }
 
 .mail-rules-move { display: inline-flex; gap: 2px; flex-shrink: 0; }
 .mail-rules-picker:focus-visible,

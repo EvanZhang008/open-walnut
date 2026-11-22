@@ -23,6 +23,7 @@ import { controlStatus, relayGroups, taskOfOwner, type RelayState } from './ext-
 import { taskHead } from './ext-tasks-model';
 import { toParent } from './ext-frame';
 import type { VaultState } from './ext-panel-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 type SitesMode = 'ask' | 'any';
 
@@ -75,7 +76,7 @@ export function ExtControl({ relay, here, tasks, owner, agents, keyed, vault, ke
 
         <section className="ext-control-group" aria-label="Tabs agents use">
           <div className="ext-relay-label">In use now</div>
-          {now.length === 0 && <p className="ext-relay-note" data-testid="ext-control-none">No agent is using a tab now.</p>}
+          {now.length === 0 && <EmptyState size="row" title="No agent is using a tab now" testId="ext-control-none" />}
           {now.map((t) => (
             <div key={t.tab} className="ext-control-tab-row">
               <RelayRow t={t} here={here} task={byId.get(taskOfOwner(t.owner))} action="Stop" onAction={() => stop(t.tab)} />

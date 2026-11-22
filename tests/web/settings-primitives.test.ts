@@ -312,9 +312,11 @@ describe('control markup', () => {
     expect(renderToStaticMarkup(h(SettingsTag, {}, 'Built-in'))).toBe(
       '<span class="badge settings-tag"><span>Built-in</span></span>',
     )
-    const loading = renderToStaticMarkup(h(SettingsLoadingRow))
-    expect(loading).toContain('Loading...')
-    expect(loading).not.toContain('role="status"')
+    // The loading line is the shared LoadingState (one look for every "on its way").
+    const loading = renderToStaticMarkup(h(SettingsLoadingRow, null, 'Loading tags\u2026'))
+    expect(loading).toContain('Loading tags\u2026')
+    expect(loading).toContain('class="empty-state"')
+    expect(loading).toContain('data-kind="loading"')
     const mono = renderToStaticMarkup(h(SettingsMonoBlock, { label: 'Raw config', text: '{"a":1}', maxHeight: 240, 'data-testid': 'raw' }))
     expect(mono).toMatch(/<pre class="settings-mono-block" style="max-height:240px" data-testid="raw"/)
     expect(mono).toContain('Copy')

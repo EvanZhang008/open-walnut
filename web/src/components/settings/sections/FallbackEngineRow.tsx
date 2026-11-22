@@ -165,7 +165,7 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
           label="Model"
           htmlFor="fallback-model-select"
           help={needsModel && allClaudeLimited
-            ? <span className="settings-help-warning" data-testid="fallback-model-needed">No Claude model helps now: the {limitName({ engine: 'claude', window: allClaudeLimited.window })} covers every Claude model. Pick another engine above.</span>
+            ? <span className="settings-help-warning" data-testid="fallback-model-needed">No Claude model helps now: the {limitName({ engine: 'claude', window: allClaudeLimited.window })} covers every Claude model. Pick another engine above.</span> // empty-state-ok: row help warning
             : needsModel
             ? <span className="settings-help-warning" data-testid="fallback-model-needed">Pick a model: {pickedName} on its own default model is the engine that is out of usage.</span>
             : models.error ? <span data-testid="fallback-model-error">{pickedName} did not list its models ({models.error}). Its default model is used.</span>
@@ -183,7 +183,7 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
               disabled={models.loading && !model.value}
               onChange={(e) => model.set(e.target.value)}
             >
-              <option value="">{needsModel ? 'Pick a model' : models.loading ? 'Loading models…' : `${pickedName} default${defaultModel ? ` (${defaultModel.name})` : ''}`}</option>
+              <option value="">{needsModel ? 'Pick a model' : models.loading ? 'Loading models…' : `${pickedName} default${defaultModel ? ` (${defaultModel.name})` : ''}`}</option>{/* empty-state-ok: option label */}
               {sameClaude ? (
                 // Which models help: a Claude model shares the 5-hour and weekly limits.
                 <>

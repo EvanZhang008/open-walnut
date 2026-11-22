@@ -11,6 +11,7 @@ import { IMPORT_FORMATS } from '../../../../src/core/vault/import'
 import { ImportIcon } from './pw-icons'
 import { Chip, ChipGroup } from '@/components/controls'
 import { ICON_CLOSE } from '../common/Icons'
+import { LoadingState } from '@/components/common/EmptyState'
 
 const MAX_FILE_BYTES = 12 * 1024 * 1024
 
@@ -89,7 +90,7 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
                 ))}
               </ChipGroup>
             )}
-            {busy && <p className="pw-hint">Reading…</p>}
+            {busy && <LoadingState size="row" title="Reading the import…" />}
             {error && <p className="pw-hint pw-hint-bad" role="alert">{error}</p>}
             {report && (
               <div className="pw-import-report" data-testid="pw-import-report">

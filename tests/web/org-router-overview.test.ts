@@ -50,7 +50,7 @@ describe('router overview words', () => {
     expect(routerRoutedLine(one, NOW)).toMatch(/^1 message: 1 failed\. Last one .+\.$/)
   })
 
-  it('never says "No conversation history found" for a router', () => {
+  it('never says only "No messages yet" for a router', () => {
     expect(routerEmptyChatLine('Personal')).toBe('Nothing in this conversation yet. It starts when the next message for Personal reaches the router.')
   })
 })
@@ -60,14 +60,12 @@ describe('router page wiring', () => {
   it('shows the overview for a router and hands its chat the router empty line', () => {
     expect(detail).toMatch(/\{routerTask && <OrgRouterOverview /)
     expect(detail).toMatch(/routerEmptyChat \? \{ emptyHistory: routerEmptyChat \} : \{\}/)
-    // memoized: SessionChatHistory is memo'd, a fresh element each render would re-render it.
-    expect(detail).toMatch(/const routerEmptyChat = useMemo\(/)
-    // keyed on primitives, never the task object (a new one on every task update)
-    expect(detail).toMatch(/\[isRouterNode, routerAreaLabel\]/)
+    // A string (the shared EmptyState's title), so SessionChatHistory's memo holds with no useMemo.
+    expect(detail).toMatch(/const routerEmptyChat = isRouterNode \? routerEmptyChatLine\(routerAreaLabel\) : undefined;/)
   })
   it('lets the chat history take another empty line, keeping the old one as the default', () => {
     const history = read('web/src/components/sessions/SessionChatHistory.tsx')
-    expect(history).toMatch(/emptyHistory \?\? <p className="text-muted">No conversation history found<\/p>/)
+    expect(history).toMatch(/stateWords\(emptyHistory \?\? 'No messages yet\. /)
     expect(read('web/src/components/sessions/SessionPanel.tsx')).toMatch(/emptyHistory=\{emptyHistory\}/)
   })
 })

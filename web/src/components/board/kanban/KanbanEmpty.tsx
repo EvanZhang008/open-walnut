@@ -5,13 +5,16 @@
  * when there is no page.
  */
 import type { ReactNode } from 'react';
+import { EmptyState } from '../../common/EmptyState';
 
 export function KanbanEmpty({ children }: { children?: ReactNode }) {
   return (
-    <div className="kanban-empty" data-testid="kanban-empty" role="status">
-      <div className="kanban-empty-title">No tasks on this board yet.</div>
-      <p className="kanban-empty-text">Add a task to a lane, or ask the leader to split the work.</p>
+    <EmptyState
+      testId="kanban-empty"
+      title="No tasks on this board yet"
+      hint="Add a task to a lane, or ask the leader to split the work."
+    >
       {children}
-    </div>
+    </EmptyState>
   );
 }

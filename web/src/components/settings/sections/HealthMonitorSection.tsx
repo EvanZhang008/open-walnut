@@ -9,7 +9,8 @@ import { Link } from 'react-router-dom';
 import { changeAlarm, fetchAlarm, fetchHealth, setFixTasks, type AlarmDetail, type AlarmRow, type AlarmState, type FixTasksMode, type HealthView } from '@/api/health-monitor';
 import { useEvent } from '@/hooks/useWebSocket';
 import { taskPath } from '@/utils/task-path';
-import { SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsNotice } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard';
@@ -26,7 +27,7 @@ const FIX_OPTIONS: ReadonlyArray<{ value: FixTasksMode; label: string; testId: s
   { value: 'off', label: 'Do nothing', testId: 'health-fix-off', title: 'Show the alarm here only' },
 ];
 
-const STATE_LABEL: Record<AlarmState, string> = { ALARM: 'Alarm', OK: 'OK', INSUFFICIENT_DATA: 'No data' };
+const STATE_LABEL: Record<AlarmState, string> = { ALARM: 'Alarm', OK: 'OK', INSUFFICIENT_DATA: 'No data' }; // empty-state-ok: state label map
 /** An alarm's state is a dot and a word: red when it fires, green when clear, grey with no data. */
 const STATE_TONE: Record<AlarmState, NoticeTone> = { ALARM: 'error', OK: 'ok', INSUFFICIENT_DATA: 'muted' };
 
@@ -70,7 +71,7 @@ function Spark({ points, state }: { points: Array<number | null>; state: AlarmSt
 function whatWalnutDid(row: AlarmRow): string {
   if (row.held) return row.override?.enabled === false ? 'Turned off: no actions' : 'Muted: no actions for now';
   const last = row.actions[row.actions.length - 1];
-  if (!last) return row.state === 'ALARM' ? 'Nothing done yet' : '';
+  if (!last) return row.state === 'ALARM' ? 'Nothing done yet' : ''; // empty-state-ok: a table cell's value
   return last.detail;
 }
 
@@ -88,7 +89,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
     finally { setBusy(false); }
   };
   if (error) return <SettingsNotice kind="error" role="alert">{`Couldn't read it: ${error}`}</SettingsNotice>;
-  if (!detail) return <SettingsLoadingRow>Reading the alarm...</SettingsLoadingRow>;
+  if (!detail) return <LoadingState title="Reading the alarm…" />;
   const muted = detail.override?.mutedUntil !== undefined && detail.override.mutedUntil > now;
   const off = detail.override?.enabled === false;
   return (
@@ -127,7 +128,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
       )}
       <h4 className="health-detail-h">History</h4>
       {detail.history.length === 0
-        ? <p className="health-detail-desc">No state change yet.</p>
+        ? <EmptyState size="row" title="No state change yet" />
         : (
           <ul className="health-list">
             {[...detail.history].reverse().slice(0, 12).map((e) => (
@@ -167,7 +168,7 @@ export function HealthMonitorSection() {
     <>
     <SectionCard id="walnut-health" title="Walnut Health" description={HEALTH_BLURB} actions={actions}>
       <div className="settings-addons-contents health-monitor" data-testid="health-monitor">
-        {loading && !view && <SettingsLoadingRow>Reading the alarms...</SettingsLoadingRow>}
+        {loading && !view && <LoadingState title="Reading the alarms…" />}
         {error && <SettingsNotice kind="error" role="alert">{`Couldn't read it: ${error}`}</SettingsNotice>}
         {view && (
           <>

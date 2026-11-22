@@ -13,7 +13,8 @@ import { useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { useAppCatalog, useAppPagePins } from '@/apps/hooks'
 import { updateAppOnSidebar, updateAppPinned } from '@/apps/store'
-import { SettingsGroup, SettingsLoadingRow, SettingsRow, SettingsTag } from '@/components/settings/SettingsSection'
+import { SettingsGroup, SettingsRow, SettingsTag } from '@/components/settings/SettingsSection'
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
 import { InlineConfirmButton } from '@/components/settings/inputs/InlineConfirmButton'
@@ -64,14 +65,14 @@ export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, 
     </button>
   )
   if (!store.registry) {
-    return <div className="apps-detail" data-testid="plugin-detail">{back}<SettingsGroup><SettingsLoadingRow>Loading plugin...</SettingsLoadingRow></SettingsGroup></div>
+    return <div className="apps-detail" data-testid="plugin-detail">{back}<SettingsGroup><LoadingState title="Loading plugin…" /></SettingsGroup></div>
   }
   if (!row) {
     return (
       <div className="apps-detail" data-testid="plugin-detail" data-plugin-id={pluginId}>
         {back}
         <SettingsGroup>
-          <SettingsRow label="This plugin is not on this computer" help="It may have been removed. Everything you can add is under Plugins to add." />
+          <UnavailableState title="This plugin is not on this computer" hint="It may have been removed. Everything you can add is under Plugins to add." />
         </SettingsGroup>
       </div>
     )
@@ -158,9 +159,11 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
             bare
             ownerShownHere={coreSections}
             renderEmpty={(why) => (why === 'loading'
-              ? <SettingsLoadingRow>Loading settings...</SettingsLoadingRow>
+              ? <LoadingState title="Loading settings…" />
               : ownPanels ? null
-                : <SettingsRow label={why === 'failed' ? "Couldn't load its settings" : 'Nothing to set up'} help={why === 'failed' ? 'Reload the page to try again.' : undefined} />)}
+                : why === 'failed'
+                  ? <UnavailableState title="Couldn't load its settings" hint="Reload the page to try again." />
+                  : <EmptyState title="Nothing to set up" />)}
           />
         </div>
       )}

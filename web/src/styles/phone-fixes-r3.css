@@ -75,13 +75,7 @@
     color: var(--accent-text);
     font: inherit;
     font-size: var(--font-size-lg);
-  }
-  /* An empty Pinned says so in one short line, not a 110 px block. */
-  .app-shell-navigation .todo-pinned-empty {
-    margin: 0;
-    padding: 4px 16px 8px;
-    font-size: var(--font-size-md);
-  }
+  }  
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {

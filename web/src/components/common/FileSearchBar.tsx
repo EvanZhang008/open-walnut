@@ -96,7 +96,7 @@ export function FileSearchBar({
         {/* index 0 with matches = none chosen yet (the page find never picks one on its own). */}
         {query ? (count > 0
           ? (index ? `${index}/${count}${capped ? '+' : ''}` : `${count}${capped ? '+' : ''} ${count === 1 && !capped ? 'match' : 'matches'}`)
-          : searching ? 'Searching\u2026' : incomplete ? 'None on screen' : 'No results') : ''}
+          : searching ? 'Searching\u2026' : incomplete ? 'None on screen' : 'No results') : ''}{/* empty-state-ok: the find bar's match count */}
       </span>
       <button type="button" className="fv-search-nav" onClick={() => onNav(-1)} disabled={!count} title="Previous match (⇧Enter)" aria-label="Previous match"><BarIcon d="M4 10l4-4 4 4" /></button>
       <button type="button" className="fv-search-nav" onClick={() => onNav(1)} disabled={!count} title="Next match (Enter)" aria-label="Next match"><BarIcon d="M4 6l4 4 4-4" /></button>

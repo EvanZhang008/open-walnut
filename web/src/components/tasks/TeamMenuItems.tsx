@@ -167,7 +167,7 @@ export function TeamMenuItems({ task, afterAction }: {
                 className="task-kebab-item"
                 data-testid={director.isDirector ? 'kebab-director-remove' : 'kebab-director-make'}
                 title={director.isDirector
-                  ? 'No longer listed under its VP on the Org page; its subtasks and chat stay as they are'
+                  ? 'No longer listed under its VP on the Org page; its subtasks and chat stay as they are' // empty-state-ok: tooltip
                   : 'Listed under its VP on the Org page, with or without subtasks'}
                 onClick={(e) => { e.stopPropagation(); setDirector(!director.isDirector); }}
               >

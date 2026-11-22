@@ -105,7 +105,7 @@
 .fv-pdf-password input { max-width: 240px; }
 .fv-pdf-password button { margin-top: 8px; }
 .fv-pdf-text ::selection { background: #4080ff55; }
-.fv-pdf-error, .fv-pdf-status {
+.fv-pdf-error {
   padding: 20px;
   color: var(--fg-muted);
   font-size: var(--font-size-md);

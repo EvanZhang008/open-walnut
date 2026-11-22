@@ -4,6 +4,7 @@
  * one card per project, whose tier or snooze applies to its open tasks. What the deck holds is a filter
  * on screen (QuickSortFilter); the queue, ages and presets are quick-sort-model.ts.
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -317,11 +318,13 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     <div className="quick-sort-progress" aria-hidden="true"><i style={{ width: `${total ? Math.round(decided / total * 100) : 0}%` }} /></div>
     <div className="quick-sort-progress-text"><span>{decided} sorted this round</span><span data-testid="quick-sort-left">{left} left</span></div>
     {error && <div className="home-board-error quick-sort-error" role="alert"><span>{error}</span></div>}
-    {shown.length === 0 ? <div className="quick-sort-empty" data-testid="quick-sort-empty">
-      <h2>{decided ? 'All sorted' : 'Nothing to sort here'}</h2>
-      <p>{view === 'tasks' ? 'No open task left under this filter.' : 'No project left in this round.'}</p>
-      {narrowed && <button type="button" onClick={() => setFilter({ tiers: [], project: null, folder: null, idleDays: 0 })}>Sort every open task</button>}
-    </div> : <div className="quick-sort-cards">
+    {shown.length === 0 ? <EmptyState
+      size="pane"
+      testId="quick-sort-empty"
+      title={decided ? 'All sorted' : 'Nothing to sort here'}
+      hint={view === 'tasks' ? 'No open task left under this filter.' : 'No project left in this round.'}
+      action={narrowed ? { label: 'Sort every open task', onClick: () => setFilter({ tiers: [], project: null, folder: null, idleDays: 0 }) } : undefined}
+    /> : <div className="quick-sort-cards">
       {view === 'tasks'
         ? (shown as SortItem[]).map((item, i) => {
             const state = shownState(taskUserState(item.task));

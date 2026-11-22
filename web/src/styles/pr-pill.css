@@ -163,7 +163,6 @@
 }
 
 .pr-card .pr-card-muted { color: var(--fg-muted); }
-.pr-card .pr-card-empty { padding: 4px 0; }
 .pr-card .pr-card-note { margin-top: 8px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .pr-card .pr-card-error {
   margin-top: 8px;

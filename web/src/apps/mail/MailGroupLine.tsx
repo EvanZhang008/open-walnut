@@ -37,6 +37,7 @@ import {
   UNSUBSCRIBE_ELLIPSIS, groupRowAria, markLabel, progressLabel, readOnlyTitle,
 } from './mail-groups-copy';
 import { groupSampleRows, loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { RETRYING_LINE } from './mail-load-retry';
 import { CheckIcon, MoreIcon, TwistIcon } from './mail-icons';
 import { isOpenRow, selectingInside } from './MailMessageRow';
@@ -365,22 +366,20 @@ function GroupRows({
   }, [more, rows.length, scope, group.id]);
   return (
     <div className="mail-group-kids" data-testid="mail-group-kids">
-      {!page.loaded && page.loading && <p className="mail-group-kids-note">Loading…</p>}
-      {page.retrying && (
-        <p className="mail-group-kids-note" data-testid="mail-load-retrying" role="status">{RETRYING_LINE}</p>
-      )}
+      {!page.loaded && page.loading && <LoadingState size="row" title="Loading this group…" />}
+      {page.retrying && <LoadingState size="row" title={RETRYING_LINE} testId="mail-load-retrying" />}
       {page.error && (
-        <p className="mail-inline-error">
-          {page.error}{' '}
-          <button
-            type="button"
-            className="mail-text-btn"
-            data-testid="mail-group-retry"
-            onClick={() => { void loadGroupPage(scope, group.id, '', page.loaded ? 'older' : 'first', true, true); }}
-          >
-            Retry
-          </button>
-        </p>
+        <UnavailableState
+          size="row"
+          title="Couldn't load this group"
+          hint={page.error}
+          action={{
+            label: 'Retry',
+            testId: 'mail-group-retry',
+            onClick: () => { void loadGroupPage(scope, group.id, '', page.loaded ? 'older' : 'first', true, true); },
+          }}
+          testId="mail-group-error"
+        />
       )}
       {rows.map((message) => (
         <MailKidRow
@@ -392,7 +391,7 @@ function GroupRows({
           accounts={accounts}
         />
       ))}
-      {page.olderLoading && <p className="mail-group-kids-note" data-testid="mail-group-loading-more">Loading…</p>}
+      {page.olderLoading && <LoadingState size="row" title="Loading older mail…" testId="mail-group-loading-more" />}
       <p className="mail-group-foot">
         {/* A group whose mail was all read stays drawn while the pointer is on the list; nothing to mark. */}
         {unread > 0 && (

@@ -30,6 +30,7 @@
  *    the heaviest subtree in the app.
  */
 import { ArrowUpRightIcon } from '@/components/common/PhoneIcons';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { AgentText } from '@/components/common/AgentText';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
@@ -849,19 +850,15 @@ function SideQuestionDrawerBody({
               </SessionRewindContext.Provider>
             </div>
           ) : activeIsPending ? (
-            <div className="side-thread-body side-thread-body-pending">
-              <span className="side-question-spinner" /> Starting a side chat…
-            </div>
+            <LoadingState size="section" title="Starting a side chat…" />
           ) : (
-            <div className="side-question-empty">
-              {/* "pick a thread above" has to be true: with every thread filed, the
-                  chip row is empty and the only pickable threads are in the shelf. */}
-              {liveThreads.length === 0 && archivedThreads.length === 0
-                ? 'No side chats yet. Ask something below: each side chat is a hidden copy of this session, so its answers never enter the main chat.'
-                : liveThreads.length === 0
-                  ? 'New side chat: ask below, or reopen one from Archived above.'
-                  : 'New side chat: ask below, or pick one above to follow up.'}
-            </div>
+            // "pick a thread above" has to be true: with every thread filed, the
+            // chip row is empty and the only pickable threads are in the shelf.
+            liveThreads.length === 0 && archivedThreads.length === 0
+              ? <EmptyState size="section" testId="side-question-empty" title="No side chats yet"
+                  hint="Ask something below: each side chat is a hidden copy of this session, so its answers never enter the main chat." />
+              : <EmptyState size="section" testId="side-question-empty" title="New side chat"
+                  hint={liveThreads.length === 0 ? 'Ask below, or reopen one from Archived above.' : 'Ask below, or pick one above to follow up.'} />
           )}
 
           {/* Per-thread actions — only meaningful with a real (confirmed) thread. */}

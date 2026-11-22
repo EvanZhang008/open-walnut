@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { FileAskNotice } from '@/components/common/FileAskNotice';
 import { isBoolean, usePageView } from '@/utils/view-memory';
@@ -33,7 +34,6 @@ import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK, type ExpandGap } f
 import { segmentHunkForAuto, type DiffSegment } from '@/components/sessions/diffAutoSegment';
 import { hiddenFunctionContext, splitSourceLines, type StickyDef } from '@/components/sessions/diffFuncContext';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
 import { FILE_ASK_FAILURE_TEXT, FileThreadLayer, type FileAskResult, type FileThreadLayerHandle } from '@/components/common/FileThreadLayer';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
@@ -1427,24 +1427,22 @@ export const FileDiffPane = memo(function FileDiffPane({
           {renderHunks}
         </Diff>
       ) : binary ? (
-        <div className="session-diff-file-empty session-diff-binary">Binary file: no line diff to show.</div>
+        <EmptyState size="section" title="Binary file: no line diff to show" testId="session-diff-binary" />
       ) : change.status === 'renamed' ? (
         // The head above names where it moved from (← old path): the body says only what it means.
-        <div className="session-diff-file-empty">Moved, content unchanged.</div>
+        <EmptyState size="section" title="Moved, content unchanged" />
       ) : ignoreWhitespace && differsOnlyInWhitespace(change.before, change.after) ? (
-        <div className="session-diff-file-empty session-diff-ws-only">
-          Only whitespace changed in this file.
-          {onShowWhitespace && <button type="button" className="btn btn-sm" onClick={onShowWhitespace} title="Turns off the toolbar's Hide whitespace, for every file">Show whitespace (all files)</button>}
-        </div>
+        // The action turns off the toolbar's Hide whitespace, for every file.
+        <EmptyState size="section" title="Only whitespace changed in this file" testId="session-diff-ws-only"
+          action={onShowWhitespace ? { label: 'Show whitespace (all files)', tooltip: "Turns off the toolbar's Hide whitespace, for every file", onClick: onShowWhitespace } : undefined} />
       ) : change.partial && change.before === change.after ? (
         // The file changed on disk after the session's edit, so the edit could not be rebuilt from
         // the session's history: say so and offer git's view, never a bare "no diff".
-        <div className="session-diff-file-empty session-diff-not-rebuilt">
-          This file changed after the session edited it, so the session&apos;s edit could not be rebuilt here.
-          {onShowUncommitted && <button type="button" className="btn btn-sm" onClick={onShowUncommitted}>Show it vs your last commit</button>}
-        </div>
+        <UnavailableState size="section" title="The session's edit could not be rebuilt here" testId="session-diff-not-rebuilt"
+          hint="This file changed after the session edited it."
+          action={onShowUncommitted ? { label: 'Show it vs your last commit', onClick: onShowUncommitted } : undefined} />
       ) : (
-        <div className="session-diff-file-empty">No textual diff (binary, identical, or unreadable content).</div>
+        <EmptyState size="section" title="No textual diff" hint="The file is binary, identical, or its content could not be read." />
       )}
     </div>
   );
@@ -2948,8 +2946,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
         <span className="session-diff-toolbar-title">
           {data && !switching
-            ? (empty ? 'No file changes' : <>{shownCount} file{shownCount === 1 ? '' : 's'}<span className="session-diff-title-long"> changed</span></>)
-            : error ? "Couldn't load changes" : (loading || switching ? 'Loading…' : 'Changes')}
+            ? (empty ? 'No file changes' /* empty-state-ok: toolbar title */ : <>{shownCount} file{shownCount === 1 ? '' : 's'}<span className="session-diff-title-long"> changed</span></>)
+            : error ? "Couldn't load changes" : (loading || switching ? 'Loading…' : 'Changes') /* empty-state-ok: toolbar title */}
           {!switching && wsOnlySet.size > 0 && (
             <span className="session-diff-ws-count" title="Files whose every change is whitespace (Hide whitespace shows them as unchanged)">{wsOnlySet.size} whitespace only</span>
           )}
@@ -3046,7 +3044,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       <div className="session-diff-view" ref={containerRef}>
         {toolbar}
         {gitStrip}
-        <div className="session-diff-loading"><LoadingSpinner /></div>
+        <LoadingState size="pane" title="Loading changes…" />
       </div>
     );
   }
@@ -3057,9 +3055,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     return (
       <div className="session-diff-view session-diff-error" ref={containerRef}>
         {toolbar}
-        <div className="session-diff-error-box">
-          {ICON_WARNING} <span>Couldn't load changes: {error}</span>
-          <button className="btn btn-sm" onClick={() => load(true)}>Retry</button>
+        <UnavailableState size="pane" title="Couldn't load changes" detail={error} onRetry={() => load(true)} testId="session-diff-error-box">
           {/* Git bases run on the (possibly remote) repo and can time out on
               huge monorepos — offer the always-works comparison as a way out. */}
           {base !== 'session' && (
@@ -3067,7 +3063,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               View this session's changes instead
             </button>
           )}
-        </div>
+        </UnavailableState>
       </div>
     );
   }
@@ -3117,36 +3113,24 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       )}
 
       {switching ? (
-        <div className="session-diff-loading"><LoadingSpinner /></div>
+        <LoadingState size="pane" title="Loading this comparison…" />
       ) : empty ? (
-        <div className="session-diff-empty">
-          {base === 'session' ? (
-            <>
-              <p>This session hasn't edited any files yet.</p>
-              <p className="text-muted">Edits, writes, and subagent changes will appear here as a diff.</p>
-            </>
-          ) : wholeRepo && !data?.groups.some((g) => g.compare) ? (
-            <>
-              <p>No git repository here.</p>
-              <p className="text-muted">This session's folder is not in a git repository, so there is no branch or commit to compare with.</p>
-            </>
-          ) : base === 'branch' ? (
-            <>
-              <p>This branch has no changes.</p>
-              <p className="text-muted">Nothing differs from where it left {data?.groups.find((g) => g.compare)?.compare?.ref ?? compare.ref ?? 'the default branch'}, uncommitted work included.</p>
-            </>
-          ) : base === 'commit' ? (
-            <>
-              <p>This commit changed no files.</p>
-              <p className="text-muted">It matches its parent (an empty commit, or a merge that took its first parent's files).</p>
-            </>
-          ) : (
-            <>
-              <p>Nothing this session changed differs for this comparison.</p>
-              <p className="text-muted">None of the files this session edited differ from "{BASE_OPTIONS.find((o) => o.value === base)?.label}".</p>
-            </>
-          )}
-        </div>
+        base === 'session' ? (
+          <EmptyState size="pane" title="This session hasn't edited any files yet" testId="session-diff-empty"
+            hint="Edits, writes, and subagent changes will appear here as a diff." />
+        ) : wholeRepo && !data?.groups.some((g) => g.compare) ? (
+          <EmptyState size="pane" title="No git repository here" testId="session-diff-empty"
+            hint="This session's folder is not in a git repository, so there is no branch or commit to compare with." />
+        ) : base === 'branch' ? (
+          <EmptyState size="pane" title="This branch has no changes" testId="session-diff-empty"
+            hint={`Nothing differs from where it left ${data?.groups.find((g) => g.compare)?.compare?.ref ?? compare.ref ?? 'the default branch'}, uncommitted work included.`} />
+        ) : base === 'commit' ? (
+          <EmptyState size="pane" title="This commit changed no files" testId="session-diff-empty"
+            hint="It matches its parent (an empty commit, or a merge that took its first parent's files)." />
+        ) : (
+          <EmptyState size="pane" title="Nothing this session changed differs for this comparison" testId="session-diff-empty"
+            hint={`None of the files this session edited differ from "${BASE_OPTIONS.find((o) => o.value === base)?.label}".`} />
+        )
       ) : (
         <div className="session-diff-body">
           {!treeCollapsed && (
@@ -3224,7 +3208,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 </div>
               </div>
             ) : selectedContentLoading ? (
-              <div className="session-diff-file-empty"><LoadingSpinner /></div>
+              <LoadingState size="section" title="Loading this file…" />
             ) : selectedChange ? (
               <FileDiffPane
                 key={selectedChange.filePath}
@@ -3253,7 +3237,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 onNextUnviewed={nextUnviewedId ? openNextUnviewed : null}
               />
             ) : (
-              <div className="session-diff-file-empty">Select a file from the tree.</div>
+              <EmptyState size="pane" title="No file selected" hint="Select a file from the tree." />
             )}
           </div>
           {canAskHere && !ghost && !selectedContentLoading && selectedChange && selectedChange.status !== 'deleted' && (

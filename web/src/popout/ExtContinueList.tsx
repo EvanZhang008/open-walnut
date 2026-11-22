@@ -5,6 +5,7 @@ import type { DrawerRow } from '@/components/chat/AskWalnutDrawer';
 import { ContinueRow } from './ExtAskChrome';
 import { sessionOfTask } from './useExtAsks';
 import type { KeptAsk } from './ext-continue-kept';
+import { LoadingState } from '@/components/common/EmptyState';
 
 /**
  * The recent asks to continue, newest first. While the board loads, the rows of the last open
@@ -20,7 +21,7 @@ export function ContinueList({ rows, kept, max, loading, onPick, className = '' 
       <div className="ext-continue-label">Continue</div>
       {shown.map((row) => <ContinueRow key={row.id} row={row} onPick={() => onPick(row.id, sessionOfTask(row.task) ?? undefined)} />)}
       {old.map((k) => <ContinueRow key={k.id} row={{ id: k.id, title: k.title }} kept={k} onPick={() => onPick(k.id, k.sessionId)} />)}
-      {loading && shown.length === 0 && old.length === 0 && <p className="ext-continue-empty"><span className="spinner" /> Loading your quick questions…</p>}
+      {loading && shown.length === 0 && old.length === 0 && <LoadingState size="row" title="Loading your quick questions…" testId="ext-continue-loading" />}
     </div>
   );
 }

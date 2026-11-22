@@ -18,6 +18,7 @@
  * The fifth state — no `tracking_note` key at all — is the ABSENCE of this whole
  * section (ProjectTrackingBlock returns null), never an empty box.
  */
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { stableHtml } from '@/hooks/useStableHtml';
 
 export type TrackingNoteState =
@@ -72,21 +73,23 @@ export function ProjectTrackingView({ notePath, state, onOpenInNotes }: ProjectT
       </div>
 
       {state.status === 'loading' && (
-        <p className="detail-memory-text text-muted">Reading {notePath}…</p>
+        <LoadingState size="row" title={`Reading ${notePath}…`} />
       )}
 
       {state.status === 'missing' && (
-        <p className="detail-memory-text text-muted">
-          This project tracks <code className="project-tracking-path">{notePath}</code>, but that note
-          is not in the vault any more. The next tracking update writes a fresh one there.
-        </p>
+        <EmptyState
+          size="row"
+          title="The tracking note is not in the vault any more"
+          hint={<>This project tracks <code className="project-tracking-path">{notePath}</code>. The next tracking update writes a fresh one there.</>}
+        />
       )}
 
       {state.status === 'unreadable' && (
-        <p className="detail-memory-text text-muted">
-          Couldn’t read <code className="project-tracking-path">{notePath}</code> ({state.message}).
-          The note itself is untouched.
-        </p>
+        <UnavailableState
+          size="row"
+          title="Couldn't read the tracking note"
+          hint={<><code className="project-tracking-path">{notePath}</code> ({state.message}). The note itself is untouched.</>}
+        />
       )}
 
       {state.status === 'present' && (

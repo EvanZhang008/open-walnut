@@ -14,7 +14,8 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import type { RegisteredApp } from '@/apps/registry'
-import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow } from '@/components/settings/SettingsSection'
+import { SettingsGroup, SettingsNotice, SettingsRow } from '@/components/settings/SettingsSection'
+import { EmptyState, LoadingState } from '@/components/common/EmptyState'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { PluginIcon, pluginTileTints } from '@/components/settings/PluginIcon'
 import { PluginPendingDependencies } from '@/components/settings/sections/PluginDependencyRows'
@@ -343,11 +344,11 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
             {store.updatable.length > 0 && <UpdatesHead updates={store.updates} slowLoad={store.slowLoad} onCheckAll={store.checkAll} />}
           </div>
           {!registry ? (
-            <SettingsGroup className="plugin-store-group"><SettingsLoadingRow>Loading plugins...</SettingsLoadingRow></SettingsGroup>
+            <SettingsGroup className="plugin-store-group"><LoadingState title="Loading plugins…" /></SettingsGroup>
           ) : installed.length === 0 ? (
-            <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins yet." /></SettingsGroup>
+            <SettingsGroup className="plugin-store-group"><EmptyState title="No plugins installed yet" /></SettingsGroup>
           ) : groups.length === 0 ? (
-            searching || heldInFilter > 0 ? null : <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins in this group yet." /></SettingsGroup>
+            searching || heldInFilter > 0 ? null : <SettingsGroup className="plugin-store-group"><EmptyState title="No plugins in this group yet" /></SettingsGroup>
           ) : (
             groups.map((section) => (
               <SourceSectionView key={section.id} section={section} store={store} card={card} />

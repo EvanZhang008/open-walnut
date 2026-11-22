@@ -96,7 +96,7 @@ test('a refusal that lasts shows its reason and Retry, and Retry loads it', asyn
   }))
   await openGrouped(page, fixture)
   const line = page.locator(`[data-testid="mail-group"][data-group-id="${first.id}"]`)
-  await expect(line.locator('.mail-inline-error')).toContainText('The mail account needs signing in again', { timeout: 20_000 })
+  await expect(line.getByTestId('mail-group-error')).toContainText('The mail account needs signing in again', { timeout: 20_000 })
   await expect(line.getByTestId('mail-load-retrying')).toHaveCount(0)
   // Count from when the first reads are all in: they go out group by group, and the list reads its
   // groups a second time as it settles, so a count taken at the first error grew by the reads still

@@ -3,6 +3,7 @@ import { previewItemTask, type InboxTaskCandidate, type InboxTaskPreview } from 
 import { PHASE_TEXT, timeText } from './item-receipt-model';
 import { taskPath } from '@/utils/task-path';
 import { projectDisplayName } from '@/utils/project-display';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: {
   letterId: string; itemId: string; task: InboxTaskCandidate; onBack: () => void; onNavigate: (to: string) => void;
@@ -22,11 +23,13 @@ export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: 
     <h3>{task.title}</h3>
     <p>{projectDisplayName(task.project)} · {PHASE_TEXT[detail?.phase ?? task.phase] ?? task.phase}</p>
     <details><summary>Task ID</summary><code>{task.id}</code></details>
-    {error ? <p>Could not load task details <button type="button" className="btn btn-sm hib-row-btn" onClick={() => setAttempt(n => n + 1)}>Try again</button></p>
-      : !detail ? <p>Loading task details…</p> : <>
-        <h4>Work goal and description</h4><div className="hii-task-description">{detail.description || 'No work goal recorded'}</div>
+    {error ? <UnavailableState size="section" title="Couldn't load task details" onRetry={() => setAttempt(n => n + 1)} retryLabel="Try again" />
+      : !detail ? <LoadingState size="section" title="Loading task details…" /> : <>
+        <h4>Work goal and description</h4>{detail.description
+          ? <div className="hii-task-description">{detail.description}</div>
+          : <EmptyState size="row" title="No work goal recorded" />}
         <h4>Recent activity</h4>
-        {detail.activity?.length ? detail.activity.map((a, index) => <p key={index}>{a.text}<small>{timeText(a.at)}</small></p>) : <p>Activity unavailable</p>}
+        {detail.activity?.length ? detail.activity.map((a, index) => <p key={index}>{a.text}<small>{timeText(a.at)}</small></p>) : <UnavailableState size="row" title="Activity unavailable" />}
       </>}
     <button type="button" className="btn btn-sm hib-row-btn" onClick={() => onNavigate(taskPath(task.id))}>Open task</button>
   </div>;

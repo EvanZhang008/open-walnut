@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Routine, RoutineAuditEntry } from '@/api/routines';
 import { auditClock, describeAuditEntry } from '@/utils/routine-format';
+import { EmptyState } from '@/components/common/EmptyState';
 import '@/styles/trigger-state.css';
 
 /**
@@ -65,7 +66,7 @@ export function AuditRow({ entry, check, onOpenSession, nameTask, repeat = 1 }: 
               <pre className="trigger-audit-injected">{entry.injected.preview}</pre>
             </>
           ) : (
-            <div className="trigger-audit-detail-label">No injected text was recorded for this fire.</div>
+            <EmptyState size="row" title="No injected text was recorded for this fire" />
           )}
           {sessionId && (
             <button type="button" className="trigger-jobs-link" onClick={() => onOpenSession(sessionId)}>

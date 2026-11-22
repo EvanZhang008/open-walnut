@@ -324,7 +324,7 @@ describe('FilterValuesPage: the second page', () => {
     const c = controller({ lists: lists({ projects: names }) })
     expect(labels(page(c, 'project', 'project 2'))).toEqual(['Project 20', 'Project 21'])
     expect(labels(page(c, 'project', 'IOS'))).toEqual(['iOS App'])
-    expect(page(c, 'project', 'zzqq').querySelector('.fb-empty')?.textContent).toBe('No match for "zzqq"')
+    expect(page(c, 'project', 'zzqq').querySelector('[data-testid="fb-empty"]')?.textContent).toBe('No match for \u201czzqq\u201d')
     const opts = dimValues('project', c.state, c.lists)
     expect(filterOptions(opts, '  ').map((o) => o.label)).toEqual(names)
     expect(filterOptions(opts, 'nut').map((o) => o.label)).toEqual(['Walnut'])
@@ -537,7 +537,7 @@ describe('FilterSearchResults: the first page while the search box has text', ()
     expect(hits[0].querySelector('.fb-hit-value')?.textContent).toBe('Garden')
     const doing = results(c, 'doing').querySelector('[role="option"]')
     expect(doing?.getAttribute('data-filter-value')).toBe('Working')
-    expect(results(c, 'xyz').querySelector('.fb-empty')?.textContent).toBe('Nothing matches "xyz"')
+    expect(results(c, 'xyz').querySelector('[data-testid="fb-empty"]')?.textContent).toBe('Nothing matches \u201cxyz\u201d')
   })
 
   it('a view hit reads View and its label after the filter hits; the current view carries the check; no pin hint', () => {
@@ -563,7 +563,7 @@ describe('FilterSearchResults: the first page while the search box has text', ()
     const current = doc.querySelector('.fb-hit[data-view-option="tasks"]')!
     expect(current.className).toContain('is-selected')
     expect(current.querySelector('.fb-item-check svg')).not.toBeNull()
-    expect(doc.querySelector('.fb-pin-hint, .fb-empty')).toBeNull()
+    expect(doc.querySelector('.fb-pin-hint, [data-testid="fb-empty"]')).toBeNull()
   })
 
   it('a selected hit carries is-selected and a check at the right; Blocked hits name no property', () => {

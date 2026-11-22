@@ -500,13 +500,14 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   await expect(panel).toBeVisible({ timeout: 15_000 })
   const pane = await openSessionBoard(page, panel)
   const error = pane.getByTestId('board-error')
-  await expect(error).toContainText("Couldn't load the board: Task not found: pw-task-model-switch")
+  await expect(error).toContainText("Couldn't load the board")
+  await expect(error).toContainText('Task not found: pw-task-model-switch')
   await expect(pane.getByTestId('board-empty')).toHaveCount(0)
   await pane.screenshot({ path: `${SHOT_DIR}/${engine}-8-error.png` })
 
   mode = 'offline'
   await error.getByRole('button', { name: 'Retry' }).click()
-  await expect(error).toContainText("Couldn't load the board: Could not reach Walnut")
+  await expect(error).toContainText('Could not reach Walnut')
 
   mode = 'real'
   await error.getByRole('button', { name: 'Retry' }).click()

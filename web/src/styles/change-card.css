@@ -250,7 +250,6 @@
 
 /* A stage's detail, read live */
 .change-card .change-card-detail { margin: 2px 8px 8px 31px; padding: 8px 4px 4px 12px; border-left: 1px solid var(--border-strong); max-height: 240px; overflow: auto; overscroll-behavior: contain; }
-.change-card .change-card-detail-error { color: var(--change-blocked); }
 .change-card .change-card-blockers { margin: 0 0 8px; padding: 0; }
 .change-card .change-card-blocker {
   display: grid;

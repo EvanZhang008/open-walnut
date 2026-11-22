@@ -17,6 +17,7 @@
  * question sits in `.thread-card-q` (tests and the fold read it).
  */
 import { memo, useMemo, type ReactNode } from 'react';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
@@ -154,10 +155,10 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
             {question(t.user)}
             {replies.map(reply)}
             {t.replies.length === 0 && last && p.awaiting && !liveReply && !p.live && (
-              <div className="thread-card-noanswer" data-awaiting="true">Waiting for its answer…</div>
+              <LoadingState size="row" title="Waiting for its answer…" testId="thread-card-noanswer" data={{ awaiting: 'true' }} />
             )}
             {t.replies.length === 0 && !(last && (liveReply || p.lastLive || p.awaiting)) && (
-              <div className="thread-card-noanswer">No answer</div>
+              <EmptyState size="row" title="No answer" testId="thread-card-noanswer" />
             )}
           </div>
         );
@@ -170,7 +171,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
           {m.status !== 'failed' && live && <LiveAnswer key={`live-${live.index}`} live={live} streaming={p.streaming} h={h} />}
         </div>
       ))}
-      {p.empty && <div className="thread-card-empty">No message in this question yet.</div>}
+      {p.empty && <EmptyState size="section" title="No message in this question yet" />}
     </>
   );
 });

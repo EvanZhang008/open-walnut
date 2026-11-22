@@ -1,0 +1,21 @@
+{
+  "ownEmptyClass": {
+    "styles/board-status.css": 1,
+    "styles/file-doc-bar.css": 2,
+    "styles/filter-bar-row.css": 1,
+    "styles/focus-spaces.css": 1,
+    "styles/globals.css": 5,
+    "styles/health-monitor.css": 1,
+    "styles/home-navigation.css": 1,
+    "styles/keyboard-shortcuts.css": 1,
+    "styles/org-rail.css": 1,
+    "styles/project-start.css": 1,
+    "styles/quickbar.css": 1,
+    "styles/session-servers.css": 2,
+    "styles/settings-nav.css": 2,
+    "styles/status-sections.css": 1,
+    "styles/task-board.css": 1,
+    "styles/tasks-page.css": 1
+  },
+  "bareEmptyText": {}
+}

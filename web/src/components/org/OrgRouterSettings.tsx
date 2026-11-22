@@ -28,6 +28,7 @@ import { setRouterSettingsOpen } from './router-settings-open';
 import { areaIdWords, routerStateWord, vpLinkCount } from './org-channels-model';
 import { RouterFolderPicker, ROUTER_NO_FOLDER_LINE, folderList, sameFolders } from './RouterFolderPicker';
 import { RouterSettingsDialog } from './RouterSettingsDialog';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
 
 export interface RouterSettingsValue {
@@ -355,7 +356,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
                 )}
               </li>
             ))}</ul>
-            : <span className="org-router-hint">No account yet. The Mail plugin adds each mailbox here.</span>}
+            : <EmptyState size="row" title="No account yet" hint="The Mail plugin adds each mailbox here." />}
           <span className="org-router-hint">{sources.some((src) => src.kind !== 'mail') ? ROUTER_CHAT_SOURCES_NOTE : ROUTER_SOURCES_NOTE}</span>
         </div>
       </div>
@@ -410,7 +411,9 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
         <div className="org-router-value">
         <p className="org-router-hint">{ROUTER_LINK_NOTE}</p>
         {leads.length === 0 && stale.length === 0 && (
-          <p className="org-router-hint" data-testid="org-router-no-vps">{tasksLoading ? 'Loading the VPs…' : 'No open VP yet. A router works on its own.'}</p>
+          tasksLoading
+            ? <LoadingState size="row" title="Loading the VPs…" testId="org-router-no-vps" />
+            : <EmptyState size="row" title="No open VP yet" hint="A router works on its own." testId="org-router-no-vps" />
         )}
         {leads.length > LINK_FILTER_FROM && onLinkFilter && (
           <MicInput
@@ -428,7 +431,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
           />
         )}
         <div className="org-router-link-list">
-        {shownLeads.length === 0 && leads.length > 0 && <p className="org-router-hint" data-testid="org-router-link-none">No VP matches “{linkFilter.trim()}”.</p>}
+        {shownLeads.length === 0 && leads.length > 0 && <EmptyState size="row" title={`No VP matches “${linkFilter.trim()}”`} testId="org-router-link-none" />}
         {shownLeads.map((lead) => (
           <label key={lead.id} className="org-router-check" data-testid="org-router-link" data-task-id={lead.id} data-link-state="open">
             <Checkbox checked={value.links.includes(lead.id)} data-draft-key={draftAttr} disabled={busy} onChange={() => onToggleLink(lead.id)} />

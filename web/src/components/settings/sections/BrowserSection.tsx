@@ -78,7 +78,7 @@ export function BrowserSection() {
       >
         <SettingsRow
           label="Browsers that let agents in now"
-          help={st === null ? 'Loading…' : st.browsers.length ? st.browsers.map((b) => b.label).join(', ') : 'None: in the extension popup, Settings, turn on "Let Walnut agents use this browser".'}
+          help={st === null ? 'Loading…' : st.browsers.length ? st.browsers.map((b) => b.label).join(', ') : 'None: in the extension popup, Settings, turn on "Let Walnut agents use this browser".'} // empty-state-ok: row help text
           control={null}
         />
         <SettingsRow

@@ -23,7 +23,7 @@ export function TopicMailFrom({ value, onPick, disabled }: {
 
   const items: ContextMenuItem[] = [
     ...(accounts ?? []).map((a) => ({ key: a.accountId, label: a.address, checked: a.accountId === value, onSelect: () => { if (a.accountId !== value) onPick(a.accountId); } })),
-    ...(accounts && !accounts.length ? [{ key: 'none-can-send', info: true, label: available ? 'No mail account can send. Add one in Settings, Mail.' : 'Mail is off or did not answer.' }] : []),
+    ...(accounts && !accounts.length ? [{ key: 'none-can-send', info: true, label: available ? 'No mail account can send. Add one in Settings, Mail.' : 'Mail is off or did not answer.' }] : []), // empty-state-ok: a menu info item (ContextMenu items take a string label)
     ...(accounts === null ? [{ key: 'loading', info: true, label: 'Reading the mail accounts…' }] : []),
     { key: 'divider', divider: true },
     { key: 'no-mailbox', label: 'No mailbox (nothing is emailed)', checked: !value, onSelect: () => { if (value) onPick(null); } },
@@ -49,7 +49,7 @@ export function TopicMailFrom({ value, onPick, disabled }: {
           />
         )}
       </span>
-      {!value && <span className="topic-muted" data-testid="topic-mail-from-none">Nothing is emailed until you choose one.</span>}
+      {!value && <span className="topic-muted" data-testid="topic-mail-from-none">Nothing is emailed until you choose one.</span>}{/* empty-state-ok: a help line under the field */}
     </div>
   );
 }

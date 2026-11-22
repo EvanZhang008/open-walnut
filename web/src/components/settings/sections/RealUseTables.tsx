@@ -14,6 +14,7 @@ import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { sparkPaths } from './host-fleet-dashboard-model';
+import { EmptyState } from '@/components/common/EmptyState';
 import {
   ROWS_SHOWN, alarmLine, alarmStatus, failuresText, isToolSort, matchesFind, msText, pageKindParts, pctText, rangeWord,
   realErrors, rowKey, seriesTitle, sizeText, sizesText, slowText, slowIsHigh, sortRows, spilledText, stepWord, type ToolSort,
@@ -144,7 +145,7 @@ function UsageTable({ kind, rows, cols, range, now, empty }: { kind: UsageKind; 
         </tr>
       </thead>
       <tbody>
-        {rows.length === 0 && <tr><td className="ru-empty" colSpan={span}>{empty}</td></tr>}
+        {rows.length === 0 && <tr><td className="ru-state-cell" colSpan={span}>{empty}</td></tr>}
         {shown.map((r) => {
           const key = rowKey(r);
           const open = openKey === key;
@@ -209,9 +210,9 @@ export function ToolsBlock({ rows, range, now }: BlockProps) {
   const [sort, setSort] = usePageView<ToolSort>('settings', 'real-use.sort', 'problems', isToolSort);
   const ops = rows.filter((r) => r.kind === 'op');
   const shown = sortRows(ops.filter((r) => matchesFind(r.name, find)), sort);
-  const empty = ops.length === 0 ? `No tool calls in the last ${rangeWord(range)}.` : (
-    <>No tool matches “{find.trim()}”. <button type="button" className="btn btn-link" onClick={() => setFind('')}>Clear the search</button></>
-  );
+  const empty = ops.length === 0
+    ? <EmptyState size="row" title={`No tool calls in the last ${rangeWord(range)}`} />
+    : <EmptyState size="row" title={`No tool matches “${find.trim()}”`} action={{ label: 'Clear search', onClick: () => setFind('') }} />;
   return (
     <section className="ru-block" data-testid="real-use-tools">
       <h4 className="ru-h">Tools</h4>
@@ -227,7 +228,7 @@ export function ToolsBlock({ rows, range, now }: BlockProps) {
         <b>Over budget</b>: answers bigger than the asking client takes (25,000 characters through MCP, 10,240 bytes through the CLI).{' '}
         <b>Refused</b>: designed refusals (a guard said no); they never ring.{' '}
         <b>{rangeWord(range)}</b>: grey line uses {stepWord(range)}, red line problems {stepWord(range)}.{' '}
-        <b>State</b>: its Walnut Health alarm. <b>Alarm</b> rang; <b>No alarm</b> checked and under its threshold; <b>No data</b> too little use to judge yet.
+        <b>State</b>: its Walnut Health alarm. <b>Alarm</b> rang; <b>No alarm</b> checked and under its threshold; <b>No data</b> too little use to judge yet.{/* empty-state-ok: a legend */}
       </p>
     </section>
   );
@@ -239,7 +240,7 @@ export function RequestsBlock({ rows, range, now }: BlockProps) {
     <section className="ru-block" data-testid="real-use-requests">
       <h4 className="ru-h">Requests</h4>
       <p className="ru-caption">Requests from the browser and the phone (a tool's own calls are counted under Tools) · {rangeWord(range)}</p>
-      <UsageTable kind="http" rows={http} cols={requestCols(range)} range={range} now={now} empty={`No requests in the last ${rangeWord(range)}.`} />
+      <UsageTable kind="http" rows={http} cols={requestCols(range)} range={range} now={now} empty={<EmptyState size="row" title={`No requests in the last ${rangeWord(range)}`} />} />
       <p className="ru-legend">
         <b>Slow</b>: reads over 5 s, long polls and streams not counted; 10 in 60 minutes ring an alarm.{' '}
         <b>Server errors</b>: 5xx answers except 501; 5 in 60 minutes ring.{' '}
@@ -255,7 +256,7 @@ export function PageErrorsBlock({ rows, range, now }: BlockProps) {
     <section className="ru-block" data-testid="real-use-pages">
       <h4 className="ru-h">Page errors</h4>
       <p className="ru-caption">Errors in Walnut's pages · {rangeWord(range)}</p>
-      <UsageTable kind="page" rows={pages} cols={pageCols(range)} range={range} now={now} empty={`No page errors in the last ${rangeWord(range)}.`} />
+      <UsageTable kind="page" rows={pages} cols={pageCols(range)} range={range} now={now} empty={<EmptyState size="row" title={`No page errors in the last ${rangeWord(range)}`} />} />
       <p className="ru-legend">Kept as the request it failed on, or the error's type and the part of Walnut's built code it came from; never its message.</p>
     </section>
   );

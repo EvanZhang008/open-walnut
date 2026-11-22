@@ -27,6 +27,7 @@ import { FleetNumber } from './FleetNumber';
 import { HostFleetCard, HostFleetOfflineRow } from './HostFleetCard';
 import { HostFleetTopology } from './HostFleetTopology';
 import type { HostFleet } from './useHostFleet';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 
@@ -98,7 +99,11 @@ export function HostFleetOverview({ fleet, onPickRow }: { fleet: HostFleet; onPi
         <>
           {error && <p className="hf-error" role="status">Could not read the hosts: {error}.{hosts ? ' Showing what was read last.' : ''}</p>}
           {refreshError && <p className="hf-error" role="status" data-testid="host-fleet-refresh-error">Could not read the hosts again: {refreshError}.{newest !== null ? ` Showing what was read ${readAgo(newest, now)}.` : ''}</p>}
-          {!sum && !error && <p className="hf-loading" data-testid="host-fleet-reading">{hosts && pending > 0 ? 'Reading each host...' : hosts ? 'No host read yet.' : 'Reading the hosts...'}</p>}
+          {!sum && !error && (hosts && pending > 0
+            ? <LoadingState title="Reading each host..." testId="host-fleet-reading" />
+            : hosts
+              ? <EmptyState title="No host read yet" testId="host-fleet-reading" />
+              : <LoadingState title="Reading the hosts..." testId="host-fleet-reading" />)}
           {sum && (
             <>
               <div className="hf-stats" data-testid="host-fleet-summary">
@@ -112,7 +117,7 @@ export function HostFleetOverview({ fleet, onPickRow }: { fleet: HostFleet; onPi
                   <HostFleetTopology rows={rows} onPick={onPick} />
                 </div>
               )}
-              {pending > 0 && <p className="hf-loading hf-loading-more" data-testid="host-fleet-reading">Reading {pending === 1 ? '1 more host' : `${pending} more hosts`}...</p>}
+              {pending > 0 && <LoadingState size="row" title={`Reading ${pending === 1 ? '1 more host' : `${pending} more hosts`}...`} testId="host-fleet-reading" />}
               <div className="hf-grid">
                 {live.map((h) => <HostFleetCard key={h.host} host={h} now={now} action={fleet.boot[h.host]} onBootStart={fleet.bootStart} onDetails={(host) => fleet.refresh([host])} />)}
               </div>

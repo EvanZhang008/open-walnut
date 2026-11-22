@@ -35,6 +35,7 @@ import { PhoneRowExtras } from './PhoneRowExtras';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
+import { EmptyState, LoadingState, UnavailableState } from '../common/EmptyState';
 import type { TaskPriority } from '@open-walnut/core';
 import { isHiddenFromTaskLists, orgDisplayTitle } from '@open-walnut/org-tree';
 import { priorityRank } from '@open-walnut/task-query';
@@ -93,7 +94,6 @@ import {
 import { arrangeSearchResults, taskMatchesCeoName, taskMatchesLiterally } from './search-relevance';
 import { taskMatchesDateTag } from './date-tag-search';
 import '@/styles/todo-search.css';
-import '@/styles/todo-empty-board.css';
 import '@/styles/row-pill-fit.css';
 import '@/styles/toolbar-fit.css';
 import { useToolbarFit } from '@/hooks/useToolbarFit';
@@ -221,6 +221,9 @@ type DetailTarget =
 interface TodoPanelProps {
   tasks: Task[];
   loading: boolean;
+  /** The list's last load failed (useTasks' error): an empty list then says so, with Retry. */
+  loadError?: string | null;
+  onRetryLoad?: () => void;
   onComplete: (id: string) => void;
   onSetPhase?: (id: string, phase: string) => void;
   onCreate: (input: { title: string; priority: string; project?: string; pinnedTier?: FocusTier; capture?: boolean }) => Promise<Task | unknown>;
@@ -2353,7 +2356,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loadError, onRetryLoad, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   countRender('TodoPanel');
   const pinUndo = useTaskUndo();
   const pinBar = useFocusBarContextSafe();
@@ -2382,6 +2385,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const bannerInList = usePhoneLayout();
   const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
   const [searchReset, setSearchReset] = useState(0);
+  // The empty answer's Clear search empties the field too (the bar keeps its own draft of the text).
+  const clearSearchField = useLeanCallback(() => { clearSearch(); setSearchReset((version) => version + 1); }, [clearSearch]);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const isSearchMode = deferredSearchQuery.trim().length > 0;
   // Org conversations stay off the board, but an explicit search must find them.
@@ -7923,7 +7928,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     hold.sig = sig;
     setHoldMoveTick((n) => n + 1);
   });
-  /** Some section draws rows of this view, so an empty list under Working is no "No tasks found". */
+  /** Some section draws rows of this view, so an empty list under Working is no "No tasks in this view". */
   const sectionRowsDrawn = sectionModel.watching.length + sectionModel.needs.length + sectionModel.waiting.length
     + sectionModel.notstarted.length + sectionModel.background.length + sectionModel.done.length + sectionModel.doneUnloaded > 0;
   // A stable ref callback: an inline one is detached (set to null) on every commit,
@@ -8294,7 +8299,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               )}
               {/* F34: no "nothing pinned" verdict before the pins have loaded. */}
               {!isFolded('pinned') && !anyTierDrawn && !loading && (
-                <p className="todo-pinned-empty" data-testid="todo-pinned-empty">Nothing pinned yet. Pin a task from its menu to keep it here.</p>
+                <EmptyState size="row" testId="todo-pinned-empty" title="Nothing pinned yet" hint="Pin a task from its menu to keep it here." />
               )}
               {!isFolded('pinned') && anyTierDrawn && (
                 <NavigationSections storageKey="walnut-todo-tier-order">
@@ -8392,17 +8397,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               dead gap above TASKS); the list scrolls once items exceed that space. */}
           {/* Nothing opened yet (a new install, a cleared browser): say what the list is for. */}
           {recentVisible && recentTasks.length === 0 && !loading && !isSearchMode && (
-            <p className="todo-pinned-empty" data-testid="todo-recent-empty">Tasks you create, open or write in show up here, newest first.</p>
+            <EmptyState size="row" testId="todo-recent-empty" title="No recent tasks yet" hint="Tasks you create, open or write in show up here, newest first." />
           )}
           {/* A search on Recent that no opened task matches (a typo, a task never opened): say so,
               with the way to the same search over every task. */}
           {recentVisible && effectiveSection === 'recent' && isSearchMode && visibleRecentTasks.length === 0 && !loading && (
-            <div className="todo-filter-empty" data-testid="todo-recent-search-empty" role="status">
-              <div className="todo-filter-empty-title">No task you opened matches</div>
-              <button type="button" className="todo-filter-empty-clear" onClick={() => setSearchSection('all')}>
-                Search all tasks
-              </button>
-            </div>
+            <EmptyState
+              testId="todo-recent-search-empty"
+              icon={ICONS.ICON_SEARCH}
+              title="No task you opened matches"
+              action={{ label: 'Search all tasks', onClick: () => setSearchSection('all') }}
+            />
           )}
           {recentVisible && visibleRecentTasks.length > 0 && (
             <div className={`todo-pinned-section${!isFolded('recent') ? ' todo-pinned-section-recent' : ''}${isAll ? '' : ' todo-pinned-section-solo'}`}>
@@ -8572,53 +8577,41 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       {tasksVisible && !tasksCollapsed && (
       <div ref={panelListRef} className="todo-panel-list" style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : undefined}>
         {loading && (
-          <div className="empty-state" style={{ padding: '24px 8px' }}>
-            <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
-          </div>
+          <LoadingState testId="todo-loading" title="Loading tasks…" />
         )}
-        {!loading && isSearchMode && searchFiltered.length === 0 && (
-          <div className="empty-state" style={{ padding: '24px 8px' }}>
-            {/* While the server pass is still in flight, "no matches yet" is a
-                pending state, not an answer — declaring "No tasks match" early
-                reads as a (wrong) final verdict for queries with no literal
-                title hit. */}
-            {isSearching
-              ? <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
-              : (
-                searchDoneCount > 0
-                  ? (
-                    <>
-                      <p className="text-sm">No open tasks match &lsquo;{deferredSearchQuery}&rsquo;</p>
-                      {/* Inline mirror of the ✓ Done chip so the answer is right
-                          where the user is already looking, not up in the strip. */}
-                      <button
-                        type="button"
-                        className="todo-search-done-reveal"
-                        onClick={() => setShowDoneResults(true)}
-                      >
-                        Show {searchDoneCount} completed result{searchDoneCount === 1 ? '' : 's'}
-                      </button>
-                    </>
-                  )
-                  : <p className="text-sm">No tasks match &lsquo;{deferredSearchQuery}&rsquo;</p>
-              )}
-          </div>
+        {!loading && isSearchMode && searchFiltered.length === 0 && !(loadError && tasks.length === 0) && (
+          /* While the server pass is still in flight, "no matches yet" is a
+             pending state, not an answer: declaring "No tasks match" early
+             reads as a (wrong) final verdict for queries with no literal title hit. */
+          isSearching
+            ? <LoadingState testId="todo-search-pending" title="Searching tasks…" />
+            : (
+              <EmptyState
+                testId="todo-search-empty"
+                icon={ICONS.ICON_SEARCH}
+                title={<>{searchDoneCount > 0 ? 'No open tasks match' : 'No tasks match'} &lsquo;{deferredSearchQuery}&rsquo;</>}
+                hint={searchDoneCount > 0 ? undefined : 'Try other words, or clear the search to see every task.'}
+                // The inline mirror of the Done chip, so the answer is where the user already looks.
+                action={searchDoneCount > 0
+                  ? { label: `Show ${searchDoneCount} completed result${searchDoneCount === 1 ? '' : 's'}`, onClick: () => setShowDoneResults(true), testId: 'todo-search-done-reveal' }
+                  : { label: 'Clear search', onClick: clearSearchField, testId: 'todo-search-clear' }}
+                secondaryAction={searchDoneCount > 0 ? { label: 'Clear search', onClick: clearSearchField, testId: 'todo-search-clear' } : undefined}
+              />
+            )
         )}
         {/* An EMPTY board (no task at all, not a filter's empty answer) says what
             to do first, and that no project is needed before it. A board whose
             tasks are all elsewhere (pinned above, filtered out) keeps the plain
             line. A project just made from the menu draws its own empty group. */}
-        {!loading && !isSearchMode && filtered.length === 0 && tasks.length === 0 && freshProjects.length === 0 && (
-          <div className="empty-state todo-empty-board" data-testid="todo-empty-board">
-            <p className="todo-empty-board-title">No tasks yet</p>
-            <p className="text-sm">Start with New task above. Projects are created for you as you go.</p>
-          </div>
+        {!loading && loadError && tasks.length === 0 && (
+          <UnavailableState testId="todo-load-error" title="Couldn't load tasks" hint="Your board could not be read. Retry in a moment." detail={loadError} onRetry={onRetryLoad} />
+        )}
+        {!loading && !loadError && !isSearchMode && filtered.length === 0 && tasks.length === 0 && freshProjects.length === 0 && (
+          <EmptyState size="pane" testId="todo-empty-board" title="No tasks yet" hint="Start with New task above. Projects are created for you as you go." />
         )}
         {/* F35: a list emptied only because its tasks sit in Pinned above says nothing. */}
         {!loading && !isSearchMode && filtered.length === 0 && filterResult.list.length === 0 && tasks.length > 0 && !showFilterEmpty && !sectionRowsDrawn && (
-          <div className="empty-state" style={{ padding: '24px 8px' }}>
-            <p className="text-sm">No tasks found</p>
-          </div>
+          <EmptyState testId="todo-list-empty" title="No tasks in this view" />
         )}
         {/* Search mode: ONE flat ranked list (no tier, project or parent grouping: a
             hit tucked under a folded parent would read as "not found", and nesting
@@ -8934,20 +8927,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       )}
       {/* Flat draws no list, so its empty states are here. */}
       {flatSections && loading && (
-        <div className="empty-state" style={{ padding: '24px 8px' }}>
-          <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
-        </div>
+        <LoadingState testId="todo-loading" title="Loading tasks…" />
       )}
       {flatSections && !loading && !phoneFirstLoad && !sectionRowsDrawn && !sectionModel.archiveLeft && sectionModel.workingCount === 0 && !showFilterEmpty && (
-        tasks.length === 0 ? (
-          <div className="empty-state todo-empty-board" data-testid="todo-empty-board">
-            <p className="todo-empty-board-title">No tasks yet</p>
-            <p className="text-sm">Start with New task above. Projects are created for you as you go.</p>
-          </div>
+        loadError && tasks.length === 0 ? (
+          <UnavailableState testId="todo-load-error" title="Couldn't load tasks" hint="Your board could not be read. Retry in a moment." detail={loadError} onRetry={onRetryLoad} />
+        ) : tasks.length === 0 ? (
+          <EmptyState size="pane" testId="todo-empty-board" title="No tasks yet" hint="Start with New task above. Projects are created for you as you go." />
         ) : (
-          <div className="empty-state" style={{ padding: '24px 8px' }}>
-            <p className="text-sm">No tasks found</p>
-          </div>
+          <EmptyState testId="todo-list-empty" title="No tasks in this view" />
         )
       )}
       </div>

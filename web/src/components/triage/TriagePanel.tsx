@@ -10,6 +10,7 @@ import { timeAgo } from '@/utils/time';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { SessionMessage } from '@/components/sessions/SessionMessage';
 import { AgentText } from '@/components/common/AgentText';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 interface TriagePanelProps {
   onClose: () => void;
@@ -133,10 +134,10 @@ function TriageSessionSection({
       {expanded && (
         <div className="triage-session-body">
           {loadingHistory && (
-            <div className="triage-session-loading">Loading session history...</div>
+            <LoadingState size="row" title="Loading session history…" />
           )}
           {historyError && (
-            <div className="triage-session-error">Error: {historyError}</div>
+            <UnavailableState size="row" title="Couldn't load session history" detail={historyError} />
           )}
 
           {/* Full session history with tool calls (when JSONL data exists) */}
@@ -215,10 +216,10 @@ export function TriagePanel({ onClose, taskId, onSessionClick }: TriagePanelProp
 
       <div className="triage-panel-body">
         {loading && (
-          <div className="triage-panel-empty">Loading...</div>
+          <LoadingState size="pane" title="Loading triage sessions…" />
         )}
         {!loading && entries.length === 0 && (
-          <div className="triage-panel-empty">No triage sessions yet</div>
+          <EmptyState size="pane" title="No triage sessions yet" />
         )}
         {entries.map((entry, i) => (
           <TriageSessionSection

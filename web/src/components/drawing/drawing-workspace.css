@@ -182,18 +182,6 @@
 .drawing-canvas-host { position: absolute; inset: 0; }
 /* A plugin's overlay (canvasExtra): its children place themselves in the canvas box. */
 .drawing-workspace-overlay { display: contents; }
-.drawing-workspace-empty, .drawing-workspace-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--fg-muted);
-  text-align: center;
-  padding: 16px;
-}
 /* Make a diagram: a key over the canvas, at the selection's corner. */
 .drawing-diagram-pill {
   position: absolute;

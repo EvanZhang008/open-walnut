@@ -345,7 +345,7 @@ test('with no Ask Walnut tasks the slot is Main\'s composer, and the drawer list
   await expect(drawerRows(page)).toHaveCount(0)
   await expect(drawerMain(page)).toBeVisible()
   await expect(drawerMain(page)).toHaveAttribute('aria-current', 'true')
-  await expect(drawer(page).getByText('No quick questions yet.')).toHaveCount(0)
+  await expect(drawer(page).getByTestId('ask-walnut-drawer-empty')).toHaveCount(0)
   await expect(drawerNew(page)).toBeVisible()
   // The search box takes the keyboard on open, and none of the removed launchers
   // is there (a regression would bring one back as a titled button).
@@ -836,7 +836,7 @@ test('the drawer\'s title switches agents: Mentor has its own list, its own comp
   await expect(agentSwitch(page)).toHaveText(/Quick question · Mentor/)
   await expect(page.locator('[data-testid="ask-walnut-agent-list"]')).toHaveCount(0)
   await expect(drawerRows(page)).toHaveCount(0)
-  await expect(drawer(page).locator('.ask-walnut-drawer-empty')).toHaveText(/No quick questions for Mentor yet/)
+  await expect(drawer(page).getByTestId('ask-walnut-drawer-empty')).toHaveText(/No quick questions for Mentor yet/)
   await settleMotion(page)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/13-mentor-empty.png` })
 

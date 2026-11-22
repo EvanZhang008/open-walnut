@@ -8,6 +8,7 @@ import type { UsageNote, UsageWatch } from '@/api/usage-watch';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import { taskPath } from '@/utils/task-path';
 import { DEFAULT_WATCH_CHECKS, checksText, noteRecipientName, noteStatus, stamp, targetResultText, watchStatus, watchWhen } from './real-use-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** Task id to title, from the watches (the only titles the report carries). */
 export function taskTitles(watches: readonly UsageWatch[]): Map<string, string> {
@@ -60,7 +61,7 @@ export function WatchesBlock({ watches, now }: { watches: UsageWatch[]; now: num
         </thead>
         <tbody>
           {watches.length === 0
-            ? <tr><td className="ru-empty" colSpan={5}>No watches yet. A task that ships a change names here what real use should show.</td></tr>
+            ? <tr><td className="ru-state-cell" colSpan={5}><EmptyState size="row" title="No watches yet" hint="A task that ships a change names here what real use should show." /></td></tr>
             : watches.map((w) => <WatchRow key={w.id} w={w} now={now} titles={titles} />)}
         </tbody>
       </table>
@@ -95,7 +96,7 @@ export function NotesBlock({ notes, now, watches, alarmsOn }: { notes: UsageNote
       <h4 className="ru-h">Notes sent</h4>
       <p className="ru-caption">What rang, told to the task that shipped it or to its project's lead: at most one note every 4 hours</p>
       {notes.length === 0
-        ? <p className="ru-empty">{alarmsOn ? 'No notes yet.' : 'No notes: Real-use watch is off, so nobody is told.'}</p>
+        ? <EmptyState size="row" title="No notes yet" hint={alarmsOn ? undefined : 'Real-use watch is off, so nobody is told.'} />
         : <ul className="ru-notes">{notes.map((n) => <NoteRow key={n.id} n={n} now={now} titles={titles} />)}</ul>}
     </section>
   );

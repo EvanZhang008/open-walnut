@@ -176,7 +176,7 @@ test('F10: the folder filter reaches the labels and never hides a mailbox', asyn
 
   // A zero hit takes away the labels and nothing else, so the sentence describes what it replaced.
   await filter.fill('no such folder')
-  await expect(page.getByTestId('mail-tail-empty')).toHaveText('No folder matches that.')
+  await expect(page.getByTestId('mail-tail-empty')).toHaveText('No folder matches \u201cno such folder\u201d')
   expect(await rows.locator('.mail-mailbox-name').allInnerTexts()).toEqual(ROLES)
   await expect(folderRow(page, HARBOUR, 'INBOX')).toHaveAttribute('aria-current', 'true')
   console.log(`shot: ${await shoot(page.locator(PANE), SHOT_DIR, 'chromium-filter')}`)
@@ -325,12 +325,12 @@ test('F1 F6 F15: All Drafts, its badge and its header say the same number', asyn
   const written = page.locator('[data-testid="mail-drafts-group"][data-group="written-here"]')
   await expect(written).toHaveCount(1)
   await expect(written).toContainText('Written here')
-  const emptyLine = page.locator('.mail-rows p', { hasText: 'No drafts.' })
+  const emptyLine = page.getByTestId('mail-drafts-empty')
   await expect(emptyLine).toHaveCount(1)
   const order = await page.locator('.mail-rows').evaluate((rowsEl) => {
     const kids = Array.from(rowsEl.children)
     const label = kids.findIndex((kid) => kid.getAttribute('data-group') === 'written-here')
-    const sentence = kids.findIndex((kid) => (kid.textContent ?? '').startsWith('No drafts.'))
+    const sentence = kids.findIndex((kid) => kid.getAttribute('data-testid') === 'mail-drafts-empty')
     return { label, sentence }
   })
   expect(order.label, 'the sentence is under its own heading').toBeLessThan(order.sentence)

@@ -65,6 +65,7 @@ import { taskTextSource } from '@/utils/agent-text-source';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { threadCountLabel } from '@open-walnut/thread-view';
 import { DisclosureButton, Tab, TabList, SegmentedControl } from '@/components/controls';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -323,7 +324,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
   }, [focus, onFocused]);
   return (
     <div ref={bodyRef} className="org-rail-body org-task-sections" data-testid="org-task-sections">
-      {sections.length === 0 && <p className="org-task-empty" data-testid="org-task-empty">Nothing open here.</p>}
+      {sections.length === 0 && <EmptyState size="section" title="Nothing open here" testId="org-task-empty" />}
       {sections.map((sec) => {
         const open = sectionOpen(sec.tab, flipped);
         // Needs you counts what asks the user, as the header does (sectionCount, headerPills).

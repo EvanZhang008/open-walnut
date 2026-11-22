@@ -78,7 +78,7 @@ describe('the now line', () => {
   })
 
   it('loading, failed, none paired, paired but never used', () => {
-    expect(deriveWays(base({ listState: 'loading' })).now.title).toBe('Checking how your phone reaches Walnut...')
+    expect(deriveWays(base({ listState: 'loading' })).now.title).toBe('Checking how your phone reaches Walnut…')
     expect(deriveWays(base({ listState: 'failed' })).now.tone).toBe('warn')
     expect(deriveWays(base()).now.title).toBe('No phone is paired yet')
     expect(deriveWays(base({ phoneUses: [{ name: 'new-phone', via: 'lan' }] })).now.title).toBe("Your phone hasn't connected yet")

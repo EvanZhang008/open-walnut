@@ -11,6 +11,7 @@ import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { KanbanChange } from './kanban-changes-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export interface KanbanChangesProps {
   open: boolean;
@@ -57,7 +58,7 @@ export function KanbanChanges({ open, anchorRef, changes, onPick, onClose }: Kan
       onKeyDown={onKeyDown}
     >
       {changes.length === 0 ? (
-        <div className="kanban-changes-empty">Nothing changed since you last looked</div>
+        <EmptyState size="row" role="presentation" title="Nothing changed since you last looked" />
       ) : changes.map((c, i) => (
         <button
           key={`${c.taskId}-${c.kind}-${i}`}

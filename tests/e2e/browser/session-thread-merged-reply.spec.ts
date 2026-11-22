@@ -62,7 +62,7 @@ test.describe('questions answered inside the running turn\'s reply', () => {
       await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(n)
       await expect(card.locator('.thread-card-title')).toHaveText(title)
       await expect(card.locator('.thread-status-word')).not.toHaveAttribute('data-kind', 'failed')
-      await expect(card.locator('.thread-card-noanswer')).toHaveCount(0)
+      await expect(card.getByTestId('thread-card-noanswer')).toHaveCount(0)
       await expect(card.locator('.thread-card-body')).toContainText(own)
       await expect(card.locator('.thread-card-body')).not.toContainText(other)
       await expect(card.locator('.thread-card-body')).not.toContainText('ROOT-DONE')

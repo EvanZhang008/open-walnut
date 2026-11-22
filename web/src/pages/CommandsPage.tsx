@@ -3,7 +3,8 @@ import { usePersistentState, oneOf } from '@/hooks/usePersistentState';
 import { useCommands } from '@/hooks/useCommands';
 import { CommandCard, COMMAND_SOURCE_LABEL } from '@/components/commands/CommandCard';
 import { CommandForm } from '@/components/commands/CommandForm';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { ICON_TERMINAL } from '@/components/common/Icons';
 import { Chip, ChipGroup } from '@/components/controls';
 import { useAlert } from '@/hooks/useConfirm';
 import type { CommandDef } from '@/api/commands';
@@ -11,7 +12,7 @@ import type { CommandDef } from '@/api/commands';
 type FilterTab = 'all' | 'builtin' | 'user';
 
 export function CommandsPage() {
-  const { commands, loading, error, create, update, remove } = useCommands();
+  const { commands, loading, error, refetch, create, update, remove } = useCommands();
   const alert = useAlert();
   const [filter, setFilter] = usePersistentState<FilterTab>(
     'walnut-commands-page-filter', 'all', oneOf(['all', 'builtin', 'user']),
@@ -58,8 +59,8 @@ export function CommandsPage() {
     }
   }, [remove, alert]);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
+  if (loading) return <LoadingState size="pane" title="Loading commands…" />;
+  if (error) return <UnavailableState size="pane" title="Couldn't load commands" detail={error} onRetry={refetch} />;
 
   return (
     <div className="page-readable">
@@ -99,13 +100,9 @@ export function CommandsPage() {
       </ChipGroup>
 
       {filtered.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-state-icon">/</div>
-          <p>{filter === 'all' ? 'No commands defined yet' : `No ${COMMAND_SOURCE_LABEL[filter].toLowerCase()} commands`}</p>
-          {filter === 'all' && (
-            <p className="text-sm" style={{ marginTop: 8 }}>Create a command to add quick prompts accessible via /name in chat</p>
-          )}
-        </div>
+        filter === 'all'
+          ? <EmptyState size="pane" icon={ICON_TERMINAL} title="No commands defined yet" hint="Create a command to add quick prompts you run with /name in chat." />
+          : <EmptyState size="pane" icon={ICON_TERMINAL} title={`No ${COMMAND_SOURCE_LABEL[filter].toLowerCase()} commands`} action={{ label: 'Show all commands', onClick: () => setFilter('all') }} />
       ) : (
         <div className="cmd-list">
           {filtered.map((cmd) => (

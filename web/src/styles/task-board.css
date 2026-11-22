@@ -90,42 +90,6 @@
   background: #fff;
 }
 
-.task-board-loading {
-  padding: 24px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-}
-
-.task-board-empty {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
-
-.task-board-empty-card {
-  max-width: 420px;
-  padding: 20px 22px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
-  text-align: center;
-}
-
-.task-board-empty-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.task-board-empty-text {
-  margin: 6px 0 14px;
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-  color: var(--fg-muted);
-}
-
 .task-board-empty-error {
   margin-top: 10px;
   font-size: var(--font-size-sm);

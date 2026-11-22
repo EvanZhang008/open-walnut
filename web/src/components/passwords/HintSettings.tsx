@@ -39,7 +39,7 @@ export function HintSettings({ status, onChanged }: { status: VaultStatus; onCha
     <SettingsGroup heading="Master password hint" data-testid="pw-hint-settings"
       footer={<>{HINT_HELP} The hint is kept unencrypted beside the vault, so it shows while Passwords is locked.</>}>
       <SettingsRow label="Hint" htmlFor="pw-hint-edit"
-        help={!unlocked ? 'Unlock Passwords in this window to change this.' : status.hint ? `Now: ${status.hint}` : 'No hint yet.'}
+        help={!unlocked ? 'Unlock Passwords in this window to change this.' : status.hint ? `Now: ${status.hint}` : 'No hint yet.'} // empty-state-ok: row help text
         error={problem || error || undefined}
         control={<input id="pw-hint-edit" data-no-draft="secret" autoComplete="off" spellCheck={false} maxLength={HINT_MAX} className="settings-input settings-input--short"
           disabled={!unlocked} value={hint} onChange={(e) => { setHint(e.target.value); setNote('') }} />} />

@@ -54,7 +54,6 @@
 .hib-index-row .hib-origin-kind, .hib-index-row .hib-origin-badge { display: none; }
 .hib-index-row .hib-origin-name { font-weight: 400; color: var(--fg-muted); font-size: var(--font-size-xs); }
 .hib-inbox-reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.hib-split-empty { flex: 1; display: grid; place-content: center; padding: 24px; color: var(--fg-muted); }
 .hib-inbox-pane[data-density="compact"] .hib-row { padding: 8px 12px; gap: 4px; }
 .hib-inbox-pane[data-density="compact"] .hib-row-actions { display: flex; visibility: hidden; }
 .hib-inbox-pane[data-density="compact"] .hib-row:is(:hover, :focus-within) .hib-row-actions { visibility: visible; }

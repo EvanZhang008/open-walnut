@@ -8,7 +8,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clearVisits, fetchVisits, type VisitStore } from '@/api/page-visits';
 import { knownPlaces, placeOfKey, type PaneName } from './page-use-model';
 import { useAppCatalog } from '@/apps/hooks';
-import { SettingsGroup, SettingsNotice, SettingsLoadingRow, SettingsRow } from '../SettingsSection';
+import { SettingsGroup, SettingsNotice, SettingsRow } from '../SettingsSection';
+import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import '@/styles/settings-sections-addons.css';
@@ -73,14 +74,14 @@ export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneNam
   return (
     <SectionCard id="page-use" title="Page Use" description={PAGE_USE_BLURB} actions={actions}>
       <div className="settings-addons-contents page-use" data-testid="page-use">
-        {loading && !store && <SettingsLoadingRow>Reading the counts...</SettingsLoadingRow>}
+        {loading && !store && <LoadingState title="Reading the counts…" />}
         {error && <SettingsNotice kind="error" role="alert">{`Couldn't read it: ${error}`}</SettingsNotice>}
         {store && (
           <SettingsGroup
             heading="Opened"
             footer={`Counting since ${new Date(store.since).toLocaleDateString()}.`}
           >
-            {opened.length === 0 && <SettingsRow label="Nothing counted yet." help="Open a page and it shows here within a few seconds." />}
+            {opened.length === 0 && <EmptyState title="Nothing counted yet" hint="Open a page and it shows here within a few seconds." />}
             {opened.length > 0 && (
               <div className="settings-row settings-row-stacked" data-wide="true">
                 <table className="page-use-table" data-testid="page-use-opened">

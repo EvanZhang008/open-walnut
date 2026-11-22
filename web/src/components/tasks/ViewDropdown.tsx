@@ -27,6 +27,7 @@
  * rows, and the body height is FIXED: interacting with the panel never resizes it.
  */
 
+import { EmptyState } from '@/components/common/EmptyState';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -521,7 +522,7 @@ function SearchResults({ groups, flat, cursor, onPick, search }: {
   search: string;
 }) {
   if (!flat.length) {
-    return <div className="vd-none">No filter matches “{search.trim()}”</div>;
+    return <EmptyState size="row" title={`No filter matches “${search.trim()}”`} />;
   }
   let index = -1;
   return (

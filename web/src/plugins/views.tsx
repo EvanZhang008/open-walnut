@@ -13,12 +13,12 @@ import { RouteLine } from '@/components/router/RouteLine'
 import type { ContentItem } from '@/utils/content-actions'
 import { lazy, Suspense, useCallback, useRef, type RefObject } from 'react'
 import type { DrawingViewProps } from '../../../packages/plugin-api/src/web'
-import { LoadingSpinner } from '@/components/common/LoadingSpinner'
+import { LoadingState } from '@/components/common/EmptyState'
 
 const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })))
 
 function DrawingView(props: DrawingViewProps) {
-  return <Suspense fallback={<LoadingSpinner />}><DrawingWorkspace {...props} /></Suspense>
+  return <Suspense fallback={<LoadingState size="pane" title="Loading drawing…" />}><DrawingWorkspace {...props} /></Suspense>
 }
 import type {
   AskObjectViewProps,

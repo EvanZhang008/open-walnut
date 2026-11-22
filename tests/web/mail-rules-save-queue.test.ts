@@ -162,7 +162,8 @@ describe('mail rules panel sentences', () => {
     expect(provenanceLine({ source: 'user' })).toBe('');
     expect(provenanceLine({ source: 'user', note: 'CI noise' })).toBe('CI noise');
     expect(provenanceLine({ source: 'user', note: '  ' })).toBe('');
-    expect(COPY.empty).toBe('No rules yet. Use "Important\u2026" or "Not important\u2026" on a mail in Mail to teach Walnut, or add one here.');
+    expect(COPY.emptyTitle).toBe('No rules yet');
+    expect(COPY.emptyHint).toBe('Use "Important\u2026" or "Not important\u2026" on a mail in Mail to teach Walnut, or add one here.');
   });
 
   it('moves an item within bounds only', () => {

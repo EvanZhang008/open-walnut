@@ -7,6 +7,7 @@
  * Writes go through the shared task store when it carries the row (the board row moves in
  * the same frame); REST is the fallback for a row it does not carry.
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import { useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { dependsOnThrough } from '../../../../src/lib/dependency-loop';
@@ -154,11 +155,14 @@ export function TaskDependencies({ task, detail, onChanged, onError }: {
             <button type="button" key={t.id} className="tdp-dep-result" onClick={() => void pickDependency(t.id)}>{orgDisplayTitle(t)}</button>
           ))}
           {results.length === 0 && loopHidden !== null && query.trim() && (
-            <div className="tdp-dep-empty" data-testid="task-detail-dependency-empty">
-              {loopHidden > 0
-                ? `No task to add: ${loopHidden === 1 ? 'the one match already depends' : `the ${loopHidden} matches already depend`} on this task, so picking it would make a loop.`
-                : 'No matching task.'}
-            </div>
+            <EmptyState
+              size="row"
+              testId="task-detail-dependency-empty"
+              title={loopHidden > 0 ? 'No task to add' : `No task matches “${query.trim()}”`}
+              hint={loopHidden > 0
+                ? `${loopHidden === 1 ? 'The one match already depends' : `The ${loopHidden} matches already depend`} on this task, so picking it would make a loop.`
+                : undefined}
+            />
           )}
           <button type="button" className="tdp-link" onClick={() => { setPicking(false); setQuery(''); setResults([]); setLoopHidden(null); }}>Cancel</button>
         </div>

@@ -1,3 +1,4 @@
+import { EmptyState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
@@ -229,7 +230,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
               📁 {projectDisplayName(name)}
             </button>
           ))}
-          {q && shown.length === 0 && <div className="tp-proj-empty">No matching project</div>}
+          {q && shown.length === 0 && <EmptyState size="row" title="No matching project" />}
         </div>,
         document.body,
       )}
@@ -674,12 +675,12 @@ export function TasksPageTable({
 
   let body: ReactNode;
   if (groups && groups.length === 0) {
-    body = <div className="tp-empty">Nothing here — use "＋ Task" to create one.</div>;
+    body = <EmptyState title="No tasks here yet" hint={'Use "＋ Task" to create one.'} />;
   } else if (!groups && sorted.length === 0) {
     body = (
       <>
         {ghostRow(undefined, 'top')}
-        <div className="tp-empty">Nothing here — use the "＋ New task…" row above or "＋ Task".</div>
+        <EmptyState title="No tasks here yet" hint={'Use the "＋ New task…" row above, or "＋ Task".'} />
       </>
     );
   } else if (!windowed) {

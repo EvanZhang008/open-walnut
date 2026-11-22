@@ -5,6 +5,7 @@
  * into a single kebab button to reduce visual noise per task row.
  */
 
+import { EmptyState } from '@/components/common/EmptyState';
 import { useState, useRef, useEffect, useCallback, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
@@ -492,7 +493,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
       {(!q || 'inbox'.includes(q)) && optionRow('', 'Inbox')}
       {shown.map((name) => optionRow(name))}
       {q && shown.length === 0 && (
-        <div className="task-kebab-project-empty">No matching project</div>
+        <EmptyState size="row" title="No matching project" />
       )}
     </div>,
     document.body,

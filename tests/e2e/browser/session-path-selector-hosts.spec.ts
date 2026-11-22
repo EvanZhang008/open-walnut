@@ -112,7 +112,7 @@ test('a bare "/" lists the filesystem root live', async ({ page }) => {
   await input(page).fill('/')
   // /usr exists as a real directory on every Unix the fixture runs on.
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: USR_DIR })).toBeVisible()
-  await expect(list(page).locator('.sps-empty', { hasText: 'No matches' })).toHaveCount(0)
+  await expect(list(page).getByTestId('sps-empty').filter({ hasText: 'No matches' })).toHaveCount(0)
   // And typing on from there keeps working (the next segment lists too).
   await input(page).fill('/usr/')
   await expect(list(page).locator('.sps-path-item.sps-live').first()).toBeVisible()
@@ -134,7 +134,7 @@ test('remote host still connecting: the connect step is shown, then the folders 
   await expect(connecting).toBeVisible()
   await expect(connecting).toContainText('Installing the session daemon runtime on Big dev box')
   // One wait, one indicator: the generic line must not stack on the host row.
-  await expect(list(page).locator('.sps-empty', { hasText: 'Loading paths' })).toHaveCount(0)
+  await expect(list(page).getByTestId('sps-loading')).toHaveCount(0)
   await expect(list(page).locator('.sps-host-note-failure')).toHaveCount(0)
 
   // Polling advances through the phases and ends in the real listing.
@@ -347,7 +347,7 @@ test('fresh remote host: a bare word lists the matching home folders, picking on
   await expect(rows.nth(0)).toContainText('~/workplace')
   await expect(rows.nth(1)).toContainText('~/workspace')
   await expect(home).not.toContainText('notes')
-  await expect(list(page).locator('.sps-empty')).toHaveCount(0)
+  await expect(list(page).getByTestId('sps-empty')).toHaveCount(0)
   // A single host tab lists only that host: no fan-out to Local for the word.
   for (const r of requests.slice(mark)) expect(r.host).toBe(HOST)
 
@@ -368,7 +368,7 @@ test('a bare word with nothing to match says so; an empty input shows no home fo
   await page.locator('.sps-host-tab', { hasText: HOST_LABEL }).click()
   await expect(input(page)).toHaveValue(aliceShown('/home/alice/'))
   await input(page).fill('zzqx')
-  await expect(list(page).locator('.sps-empty')).toContainText('No history or home folder matches "zzqx"')
+  await expect(list(page).getByTestId('sps-empty')).toContainText('No history or home folder matches ‘zzqx’')
   await expect(list(page).locator('[data-section-id^="home:"]')).toHaveCount(0)
   await input(page).fill('')
   await expect(list(page).locator('[data-section-id^="home:"]')).toHaveCount(0)

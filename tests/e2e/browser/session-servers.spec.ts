@@ -353,7 +353,7 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await expect(view.getByTestId('session-servers-notice')).toContainText(`Stopped :${webPort}`, { timeout: 15_000 })
   await expect(list.locator(`[data-port="${webPort}"]`)).toHaveCount(0)
   await expect(list.getByTestId('session-server-row')).toHaveCount(2)
-  await expect(view.locator('.session-code-error-card')).toHaveCount(0)
+  await expect(view.locator('[data-testid="session-web-error"], [data-testid="session-web-blocked"], [data-testid="session-servers-none"], [data-testid="session-servers-unavailable"], [data-testid="session-web-open-hint"]')).toHaveCount(0)
   expect(alive(raw.pid), 'another server of the session').toBe(true)
   expect(alive(term.pid), 'the terminal job').toBe(true)
   expect(alive(other.pid), 'another session\'s server').toBe(true)
@@ -380,18 +380,18 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await lateRow.getByTestId('session-server-open').click()
   await expect(panel.frameLocator('.session-web-iframe').getByText('DEV_SERVER_MARKER')).toBeVisible({ timeout: 20_000 })
   process.kill(-late.pgid, 'SIGKILL')
-  await expect(view.locator('.session-code-error-body')).toHaveText(`The server on :${latePort} stopped.`, { timeout: 20_000 })
+  await expect(view.getByTestId('session-web-error-body')).toHaveText(`The server on :${latePort} stopped.`, { timeout: 20_000 })
   await expect(view.locator('.session-web-iframe')).toHaveCount(0)
   // Reload asks again: the stopped server does not come back as a cached page, and the
   // page still says why (with its host), not a generic failure.
   await view.getByRole('button', { name: 'Reload' }).click()
   await expect(view.getByTestId('session-web-error-title')).toContainText(`localhost:${latePort}`, { timeout: 20_000 })
-  await expect(view.locator('.session-code-error-body')).toHaveText(`The server on :${latePort} stopped.`)
+  await expect(view.getByTestId('session-web-error-body')).toHaveText(`The server on :${latePort} stopped.`)
   await expect(view.locator('.session-code-host')).toHaveText('Local')
   await expect(view.locator('.session-web-iframe')).toHaveCount(0)
   await startServer(WEB, latePort, { WALNUT_SESSION_ID: SESSION_ID })
   await expect(panel.frameLocator('.session-web-iframe').getByText('DEV_SERVER_MARKER')).toBeVisible({ timeout: 30_000 })
-  await expect(view.locator('.session-code-error-card')).toHaveCount(0)
+  await expect(view.locator('[data-testid="session-web-error"], [data-testid="session-web-blocked"], [data-testid="session-servers-none"], [data-testid="session-servers-unavailable"], [data-testid="session-web-open-hint"]')).toHaveCount(0)
   await expect(strip.locator(`[data-testid="session-server-chip"][data-port="${latePort}"]`)).toBeVisible({ timeout: 10_000 })
 
   // ── Stopping a server that is not shown (from the list over the page) says so too, and the

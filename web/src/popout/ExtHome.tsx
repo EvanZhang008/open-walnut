@@ -37,6 +37,7 @@ import type { Attached } from './ext-attached';
 import type { OpenTask } from './ExtHomeTasks';
 import { useHomeSnapshots } from './useHomeSnapshots';
 import { launchPlaceOf, readHomePlace, withHandedLaunch, writeHomePlace } from './ext-home-place';
+import { LoadingState } from '@/components/common/EmptyState';
 
 const ExtHomeTasks = lazy(() => import('./ExtHomeTasks'));
 
@@ -322,7 +323,7 @@ export function ExtHome(p: Props) {
       {p.strip}
       </>}
       <div className="ext-home-tasks" data-testid="ext-home-tasks">
-        <Suspense fallback={<p className="ext-home-loading muted" role="status"><span className="spinner" /> Loading your tasks…</p>}>
+        <Suspense fallback={<LoadingState size="row" title="Loading your tasks…" testId="ext-home-loading" />}>
           <ExtHomeTasks onOpen={p.onOpenTask} />
         </Suspense>
       </div>

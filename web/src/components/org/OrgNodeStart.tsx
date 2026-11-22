@@ -18,6 +18,7 @@ import type { ChannelRow } from './org-channels-model';
 import { orgStartView } from './org-start-view';
 import { ROUTER_SETTINGS_OPEN_EVENT } from './OrgRouterSettings';
 import { useRouterSettingsOpen } from './router-settings-open';
+import { LoadingState } from '@/components/common/EmptyState';
 
 export function OrgNodeStart({ row, contact, title, onStart, loading = false, starting = false }: {
   row: ChannelRow; contact: Task | undefined; title: string;
@@ -79,9 +80,9 @@ export function OrgNodeStart({ row, contact, title, onStart, loading = false, st
         <button type="button" className="btn btn-sm btn-primary" data-testid="org-turn-on" disabled={busy}
           onClick={() => { void run('turn org on', () => save({ enabled: true })); }}>Turn the org on</button>
       </>}
-      {view.kind === 'loading' && <p data-testid="org-start-loading"><span className="org-start-spinner" aria-hidden="true" />Loading {title}…</p>}
+      {view.kind === 'loading' && <LoadingState size="section" title={`Loading ${title}…`} testId="org-start-loading" />}
       {view.kind === 'elsewhere' && <p>{title} runs on your primary Walnut (your Mac). Its chat shows here once it has started there.</p>}
-      {view.kind === 'starting' && <p data-testid="org-starting"><span className="org-start-spinner" aria-hidden="true" />{title} is starting…</p>}
+      {view.kind === 'starting' && <LoadingState size="section" title={`${title} is starting…`} testId="org-starting" />}
       {view.kind === 'failed' && <>
         <p data-testid="org-start-failed">{title} could not start: {view.error}</p>
         <button type="button" className="btn btn-sm btn-primary" data-testid="org-start-retry" disabled={busy} onClick={start}>Retry</button>

@@ -81,7 +81,7 @@ export function waitingDetailSourcedLines(task: DetailTask, triggersText = ''): 
   if (reads === 'read') own('Nothing is asked: there is a result to read.');
   own(task.wait_until
     ? `Wakes by itself ${new Date(task.wait_until).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, or sooner when something happens.`
-    : 'No clock: it waits until something happens (a trigger fires, a message arrives).');
+    : 'No clock: it waits until something happens (a trigger fires, a message arrives).'); // empty-state-ok: a line of the chip's explanation
   const on = task.user_status?.waitingOn?.trim();
   if (on && reads === 'waiting') lines.push({ text: `Waiting on ${on}.`, source: taskTextSource(task as Task, 'waiting') });
   const next = task.user_status?.next?.trim();

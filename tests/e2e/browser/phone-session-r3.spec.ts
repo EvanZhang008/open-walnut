@@ -261,7 +261,7 @@ test('N2-09: a tapped session draws its bar and composer at once, and a second o
   gate = held()
   await tapSettledHomeRow(page, 'Walnut', 'Question recovery fixture')
   await expect(overlayOf(page, sid).locator('[data-message-id="a-3"]')).toBeVisible({ timeout: 1_500 })
-  await expect(overlayOf(page, sid).getByText('No conversation history found')).toHaveCount(0)
+  await expect(overlayOf(page, sid).getByText('No messages yet')).toHaveCount(0)
   gate.release()
   expect(errors).toEqual([])
 })

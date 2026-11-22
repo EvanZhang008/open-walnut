@@ -11,6 +11,7 @@ import { fetchSelectedFolder, requestMailRefresh } from './mail-actions';
 import { folderFetchFor, selectionKey, type MailSnapshot } from './mail-store';
 import { smartPairs, type SmartRole } from './mail-smart';
 import type { Section } from './mail-list-section';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 /**
  * The accounts one merged list actually covers.
@@ -58,62 +59,46 @@ export function EmptyFolder({ snapshot, section, smart }: {
   const total = section?.count ?? mailbox?.total ?? 0;
 
   if (fetch?.state === 'fetching' || fetch?.state === 'running') {
-    return (
-      <p className="mail-pane-empty" data-testid="mail-folder-fetching">
-        Fetching this folder…
-      </p>
-    );
+    return <LoadingState title="Fetching this folder…" testId="mail-folder-fetching" />;
   }
   if (fetch?.state === 'failed') {
+    // The provider's own sentence is the hint, on its OWN line rather than run on after Walnut's: a
+    // plugin writes this text and nothing here can promise it starts with a capital. Joined inline it
+    // read as "could not fetch this folder. this server will not open Aged", which looks like the
+    // console broke its own sentence in half.
     return (
-      <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-folder-fetch-failed">
-        <span>Walnut could not fetch this folder.</span>
-        {/* The provider's own sentence, on its OWN line rather than run on after that full stop. A
-            plugin writes this text and nothing here can promise it starts with a capital: joined
-            inline it read as "could not fetch this folder. this server will not open Aged", which
-            looks like the console broke its own sentence in half. */}
-        {fetch.detail && <span className="mail-folder-detail">{fetch.detail}</span>}
-        <button
-          type="button"
-          className="mail-text-btn"
-          data-testid="mail-folder-fetch"
-          onClick={() => { void fetchSelectedFolder(); }}
-        >
-          Try again
-        </button>
-      </p>
+      <UnavailableState
+        title="Walnut could not fetch this folder"
+        hint={fetch.detail || undefined}
+        action={{ label: 'Try again', onClick: () => { void fetchSelectedFolder(); }, testId: 'mail-folder-fetch' }}
+        testId="mail-folder-fetch-failed"
+      />
     );
   }
   // The button is here for the second visit: the automatic fetch runs once per folder per tab, so a
   // page reloaded after that would otherwise be a dead end with no way to ask.
   if (mailbox && mailbox.lastSyncAt === undefined) {
     return (
-      <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-folder-unfetched">
-        <span>Walnut has not fetched this folder yet.</span>
-        <button
-          type="button"
-          className="mail-text-btn"
-          data-testid="mail-folder-fetch"
-          onClick={() => { void fetchSelectedFolder(); }}
-        >
-          Fetch it now
-        </button>
-      </p>
+      <EmptyState
+        title="Walnut has not fetched this folder yet"
+        action={{ label: 'Fetch it now', onClick: () => { void fetchSelectedFolder(); }, testId: 'mail-folder-fetch' }}
+        testId="mail-folder-unfetched"
+      />
     );
   }
   if (total > 0) {
+    // States what is OBSERVED (fetched, holding none of them) and then the rule that explains it,
+    // rather than asserting that every one of those messages is old. Walnut can see the first two
+    // things; the third is an inference, and it is the cache's rule that is worth telling anyway.
     return (
-      <p className="mail-pane-empty" data-testid="mail-folder-outside-window">
-        {/* States what is OBSERVED (fetched, holding none of them) and then the rule that explains
-            it, rather than asserting that every one of those messages is old. Walnut can see the
-            first two things; the third is an inference, and it is the cache's rule that is worth
-            telling somebody anyway. */}
-        {`Walnut fetched this folder and kept none of its ${formatCount(total)} messages:`
-          + ' the mail cache only keeps recent mail.'}
-      </p>
+      <EmptyState
+        title={`Walnut fetched this folder and kept none of its ${formatCount(total)} messages`}
+        hint="The mail cache only keeps recent mail."
+        testId="mail-folder-outside-window"
+      />
     );
   }
-  return <p className="mail-pane-empty" data-testid="mail-list-empty">No mail in this folder yet.</p>;
+  return <EmptyState title="No mail in this folder yet" testId="mail-list-empty" />;
 }
 
 /** What a merged list calls the folders it stands for. Drafts never reaches here (see draftsView). */
@@ -139,24 +124,12 @@ function SmartEmpty({ snapshot, role }: { snapshot: MailSnapshot; role: SmartRol
     const row = (snapshot.mailboxes[pair.accountId] ?? []).find((one) => one.mailboxId === pair.mailboxId);
     return !row || row.lastSyncAt === undefined;
   });
-  if (!unfetched) {
-    return (
-      <p className="mail-pane-empty" data-testid="mail-smart-empty">
-        {`No mail in ${noun.many} yet.`}
-      </p>
-    );
-  }
+  if (!unfetched) return <EmptyState title={`No mail in ${noun.many} yet`} testId="mail-smart-empty" />;
   return (
-    <p className="mail-pane-empty mail-folder-unfetched" data-testid="mail-smart-unfetched">
-      <span>{`Walnut has not fetched ${noun.each} yet.`}</span>
-      <button
-        type="button"
-        className="mail-text-btn"
-        data-testid="mail-smart-refresh"
-        onClick={() => { void requestMailRefresh(); }}
-      >
-        Check for new mail
-      </button>
-    </p>
+    <EmptyState
+      title={`Walnut has not fetched ${noun.each} yet`}
+      action={{ label: 'Check for new mail', onClick: () => { void requestMailRefresh(); }, testId: 'mail-smart-refresh' }}
+      testId="mail-smart-unfetched"
+    />
   );
 }

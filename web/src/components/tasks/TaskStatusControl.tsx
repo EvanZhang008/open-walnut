@@ -152,7 +152,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
             title="No time limit: it waits until something happens"
             onClick={(e) => { e.stopPropagation(); setOpen(false); onSet(''); }}
           >
-            No limit
+            No limit{/* empty-state-ok: button label */}
           </button>
         )}
       </div>

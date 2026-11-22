@@ -84,7 +84,7 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
     ? status.counting && !status.countedAt
       ? 'Counting the sessions stored remotely…'
       : status.uploaded === 0
-      ? status.enabled ? `Nothing is stored remotely yet. Sessions go once compressed and untouched for ${status.days} days.` : 'Nothing is stored remotely.'
+      ? status.enabled ? `Nothing is stored remotely yet. Sessions go once compressed and untouched for ${status.days} days.` : 'Nothing is stored remotely.' // empty-state-ok: row help text
       : `${status.uploaded} ${status.uploaded === 1 ? 'session' : 'sessions'} stored remotely (${fmtBytes(status.remoteBytes)}); ${status.remoteOnly} only there.`
     : 'Reading…';
 

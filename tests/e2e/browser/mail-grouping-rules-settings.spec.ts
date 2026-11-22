@@ -113,7 +113,8 @@ test('C31 C75 C88: the real path, Copy path, Create rules file, Open in Walnut, 
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(path)
   }
   await expect(page.locator(PANEL)).toContainText('No rules file yet. Walnut creates it the first time you save a rule.')
-  await expect(page.getByTestId('mail-rules-empty')).toHaveText('No rules yet. Use "Important\u2026" or "Not important\u2026" on a mail in Mail to teach Walnut, or add one here.')
+  await expect(page.getByTestId('mail-rules-empty').locator('.empty-state-title')).toHaveText('No rules yet')
+  await expect(page.getByTestId('mail-rules-empty').locator('.empty-state-hint')).toHaveText('Use "Important\u2026" or "Not important\u2026" on a mail in Mail to teach Walnut, or add one here.')
   const builtins = (await api(fixture, '/rules')).body.builtins as Array<{ then: string }>
   await expect(page.getByTestId('mail-rules-builtin')).toHaveCount(builtins.length)
   // Each built-in rule says where its mail goes, as a person's rule does.

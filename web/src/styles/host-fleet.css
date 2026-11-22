@@ -273,8 +273,6 @@
 
 .hf-dash .hf-off .hf-read-error { margin: 2px 0 0 18px; }
 
-.hf-dash .hf-loading-more { margin: 8px 0 0; }
-
 .hf-dash .hf-link {
   appearance: none;
   border: 0;
@@ -310,7 +308,7 @@
 
 .hf-dash .hf-off .hf-details { margin: 6px 0 2px 18px; }
 
-.hf-dash .hf-error, .hf-dash .hf-loading { margin: 0 0 8px; padding: 0 calc(var(--settings-row-pad-x) + 1px); color: var(--settings-help-fg); }
+.hf-dash .hf-error { margin: 0 0 8px; padding: 0 calc(var(--settings-row-pad-x) + 1px); color: var(--settings-help-fg); }
 
 .hf-dash .hf-error { color: var(--settings-error-text); }
 

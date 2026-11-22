@@ -12,6 +12,7 @@
  *    else the previous one, else the parent;
  *  - a second click on the same action within 400ms is ignored.
  */
+import { EmptyState } from '@/components/common/EmptyState';
 import {
   forwardRef, useCallback, useDeferredValue, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent,
@@ -419,10 +420,8 @@ export const ThreadTreeRows = forwardRef<ThreadTreeRowsHandle, ThreadTreeRowsPro
           />
         ))}
         {flat.noResults && (
-          <div className="thread-tree-empty" role="presentation">
-            <span>{noResultsText(query.trim())}</span>
-            <button type="button" className="thread-tree-text-btn" onClick={p.onShowAll}>Show all</button>
-          </div>
+          <EmptyState size="row" role="presentation" title={noResultsText(query.trim())} testId="thread-tree-empty"
+            action={{ label: 'Show all', onClick: () => p.onShowAll() }} />
         )}
       </div>
       {confirm?.kind === 'done' && (

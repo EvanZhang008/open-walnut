@@ -22,6 +22,7 @@ import { formatAbsoluteTime } from './addons-format';
 import type { SourceAutoState } from '../plugin-auto-update-view';
 import { plainText, resolveRowState, sourceShortLabel, updateButtonMode, type Feedback } from '../plugin-update-view';
 import { sourceRowKey } from '../plugin-update-types';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** One plugin dir inside a source, as GET /api/plugin-sources reports it. */
 export interface StorePlugin {
@@ -274,7 +275,7 @@ export function PluginSourceHead(props: PluginSourceHeadProps) {
       {!source.cloned || cardsShown ? null : only ? (
         <SettingsRow indent label={only.name ?? only.id ?? 'Unnamed'} help={only.error} state={only.error ? 'warning' : undefined} />
       ) : source.plugins.length === 0 ? (
-        <SettingsRow indent label={`No plugins found in this ${kind === 'npm' ? 'package' : 'repo'}.`} />
+        <EmptyState size="row" title={`No plugins found in this ${kind === 'npm' ? 'package' : 'repo'}`} />
       ) : (
         source.plugins.map((plugin) => {
           const status = STATUS_LABELS[plugin.status] ?? STATUS_LABELS.error;

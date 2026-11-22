@@ -349,7 +349,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
             onEffortDefault: () => pickEffort(undefined),
             // Ask Walnut's launch without a level takes its remembered one (else medium), not the CLI's.
             effortDefaultTitle: walnut
-              ? 'No level picked here: the quick question starts at the level its last one used (medium the first time)'
+              ? 'No level picked here: the quick question starts at the level its last one used (medium the first time)' // empty-state-ok: tooltip of the Default row
               : effortDefault.title,
             ...(!walnut && effortDefault.level ? { effortDefaultLevel: effortDefault.level } : {}),
           } : {})}

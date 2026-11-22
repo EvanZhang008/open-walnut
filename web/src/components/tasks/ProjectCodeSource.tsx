@@ -8,6 +8,7 @@
  * isolated workspace on) reads as its own checked choice ("Workspace setting") with a button to make
  * it an explicit git worktree source; a source with no folder to be made from cannot be saved.
  */
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useEffect, useMemo, useState } from 'react';
 import { saveProjectMetadata, type ProjectMetadata, type WorkspaceSource } from '@/api/projects';
 import { fetchWorkspaceCandidates, type WorkspaceCandidate } from '@/api/workspaces';
@@ -115,8 +116,8 @@ export function ProjectCodeSource({ project, metadata, row, onSaved }: {
           </Chip>
         ))}
       </ChipGroup>
-      {!providers && !loadError && <div className="pcs-note">Loading the workspace kinds…</div>}
-      {loadError && <div className="pcs-note is-error">{loadError}</div>}
+      {!providers && !loadError && <LoadingState size="row" title="Loading the workspace kinds…" />}
+      {loadError && <UnavailableState size="row" title="Couldn't load the workspace kinds" detail={loadError} />}
       {edit && (
         <>
           <label className="pcs-field">

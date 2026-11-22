@@ -158,7 +158,7 @@ export function JevSettings({ config, onSave, onReload }: Props) {
       </span>
     );
   } else {
-    keyHelp = <span data-testid="jev-no-key">No key yet, so Walnut&apos;s usual model answers until you save one.</span>;
+    keyHelp = <span data-testid="jev-no-key">No key yet, so Walnut&apos;s usual model answers until you save one.</span>; // empty-state-ok: row help text
     keyControl = keyEntry;
   }
 

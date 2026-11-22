@@ -29,6 +29,7 @@ import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
 import '@/styles/pick-and-nav.css'
 import { SearchField } from '@/components/common/SearchField'
+import { EmptyState } from '@/components/common/EmptyState'
 
 export { NAV_OWNER, resolvePane } from './settings-routing'
 
@@ -418,10 +419,12 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
           </div>
         )))}
         {filtering && hits.length === 0 && (
-          <div className="settings-nav-empty" data-testid="settings-filter-empty">
-            <p>No settings match &quot;{query.trim()}&quot;.</p>
-            <button type="button" className="settings-nav-clear-search" onClick={clearQuery}>Clear search</button>
-          </div>
+          <EmptyState
+            size="row"
+            title={`No settings match “${query.trim()}”`}
+            action={{ label: 'Clear search', onClick: clearQuery }}
+            testId="settings-filter-empty"
+          />
         )}
         {/* A plugin's settings are on its page in Apps, so a search for one is pointed there. */}
         {filtering && (

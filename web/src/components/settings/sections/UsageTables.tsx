@@ -5,6 +5,7 @@
  */
 import type { UsageByGroup, UsageRecord } from '@/api/usage';
 import { formatTokens } from '@/utils/format';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { usageDisplayName } from '@/utils/usageLabels';
 
 /** "Sep 23, 1:25 AM": one date and time format across settings (F32). */
@@ -62,7 +63,7 @@ interface BreakdownProps {
 }
 
 export function SettingsUsageBreakdown({ data, loading, activeName, onSelect }: BreakdownProps) {
-  if (data.length === 0) return <p className="settings-usage-empty">{loading ? 'Loading...' : 'No calls in this period.'}</p>;
+  if (data.length === 0) return loading ? <LoadingState title="Loading usage…" /> : <EmptyState title="No calls in this period" />;
   return (
     <table className="settings-usage-table settings-usage-breakdown">
       <colgroup>
@@ -119,7 +120,7 @@ export function SettingsUsageBreakdown({ data, loading, activeName, onSelect }: 
 }
 
 export function SettingsUsageRecent({ data, loading }: { data: UsageRecord[]; loading: boolean }) {
-  if (data.length === 0) return <p className="settings-usage-empty">{loading ? 'Loading...' : 'No activity in this period.'}</p>;
+  if (data.length === 0) return loading ? <LoadingState title="Loading recent activity…" /> : <EmptyState title="No activity in this period" />;
   return (
     <table className="settings-usage-table settings-usage-recent">
       <colgroup>

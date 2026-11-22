@@ -247,7 +247,7 @@ export function ExtAsksDrawer(p: DrawerProps) {
   const locked = p.vault?.locked !== false;
   const count = p.vault?.siteCount;
   const needs = p.asks.needs + p.approvals;
-  const pwMeta = locked ? 'Locked' : typeof count === 'number' ? (count === 0 ? 'No logins here' : count === 1 ? '1 login here' : `${count} logins here`) : '';
+  const pwMeta = locked ? 'Locked' : typeof count === 'number' ? (count === 0 ? 'No logins here' : count === 1 ? '1 login here' : `${count} logins here`) : ''; // empty-state-ok: a count in a footer row's meta
   const foot = (
     <>
       {p.keyed && (

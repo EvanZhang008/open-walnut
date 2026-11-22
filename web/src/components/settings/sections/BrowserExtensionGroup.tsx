@@ -17,6 +17,7 @@ import { fetchDevicesList, devicesListChanged } from './cloud/devices-list'
 import { saveErrorMessage } from '../settings-pane-context'
 import { ExtensionInstallSteps, detectBrowser, type ExtBrowser } from '@/components/passwords/ExtensionInstall'
 import { extRows, type ExtDevice, type ExtSeen, type ExtShipped } from './browser-extension-model'
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 
 export interface ExtensionStatus {
   /** The browsers that let agents in now, with their caps. */
@@ -79,7 +80,9 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
         data-testid="ext-browsers"
         footer={shipped ? <>Walnut ships version {shipped.version} (build {shipped.build.slice(0, 7)}). Installed from the Chrome Web Store, the extension updates through the store. Set up from Walnut&apos;s folder, it updates itself after each Walnut update.</> : undefined}
       >
-        {rows === null && <SettingsRow label={loadError ? 'Could not read the connected browsers' : 'Loading…'} help={loadError || undefined} control={null} />}
+        {rows === null && (loadError
+          ? <UnavailableState title="Couldn't read the connected browsers" detail={loadError} />
+          : <LoadingState title="Loading the connected browsers…" />)}
         {rows?.length === 0 && (
           <SettingsRow
             data-testid="ext-none"

@@ -510,7 +510,7 @@ test.describe('the dense pane', () => {
         if (li.querySelector('.mail-tail-toggle')) return 'tail'
         if (li.querySelector('.mail-tail-head')) return 'head'
         if (li.querySelector('.mail-tail-filter')) return 'filter'
-        if (li.classList.contains('mail-tail-empty')) return 'empty'
+        if (li.querySelector('[data-testid="mail-tail-empty"]')) return 'empty'
         const row = li.querySelector('.mail-mailbox')
         return `row:${row?.querySelector('.mail-mailbox-name')?.textContent ?? ''}:${row?.getAttribute('data-promoted') ?? ''}`
       })
@@ -534,7 +534,7 @@ test.describe('the dense pane', () => {
     await expect(section(page, HARBOUR).locator(`.mail-mailbox[data-mailbox-id="${TAIL_FOLDER}"]`)).toHaveCount(1)
     expect(await rowNames(page, HARBOUR), 'the role rows stay pinned').toEqual([...ROLE_ROWS, 'Receipts'])
     await filter.fill('nothing matches this')
-    await expect(page.getByTestId('mail-tail-empty')).toHaveText('No folder matches that.')
+    await expect(page.getByTestId('mail-tail-empty')).toHaveText('No folder matches \u201cnothing matches this\u201d')
     // The sentence describes the TAIL, which is what the box filters: the role rows are still there.
     expect(await rowNames(page, HARBOUR), 'and a zero hit hides no mailbox').toEqual(ROLE_ROWS)
     await expect(filter, 'a zero hit keeps what was typed').toHaveValue('nothing matches this')

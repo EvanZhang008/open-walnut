@@ -38,8 +38,6 @@
 .ru-caption { margin: 0 0 8px; font-size: var(--font-size-sm); }
 .ru-legend { margin: 0; font-size: var(--font-size-sm); line-height: 16px; }
 .ru-legend b { color: var(--fg); font-weight: 600; }
-.ru-empty { margin: 0; padding: 12px 8px; font-size: var(--font-size-md); color: var(--fg-secondary); }
-.ru-empty-all { margin: 12px 0 0; padding: 12px 0; }
 
 .ru-toolbar {
   display: flex;

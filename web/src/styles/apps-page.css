@@ -104,24 +104,6 @@
   color: var(--fg-muted);
 }
 .apps-source .apps-section-title { margin-bottom: 6px; }
-.apps-empty {
-  margin-top: 26px;
-  padding: 18px;
-  border-radius: var(--radius-md);
-  background: var(--settings-group-bg);
-  color: var(--fg-muted);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.apps-empty button {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
-  padding: 0;
-}
 
 /* ── Tiles ── */
 .apps-grid {

@@ -734,12 +734,6 @@ textarea::placeholder { max-width: 100%; }
 
 /* ===== Notification feed (the panel's detail pane) ===== */
 
-.notification-feed-empty {
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  padding: 8px 2px 4px;
-}
-
 .notification-feed {
   display: flex;
   flex-direction: column;
@@ -1222,18 +1216,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 
 /* ===== Empty State ===== */
 
-.empty-state {
-  text-align: center;
-  padding: 48px 16px;
-  color: var(--fg-muted);
-}
-
-.empty-state-icon {
-  font-size: 32px;
-  margin-bottom: 12px;
-  opacity: 0.5;
-}
-
 /* ===== Utility ===== */
 
 .flex { display: flex; }
@@ -1688,7 +1670,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 /* ===== Sessions ===== */
 
 /* Session detail & chat history */
-
 
 
 .session-fork-popover {
@@ -2444,13 +2425,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   position: sticky;
   top: 0;
   z-index: 5;
-  padding: 6px 12px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  margin: 4px 8px;
+  background: var(--bg);
 }
 
 .session-msg {
@@ -3424,11 +3399,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   overflow: hidden;
   background: var(--bg);
 }
-.team-card-loading {
-  padding: 16px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}
 .team-card-header {
   display: flex;
   align-items: center;
@@ -3703,7 +3673,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   white-space: pre-wrap;
   word-break: break-word;
 }
-.wf-agent-result-empty { color: var(--fg-muted); font-style: italic; }
 
 /* "View full transcript →" — opens the large modal reader (inline box was too cramped). */
 .wf-transcript-toggle {
@@ -3736,7 +3705,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-overview-count { color: var(--fg-muted); font-size: var(--font-size-xs); white-space: nowrap; }
 .wf-overview-link { margin-left: auto; min-width: 0; color: var(--fg-muted); font-size: var(--font-size-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wf-overview-list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--border); }
-.wf-empty { padding: 28px 20px; color: var(--fg-muted); font-size: var(--font-size-sm); }
 
 /* One card per phase; phases that ran side by side share a row (or a stack). */
 .wf-stage-graph--column { display: flex; flex-direction: column; padding: 10px 12px 12px; }
@@ -3899,12 +3867,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   min-height: 0;
   overflow-y: auto;
   padding: 16px 20px;
-}
-.wf-modal-loading {
-  padding: 32px;
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
 }
 /* A big agent's reader shows its newest part (subagent-ready-view.ts): one quiet line says so. */
 .wf-modal-windowed { padding: 6px 12px; font-size: var(--font-size-sm); color: var(--fg-muted); }
@@ -4179,27 +4141,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   flex-direction: column;
   gap: 2px;
 }
-.team-agent-loading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}
-.team-agent-loading-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-.team-agent-empty {
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  padding: 24px;
-}
 .team-agent-events {
   display: flex;
   flex-direction: column;
@@ -4304,24 +4245,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   position: relative;
 }
 
-.session-history-unavailable {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-}
-
-.session-history-unavailable strong {
-  color: var(--fg-secondary);
-  font-size: var(--font-size-md);
-}
-
 /* ── Per-message copy actions (Markdown / Rich text) ── */
 /* A bottom action bar under the message body, ChatGPT/Claude style. */
 .session-msg-actions {
@@ -4348,7 +4271,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   align-items: center;
   gap: 4px;
 }
-
 
 .msg-copy-label { white-space: nowrap; }
 
@@ -4566,22 +4488,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   text-transform: capitalize;
 }
 
-/* Empty state */
-.memory-tree-empty {
-  padding: 20px 16px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  text-align: center;
-}
-
-/* Content panel */
-.memory-content-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .memory-content-panel {
   flex: 1;
   display: flex;
@@ -4627,7 +4533,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   flex-shrink: 0;
   margin-left: 12px;
 }
-
 
 .memory-save-btn:hover {
   background: color-mix(in srgb, var(--accent) 85%, #000);
@@ -5876,9 +5781,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   flex-direction: column;
   gap: 4px;
 }
-.claude-stream-view--empty {
-  padding: 4px 0;
-}
 .claude-stream-text {
   font-size: var(--font-size-sm);
   line-height: 1.5;
@@ -6125,13 +6027,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 4px;
-}
-
-.task-group-empty {
-  padding: 8px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  font-style: italic;
 }
 
 @keyframes pulse-dot {
@@ -6427,13 +6322,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .plan-preview-body .session-plan-card-body {
   border-top: none;
   padding: 0;
-}
-
-.plan-preview-loading {
-  padding: 8px 16px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  font-style: italic;
 }
 
 .session-panel .plan-preview-section {
@@ -6904,11 +6792,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   display: none;
 }
 .mention-row:hover .mention-pick-btn, .mention-row.selected .mention-pick-btn { display: inline-flex; }
-.mention-empty {
-  padding: 6px 10px 8px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-}
 .mention-skeleton { display: flex; align-items: center; gap: 9px; padding: 8px 10px; }
 .mention-skeleton .sk-icon, .mention-skeleton .sk-line {
   border-radius: var(--radius-xs);
@@ -7199,12 +7082,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   flex: 1;
   overflow-y: auto;
   padding: 6px 0;
-}
-.voice-panel-empty {
-  padding: 24px 16px;
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
-  text-align: center;
 }
 /* Natural rows (match the Notifications panel): whole row clickable to insert,
    quiet hover tint, icon actions appear only on hover — no loud pill buttons. */
@@ -7626,17 +7503,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 }
 .mic-retry-item:hover {
   background: var(--bg-hover);
-}
-
-.mic-retry-loading,
-.mic-retry-empty {
-  color: var(--fg-muted);
-  cursor: default;
-  font-style: italic;
-}
-.mic-retry-loading:hover,
-.mic-retry-empty:hover {
-  background: none;
 }
 
 .mic-retry-model-name {
@@ -8524,36 +8390,13 @@ body.walnut-dragging {
   .main-page { --home-side-bar-floor: 0px; }
 }
 
-/* Nothing open beside the task panel (pages/HomeEmptyPane.tsx): the room's title and its
-   one next step, centred and quiet, never a blank two thirds of the window. */
+/* Nothing open beside the task panel (pages/HomeEmptyPane.tsx): the room around the shared pane
+   state, filling the row; the state draws the words and the one next step. */
 .home-empty-pane {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
   background: var(--bg);
-}
-.home-empty-pane-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  max-width: 320px;
-  text-align: center;
-}
-.home-empty-pane-title {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  color: var(--fg-secondary);
-}
-.home-empty-pane-hint {
-  margin: 0 0 8px;
-  font-size: var(--font-size-md);
-  line-height: 1.5;
-  color: var(--fg-muted);
 }
 
 /* .session-resize-handle + .session-col-resize-handle — styled by the unified
@@ -9269,7 +9112,6 @@ body.walnut-dragging {
 /* A set count is `.badge.badge-accent.badge-count`; an empty one still holds its place. */
 .vd-rail-badge { margin-left: auto; flex-shrink: 0; min-width: var(--badge-h); height: var(--badge-h); }
 .vd-detail { overflow-y: auto; padding: 10px 12px; }
-.vd-none { padding: 24px 0; text-align: center; font-size: var(--font-size-sm); color: var(--fg-muted); }
 /* One muted line under a capped chip grid (Tags) pointing at the panel search. */
 .vd-hint { margin-top: 8px; font-size: var(--font-size-xs); color: var(--fg-muted); }
 
@@ -9482,16 +9324,6 @@ body.walnut-dragging {
   max-width: 200px;
   opacity: 1;
   text-overflow: ellipsis;
-}
-
-/* The All view's Pinned section with nothing pinned: the heading stays (a first visit
-   learns the section exists) and this one line stands in for the tier groups, which
-   wait for their first task. */
-.todo-pinned-empty {
-  margin: 2px 0 6px;
-  padding: 0 10px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
 }
 
 .todo-section-tab-count {
@@ -11210,12 +11042,6 @@ body.walnut-dragging {
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   margin-bottom: 2px;
 }
-.sprint-picker-empty {
-  padding: 8px 10px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  text-align: center;
-}
 
 /* ── CopyableId: an id as a quiet reference (theme vars only, no pinned pair) ── */
 .copyable-id {
@@ -11489,11 +11315,6 @@ body.walnut-dragging {
   color: var(--accent);
 }
 
-.todo-detail-empty {
-  padding: 8px 0;
-  font-style: italic;
-}
-
 /* ===== Global Notes Section (TodoPanel bottom) ===== */
 
 .global-notes-section {
@@ -11560,6 +11381,21 @@ body.walnut-dragging {
   scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
+}
+
+/* The empty scratchpad's state, over the editor (GlobalNotesSection): layout only. */
+.global-notes-body { position: relative; }
+.global-notes-empty-cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  cursor: text;
+}
+
+/* While the editor has focus the words stay (they have no fill, so the caret shows above them)
+   and clicks go straight to the editor. */
+.global-notes-body:focus-within .global-notes-empty-cover {
+  pointer-events: none;
 }
 
 /* ── Notes as its own todo-panel tab (fill mode) ──
@@ -11859,13 +11695,6 @@ body.walnut-dragging {
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
-}
-
-.notes-slash-empty {
-  padding: 12px 16px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  text-align: center;
 }
 
 .notes-slash-item {
@@ -13548,11 +13377,6 @@ a.task-kebab-info:hover {
 .task-kebab-project-opt:hover { background: var(--accent-subtle); }
 .task-kebab-project-opt.active { font-weight: 600; color: var(--accent); }
 /* An option's name wraps, never cut (.wn-title on the element, text-fit.css). */
-.task-kebab-project-empty {
-  padding: 8px 12px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-}
 
 /* ── Plugin-declared task fields (manifest taskFields) ── */
 /* Flyout rows reuse .task-kebab-project-opt; these are the extras. */
@@ -14309,12 +14133,10 @@ a.task-kebab-info:hover {
   to { opacity: 1; transform: none; }
 }
 
-
 /* A few lines, then Details (NoticeText.tsx): never one ellipsized line that hides the rest
    (2026-11-05: a daemon error's command was cut off and its x pushed out of the toast). */
 /* The toast's title is the card's preview: its words in the card's own colour, two lines. */
 .notification-toast-title { color: var(--fg); }
-
 
 .notification-toast-body {
   font-size: var(--font-size-md);
@@ -15201,19 +15023,12 @@ a.task-kebab-info:hover {
   overflow: auto;
 }
 
-.fmp-loading, .fmp-empty, .fmp-error, .fmp-preview-empty {
+.fmp-error {
   padding: 10px;
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 .fmp-error { color: var(--error); }
-.fmp-preview-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  text-align: center;
-}
 
 .file-mention-hint {
   display: flex;
@@ -15485,7 +15300,6 @@ a.task-kebab-info:hover {
   align-items: center;
 }
 
-
 .sps-path-list {
   flex: 1;
   overflow-y: auto;
@@ -15592,14 +15406,6 @@ a.task-kebab-info:hover {
   text-underline-offset: 2px;
 }
 
-.sps-empty, .sps-error {
-  padding: 20px 12px;
-  text-align: center;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-}
-.sps-error { color: var(--error); }
-
 /* Section labels — "📁 subdirectories" / "🕘 history" / per-host groups.
    Live and history results must be visually distinct: history can never
    impersonate a live listing. */
@@ -15622,14 +15428,6 @@ a.task-kebab-info:hover {
   font-size: var(--font-size-xs);
   color: var(--accent);
   opacity: 0.9;
-}
-
-/* Per-host live diagnostics: missing dir / empty dir (informational) */
-.sps-live-note {
-  padding: 6px 12px;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  font-style: italic;
 }
 
 /* Host still connecting (first connect installs the daemon): say which step. */
@@ -16141,11 +15939,6 @@ a.task-kebab-info:hover {
   font-size: var(--font-size-xs);
 }
 
-/* Retry after a failed draft probe — sits under the error text. */
-.model-picker-retry {
-  margin-top: 8px;
-}
-
 .model-picker-header {
   display: flex;
   align-items: center;
@@ -16290,11 +16083,6 @@ a.task-kebab-info:hover {
   overflow-y: auto;
 }
 
-.model-picker-details-loading {
-  font-style: italic;
-  padding: 2px 0;
-}
-
 .model-picker-details-block + .model-picker-details-block {
   margin-top: 8px;
 }
@@ -16343,7 +16131,6 @@ a.task-kebab-info:hover {
   white-space: normal;
   text-align: right;
 }
-
 
 .model-picker-option-requested {
   color: var(--warning);
@@ -16946,7 +16733,6 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   font-size: var(--font-size-md);
 }
-
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .usage-summary-cards {
@@ -17732,14 +17518,6 @@ td.usage-share-col {
   white-space: normal;
 }
 
-.sfe-loading,
-.sfe-empty,
-.sfe-preview-empty {
-  padding: 12px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}
-
 .sfe-error {
   padding: 6px 12px;
   color: var(--error);
@@ -18027,13 +17805,6 @@ a.tag-chip:hover .tag-chip-value,
   padding: 8px 0;
 }
 
-.triage-panel-empty {
-  padding: 24px 16px;
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}
-
 /* ── Collapsible Triage Session Sections ── */
 
 .triage-session-section {
@@ -18139,19 +17910,6 @@ a.tag-chip:hover .tag-chip-value,
 }
 .triage-session-body .session-msg + .session-msg {
   border-top: 1px solid var(--border);
-}
-
-.triage-session-loading,
-.triage-session-error,
-.triage-session-empty {
-  padding: 16px;
-  text-align: center;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-}
-
-.triage-session-error {
-  color: var(--error);
 }
 
 .triage-session-summary-full {
@@ -18445,13 +18203,6 @@ a.tag-chip:hover .tag-chip-value,
   font-size: var(--font-size-xs);
   padding: 8px;
   gap: 8px;
-}
-
-.dock-task-no-session {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  font-style: italic;
-  padding: 8px;
 }
 
 /* ── Card send input (compact ChatInput reuse) ── */
@@ -19991,15 +19742,6 @@ a.tag-chip:hover .tag-chip-value,
   cursor: pointer;
 }
 .notes-chat-clear:hover { color: var(--fg); }
-.notes-chat-loading { flex: 1; display: flex; align-items: center; justify-content: center; }
-.notes-chat-empty {
-  padding: 16px;
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
-  line-height: 1.6;
-}
-.notes-chat-empty ul { margin: 10px 0 0; padding-left: 18px; }
-.notes-chat-empty li { margin: 3px 0; }
 /* No separator line above the composer — the card's own border is enough. */
 .notes-chat-input {
   flex: 0 0 auto;
@@ -20224,15 +19966,6 @@ a.tag-chip:hover .tag-chip-value,
   padding: 6px 0 6px;
   padding-bottom: max(6px, var(--corner-stack-room, 0px));
   scrollbar-gutter: stable;
-}
-
-.notes-tree-empty {
-  padding: 32px 20px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  text-align: center;
-  opacity: 0.7;
-  line-height: 1.5;
 }
 
 /* ─── Tree Items ─── */
@@ -20469,25 +20202,6 @@ a.tag-chip:hover .tag-chip-value,
 
 /* ─── Editor Panel ─── */
 
-.notes-editor-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.notes-editor-empty-content {
-  text-align: center;
-  color: var(--fg-muted);
-  opacity: 0.6;
-}
-
-.notes-editor-empty-content p {
-  margin-top: 16px;
-  font-size: var(--font-size-lg);
-  line-height: 1.6;
-}
-
 .notes-editor-panel {
   display: flex;
   flex-direction: column;
@@ -20667,13 +20381,6 @@ a.tag-chip:hover .tag-chip-value,
   min-width: 220px;
   max-width: 360px;
   padding: 4px;
-}
-
-.notes-wikilink-empty {
-  padding: 12px 16px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  text-align: center;
 }
 
 .notes-wikilink-item {
@@ -20940,7 +20647,6 @@ a.file-link:hover {
   padding: 0;
 }
 
-.file-viewer-loading,
 .file-viewer-error {
   display: flex;
   align-items: center;
@@ -21225,7 +20931,6 @@ a.file-link:hover {
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
-.ref-panel-error { color: var(--error); }
 .ref-panel-section {
   padding: 8px 10px 3px;
   font-size: var(--font-size-xs);
@@ -21359,7 +21064,6 @@ a.file-link:hover {
 .fv-video-view .fv-media-preview { flex: 1; min-height: 0; height: auto; flex-direction: column; }
 .fv-video-view .fv-media-preview video { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
 .fv-video-view .wn-video-controls { flex: 0 0 auto; }
-
 
 /* PDF: the browser's own viewer fills the pane (no bundled PDF renderer). */
 .fv-doc-preview {
@@ -21662,11 +21366,6 @@ a.file-link:hover {
 
 .sidebar-recording-btn.recording-active svg circle[fill] {
   animation: recording-pulse 1.5s ease-in-out infinite;
-}
-
-.sidebar-recording-btn.recording-loading {
-  opacity: 0.6;
-  animation: recording-blink 0.8s ease-in-out infinite;
 }
 
 .sidebar-recording-btn .sidebar-label {
@@ -22158,38 +21857,10 @@ a.file-link:hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 40px;
-  text-align: center;
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
   background: var(--bg);
 }
 
-.session-code-spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: session-code-spin 0.8s linear infinite;
-}
-@keyframes session-code-spin { to { transform: rotate(360deg); } }
 
-.session-code-error-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 40px;
-  text-align: center;
-  color: var(--fg);
-  background: var(--bg);
-}
-.session-code-error-title { font-size: var(--font-size-lg); font-weight: 600; }
-.session-code-error-body { font-size: var(--font-size-md); color: var(--fg-muted); max-width: 480px; }
 .session-code-error-hint { font-size: var(--font-size-sm); color: var(--fg-muted); max-width: 480px; }
 
 /* Web preview (SessionWebView): the Code view's frame with an address bar. */
@@ -22241,49 +21912,6 @@ a.file-link:hover {
   background: var(--bg);
 }
 
-.plugin-app-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 40px;
-  text-align: center;
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
-  background: var(--bg);
-}
-
-.plugin-app-spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: plugin-app-spin 0.8s linear infinite;
-}
-@keyframes plugin-app-spin { to { transform: rotate(360deg); } }
-
-.plugin-app-message-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 40px;
-  text-align: center;
-  color: var(--fg);
-  background: var(--bg);
-}
-.plugin-app-message-title { font-size: var(--font-size-lg); font-weight: 600; }
-.plugin-app-message-body { font-size: var(--font-size-md); color: var(--fg-muted); max-width: 480px; }
-.plugin-app-message-body code {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-}
 
 /* ===== Pop-out windows (/popout) ===== */
 /* Standalone window shell — no sidebar/providers. Full-height, theme-aware,
@@ -22295,24 +21923,6 @@ a.file-link:hover {
   background: var(--bg);
   color: var(--fg);
   padding: 16px;
-}
-/* STUB placeholder shown until integration agents flesh out a leaf view. */
-.popout-stub {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 24px;
-  color: var(--fg-muted);
-}
-.popout-stub h2 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--fg);
-}
-.popout-stub code {
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
-  font-size: var(--font-size-sm);
-  word-break: break-all;
 }
 
 /* ── Side question ("/btw") — inline PILL trigger + floating POPOVER ── */
@@ -22363,12 +21973,6 @@ a.file-link:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-.side-question-empty {
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-  color: var(--fg-muted);
-  padding: 4px 2px;
 }
 
 /* One self-contained Q&A card — each fully boxed so it's obviously separate.
@@ -22490,7 +22094,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
    (a shrunk-away composer is an unusable drawer). */
 .side-question-popover--threads > .side-question-popover-header,
 .side-question-popover--threads > .side-question-composer,
-.side-question-popover--threads > .side-question-empty,
 .side-question-popover--threads > .side-question-error,
 .side-question-popover--threads > .side-question-notice {
   flex: 0 0 auto;
@@ -22610,16 +22213,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   min-height: 0;
   overflow-y: auto;
   padding: 10px 12px;
-}
-.side-thread-body-pending {
-  height: auto;
-  align-items: center;
-  justify-content: center;
-  flex-direction: row;
-  gap: 8px;
-  padding: 18px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
 }
 
 .side-thread-actions {
@@ -22912,26 +22505,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   position: relative;
   background: var(--bg);
 }
-.session-diff-loading {
-  align-items: center;
-  justify-content: center;
-}
-/* The error pane keeps the full toolbar on top; the message centers below it. */
-.session-diff-error .session-diff-error-box {
-  margin: auto;
-  max-width: min(720px, 100%);
-  flex-wrap: wrap;
-  justify-content: center;
-  text-align: left;
-}
-.session-diff-error-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  color: var(--error);
-  font-size: var(--font-size-md);
-}
 
 /* Slim inline variant: refresh failed while a cached list is still showing. */
 .session-diff-error-strip {
@@ -23142,16 +22715,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 .sdc-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; color: var(--fg-muted); font-size: var(--font-size-xs); }
 .sdc-note { padding: 8px 12px; color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 1.45; }
-.sdc-error { color: var(--error); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.sdc-retry {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  border-radius: var(--radius-full);
-  padding: 1px 8px;
-  font-size: var(--font-size-xs);
-  cursor: pointer;
-}
 
 /* One line naming a branch or commit comparison, under the toolbar. */
 .session-diff-compare-strip {
@@ -23437,13 +23000,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 .session-diff-refresh:hover { color: var(--fg); }
 
-.session-diff-empty {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-}
-
 /* Toolbar: (md) Rendered toggle. (The tree collapse control moved into the
    tree pane itself — .sfe-tree-collapse-btn / .sfe-tree-collapsed-rail,
    shared with the Files tab.) */
@@ -23625,12 +23181,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-filepane-spacer { flex: 1 1 0; min-width: 0; }
 .session-diff-stat-add { color: var(--success); }
 .session-diff-stat-del { color: var(--error); }
-.session-diff-file-empty {
-  padding: 30px 16px;
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
-  text-align: center;
-}
 
 /* ✦ AI summary strip under the file header (Changed tab) */
 .session-diff-ai-summary {
@@ -24766,7 +24316,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   align-items: center;
 }
 
-
 .routine-check-test {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -24901,7 +24450,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 
 .trigger-jobs-fold { margin-top: 2px; }
 /* No check recorded yet: a plain line, no chevron (there is nothing to open). */
-.trigger-jobs-fold-empty { margin: 0; font-size: var(--font-size-md); line-height: 18px; color: var(--fg-muted); padding: 2px 0; }
 
 .trigger-audit-chevron { transition: transform 0.12s ease; }
 .trigger-audit-chevron.open { transform: rotate(90deg); }
@@ -25806,7 +25354,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   cursor: grabbing;
 }
 
-.cal-rail-empty,
 .cal-rail-hint {
   padding: 10px;
   font-size: var(--font-size-sm);
@@ -26974,12 +26521,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   text-overflow: ellipsis;
 }
 
-.cal-cals-empty {
-  font-size: var(--font-size-md);
-  color: var(--fg-muted);
-  padding: 6px 2px;
-}
-
 .cal-cals-footer {
   border-top: 1px solid var(--border);
   margin-top: 6px;
@@ -27286,13 +26827,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   min-height: 0;
   overflow-y: auto;
   padding: 4px;
-}
-
-.session-search-empty {
-  padding: 20px 14px;
-  text-align: center;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
 }
 
 .session-search-result {
@@ -28009,14 +27543,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   min-width: 0;
 }
 
-.plugin-task-view-loading,
-.plugin-task-view-error {
-  align-items: center;
-  justify-content: center;
-}
-
-.plugin-task-view-error { color: var(--error); }
-
 .plugin-task-view-toolbar {
   display: flex;
   align-items: center;
@@ -28059,8 +27585,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .plugin-chat-view-header button:hover { color: var(--fg); }
-.plugin-chat-view-loading { flex: 1; display: flex; align-items: center; justify-content: center; }
-.plugin-chat-view-empty { padding: 16px; color: var(--fg-muted); font-size: var(--font-size-md); }
 .plugin-chat-view-input { flex: 0 0 auto; }
 .plugin-chat-view-spinner {
   width: 14px;
@@ -28577,15 +28101,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
-.agent-search-error { padding: 6px 0 2px; color: var(--fg-muted); font-size: var(--font-size-sm); }
-.agent-search-retry {
-  border: none;
-  background: none;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: var(--font-size-sm);
-  padding: 0;
-}
 
 /* ── The follow-up window (AgentSearchFollowUp) ──────────────────────────────
    A conversation inside the card, so the question after the answer costs no
@@ -28946,7 +28461,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   opacity: 1;
   pointer-events: auto;
 }
-
 
 /* The time reads as an age; the exact stamp rides a hover tooltip, because
    "how long ago" is the question a transcript actually gets asked. */

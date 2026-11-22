@@ -64,7 +64,7 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
             {([['upper', 'A-Z'], ['lower', 'a-z'], ['digits', '0-9'], ['symbols', '!@#']] as const).map(([k, label]) => (
               <Checkbox key={k} checked={random[k]} onChange={(on) => setR({ [k]: on })} label={label} />
             ))}
-            <Checkbox checked={random.avoidAmbiguous} onChange={(on) => setR({ avoidAmbiguous: on })} label="No look-alikes" />
+            <Checkbox checked={random.avoidAmbiguous} onChange={(on) => setR({ avoidAmbiguous: on })} label="No look-alikes" />{/* empty-state-ok: checkbox label */}
           </div>
         </>
       )}

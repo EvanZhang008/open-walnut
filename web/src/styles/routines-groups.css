@@ -527,10 +527,6 @@
   font-size: var(--font-size-sm);
 }
 
-.routine-task-none {
-  padding: 7px 10px;
-  font-size: var(--font-size-md);
-}
 
 @media (hover: hover) {
   .routine-task-hit:hover {

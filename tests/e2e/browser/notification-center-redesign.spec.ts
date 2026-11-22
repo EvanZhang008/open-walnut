@@ -537,7 +537,7 @@ test('with no pending ask the center lands on All, and Needs Action reads empty'
   await showSection(panel, 'Needs you')
   // No pending ask at all: the feed is stubbed and live notifications are kept off.
   await expect(seededPermCards(panel)).toHaveCount(0)
-  await expect(panel.locator('.notification-feed-empty')).toHaveText('No session is asking you anything')
+  await expect(panel.getByTestId('notification-feed-empty')).toHaveText('No session is asking you anything')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/landing-all-empty-action.png`, fullPage: true })
 })
 

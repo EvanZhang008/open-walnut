@@ -16,6 +16,7 @@ import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { MicInput } from '@/components/common/BoxMic';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
 
@@ -171,7 +172,9 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
             flashing "No unscheduled tasks" at someone who has 2,890 of them is worse
             than showing nothing for a frame. */}
         {sections.length === 0 && !settling && (
-          <div className="cal-rail-empty">No unscheduled tasks</div>
+          filter.trim()
+            ? <EmptyState testId="cal-rail-empty" title={`No unscheduled task matches “${filter.trim()}”`} action={{ label: 'Clear filter', onClick: () => setFilter('') }} />
+            : <EmptyState testId="cal-rail-empty" title="No unscheduled tasks" />
         )}
         {sections.map((s) => (
           <div key={s.key} className="cal-rail-group" data-rail-section={s.key}>

@@ -97,7 +97,7 @@ export function PdfFind({ pdf, root }: { pdf?: PDFDocumentProxy; root: React.Ref
           if (event.key === 'Enter') { event.preventDefault(); next(event.shiftKey ? -1 : 1); }
           if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); }
         }} />
-      <span role="status">{searching ? 'Searching…' : error ? 'Search failed. Try again.' : matches.length ? `${index + 1} / ${matches.length} pages` : query ? 'No matches' : ''}</span>
+      <span role="status">{searching ? 'Searching…' : error ? 'Search failed. Try again.' : matches.length ? `${index + 1} / ${matches.length} pages` : query ? 'No matches' : ''}</span>{/* empty-state-ok: the find bar's match count */}
       <button type="button" className="btn btn-ghost btn-sm" aria-label="Previous matching page" disabled={!matches.length} onClick={() => next(-1)}>↑</button>
       <button type="button" className="btn btn-ghost btn-sm" aria-label="Next matching page" disabled={!matches.length} onClick={() => next(1)}>↓</button>
       <button type="button" className="btn btn-ghost btn-sm" aria-label="Close PDF search" onClick={() => setOpen(false)}>×</button>

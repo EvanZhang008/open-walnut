@@ -9,6 +9,7 @@ import type { Task } from '@open-walnut/core';
 import { fetchOrgDuties, setOrgDuty, type OrgDuty } from '@/api/org';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { log } from '@/utils/log';
+import { UnavailableState } from '@/components/common/EmptyState';
 
 type Caps = NonNullable<Task['org_duties']>;
 
@@ -64,7 +65,7 @@ export function NodeDuties({ task }: { task: Pick<Task, 'id' | 'org_role' | 'org
     }
   };
 
-  if (loadError) return <p className="am-note am-error" role="alert" data-testid="am-duties-error">Could not read the duties. {loadError}</p>;
+  if (loadError) return <UnavailableState size="row" title="Could not read the duties" detail={loadError} testId="am-duties-error" />;
   if (!list?.length) return null;
   return (
     <section className="am-duties" data-testid="am-duties">

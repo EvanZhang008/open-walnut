@@ -84,7 +84,6 @@
 /* The open notification center lists the approvals waiting: the corner's card steps aside. */
 .corner-stack.approvals-listed .corner-slot-approvals { display: none; }
 
-
 /* A board toast's actions look like every other toast's (.notification-toast-action). */
 .corner-stack .kanban-toast-btn {
   font-size: var(--font-size-sm);
@@ -118,9 +117,6 @@
 .corner-stack .corner-more:hover .wn-notice-line { color: var(--fg); }
 .corner-stack .kanban-toast-main { gap: 6px 6px; }
 .corner-stack .kanban-toast-text { flex: 1 0 100%; font-size: var(--font-size-md); color: var(--fg); }
-
-
-
 
 /* Crowded (corner-stack.tsx is-compact): every notice in its shortest form, so the stack
    covers as little of the page as it can. The approval card is its two short lines

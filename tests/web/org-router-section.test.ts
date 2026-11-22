@@ -313,7 +313,8 @@ describe('router settings render', () => {
   it('says which accounts its area reads, or how one gets added', () => {
     const none = body()
     expect(none).toContain('data-testid="org-router-sources"')
-    expect(none).toContain('No account yet. The Mail plugin adds each mailbox here.')
+    expect(none).toContain('>No account yet</span>')
+    expect(none).toContain('>The Mail plugin adds each mailbox here.</span>')
     expect(none).toContain('It reads every new mail of these accounts in the folders it watches.')
     // No mailbox: no folders to pick.
     expect(none).not.toContain('data-testid="org-router-folders"')
@@ -367,7 +368,9 @@ describe('router settings render', () => {
   })
 
   it('with no VP it says a router works on its own', () => {
-    expect(body({ leads: [], stale: [], value: { name: 'n', links: [], paused: true } })).toContain('No open VP yet. A router works on its own.')
+    const html = body({ leads: [], stale: [], value: { name: 'n', links: [], paused: true } })
+    expect(html).toContain('>No open VP yet</span>')
+    expect(html).toContain('>A router works on its own.</span>')
   })
 })
 
@@ -494,7 +497,8 @@ describe('New router reuses the router an area already has', () => {
   it('an area with none offers Create router, with zero or several VPs to link', () => {
     const none = setup([closedWork])
     expect(none).toContain('data-testid="router-setup-create"')
-    expect(none).toContain('No open VP yet. A router works on its own.')
+    expect(none).toContain('>No open VP yet</span>')
+    expect(none).toContain('>A router works on its own.</span>')
     const many = setup([vpA, vpB, closedWork])
     expect(many).toContain('Dock VP')
     expect(many).toContain('Ferry VP')

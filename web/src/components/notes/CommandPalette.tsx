@@ -31,6 +31,7 @@ import { noteHitLabel, type NoteHitLabel } from '../../../../src/core/note-hit-l
 import { log } from '@/utils/log';
 import { MicInput } from '@/components/common/BoxMic';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { EmptyState } from '@/components/common/EmptyState';
 
 interface CommandPaletteProps {
   /**
@@ -357,11 +358,9 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
 
         <div className="notes-cmdk-list" ref={listRef}>
           {rows.length === 0 && !searching && (
-            <div className="notes-cmdk-empty">
-              {q
-                ? <>No notes found. Press <kbd>↵</kbd> to create <strong>{q}</strong>.</>
-                : <>No notes yet. Press <kbd>⌘↵</kbd> for a blank note.</>}
-            </div>
+            q
+              ? <EmptyState size="row" title={<>No notes match “{q}”</>} hint={<>Press <kbd>↵</kbd> to create <strong>{q}</strong>.</>} />
+              : <EmptyState size="row" title="No notes yet" hint={<>Press <kbd>⌘↵</kbd> for a blank note.</>} />
           )}
           {/* First fetch in flight with nothing to keep showing — subtle hint
               instead of a lone "Create note" row flashing on every keystroke. */}

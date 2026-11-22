@@ -21,7 +21,7 @@ import {
   type FileHistoryEntry, type FileHistoryCommit, type FileHistoryResponse, type FileHistoryWriter,
 } from '@/api/file-history';
 import { toGitStylePatch } from '@/components/sessions/diffPatch';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { badge, type BadgeTone } from '@/components/common/badge';
@@ -209,9 +209,9 @@ export function FileHistoryPanel({
         <button type="button" className="fh-close" onClick={onClose} title="Close history" aria-label="Close history">✕</button>
       </div>
 
-      {loading && <div className="fh-loading"><LoadingSpinner /></div>}
-      {error && <div className="fh-error">Couldn’t load history: {error}</div>}
-      {empty && <div className="fh-empty">No history yet</div>}
+      {loading && <LoadingState size="section" title="Loading history…" />}
+      {error && <UnavailableState size="section" title="Couldn’t load history" detail={error} />}
+      {empty && <EmptyState size="section" title="No history yet" hint="Earlier versions show here once this file is saved or committed." />}
       {gitUnavailableNote && <div className="fh-note">{gitUnavailableNote}</div>}
 
       {rows.length > 0 && (

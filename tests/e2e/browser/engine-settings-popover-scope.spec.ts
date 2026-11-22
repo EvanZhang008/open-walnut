@@ -165,7 +165,7 @@ test.describe('engine settings popover: write scope', () => {
     await page.waitForTimeout(500)
     expect(seen.slice(mark).filter((r) => r.startsWith('GET')).map((r) => new URL(r.slice(4)).searchParams.get('scope'))).toEqual(['project', null])
     await expect(banner(dialog)).toHaveCount(0)
-    await expect(dialog.locator('.engine-settings-popover-error')).toHaveCount(0)
+    await expect(dialog.getByTestId('engine-settings-popover-error')).toHaveCount(0)
     await refused.unroute()
     await stub.unroute()
     await dialog.locator('button.engine-settings-popover-close').click()

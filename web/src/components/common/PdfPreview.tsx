@@ -3,6 +3,7 @@ import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import { rawFileContentUrl } from '@/api/files';
 import { log } from '@/utils/log';
 import { PdfFind } from '@/components/common/PdfFind';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/pdf-preview.css';
 
 interface PdfLink { id: string; rect: number[]; url?: string; dest?: string | unknown[] }
@@ -382,8 +383,8 @@ export function PdfPreview({ path, host, reloadToken, url, label }: Props) {
         <span className="fv-pdf-page-count">{document ? `${pageNumber} / ${document.pdf.numPages}` : 'PDF'}</span>
       </div>
       <div ref={scrollRef} className="fv-pdf-scroll" onScroll={onScroll} tabIndex={0} aria-label="PDF document">
-        {error ? <div role="alert" className="fv-pdf-error">{error} <button type="button" className="btn btn-ghost btn-sm"
-          onClick={() => setAttempt((value) => value + 1)}>Retry</button></div>
+        {error ? <UnavailableState size="pane" testId="pdf-error" title="Couldn't open this PDF" detail={error}
+          onRetry={() => setAttempt((value) => value + 1)} />
           : passwordRequest ? <form className="fv-pdf-password" onSubmit={(event) => {
             event.preventDefault(); passwordRequest.submit(password);
           }}>
@@ -394,7 +395,7 @@ export function PdfPreview({ path, host, reloadToken, url, label }: Props) {
             {passwordRequest.incorrect && <div role="alert">Incorrect password. Try again.</div>}
             <button type="submit" className="btn btn-ghost btn-sm">Unlock PDF</button>
           </form>
-          : !document ? <div className="fv-pdf-status" role="status">Loading PDF…</div> : null}
+          : !document ? <LoadingState size="pane" testId="pdf-loading" title="Loading PDF…" /> : null}
         <div ref={pagesRef} className="fv-pdf-pages">
           {document?.sizes.map((size, index) => <PdfPage key={index} pdf={document.pdf} lib={document.lib}
             number={index + 1} size={size} scale={scale} root={scrollRef} onSize={onPageSize} onJump={onJump} />)}

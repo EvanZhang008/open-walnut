@@ -10,7 +10,7 @@ import { createProject } from '@/api/projects';
 import { TasksPageRail, type RailProjectItem } from '@/components/tasks/TasksPageRail';
 import { TasksPageTable } from '@/components/tasks/TasksPageTable';
 import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
-import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import type { TpSort } from '@/components/tasks/tasks-page-sort';
 import { openCountsByProject, railProjectNames, tasksOfRailSelection } from '@/components/tasks/tasks-page-sort';
 import {
@@ -81,7 +81,7 @@ export function DashboardPage() {
   // A project's ⋮ menu asks Main about it; the answer is read in Main's chat.
   const openMainChat = useCallback(() => navigate('/org?node=main&tab=chat'), [navigate]);
   const askMainAbout = useAskMainAbout(openMainChat);
-  const { tasks: storeTasks, loading, error, create, update, completedHidden, ensureAllTasks } = useTasksContext();
+  const { tasks: storeTasks, loading, error, refetch, create, update, completedHidden, ensureAllTasks } = useTasksContext();
   const { toggleComplete, deleteTask } = useUndoableTaskActions();
   // Main and project leads are the org's own nodes: hidden here as on the home board (the org chart shows them).
   // A focus space shows only its tasks here too (experiment focus_workspace; null = no focus).
@@ -372,8 +372,8 @@ export function DashboardPage() {
     });
   }, [refreshRegistry]);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
+  if (loading) return <LoadingState size="pane" title="Loading tasks…" />;
+  if (error) return <UnavailableState size="pane" title="Couldn't load tasks" detail={error} onRetry={refetch} />;
 
   const boardTitle = activeProject === null ? 'All Tasks' : projectDisplayName(activeProject);
   const isAll = activeProject === null;

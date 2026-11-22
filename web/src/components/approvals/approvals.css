@@ -42,7 +42,6 @@
 /* A card that just took another's place: its buttons wait a moment (ApprovalPrompts ARM_MS). */
 .approval-card-arming .approval-actions { pointer-events: none; opacity: 0.55; transition: opacity 0.2s ease; }
 
-
 .approval-head-end { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 
 /* "3 waiting": how many wait, the same count the Needs you line gives; it opens the list of them. */
@@ -358,7 +357,6 @@
 /* Ends the first line: the time and the buttons are the second. */
 .approval-line-break { flex: 0 0 100%; height: 0; }
 .approval-card-line .approval-line-meta { margin-top: 4px; }
-
 
 /* The approval dialog shows the request and waits on the person: the whole corner steps aside
    until it closes (the toasts would sit dimmed under its mask, one more thing to read). */
