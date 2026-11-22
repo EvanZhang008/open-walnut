@@ -280,8 +280,11 @@ test('a long last turn opens at its start; 20 calls are one row; the jump pill c
   await expect(jump).toHaveCount(1)
   await expect(jump).toHaveClass(/visible/)
   await expect(jump).toHaveAttribute('aria-label', 'Scroll to bottom')
-  await expect(jump).toHaveText('Latest')
-  expect((await jump.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+  // The shared round jump button: a 44 px circle on a phone, no words.
+  const box = (await jump.boundingBox())!
+  expect(box.height).toBeGreaterThanOrEqual(44)
+  expect(Math.abs(box.width - box.height)).toBeLessThanOrEqual(1)
+  await expect(jump).toHaveText('')
   await expect(page.getByRole('button', { name: 'Jump to latest' })).toHaveCount(0)
   // Twenty consecutive calls: ONE row of 44 px, opens and closes.
   const run = scroller.locator('.tool-run-toggle', { hasText: '20 tool calls' })
@@ -302,7 +305,8 @@ test('a long last turn opens at its start; 20 calls are one row; the jump pill c
   }
   await inject(page, 'session:batch-completed', { sessionId: SID })
   await expect(scroller.locator('[data-message-id="new-3"]')).toBeAttached({ timeout: 15_000 })
-  await expect(jump).toHaveText('3 new')
+  await expect(jump).toHaveAttribute('aria-label', 'Scroll to bottom, 3 new')
+  await expect(jump.locator('.scroll-to-bottom-badge')).toHaveText('3')
   expect(Math.abs((await scroller.evaluate((el) => el.scrollTop)) - before)).toBeLessThanOrEqual(1)
   await jump.click()
   await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(80)

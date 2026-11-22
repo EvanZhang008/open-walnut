@@ -2690,56 +2690,7 @@ select {
   gap: 4px;
 }
 
-.scroll-to-bottom-btn {
-  position: sticky;
-  bottom: 8px;
-  align-self: flex-end;
-  margin-top: -36px;  /* don't push content down */
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xl);
-  line-height: 1;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-}
-.scroll-to-bottom-btn.visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-.scroll-to-bottom-btn:hover {
-  background: var(--bg-hover);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .scroll-to-bottom-btn {
-    border-color: rgba(255, 255, 255, 0.15);
-    background: #2c2c2e;
-    color: #aaa;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  }
-  :root:not([data-theme]) .scroll-to-bottom-btn:hover {
-    background: #3a3a3c;
-  }
-}
-[data-theme="dark"] .scroll-to-bottom-btn {
-  border-color: rgba(255, 255, 255, 0.15);
-  background: #2c2c2e;
-  color: #aaa;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-[data-theme="dark"] .scroll-to-bottom-btn:hover {
-  background: #3a3a3c;
-}
+/* The jump-to-latest button: common/ScrollToBottomButton.tsx, styles/scroll-jump.css. */
 
 .session-history-empty {
   display: flex;

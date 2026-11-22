@@ -172,4 +172,46 @@ test.describe('Transcript ↓ arrow follows geometry', () => {
     expect((await geometry(page)).gap, 'still parked above the newest row').toBeGreaterThan(200);
     await expect.poll(() => arrowShown(page), { timeout: 4000 }).toBe(true);
   });
+
+  // 2026-11-22, the user, of the arrow at the lower right: "need to be round and in middle, and
+  // glass". The shared ScrollToBottomButton: a circle centred on the timeline, frosted glass,
+  // resting just above the composer; a click reaches the end and hides it.
+  test('the way back is a round glass button centred above the composer, and a click takes it home', async ({ page }) => {
+    await mockSession(page);
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.waitForLoadState('domcontentloaded');
+    const history = historyOf(page);
+    await expect(history).toContainText(`Transcript row ${ROWS - 2}`, { timeout: 15000 });
+    await page.waitForTimeout(2500);
+    await history.hover();
+    for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -400);
+    await expect.poll(() => arrowShown(page), { timeout: 4000 }).toBe(true);
+    await page.waitForTimeout(300);
+
+    const m = await arrowOf(page).evaluate((btn) => {
+      const scroller = btn.closest('.session-history') as HTMLElement;
+      const s = scroller.getBoundingClientRect();
+      const b = btn.getBoundingClientRect();
+      const cs = getComputedStyle(btn);
+      return {
+        dx: b.left + b.width / 2 - (s.left + scroller.clientLeft + scroller.clientWidth / 2),
+        w: b.width, h: b.height,
+        radius: parseFloat(cs.borderTopLeftRadius),
+        blur: cs.backdropFilter || cs.getPropertyValue('-webkit-backdrop-filter'),
+        gapToEdge: s.bottom - b.bottom,
+        text: btn.textContent,
+      };
+    });
+    expect(Math.abs(m.dx), `centre offset ${m.dx}`).toBeLessThanOrEqual(2);
+    expect(m.w).toBe(m.h);
+    expect(m.radius).toBeGreaterThanOrEqual(m.w / 2);
+    expect(m.blur).toMatch(/blur\(/);
+    expect(m.gapToEdge).toBeGreaterThanOrEqual(4);
+    expect(m.gapToEdge).toBeLessThanOrEqual(16);
+    expect(m.text).toBe('');
+
+    await arrowOf(page).click();
+    await expect.poll(async () => (await geometry(page)).gap).toBeLessThanOrEqual(80);
+    await expect.poll(() => arrowShown(page), { timeout: 4000 }).toBe(false);
+  });
 });

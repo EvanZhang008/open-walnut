@@ -475,15 +475,6 @@
   }
 }
 
-/* N30: the jump pill steps aside while it would cover an unanswered prompt
-   card (PhoneTimelinePills sets the attribute from the two boxes). */
-@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .scroll-to-bottom-btn[data-over-prompt] {
-    opacity: 0;
-    pointer-events: none;
-  }
-}
-
 /* N26: search is left with Cancel (in the bar's right slot), as on iOS: no
    Back beside it. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {

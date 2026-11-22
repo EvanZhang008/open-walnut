@@ -37,6 +37,12 @@ const GLASS_OVERLAYS: Record<string, string> = {
   'cal-day-flyout': 'the new-event form\'s mini month (date picker)',
   'qb-center': 'the quick bar over the page (Control-Option-Command-Space): one line of words, read as you speak',
   'wn-notice': 'every notice card (common/NoticeCard.tsx): drawn into the corner stack, a child of <body>; a card inside a panel is `solid` and carries no glass',
+  'scroll-to-bottom-btn': 'the jump-to-latest circle (common/ScrollToBottomButton.tsx; 2026-11-22, the user: "need to be round and in middle, and glass"): an arrow, no words, over its own scroller\'s rows, which sit in its backdrop root',
+};
+/** Glass carriers that float over their own scroller instead of the page (not portalled): what is
+ *  behind them is that scroller's rows, inside the same backdrop root, so the blur reaches them. */
+const IN_SCROLLER_GLASS: Record<string, string> = {
+  'scroll-to-bottom-btn': path.join('components', 'common', 'ScrollToBottomButton.tsx'),
 };
 /** The tint floor: the raised surface's share of the glass. */
 const GLASS_TINT_MIN = 84;
@@ -227,7 +233,8 @@ describe('the legible glass stays legible, and only where it is listed', () => {
       const text = fs.readFileSync(path.join(WEB, c.file), 'utf8');
       // The notice card is portalled by the corner stack it is drawn into (CornerSlot, appendToCornerStack).
       const inStack = c.classes.includes('wn-notice') && c.file === path.join('components', 'common', 'NoticeCard.tsx');
-      if (!inStack && !/createPortal\([\s\S]*document\.body/.test(text)) bad.push(`${c.file}: ${c.classes.join(' ')} is not portalled to <body>`);
+      const inScroller = c.classes.some((t) => IN_SCROLLER_GLASS[t] === c.file);
+      if (!inStack && !inScroller && !/createPortal\([\s\S]*document\.body/.test(text)) bad.push(`${c.file}: ${c.classes.join(' ')} is not portalled to <body>`);
     }
     expect(bad).toEqual([]);
     const carried = new Set(found.flatMap((c) => c.classes));

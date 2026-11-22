@@ -2,9 +2,9 @@
  * The two pills a phone stacks above the composer (spec 4.5, 4.7; C35, C65,
  * C70), both sticky at the bottom of the timeline's own scroller:
  *
- * - The jump pill IS the existing `.scroll-to-bottom-btn` (no second jump
- *   control): on a phone it reads `<n> new` (rows that arrived below the last
- *   one you had when you scrolled away) or `Latest`; its aria-label stays.
+ * - The jump button is the shared ScrollToBottomButton (no second jump
+ *   control): on a phone its badge counts the rows that arrived below the last
+ *   one you had when you scrolled away (`Scroll to bottom, <n> new`).
  * - The prompt pill, `1 prompt waiting` / `N prompts waiting`, shows while the
  *   first unanswered card is out of view or the keyboard is up; a tap brings
  *   the card into view. It sits 8 px above the jump pill when both show.
@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from 'react';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { ScrollToBottomButton } from '@/components/common/ScrollToBottomButton';
 
 const ROW_SELECTOR = '[data-msg-role]';
 const PROMPT_SELECTOR = '[data-prompt-pending="true"]';
@@ -43,13 +44,16 @@ function useScrollerWatch(ref: RefObject<HTMLElement | null>, active: boolean, r
   }, [ref, active, read]);
 }
 
-/** The jump pill's text: a down arrow on the desktop, `<n> new` / `Latest` on a phone. */
-export function JumpPillLabel({ containerRef, visible }: { containerRef: RefObject<HTMLElement | null>; visible: boolean }) {
+/**
+ * The jump button's phone count: rows that arrived below the last one on screen when the button
+ * appeared (`3 new`), and N30, stepping aside while it would sit on an unanswered prompt card.
+ */
+export function useJumpCount(containerRef: RefObject<HTMLElement | null>, buttonRef: RefObject<HTMLElement | null>, visible: boolean): number {
   const phone = usePhoneLayout();
   const [count, setCount] = useState(0);
   const lastSeen = useRef<Element | null>(null);
 
-  // The last row on screen when the pill appeared: every row after it is new.
+  // The last row on screen when the button appeared: every row after it is new.
   useEffect(() => {
     if (!phone) return;
     if (!visible) { lastSeen.current = null; setCount(0); return; }
@@ -58,14 +62,17 @@ export function JumpPillLabel({ containerRef, visible }: { containerRef: RefObje
     lastSeen.current = rows && rows.length ? rows[rows.length - 1]! : null;
   }, [phone, visible, containerRef]);
 
-  const labelRef = useRef<HTMLSpanElement | null>(null);
-
   const read = useCallback(() => {
     const el = containerRef.current;
-    // N30: the pill steps aside while it would sit on an unanswered prompt card's
+    // N30: the button steps aside while it would sit on an unanswered prompt card's
     // buttons (the card is what needs the tap; the bottom is a few pixels away).
-    const pill = labelRef.current?.closest('button');
-    if (el && pill) pill.toggleAttribute('data-over-prompt', overlapsPrompt(pill, el));
+    const btn = buttonRef.current;
+    if (el && btn) {
+      const over = overlapsPrompt(btn, el);
+      btn.toggleAttribute('data-over-prompt', over);
+      // Stepped aside is out of the Tab order too, not only out of sight.
+      btn.tabIndex = over ? -1 : 0;
+    }
     const seen = lastSeen.current;
     if (!el || !seen || !seen.isConnected) { setCount(0); return; }
     let n = 0;
@@ -75,16 +82,15 @@ export function JumpPillLabel({ containerRef, visible }: { containerRef: RefObje
       if (seen.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) n += 1;
     }
     setCount(n);
-  }, [containerRef]);
+  }, [containerRef, buttonRef]);
   useScrollerWatch(containerRef, phone && visible, read);
 
   useEffect(() => {
     if (visible) return;
-    labelRef.current?.closest('button')?.removeAttribute('data-over-prompt');
-  }, [visible]);
+    buttonRef.current?.removeAttribute('data-over-prompt');
+  }, [visible, buttonRef]);
 
-  if (!phone) return <>{'\u2193'}</>;
-  return <span ref={labelRef} className="scroll-to-bottom-label">{count > 0 ? `${count} new` : 'Latest'}</span>;
+  return phone ? count : 0;
 }
 
 /** Whether the pill's box crosses an unanswered prompt card in the scroller. */
@@ -197,21 +203,25 @@ export function useFlagStore(): FlagStore {
   }, []);
 }
 
-/** The prompt pill and the jump pill, at the timeline's bottom. */
+/** The prompt pill and the jump button, at the timeline's bottom. */
 export function TimelineBottomPills({ containerRef, arrow, onJump }: {
   containerRef: RefObject<HTMLElement | null>;
   arrow: FlagStore;
   onJump: () => void;
 }) {
   const visible = useSyncExternalStore(arrow.subscribe, arrow.get, arrow.get);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const count = useJumpCount(containerRef, buttonRef, visible);
   return (
     <>
       <PromptWaitingPill containerRef={containerRef} stacked={visible} />
-      <button
-        className={`scroll-to-bottom-btn${visible ? ' visible' : ''}`}
+      <ScrollToBottomButton
+        ref={buttonRef}
+        visible={visible}
         onClick={onJump}
-        aria-label="Scroll to bottom"
-      ><JumpPillLabel containerRef={containerRef} visible={visible} /></button>
+        label={count > 0 ? `Scroll to bottom, ${count} new` : 'Scroll to bottom'}
+        badge={count > 0 ? count : null}
+      />
     </>
   );
 }

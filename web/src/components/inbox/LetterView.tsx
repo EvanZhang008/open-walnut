@@ -51,6 +51,7 @@ import { useThreadPane } from './useThreadPane';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import '@/styles/human-inbox.css';
+import { ScrollToBottomButton } from '@/components/common/ScrollToBottomButton';
 import { taskPath } from '@/utils/task-path';
 import { openAgentRef, type AgentRef } from '@/utils/agent-ref-open';
 
@@ -496,16 +497,16 @@ export function LetterView({
           </div>
           <div className="hib-new-reply-seat" aria-live="polite">
             {thread.newBelow && (
-              <button
-                type="button"
-                className="hib-new-reply"
+              <ScrollToBottomButton
+                visible
+                seated
+                label="New reply below"
+                testId="hib-new-reply"
                 onClick={() => {
                   thread.follow();
                   thread.scrollRef.current?.focus({ preventScroll: true });
                 }}
-              >
-                New reply ↓
-              </button>
+              />
             )}
           </div>
         </div>

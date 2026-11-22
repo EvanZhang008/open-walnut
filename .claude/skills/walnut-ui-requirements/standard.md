@@ -80,6 +80,17 @@ card). `tests/e2e/browser/ask-card-family.ts` measures it on the page: `ask-card
 runs it on every kind of ask (a new kind fails `ask-card-words-guard.test.ts` until that spec plays
 it), and the strip and To read specs run it on theirs.
 
+### Jump to the latest
+
+A button that takes a scrolled view back to its end (a session's timeline, a letter's thread, any
+list that offers it) is `ScrollToBottomButton` (`web/src/components/common/ScrollToBottomButton.tsx`,
+styled only by `web/src/styles/scroll-jump.css`): a 36 px circle (44 px on a phone) of the shared
+frosted glass (`wn-glass-frost`), a down arrow centred in it and no words, horizontally centred in its
+scroller and resting 8 px above the scroller's bottom edge, shown only while the view is away from
+its end. A count of rows that arrived below is a small `--accent` badge on its corner. Source: the
+user, 2026-11-22, of the old grey ellipse at the lower right: "need to be round and in middle, and
+glass". `tests/web/scroll-jump-button-guard.test.ts` fails on a jump button drawn on its own.
+
 ## Inputs
 
 - In a card, the answer box is the chat input in the answer row: `--bg-secondary`, corner 8 px,

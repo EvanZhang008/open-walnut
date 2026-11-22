@@ -168,7 +168,7 @@ test('a long thread opens at its newest turn and never moves a reader who scroll
 
   // A new reply while scrolled up: the reader stays, a button says so.
   await agentReply(request, id, { text: `Agent turn 31 arrives while you read ${NONCE}` })
-  const newReply = view.locator('.hib-new-reply')
+  const newReply = view.getByTestId('hib-new-reply')
   await expect(newReply).toBeVisible({ timeout: 20_000 })
   await expect(view.locator('.hib-turn').last()).toContainText('Agent turn 31')
   const afterReply = await topTurn(view)

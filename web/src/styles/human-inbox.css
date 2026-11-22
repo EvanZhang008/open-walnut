@@ -460,20 +460,8 @@
 .hib-new-reply-seat {
   position: absolute;
   left: 50%;
-  bottom: 12px;
+  bottom: 8px;
   transform: translateX(-50%);
-}
-
-.hib-new-reply {
-  padding: 5px 12px;
-  border: none;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-  cursor: pointer;
 }
 
 /* ── Composer ─────────────────────────────────────────────────────────────── */

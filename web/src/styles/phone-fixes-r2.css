@@ -224,8 +224,8 @@
     order: 3;
   }
 
-  /* N2-23: the Latest pill is opaque and sits 8 px above the composer, in the
-     scroller's own bottom edge, like the prompt pill. */
+  /* N2-23: the jump button (scroll-jump.css) and the prompt pill sit 8 px above
+     the composer, in the scroller's own bottom edge. */
   /* Sticky offsets count from inside the scroller's padding: the timeline's
      bottom padding is pinned to 12 px here, and the pills sit at -4 px, which
      puts them 8 px above the scroller's edge, right over the composer. */
@@ -237,23 +237,6 @@
   }
   .app-shell-navigation .session-panel.is-phone-layer .session-history .phone-prompt-pill.is-stacked {
     bottom: calc(-4px + 44px + 8px);
-  }
-  .app-shell-navigation .session-history .scroll-to-bottom-btn {
-    position: sticky;
-    bottom: -4px;
-    z-index: 11;
-    background: var(--card-bg);
-    background: linear-gradient(var(--card-bg), var(--card-bg)), var(--bg);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    border: 1px solid var(--border-strong);
-    box-shadow: 0 2px 10px rgb(0 0 0 / 18%);
-  }
-  /* Opaque only while it is up and not stepping aside from a prompt card
-     (N30): a bare opacity 1 above showed the pill on every session, a short
-     one too, sitting on the last message's text. */
-  .app-shell-navigation .session-history .scroll-to-bottom-btn.visible:not([data-over-prompt]) {
-    opacity: 1;
   }
 }
 

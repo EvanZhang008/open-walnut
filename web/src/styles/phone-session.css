@@ -149,26 +149,12 @@
   }
 }
 
-/* Timeline (spec 4.5): the jump pill reuses .scroll-to-bottom-btn; the prompt
-   pill stacks 8 px above it. Both sticky at the scroller's bottom, both in
+/* Timeline (spec 4.5): the jump button is the shared ScrollToBottomButton
+   (scroll-jump.css); the prompt pill stacks 8 px above it. Both sticky at the scroller's bottom, both in
    the scroller's own box, so neither covers the composer. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* flex-shrink 0: the timeline is a flex column, and a long one squeezes a
      shrinkable item down to its text's height. */
-  .app-shell-navigation .scroll-to-bottom-btn {
-    flex-shrink: 0;
-    width: auto;
-    min-width: 88px;
-    height: 44px;
-    min-height: 44px;
-    margin-top: -44px;
-    padding: 0 16px;
-    border-radius: 22px;
-    font-size: var(--font-size-lg);
-    font-weight: 600;
-    align-self: center;
-  }
-
   /* The prompt key is the family's .btn-primary, a finger's 44 px tall. */
   .app-shell-navigation .phone-prompt-pill {
     flex-shrink: 0;

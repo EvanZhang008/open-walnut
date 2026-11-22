@@ -260,7 +260,7 @@ test('N2-07: the session menu is opaque, its labels sit in the middle of their r
   expect(errors).toEqual([])
 })
 
-test('N2-23: the Latest pill is opaque and sits about 8 px above the composer', async ({ page }) => {
+test('N2-23: the jump button is round glass and sits about 8 px above the composer', async ({ page }) => {
   const errors = await openStubSession(page, { turns: 8 })
   const scroller = sessionOverlay(page).locator('.session-history')
   await scroller.evaluate((el) => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -400 })); el.scrollTop = 0 })
@@ -272,8 +272,11 @@ test('N2-23: the Latest pill is opaque and sits about 8 px above the composer', 
   const gap = composer.y - (p.y + p.height)
   expect(gap, `gap ${gap}`).toBeGreaterThanOrEqual(4)
   expect(gap, `gap ${gap}`).toBeLessThanOrEqual(16)
-  const bg = await pill.evaluate((el) => getComputedStyle(el).backgroundColor)
-  expect(bg).toMatch(/^rgb\(|, 1\)$/)
+  // 2026-11-22: the shared frosted circle (scroll-jump.css), centred in the timeline.
+  expect(Math.abs(p.width - p.height)).toBeLessThanOrEqual(1)
+  expect(await pill.evaluate((el) => getComputedStyle(el).backdropFilter)).toMatch(/blur/)
+  const s = (await scroller.boundingBox())!
+  expect(Math.abs(p.x + p.width / 2 - (s.x + s.width / 2))).toBeLessThanOrEqual(2)
   await shot(page, 'n2-23-latest')
   expect(errors).toEqual([])
 })
