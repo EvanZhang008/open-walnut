@@ -270,7 +270,7 @@ describe("Home's row: the pane just opened gets its share", () => {
   // long titles wrapped in the task panel.
   it('with nothing open beside it, the task panel takes the room up to a readable line, never below its usual width', () => {
     expect(todoPanelAloneWidth(null, 33.42)).toBe(
-      'max(calc((100vw - var(--home-rail-width, 56px)) * 0.3342), min(calc(100vw - var(--home-rail-width, 56px) - 400px), 880px))',
+      `max(${todoPanelWidth(33.42)}, min(calc(100vw - var(--home-rail-width, 56px) - 400px), 880px))`,
     );
     // A width the user dragged in this layout is his, as a plain share.
     expect(todoPanelAloneWidth(45, 33.42)).toBe(todoPanelWidth(45));

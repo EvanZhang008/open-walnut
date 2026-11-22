@@ -121,6 +121,10 @@ test('Home with nothing open: the task panel takes the room, its divider follows
   await boot(page, baseURL!, false)
   await expect(page.getByTestId('home-empty-pane')).toBeVisible()
   const todo = page.locator('.main-page-todo')
+  // The width beside a session as this browser has it (synced view prefs can carry an earlier
+  // test's drag back after boot clears it): the alone drags below must leave it as it is.
+  const shared = () => page.evaluate(() => localStorage.getItem('open-walnut-todo-width'))
+  const sharedBefore = await shared()
   // 1512 less the 56 px rail, less the empty pane's 400 px, capped at the readable 880 px.
   await expect.poll(async () => Math.round((await todo.boundingBox())!.width)).toBe(880)
   const handle = page.locator('.todo-resize-handle')
@@ -130,9 +134,11 @@ test('Home with nothing open: the task panel takes the room, its divider follows
     expect(Math.abs(moved.released - dx), `task panel divider released moved ${moved.released} for ${dx}`).toBeLessThanOrEqual(2)
   }
   await page.screenshot({ path: `${SHOT_DIR}/todo-alone-after-drag.png` })
-  // A session opened: the task panel is back at its own width beside a session (the default 25%).
+  expect(await shared(), 'an alone drag leaves the width beside a session').toBe(sharedBefore)
+  // A session opened: the task panel is back at its own width beside a session (25% by default).
   await openSessionColumn(page)
-  await expect.poll(async () => Math.round((await todo.boundingBox())!.width)).toBe(Math.round((1512 - 56) * 0.25))
+  const pct = sharedBefore === null ? 25 : Number(sharedBefore)
+  await expect.poll(async () => Math.round((await todo.boundingBox())!.width)).toBe(Math.round((1512 - 56) * pct / 100))
 })
 
 // 2026-11-22 audit: an empty Quick question took half the row beside a session with a long history.

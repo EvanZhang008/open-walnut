@@ -462,16 +462,14 @@ for (const scheme of ['light', 'dark'] as const) {
       return { history: Math.round(Math.min(hist.bottom, input.top) - Math.max(hist.top, header.bottom)) }
     })
     expect(room.history, `${why}, chat history ${room.history}`).toBeGreaterThanOrEqual(160)
-    const head = detail.getByTestId('kanban-detail-head')
-    const hb = (await head.boundingBox())!
+    const hb = (await detail.getByTestId('kanban-detail-head').boundingBox())!
     expect(hb.height, `${why}, card ${Math.round(hb.height)}`).toBeLessThanOrEqual(pb.height * 0.4 + 2)
     // The card's title is whole (it scrolls, never cuts), and Back and the actions stay in view.
-    const title = detail.locator('.kanban-detail-title')
-    expect(await title.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && getComputedStyle(el).textOverflow !== 'ellipsis')).toBe(true)
+    expect(await detail.locator('.kanban-detail-title').evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && getComputedStyle(el).textOverflow !== 'ellipsis')).toBe(true)
     await expect(pane.getByTestId('kanban-detail-back')).toBeInViewport({ ratio: 1 })
     await expect(detail.getByTestId('kanban-detail-complete')).toBeInViewport({ ratio: 1 })
-    const actions = (await detail.locator('.kanban-detail-actions').boundingBox())!
-    expect(actions.y + actions.height, 'the actions sit at the bottom of the card box').toBeLessThanOrEqual(hb.y + hb.height + 1)
+    const ab = (await detail.locator('.kanban-detail-actions').boundingBox())!
+    expect(ab.y + ab.height, 'the actions sit at the bottom of the card box').toBeLessThanOrEqual(hb.y + hb.height + 1)
     await page.screenshot({ path: `${SHOTS}/${engine}-r305-detail-session-${scheme}.png` })
     await pane.getByTestId('kanban-detail-back').click()
     await expect(detail).toHaveCount(0)
