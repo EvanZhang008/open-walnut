@@ -99,10 +99,16 @@ export function kindsOf(tag: string, attrs: string): Array<{ kind: Kind; what: s
     const type = attrs.match(/\btype=["'](checkbox|radio)["']/)?.[1];
     if (type) add('check', `input type=${type}`);
   }
+  // A plain span or div that takes no input (no handler, role, tab stop or on-state) and is named
+  // -switch is a wrapper around a switch, not one: `.apps-card-switch` holds a shared ToggleSwitch
+  // and its label (2026-11-22). A clickable span or div still counts, and a -tabs strip counts
+  // whatever it is (a hand-built tab bar's container).
+  const inertWrapper = (tag === 'span' || tag === 'div') && !role &&
+    !/\b(onClick|onKeyDown|onPointerDown|onMouseDown|tabIndex|aria-pressed|aria-checked|aria-selected)\b/.test(attrs);
   for (const w of words) {
     if (/-tabs?(-bar)?(-item|-btn|-button)?$/.test(w)) add('tab', `.${w}`);
     else if (/-(seg|segment|segmented)$/.test(w)) add('segment', `.${w}`);
-    else if (/-switch$/.test(w)) add('switch', `.${w}`);
+    else if (/-switch$/.test(w) && !inertWrapper) add('switch', `.${w}`);
     else if (/-chip$/.test(w) && (/\baria-pressed\b/.test(attrs) || /\b(active|on|selected|is-on|is-active|is-selected)\b/.test(cls))) add('chip', `.${w}`);
   }
   // A button that keeps its own on-class beside aria-pressed draws an on state of its own: a second

@@ -48,6 +48,9 @@ describe('choice controls: one component per kind', () => {
     expect(k('button', ' role="switch" aria-checked={on}')).toEqual(['switch']);
     expect(k('span', ' className="pr-card-switch-track"')).toEqual([]);
     expect(k('label', ' className="draft-workspace-switch"')).toEqual(['switch']);
+    // A wrapper around a shared switch is not one; a clickable span is.
+    expect(k('span', ' className="apps-card-switch" title="x"')).toEqual([]);
+    expect(k('span', ' className="row-switch" onClick={flip}')).toEqual(['switch']);
     expect(k('input', ' type="checkbox" checked={on}')).toEqual(['check']);
     expect(k('input', ' type="text"')).toEqual([]);
     expect(k('button', ' className="org-threads-chip" aria-pressed={on}')).toEqual(['chip']);
