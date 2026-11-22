@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-test-priv
 
 import {
   addTask, addTaskFull, updateTask, getTask, ensureProject, makeTaskLocal, releaseSyncHold, setTaskSyncHold,
-  _resetForTesting, settleBackgroundPushes, updateTaskRaw,
+  _resetForTesting, settleBackgroundPushes,
 } from '../../../src/core/task-manager.js';
 import { updateConfig } from '../../../src/core/config-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
@@ -287,11 +287,12 @@ describe('private tasks against a sync plugin', () => {
     expect((await getTask(task.id)).source).toBe(PLUGIN);
   });
 
-  it('a held task moved to a project that does not sync drops its hold; back in a synced one it keeps it', async () => {
+  it('a held task moved to a project that does not sync keeps its own hold (it stays off hosts); back in a synced one it keeps it', async () => {
     const { task } = await addTask({ title: 'Marigold notes', project: PROJECT });
+    const held = (await getTask(task.id)).sync_hold;
+    expect(held).toMatchObject({ state: 'private', by: 'words' });
     await updateTask(task.id, { project: 'Personal' }, { source: 'api' });
-    expect((await getTask(task.id)).sync_hold).toBeUndefined();
-    await updateTaskRaw(task.id, { sync_hold: { target: PLUGIN, state: 'chosen', at: '' } } as Partial<Task>);
+    expect((await getTask(task.id)).sync_hold).toEqual(held);
     await updateTask(task.id, { project: PROJECT }, { source: 'api' });
     const back = await getTask(task.id);
     expect(back.source).toBe('local');

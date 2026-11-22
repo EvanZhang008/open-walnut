@@ -86,11 +86,14 @@ describe('a session\'s call goes only to a server of its own Walnut, both twins'
       expect(fnBody(src, 'historyFetchTarget')).toMatch(/home \? gatewayTargetFor\(home\) : pickTrustedClient\(''\)\.client/)
       const relays = enclosing(src, /(?<!function )\brelayToPrimary\(/).filter((fn) => fn !== 'relayToPrimary')
       for (const fn of relays) expect(RELAY_CALLERS, `${fn} calls relayToPrimary`).toHaveProperty(fn)
-      // The send's targets: gatewayTargetFor's pick, or the copy of it handed on (primary).
+      // The send's targets: gatewayTargetFor's pick, the copy of it handed on (primary), or the pick
+      // made again when a same-host send's hand-off ends (leader: the one that answers then).
       const send = fnBody(src, 'sendGatewayRequest')
       expect(send).toMatch(/target = gatewayTargetFor\(home, \{ callerSid/)
-      for (const m of send.matchAll(/relayToPrimary\((\w+),/g)) expect(['target', 'primary']).toContain(m[1])
+      for (const m of send.matchAll(/relayToPrimary\((\w+),/g)) expect(['target', 'primary', 'leader']).toContain(m[1])
       expect(send).toMatch(/(const|var) primary = target/)
+      for (const m of send.matchAll(/(?:const|var) leader = ([^;\n]+)/g)) expect(m[1]!.trim()).toBe('gatewayTargetFor(home)')
+      expect(send.match(/(?:const|var) leader = /g)?.length ?? 0).toBe(send.match(/relayToPrimary\(leader,/g)?.length ?? 0)
       // A plugin job's call: a socket bound to its Walnut, nothing else.
       expect(fnBody(src, 'sendPluginJobGatewayRequest')).toMatch(/if \(gatewayClientHomes\.get\(client\) === home\) target = client/)
     })

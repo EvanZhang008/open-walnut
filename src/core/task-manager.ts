@@ -59,6 +59,7 @@ import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { linkTargetOfTag, newLinkTags, relabelLinkTags, mergeLinkNames, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-remote-links.js';
 import { decideBirth } from './private-tasks/birth.js';
+import { holdWhenProjectLocal, projectOwnsHold } from './private-tasks/hold-owner.js';
 import { syncRulesFor } from './private-tasks/provider-rules.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
 import { isPermitRefusal, leaderPermitActive } from './leader/switch/doors.js';
@@ -2459,7 +2460,8 @@ export async function setProjectMetadata(
  * (makeTaskLocal, one by one, so each releases its remote identity and its outside copy is
  * handled); a task still synced refuses the switch, because a local row over a synced task is
  * the mismatch the pull reports forever. A pull of the service's list of the same name then
- * skips it (the existing row wins). Returns null for an unknown project.
+ * skips it (the existing row wins). It clears only the holds a project step made
+ * (hold-owner.ts); a task's own hold stays. Returns null for an unknown project.
  */
 export async function setProjectLocal(project: string): Promise<{ name: string; from: TaskSource; holdsCleared: number } | null> {
   await ensureInit();
@@ -2473,8 +2475,9 @@ export async function setProjectLocal(project: string): Promise<{ name: string; 
     const inProject = store.tasks.filter((t) => (t.project ?? '').trim().toLowerCase() === key.toLowerCase());
     const synced = inProject.filter((t) => t.source !== 'local').length;
     if (synced > 0) throw new Error(`${synced} task(s) in "${key}" still sync to ${from}; make them local first`);
-    // A hold aimed at the service the project no longer syncs to means nothing now.
-    const cleared = inProject.filter((t) => t.sync_hold && t.sync_hold.state !== 'checking' && t.sync_hold.target === from);
+    // Only the holds a project step made to stop the sync go; a task's own hold (private,
+    // chosen, unjudged, checking) stays, and keeps it off every host's copies (hold-owner.ts).
+    const cleared = inProject.filter((t) => t.sync_hold && t.sync_hold.target === from && projectOwnsHold(t.sync_hold));
     for (const t of cleared) t.sync_hold = undefined;
     store.projects = { ...projects, [key]: { ...projects[key], source: 'local' } };
     await writeStore(store);
@@ -4703,19 +4706,20 @@ function moveOffService(store: TaskStore, task: Task, newProject: string, claim:
 /** The hold a task moved into a project of another outside service carries: it stays local
  *  there until someone chooses to sync it (by 'user': no automatic release takes it out). */
 export function movedInHold(from: TaskSource, target: TaskSource, at: string): SyncHold {
-  return { target, state: 'chosen', by: 'user', at, reason: movedHoldReason(target, from) };
+  return { target, state: 'chosen', by: 'user', via: 'project', at, reason: movedHoldReason(target, from) };
 }
 
 const MOVED_HOLD_PREFIX = 'Moved here';
 
 /**
  * The hold of a local task whose project is now `target` (the project's outside service, or
- * null): null when the project syncs nowhere (nothing to hold), else the hold naming that
- * service, so "Sync to …" always says, and sends to, the service the project syncs to. Every
- * path that changes a held task's project goes through it (updateTask, a folder move, filing).
+ * null): in a project that syncs nowhere, the task's own hold as it is and none when a project
+ * step made it (hold-owner.ts); else the hold naming that service, so "Sync to …" always says,
+ * and sends to, the service the project syncs to. Every path that changes a held task's project
+ * goes through it (updateTask, a folder move, filing).
  */
 export function holdForProject(hold: SyncHold, target: TaskSource | null): SyncHold | null {
-  if (!target) return null;
+  if (!target) return holdWhenProjectLocal(hold);
   if (hold.target === target) return hold;
   return hold.reason?.startsWith(MOVED_HOLD_PREFIX)
     ? { ...hold, target, reason: movedHoldReason(target) }
@@ -9679,8 +9683,11 @@ export async function releaseSyncHold(
     if (when && !when(task)) return { task, released: false, reason: 'hold_moved' };
     const target = projectSyncSource(store, task.project);
     if (!target) {
-      // Its project no longer syncs (moved, or the project went local): nothing to hold.
-      if (!task.sync_hold) return { task, released: false, reason: 'project_local' };
+      // Its project no longer syncs (moved, or the project went local): nothing is sent. Only a
+      // hold still being judged, or one a project step made, goes; the task's own hold stays.
+      if (!task.sync_hold || (task.sync_hold.state !== 'checking' && !projectOwnsHold(task.sync_hold))) {
+        return { task, released: false, reason: 'project_local' };
+      }
       delete task.sync_hold;
       await writeStore(store);
       return { task, released: false, reason: 'project_local', wrote: true };

@@ -281,7 +281,7 @@ describe('triggers here', () => {
     expect(sent).toEqual([])
   })
 
-  it('pause and resume are PATCH {enabled} alone (any other change is trigger_update: the Mac\'s); delete is DELETE', async () => {
+  it('pause and resume are PATCH {enabled} alone (any other change is trigger_update: away-trigger-update.test.ts); delete is DELETE', async () => {
     const { h } = triggers()
     const sent: Sent[] = []
     await run(h, { method: 'PATCH', path: '/v1/routines/mhere-made-01', body: { enabled: false }, replicaWrite: write('op-p', sent) })
@@ -289,10 +289,13 @@ describe('triggers here', () => {
     await run(h, { method: 'DELETE', path: '/v1/routines/mhere-made-01', body: {}, replicaWrite: write('op-d', sent) })
     expect(sent.map((s) => [s.op, s.args])).toEqual([['trigger_pause', { id: 'mhere-made-01' }], ['trigger_resume', { id: 'mhere-made-01' }], ['trigger_delete', { id: 'mhere-made-01' }]])
     const update = await run(h, { method: 'PATCH', path: '/v1/routines/mhere-made-01', body: { schedule: { kind: 'every', everyMs: 60_000 } }, replicaWrite: write('op-u', sent) })
-    expect(update).toMatchObject({ status: 503, body: { error: { code: 'needs_leader', why: 'routine_writes_need_mac' } } })
+    expect(update).toMatchObject({ status: 200 })
+    expect(sent[3]).toMatchObject({ op: 'trigger_update', args: { id: 'mhere-made-01', args: { id: 'mhere-made-01', every: 60_000 }, on: true } })
     const job = await run(triggers({}, JOB).h, { method: 'DELETE', path: '/v1/routines/mhere-made-01', body: {}, replicaWrite: write('op-j', sent) })
     expect(job).toMatchObject({ status: 503 })
-    expect(sent).toHaveLength(3)
+    const jobUpdate = await run(triggers({}, JOB).h, { method: 'PATCH', path: '/v1/routines/mhere-made-01', body: { name: 'x' }, replicaWrite: write('op-ju', sent) })
+    expect(jobUpdate).toMatchObject({ status: 503 })
+    expect(sent).toHaveLength(4)
   })
 
   describe('a trigger of a task the Mac keeps local (kept-local-calls.ts)', () => {

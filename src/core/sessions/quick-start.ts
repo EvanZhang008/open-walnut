@@ -83,6 +83,8 @@ export interface QuickStartParams {
   /** The session that asks for this start (`x-walnut-caller-sid`): the launch runs at most as
    *  loose as its own mode (delegated-mode.ts capStartMode). Absent: the person, or Walnut itself. */
   callerSid?: string;
+  /** Its host's daemon could not prove `callerSid` (lib/caller-unproven.ts): the ceiling reads an outside caller. */
+  callerUnproven?: boolean;
   /** `mode` came from defaults the caller did not name (its project's): a looser one comes down
    *  to the caller's mode instead of refusing the start. */
   modeImplied?: boolean;
@@ -414,11 +416,12 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     }
   }
   // A session starts work at most as loose as itself, a project's default mode included.
-  if (params.callerSid) {
+  if (params.callerSid || params.callerUnproven) {
     const { capStartMode } = await import('./delegated-mode.js');
     const asked = params.modeImplied ? undefined : params.mode;
-    const capped = await capStartMode(params.callerSid, asked);
-    mode = mode !== undefined && mode !== asked ? await capStartMode(params.callerSid, mode, { implied: true }) : capped;
+    const unproven = params.callerUnproven;
+    const capped = await capStartMode(params.callerSid, asked, { unproven });
+    mode = mode !== undefined && mode !== asked ? await capStartMode(params.callerSid, mode, { implied: true, unproven }) : capped;
     if (launchSource?.started) launchSource = { ...launchSource, started: { ...launchSource.started, ...(mode ? { mode: mode as import('../types.js').SessionMode } : {}) } };
   }
   const selfDecides = !fallbackDecided && !fallback && selfDecidesFallback(source, walnutAgent);

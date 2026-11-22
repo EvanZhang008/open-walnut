@@ -75,7 +75,7 @@ function mapCronError(err: unknown): never {
  * It runs only on this REST/relay path, never on store load: revalidating on
  * load would let a rule added later make an existing job unreadable.
  */
-async function validateExecutorForSave(input: { executor?: unknown }): Promise<void> {
+export async function validateExecutorForSave(input: { executor?: unknown }): Promise<void> {
   const ref = input.executor as { type?: string; config?: unknown } | undefined;
   if (!ref || typeof ref.type !== 'string' || !ref.type) return;
   const { getExecutor, listExecutors } = await import('./registry.js');
@@ -111,6 +111,33 @@ function assertIntervalSchedule(schedule: { kind?: string; everyMs?: number } | 
 }
 
 /**
+ * The first two checks of validateCheckForSave, which ask no daemon: an interval schedule and a
+ * command that survived normalization (throws the 400). A host's follower runs them on a change
+ * it makes while the Mac is away (replica/away-trigger-update.ts). The input's check, or null.
+ */
+export function checkShapeForSave(input: { schedule?: unknown; check?: unknown }, raw: unknown, existing?: Pick<CronJob, 'schedule' | 'check'>): TriggerCheck | null {
+  const rawCheck = rawRecord(raw)?.check ?? rawRecord(rawRecord(raw)?.job)?.check;
+  if (input.check === null) return null;
+  const schedule = (input.schedule ?? existing?.schedule) as { kind?: string; everyMs?: number } | undefined;
+  if (!input.check) {
+    // normalize() drops a check whose `run` is empty — say so instead of quietly
+    // storing a plain time-only routine the caller did not ask for.
+    if (rawRecord(rawCheck)) {
+      throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
+    }
+    // A schedule-only patch on a stored trigger must keep it an interval.
+    if (existing?.check && input.schedule) assertIntervalSchedule(schedule);
+    return null;
+  }
+  const check = input.check as TriggerCheck;
+  assertIntervalSchedule(schedule);
+  if (!check.run || !check.run.trim()) {
+    throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
+  }
+  return check;
+}
+
+/**
  * Validate a `check` at SAVE time, for the same reason validateExecutorForSave
  * exists: a trigger that only fails on its first tick fails in a history line
  * nobody is watching. Three things are checked, and each one is a different
@@ -136,24 +163,8 @@ async function validateCheckForSave(
   existing?: CronJob,
   origin?: string,
 ): Promise<string | null> {
-  const rawCheck = rawRecord(raw)?.check ?? rawRecord(rawRecord(raw)?.job)?.check;
-  if (input.check === null) return null;
-  const schedule = (input.schedule ?? existing?.schedule) as { kind?: string; everyMs?: number } | undefined;
-  if (!input.check) {
-    // normalize() drops a check whose `run` is empty — say so instead of quietly
-    // storing a plain time-only routine the caller did not ask for.
-    if (rawRecord(rawCheck)) {
-      throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
-    }
-    // A schedule-only patch on a stored trigger must keep it an interval.
-    if (existing?.check && input.schedule) assertIntervalSchedule(schedule);
-    return null;
-  }
-  const check = input.check as TriggerCheck;
-  assertIntervalSchedule(schedule);
-  if (!check.run || !check.run.trim()) {
-    throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
-  }
+  const check = checkShapeForSave(input, raw, existing);
+  if (!check) return null;
   const host = check.host || '__local__';
   if (checkCommandChanged(check, existing?.check)) {
     // A plugin template's command is exempt from the host policy, stored as
@@ -176,7 +187,7 @@ async function validateCheckForSave(
  * a check to an existing wake routine — is refused too, not just a create that
  * carries both.
  */
-function assertWakeNotOnCheck(
+export function assertWakeNotOnCheck(
   input: { check?: unknown; wake?: unknown },
   existing?: CronJob,
 ): void {

@@ -78,9 +78,9 @@ function harness(over: Partial<AwayStartsDeps> = {}, o: { start?: ReplicaWriteRe
     ...over,
   }
   const handler = awayStarts(deps)
-  async function post(path: string, body: Record<string, unknown>, opId = 'op-1'): Promise<{ status: number; body: any }> {
+  async function post(path: string, body: Record<string, unknown>, opId = 'op-1', headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
     return new Promise((resolve, reject) => {
-      const req = { method: 'POST', path, body, replicaWrite: writeOf(opId), headers: {} } as unknown as Request
+      const req = { method: 'POST', path, body, replicaWrite: writeOf(opId), headers } as unknown as Request
       let status = 0
       const res = {
         headersSent: false,
@@ -312,6 +312,24 @@ describe('away starts', () => {
         expect(r).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
         expect(h.calls).toEqual([])
       }
+    })
+
+    // The host's daemon could not prove the session sid (src/lib/caller-unproven.ts): this replica's
+    // own self-calls for the relayed call carry the mark, and the caller is an outside one.
+    it('a call marked unproven is an outside caller, even naming a bypass session\'s sid or a vouched job', async () => {
+      const UNPROVEN = { 'x-walnut-caller-unproven': '1' }
+      const h = harness(asSession('sess-bypass'))
+      expect(await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' }, 'op-1', UNPROVEN)).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
+      expect(h.calls).toEqual([])
+      const none = harness({ ...asSession('sess-bypass'), freshStart: async () => ({ mode: 'bypass', modeNamed: true, context: 'ctx' }) })
+      expect((await none.post('/v1/tasks/t1/start', { message: 'go' }, 'op-1', UNPROVEN)).status).toBe(200)
+      expect(none.calls[0]!.params).toMatchObject({ mode: 'default', modeNamed: true })
+      // The same session without the mark keeps its own ceiling.
+      expect((await harness(asSession('sess-bypass')).post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' }, 'op-2')).status).toBe(200)
+      // The vouched job's token counts for nothing beside the mark.
+      expect((await harness().post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' }, 'op-1', UNPROVEN)).status).toBe(403)
+      // Before the actor: a device carrying it caps only itself.
+      expect(await awayStartCaller({ headers: UNPROVEN } as unknown as IncomingMessage, { kind: 'device', deviceId: 'd1' }, SESSIONS)).toEqual({ kind: 'external' })
     })
 
     it('a device is the person: no ceiling (it still starts nothing here, needs_leader above)', async () => {

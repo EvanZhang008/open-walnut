@@ -46,6 +46,7 @@ import {
   startClockPlacementWatch, watchTask,
 } from './clock-placement-watch.js';
 import { routineStartOf } from './clock-routine-start.js';
+import { clockKeptOff, routineTaskIds } from './clock-kept.js';
 import { isOfflinePortable, offlineOwnerIdOf, offlineRoutineStartOf } from './offline-run.js';
 import {
   defaultPortableClockEnv, portableBudgetMs, portableClaudeConfigOf, portableSeatOf, withinBudget,
@@ -254,9 +255,11 @@ export async function placeClocksForHost(
   jobs: CronJob[],
   capability: ClockCapability,
   deps: PlacementDeps = defaultPlacementDeps(),
-  opts: { fresh?: boolean; hostStart?: boolean } = {},
+  /** `keptOff`: the tasks this host leaves out (host-private.ts keptOffHost); their routines' clocks stay off it (clock-kept.ts). */
+  opts: { fresh?: boolean; hostStart?: boolean; keptOff?: (taskId: string) => boolean } = {},
 ): Promise<HostClocks> {
   const hosts = await deps.hosts();
+  const keptOff = opts.keptOff;
   // A daemon met anew (a restart, an upgrade) is asked again about what it refused.
   if (opts.fresh) refusedClocks.delete(host);
   const refusedHere = refusedClocks.get(host);
@@ -277,6 +280,8 @@ export async function placeClocksForHost(
       // start is retained only for this enabled routine. After a server restart
       // with no cached start, leave it out and wait for the daemon's release reply.
       if (!job.enabled) continue;
+      // A kept task's routine is given back: privacy is read from the task store, not the config.
+      if (keptOff && routineTaskIds(job).some(keptOff)) continue;
       if (job.state.clockStarts === true) {
         const kept = acceptedStarts.get(acceptedKey(host, job.id));
         if (kept) retained.set(job.id, kept);
@@ -295,6 +300,10 @@ export async function placeClocksForHost(
       if (!clockCandidate(job) && !kind) continue;
       // Held by another host: it moves only after that host gives it back.
       if (job.state?.clockHost && job.state.clockHost !== host) continue;
+      if (keptOff && await clockKeptOff(job, keptOff, kind === 'offline' ? () => withinBudget(deps.offline?.ownerOf?.(job), deadlineMs) : undefined)) {
+        log.cron.debug('clock placement: a kept-local task\'s routine stays off this host', { host, jobId: job.id });
+        continue;
+      }
       const work = clockCandidate(job) ? await workHostOf(job, deps, hosts, host).catch(() => null) : null;
       // The task a transfer moved the work to is watched too: its session starts later.
       if (work?.taskId) watchTask(work.taskId);
@@ -312,6 +321,8 @@ export async function placeClocksForHost(
       // fit, and only while no host holds it. Held by this host already, it stays (conservative: no reshuffle).
       if (bound && kind === 'claude' && !job.state?.clockHost) bound = null;
       if (bound) {
+        // The task a transfer moved the work to may be kept too.
+        if (keptOff && bound.taskId && keptOff(bound.taskId)) continue;
         if (!job.state?.clockHost && refusedHere?.get(job.id) === refusalKeyOf(job, bound.taskId)) continue;
         wanted.add(job.id);
         if (bound.taskId) taskOf.set(job.id, bound.taskId);

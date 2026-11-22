@@ -63,6 +63,8 @@ export interface KindManifest<Row> {
   keep?: string[]
   /** The leader's retention window over these rows (kind.ts `window`), when the kind names one. */
   window?: Record<string, unknown>
+  /** Keys a host's manifest leaves out as kept local (kind.ts `leftOut`, host-private.ts hostManifest). */
+  leftOut?: string[]
 }
 
 function keysOf(manifest: KindManifest<unknown>): string {
@@ -151,6 +153,7 @@ export async function runKindRound<Row>(
       op: 'sync', kind: kind.kind, schemaVersion: kind.schemaVersion, entries: manifest.entries, asOf, ...(confirm ? { confirm: true, confirmFor: confirm } : {}),
       ...(manifest.keep?.length ? { keep: manifest.keep } : {}),
       ...(manifest.window ? { window: manifest.window } : {}),
+      ...(manifest.leftOut?.length ? { leftOut: manifest.leftOut } : {}),
     })
   } catch (err) {
     // A confirm is used up only by an answer (an older follower refusing it anyway);

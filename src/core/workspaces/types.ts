@@ -46,6 +46,9 @@ export interface WorkspacePendingStart {
   /** The plugin job `caller_sid: external` was, vouched for by its host when the start was asked
    *  (plugin-jobs/job-caller.ts): the replay's mode ceiling. An older Walnut ignores it and caps the replay. */
   caller_job?: { plugin: string; job: string; host: string }
+  /** Its host's daemon could not prove `caller_sid` (lib/caller-unproven.ts): the replay's ceiling
+   *  reads an outside caller. An older Walnut ignores it and caps the replay by that sid's mode. */
+  caller_unproven?: true
   /** The user's words a deferred task-start was asked with (subtask-limits.ts). */
   user_request?: string
   expect_reply?: boolean

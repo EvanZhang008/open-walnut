@@ -6,13 +6,13 @@
  * (offline-host-core.ts followerCall: armTrigger, opTriggerWrite):
  *
  *   POST   /v1/routines/trigger      trigger_create: the daemon gives the id and arms it at once
- *   PATCH  /v1/routines/:id          trigger_pause / trigger_resume ({enabled} alone; any other
- *                                    change is trigger_update, which needs the Mac)
+ *   PATCH  /v1/routines/:id          trigger_pause / trigger_resume ({enabled} alone); any other
+ *                                    change is trigger_update (away-trigger-update.ts)
  *   DELETE /v1/routines/:id          trigger_delete
  *   POST   /v1/routines/check-test   trigger_test: the check run once here (follower.trigger.test)
  *   GET    /v1/routines[/:id]        trigger_list and the read before a pause: the routines copy
  *                                    with this host's own triggers over it (follower.triggers):
- *                                    one made here, a pause, a resume or a delete made here
+ *                                    one made here, a pause, a resume, a delete or a change made here
  *
  * The reads and the test need the daemon's `follower-triggers-v1`; without it the copy answers
  * alone and the test is handed back to the daemon's own away answer.
@@ -33,6 +33,7 @@ import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../co
 import { parseWaitUntil } from '../core/task-wait-clock.js'
 import { log } from '../logging/index.js'
 import { namesKeptLocal, refreshLocalTasksHere, type LocalTasksHere } from '../core/replication/kinds/local-tasks.js'
+import { updateHere, withChanges } from './away-trigger-update.js'
 
 /** The daemon capability the reads and the test ride on. */
 export const FOLLOWER_TRIGGERS_CAP = 'follower-triggers-v1'
@@ -51,6 +52,8 @@ export interface HereTrigger {
   status?: { nextRunAtMs?: number; lastRunAtMs?: number; consecutiveErrors?: number; pendingFires?: number }
   created?: boolean
   description?: string
+  /** What this host changed (trigger_update's arguments, the later over the earlier). */
+  changes?: Record<string, unknown>
 }
 
 type Job = Record<string, unknown>
@@ -78,13 +81,15 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 /** A trigger of this host as the routine row the server lists (the copy's own row when it has one). */
 export function withHere(job: Job | null, t: HereTrigger, host: string, now: number): Job {
   const def = t.def
-  const base: Job = job ?? {
+  const made: Job = job ?? {
     id: def.id, name: def.name, ...(t.description ? { description: t.description } : {}),
     schedule: { kind: 'every', everyMs: def.everyMs },
     check: { run: def.check.run, ...(def.check.cwd ? { cwd: def.check.cwd } : {}), host, timeoutSeconds: def.check.timeoutSeconds ?? TIME_LIMIT_DEFAULT_S },
     executor: { type: 'session', config: { ...(def.deliver?.taskId ? { target: def.deliver.taskId } : {}), ...(def.deliver?.prompt ? { prompt: def.deliver.prompt } : {}) } },
     state: {},
   }
+  // A change made here, with the Mac's own merge (away-trigger-update.ts).
+  const base = withChanges(made, t.changes)
   const state: Record<string, unknown> = { ...((base.state as Record<string, unknown> | undefined) ?? {}) }
   const s = t.status
   if (typeof s?.nextRunAtMs === 'number') state.nextRunAtMs = s.nextRunAtMs
@@ -203,6 +208,14 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
     return { answered: false, status: 200, body: { job: withHere(job, t, host, now()) } }
   }
 
+  /** The row a change is made on: as GET answers it (this host's over the copy), else the copy's own. */
+  async function rowOf(id: string): Promise<Job | 'deleted' | null> {
+    const t = (await hereTriggers(id))?.find((x) => x.id === id)
+    if (t?.state === 'deleted') return 'deleted'
+    const job = (await deps.copyJobs(true))?.find((j) => j.id === id) ?? null
+    return t ? withHere(job, t, host, now()) : job
+  }
+
 
   async function create(req: Request, w: ReplicaWrite, actor: WriteActor): Promise<PortAnswer> {
     if (actor.kind !== 'session') return needsMac('A trigger a plugin job makes')
@@ -263,7 +276,9 @@ export function awayTriggers(deps: AwayTriggersDeps): RequestHandler {
     if (req.method.toUpperCase() === 'PATCH') {
       const b = bodyOf(req)
       const keys = Object.keys(b).filter((k) => b[k] !== undefined)
-      if (keys.length !== 1 || keys[0] !== 'enabled' || typeof b.enabled !== 'boolean') return needsMac('Changing a trigger in place (trigger_update)')
+      if (keys.length !== 1 || keys[0] !== 'enabled' || typeof b.enabled !== 'boolean') {
+        return updateHere({ hostKey: host, row: rowOf, log: deps.log }, req, w, actor, id)
+      }
       op = b.enabled ? 'trigger_resume' : 'trigger_pause'
     }
     return settleCall(await w.submit(op, { id }, undefined, actor), 200)

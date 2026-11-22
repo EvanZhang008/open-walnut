@@ -71,6 +71,9 @@ export function hostDaemonLog(c: ReplicaCluster): Array<Record<string, any>> {
   return out
 }
 
+/** Lines of the host daemon's log written since `from` (ms). */
+export const logSince = (c: ReplicaCluster, from: number) => hostDaemonLog(c).filter((l) => Date.parse(String(l.ts)) >= from)
+
 /**
  * The env of the mock CLI running session `sid` (its command line names the cluster's copy of the
  * mock and the sid), read from /proc: null when no such process runs, or where /proc is not there.
@@ -117,6 +120,20 @@ export function hostStream(c: ReplicaCluster, sid: string): Array<Record<string,
     return fs.readFileSync(path.join(c.base, 'hd', 'streams', `${sid}.jsonl`), 'utf8').split('\n').filter(Boolean)
       .map((l) => { try { return JSON.parse(l) as Record<string, any> } catch { return {} } })
   } catch { return [] }
+}
+
+/** How many messages holding `text` were delivered into `sid` on the host (the daemon's marker of each delivered line). */
+export const deliveries = (c: ReplicaCluster, sid: string, text: string) => hostStream(c, sid).filter((l) => l.type === 'user' && l.subtype === 'walnut-injected' && JSON.stringify(l.message ?? '').includes(text)).length
+export const delivered = (c: ReplicaCluster, sid: string, text: string) => deliveries(c, sid, text) > 0
+/** How many turns of `sid` answered `text` (the mock echoes the words it got). */
+export const turnsWith = (c: ReplicaCluster, sid: string, text: string) => hostStream(c, sid).filter((l) => l.type === 'result' && String(l.result).includes(text)).length
+/** The outermost user rows under `v` whose text holds `needle` (a transcript's messages holding it). */
+export function userRowsWith(v: unknown, needle: string): number {
+  if (Array.isArray(v)) return v.reduce((n, x) => n + userRowsWith(x, needle), 0)
+  if (!v || typeof v !== 'object') return 0
+  const o = v as Record<string, unknown>
+  if ((o.role === 'user' || o.type === 'user') && JSON.stringify(o).includes(needle)) return 1
+  return Object.values(o).reduce<number>((n, x) => n + userRowsWith(x, needle), 0)
 }
 
 function rowsOf(dir: string, sql: string, file: string, params: unknown[]): Array<Record<string, any>> {

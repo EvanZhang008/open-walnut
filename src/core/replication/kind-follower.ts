@@ -276,6 +276,10 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     const keep = keepOf(body.keep)
     if (!keep) return { ok: false, status: 400, error: 'bad_keep' }
     const kept = new Set(keep)
+    // Rows the leader leaves out because their task is kept local (kind.ts leftOut).
+    const leftOutKeys = keepOf(body.leftOut)
+    if (!leftOutKeys) return { ok: false, status: 400, error: 'bad_left_out' }
+    const leftOut = new Set(leftOutKeys)
     const s = await spec.load()
     const held = await spec.held()
     const local = await spec.localKeys()
@@ -304,10 +308,11 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     // leader pruned) are not a loss: they go, and only the rest count. The floor
     // stays on the whole copy: explained rows never turn the brake off for the
     // rest (a lost store after a quiet week would otherwise take the recent rows).
+    // Rows of a task kept local are not a loss either: the leader named them (kind.ts leftOut).
     let pruned = 0
-    if (removeIds.length > 0 && spec.pruned) {
-      const explained = await spec.pruned(removeIds, { window: body.window, asOf: Number(body.asOf) || 0, entries: entries.length })
-      pruned = removeIds.filter((id) => explained.has(id)).length
+    if (removeIds.length > 0 && (spec.pruned || leftOut.size > 0)) {
+      const explained = spec.pruned ? await spec.pruned(removeIds, { window: body.window, asOf: Number(body.asOf) || 0, entries: entries.length }) : new Set<string>()
+      pruned = removeIds.filter((id) => explained.has(id) || leftOut.has(id)).length
     }
     if (local.length >= spec.removalFloor && removesMost(local.length - pruned, removeIds.length - pruned, 0)) {
       const confirmed = body.confirm === true && confirmMatches(body.confirmFor, entries)

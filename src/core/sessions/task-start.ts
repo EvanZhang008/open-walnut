@@ -58,6 +58,8 @@ export interface SessionStartParams {
   callerSid?: string;
   /** The plugin job a caller `external` is, as its host's daemon vouched (plugin-jobs/job-caller.ts): the mode ceiling's caller. */
   callerJob?: VouchedJob;
+  /** Its host's daemon could not prove `callerSid` (lib/caller-unproven.ts): the ceiling reads an outside caller. */
+  callerUnproven?: boolean;
   startAttemptId?: string;
   source: string;
   /** Answer only once the session really started or failed (an engine switch must know the new id). */
@@ -345,9 +347,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
 }
 
 async function startOrWait(params: SessionStartParams): Promise<SessionStartResult> {
-  if (params.callerSid) {
+  if (params.callerSid || params.callerUnproven) {
     const { capStartMode } = await import('./delegated-mode.js');
-    params = { ...params, mode: await capStartMode(params.callerSid, params.mode, { job: params.callerJob }) };
+    params = { ...params, mode: await capStartMode(params.callerSid, params.mode, { job: params.callerJob, unproven: params.callerUnproven }) };
   }
   let result: SessionStartResult;
   const picked: { split?: { key: string; engine: SessionEngine; model?: string } } = {};
@@ -888,7 +890,7 @@ export async function moveFromLostHost(task: Task, params: SessionStartParams): 
     moved = await requestEngineSwitch({
       taskId: task.id, engine: (params.engine !== undefined ? normalizeEngine(params.engine) : undefined) ?? resolveEngine(anchor.engine),
       host: params.host, message: '', source: params.source,
-      ...(params.callerSid ? { callerSid: params.callerSid } : {}), ...(params.model ? { model: params.model } : {}),
+      ...(params.callerSid ? { callerSid: params.callerSid } : {}), callerUnproven: params.callerUnproven, ...(params.model ? { model: params.model } : {}),
       ...(params.effort ? { effort: params.effort } : {}), ...(params.userRequest ? { userWords: params.userRequest } : {}),
     });
   } catch (err) {

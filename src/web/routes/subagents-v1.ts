@@ -15,6 +15,7 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const subagentsV1Router = Router()
 
@@ -71,6 +72,7 @@ subagentsV1Router.post('/subagents', (req, res, next) => answer(req, res, next, 
     background: b.background === true,
     ...(typeof b.timeout_min === 'number' ? { timeoutMin: b.timeout_min } : {}),
     ...(str(b.tool_use_id) ? { toolUseId: str(b.tool_use_id) } : {}),
+    ...(callerUnprovenOf(req) ? { callerUnproven: true } : {}),
   })
   await reg.waitLightSubagent(run, waitFor(b.wait_ms, run.background ? 0 : MAX_WAIT_MS, deadline))
   return view(reg, run)

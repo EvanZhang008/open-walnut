@@ -50,6 +50,7 @@ import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../cor
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { logRouteError } from './route-error-log.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const taskV1Router = Router()
 
@@ -586,6 +587,8 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         handsOn: str('hands_on'),
         callerSid,
         ...(callerJob ? { callerJob } : {}),
+        // Its host could not prove that sid (lib/caller-unproven.ts): the ceiling reads an outside caller.
+        callerUnproven: callerUnprovenOf(req),
         startAttemptId: str('start_attempt_id'),
         source: programSource ?? startRouteSource('api-v1', req.headers),
         // An agent's start answers once its session is up or the start failed (a sync call,

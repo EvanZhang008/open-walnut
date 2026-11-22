@@ -124,6 +124,18 @@ describe('trigger_update', () => {
   })
 })
 
+describe('trigger_update replayed by the Mac (a change a host made while it was away)', () => {
+  it('changes only the fields the host changed: one the Mac changed meanwhile stays, and a second replay changes nothing', async () => {
+    // The Mac renamed it and set a new prompt while the host was away; the host raised the time limit.
+    const s = server(trigger({ name: 'Renamed on the Mac', executor: { type: 'session', config: { target: 'task-1', prompt: 'New words from the Mac.' } } }))
+    await update({ id: 't1', timeoutSeconds: 120 }, s)
+    const once = (await s.call('GET', '/routines/t1')).job
+    expect(once).toMatchObject({ name: 'Renamed on the Mac', executor: { config: { prompt: 'New words from the Mac.' } }, check: { run: 'bash ~/.open-walnut/triggers/pipe/check.sh', host: 'devbox', timeoutSeconds: 120 } })
+    await update({ id: 't1', timeoutSeconds: 120 }, s)
+    expect((await s.call('GET', '/routines/t1')).job).toEqual(once)
+  })
+})
+
 describe('class guard: what trigger_create sets, trigger_update can change', () => {
   it('every trigger_create field is changeable or named with why not', () => {
     const create = Object.keys(getOp('trigger_create')!.input)

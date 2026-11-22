@@ -3817,3 +3817,41 @@ describe('plugin job caller vouching parity (the twins differ on purpose)', () =
     expect(jobBranch(template)).toMatch(/never vouched: [\s\S]*cannot read a socket's process/)
   })
 })
+
+// A session's sid on the gateway socket (2026-11-21): the line's sid is believed only from a caller
+// that may speak for it. The bun twin reads the socket's process (claimedSidVerdict): inside the
+// session, or the daemon's own starter, else the anonymous `external`; it cannot tell at all only
+// with no peer reader or no `ps`, and then the sid stands, marked `callerUnproven`. The JS twin
+// cannot read the socket's process, so every socket line naming a session is marked unproven. A
+// host call entry line's sid was proved by its run's token: never read, never marked.
+describe('gateway caller identity parity (the twins differ on purpose)', () => {
+  const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8')
+  const body = (src: string, head: string) => {
+    const at = src.indexOf(head)
+    expect(at, head).toBeGreaterThan(-1)
+    return src.slice(at, src.indexOf('\n}\n', at))
+  }
+
+  it('the standalone twin reads the socket\'s process for a session\'s sid, never for a token-proved line', () => {
+    const fn = body(standalone, 'function handleGatewayLine(')
+    expect(fn).toContain('if (fd === null) return sendSessionGatewayLine(req, callerSid, respond, plan)')
+    expect(fn).toContain('gatewayCallerIdentity(socketPeerPid(fd), callerSid, openedAt)')
+    expect(fn).toContain("sendSessionGatewayLine(req, seen === 'outside' ? EXTERNAL_CALLER_SID : callerSid, respond, plan, { fd, openedAt })")
+    expect(fn).toContain("if (seen === 'unread') req.args = { ...req.args, callerUnproven: true }")
+    // Its caller gone while it was read: never sent (a retry would apply a write twice).
+    expect(fn).toMatch(/gatewayCallerLeft\.get\(respond\)\?\.\(\)\) return logMsg/)
+    expect(body(standalone, 'async function gatewayCallerIdentity(')).toContain('claimedSidVerdict(table, peer, openedAt, procs, (pid) => now.get(pid), process.pid)')
+    expect(body(standalone, 'function cmdFollowerGateway(')).toContain('handleGatewayLine(line, respond, null, openedAt)')
+  })
+
+  it('the JS twin marks every socket line naming a session unproven, and no token-proved one', () => {
+    const fn = body(template, 'function handleGatewayLine(line, respond, tokenProven) {')
+    expect(fn).toMatch(/\} else if \(tokenProven !== true\) \{[\s\S]*?req\.args = Object\.assign\(\{\}, req\.args, \{ callerUnproven: true \}\);/)
+    expect(fn).not.toMatch(/socketPeerPid|gatewayCallerIdentity/)
+    expect(body(template, 'function cmdFollowerGateway(')).toContain('handleGatewayLine(line, respond, true);')
+    // The token entry is the only caller that says so.
+    expect(template.split('handleGatewayLine(line, respond, true)').length - 1).toBe(1)
+    expect(standalone.split('handleGatewayLine(line, respond, null, openedAt)').length - 1).toBe(1)
+  })
+})

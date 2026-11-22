@@ -14,7 +14,7 @@ import { clipText, tailText } from './doc-page.js'
 import { awayAnswer, withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
-import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from '../core/routines/trigger-fields.js'
+import { buildTriggerUpdatePatch, type TriggerUpdateField } from '../core/routines/trigger-update-patch.js'
 import { ownJobWatchWarning } from '../core/routines/own-job-watch.js'
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js'
 import {
@@ -612,16 +612,8 @@ defineOp({
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 
-/**
- * What trigger_update may change, by its input field. A trigger_create field that is
- * neither here nor in TRIGGER_UPDATE_NOT_EDITABLE fails tests/unit/ops/trigger-update.test.ts:
- * a new way to set up a trigger must be a way to change one too, or say why not
- * (2026-11-04: a too-short time limit could only be fixed by delete and arm again,
- * which lost the trigger's id and what it had seen).
- */
-export const TRIGGER_UPDATE_FIELDS = [
-  'every', 'timeoutSeconds', 'maxFiresPerDay', 'prompt', 'description', 'name', 'run', 'cwd', 'watches',
-] as const
+// What trigger_update may change, and how its arguments become a patch: trigger-update-patch.ts.
+export { TRIGGER_UPDATE_FIELDS } from '../core/routines/trigger-update-patch.js'
 
 /** trigger_create fields trigger_update leaves alone, each with why. */
 export const TRIGGER_UPDATE_NOT_EDITABLE: Record<string, string> = {
@@ -640,10 +632,7 @@ type TriggerJob = NonNullable<RoutineJobBody['job']> & {
   executor?: { type?: string; config?: Record<string, unknown> }
 }
 
-/** What trigger_update changes on a scheduled routine: its words, never a check or its schedule. */
-const ROUTINE_UPDATE_FIELDS = ['prompt', 'description', 'name'] as const
-
-const UPDATE_LABELS: Record<(typeof TRIGGER_UPDATE_FIELDS)[number], string> = {
+const UPDATE_LABELS: Record<TriggerUpdateField, string> = {
   every: 'interval', timeoutSeconds: 'time limit', maxFiresPerDay: 'fire budget', prompt: 'prompt',
   description: 'description', name: 'name', run: 'command', cwd: 'directory', watches: 'what it watches',
 }
@@ -683,54 +672,12 @@ defineOp({
     const path = `/routines/${encodeURIComponent(id)}`
     const current = (await call('GET', path) as { job?: TriggerJob } | undefined)?.job
     if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
-    const given = TRIGGER_UPDATE_FIELDS.filter((f) => (args as Record<string, unknown>)[f] !== undefined)
-    if (!current.check) {
-      // A scheduled routine (no check script): only its words change here; its schedule is the routine's own.
-      const fixed = given.filter((f) => !ROUTINE_UPDATE_FIELDS.includes(f as never))
-      if (current.executor?.type !== 'session') throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine that starts no session turn; change it in Routines`)
-      if (fixed.length) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine: only ${ROUTINE_UPDATE_FIELDS.join(', ')} change here, not ${fixed.join(', ')}`)
-    }
-    if (given.length === 0) {
-      throw new Error(`nothing to change: pass at least one of ${TRIGGER_UPDATE_FIELDS.join(', ')}`)
-    }
-    if (current.check?.template && (args.run !== undefined || args.cwd !== undefined)) {
-      throw new Error(`${id} is built from a plugin template, so Walnut writes its command; change its other fields here`)
-    }
-    const patch: Record<string, unknown> = {}
-    if (args.watches !== undefined) patch.ownWork = args.watches === 'own'
-    if (args.every !== undefined) {
-      const everyMs = parseEveryMs(args.every)
-      if (everyMs === null) throw new Error('every must be milliseconds, or a duration like "30s" / "5m" / "1h"')
-      patch.schedule = { kind: 'every', everyMs }
-    }
-    if (args.description !== undefined) {
-      const description = String(args.description).replace(/\s+/g, ' ').trim()
-      if (!description) throw new Error('description cannot be blank: one or two plain sentences saying what it watches')
-      if (description.length > TRIGGER_DESCRIPTION_MAX) {
-        throw new Error(`description is ${description.length} characters; the limit is ${TRIGGER_DESCRIPTION_MAX} (one or two sentences)`)
-      }
-      patch.description = description
-    }
-    if (args.name !== undefined) {
-      const name = String(args.name).trim()
-      if (!name) throw new Error('name cannot be blank: a few plain words naming what it watches')
-      patch.name = name
-    }
-    if (args.prompt !== undefined) {
-      if (!String(args.prompt).trim()) throw new Error('prompt cannot be blank: what the session should do when it fires')
-      const executor = current.executor ?? { type: 'session', config: {} }
-      patch.executor = { ...executor, config: { ...(executor.config ?? {}), prompt: String(args.prompt) } }
-    }
-    const checkFields = (['run', 'cwd', 'timeoutSeconds', 'maxFiresPerDay'] as const).filter((f) => args[f] !== undefined)
-    if (checkFields.length > 0) {
-      // The server replaces `check` wholesale, so the fields not named here are carried over.
-      const check: Record<string, unknown> = { ...current.check }
-      for (const f of checkFields) check[f] = f === 'run' ? String(args.run).trim() : args[f]
-      if (check.run === '') throw new Error('run cannot be blank: the shell command that decides whether to fire')
-      if (check.cwd === '') delete check.cwd
-      patch.check = check
-    }
-    const updated = (await call('PATCH', path, patch) as { job?: TriggerJob } | undefined)?.job ?? current
+    const { patch, given } = buildTriggerUpdatePatch(current, args as Record<string, unknown>)
+    const answer = await call('PATCH', path, patch)
+    // Changed on this host while the server is away (a host's follower): its own words.
+    const away = awayAnswer(answer)
+    if (away) return away
+    const updated = (answer as { job?: TriggerJob } | undefined)?.job ?? current
     const state = triggerRunState(updated)
     const name = updated.name ?? current.name ?? id
     const changed = given.map((f) => UPDATE_LABELS[f]).join(', ')

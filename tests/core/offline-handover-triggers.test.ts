@@ -63,6 +63,16 @@ describe('offline handover: trigger changes made on a host', () => {
     expect(acks).toEqual([3])
   })
 
+  it('a change made on the host (trigger_update) is replayed through its op with only the fields it changed', async () => {
+    executeOp.mockResolvedValue({ ok: true, result: {} })
+    const change: OfflineRecord = { ...rec(11, 'trigger_update'), args: { id: def.id, timeoutSeconds: 120 }, armed: true }
+    const { result, acks } = await replay([change])
+    expect(result).toMatchObject({ records: 1, replayed: 1, failed: 0 })
+    expect(executeOp.mock.calls.map(([name, args, ctx]) => [name, args, ctx.callerSid, ctx.callerHost])).toEqual([['trigger_update', { id: def.id, timeoutSeconds: 120 }, SID, 'devbox']])
+    expect(getTask).not.toHaveBeenCalled()
+    expect(acks).toEqual([11])
+  })
+
   it('a refusal (the routine is gone) is the caller\'s to hear, and names no task', async () => {
     executeOp.mockResolvedValue({ ok: false, message: 'Walnut API error (not_found): no routine mtrigpr0-0001' })
     const warns = vi.spyOn(log.session, 'warn')

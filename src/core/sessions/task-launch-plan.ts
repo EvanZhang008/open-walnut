@@ -46,9 +46,9 @@ export function validateLaunchChoices(params: SessionStartParams): void {
 export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStartParams, opts: { preview?: boolean } = {}) {
   if (params.startAttemptId || params.source === 'human-inbox') requireFrozenWorkspaceReady(task, params);
   validateLaunchChoices(params);
-  if (params.callerSid) {
+  if (params.callerSid || params.callerUnproven) {
     const { capStartMode } = await import('./delegated-mode.js');
-    params = { ...params, mode: await capStartMode(params.callerSid, params.mode, { job: params.callerJob }) };
+    params = { ...params, mode: await capStartMode(params.callerSid, params.mode, { job: params.callerJob, unproven: params.callerUnproven }) };
   }
   const model = params.model && params.model !== 'default' ? resolveModelSwitchValue(params.model) ?? undefined : undefined;
   const metadata = await getProjectMetadata(task.project || '');

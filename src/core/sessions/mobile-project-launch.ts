@@ -19,7 +19,7 @@ export interface MobileProjectStart {
   /** After quickStartSession: make the workspace with the start waiting in it, count the values used. */
   finish(task: Task, start: {
     message: string; model?: string; mode?: string; effort?: string; engine?: string; engineDecided?: boolean
-    sessionId?: string; source: string; callerSid?: string
+    sessionId?: string; source: string; callerSid?: string; callerUnproven?: boolean
   }): Promise<MobileLaunchResult | null>
 }
 
@@ -59,7 +59,7 @@ export async function mobileProjectStart(input: MobileLaunchInput): Promise<Mobi
       const answer = await plan.begin(task, {
         message: s.message, ...(s.model ? { model: s.model } : {}), ...(s.mode ? { mode: s.mode } : {}), ...(s.effort ? { effort: s.effort } : {}),
         ...(s.engine ? { engine: s.engine } : {}), ...(s.engineDecided ? { engine_decided: true } : {}), ...(s.sessionId ? { session_id: s.sessionId } : {}),
-        source: s.source, ...(s.callerSid ? { caller_sid: s.callerSid } : {}),
+        source: s.source, ...(s.callerSid ? { caller_sid: s.callerSid } : {}), ...(s.callerUnproven ? { caller_unproven: true as const } : {}),
       })
       const preparing = answer.preparing === true
       recordStartUse(start.project, answer)

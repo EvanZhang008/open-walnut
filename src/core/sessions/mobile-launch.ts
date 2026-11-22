@@ -334,8 +334,9 @@ export const MOBILE_DRAFT_TIER = 'focus';
 export async function performMobileLaunch(
   input: MobileLaunchInput,
   source: string,
-  /** The session asking (`x-walnut-caller-sid`): the launch runs at most as loose as it. */
-  opts: { callerSid?: string } = {},
+  /** The session asking (`x-walnut-caller-sid`): the launch runs at most as loose as it, or as an
+   *  outside caller when its host could not prove it (`callerUnproven`, lib/caller-unproven.ts). */
+  opts: { callerSid?: string; callerUnproven?: boolean } = {},
 ): Promise<MobileLaunchResult> {
   // A start from a project: its source names the folder, the host and the workspace.
   const fromProject = input.fromProject ? await mobileProjectStart(input) : null;
@@ -368,7 +369,7 @@ export async function performMobileLaunch(
     model: ask ? ask.model : pick?.model ?? input.model,
     mode: pick?.mode ?? input.mode,
     ...(input.effort ? { effort: input.effort } : {}),
-    ...(opts.callerSid ? { callerSid: opts.callerSid, ...(input.mode ? {} : { modeImplied: true }) } : {}),
+    ...(opts.callerSid || opts.callerUnproven ? { callerSid: opts.callerSid, callerUnproven: opts.callerUnproven, ...(input.mode ? {} : { modeImplied: true }) } : {}),
     existingTaskId: input.taskId,
     taskTitle: input.taskTitle,
     project: ask ? ask.project : input.project,
@@ -403,6 +404,7 @@ export async function performMobileLaunch(
   const prepared = await fromProject?.finish(task, {
     message: input.message, model: pick?.model ?? input.model, mode: pick?.mode ?? input.mode, effort: input.effort, engine: normalizeEngine(engine),
     engineDecided: !!pick && (pick.source.engine === 'project' || !!input.engine), sessionId: preassignedSessionId, source, callerSid: opts.callerSid,
+    callerUnproven: opts.callerUnproven,
   });
   if (prepared) return prepared;
   if (ask) rememberAskModelPick(input.rawModel, input.taskId);

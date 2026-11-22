@@ -64,6 +64,7 @@ export async function waitForHostSlot(params: SessionStartParams, detail: HostsF
   if (params.callerSid && !caller?.taskId) throw new Error('An automatic slot wait needs its asking task');
   const entry: StartQueueEntry = {
     at: new Date().toISOString(), parent_id: caller?.taskId ?? detail.taskId, caller_sid: caller?.claudeSessionId ?? '',
+    ...(params.callerUnproven ? { caller_unproven: true as const } : {}),
     ...(!caller ? { source: params.source } : {}),
     host: detail.host, reason: detail.reason, wait_for_slot: true,
     params: {
@@ -164,7 +165,7 @@ export async function startQueuedNow(taskId: string): Promise<SessionStartResult
     return { taskId, title: result.task.title, started: true, ...(entry.routine_session_id ? { sessionId: entry.routine_session_id } : {}) };
   }
   const { startSessionForTask } = await import('./task-start.js');
-  return await startSessionForTask({ ...entry.params, taskIdPrefix: taskId, callerSid: entry.caller_sid, source: entry.source ?? START_QUEUE_SOURCE, byPerson: true, queuedAt: entry.at });
+  return await startSessionForTask({ ...entry.params, taskIdPrefix: taskId, callerSid: entry.caller_sid, callerUnproven: entry.caller_unproven === true, source: entry.source ?? START_QUEUE_SOURCE, byPerson: true, queuedAt: entry.at });
 }
 
 /**
@@ -310,7 +311,7 @@ async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
         continue;
       }
       // Placed again: it goes to the host with room that has its files (start-placement.ts).
-      const result = await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: entry.source ?? START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
+      const result = await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, callerUnproven: entry.caller_unproven === true, source: entry.source ?? START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
       if (result.queued) { out.held.push(t.id); continue; }
       out.started.push(t.id);
       log.session.info('queued start started', { taskId: t.id, askerId: entry.parent_id, host: entry.host, queuedAt: entry.at });

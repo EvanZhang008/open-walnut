@@ -34,6 +34,11 @@
  *     still count, so a leader that lost its store still cannot empty a copy.
  *     It is worked out from the rows, so the manifest hash covers it. An older
  *     follower ignores it (and refuses as before);
+ *   - `leftOut` (optional): keys a host target's manifest leaves out because Walnut keeps their
+ *     task local (host-private.ts). A row the follower would remove that it names goes without
+ *     counting toward the half rule, so making many tasks local at once never waits on the
+ *     user's confirm while their rows stay on the host. The leader names them only when it reads
+ *     them as kept; a leader that lost its store names none. An older follower ignores it;
  *   - `keep` (WP4): keys the leader has but could not read this round (a board
  *     file it failed to open or parse). The follower neither asks for them nor
  *     removes them, so a read error on the Mac never deletes the copy. The

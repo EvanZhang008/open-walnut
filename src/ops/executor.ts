@@ -21,8 +21,9 @@ import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER } from '../lib/cli-sender.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
 import { answerByHeader } from '../lib/answer-by.js'
+import { CALLER_UNPROVEN_HEADER } from '../lib/caller-unproven.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
-const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string }>()
+const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string; unproven?: true }>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { defaultAddressNote, demoApiHeaders, getSelfApiRoot, getSelfCallToken, walnutApiTarget } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
@@ -97,7 +98,7 @@ export const CALLER_JOB_HEADER = 'x-walnut-caller-job'
  * route may LOWER trust on it, never raise it.
  */
 interface CallerProvenance {
-  host?: string; proof?: string; trigger?: string; job?: string; sid?: string; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; pluginJob?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
+  host?: string; proof?: string; trigger?: string; job?: string; sid?: string; unproven?: true; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; pluginJob?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
   /** The op call's id (src/lib/op-call-id.ts): each write it makes carries an op id derived from it. */
   callId?: string
   /** Writes made so far per route, for those op ids. */
@@ -203,6 +204,8 @@ async function rawRequest(
         ...(prov.trigger ? { 'x-walnut-caller-trigger': prov.trigger } : {}),
         // A relayed plugin job's call, by a token only this process holds (core/plugin-jobs/job-caller.ts).
         ...(prov.job ? { [CALLER_JOB_HEADER]: prov.job } : {}),
+        // A session sid the host's daemon could not prove (lib/caller-unproven.ts): it only lowers trust.
+        ...(prov.unproven ? { [CALLER_UNPROVEN_HEADER]: '1' } : {}),
         // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
         ...(!prov.sid && prov.callerKind === 'agent' ? { [CALLER_KIND_HEADER]: 'automation', ...(prov.sender ? { [SENDER_LABEL_HEADER]: prov.sender } : {}) } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
@@ -362,6 +365,11 @@ export interface ExecuteOpOptions {
   /** A relayed plugin job's token (core/plugin-jobs/job-caller.ts): only the gateway relay sets it. */
   callerJob?: string
   /**
+   * The host's daemon could not prove the session sid it relays (lib/caller-unproven.ts): the
+   * start-mode ceiling reads this caller as anonymous. Nested ops of the call keep it.
+   */
+  callerUnproven?: boolean
+  /**
    * REQUIRED: who this call acts for (src/lib/caller-origin.ts). `__local__` only
    * for a caller on this Mac; a gateway call passes its host, a route passes the
    * request's origin. A missing value runs as the strictest class, and the origin
@@ -507,6 +515,8 @@ export async function executeOp(
   const callerKind = human ? 'person' : 'agent'
   // The plugin making this call names it; a call naming none keeps the one it runs under.
   const pluginId = options.callerPluginId?.trim() || inherited?.pluginId
+  // Once marked, every nested op of the call keeps the mark: it only lowers trust.
+  const unproven = !human && (options.callerUnproven === true || inherited?.unproven === true)
   // A read runs again freely; a write runs once per call id.
   const once = callId && op.tags.readonly !== true ? callId : undefined
   const run = async (): Promise<OpOutcome> => {
@@ -523,9 +533,10 @@ export async function executeOp(
       ...(options.callerProof ? { proof: options.callerProof } : {}),
       ...(options.callerTrigger ? { trigger: options.callerTrigger } : {}),
       ...(options.callerJob ? { job: options.callerJob } : {}),
+      ...(unproven ? { unproven: true as const } : {}),
       ...(once ? { callId: once } : {}),
     }
-    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}) }, () => runOp(op, args, base, prov)))
+    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}), ...(unproven ? { unproven: true as const } : {}) }, () => runOp(op, args, base, prov)))
     // A handler that caught a lost or refused-for-now self-call and answered ok (a bulk op's
     // failed row): a copy must run it again, and the ledger answers the rows that applied.
     if (outcome.ok) return prov.lostAny || prov.unsettled ? { ...outcome, retry: true } : outcome

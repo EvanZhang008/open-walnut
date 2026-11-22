@@ -45,19 +45,30 @@ function cluster(o: { fail?: string } = {}) {
   })
   const relayed: unknown[] = []
   const answers: FollowerGatewayResponse[] = []
-  /** The twins' online branch: open, hand off, and on its end relay it only when nothing was written here. */
+  /** Whether a leader answers when the hand-off ends (its link may close during it). */
+  const leader = { answers: true }
+  /**
+   * The twins' online branch: open, hand off, and on its end, when nothing was written here, relay
+   * it to the leader that answers then, else answer it with this host's own away code (handle).
+   */
   function call(): Record<string, unknown> {
     const payload: Record<string, unknown> = { name: 'task_send', args: { to: TASK_B, text: 'hi', messageId: MID } }
     const relay = () => { relayed.push(payload) }
     if (!host.openOnline(JHOME, payload)) { relay(); return payload }
-    const ended = () => { void host.endOnline(JHOME, payload).then((r) => (r ? answers.push(r as FollowerGatewayResponse) : relay())) }
+    const ended = () => {
+      void host.endOnline(JHOME, payload).then(async (r) => {
+        if (r) return answers.push(r as FollowerGatewayResponse)
+        if (leader.answers) return relay()
+        answers.push(await host.handle(JHOME, SID_A, 'tools.call', payload) as FollowerGatewayResponse)
+      })
+    }
     if (!gw.handOff({ home: JHOME, capability: 'tools.call', callerSid: SID_A, payload, deadline: T0 + 20_000, online: true, fallback: ended }, (r) => answers.push(r))) ended()
     return payload
   }
   const hold = () => { let open!: () => void; gate = new Promise<void>((r) => { open = r }); return () => { gate = null; open() } }
   const timeout = () => timers.shift()!()
   const settle = () => new Promise((r) => setTimeout(r, 10))
-  return { host, journal: h.journal, gw, sock, sent, delivered, relayed, answers, call, hold, timeout, settle }
+  return { host, journal: h.journal, gw, sock, sent, delivered, relayed, answers, leader, call, hold, timeout, settle }
 }
 
 describe('an online hand-off is written once: by this host or by the leader, never both', () => {
@@ -152,6 +163,25 @@ describe('an online hand-off is written once: by this host or by the leader, nev
     expect(c.answers).toEqual([expect.objectContaining({ ok: true, result: expect.objectContaining({ messageId: MID }) })])
     expect(c.delivered).toEqual([SID_B])
     expect(c.journal.records(JHOME).map((r) => r.kind)).toEqual(['row', 'delivery'])
+  })
+
+  // The leader's link closes during the hand-off and the follower does not answer in time: the twins
+  // relayed it to the leader captured when the call came, on its dead socket with the hand-off's time
+  // spent, so nobody delivered it and the caller heard hub_timeout (tests/e2e/replica-cluster-handoff-cut-e2e.test.ts).
+  it('the hand-off times out with the leader gone: this host\'s own away answer delivers it once; the follower\'s late write is refused', async () => {
+    const c = cluster()
+    c.call()
+    c.leader.answers = false
+    c.timeout()
+    await c.settle()
+    expect(c.relayed).toEqual([])
+    expect(c.answers).toEqual([expect.objectContaining({ ok: true, result: expect.objectContaining({ messageId: MID }) })])
+    expect(c.delivered).toEqual([SID_B])
+    for (const late of [PEER, { ...PEER, online: false, opId: 'op-away-late' }]) {
+      expect(await c.host.handleFollowerPeer(JHOME, late)).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'server_delivers' } } })
+    }
+    expect(c.delivered).toEqual([SID_B])
+    expect(c.journal.records(JHOME).filter((r) => r.kind === 'delivery').map((r) => (r as { messageId?: string }).messageId)).toEqual([MID])
   })
 
   it('a hand-off already relayed to the leader: the follower\'s away write of it is refused, nothing written', async () => {

@@ -145,3 +145,29 @@ export function proofFor(table: Map<number, ProcRow>, peer: number, at: number,
   if (!own.length) return { verified: false, unchecked: true }
   return { verified: descendsFrom(table, peer, own) }
 }
+
+/** Whether `pid` is one of process `self`'s ancestors in the snapshot (pid 1 never counts). Pure. */
+export function ancestorOf(table: Map<number, { ppid: number }>, pid: number, self: number): boolean {
+  if (!(pid > 1)) return false
+  let cur = table.get(self)?.ppid
+  for (let i = 0; i < MAX_DEPTH && cur !== undefined && cur > 1; i++) {
+    if (cur === pid) return true
+    cur = table.get(cur)?.ppid
+  }
+  return false
+}
+
+/**
+ * Who the process `peer` on a host daemon's gateway socket may speak as, when its line names a
+ * session whose own processes are `procs` (2026-11-21: a default session that named its bypass
+ * sibling's sid was that sibling): `session` when it runs inside that session (proofFor), `starter`
+ * when it is one of the daemon's own ancestors (`self` is the daemon's pid: the process that started
+ * the daemon commands it anyway, so its word on a sid gives it nothing more), else `outside`, a
+ * process that left before it was seen included. Pure apart from `readTicks`.
+ */
+export function claimedSidVerdict(table: Map<number, ProcRow>, peer: number, at: number,
+  procs: ReadonlyArray<{ pid: number; start?: string | null; before?: number }>, readTicks: (pid: number) => string | null | undefined,
+  self: number): 'session' | 'starter' | 'outside' {
+  if (startedBy(table.get(peer)?.start, at) && ancestorOf(table, peer, self)) return 'starter'
+  return proofFor(table, peer, at, procs, readTicks).verified ? 'session' : 'outside'
+}

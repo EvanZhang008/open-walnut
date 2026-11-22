@@ -59,6 +59,21 @@ describe('follower gateway twin wiring', () => {
     }
   })
 
+  it('both twins end a same-host send\'s unanswered hand-off at the leader that answers now, else with their own away answer', () => {
+    for (const src of [standalone, source]) {
+      const at = src.indexOf('offlineHost.endOnline(home, payload)')
+      expect(at, 'the online hand-off\'s end').toBeGreaterThan(0)
+      const end = src.slice(at, src.indexOf('followerGateway.handOff(', at))
+      // Never the leader captured when the call came (its link may have closed during the hand-off:
+      // a relay there, with the hand-off's time spent, was lost; tests/e2e/replica-cluster-handoff-cut-e2e.test.ts).
+      expect(end).not.toMatch(/relay\(\)/)
+      expect(end).toMatch(/(const|var) leader = gatewayTargetFor\(home\)/)
+      expect(end).toMatch(/relayToPrimary\(leader, home, capability, callerSid, payload, respond, readable, deadline\)/)
+      // No leader: the same function again, marked, so the follower (whose hand-off ended) is not asked.
+      expect(end).toMatch(/sendGatewayRequest\(capability, callerSid, payload, respond, (\{ \.\.\.plan, ownServerAsked: true \}|Object\.assign\(\{\}, plan, \{ ownServerAsked: true \}\))\)/)
+    }
+  })
+
   it('both twins end a plugin job\'s waiting call when its caller left or the daemon stops, and never wait while a backup leads', () => {
     for (const src of [standalone, source]) {
       const fn = src.slice(src.indexOf('function sendPluginJobGatewayRequest('), src.indexOf('\n}\n', src.indexOf('function sendPluginJobGatewayRequest(')))

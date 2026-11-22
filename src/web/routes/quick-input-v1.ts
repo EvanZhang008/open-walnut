@@ -59,6 +59,7 @@ import type { SessionRecord, Task } from '../../core/types.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { extractValidImages } from './session-send-v1.js'
 import { routeSource, startRouteSource } from '../../core/sessions/send-sent-by.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const quickInputV1Router = Router()
 
@@ -353,17 +354,17 @@ quickInputV1Router.post('/quick/session', async (req: Request, res: Response, ne
       await sendAndFollow(() => sendToTaskFromRequest(req, task, text, images), res)
       return
     }
-    await sendAndFollow(() => startAsk(text, images, startRouteSource('quick-input', req.headers), startingSid(req)), res)
+    await sendAndFollow(() => startAsk(text, images, startRouteSource('quick-input', req.headers), startingCaller(req)), res)
   } catch (err) {
     next(err)
   }
 })
 
 /** A new ask started with the text: the same task and session the phone's New chat makes. */
-async function startAsk(text: string, images: SessionImage[], source: string, callerSid?: string): Promise<QuickMainResult> {
+async function startAsk(text: string, images: SessionImage[], source: string, caller: StartingCaller = {}): Promise<QuickMainResult> {
   const { validateMobileLaunchBody, performMobileLaunch } = await import('../../core/sessions/mobile-launch.js')
   const message = await withSavedImages(text, images)
-  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), source, callerSid ? { callerSid } : {})
+  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), source, { callerSid: caller.callerSid, callerUnproven: caller.callerUnproven })
   return { taskId: launched.taskId, sessionId: launched.sessionId ?? null, started: true }
 }
 
@@ -479,15 +480,21 @@ async function exactTask(taskId: string, res: Response): Promise<Task | null> {
 
 /** The words into one task's chat as this request's: its source, its start's source and caller. */
 async function sendToTaskFromRequest(req: Request, task: Task, text: string, images: SessionImage[], line?: QuickLine): Promise<QuickMainResult> {
-  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req), line)
+  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingCaller(req), line)
 }
 
-/** The session making this request: a task it starts here runs at most as loose as it (delegated-mode.ts). */
-function startingSid(req: Request): string | undefined {
-  return req.get('x-walnut-caller-sid')?.trim() || undefined
+/** Who asks a start made here, beside the words. */
+interface StartingCaller { callerSid?: string; callerUnproven?: true }
+
+/**
+ * The session making this request: a task it starts here runs at most as loose as it
+ * (delegated-mode.ts), or as an outside caller when its host could not prove it (lib/caller-unproven.ts).
+ */
+function startingCaller(req: Request): StartingCaller {
+  return { callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined, callerUnproven: callerUnprovenOf(req) }
 }
 
-async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui', firstSource = source, callerSid?: string, line?: QuickLine): Promise<QuickMainResult> {
+async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui', firstSource = source, caller: StartingCaller = {}, line?: QuickLine): Promise<QuickMainResult> {
   if (record) {
     const sessionId = record.claudeSessionId
     if (line?.resend) {
@@ -525,7 +532,7 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
     // The first line goes out under the send's own uuid, so the same send again after a restart
     // finds the line it started the session with (send-once.ts sameSendSettled) and is not sent twice.
     started = await startSessionForTask({
-      taskIdPrefix: task.id, message: cliText, source: firstSource === 'ui' ? 'api-v1' : firstSource, callerSid,
+      taskIdPrefix: task.id, message: cliText, source: firstSource === 'ui' ? 'api-v1' : firstSource, callerSid: caller.callerSid, callerUnproven: caller.callerUnproven,
       ...(line ? { firstLineUuid: line.userUuid } : {}),
     })
   } catch (err) {
@@ -533,7 +540,7 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
     if (err instanceof SessionExistsError && err.existingSessionId && !startedOnce) {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const existing = await getSessionByClaudeId(err.existingSessionId)
-      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source, firstSource, callerSid, line)
+      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source, firstSource, caller, line)
     }
     throw err
   }

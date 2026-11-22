@@ -60,7 +60,8 @@ beforeAll(async () => {
   ids.parent = await synced('Plan the move');
   ids.child = await synced('Book the van', { parent: ids.parent });
   ids.gone = await synced('Deleted over there', { remote: GONE });
-  // A local task the user kept out of the list earlier: its hold means nothing once the project is local.
+  // A local task the user kept out of the list earlier: its own hold stays once the project is local
+  // (it also keeps the task off every host's copies, private-tasks/hold-owner.ts).
   ids.kept = (await addTask({ title: 'My own note', project: 'Errands', source: 'local' } as never)).task.id;
   // Another project's synced task is never touched.
   ids.other = await synced('Elsewhere', { project: 'Other list', remote: 'r-other' });
@@ -99,10 +100,11 @@ describe('a project stops syncing, a batch at a time', () => {
 
     const inProject = await listTasks({ project: 'Errands' });
     expect(inProject.filter((t) => t.source !== 'local').map((t) => t.title)).toEqual([]);
-    // Content stays, and no task keeps a hold aimed at the service the project left.
+    // Content stays; the holds the batches made go, and the task kept by the user keeps its own.
     expect((await getTask(ids.done)).title).toBe('Bought stamps');
     expect((await getTask(ids.done)).phase).toBe('COMPLETE');
-    expect(inProject.filter((t) => t.sync_hold?.target === PLUGIN).map((t) => t.title)).toEqual([]);
+    expect(inProject.filter((t) => t.sync_hold?.target === PLUGIN).map((t) => t.title)).toEqual(['My own note']);
+    expect((await getTask(ids.kept)).sync_hold).toMatchObject({ target: PLUGIN, state: 'chosen' });
     expect((await getTask(ids.child)).parent_task_id).toBe(ids.parent);
 
     // Every copy there was closed, finished ones included; the one deleted there is reported.

@@ -218,6 +218,9 @@ export interface StartLightSubagent {
   background?: boolean
   timeoutMin?: number
   toolUseId?: string
+  /** Its host's daemon could not prove the parent sid (lib/caller-unproven.ts): the run takes none of
+   *  that session's posture, as an outside caller's start takes no session's mode. */
+  callerUnproven?: boolean
 }
 
 export function engineLabel(run: Pick<LightSubagentRun, 'engine' | 'model'> & Partial<Pick<LightSubagentRun, 'host' | 'fromHost'>>): string {
@@ -279,14 +282,15 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
     ...(record.taskId ? { parentTaskId: record.taskId } : {}),
     host, cwd, engine,
     ...(away ? { fromHost: ownHost, grant: { taskId: away.taskId, id: away.grantId } } : {}),
-    ...(record.mode ? { parentMode: record.mode } : {}),
+    // An unproven parent lends none of its posture (lib/caller-unproven.ts): the run never waits, and is no bypass.
+    ...(record.mode && !req.callerUnproven ? { parentMode: record.mode } : {}),
     ...(req.model ? { model: req.model } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
     description: (req.description?.trim() || firstLine(prompt)).slice(0, 120),
     prompt,
     ...(req.toolUseId ? { toolUseId: req.toolUseId } : {}),
     // The parent's real posture: its Walnut mode, or the preset it picked in its engine's own controls.
-    fullAccess: acpSupposedFullAccess({ walnutMode: record.mode ?? 'default', chosenMode: record.acpConfig?.mode }),
+    fullAccess: !req.callerUnproven && acpSupposedFullAccess({ walnutMode: record.mode ?? 'default', chosenMode: record.acpConfig?.mode }),
     background: req.background === true,
     status: 'running',
     startedAt: Date.now(),

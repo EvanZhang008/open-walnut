@@ -14,6 +14,7 @@ import { isFollower } from '../../core/server-role.js'
 import type { SessionEngine, Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const taskMoveV1Router = Router()
 
@@ -84,7 +85,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
     const ask = (id: string) => requestEngineSwitch({
       taskId: id, engine, host, message: text, ...(userWords ? { userWords } : {}), ...(reason ? { reason } : {}), ...(waitFor === 0 ? { detach: true } : {}),
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
-      callerSid: caller, source,
+      callerSid: caller, callerUnproven: callerUnprovenOf(req), source,
     })
     const team = body.team === true ? await teamToMove(task, host) : []
     const work = normalizeHost(conversation.host) === host && team.length > 0 ? null : ask(task.id)
@@ -99,7 +100,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
         try {
           const r = await requestEngineSwitch({
             taskId: t.id, engine: resolveEngine((await taskConversation(t.id))?.engine), host, message: text,
-            ...(userWords ? { userWords } : {}), ...(reason ? { reason } : {}), callerSid: caller, source,
+            ...(userWords ? { userWords } : {}), ...(reason ? { reason } : {}), callerSid: caller, callerUnproven: callerUnprovenOf(req), source,
           })
           results.push({ taskId: t.id, state: r.state })
         } catch (err) {

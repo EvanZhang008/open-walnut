@@ -361,8 +361,8 @@ permission prompts still name Walnut.
   and op ids, so the leader's drain applies each one once: a message that asks for a reply (a request row the
   leader opens with the same deadline rules, `away-sends.ts`, rules shared with the leader in
   `core/sessions/send-rules.ts`) and a reply to one (`away-replies.ts`); `agent_memory_write` (held with the
-  leader's own note checks) and `human_inbox_send` (`away-calls.ts`); every trigger op but `trigger_update`
-  (`away-triggers.ts`), and the delivery of a trigger's fire to a session on the host
+  leader's own note checks) and `human_inbox_send` (`away-calls.ts`); every trigger op (`away-triggers.ts`;
+  `trigger_update` in `away-trigger-update.ts`), and the delivery of a trigger's fire to a session on the host
   (`away-trigger-delivery.ts`, the daemon still delivers when the follower is down or keeps failing). Reads
   (`session_list`, `request_get`, `search`, `open_items`, `walnut_status`, `tools.list`) fold the host's own
   records in; every op has a row in `src/replica/away-op-decisions.ts`, which a ratchet holds.
@@ -378,14 +378,29 @@ permission prompts still name Walnut.
   (flag off, link down, older daemon) goes to the socket with the same call id.
 - **A task kept local stays off the host** (`sync_hold`, `core/replication/host-private.ts`). Its row and the
   data that belongs to it are not copied to host followers (the companion still gets them); a copy a host
-  already holds is removed on the next round. Its own session's calls are relayed to the leader while it
+  already holds is removed within seconds of the hold (every copy listens for a change of the kept set),
+  and that removal never waits on the half rule (the sync names the rows it leaves out; the daemon's memory
+  file copy still counts them, where a task's own files are a small share). A routine of such a
+  task keeps its clock on the leader unless the task's own session runs on that host. A project made local
+  leaves every hold a task owns in place (`core/private-tasks/hold-owner.ts`). Its own session's calls are relayed to the leader while it
   answers and answer `needs_leader` (`task_kept_local`) while it is away.
 - **Turned down: starting a task made on the leader alone.** Where such a task starts needs the leader's whole
   placement rule: the caller, the task's ancestors, its workspaces and the folders on the leader's disks. A
   second copy of that rule on the follower was wrong twice in review, so such a start keeps answering
   `needs_leader` (`task_made_on_mac`).
-- **Not yet.** `trigger_update` alone answers `needs_leader` (its partial update needs the leader's whole
-  trigger row). The watcher that ends a session's turn stays in the daemon until step C. A prompt that asks
+- **A trigger changed on its host while the leader is away** (`away-trigger-update.ts`). The routines copy
+  already holds each routine's whole row, so the follower runs the op as the leader does (its patch from
+  `core/routines/trigger-update-patch.ts`), checks and merges the patch with the leader's own functions
+  (`normalizeCronJobPatch`, `checkShapeForSave`, `applyJobPatch`), and the daemon journals one
+  `trigger_update` op record of only the fields that changed, arming the changed def at once in place of the
+  leader's while the leader's set still says whether it runs. The leader replays it through the op on its
+  return, under the record's op id, so it is applied once and a field the leader changed meanwhile that the
+  host did not stays (the host's value wins a field both changed, as for every trigger record). Only a leader
+  that drains `trigger-update` gets one; an older one answers `needs_leader` (`mac_too_old`). What only the
+  leader decides answers `needs_leader` (`fields`) for those fields alone, each named with why: the check's
+  host, a template, the task it wakes, a prompt over 32 KB; a trigger whose check runs on another host or a
+  scheduled routine (its clock is the leader's) needs the leader whole.
+- **Not yet.** The watcher that ends a session's turn stays in the daemon until step C. A prompt that asks
   the person for an approval goes through the old socket.
 
 ## Compatibility

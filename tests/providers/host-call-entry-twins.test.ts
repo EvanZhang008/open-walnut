@@ -66,9 +66,10 @@ describe('host call entry twin wiring', () => {
   })
 
   it('the bun twin proves an approval\'s caller only from its gateway socket\'s kernel peer, never a pid a follower names', () => {
-    expect(fnBody(standalone, 'handleGatewayLine')).toContain('gatewayCallerProof(socketPeerPid(fd), callerSid, openedAt)')
+    expect(fnBody(standalone, 'sendSessionGatewayLine')).toContain('gatewayCallerProof(socketPeerPid(socket?.fd), callerSid, socket?.openedAt ?? Date.now())')
     const gw = fnBody(standalone, 'cmdFollowerGateway')
-    expect(gw).toContain('handleGatewayLine(line, respond, undefined, openedAt)')
+    // null: no socket, the token proved the sid (the line's session is not read off a process).
+    expect(gw).toContain('handleGatewayLine(line, respond, null, openedAt)')
     expect(gw).not.toContain('peerPid')
   })
 

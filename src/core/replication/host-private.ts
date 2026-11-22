@@ -19,6 +19,9 @@
  * named in `derivedFrom`). A kind of no one's rows says why (`taskFree`).
  * tests/core/replication/host-private-guard.test.ts holds every kind and every daemon copy to it.
  * A change of the kept set reaches every copy within seconds (onHostPrivacyChange), not at its sweep.
+ * A host manifest names the rows it leaves out (`leftOut`, kind.ts), so their removal never waits
+ * on the half rule, however many tasks were made local at once. A routine of a kept task keeps its
+ * clock off the host too (routines/clock-kept.ts).
  *
  * The cloud companion is not filtered: it is the user's own server that answers his phone while
  * the Mac is away, it creates Local tasks itself (task-manager.ts, the companion's create path),
@@ -282,6 +285,9 @@ async function defaultResolve(name: string): Promise<ParentKind | undefined> {
   return (await import('./kinds/index.js')).copyKinds().find((k) => k.kind === name)
 }
 
+/** A sync names at most this many left-out keys; past it none (the half rule counts them as before). */
+export const LEFT_OUT_MAX = 20_000
+
 const derivedManifests = new WeakMap<object, { sig: string; out: KindManifest<unknown>; left: ReadonlySet<string> }>()
 
 /**
@@ -319,10 +325,14 @@ export async function hostManifest<Row>(
   if (left.size === 0 && (keep?.length ?? 0) === (manifest.keep?.length ?? 0)) out = manifest
   else {
     const hash = manifestHashOf(entries)
+    // Named to the follower, so their removal never waits on the half rule (kind.ts leftOut).
+    const stillKept = new Set(keep)
+    const leftOut = [...left, ...(manifest.keep ?? []).filter((k) => !stillKept.has(k))].sort()
     out = {
       entries, byKey, hash: keep && keep.length > 0 ? keptManifestHash(hash, keep) : hash,
       ...(keep && keep.length > 0 ? { keep } : {}),
       ...(manifest.window ? { window: manifest.window } : {}),
+      ...(leftOut.length > 0 && leftOut.length <= LEFT_OUT_MAX ? { leftOut } : {}),
     }
   }
   if (!kind.derivedFrom) derivedManifests.set(manifest, { sig: p.sig, out: out as KindManifest<unknown>, left })

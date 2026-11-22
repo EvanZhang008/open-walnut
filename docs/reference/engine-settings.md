@@ -439,6 +439,19 @@ session cannot start a task in bypass mode. Change the caller's mode first.", an
 carries over (a project's default) comes down to Default. Host commands, credentials, external MCP calls and browser actions receive
 no general allow rule. Slim application profiles keep their own restrictions.
 
+While the Mac is away, a host's own service applies the same ceiling to the starts it makes itself
+(`src/replica/start-ceiling.ts`), reading the calling session's mode from its copy of the sessions, so a
+mode lowered on the Mac just before it went away (Bypass to Default) still counts there as the older,
+looser one until that copy catches up: the window lasts exactly as long as the replication delay.
+
+A session sid the host's daemon could not prove is capped as an outside caller: the daemon marks such a
+relayed call `callerUnproven` (always on a host running the JS daemon, which cannot read the process on
+its socket; on the bun daemon only when it cannot read it), and the Mac or the host's own service then
+reads that caller as `external` on every start, mode change and subagent run
+(`src/lib/caller-unproven.ts`), so a session naming its Bypass sibling's sid starts nothing looser than
+Default. The remaining window: such a session still acts as the sid it named for every other op (sending
+as it, updating its task), because the sid stays the call's provenance.
+
 Claude Code's classifier refusal text is saved with the session and shown in a notice.
 A person's Deny, a policy rule or a hook refusal does not offer this recovery.
 The notice offers **Switch to asking**, which applies the regular Default mode

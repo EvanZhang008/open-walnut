@@ -35,8 +35,8 @@ import path from 'node:path'
 import type { HostCallOutcome } from '../../src/providers/host-call-client-core.js'
 import { BUN, sleep, startReplicaCluster, waitFor, WINDOWS, type ReplicaCluster, type Twin } from '../helpers/replica-cluster.js'
 import {
-  callEnvOf, entryCall, entryGiven, gatewayCall, hostDaemonLog, hostJournal as journal, hostStream, keepLogsOnFailure, macSessions, macTasks,
-  replicaKnowsDefaultHost, replicaRows, sessionCliEnv,
+  callEnvOf, deliveries, delivered, entryCall, entryGiven, gatewayCall, hostJournal as journal, keepLogsOnFailure, logSince, macSessions, macTasks,
+  replicaKnowsDefaultHost, replicaRows, sessionCliEnv, turnsWith, userRowsWith,
 } from '../helpers/replica-cluster-reads.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
@@ -70,21 +70,6 @@ function replicaLocalTasks(c: ReplicaCluster): string[] {
 }
 const HANDED = 'gateway: handed to this host\'s Walnut server'
 
-/** Lines of the daemon log written since `from` (ms). */
-const logSince = (c: ReplicaCluster, from: number) => hostDaemonLog(c).filter((l) => Date.parse(String(l.ts)) >= from)
-/** How many messages holding `text` were delivered into `sid` on the host (the daemon's marker of each delivered line). */
-const deliveries = (c: ReplicaCluster, sid: string, text: string) => hostStream(c, sid).filter((l) => l.type === 'user' && l.subtype === 'walnut-injected' && JSON.stringify(l.message ?? '').includes(text)).length
-const delivered = (c: ReplicaCluster, sid: string, text: string) => deliveries(c, sid, text) > 0
-/** How many turns of `sid` answered `text` (the mock echoes the words it got). */
-const turnsWith = (c: ReplicaCluster, sid: string, text: string) => hostStream(c, sid).filter((l) => l.type === 'result' && String(l.result).includes(text)).length
-/** The outermost user rows under `v` whose text holds `needle`. */
-function userRowsWith(v: unknown, needle: string): number {
-  if (Array.isArray(v)) return v.reduce((n, x) => n + userRowsWith(x, needle), 0)
-  if (!v || typeof v !== 'object') return 0
-  const o = v as Record<string, unknown>
-  if ((o.role === 'user' || o.type === 'user') && JSON.stringify(o).includes(needle)) return 1
-  return Object.values(o).reduce<number>((n, x) => n + userRowsWith(x, needle), 0)
-}
 /** Every object under `v` whose `key` is `value`. */
 function having(v: unknown, key: string, value: string, out: Array<Record<string, any>> = []): Array<Record<string, any>> {
   if (Array.isArray(v)) { for (const x of v) having(x, key, value, out); return out }
@@ -383,4 +368,164 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     await c.waitBack(token)
   }, 600_000)
 
+})
+
+/**
+ * The seconds right after the Mac's link to the host daemon drops (a deploy's restart): the daemon
+ * sees the Mac gone at once and hands a session's call to the follower, whose own view of the Mac (a
+ * poll of follower.status) may still say it answers, so it refuses `leader_answers`. The daemon hands
+ * the call to it again (follower-gateway-core.ts waitOutLag) instead of its own away answer. The
+ * follower is SIGSTOPped across the cut, so its view is the one from before it when the calls reach it.
+ */
+describe.each(TWINS)('a call right after the Mac\'s link drops is the follower\'s, never the daemon\'s away answer (%s twin)', (twin) => {
+  let c: ReplicaCluster
+  let token = ''
+  const a = { task: '', sid: '' }
+  const LAG_LINE = 'gateway: this host\'s Walnut server does not see the leader away yet; the call goes to it again'
+
+  beforeAll(async () => {
+    c = await startReplicaCluster({ twin, linkProxy: true })
+    process.stdout.write(`replica-cluster-host-calls-e2e: lag ${twin} cluster at ${c.base}\n`)
+    const hostCwd = fs.realpathSync(path.join(c.base, 'hh', 'work'))
+    token = await c.pairDevice('marina-phone')
+    const made = await c.mac('POST', '/api/tasks', { title: 'Lag caller', project: 'Acme' })
+    expect(made.status, JSON.stringify(made.json)).toBe(201)
+    a.task = String(made.json.task.id)
+    const st = await c.mac('POST', `/api/v1/tasks/${a.task}/start`, { host: 'devbox', cwd: hostCwd, mode: 'default', message: 'hello lag' })
+    expect(st.status, JSON.stringify(st.json)).toBe(202)
+    a.sid = String(st.json.sessionId)
+    await waitFor(() => turnsWith(c, a.sid, 'hello lag') > 0, 120_000, 'the session to answer')
+    await waitFor(() => { const h = (c.stores().sessions as { hashes?: Record<string, string> } | null)?.hashes ?? {}; return h[a.sid] ? true : null }, 120_000, 'the copy to hold the session')
+    await waitFor(() => (replicaTaskIds(c).includes(a.task) ? true : null), 120_000, 'the copy to hold the task')
+  }, 900_000)
+
+  afterAll(async () => { await c?.stop() }, 120_000)
+
+  it('the follower still sees the Mac: the calls go to it again and it answers them, the write journaled once, no daemon away answer', async () => {
+    keepLogsOnFailure(() => c, `host-calls-lag-${twin}`)
+    const seqMark = journal(c).reduce((m, r) => Math.max(m, r.seq as number), 0)
+    c.pauseReplica()
+    const at = Date.now()
+    let resumed = false
+    try {
+      c.cutLink()
+      await waitFor(() => (logSince(c, at).some((l) => l.msg === 'client disconnected') ? true : null), 15_000, 'the daemon to see the Mac\'s link close', 50)
+      const write = gatewayCall(c, a.sid, 'task_update', { id: a.task, tags: ['lag-check'] })
+      const read = gatewayCall(c, a.sid, 'task_get', { id: a.task })
+      await waitFor(() => (logSince(c, at).filter((l) => l.msg === HANDED && l.callerSid === a.sid).length >= 2 ? true : null), 15_000, 'the daemon to hand both calls to the follower', 50)
+      c.resumeReplica()
+      resumed = true
+      const [w, r] = await Promise.all([write, read])
+      expect(w.ok, `task_update: ${JSON.stringify(w).slice(0, 1500)}`).toBe(true)
+      expect(r.ok, `task_get: ${JSON.stringify(r).slice(0, 1500)}`).toBe(true)
+    } finally {
+      if (!resumed) c.resumeReplica()
+    }
+    const lines = logSince(c, at)
+    show('lag lines', lines.filter((l) => l.msg === LAG_LINE || String(l.msg).includes('handed the call back') || l.msg === OFFLINE_LINE).map((l) => [l.msg, l.op, l.relayId]))
+    // The race the fix is for usually happens here (the follower refuses with its stale view and the call goes
+    // to it again); when its presence turns first, the calls are simply its own. Either way: no away answer.
+    // The race itself is pinned by tests/providers/follower-gateway-lag.test.ts.
+    show('lag race hit', lines.filter((l) => l.msg === LAG_LINE).length > 0)
+    expect(lines.filter((l) => l.msg === OFFLINE_LINE).map((l) => `${l.op}:${l.why}`)).toEqual([])
+    const fields = journal(c).filter((r) => (r.seq as number) > seqMark && r.kind === 'task-fields' && r.taskId === a.task)
+    expect(fields.filter((r) => JSON.stringify(r.fields ?? {}).includes('lag-check')), JSON.stringify(fields).slice(0, 1500)).toHaveLength(1)
+
+    // The Mac back: it holds the write once.
+    c.mendLink()
+    await c.waitBack(token, 120_000)
+    await waitFor(() => (String(macTasks(c).find((t) => t.id === a.task)?.tags ?? '').includes('lag-check') ? true : null), 120_000, 'the Mac to hold the tag')
+  }, 600_000)
+})
+
+/**
+ * trigger_update while the Mac is away (replica/away-trigger-update.ts): a trigger the Mac made for a
+ * session on devbox is changed by that session while the Mac sleeps. The follower answers it (no daemon
+ * away answer), the daemon journals one `trigger_update` op record of only the changed fields and runs
+ * the new time limit at once; the Mac, back, holds the change once, keeps what it did not change, and a
+ * second sleep and wake changes nothing.
+ */
+describe.each(TWINS)('a trigger changed on its host while the Mac is away is the Mac\'s once, when it is back (%s twin)', (twin) => {
+  let c: ReplicaCluster
+  let token = ''
+  const s = { task: '', sid: '' }
+  let triggerId = ''
+  let seqMark = 0
+  const DESCRIPTION = 'Checks the caterer list every 30 seconds; on a new entry the session looks at it.'
+  const CHANGED = 'Checks the caterer list every minute; on a new entry the session books it.'
+  const macRoutine = async () => withId((await c.mac('GET', '/api/v1/routines?includeDisabled=true')).json, triggerId)[0] as Record<string, any> | undefined
+
+  beforeAll(async () => {
+    c = await startReplicaCluster({ twin })
+    process.stdout.write(`replica-cluster-host-calls-e2e: trigger update ${twin} cluster at ${c.base}\n`)
+    const hostCwd = fs.realpathSync(path.join(c.base, 'hh', 'work'))
+    token = await c.pairDevice('marina-phone')
+    const made = await c.mac('POST', '/api/tasks', { title: 'Caterer watcher', project: 'Acme' })
+    expect(made.status, JSON.stringify(made.json)).toBe(201)
+    s.task = String(made.json.task.id)
+    const st = await c.mac('POST', `/api/v1/tasks/${s.task}/start`, { host: 'devbox', cwd: hostCwd, mode: 'default', message: 'hello watcher' })
+    expect(st.status, JSON.stringify(st.json)).toBe(202)
+    s.sid = String(st.json.sessionId)
+    await waitFor(() => turnsWith(c, s.sid, 'hello watcher') > 0, 120_000, 'the session to answer')
+    await waitFor(() => { const h = (c.stores().sessions as { hashes?: Record<string, string> } | null)?.hashes ?? {}; return h[s.sid] ? true : null }, 120_000, 'the copy to hold the session')
+    // Made on the Mac while it answers, checked on devbox.
+    const check = path.join(hostCwd, 'caterer-check.sh')
+    fs.writeFileSync(check, 'echo \'{"fire":false}\'\n', { mode: 0o755 })
+    const armed = okOf(await gatewayCall(c, s.sid, 'trigger_create', { run: `sh ${check}`, every: '30s', prompt: 'The caterer watch fired.', description: DESCRIPTION, name: 'Caterer watch' }))
+    triggerId = String(armed.id ?? '')
+    expect(triggerId, JSON.stringify(armed)).not.toBe('')
+    expect(armed.offline, 'made by the Mac').toBeUndefined()
+    await waitFor(() => (withId(c.stores().routines, triggerId).length > 0 ? true : null), 120_000, 'the routines copy to hold the trigger')
+  }, 900_000)
+
+  afterAll(async () => { await c?.stop() }, 120_000)
+
+  it('the Mac away: the follower changes it, the daemon journals the changed fields once and runs them at once', async () => {
+    keepLogsOnFailure(() => c, `host-calls-trigger-update-${twin}`)
+    seqMark = journal(c).reduce((m, r) => Math.max(m, r.seq as number), 0)
+    const slept = c.sleepMac()
+    await c.waitAway(token)
+    const quietAt = slept.after + WINDOWS.quietMs + 1_000
+    if (Date.now() < quietAt) await sleep(quietAt - Date.now())
+    const r = await gatewayCall(c, s.sid, 'trigger_update', { id: triggerId, timeoutSeconds: 120, description: CHANGED })
+    show('trigger_update away', r)
+    const out = okOf(r)
+    expect(out).toMatchObject({ offline: true, queued: true, state: 'armed' })
+    // A field only the Mac decides is refused by name, nothing saved.
+    const big = await gatewayCall(c, s.sid, 'trigger_update', { id: triggerId, prompt: 'p'.repeat(33 * 1024) })
+    expect(big.ok, JSON.stringify(big).slice(0, 800)).toBe(false)
+    expect(big.error?.code).toBe('needs_leader')
+    expect(JSON.stringify(big.error)).toContain('prompt')
+    const listed = okOf(await gatewayCall(c, s.sid, 'trigger_list', { name: triggerId, full: true }))
+    show('trigger_list away', listed)
+    expect(JSON.stringify(listed)).toContain(CHANGED)
+    const away = journal(c).filter((x) => (x.seq as number) > seqMark && x.kind === 'op' && x.op === 'trigger_update')
+    expect(away.map((x) => x.args)).toEqual([{ id: triggerId, timeoutSeconds: 120, description: CHANGED }])
+    expect(away[0]!.trigger?.check?.timeoutSeconds).toBe(120)
+    expect(logSince(c, slept.after).filter((l) => l.msg === OFFLINE_LINE).map((l) => `${l.op}:${l.why}`)).toEqual([])
+  }, 600_000)
+
+  it('the Mac wakes: it holds the change once, keeps the rest; asleep and awake again, nothing changes', async () => {
+    keepLogsOnFailure(() => c, `host-calls-trigger-update-${twin}`)
+    c.wakeMac()
+    await c.waitBack(token)
+    let seen: Record<string, any> | undefined
+    await waitFor(async () => {
+      seen = await macRoutine()
+      return seen?.check?.timeoutSeconds === 120 && seen?.description === CHANGED ? true : null
+    }, 180_000, 'the Mac to hold the change').catch((e: Error) => { e.message += ` (the Mac holds ${JSON.stringify(seen)})`; throw e })
+    expect(seen).toMatchObject({ id: triggerId, name: 'Caterer watch', enabled: true, schedule: { everyMs: 30_000 }, executor: { config: { prompt: 'The caterer watch fired.' } } })
+    await waitFor(() => (journal(c).some((x) => x.kind === 'op' && x.op === 'trigger_update') ? null : true), 60_000, 'the record to be acked')
+    const before = await macRoutine()
+    c.sleepMac()
+    await c.waitAway(token)
+    c.wakeMac()
+    await c.waitBack(token)
+    await sleep(5_000)
+    const after = await macRoutine()
+    // The definition as stored (its run state and the engine's clock move on every check).
+    const { state: _sb, updatedAtMs: _ub, ...b } = before ?? {}
+    const { state: _sa, updatedAtMs: _ua, ...a } = after ?? {}
+    expect(a).toEqual(b)
+  }, 600_000)
 })

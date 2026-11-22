@@ -11,6 +11,9 @@ const started = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 vi.mock('../../src/core/sessions/task-start.js', () => ({
   startSessionForTask: vi.fn(async (p: Record<string, unknown>) => { started.push(p); return { taskId: p.taskIdPrefix, started: true } }),
 }))
+vi.mock('../../src/core/sessions/quick-start.js', () => ({
+  quickStartSession: vi.fn(async (p: Record<string, unknown>) => { started.push(p); return { id: p.existingTaskId } }),
+}))
 
 import { managerDeps } from '../../src/core/workspaces/manager.js'
 import type { TaskWorkspace, WorkspacePendingStart } from '../../src/core/workspaces/types.js'
@@ -38,5 +41,28 @@ describe('a workspace replay of a plugin job\'s start', () => {
     await managerDeps().launch(task, ws, pending({ caller_sid: 'external', caller_job: { plugin: '', job: 'poll', host: 'devbox' } }))
     await managerDeps().launch(task, ws, pending({ caller_sid: 'external' }))
     expect(started.map((p) => 'callerJob' in p)).toEqual([false, false, false])
+  })
+})
+
+// A start asked under a sid its host could not prove (src/lib/caller-unproven.ts) replays as
+// unproven too, so the replay's ceiling is an outside caller's, never the claimed session's.
+describe('a workspace replay of an unproven caller\'s start', () => {
+  beforeEach(() => { started.length = 0 })
+
+  it('replays unproven on every replay path; a start without the mark replays without it', async () => {
+    const marked = pending({ caller_sid: 'sid-bypass', caller_unproven: true })
+    await managerDeps().launch(task, ws, marked)
+    await managerDeps().launchInFolder(task, ws, marked, 'no git')
+    await managerDeps().launch(task, ws, { ...marked, via: 'quick-start' })
+    await managerDeps().launch(task, ws, pending({ caller_sid: 'sid-bypass' }))
+    expect(started.map((p) => [p.callerSid, p.callerUnproven])).toEqual([
+      ['sid-bypass', true], ['sid-bypass', true], ['sid-bypass', true], ['sid-bypass', false],
+    ])
+  })
+
+  it('the task-start pending start keeps the mark it was asked with, and only then', async () => {
+    const { taskStartPending } = await import('../../src/core/workspaces/launch.js')
+    expect(taskStartPending(task, { callerSid: 'sid-bypass', callerUnproven: true, source: 'api-v1' }).caller_unproven).toBe(true)
+    expect('caller_unproven' in taskStartPending(task, { callerSid: 'sid-bypass', source: 'api-v1' })).toBe(false)
   })
 })

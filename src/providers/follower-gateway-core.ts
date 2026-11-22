@@ -32,6 +32,15 @@
  * job's call waits (`routeJob`), within its own deadline, for the leader to answer again
  * or the follower to be allowed to write, then goes that way.
  *
+ * The follower's own view of the leader lags this daemon's by up to a poll of follower.status
+ * (a few seconds): right after the leader's link drops, it may still refuse with `leader_answers`
+ * ("the Mac answers again") a call this daemon handed it because the leader is gone. While this
+ * daemon still sees the leader away, that refusal is not taken at its word: the call is handed to
+ * the follower again every LAG_STEP_MS, under the SAME relayId (a refusal runs nothing and is not
+ * kept, so the follower's dedupe still runs it once), until it answers, the leader answers again
+ * here (the call is routed afresh: relayed), or LAG_MAX_MS or the call's time runs out (today's
+ * way: the daemon's own away answer, counted).
+ *
  * One attempt per call, timed as a relay to the leader is (relayAttemptMs). A follower
  * socket answers only the relays it was sent.
  *
@@ -102,16 +111,28 @@ export interface HandOff {
    * follower's follower.peer already claimed its message id and wrote it; offline-host-core.ts).
    */
   online?: boolean
+  /** A plugin job's call: routes it afresh (the twin's `again`), set by routeJob. */
+  reroute?: () => void
 }
 
 export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
   /** Codes a follower answers that hand a session's call back to the daemon's own answer. */
   const FALLS_BACK = ['needs_leader', 'unsupported_replica', 'unsupported_version']
-  interface Pending { ws: S; call: HandOff; respond: (r: FollowerGatewayResponse) => void; timer: unknown }
+  /** `lagSince`: when the follower first refused this call with `leader_answers` while this daemon saw the leader away. */
+  interface Pending { ws: S; call: HandOff; respond: (r: FollowerGatewayResponse) => void; timer: unknown; lagSince?: number }
   const pending = new Map<number, Pending>()
   /** How often a plugin job's waiting call looks again, and the time it keeps for its attempt after. */
   const JOB_WAIT_STEP_MS = 250
   const JOB_WAIT_SPARE_MS = 2_000
+  /**
+   * A `leader_answers` refusal while this daemon sees the leader away: handed again this often, for
+   * at most LAG_MAX_MS (the follower re-reads follower.status every 3 s), and only while the call
+   * keeps LAG_SPARE_MS for the follower to run it: a start's budget (replica/local-calls.ts
+   * START_LEFT_MS, 10 s, plus its 500 ms answer margin), so no re-handed call is refused as too late.
+   */
+  const LAG_STEP_MS = 500
+  const LAG_MAX_MS = 5_000
+  const LAG_SPARE_MS = 10_500
 
   /** A follower of `home` answers its calls now: linked, and allowed to write. */
   function answers(home: string | undefined): boolean {
@@ -126,11 +147,16 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
 
   /** Hand `call` to the follower. False: nothing was sent (none answers now, or the write failed); the caller goes on. */
   function handOff(call: HandOff, respond: (r: FollowerGatewayResponse) => void): boolean {
+    return sendTo(call, respond)
+  }
+
+  /** handOff, or a call handed again after a lagging refusal (`again`: its relayId and when the lag began). */
+  function sendTo(call: HandOff, respond: (r: FollowerGatewayResponse) => void, again?: { relayId: number; lagSince: number }): boolean {
     const ws = deps.follower(call.home)
     if (!ws) return false
     if (call.online ? deps.answersOnline?.(ws) !== true : !deps.mayWrite(call.home)) return false
-    const relayId = deps.nextRelayId()
-    const entry: Pending = { ws, call, respond, timer: null }
+    const relayId = again ? again.relayId : deps.nextRelayId()
+    const entry: Pending = { ws, call, respond, timer: null, ...(again ? { lagSince: again.lagSince } : {}) }
     pending.set(relayId, entry)
     // What is left of the call's time (after a wait, maybe little): the server answers within it,
     // and refuses before anything runs when it is too short for the op (replica/local-calls.ts).
@@ -144,7 +170,7 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
       return false
     }
     entry.timer = deps.setTimer(() => ended(relayId, 'timeout'), answerInMs)
-    deps.log('info', 'gateway: handed to this host\'s Walnut server', {
+    deps.log('info', again ? 'gateway: handed to this host\'s Walnut server again' : 'gateway: handed to this host\'s Walnut server', {
       relayId, capability: call.capability, callerSid: call.callerSid, op: typeof call.payload.name === 'string' ? call.payload.name : undefined,
       ...(call.caller ? { plugin: call.caller.plugin, job: call.caller.job } : {}),
     })
@@ -173,7 +199,7 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
    * follower, or no time left to wait; the caller answers `hub_unreachable`.
    */
   function routeJob(call: HandOff, respond: (r: FollowerGatewayResponse) => void, again: () => void, waited = false): 'handed' | 'waiting' | 'none' {
-    if (handOff(call, respond)) return 'handed'
+    if (handOff({ ...call, reroute: again }, respond)) return 'handed'
     if (deps.follower(call.home) === null) return 'none'
     if (call.deadline - deps.now() <= JOB_WAIT_STEP_MS + JOB_WAIT_SPARE_MS) return 'none'
     if (!waited) {
@@ -223,6 +249,34 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     return typeof relayId === 'number' && pending.has(relayId)
   }
 
+  /**
+   * The follower refused with `leader_answers` a call this daemon handed it while it saw the leader
+   * away: its view lags (see the top). True: the call waits a step, then goes to the follower again
+   * under the same relayId, or, the leader answering here again by then, is routed afresh (relayed,
+   * nothing ran). False, the refusal taken as before: a same-host send, the leader answering here
+   * already or the companion leading, nothing to route it on, or the lag budget or the call's time spent.
+   */
+  function waitOutLag(relayId: number, e: Pending): boolean {
+    const home = e.call.home
+    const goOn = e.call.fallback ?? e.call.reroute
+    if (e.call.online || !goOn || !deps.mayWrite(home) || deps.leaderElsewhere?.(home) === true) return false
+    const now = deps.now()
+    const lagSince = e.lagSince ?? now
+    if (now + LAG_STEP_MS - lagSince > LAG_MAX_MS || e.call.deadline - now - LAG_STEP_MS < LAG_SPARE_MS) return false
+    const op = typeof e.call.payload.name === 'string' ? e.call.payload.name : undefined
+    if (e.lagSince === undefined) deps.log('info', 'gateway: this host\'s Walnut server does not see the leader away yet; the call goes to it again', { relayId, op })
+    deps.setTimer(() => {
+      if (!deps.mayWrite(home)) {
+        deps.log('info', 'gateway: the leader answers again; a call this host\'s Walnut server refused is routed afresh', { relayId, op })
+        goOn()
+        return
+      }
+      // The follower gone, or the write failed: the twin's rules decide, as on any hand-back.
+      if (!sendTo(e.call, e.respond, { relayId, lagSince })) goOn()
+    }, LAG_STEP_MS)
+    return true
+  }
+
   /** The follower's answer: 'ok', or why it was not taken ('stale': nothing waits on it). */
   function settle(ws: S, relayId: number, resp: FollowerGatewayResponse): 'ok' | 'wrong_socket' | 'stale' {
     const e = pending.get(relayId)
@@ -236,6 +290,7 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     const detail = !resp.ok && resp.error ? resp.error.detail as { final?: unknown } | undefined : undefined
     const final = !e.call.online && !!detail && typeof detail === 'object' && detail.final === true
       && deps.mayWrite(e.call.home) && deps.leaderElsewhere?.(e.call.home) !== true
+    if (code === 'needs_leader' && !!detail && typeof detail === 'object' && (detail as { why?: unknown }).why === 'leader_answers' && waitOutLag(relayId, e)) return 'ok'
     if (e.call.fallback && FALLS_BACK.indexOf(code) !== -1 && !final) {
       deps.log('info', 'gateway: this host\'s Walnut server handed the call back', { relayId, code, op: e.call.payload.name })
       e.call.fallback()

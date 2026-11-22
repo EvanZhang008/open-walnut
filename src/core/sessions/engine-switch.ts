@@ -85,6 +85,8 @@ export interface EngineSwitchRequest {
   displayText?: string;
   /** The session asking (an agent), or undefined for a person. */
   callerSid?: string;
+  /** Its host's daemon could not prove `callerSid` (lib/caller-unproven.ts): the ceiling reads an outside caller. */
+  callerUnproven?: boolean;
   source: string;
   /** Answer once the switch is checked and under way, not when the new session is up. */
   detach?: boolean;
@@ -186,12 +188,12 @@ export async function switchHostBlocker(host: string, engine: SessionEngine): Pr
  * task's session already runs in loosens nothing. Checked before anything else is refused.
  */
 async function capSwitchMode(req: EngineSwitchRequest, task: Task): Promise<void> {
-  if (!req.permissionMode || !req.callerSid) return;
+  if (!req.permissionMode || (!req.callerSid && !req.callerUnproven)) return;
   const { taskConversation } = await import('./task-session-claim.js');
   const current = await taskConversation(task.id).catch(() => null);
   if (current?.mode === req.permissionMode) return;
   const { capStartMode } = await import('./delegated-mode.js');
-  try { await capStartMode(req.callerSid, req.permissionMode); }
+  try { await capStartMode(req.callerSid, req.permissionMode, { unproven: req.callerUnproven }); }
   catch (err) { throw new EngineSwitchError(err instanceof Error ? err.message : String(err), 403, 'mode_above_caller'); }
 }
 
@@ -288,7 +290,7 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     const { startSessionForTask } = await import('./task-start.js');
     const started = await startSessionForTask({
       taskIdPrefix: task.id, message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
-      callerSid: req.callerSid, expectReply: false, source: req.source, ownMove: true,
+      callerSid: req.callerSid, callerUnproven: req.callerUnproven, expectReply: false, source: req.source, ownMove: true,
       ...(req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
       // Nothing to say: the task's description is not run as if it were (the same as a switch).
       ...(message.trim() ? {} : { idle: true }),

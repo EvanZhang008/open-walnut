@@ -24,7 +24,11 @@
  * host's name is `devbox.invalid` (never resolvable).
  *
  * sleepMac() = SIGSTOP of the Mac server and its local daemon (a lid close: the
- * sockets stay open and go silent), wakeMac() = SIGCONT. stop() and a process
+ * sockets stay open and go silent), wakeMac() = SIGCONT. With `linkProxy`, the Mac's
+ * link to the host daemon runs through a TCP proxy (silent-link-proxy.ts): cutLink()
+ * closes it for real (the daemon sees the socket close; the Mac's redials hang
+ * unanswered), mendLink() lets the next redial through. pauseReplica() / resumeReplica()
+ * = SIGSTOP / SIGCONT of the replica, each pin checked first. stop() and a process
  * `exit` handler SIGCONT before SIGTERM. Every signal goes to a process this
  * harness can name, checked right before it is sent, never to a pid alone and
  * never to a process matched by the base path alone:
@@ -65,6 +69,7 @@ import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from './source-twin.js'
 import { bunRuntime, testBun } from './bun-runtime.js'
+import { startSilentLinkProxy, type SilentLinkProxy } from './silent-link-proxy.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
 export const BUN: string | undefined = testBun()
@@ -191,6 +196,21 @@ export interface ReplicaCluster {
   sleepMac(): SignalWindow
   wakeMac(): SignalWindow
   asleep(): boolean
+  /** `linkProxy` only: close the Mac's link to the host daemon (every connection) and hold its redials silent. */
+  cutLink(): void
+  /** `linkProxy` only: let the Mac's next redial through. */
+  mendLink(): void
+  /** SIGSTOP / SIGCONT of the replica's process (refused when none is the one this cluster started). */
+  pauseReplica(): void
+  resumeReplica(): void
+  /**
+   * Steps the paused replica through what it does, to stop it between two of its own moves: it runs
+   * for about `sliceMs`, stops, and after `gapMs` `until()` is asked; at most `maxSteps` steps, the
+   * number taken returned. Pinned once; each signal checks the process again by /proc (its start tick
+   * and command line, read in well under a millisecond) where there is one, else as every other
+   * signal does. It stays stopped.
+   */
+  stepReplica(o: { sliceMs: number; gapMs: number; maxSteps: number; until(): boolean }): Promise<number>
   /** Waits until the replica answers `token`'s reads from its copies (x-walnut-offline). */
   waitAway(token: string, timeoutMs?: number): Promise<number>
   /** Waits until the replica forwards `token`'s reads to the Mac again. */
@@ -308,6 +328,16 @@ function pin(name: string, pid: number, looksRight: (command: string) => boolean
   const command = commandOf(pid)
   if (!started || !command || !looksRight(command)) return null
   return { name, pid, started, command }
+}
+
+/** `pid`'s start tick and command line from /proc (Linux), or null: what a fast re-check compares. */
+function procIdentity(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const started = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+    const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+    return started && cmd ? `${started}\n${cmd}` : null
+  } catch { return null }
 }
 
 /** The pinned process is still the one that was pinned (same start time, same command line). */
@@ -584,7 +614,7 @@ async function bootMac(script: string, file: string, env: Record<string, string>
  */
 export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
 
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[] }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -623,6 +653,8 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   let stopped = false
   let hostDaemon: Awaited<ReturnType<typeof startHostDaemon>> | null = null
   let mac: Awaited<ReturnType<typeof bootMac>> | null = null
+  /** The Mac's link to the host daemon, when the test cuts it (`linkProxy`). */
+  let link: SilentLinkProxy | null = null
 
   /** The Mac server (the process mac-boot reports) and the Mac's own daemon, pinned when first seen. */
   let macPin: Pinned | null = null
@@ -685,6 +717,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     for (const p of [macPin, macDaemonPin, ...left]) signalPinned(p, 'SIGKILL')
     if (mac?.proc) signalChild(mac.proc, 'SIGKILL')
     if (hostDaemon) signalChild(hostDaemon.proc, 'SIGKILL')
+    await link?.close().catch(() => undefined)
   }
   // A runner that exits without stop(): nothing it started may stay behind (a
   // stopped Mac would hold a pending SIGTERM forever, a replica would run on).
@@ -700,6 +733,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
 
   try {
     hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true)
+    if (opts.linkProxy) link = await startSilentLinkProxy(hostDaemon.port)
     seedHostStream(path.join(d.hostDaemon, 'streams'))
     seedHostTranscript(d.hostHome, d.hostCwd)
     const macEnv: Record<string, string> = {
@@ -715,7 +749,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
-    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin }), macBootFile, macEnv, macLog)
+    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)
@@ -788,6 +822,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     }
     return timing
   }
+  /** The replica's processes, each checked first; refused when none is this cluster's. */
+  const signalReplica = (sig: NodeJS.Signals) => {
+    const pins = replicaPins()
+    if (!pins.length || !pins.every((p) => signalPinned(p, sig))) throw new Error(`replica-cluster: refusing ${sig}: no replica process of this cluster (${pins.map((p) => p.pid).join(', ') || 'none'})`)
+  }
   const offlineOf = (h: http.IncomingHttpHeaders): number | null => (typeof h['x-walnut-offline'] === 'string' ? Number(h['x-walnut-offline']) : null)
 
   return {
@@ -811,6 +850,28 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     sleepMac() { const timing = signalMac('SIGSTOP'); paused = true; return timing },
     wakeMac() { const timing = signalMac('SIGCONT'); paused = false; return timing },
     asleep: () => paused,
+    cutLink() { if (!link) throw new Error('replica-cluster: cutLink needs linkProxy'); link.setMode('drop-hold') },
+    mendLink() { if (!link) throw new Error('replica-cluster: mendLink needs linkProxy'); link.setMode('pass') },
+    pauseReplica() { signalReplica('SIGSTOP') },
+    resumeReplica() { signalReplica('SIGCONT') },
+    async stepReplica(o) {
+      const pins = replicaPins()
+      if (!pins.length) throw new Error('replica-cluster: no replica process of this cluster to step')
+      const ids = pins.map((p) => procIdentity(p.pid))
+      const signal = (sig: NodeJS.Signals) => pins.forEach((p, i) => {
+        if (ids[i] !== null && procIdentity(p.pid) === ids[i]) { try { process.kill(p.pid, sig) } catch { /* gone */ } return }
+        if (!signalPinned(p, sig)) throw new Error(`replica-cluster: refusing ${sig}: ${p.pid} is not the replica this cluster started`)
+      })
+      let steps = 0
+      while (steps < o.maxSteps && !o.until()) {
+        signal('SIGCONT')
+        await sleep(o.sliceMs)
+        signal('SIGSTOP')
+        steps++
+        await sleep(o.gapMs)
+      }
+      return steps
+    },
     async waitAway(token, timeoutMs = WINDOWS.quietMs + 30_000) {
       const t0 = Date.now()
       await waitFor(async () => offlineOf((await replicaCall('GET', '/api/tasks', { token })).headers) !== null, timeoutMs, 'the replica to answer away', 500)

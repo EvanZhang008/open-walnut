@@ -440,9 +440,9 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   const plan = planTransfer(task, session, req, known);
   // A session cannot loosen the task's mode past its own through a transfer (delegated-mode.ts),
   // on the fork and the fresh start alike; keeping the mode the conversation runs in loosens nothing.
-  if (req.callerSid && req.permissionMode && req.permissionMode !== session.mode) {
+  if ((req.callerSid || req.callerUnproven) && req.permissionMode && req.permissionMode !== session.mode) {
     const { capStartMode } = await import('../sessions/delegated-mode.js');
-    try { await capStartMode(req.callerSid, req.permissionMode); }
+    try { await capStartMode(req.callerSid, req.permissionMode, { unproven: req.callerUnproven }); }
     catch (err) { throw new TransferError(err instanceof Error ? err.message : String(err), 403, 'mode_above_caller'); }
   }
   // The SDK session server starts fresh sessions and cannot fork one: while
@@ -546,7 +546,7 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
       const { startSessionForTask } = await import('../sessions/task-start.js');
       const started = await startSessionForTask({
         taskIdPrefix: target.id, message, cwd, host: plan.target.host === LOCAL_HOST ? '__local__' : plan.target.host,
-        engine: plan.target.engine, model: plan.target.model, callerSid: req.callerSid, expectReply: false, source: 'transfer',
+        engine: plan.target.engine, model: plan.target.model, callerSid: req.callerSid, callerUnproven: req.callerUnproven, expectReply: false, source: 'transfer',
         ...(plan.target.effort ? { effort: plan.target.effort } : {}),
         ...(plan.target.permissionMode ? { mode: plan.target.permissionMode } : {}),
       });

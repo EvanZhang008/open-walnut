@@ -112,7 +112,7 @@ const realDeps: WorkspaceManagerDeps = {
       await startSessionForTask({
         taskIdPrefix: task.id, requestedAt: pending.at, message: pending.message, model: pending.model, mode: pending.mode,
         ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
-        engine: pending.engine as never, callerSid: pending.caller_sid, ...callerJobOf(pending),
+        engine: pending.engine as never, callerSid: pending.caller_sid, ...callerJobOf(pending), callerUnproven: pending.caller_unproven === true,
         ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
         replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
       ...(pending.hands_on ? { handsOn: pending.hands_on } : {}),
@@ -125,7 +125,7 @@ const realDeps: WorkspaceManagerDeps = {
       cwd: ws.cwd!, host: ws.host === '__local__' ? undefined : ws.host,
       model: pending.model, mode: pending.mode, existingTaskId: task.id,
       ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
-      source: pending.source ?? 'workspace', engine: pending.engine as never, callerSid: pending.caller_sid,
+      source: pending.source ?? 'workspace', engine: pending.engine as never, callerSid: pending.caller_sid, callerUnproven: pending.caller_unproven === true,
       ...(pending.engine_decided ? { engineDecided: true } : {}),
       ...(pending.session_id ? { preassignedSessionId: pending.session_id } : {}),
     })
@@ -145,7 +145,7 @@ const realDeps: WorkspaceManagerDeps = {
     await startSessionForTask({
       taskIdPrefix: task.id, requestedAt: pending.at, message: `${pending.message}\n\n${note}`, model: pending.model, mode: pending.mode,
       ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
-      engine: pending.engine as never, callerSid: pending.caller_sid, ...callerJobOf(pending),
+      engine: pending.engine as never, callerSid: pending.caller_sid, ...callerJobOf(pending), callerUnproven: pending.caller_unproven === true,
       ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
       replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
       ...(pending.hands_on ? { handsOn: pending.hands_on } : {}),

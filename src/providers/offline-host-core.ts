@@ -207,9 +207,10 @@ export type OfflineRecord =
    * `base`: the copy's updated_at for that task when the write was queued (the server's clock).
    * `trigger`: for a trigger created, paused, resumed or deleted here, the trigger as this host
    * runs it, so a resume here can arm it again (the server's set no longer carries a paused
-   * trigger) and a trigger created here runs before the server has it.
+   * trigger) and a trigger created here runs before the server has it. `armed`: for a
+   * `trigger_update` (its args only the fields it changed), whether the trigger ran when it was changed.
    */
-  | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string; trigger?: OfflineTrigger; callId?: string }
+  | { seq: number; at: number; online?: true; kind: 'op'; op: string; args: Record<string, unknown>; callerSid: string; base?: string; trigger?: OfflineTrigger; callId?: string; armed?: boolean }
   /**
    * A model, effort or permission mode the cloud companion applied to a live
    * session here while it led (leader.settings, leader.control): the server
@@ -327,8 +328,11 @@ export interface OfflineTriggerTable {
 /**
  * The last trigger write made here per id that the server has not taken yet.
  * `created`: the trigger itself was created here (the server has no routine of that id yet).
+ * `updated`: it was changed here (trigger_update), so `def` runs in place of the server's.
+ * `keepsState`: only changed here, never switched on or off here, so the server's set still
+ * says whether it runs (`on` is what it was when changed, for the lists here).
  */
-export interface TriggerHold { home: string; on: boolean; deleted?: boolean; created?: true; def?: OfflineTrigger }
+export interface TriggerHold { home: string; on: boolean; deleted?: boolean; created?: true; def?: OfflineTrigger; updated?: true; keepsState?: true }
 
 export interface OfflineHostDeps {
   fs: typeof import('node:fs')
@@ -560,7 +564,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   }
   // The checks run on this host, so it answers for them itself (create, pause, resume
   // and delete take effect here at once and reach Walnut when the server is back).
-  const TRIGGER_WRITE_OPS = ['trigger_create', 'trigger_pause', 'trigger_resume', 'trigger_delete']
+  const TRIGGER_WRITE_OPS = ['trigger_create', 'trigger_pause', 'trigger_resume', 'trigger_delete', 'trigger_update']
   if (deps.triggers) {
     OFFLINE_OPS.push(
       { name: 'trigger_list', title: 'List the triggers this host runs', description: 'The triggers this host checks for this Walnut, with their last check and next run, as this host has them now.', readonly: true, signature: '' },
@@ -2537,8 +2541,36 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       case 'trigger_pause': case 'trigger_resume': case 'trigger_delete':
         if (!deps.triggers || !sid) return needsMac(`${name} here`)
         return opTriggerWrite(home, sid, name, args, needsMac, opId)
+      case 'trigger_update':
+        if (!deps.triggers || !sid) return needsMac(`${name} here`)
+        if (!drainsKind(home, 'trigger-update')) return tooOld()
+        return followerTriggerUpdate(home, sid, args, opId)
     }
     return null
+  }
+
+  /**
+   * A trigger_update the follower decided (replica/away-trigger-update.ts): `args` the fields it
+   * changed (what the Mac replays through the op), `def` the trigger as it runs now, `on` whether it
+   * ran when changed. Checked by this daemon, journaled, and armed at once (applyTriggerHolds).
+   */
+  function followerTriggerUpdate(home: string, sid: string, a: Record<string, unknown>, opId: string): GatewayResult {
+    const id = typeof a.id === 'string' ? a.id : ''
+    const replay = a.args && typeof a.args === 'object' && !Array.isArray(a.args) ? a.args as Record<string, unknown> : null
+    const given = a.def && typeof a.def === 'object' && !Array.isArray(a.def) ? a.def as OfflineTrigger : null
+    if (!id || !replay || replay.id !== id || Object.keys(replay).length < 2 || !given || given.id !== id || typeof a.on !== 'boolean') {
+      return fail('bad_request', 'trigger_update: the follower sent an incomplete change')
+    }
+    if (triggerOf(home, id)?.hold?.deleted) return fail('not_found', `Trigger ${id} was deleted on this host; nothing to change`)
+    // Its fires are delivered into this Walnut's sessions, whichever data dir the follower named.
+    const def: OfflineTrigger = { ...given, ...(given.deliver ? { deliver: { ...given.deliver, home } } : {}) }
+    const checked = deps.triggers!.validate ? deps.triggers!.validate(def) : { ok: false as const, error: 'this daemon cannot check a trigger' }
+    if (!checked.ok) return fail('bad_request', checked.error)
+    const saved = refusal(append(home, { kind: 'op', op: 'trigger_update', args: replay, callerSid: sid, trigger: def, armed: a.on }, false, { opId, admit: () => admitWrite(sid) ?? roomFor(home) }))
+    if (saved) return saved
+    try { deps.triggers!.changed() } catch (err) { deps.log('warn', 'offline host: triggers did not follow a change here', { id, error: (err as Error).message }) }
+    deps.log('info', 'offline host: trigger changed here', { home, id, fields: Object.keys(replay).filter((k) => k !== 'id'), callerSid: sid })
+    return triggerChangedAnswer('trigger_update', def, false, a.on)
   }
 
   /** A trigger the follower decided, as armTrigger takes it (null: not whole). */
@@ -2578,7 +2610,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const plan = { name: String(a.name ?? ''), description: String(a.description ?? ''), everyMs: Number(a.every) || 0, run: String(a.run ?? ''), cwd: typeof a.cwd === 'string' ? a.cwd : '', taskId: String(a.session ?? '') }
       return triggerArmedAnswer(home, a.id, plan, '', true)
     }
-    if (TRIGGER_WRITE_OPS.indexOf(r.op) !== -1 && r.trigger && typeof r.trigger === 'object') return triggerChangedAnswer(r.op, r.trigger as OfflineTrigger, true)
+    if (TRIGGER_WRITE_OPS.indexOf(r.op) !== -1 && r.trigger && typeof r.trigger === 'object') return triggerChangedAnswer(r.op, r.trigger as OfflineTrigger, true, r.armed === true)
     return null
   }
 
@@ -2827,12 +2859,40 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const prev = holds.get(id)
         const def = r.trigger ?? prev?.def
         const created = r.op === 'trigger_create' || prev?.created === true
+        const update = r.op === 'trigger_update'
+        // A change alone leaves on and off where it was: to a switch made here, else to the server's set.
+        const keepsState = update && (!prev || prev.keepsState === true)
         holds.set(id, {
-          home, on: r.op === 'trigger_resume' || r.op === 'trigger_create',
-          ...(r.op === 'trigger_delete' ? { deleted: true } : {}), ...(created ? { created: true as const } : {}), ...(def ? { def } : {}),
+          home, on: update ? (prev && !prev.keepsState ? prev.on : r.armed === true) : r.op === 'trigger_resume' || r.op === 'trigger_create',
+          ...(r.op === 'trigger_delete' || (update && prev?.deleted) ? { deleted: true } : {}), ...(created ? { created: true as const } : {}), ...(def ? { def } : {}),
+          ...(update || prev?.updated ? { updated: true as const } : {}), ...(keepsState ? { keepsState: true as const } : {}),
         })
       }
       if (holds.size) out.set(home, holds)
+    }
+    return out
+  }
+
+  /**
+   * The server's set with the holds of one Walnut over it (both daemon twins arm this): a trigger
+   * paused or deleted here stays off even when a set that still carries it arrives first (the
+   * reconnect pushes the set while the journal drains), one paused and resumed or created here runs
+   * from its def, and one changed here runs its changed def in place of the server's while the
+   * server's set still decides whether it runs. `parse`: the daemon's validateTriggerDef.
+   */
+  function applyTriggerHolds<D extends { id: string }>(holds: Map<string, TriggerHold>, defs: D[], parse: (raw: unknown) => { ok: true; def: D } | { ok: false }): D[] {
+    if (holds.size === 0) return defs
+    const out: D[] = []
+    for (const def of defs) {
+      const h = holds.get(def.id)
+      if (h && !h.keepsState && h.on === false) continue
+      const parsed = h && h.updated && h.def ? parse(h.def) : null
+      out.push(parsed && parsed.ok ? parsed.def : def)
+    }
+    for (const [tid, hold] of holds) {
+      if (!hold.on || !hold.def || hold.keepsState || out.some((def) => def.id === tid)) continue
+      const parsed = parse(hold.def)
+      if (parsed.ok) out.push(parsed.def)
     }
     return out
   }
@@ -2891,18 +2951,25 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   /**
    * This Walnut's triggers here as the follower merges them into its routines copy: each one's
-   * def, state and status, and for one created here the description its record keeps.
+   * def, state and status, for one created here the description its record keeps, and for one
+   * changed here what changed (`changes`: trigger_update's arguments, the later over the earlier).
    */
   function followerTriggers(home: string, id?: unknown): Record<string, unknown> {
     const described = new Map<string, string>()
+    const changed = new Map<string, Record<string, unknown>>()
     for (const r of recordsOf(home)) {
       if (r.kind === 'op' && r.op === 'trigger_create' && typeof r.args.id === 'string' && typeof r.args.description === 'string') described.set(r.args.id, r.args.description)
+      if (r.kind === 'op' && r.op === 'trigger_update' && typeof r.args.id === 'string') {
+        const { id: tid, ...fields } = r.args
+        changed.set(tid as string, { ...(changed.get(tid as string) ?? {}), ...fields })
+      }
     }
     const triggers = hereTriggers(home)
       .filter((t) => typeof id !== 'string' || t.def.id === id)
       .map((t) => ({
         id: t.def.id, state: t.state, def: t.def, ...(t.status ? { status: t.status } : {}),
         ...(t.hold?.created ? { created: true } : {}), ...(described.has(t.def.id) ? { description: described.get(t.def.id) } : {}),
+        ...(changed.has(t.def.id) ? { changes: changed.get(t.def.id) } : {}),
       }))
     return { host: slices.get(home)?.host ?? '', runsTriggers: !!deps.triggers, triggers }
   }
@@ -3012,16 +3079,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return triggerChangedAnswer(name, t!.def)
   }
 
-  function triggerChangedAnswer(name: string, def: OfflineTrigger, duplicate = false): GatewayResult {
+  function triggerChangedAnswer(name: string, def: OfflineTrigger, duplicate = false, on = true): GatewayResult {
     const label = `"${def.name}"`
     const outcome = name === 'trigger_pause'
       ? `Paused ${label} on this host: it is not checked from now on; Walnut records the pause when the server reconnects.`
+      : name === 'trigger_update'
+        ? `Updated ${label} in place on this host: same id, it keeps the items it has seen and the script's cursor${on ? `, and the daemon here runs the new settings from its next check (every ${everyLabel(def.everyMs)})` : '; it is still paused: trigger_resume starts it again'}. Walnut makes the same change when the server reconnects.`
       : name === 'trigger_resume'
         ? `Resumed ${label} on this host: the first check runs within seconds, every ${everyLabel(def.everyMs)} after that; Walnut records it when the server reconnects.`
         : `Deleted ${label} on this host: nothing checks it any more; Walnut deletes the trigger when the server reconnects. Its check script file is untouched.`
     // triggerId: the same id under a name a link frame never takes (its own `id` addresses the answer).
     return ok({
-      id: def.id, triggerId: def.id, name: def.name, state: name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
+      id: def.id, triggerId: def.id, name: def.name, state: name === 'trigger_update' ? (on ? 'armed' : 'paused') : name === 'trigger_resume' ? 'armed' : name === 'trigger_pause' ? 'paused' : 'deleted',
       changed: true, queued: true, offline: true, ...(duplicate ? { duplicate: true } : {}), outcome, next: 'Nothing else is required. Do not repeat the call.',
     })
   }
@@ -3869,7 +3938,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
     pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverTriggerTo, liveSessionsOf, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession, checkTaskStart,
-    triggerHolds, triggerHoldsByHome, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS,
+    triggerHolds, triggerHoldsByHome, applyTriggerHolds, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS,
     /** The follower's read of this Walnut's triggers here (follower.triggers, follower-triggers-v1). */
     followerTriggers,
     /** The follower's trigger_test (follower.trigger.test): the check run once here, as this host's own trigger_test runs it. */

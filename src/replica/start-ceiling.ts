@@ -11,6 +11,9 @@
  *                leader reads (plugin-jobs/job-caller.ts vouchedPluginJob, held by the relay in
  *                capability-router.ts only for a frame the daemon stamped `vouched: true`), naming
  *                this job, on this replica's own self-call; else an outside caller, capped at 'default'
+ *   unproven     a request carrying the unproven mark (lib/caller-unproven.ts: the host's daemon
+ *                could not prove the session sid the relayed call names; this replica's own
+ *                self-calls for it carry it): an outside caller whatever its actor, as on the leader
  */
 import type { IncomingMessage } from 'node:http'
 import { applyStartModeCeiling, type StartCaller } from '../core/sessions/delegated-mode.js'
@@ -19,6 +22,7 @@ import type { SessionMode } from '../core/types.js'
 import { claimedOrigin } from '../web/middleware/request-origin.js'
 import type { PortAnswer, WriteActor } from './write-port.js'
 import { isSelfCall } from './write-actor.js'
+import { callerUnprovenOf } from '../lib/caller-unproven.js'
 
 export interface StartCallerDeps {
   /** A session's mode as this replica shows it, or undefined when it names none or cannot be read. */
@@ -29,6 +33,8 @@ export interface StartCallerDeps {
 
 /** Who asks for a start here, for the leader's ceiling. */
 export async function awayStartCaller(req: IncomingMessage, actor: WriteActor, deps: StartCallerDeps): Promise<StartCaller> {
+  // Before the actor: the mark only lowers trust, so whoever carries it is capped (delegated-mode.ts startCallerOf).
+  if (callerUnprovenOf(req)) return { kind: 'external' }
   if (actor.kind === 'device') return { kind: 'person' }
   if (actor.kind === 'session') {
     const mode = await deps.sessionMode(actor.sid).catch(() => undefined)

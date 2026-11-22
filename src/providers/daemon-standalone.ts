@@ -79,7 +79,7 @@ import {
   type BudgetGate,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
-import { PS_TREE_ARGS, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
+import { PS_TREE_ARGS, claimedSidVerdict, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
 import { socketPeerPid, socketPeerPidReady } from './socket-peer-pid.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
@@ -91,7 +91,7 @@ import { createFsLs } from './fs-ls-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
-import { createOfflineHostCore, OFFLINE_MAX_RECORDS, type HostSlice, type LeaderDelivery, type OfflineTrigger } from './offline-host-core.js'
+import { createOfflineHostCore, OFFLINE_MAX_RECORDS, type HostSlice, type LeaderDelivery, type OfflineTrigger, type TriggerHold } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
 import { createHostJournal } from './host-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
@@ -259,6 +259,7 @@ import {
   shimCoreNeedsCopy,
   gatewayApiAnswerOf,
   type GatewayErrorCode,
+  type GatewayRequest,
   type GatewayResponse,
 } from './gateway-core.js'
 import type { DaemonRuntimeOptions, DaemonFrame, DaemonClient, DaemonRuntime, FollowerSeat } from './daemon-runtime-types.js'
@@ -4981,7 +4982,8 @@ function cmdFollowerGateway(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   const respond = (resp: GatewayResponse) => sendOk(ws, id, { response: resp })
   // The caller "left" once this follower's link is gone (a waiting call ends, as on the socket).
   gatewayCallerLeft.set(respond, () => followerSockets.get(home) !== ws)
-  handleGatewayLine(line, respond, undefined, openedAt)
+  // null: the token proved the line's sid (it is the one the token was made for), no socket to read.
+  handleGatewayLine(line, respond, null, openedAt)
 }
 
 // ── Streams between servers ('stream-relay-v1', stream-relay-core.ts) ──
@@ -6065,7 +6067,18 @@ function sendGatewayRequest(
     if (followerGateway.answersOnline(home) && offlineHost.localCandidate(home, callerSid, capability, payload)) {
       const relay = () => relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
       if (!offlineHost.openOnline(home, payload)) return relay()
-      const ended = () => { void offlineHost.endOnline(home, payload).then((r) => (r ? respond(r as GatewayResponse) : relay())) }
+      // Ended with nothing written here: to the leader that answers NOW, never to one whose link
+      // closed meanwhile (a relay on a dead socket, with the hand-off's time spent, is lost). With
+      // none, the call goes as any call with no leader, not to the follower again (its hand-off
+      // ended, so its late follower.peer is refused): this host's own away answer, written once.
+      const ended = () => {
+        void offlineHost.endOnline(home, payload).then((r) => {
+          if (r) return respond(r as GatewayResponse)
+          const leader = gatewayTargetFor(home)
+          if (leader) return relayToPrimary(leader, home, capability, callerSid, payload, respond, readable, deadline)
+          sendGatewayRequest(capability, callerSid, payload, respond, { ...plan, ownServerAsked: true })
+        })
+      }
       if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, online: true, fallback: ended }, (r) => respond(r as GatewayResponse))) return
       return ended()
     }
@@ -6456,8 +6469,11 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
   relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline, caller)
 }
 
-/** One parsed NDJSON line from the agent socket → local reject or hub relay. */
-function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd?: number, openedAt = Date.now()) {
+/**
+ * One parsed NDJSON line from the agent socket → local reject or hub relay. `fd`: the gateway
+ * socket's own (undefined when unknown), or null for a host call entry line its token proved.
+ */
+function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void, fd: number | null | undefined, openedAt = Date.now()) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
@@ -6514,16 +6530,39 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
     // the request never leaves this host. A respawn self-heals (plan §5).
     return respond(gatewayError('unknown_caller', 'session is not tracked by this daemon (a respawn self-heals)'))
   }
+  // The call's time runs from now, not from when its caller was read.
+  const plan = gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now())
   if (isExternalCallerSid(callerSid)) {
     logMsg('info', 'gateway: external caller (no session env)', { op: req.op })
+    return sendSessionGatewayLine(req, callerSid, respond, plan)
   }
-  const plan = gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now())
+  // The line names a session. A host call entry line was proven by its run's token (`fd` null);
+  // a socket line is that session's only when the process on the socket runs inside it (or started
+  // this daemon): anyone else naming it is the anonymous `external`. Where the process cannot be
+  // read at all, the sid stands, marked unproven (keep in sync with daemon-source.ts, which never
+  // reads it).
+  if (fd === null) return sendSessionGatewayLine(req, callerSid, respond, plan)
+  void gatewayCallerIdentity(socketPeerPid(fd), callerSid, openedAt).then((seen) => {
+    // Gone while its process was read: asked of no one (its retry would apply a write twice).
+    if (gatewayCallerLeft.get(respond)?.()) return logMsg('info', 'gateway: a session\'s call ends before it is sent, its caller left', { op: req.op })
+    if (seen === 'outside') warnSessionCallerOutside(callerSid)
+    if (seen === 'unread') req.args = { ...req.args, callerUnproven: true }
+    sendSessionGatewayLine(req, seen === 'outside' ? EXTERNAL_CALLER_SID : callerSid, respond, plan, { fd, openedAt })
+  })
+}
+
+/**
+ * The rest of a session's (or the anonymous caller's) gateway line, its caller settled. `socket`:
+ * the gateway socket it came on (an approval reads its process); none for a host call entry line.
+ */
+function sendSessionGatewayLine(req: GatewayRequest, callerSid: string, respond: (resp: GatewayResponse) => void,
+  plan: ReturnType<typeof gatewayCallPlan>, socket?: { fd: number | undefined; openedAt: number }) {
   // caller-proof-v1: only this daemon writes callerProof. For an approval it reads the process on
   // the socket now, while the caller still holds it, and tells the server whether it runs inside
   // the session it names (keep in sync with daemon-source.ts, which sends none).
   const args = req.args
   if (!isExternalCallerSid(callerSid) && wantsCallerProof(req.op, args)) {
-    void gatewayCallerProof(socketPeerPid(fd), callerSid, openedAt).then((callerProof) =>
+    void gatewayCallerProof(socketPeerPid(socket?.fd), callerSid, socket?.openedAt ?? Date.now()).then((callerProof) =>
       sendGatewayRequest(req.op, callerSid, { ...args, callerProof }, respond, plan))
     return
   }
@@ -6540,32 +6579,40 @@ async function proofSlot<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Whether the process on the gateway socket (`peer`) runs inside session `sid`: it descends from
- * the process this daemon runs for that session, its Claude Code CLI or its ACP worker. Never
- * throws; a peer it could not read, or a session with no live process here, is not verified.
+ * The processes this daemon holds alive for session `sid`, each still the one it started: its CLI
+ * with the start time recorded at spawn (and this boot's, for a system service), or its ACP worker
+ * not seen to exit, with the start time read after spawn; and each one's start
+ * time read again now by the reader that recorded it (the CLI's by the daemon's own, an ACP
+ * worker's by `ps` as acp-daemon.ts reads it), so a locale never makes it differ.
  */
-async function gatewayCallerProof(peer: number | undefined, sid: string, openedAt: number): Promise<CallerProof> {
-  if (!peer) return { v: 1, verified: false, unchecked: true }
-  const table = await processTreeSnapshot()
-  if (!table?.size) return { v: 1, verified: false, pid: peer, unchecked: true }
-  // Only a process this daemon holds alive for the session, and still the one it started: its CLI
-  // with the start time recorded at spawn (and this boot's, for a system service), or its ACP
-  // worker, a child of this daemon not reaped yet, with the start time read after spawn. The
-  // asker must have started by `openedAt`: a process given its pid after it exited started later.
+async function sessionProcsNow(sid: string): Promise<{ procs: Array<{ pid: number; start?: string | null }>; now: Map<number, string | null> }> {
   const native = sessions.get(sid)
   const worker = acp.hasWorker(sid) ? acp.workers.get(sid) : undefined
   const procs: Array<{ pid: number; start?: string | null }> = []
   if (native?.state === 'running' && native.pid && native.pid !== process.pid && (!SERVICE_MODE || (!!daemonBootId && native.bootId === daemonBootId))) {
     procs.push({ pid: native.pid, start: native.startTime })
   }
-  const wpid = worker?.proc?.pid
-  if (wpid && wpid !== process.pid && worker.proc.exitCode === null && worker.proc.signalCode === null && worker.start) {
+  // A worker adopted after a restart (it outlived the last daemon) has its pid and start, no `proc`.
+  const wpid = worker?.proc?.pid ?? worker?.pid
+  if (worker && wpid && wpid !== process.pid && !worker.exited() && worker.start) {
     procs.push({ pid: wpid, start: worker.start })
   }
-  // Each start time read again by the reader that recorded it (the CLI's by the daemon's own, an
-  // ACP worker's by `ps` as acp-daemon.ts reads it), so a locale never makes it differ.
   const now = new Map<number, string | null>()
   for (const p of procs) now.set(p.pid, p.pid === wpid ? await psLstart(p.pid) : await proofStartTime(p.pid))
+  return { procs, now }
+}
+
+/**
+ * Whether the process on the gateway socket (`peer`) runs inside session `sid`: it descends from
+ * the process this daemon runs for that session, its Claude Code CLI or its ACP worker. Never
+ * throws; a peer it could not read, or a session with no live process here, is not verified.
+ */
+async function gatewayCallerProof(peer: number | undefined, sid: string, openedAt: number): Promise<CallerProof> {
+  if (!peer) return { v: 1, verified: false, unchecked: true }
+  const table = await processTreeSnapshot(openedAt)
+  if (!table?.size) return { v: 1, verified: false, pid: peer, unchecked: true }
+  // The asker must have started by `openedAt`: a process given its pid after it exited started later.
+  const { procs, now } = await sessionProcsNow(sid)
   const verdict = proofFor(table, peer, openedAt, procs, (pid) => now.get(pid))
   const parent = table.get(peer)?.ppid
   const args = parent && parent > 1 ? await new Promise<string | null>((resolve) => {
@@ -6581,15 +6628,50 @@ async function gatewayCallerProof(peer: number | undefined, sid: string, openedA
 }
 
 /**
- * One `ps` snapshot of every process with its parent and its start time, so each pid a check reads
- * in it is the process it was then, never only a number; null when `ps` could not tell.
+ * Whether the process on the gateway socket (`peer`) may speak as session `sid`, the one its line
+ * names (caller-proof-core.ts claimedSidVerdict): `session` inside it, `starter` the process that
+ * started this daemon, `outside` any other (a process gone before it was read included), `unread`
+ * when it cannot tell at all (no socket peer reader, no peer, no `ps`). Never throws.
  */
-async function processTreeSnapshot(): Promise<Map<number, ProcRow> | null> {
-  const ps = await proofSlot(() => new Promise<string | null>((resolve) => {
+async function gatewayCallerIdentity(peer: number | undefined, sid: string, openedAt: number): Promise<'session' | 'starter' | 'outside' | 'unread'> {
+  try {
+    if (!peer) return 'unread'
+    const table = await processTreeSnapshot(openedAt)
+    if (!table?.size) return 'unread'
+    const { procs, now } = await sessionProcsNow(sid)
+    return claimedSidVerdict(table, peer, openedAt, procs, (pid) => now.get(pid), process.pid)
+  } catch {
+    return 'unread'
+  }
+}
+
+/** Sids already warned about a caller outside their session: one line per sid, never one per call. */
+const sessionCallersOutside = new Set<string>()
+function warnSessionCallerOutside(sid: string): void {
+  if (sessionCallersOutside.has(sid)) return
+  if (sessionCallersOutside.size >= 256) sessionCallersOutside.clear()
+  sessionCallersOutside.add(sid)
+  logMsg('warn', 'gateway: a process names a session it does not run inside; its calls go as the anonymous caller', { sid })
+}
+
+/** The last process snapshot, and when it was asked for (in flight until it settles). */
+let treeSnapshot: { at: number; table: Promise<Map<number, ProcRow> | null> } | null = null
+
+/**
+ * One `ps` snapshot of every process with its parent and its start time, so each pid a check reads
+ * in it is the process it was then, never only a number; null when `ps` could not tell. A snapshot
+ * asked for at or after `since` (a caller's connection time) is shared: every process on a socket
+ * opened by then is in it, so a burst of calls runs one `ps`.
+ */
+function processTreeSnapshot(since: number): Promise<Map<number, ProcRow> | null> {
+  if (treeSnapshot && treeSnapshot.at >= since) return treeSnapshot.table
+  const at = Date.now()
+  const table = proofSlot(() => new Promise<string | null>((resolve) => {
     execFile('ps', PS_TREE_ARGS, { timeout: 2_000, maxBuffer: 8 * 1024 * 1024, env: { ...daemonEnv, LC_ALL: 'C', LANG: 'C' } },
       (err, stdout) => resolve(err && !stdout ? null : String(stdout ?? '')))
-  }))
-  return ps ? parseProcessTree(ps) : null
+  })).then((ps) => (ps ? parseProcessTree(ps) : null))
+  treeSnapshot = { at, table }
+  return table
 }
 
 /**
@@ -6606,7 +6688,7 @@ async function jobCallerVouched(peer: number | undefined, proc: { pid: number; s
     if (proc.spawned && peer === proc.pid) return 'inside'
     const run = proc.startTime ? { pid: proc.pid, start: proc.startTime } : proc.spawned ? { pid: proc.pid, before: Date.now() } : null
     if (!run) return 'unknown'
-    const table = await processTreeSnapshot()
+    const table = await processTreeSnapshot(openedAt)
     if (!table?.size) return 'unknown'
     const procFs = fs.existsSync('/proc/self/stat')
     const verdict = proofFor(table, peer, openedAt, [run], (pid) => (procFs ? readStartTime(pid) : undefined))
@@ -8943,28 +9025,18 @@ function tickTriggers(): void {
 
 /**
  * The server's set with what a session changed here while its Walnut was away
- * and the server has not taken yet: a trigger paused or deleted here stays off
- * even when a set that still carries it arrives first (the reconnect pushes the
- * set while the journal drains), and one paused and resumed here runs from the
- * def it had. A named Walnut takes only its own holds; the unnamed set takes
- * those of every Walnut that has no set of its own here.
+ * and the server has not taken yet (offline-host-core.ts applyTriggerHolds: a pause,
+ * resume, delete, create or change made here). A named Walnut takes only its own
+ * holds; the unnamed set takes those of every Walnut that has no set of its own here.
  */
 function effectiveTriggerDefs(home: string, defs: TriggerDef[]): TriggerDef[] {
-  const holds = triggerHoldsFor(home)
-  if (holds.size === 0) return defs
-  const out = defs.filter((def) => holds.get(def.id)?.on !== false)
-  for (const [tid, hold] of holds) {
-    if (!hold.on || !hold.def || out.some((def) => def.id === tid)) continue
-    const parsed = validateTriggerDef(hold.def)
-    if (parsed.ok) out.push(parsed.def)
-  }
-  return out
+  return offlineHost.applyTriggerHolds(triggerHoldsFor(home), defs, validateTriggerDef)
 }
 
-function triggerHoldsFor(home: string): Map<string, { on: boolean; def?: unknown }> {
+function triggerHoldsFor(home: string): Map<string, TriggerHold> {
   const byHome = offlineHost.triggerHoldsByHome()
   if (home) return byHome.get(home) ?? new Map()
-  const out = new Map<string, { on: boolean; def?: unknown }>()
+  const out = new Map<string, TriggerHold>()
   for (const [h, holds] of byHome) {
     if (h && triggerScopes.has(h)) continue
     for (const [tid, hold] of holds) out.set(tid, hold)

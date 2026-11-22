@@ -19,6 +19,7 @@ import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types
 import type { TransferJob } from '../../core/transfer/transfer-jobs.js'
 import { isFollower } from '../../core/server-role.js'
 import { missingIsNull } from '../../lib/id-ref.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const transferV1Router = Router()
 
@@ -138,6 +139,7 @@ transferV1Router.post('/tasks/:id/transfer', async (req: Request, res: Response,
       ...(str('message') ? { message: str('message') } : {}),
       keepSource: body.keep_source === true,
       callerSid: callerSid(req),
+      callerUnproven: callerUnprovenOf(req),
     }, transferTask)
     sendJob(res, await jobs.waitForTransferJob(job, waitMs(body.wait_ms, 20_000)))
   } catch (err) {

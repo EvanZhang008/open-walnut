@@ -383,10 +383,15 @@ async function handleToolsCall(
   const { isCallId } = await import('../../lib/op-call-id.js');
   const callId = isCallId(payload.callId) ? payload.callId : undefined;
   const startedAt = Date.now();
+  // The daemon could not prove the session sid (lib/caller-unproven.ts): the sid stays the call's
+  // provenance, and the start-mode ceiling of every self-call reads the caller as anonymous.
+  const { relayedCallerUnproven } = await import('../../lib/caller-unproven.js');
+  const unproven = relayedCallerUnproven(payload);
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
-  callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
-  ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
-  ...(jobToken ? { callerJob: jobToken } : {}),
+callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
+...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
+...(jobToken ? { callerJob: jobToken } : {}),
+...(unproven ? { callerUnproven: true } : {}),
   // A session reads a receipt or capped content (ops/answer.ts); a check script or a plugin job reads the result as it is.
   // A call no session made (a person's terminal on that host, an outside script) reads the result as it is too.
   forAgent: !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid),

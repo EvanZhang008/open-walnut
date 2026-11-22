@@ -6219,7 +6219,8 @@ function cmdFollowerGateway(ws, id, cmd) {
   try { line = JSON.stringify(request); } catch (e) { return sendError(ws, id, 'follower.gateway: the request does not serialize'); }
   var respond = function (resp) { sendOk(ws, id, { response: resp }); };
   gatewayCallerLeft.set(respond, function () { return followerSockets.get(home) !== ws; });
-  handleGatewayLine(line, respond);
+  // true: the token proved the line's sid (it is the one the token was made for).
+  handleGatewayLine(line, respond, true);
 }
 
 // Streams between servers (stream-relay-v1). Twin of daemon-standalone.ts.
@@ -7273,7 +7274,16 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
         relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline);
       };
       if (!offlineHost.openOnline(home, payload)) return relay();
-      var ended = function () { offlineHost.endOnline(home, payload).then(function (r) { if (r) respond(r); else relay(); }); };
+      // Ended with nothing written here: to the leader that answers NOW, never to one whose link
+      // closed meanwhile; with none, this host's own away answer, not the follower again (twin).
+      var ended = function () {
+        offlineHost.endOnline(home, payload).then(function (r) {
+          if (r) return respond(r);
+          var leader = gatewayTargetFor(home);
+          if (leader) return relayToPrimary(leader, home, capability, callerSid, payload, respond, readable, deadline);
+          sendGatewayRequest(capability, callerSid, payload, respond, Object.assign({}, plan, { ownServerAsked: true }));
+        });
+      };
       if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, online: true, fallback: ended }, function (r) { respond(r); })) return;
       return ended();
     }
@@ -7609,8 +7619,9 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond, caller,
   relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false, deadline, caller);
 }
 
-// One parsed NDJSON line from the agent socket → local reject or hub relay.
-function handleGatewayLine(line, respond) {
+// One parsed NDJSON line from the agent socket → local reject or hub relay. tokenProven: a
+// host call entry line, its sid proved by its run's token.
+function handleGatewayLine(line, respond, tokenProven) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }));
   var parsed = parseGatewayLine(line);
   if (parsed.ok !== true) return respond(parsed);
@@ -7661,6 +7672,11 @@ function handleGatewayLine(line, respond) {
   }
   if (callerSid === EXTERNAL_CALLER_SID) {
     logMsg('info', 'gateway: external caller (no session env)', { op: req.op });
+  } else if (tokenProven !== true) {
+    // A socket line naming a session: this twin cannot read the socket's process (the standalone
+    // twin makes one outside the session the anonymous caller), so the sid stands, marked unproven:
+    // a leader that reads it can hold it to the anonymous caller's start-mode ceiling.
+    req.args = Object.assign({}, req.args, { callerUnproven: true });
   }
   sendGatewayRequest(req.op, callerSid, req.args, respond, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
 }
@@ -10239,21 +10255,12 @@ function tickTriggers() {
 }
 
 // The server's set with what a session changed here while its Walnut was away and
-// the server has not taken yet: a trigger paused or deleted here stays off even
-// when a set that still carries it arrives first, and one paused and resumed here
-// runs from the def it had. A named Walnut takes only its own holds; the unnamed
-// set takes those of every Walnut that has no set of its own here. Mirror
-// daemon-standalone.ts.
+// the server has not taken yet (offline-host-core.ts applyTriggerHolds: a pause,
+// resume, delete, create or change made here). A named Walnut takes only its own
+// holds; the unnamed set takes those of every Walnut that has no set of its own
+// here. Mirror daemon-standalone.ts.
 function effectiveTriggerDefs(home, defs) {
-  var holds = triggerHoldsFor(home);
-  if (holds.size === 0) return defs;
-  var out = defs.filter(function (def) { var h = holds.get(def.id); return !h || h.on !== false; });
-  for (const [tid, hold] of holds) {
-    if (!hold.on || !hold.def || out.some(function (def) { return def.id === tid; })) continue;
-    var parsed = triggerCheckCore.validateTriggerDef(hold.def);
-    if (parsed.ok) out.push(parsed.def);
-  }
-  return out;
+  return offlineHost.applyTriggerHolds(triggerHoldsFor(home), defs, triggerCheckCore.validateTriggerDef);
 }
 
 function triggerHoldsFor(home) {

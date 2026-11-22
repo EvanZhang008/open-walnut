@@ -2,7 +2,9 @@
  * When the hosts' read copies are brought up to date (core/host-replica.ts):
  * a few seconds after a note, MEMORY.md / USER.md, or the settings change, and
  * every few minutes for what changes without an event (a skill edited on disk,
- * a note synced in by git). A round that finds nothing changed sends nothing.
+ * a note synced in by git), and a few seconds after a task is kept local or no longer kept
+ * (replication/host-private.ts: its folder and the memory files naming it leave or return), not
+ * at the sweep. A round that finds nothing changed sends nothing.
  * The cloud companion is one of the targets (core/host-replica.ts
  * syncCompanionHostReplica). Primary only: the companion pushes no copies.
  */
@@ -14,7 +16,15 @@ const SWEEP_MS = 5 * 60_000
 const FIRST_ROUND_MS = 20_000
 const SUBSCRIBER = 'host-replica-sync'
 
-export function startHostReplicaSync(): { stop: () => void } {
+/** host-private.ts onHostPrivacyChange, loaded when it starts (this file imports nothing heavy). */
+function watchHostPrivacy(fn: () => void): () => void {
+  let off: (() => void) | null = null
+  let stopped = false
+  void import('./replication/host-private.js').then((m) => { if (!stopped) off = m.onHostPrivacyChange(fn) }).catch(() => {})
+  return () => { stopped = true; off?.() }
+}
+
+export function startHostReplicaSync(deps: { onPrivacyChange?: (fn: () => void) => () => void } = {}): { stop: () => void } {
   if (isFollower()) return { stop: () => {} }
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
@@ -34,6 +44,7 @@ export function startHostReplicaSync(): { stop: () => void } {
     const names = [EventNames.NOTES_UPDATED, EventNames.NOTES_TREE_CHANGED, 'memory:updated', EventNames.CONFIG_CHANGED]
     bus.subscribe(SUBSCRIBER, (event) => { if (names.includes(event.name)) soon() }, { global: true, interest: names })
   })
+  const unwatchPrivacy = (deps.onPrivacyChange ?? watchHostPrivacy)(soon)
   const sweep = setInterval(push, SWEEP_MS)
   sweep.unref?.()
   // The daemons get theirs when they connect; the companion has no connect here.
@@ -45,6 +56,7 @@ export function startHostReplicaSync(): { stop: () => void } {
       if (timer) clearTimeout(timer)
       clearTimeout(first)
       clearInterval(sweep)
+      unwatchPrivacy()
       void import('./event-bus.js').then(({ bus }) => bus.unsubscribe(SUBSCRIBER)).catch(() => {})
     },
   }

@@ -46,3 +46,41 @@ describe('capStartMode: a session starts work at most as loose as itself', () =>
     expect(await capStartMode('sid-bypass', 'bypass', { implied: true })).toBe('bypass');
   });
 });
+
+// A session sid its host's daemon could not prove (src/lib/caller-unproven.ts): an outside caller.
+const { modeChangeRefusal, startCallerOf, UNPROVEN_NOTE } = await import('../../../src/core/sessions/delegated-mode.js');
+describe('capStartMode: an unproven caller is capped as an outside caller', () => {
+  it('a bypass session\'s sid, unproven, gets the default ceiling', async () => {
+    expect(await startCallerOf('sid-bypass', { unproven: true })).toEqual({ kind: 'external' });
+    const err = await capStartMode('sid-bypass', 'bypass', { unproven: true }).catch(e => e);
+    expect(err).toBeInstanceOf(QuickStartError);
+    expect(err.statusCode).toBe(403);
+    expect(err.message).toContain('cannot start a task in bypass mode');
+    expect(err.message).toContain(UNPROVEN_NOTE);
+    await expect(capStartMode('sid-bypass', 'auto', { unproven: true })).rejects.toThrow('cannot start a task');
+  });
+  it('no mode asked takes default, not the claimed session\'s; an implied looser one comes down', async () => {
+    expect(await capStartMode('sid-bypass', undefined, { unproven: true })).toBe('default');
+    expect(await capStartMode('sid-bypass', 'bypass', { implied: true, unproven: true })).toBe('default');
+    expect(await capStartMode('sid-bypass', 'plan', { unproven: true })).toBe('plan');
+  });
+  it('the mark wins over every other word: no sid, a plugin\'s sid, a vouched job', async () => {
+    await expect(capStartMode(undefined, 'bypass', { unproven: true })).rejects.toThrow('cannot start a task');
+    await expect(capStartMode('plugin:demo', 'bypass', { unproven: true })).rejects.toThrow('cannot start a task');
+    const job = { plugin: 'p', job: 'j', host: 'h' };
+    expect(await capStartMode('external', 'bypass', { job })).toBe('bypass');
+    await expect(capStartMode('external', 'bypass', { job, unproven: true })).rejects.toThrow('cannot start a task');
+  });
+  it('without the mark nothing changes', async () => {
+    expect(await capStartMode('sid-bypass', 'bypass', { unproven: false })).toBe('bypass');
+    // A bypass caller naming no mode leaves it unnamed (the start's own default stands).
+    expect(await capStartMode('sid-bypass')).toBeUndefined();
+  });
+  it('a live mode change by an unproven caller is capped the same', async () => {
+    expect(await modeChangeRefusal('sid-bypass', 'bypass')).toBeNull();
+    const refused = await modeChangeRefusal('sid-bypass', 'bypass', { unproven: true });
+    expect(refused).toContain('cannot set a session to bypass mode');
+    expect(await modeChangeRefusal('sid-bypass', 'default', { unproven: true })).toBeNull();
+    expect(await modeChangeRefusal(undefined, 'bypass', { unproven: true })).toContain('cannot set a session to');
+  });
+});

@@ -807,6 +807,9 @@ export interface StartQueueEntry {
   parent_id: string;
   /** The session that asked for the start: the replay runs as its start. */
   caller_sid: string;
+  /** Its host's daemon could not prove `caller_sid` (lib/caller-unproven.ts): the replay's ceiling
+   *  reads an outside caller. An older Walnut ignores it; the stored mode was capped already. */
+  caller_unproven?: true;
   /** The host it waits for now ('__local__' = this Mac); placed again when it starts, it may run on another with room. Older entries have none. */
   host?: string;
   /** Why that host has no room, in words that stay the same while it waits ("all 24 slots taken"). */
@@ -1468,6 +1471,11 @@ export interface ReplicaCopiesConfig {
   conversation_bodies?: boolean;
 }
 
+/** Every kind of Task.sync_hold (its `state`). A path that clears holds names the kinds it owns
+ *  (private-tasks/hold-owner.ts); tests/core/private-tasks/hold-owner.test.ts walks this list. */
+export const SYNC_HOLD_STATES = ['checking', 'private', 'unjudged', 'chosen'] as const;
+export type SyncHoldState = typeof SYNC_HOLD_STATES[number];
+
 /** See Task.sync_hold. */
 export interface SyncHold {
   /** The outside service the task would sync to (its project's source). */
@@ -1475,9 +1483,13 @@ export interface SyncHold {
   /** `checking` = the model is judging it; `private` = the user's words or the model found it
    *  private; `unjudged` = the model could not answer; `chosen` = a person or an agent made it
    *  local (at its create, or by turning a synced task local). */
-  state: 'checking' | 'private' | 'unjudged' | 'chosen';
+  state: SyncHoldState;
   /** What decided: the user's words, the model, a person or an agent. */
   by?: 'words' | 'model' | 'user';
+  /** `project`: made by a project-level step that only stops syncing (a project made local, a
+   *  task moved into another service's project), so that project going local clears it. Absent:
+   *  the task's own hold, which no project change clears (hold-owner.ts). An older Walnut ignores it. */
+  via?: 'project';
   /** One line the user reads on the task. */
   reason?: string;
   /** ISO time of the last change. */

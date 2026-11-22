@@ -1319,8 +1319,10 @@ about, not the words it mentions: work on a privacy feature or a filter passes.
   `200 { "project", "from", "service", "done", "processed": [{ "id", "outside", "children" }],
   "failed": [{ "id", "error" }], "remaining", "holds_cleared", "outcome" }`: a project stops syncing,
   `limit` tasks (default 25) per call. Each synced task is made local as above, its outside copy
-  archived by default; once none syncs, the project becomes Local and the holds aimed at its old
-  service are cleared. Call again while `remaining` > 0. Op `project_make_local`.
+  archived by default; once none syncs, the project becomes Local and the holds this call made to
+  stop the sync are cleared (`holds_cleared`). A task's own hold (private, chosen, unjudged,
+  checking) stays, and keeps the task off every host's copies. Call again while `remaining` > 0.
+  Op `project_make_local`.
 - `POST /api/v1/private-tasks/test { "text", "words"?, "provider"?, "ai"?, "ai_rule"? }` →
   `{ "match": string|null, "invalid": string[], "ai"?: { "pass", "reason" } | { "error" } }`: which
   hard rule a text fails (the given list, else the provider's), and with `ai: true` the AI rule's

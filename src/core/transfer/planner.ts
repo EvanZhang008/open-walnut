@@ -39,6 +39,8 @@ export interface TransferRequest {
    *  session when the source is still in use (source-in-use.ts), where it stays open. */
   keepSource?: boolean;
   callerSid?: string;
+  /** Its host's daemon could not prove `callerSid` (lib/caller-unproven.ts): the ceiling reads an outside caller. */
+  callerUnproven?: boolean;
 }
 
 export interface TransferPlan {

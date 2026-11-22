@@ -14,6 +14,11 @@
  * a job does not need it). So a new start entry that drops the job fails here, as one that drops
  * the caller does.
  *
+ * A session sid its host's daemon could not prove (src/lib/caller-unproven.ts) is an outside caller
+ * to the ceiling. The mark lowers trust, so dropping it is the risky gap (the opposite of the job):
+ * every start call that hands on the caller also hands on `callerUnproven`, and every capStartMode
+ * and modeChangeRefusal call passes `unproven`, or is listed with why no relayed call reaches it.
+ *
  * A host's own Walnut server starts work too while the Mac is away (src/replica: `follower.start`
  * to its daemon). Each file that sends one caps the mode with the Mac's rule (replica/start-ceiling.ts
  * capAwayStart), and no mode read off the request body reaches the daemon but through it.
@@ -86,6 +91,14 @@ const CAPS_WITHOUT_JOB: Record<string, { count: number; why: string }> = {
   'src/core/transfer/transfer.ts': { count: 1, why: 'a transfer\'s mode: a job does not need to loosen it, so it stays capped' },
 }
 
+/** file -> why its start calls hand on the caller but not the unproven mark: no relayed session call reaches them. */
+const HANDS_CALLER_NOT_UNPROVEN: Record<string, { count: number; why: string }> = {
+  'src/commands/direct-commands.ts': { count: 1, why: 'a CLI command typed on this machine: no host relays a call here, so nothing is unproven' },
+}
+
+/** file -> why its capStartMode / modeChangeRefusal calls pass no unproven mark. */
+const CAPS_WITHOUT_UNPROVEN: Record<string, { count: number; why: string }> = {}
+
 /** file -> its `follower.start` calls (a start the host's own server makes while the Mac is away), and how each is capped. */
 const FOLLOWER_STARTS: Record<string, { count: number; why: string }> = {
   'src/replica/away-starts.ts': { count: 1, why: 'task_start and task_create\'s start: capAwayStart before anything else, its mode sent' },
@@ -124,6 +137,8 @@ function callsIn(src: string, names: string[], lines = 3): { call: string; befor
   return calls
 }
 
+const handsOnUnproven = (call: string) => /\bcallerUnproven\b/.test(call)
+const passesUnproven = (call: string) => /\bunproven\s*(?::\s*(?!undefined\b)[\w.]|[,}\s])/.test(call)
 const handsOnCaller = (call: string) => /\bcallerSid\s*(?::\s*(?!undefined\b)[\w.]|[,}\s])/.test(call)
 const capsItself = (text: string, cap: string) => new RegExp(`\\b${cap}\\b`).test(text)
 
@@ -191,6 +206,36 @@ describe('launch-mode ceiling on every start path', () => {
     expect(bare).toEqual(Object.fromEntries(Object.entries(CAPS_WITHOUT_JOB).map(([f, v]) => [f, v.count])))
   })
 
+  it('every start call that hands on the caller hands on the unproven mark too, or is listed with why no relayed call reaches it', () => {
+    const dropped: Record<string, number> = {}
+    for (const { file, src } of files) {
+      const n = callsIn(src, START_FUNCTIONS).filter(({ call }) => handsOnCaller(call) && !handsOnUnproven(call)).length
+      if (n) dropped[file] = n
+    }
+    expect(dropped).toEqual(Object.fromEntries(Object.entries(HANDS_CALLER_NOT_UNPROVEN).map(([f, v]) => [f, v.count])))
+  })
+
+  it('every capStartMode and modeChangeRefusal call passes the unproven mark, or is listed', () => {
+    const bare: Record<string, number> = {}
+    for (const { file, src } of files) {
+      const n = callsIn(src, ['capStartMode', 'modeChangeRefusal'], 0).filter(({ call }) => !passesUnproven(call)).length
+      if (n) bare[file] = n
+    }
+    expect(bare).toEqual(Object.fromEntries(Object.entries(CAPS_WITHOUT_UNPROVEN).map(([f, v]) => [f, v.count])))
+  })
+
+  it('the relay hands the daemon\'s unproven mark to the op, and the start routes read it', () => {
+    const router = files.find(f => f.file === 'src/core/peers/capability-router.ts')!.src
+    expect(router).toMatch(/relayedCallerUnproven\(payload\)/)
+    expect(callsIn(router, ['executeOp']).some(c => /\bcallerUnproven\b/.test(c.call))).toBe(true)
+    const route = files.find(f => f.file === 'src/web/routes/task-v1.ts')!.src
+    const start = callsIn(route, ['startSessionForTask']).map(c => c.call)
+    expect(start[0]).toMatch(/callerUnproven:\s*callerUnprovenOf\(req\)/)
+    // The follower's away starts read it before their actor (replica/start-ceiling.ts).
+    const away = files.find(f => f.file === 'src/replica/start-ceiling.ts')!.src
+    expect(away).toMatch(/if \(callerUnprovenOf\(req\)\) return \{ kind: 'external' \}/)
+  })
+
   it('the routes a job\'s task_create and task_start reach read the vouched job', () => {
     const route = files.find(f => f.file === 'src/web/routes/task-v1.ts')!.src
     expect(route).toMatch(/vouchedPluginJob\(req\)/)
@@ -225,6 +270,6 @@ describe('launch-mode ceiling on every start path', () => {
   })
 
   it('every listed reason says something', () => {
-    for (const { why } of [...Object.values(NOT_A_SESSIONS_START), ...Object.values(SESSION_START_EMITS), ...Object.values(HANDS_CALLER_NOT_JOB), ...Object.values(CAPS_WITHOUT_JOB), ...Object.values(FOLLOWER_STARTS)]) expect(why.length).toBeGreaterThan(20)
+    for (const { why } of [...Object.values(NOT_A_SESSIONS_START), ...Object.values(SESSION_START_EMITS), ...Object.values(HANDS_CALLER_NOT_JOB), ...Object.values(CAPS_WITHOUT_JOB), ...Object.values(HANDS_CALLER_NOT_UNPROVEN), ...Object.values(CAPS_WITHOUT_UNPROVEN), ...Object.values(FOLLOWER_STARTS)]) expect(why.length).toBeGreaterThan(20)
   })
 })

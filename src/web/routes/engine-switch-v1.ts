@@ -18,6 +18,7 @@ import { isFollower } from '../../core/server-role.js'
 import type { SessionEffort, SessionEngine, SessionMode, SessionRecord, Task } from '../../core/types.js'
 import { missingIsNull } from '../../lib/id-ref.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const engineSwitchV1Router = Router()
 
@@ -123,7 +124,7 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       ...(typeof body.effort === 'string' ? { effort: body.effort as SessionEffort } : {}),
       ...(typeof body.permission_mode === 'string' ? { permissionMode: body.permission_mode as SessionMode } : {}),
       ...(typeof body.reason === 'string' && body.reason.trim() ? { reason: body.reason } : {}),
-      callerSid: callerSid(req), source: startRouteSource('api-v1', req.headers),
+      callerSid: callerSid(req), callerUnproven: callerUnprovenOf(req), source: startRouteSource('api-v1', req.headers),
     })
     let timer: ReturnType<typeof setTimeout> | undefined
     const outcome = await Promise.race([

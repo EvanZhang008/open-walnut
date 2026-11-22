@@ -67,7 +67,7 @@ export function socketPeerPidReady(): boolean {
 }
 
 /** The pid on the other end of the unix socket `fd`, or undefined when it cannot be read. */
-export function socketPeerPid(fd: number | undefined): number | undefined {
-  if (!socketPeerPidReady() || !loaded || fd === undefined) return undefined
+export function socketPeerPid(fd: number | null | undefined): number | undefined {
+  if (!socketPeerPidReady() || !loaded || fd === undefined || fd === null) return undefined
   try { return loaded(fd) } catch { return undefined }
 }

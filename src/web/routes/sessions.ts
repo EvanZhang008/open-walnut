@@ -135,6 +135,7 @@ function logMessageOrdering(phase: string, sessionId: string, messages: SessionH
 // Liveness correction + hostname resolution moved to
 // core/sessions/session-enrich.ts (shared with the /api/v1 mobile routes).
 import { enrichWithLiveStatus, enrichWithHostnames } from '../../core/sessions/session-enrich.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const sessionsRouter = Router()
 
@@ -578,11 +579,13 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // A session's start runs at most as loose as that session (delegated-mode.ts): a looser mode
     // it names is refused, a looser project default comes down to its mode.
     const startedBySid = req.get('x-walnut-caller-sid')?.trim() || undefined
-    if (startedBySid) {
+    // Its host could not prove that sid (lib/caller-unproven.ts): capped as an outside caller.
+    const startedUnproven = callerUnprovenOf(req)
+    if (startedBySid || startedUnproven) {
       const { capStartMode } = await import('../../core/sessions/delegated-mode.js')
       try {
-        const capped = await capStartMode(startedBySid, mode || undefined)
-        launchMode = !mode && launchMode ? await capStartMode(startedBySid, launchMode, { implied: true }) : capped
+        const capped = await capStartMode(startedBySid, mode || undefined, { unproven: startedUnproven })
+        launchMode = !mode && launchMode ? await capStartMode(startedBySid, launchMode, { implied: true, unproven: startedUnproven }) : capped
       } catch (err) {
         if (err instanceof QuickStartError) { res.status(err.statusCode).json({ error: err.message }); return }
         throw err
@@ -783,7 +786,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         // The person picked this folder in the draft (its folder picker), not a folder the client
         // filled in: only such a folder holds a VP or lead outside its own directory (org-own-folder.ts).
         ...((req.body as { cwdChosen?: unknown }).cwdChosen === true ? { cwdChosen: true } : {}),
-        ...(startedBySid ? { callerSid: startedBySid, ...(mode ? {} : { modeImplied: true }) } : {}),
+        ...(startedBySid || startedUnproven ? { callerSid: startedBySid, callerUnproven: startedUnproven, ...(mode ? {} : { modeImplied: true }) } : {}),
         // Hints the first message asks for (the side panel's object-context), beside the words.
         ...(requestedHints ? { hints: requestedHints } : {}),
         ...(inOwnTaskDir ? { ownTaskDir: true } : {}),
@@ -860,7 +863,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
           ...(launchEffort ? { effort: launchEffort } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), engine_decided: true, ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
           source: startRouteSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
-          ...(startedBySid ? { caller_sid: startedBySid } : {}),
+          ...(startedBySid ? { caller_sid: startedBySid } : {}), ...(startedUnproven ? { caller_unproven: true as const } : {}),
         })
         fromProject?.used(answer)
         res.json(answer)
@@ -1419,7 +1422,7 @@ sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response) 
   const { id, value } = req.body as { id?: unknown; value?: unknown }
   try {
     const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-    const refused = id === 'mode' ? await modeChangeRefusal(req.get('x-walnut-caller-sid'), value) : null
+    const refused = id === 'mode' ? await modeChangeRefusal(req.get('x-walnut-caller-sid'), value, { unproven: callerUnprovenOf(req) }) : null
     if (refused) { res.status(403).json({ error: refused, code: 'mode_above_caller' }); return }
     res.json(await applySessionControl(sessionId, id, value))
   } catch (err) {
@@ -1446,7 +1449,7 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     // identities and must never select or implicitly create a durable record.
     try {
       const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-      const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), (req.body as { mode?: unknown } | undefined)?.mode)
+      const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), (req.body as { mode?: unknown } | undefined)?.mode, { unproven: callerUnprovenOf(req) })
       if (refused) { res.status(403).json({ error: refused, code: 'mode_above_caller' }); return }
       const session = await patchSession(sessionId, (req.body ?? {}) as Record<string, unknown>)
       log.web.info('session updated via REST', { sessionId, fields: Object.keys(req.body ?? {}) })
@@ -3134,10 +3137,11 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     // A session's plan execution runs at most as loose as that session (delegated-mode.ts): a
     // looser mode it names is refused, the Bypass default comes down to its mode.
     const execBySid = req.get('x-walnut-caller-sid')?.trim()
-    if (execBySid) {
+    const execUnproven = callerUnprovenOf(req)
+    if (execBySid || execUnproven) {
       const { capStartMode } = await import('../../core/sessions/delegated-mode.js')
       try {
-        execMode = (mode ? await capStartMode(execBySid, mode) : await capStartMode(execBySid, execMode, { implied: true })) ?? execMode
+        execMode = (mode ? await capStartMode(execBySid, mode, { unproven: execUnproven }) : await capStartMode(execBySid, execMode, { implied: true, unproven: execUnproven })) ?? execMode
       } catch (err) {
         if (err instanceof QuickStartError) { res.status(err.statusCode).json({ error: err.message, code: 'mode_above_caller' }); return }
         throw err

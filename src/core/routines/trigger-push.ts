@@ -18,7 +18,8 @@
  * A check runs on its host whoever owns it, but what it delivers to a task kept local
  * (replication/host-private.ts) stays off a host none of that task's sessions run on: the
  * def goes without its `deliver` (the target and the prompt), and the fire waits for the
- * server. A clock routine is placed where its target's session runs, so it keeps its own.
+ * server. A clock routine of such a task stays off that host too (clock-kept.ts); one whose
+ * target's session runs there keeps its own.
  */
 
 import { WALNUT_HOME } from '../../constants.js';
@@ -66,6 +67,17 @@ export function triggerDefOf(job: CronJob, host: string): TriggerDef | null {
   if ((job.check.host || '__local__') !== host) return null;
   if (job.schedule.kind !== 'every') return null;
   if (cloudModeSkipsJob(job)) return null;
+  return checkDefOf(job as CheckJob);
+}
+
+/** A routine with a check on an interval: what a wire def is made of. */
+export type CheckJob = CronJob & { check: NonNullable<CronJob['check']>; schedule: Extract<CronJob['schedule'], { kind: 'every' }> };
+
+/**
+ * A check routine's wire def, whoever asks: the push above, and a host's follower arming a
+ * trigger it changed while the Mac is away (replica/away-trigger-update.ts).
+ */
+export function checkDefOf(job: CheckJob): TriggerDef {
   // An older daemon drops the field (validateTriggerDef keeps known keys only).
   const deliver = deliverSpecOf(job);
   const def: TriggerDef = {
@@ -162,7 +174,7 @@ export async function compileTriggersForHost(
     const seen = alias === host ? jobs : await service.list({ includeDisabled: true, recompute: false });
     // A refusal is forgotten only for the alias whose link is new; the daemon of the others did not change.
     placed.push(await placeClocksForHost(service, alias, seen, opts.clock ?? 'unknown', undefined, {
-      fresh: opts.fresh === true && alias === host, hostStart: opts.hostStart === true,
+      fresh: opts.fresh === true && alias === host, hostStart: opts.hostStart === true, keptOff,
     }));
   }
   if (placed.length === 1) {

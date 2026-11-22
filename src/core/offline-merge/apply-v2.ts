@@ -48,14 +48,17 @@ export const APPLIED_V2_KINDS = ['task-fields', 'task-create', 'task-move', 'boa
  * `routine-run` (a `session` record with `routine` is adopted as a routine's run, not an ask:
  * apply-session.ts; a host starts one only for a Mac that says so), plus `trigger-create` (a
  * `trigger_create` op record is replayed under the id the host gave it: trigger-api.ts; a host
- * arms one while this Mac is away only for a Mac that says so), plus `held-op` (a `task_send`,
+ * arms one while this Mac is away only for a Mac that says so), plus `trigger-update` (a `trigger_update`
+ * op record is replayed through the op with only the fields the host changed, so a field this Mac changed
+ * meanwhile and the host did not stays; a host changes one of its triggers while away only for a Mac that
+ * says so: replica/away-trigger-update.ts), plus `held-op` (a `task_send`,
  * `session_send` or `agent_memory_write` op record a host held while nothing could take it is
  * replayed once through the op: offline-handover.ts HELD_OPS), plus `plugin-job-actor` (a record a
  * plugin's job made on its host, its actor's rules in journal-actor.ts) and `task-start` (a `session`
  * record with `run: 'task'` is adopted as a plain session of a task the host's journal created:
  * apply-session.ts; a host starts one only for a Mac that says so).
  */
-export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run', 'trigger-create', 'held-op', 'plugin-job-actor', 'task-start'];
+export const MAC_DRAINS = [...APPLIED_V2_KINDS, 'device-actor', 'routine-run', 'trigger-create', 'trigger-update', 'held-op', 'plugin-job-actor', 'task-start'];
 
 export type { JournalActorLike };
 

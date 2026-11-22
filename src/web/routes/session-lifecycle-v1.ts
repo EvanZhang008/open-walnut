@@ -39,6 +39,7 @@ import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const sessionLifecycleV1Router = Router()
 
@@ -262,7 +263,7 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
     const body = (req.body ?? {}) as Record<string, unknown>
     // A session sets a mode at most as loose as its own (delegated-mode.ts), before any relay.
     const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-    const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), body.mode)
+    const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), body.mode, { unproven: callerUnprovenOf(req) })
     if (refused) { sendError(res, 403, 'mode_above_caller', refused); return }
     const patch = {
       ...(body.title !== undefined ? { title: body.title } : {}),

@@ -169,7 +169,8 @@ privateTasksV1Router.post('/projects/:name/make-local', route(async (req, res) =
     // and completing a completed item changes nothing.
     const action = outside
     try {
-      const made = await tm.makeTaskLocal(t.id, { state: 'chosen', by: 'user', at, reason: `Its project stopped syncing to ${service}` }, action)
+      // via 'project': the hold only stops the sync, so the project turning Local clears it (hold-owner.ts).
+      const made = await tm.makeTaskLocal(t.id, { state: 'chosen', by: 'user', via: 'project', at, reason: `Its project stopped syncing to ${service}` }, action)
       if (!made.outside.done) failed.push({ id: t.id, error: `local now, but its copy in ${service} was not closed: ${made.outside.error}` })
       processed.push({ id: t.id, outside: made.outside.done ? action : 'unchanged', children: made.children.length })
     } catch (err) {

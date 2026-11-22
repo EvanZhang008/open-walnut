@@ -183,7 +183,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   trigger_pause: host('a trigger this host runs: paused here and journaled', TRIGGERS),
   trigger_resume: host('a trigger paused here: resumed and journaled', TRIGGERS),
   trigger_delete: host('a trigger this host runs: removed here and journaled', TRIGGERS),
-  trigger_update: leader('any change but on/off needs the leader (trigger_update)', TRIGGERS),
+  trigger_update: host('a trigger this host runs or holds in its copy: merged onto the copy\'s whole row with the leader\'s merge, armed here and journaled as the fields it changed; a host move, a template, the task it wakes or a prompt over 32 KB needs the leader for that field', 'src/replica/away-trigger-update.ts'),
   trigger_templates: read(),
   trigger_template_check: macWrite('A template check'),
 

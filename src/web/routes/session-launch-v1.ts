@@ -65,6 +65,7 @@ import { QuickStartError } from '../../core/sessions/quick-start.js'
 import { log } from '../../logging/index.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
+import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const sessionLaunchV1Router = Router()
 
@@ -410,7 +411,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
           // the session core, so the generic local path cannot regress here.
           const result = await performMobileLaunch(
             { ...input, host: launchHostForCore(input.host) }, startRouteSource('cloud-exec-launch', req.headers),
-            { callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined },
+            { callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined, callerUnproven: callerUnprovenOf(req) },
           )
           // Seed id→host so this box's OWN subsequent stream/send/transcript
           // calls resolve to the cloud host instead of missing the (Mac-owned)
@@ -448,7 +449,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
 
     try {
       const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
-      const result = await performMobileLaunch(input, startRouteSource('mobile-launch', req.headers), callerSid ? { callerSid } : {})
+      const result = await performMobileLaunch(input, startRouteSource('mobile-launch', req.headers), { callerSid, callerUnproven: callerUnprovenOf(req) })
       res.status(201).json(result)
     } catch (err) {
       if (err instanceof QuickStartError) {
