@@ -123,11 +123,13 @@ test('task ids in a reply render as task pills and open the task', async ({ page
   await expect(codeLink).not.toHaveAttribute('data-user-state', /.*/)
   const dot = await donePills.nth(0).evaluate((a) => {
     const st = getComputedStyle(a, '::before')
-    return { content: st.content, w: st.width, bg: st.backgroundColor }
+    return { content: st.content, w: st.width, bg: st.backgroundColor, mask: st.maskImage || st.webkitMaskImage }
   })
   expect(dot.content).not.toBe('none')
-  // The shared 8px status dot (styles/task-state.css).
-  expect(dot.w).toBe('8px')
+  // The shared status icon at its small-text size, drawn as the icon's own shape (a mask), never a
+  // dot of its own (styles/task-state.css, components/common/task-state-shapes.ts).
+  expect(dot.w).toBe('12px')
+  expect(dot.mask).toMatch(/^url\(/)
   expect(pageErrors).toEqual([])
 
   await reply.scrollIntoViewIfNeeded()
