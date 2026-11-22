@@ -130,6 +130,10 @@ const LINK_WRITERS = /\b(linkSession|linkSessionSlot|linkSessionToTask|addSessio
 const LINKING_FILES = [
   'src/core/ai/ai-agent.ts',
   'src/core/offline-merge/apply-session.ts',
+  // A host that runs its sessions: its port writes their rows (createSessionRecord, naming the task)
+  // and refuses the task links, which the leader makes from the facts (leader-tasks.ts).
+  'src/core/session-channel/host-port.ts',
+  'src/core/session-channel/leader-tasks.ts',
   'src/core/sessions/adopt-search-session.ts',
   'src/core/sessions/cloud-chat-lane.ts',
   'src/core/sessions/engine-switch-resume.ts',

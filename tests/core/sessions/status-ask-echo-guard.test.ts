@@ -23,6 +23,7 @@ const ASKERS: Record<string, string> = {
   'src/core/session-hooks/builtins.ts': 'turn-end summary and new-session title: driven by turn-end and launch events, not by a record change',
   'src/core/diff-summary.ts': 'asked through the sessions route when a person opens a diff summary',
   'src/providers/acp-session.ts': 'the ACP transport\'s own method (an ACP engine is never asked by the schedulers above)',
+  'src/providers/remote-judged-session.ts': 'the leader\'s proxy of a session its host runs: forwards an ask of the callers above to the host\'s runner and asks nothing itself',
   // Same name, not a side question.
   'src/core/sessions/session-extras.ts': 'a person\'s own side question (the session menu)',
   'src/providers/claude-code-session.ts': 'the transport itself',

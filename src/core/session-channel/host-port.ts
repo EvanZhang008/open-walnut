@@ -85,7 +85,7 @@ export interface OwnApi {
  * the caller session (lib/self-api-root.ts, replica/write-actor.ts). Null before the server listens.
  */
 export async function selfOwnApi(): Promise<OwnApi | null> {
-  const [{ getSelfApiRoot, getSelfCallToken }, { CALLER_SID_HEADER }] = await Promise.all([
+  const [{ demoApiHeaders, getSelfApiRoot, getSelfCallToken }, { CALLER_SID_HEADER }] = await Promise.all([
     import('../../lib/self-api-root.js'), import('../../ops/executor.js'),
   ])
   return {
@@ -93,10 +93,11 @@ export async function selfOwnApi(): Promise<OwnApi | null> {
       const root = getSelfApiRoot()
       const token = getSelfCallToken()
       if (!root || !token) throw new NeedsLeaderError('no_self_api', 'this host\'s server cannot call its own API yet')
-      const res = await fetch(root + path, {
+      const url = root + path
+      const res = await fetch(url, {
         method,
         headers: {
-          authorization: `Bearer ${token}`, 'content-type': 'application/json',
+          authorization: `Bearer ${token}`, 'content-type': 'application/json', ...demoApiHeaders(url),
           ...(opts.sid ? { [CALLER_SID_HEADER]: opts.sid } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),

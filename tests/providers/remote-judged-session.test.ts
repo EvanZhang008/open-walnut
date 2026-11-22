@@ -44,6 +44,10 @@ describe('RemoteJudgedSession', () => {
     expect(p.mode).toBe('plan')
     expect(p.teamActive).toBe(true)
     expect(p.workOutlivesTurn).toBe(true)
+    // The runner's rule: an armed /loop alone keeps the work list, not the turn open.
+    noteLiveState('s1', { turnGen: 4, processStatus: 'idle', outliving: ['loop'] })
+    expect(p.outlivingWork).toEqual(['loop'])
+    expect(p.workOutlivesTurn).toBe(false)
     noteLiveState('s1', { turnGen: 5, processStatus: 'idle' })
     expect(p.turnGen).toBe(5)
     expect(p.processStatus).toBe('idle')

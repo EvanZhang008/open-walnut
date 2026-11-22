@@ -64,7 +64,8 @@ export class RemoteJudgedSession {
   get teamActive(): boolean { return this.state.teamActive === true }
   get cronArmed(): boolean { return this.state.cronArmed === true }
   get outlivingWork(): string[] { return (this.state.outliving ?? []).map(String) }
-  get workOutlivesTurn(): boolean { return (this.state.outliving?.length ?? 0) > 0 }
+  /** The runner's rule (claude-code-session.ts): a /loop alone is no work that outlives the turn. */
+  get workOutlivesTurn(): boolean { return this.outlivingWork.some((s) => s !== 'loop') }
   get promptCache(): unknown { return this.state.promptCache }
   get controlRequestsPending(): number { return this.state.controlRequestsPending ?? 0 }
   get lastClaudeOutputAt(): number { return this.state.timestamps?.lastClaudeOutputAt ?? 0 }

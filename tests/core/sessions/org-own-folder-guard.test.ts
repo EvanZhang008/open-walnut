@@ -28,6 +28,7 @@ const KNOWN: Record<string, { count: number; how: string }> = {
   'src/core/sessions/cloud-chat-lane.ts': { count: 1, how: 'the companion\'s chat lane has no task' },
   'src/core/ai/ai-agent.ts': { count: 1, how: 'a one-shot agent call has no task' },
   'src/core/subagents/on-host.ts': { count: 1, how: 'a subagent\'s lane session has no task: it runs in its own copy of the caller\'s work' },
+  'src/core/session-channel/host-port.ts': { count: 2, how: 'the session port of a host that runs its sessions: passes the runner\'s own call through (the callers above decided the folder), only stamping the host\'s key' },
   'src/core/offline-merge/apply-session.ts': { count: 2, how: 'records a session that already ran on a host while the Mac was away; its next spawn moves a VP or lead' },
 }
 

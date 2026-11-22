@@ -61,9 +61,10 @@ describe('Demo op generation headers', () => {
     walk(root)
     expect(files.sort()).toEqual([
       'commands/trigger-check.ts', 'core/plugins/plugin-control-relay.ts', 'core/plugins/server-api.ts',
-      'ops/executor.ts', 'web/v1-forward/target.ts',
+      'core/session-channel/host-port.ts', 'ops/executor.ts', 'web/v1-forward/target.ts',
     ])
-    for (const file of ['commands/trigger-check.ts', 'core/plugins/plugin-control-relay.ts', 'ops/executor.ts']) {
+    // host-port: a host's session port writes a task through this server's own API, the Demo's included.
+    for (const file of ['commands/trigger-check.ts', 'core/plugins/plugin-control-relay.ts', 'core/session-channel/host-port.ts', 'ops/executor.ts']) {
       expect(fs.readFileSync(path.join(root, file), 'utf8'), file).toContain('...demoApiHeaders(url)')
     }
     // server-api is a plugin's external HTTP client; v1-forward is a remote bridge, disabled in Demo.
