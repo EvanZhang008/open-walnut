@@ -9,6 +9,7 @@ import { MailAskDrawer } from './MailAskDrawer';
 import { MailGroupsLearnHost } from './MailGroupsLearnHost';
 import { MailPaneSplitter } from './MailPaneSplitter';
 import { MailReader } from './MailReader';
+import { blankAccountsRoom, useRowStaysPut } from './mail-reader-room';
 import { ComposerPanel } from './compose/ComposerPanel';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { openMailDeepLink, refreshMailAll } from './mail-actions';
@@ -29,8 +30,9 @@ import './mail-compose.css';
  * so every UI change would need a committed bundle. It is gated with `requiresPlugin`, so the
  * row disappears when the plugin is off.
  *
- * Layout: three panes side by side, one pane at a time below 900px (the panes stay mounted, so
- * a drill down and back does not refetch or lose the reader's opted-in images).
+ * Layout: three panes side by side, one pane at a time below 1100px (the panes stay mounted, so
+ * a drill down and back does not refetch or lose the reader's opted-in images). With nothing open
+ * the reader is a narrow hint and the list takes its room (mail-reader-room.ts).
  */
 
 /**
@@ -99,7 +101,10 @@ function usePaneWidths() {
     const column = box?.querySelector<HTMLElement>(`:scope > .${PANE_CLASS[id]}`);
     const other = box?.querySelector<HTMLElement>(`:scope > .${PANE_CLASS[id === 'accounts' ? 'list' : 'accounts']}`);
     if (!box || !column || !other) return null;
-    return { width: column.getBoundingClientRect().width, room: box.clientWidth - other.getBoundingClientRect().width };
+    const width = column.getBoundingClientRect().width;
+    // With nothing to read the list is the flexible column, so its width on screen is no bound.
+    if (id === 'accounts' && box.dataset.reader === 'blank') return { width, room: blankAccountsRoom(box.clientWidth) };
+    return { width, room: box.clientWidth - other.getBoundingClientRect().width };
   }, []);
   const live = useCallback((id: MailPaneId, width: number) => setWidths((now) => ({ ...now, [id]: width })), []);
   const done = useCallback((id: MailPaneId, width: number) => {
@@ -126,6 +131,10 @@ export function MailApp(props: AppComponentProps) {
   // doing that before the console has its account list would race `ensureSelection`, which would then
   // move the human off the message they followed a link to.
   useMailDeepLink(props.search, mail.loaded && mail.accounts.length > 0);
+  // Something in the reader slot. With nothing there the list takes the room and the reader is a narrow
+  // hint (mail.css, `data-reader`); the dragged list width comes back the moment something opens.
+  const reading = !!(mail.open || mail.composer || mail.ask);
+  useRowStaysPut(panes.consoleRef, reading, !narrow);
 
   const openAdd = useCallback(() => setAdding(true), []);
   const closeAdd = useCallback(() => setAdding(false), []);
@@ -206,9 +215,17 @@ export function MailApp(props: AppComponentProps) {
 
   return (
     <div className="mail-app mail-app-panes" data-testid="mail-app">
-      <div className="mail-console" data-narrow-pane={pane} ref={panes.consoleRef} style={narrow ? undefined : paneStyle(panes.widths)}>
-        {/* First in the DOM so the reader stays `:last-child`; absolutely placed, so no grid cell. */}
-        {!narrow && (['accounts', 'list'] as MailPaneId[]).map((id) => (
+      <div
+        className="mail-console"
+        data-narrow-pane={pane}
+        {...(narrow ? {} : { 'data-reader': reading ? 'open' : 'blank' })}
+        ref={panes.consoleRef}
+        style={narrow ? undefined : paneStyle(panes.widths)}
+      >
+        {/* First in the DOM so the reader stays `:last-child`; absolutely placed, so no grid cell. The
+            list's handle only while something is open: with nothing to read the list fills the room,
+            and a drag there would move nothing on screen. */}
+        {!narrow && (reading ? ['accounts', 'list'] as MailPaneId[] : ['accounts'] as MailPaneId[]).map((id) => (
           <MailPaneSplitter
             key={id}
             id={id}

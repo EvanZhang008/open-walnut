@@ -13,7 +13,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import {
-  ALL_INBOXES, MARINA, MARINA_INBOX, deliver, fileRules, getGroups, groupLine, openGroupMenu, openGrouped,
+  ALL_INBOXES, MARINA, MARINA_INBOX, deliver, fileRules, getGroups, groupLine, openGroupLine, openGroupMenu, openGrouped,
   startGroupsFixture, statusLine, waitLabeled,
 } from './mail-grouping-helpers'
 import { shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
@@ -78,13 +78,21 @@ test.describe('resizable columns', () => {
     const list = '.mail-console > .mail-list-pane'
     const folders = '.mail-console > .mail-accounts-pane'
     const reader = '.mail-console > :last-child'
-    const start = await widthOf(page, list)
-    expect(Math.abs(start - await defaultListWidth(page))).toBeLessThanOrEqual(1)
+    // Nothing open: the list takes the room, the reader is a 240px hint and the list has no handle
+    // (2026-11-22: the default widths below apply while something is open).
+    expect(await widthOf(page, reader)).toBe(240)
+    await expect(page.getByTestId('mail-splitter-list')).toHaveCount(0)
 
     // Open a mail first: the reader's body is an iframe, and the drag must survive the pointer over it.
-    await groupLine(page, (await getGroups(fixture, ALL_INBOXES)).groups[0].id).getByTestId('mail-group-name').click()
-    await page.locator('.mail-group-kids [data-testid="mail-row"]').first().click()
-    await expect(page.getByTestId('mail-reader')).toBeVisible()
+    await openGroupLine(page, (await getGroups(fixture, ALL_INBOXES)).groups[0].id)
+    const clicked = page.locator('.mail-group-kids [data-testid="mail-row"]').first()
+    const clickedTop = (await clicked.boundingBox())!.y
+    await clicked.click()
+    await expect(page.getByTestId('mail-reader')).toHaveAttribute('data-message-id', /.+/)
+    // The list narrowed under the pointer, and the clicked row stayed where it was (mail-reader-room.ts).
+    expect(Math.abs((await clicked.boundingBox())!.y - clickedTop)).toBeLessThanOrEqual(1)
+    const start = await widthOf(page, list)
+    expect(Math.abs(start - await defaultListWidth(page))).toBeLessThanOrEqual(1)
     await drag(page, 'mail-splitter-list', 150)
     await expect.poll(() => widthOf(page, list)).toBe(start + 150)
     expect(await stored(page)).toEqual({ list: start + 150 })
@@ -110,9 +118,15 @@ test.describe('resizable columns', () => {
     expect(await compose.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     await expect(compose).toHaveAccessibleName('New message')
 
-    // Remembered across a reload.
+    // Remembered across a reload: kept while nothing is open (the list fills the room then) and
+    // back the moment a mail opens.
     await page.reload()
     await expect(page.getByTestId('mail-grouped')).toBeVisible({ timeout: 60_000 })
+    expect(await widthOf(page, folders)).toBe(168)
+    await expect.poll(() => widthOf(page, reader)).toBe(240)
+    expect(await stored(page)).toEqual({ list: start + 150 - 32, accounts: 168 })
+    await openGroupLine(page, (await getGroups(fixture, ALL_INBOXES)).groups[0].id)
+    await page.locator('.mail-group-kids [data-testid="mail-row"]').first().click()
     await expect.poll(() => widthOf(page, list)).toBe(start + 150 - 32)
     expect(await widthOf(page, folders)).toBe(168)
 

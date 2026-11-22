@@ -37,7 +37,6 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
   const navigate = useNavigate();
   // Every row says where its message went or why it went nowhere (the user's ask), on one line.
   const view = outgoing ? outgoingRouteView(outgoing) : mailRouteView(route, unavailable, routingArea, routingCoverage);
-  const Tag = surface === 'row' ? 'span' : 'p';
   const go = (link: MailRouteLink) => {
     if (link.kind === 'letter') { openLetterAnywhere(link.id); return; }
     if (link.kind === 'task') {
@@ -63,71 +62,97 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       })
       .catch(() => navigate('/org'));
   };
-  // A row's words are metadata, one line, cut first (text-fit.css); the reader shows them whole.
-  const fit = surface === 'row' ? ' wn-meta' : '';
-  const line = (
-    <Tag
-      className={`mail-route mail-route-${surface}`}
-      data-testid={surface === 'row' ? 'mail-row-route' : 'mail-reader-route'}
-      data-route-status={view.status}
-      data-route-area={route?.areaId}
-      {...(view.link?.kind === 'letter' ? { 'data-route-letter': view.link.id } : {})}
-      {...(route?.target ? {
-        'data-target-kind': route.target.kind,
-        'data-target-id': route.target.id,
-        'data-target-available': String(!!view.link),
-      } : {})}
+  const row = surface === 'row';
+  const lead = view.link?.kind === 'letter' ? (
+    <button
+      type="button"
+      className="mail-route-link mail-route-lead"
+      data-testid={`${row ? 'mail-row' : 'mail-reader'}-route-letter`}
       title={view.title}
+      aria-label="Open the letter"
+      onPointerDown={stop}
+      onMouseDown={stop}
+      onKeyDown={stopActivation}
+      onClick={(event) => { event.stopPropagation(); event.preventDefault(); go(view.link!); }}
     >
-      <span className="mail-route-mark" data-route-status={view.status} {...(view.link?.kind === 'letter' ? { 'data-route-letter': '' } : {})} aria-hidden="true" />
-      {view.link?.kind === 'letter' ? (
-        <button
-          type="button"
-          className="mail-route-link mail-route-lead"
-          data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-letter`}
-          title={view.title}
-          aria-label="Open the letter"
-          onPointerDown={stop}
-          onMouseDown={stop}
-          onKeyDown={stopActivation}
-          onClick={(event) => { event.stopPropagation(); event.preventDefault(); go(view.link!); }}
-        >
-          {view.lead}
-        </button>
-      ) : <span className="mail-route-lead">{view.lead}</span>}
-      {view.name && ' '}
-      {view.name && (view.link ? (
-        <button
-          type="button"
-          className={`mail-route-link${fit}`}
-          data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-link`}
-          title={view.title}
-          aria-label={view.link.kind === 'vp' ? `Open ${view.name} in Org` : view.link.kind === 'letter' ? 'Open the letter' : `Open task ${view.name}`}
-          onPointerDown={stop}
-          onMouseDown={stop}
-          onKeyDown={stopActivation}
-          onClick={(event) => {
-            event.stopPropagation();
-            event.preventDefault();
-            go(view.link!);
-          }}
-        >
-          {view.name}
-        </button>
-      ) : (
-        <span className={`mail-route-name${fit}`} data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-name`}>
-          {view.name}
+      {view.lead}
+    </button>
+  ) : <span className="mail-route-lead">{view.lead}</span>;
+  // The target's name tells one routed mail from the next and is what the person clicks, so on a row
+  // it is a title (text-fit.css .wn-title: wraps, never cut); the reader shows every word anyway.
+  const name = view.name ? (view.link ? (
+    <button
+      type="button"
+      className={`mail-route-link${row ? ' wn-title' : ''}`}
+      data-testid={`${row ? 'mail-row' : 'mail-reader'}-route-link`}
+      title={view.title}
+      aria-label={view.link.kind === 'vp' ? `Open ${view.name} in Org` : view.link.kind === 'letter' ? 'Open the letter' : `Open task ${view.name}`}
+      onPointerDown={stop}
+      onMouseDown={stop}
+      onKeyDown={stopActivation}
+      onClick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        go(view.link!);
+      }}
+    >
+      {view.name}
+    </button>
+  ) : (
+    <span className={`mail-route-name${row ? ' wn-title' : ''}`} data-testid={`${row ? 'mail-row' : 'mail-reader'}-route-name`}>
+      {view.name}
+    </span>
+  )) : null;
+  const attrs = {
+    'data-testid': row ? 'mail-row-route' : 'mail-reader-route',
+    'data-route-status': view.status,
+    'data-route-area': route?.areaId,
+    ...(view.link?.kind === 'letter' ? { 'data-route-letter': view.link.id } : {}),
+    ...(route?.target ? {
+      'data-target-kind': route.target.kind,
+      'data-target-id': route.target.id,
+      'data-target-available': String(!!view.link),
+    } : {}),
+    title: view.title,
+  };
+  const mark = <span className="mail-route-mark" data-route-status={view.status} {...(view.link?.kind === 'letter' ? { 'data-route-letter': '' } : {})} aria-hidden="true" />;
+  // Same words on both surfaces, laid out twice. A row: the mark and the lead, then the name and the
+  // router's reason in one column, the reason beside the name while it has room and on the next line
+  // when not, one line cut first (.wn-meta). The reader: the reason on a line of its own, in full.
+  const line = row ? (
+    <span className="mail-route mail-route-row" {...attrs}>
+      {mark}
+      {lead}
+      {(name || view.detail) && ' '}
+      {(name || view.detail) && (
+        <span className="mail-route-rest">
+          {name}
+          {name && view.detail && ' '}
+          {view.detail && (
+            <span className="mail-route-why wn-meta">
+              <span className="mail-route-sep" aria-hidden="true">·</span>
+              {' '}
+              <span className="mail-route-detail">{view.detail}</span>
+            </span>
+          )}
         </span>
-      ))}
+      )}
+    </span>
+  ) : (
+    <p className="mail-route mail-route-reader" {...attrs}>
+      {mark}
+      {lead}
+      {name && ' '}
+      {name}
       {view.detail && (
         <>
           {' '}
           <span className="mail-route-sep" aria-hidden="true">·</span>
           {' '}
-          <span className={`mail-route-detail${fit}`}>{view.detail}</span>
+          <span className="mail-route-detail">{view.detail}</span>
         </>
       )}
-    </Tag>
+    </p>
   );
   // Beside the line, never inside it: the row and the reader line keep the same words.
   const next = action ? (

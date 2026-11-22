@@ -46,6 +46,15 @@
   grid-template-columns: var(--mail-accounts-col) var(--mail-list-col) minmax(0, 1fr);
 }
 
+/* Nothing to read (no message, composer or Ask drawer; `data-reader` is set by MailApp above the
+   drill breakpoint only): the reader is a narrow hint and the list takes the rest. An empty reader
+   kept 380px or more while the list beside it wrapped every subject and cut every route target
+   (2026-11-22 review). The dragged list width is untouched and returns when something opens;
+   mail-reader-room.ts keeps the clicked row where it was through that change. */
+.mail-console[data-reader='blank'] {
+  grid-template-columns: var(--mail-accounts-col) minmax(0, 1fr) 240px;
+}
+
 /* The reader is the pane that needs the room, and the window also holds the app's sidebar, so the
    two left columns give some back before the drill breakpoint takes over (see MailApp.tsx). */
 @media (max-width: 1360px) {

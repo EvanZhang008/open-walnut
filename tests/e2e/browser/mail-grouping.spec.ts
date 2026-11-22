@@ -413,10 +413,13 @@ test.describe('the model answering', () => {
   test('default column, light and dark: nothing overflows', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await openGrouped(page, fixture)
-    // The list takes clamp(360px, 36%, 560px) of the console (2026-11-21: by content, no longer 336px).
-    const width = await page.locator('.mail-list-pane').evaluate((el) => el.clientWidth)
-    expect(width).toBeGreaterThanOrEqual(360)
-    expect(width).toBeLessThanOrEqual(560)
+    // Nothing open: the list takes the room and the reader is a 240px hint (2026-11-22 review: an empty
+    // reader held half the window). The reading width, clamp(360px, 36%, 560px), is checked once a mail opens.
+    await expect(page.locator('.mail-console')).toHaveAttribute('data-reader', 'blank')
+    const [consoleWidth, folders, width, hint] = await page.evaluate(() => ['.mail-console', '.mail-console > .mail-accounts-pane',
+      '.mail-console > .mail-list-pane', '.mail-console > :last-child'].map((s) => Math.round(document.querySelector(s)!.getBoundingClientRect().width)))
+    expect(hint).toBe(240)
+    expect(Math.abs(width - (consoleWidth - folders - hint))).toBeLessThanOrEqual(1)
     const overflow = () => page.evaluate(() => {
       const bad: string[] = []
       const check = (el: Element | null, name: string) => { if (el && el.scrollWidth > el.clientWidth + 1) bad.push(name) }
@@ -438,6 +441,12 @@ test.describe('the model answering', () => {
     await openGroupLine(page, groups.groups[0].id)
     expect(await overflow()).toEqual([])
     await shoot(page, SHOTS, 'overview-default-dark')
+    await page.locator('.mail-group-kids [data-testid="mail-row"]').first().click()
+    await expect(page.locator('.mail-console')).toHaveAttribute('data-reader', 'open')
+    const reading = await page.locator('.mail-list-pane').evaluate((el) => el.clientWidth)
+    expect(reading).toBeGreaterThanOrEqual(360)
+    expect(reading).toBeLessThanOrEqual(560)
+    expect(await overflow()).toEqual([])
   })
 
   test('all caught up: every group read, only the words and the read Important mail remain', async ({ page }) => {

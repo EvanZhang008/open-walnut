@@ -249,7 +249,7 @@
   grid-template-columns: 6px fit-content(40%) minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 2px 6px;
-  padding: 6px 12px 6px 17px;
+  padding: 6px 12px 6px 18px;
   border-bottom: none;
   font-size: var(--font-size-md);
 }
