@@ -287,6 +287,12 @@ export interface OrgThread {
   reply_by?: ThreadWriter;
   reply_sid?: string;
   reply_host?: string;
+  /**
+   * When the task's status answer last moved this thread's state (sessions/status-threads.ts,
+   * updateThread's `line`); gone once any other write sets it. A pending with none (the task's own thread_update, his
+   * Acknowledge, Walnut's own park) is kept: a status line never moves it back to working.
+   */
+  lineState?: string;
   /** Tasks the thread went to: shown with their live status. */
   tasks?: string[];
   messages: ThreadMessage[];
@@ -1020,7 +1026,7 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
  * `source`: the writer's own session as Walnut verified it (ThreadTextSource); absent for the user
  * and for a caller Walnut could not place, whose summary then reads as written by an unknown session.
  */
-export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource): { file: ThreadsFile; thread: OrgThread } {
+export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   file = stampLegacyReplyAt(file);
   const cur = find(file, id);
@@ -1083,6 +1089,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
   else if (HIDDEN_STATES.has(cur.state) && next.reply !== undefined && next.reply !== cur.reply) next.state = 'answered';
+  // The status answer's mark (lineState): a state it moves is its own, one it leaves keeps whose it
+  // was; a state anyone else sets (or a close, a reopen) is no longer the answer's.
+  if (opts.line && patch.state !== undefined) { if (patch.state !== cur.state) next.lineState = at; }
+  else if (patch.state !== undefined || patch.close || patch.reopen) delete next.lineState;
   if (handing && by !== 'human') next.needsAt = at;
   // Real news takes a snooze off: the thread now waits on him (needs) or its result is in (answered).
   if (next.snoozed && next.state !== cur.state && (next.state === 'needs' || next.state === 'answered')) delete next.snoozed;

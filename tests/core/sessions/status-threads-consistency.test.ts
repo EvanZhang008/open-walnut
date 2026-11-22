@@ -19,6 +19,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-status-th
 
 import { readStatusReport } from '../../../src/core/session-hooks/builtins.js'
 import { patchForLine, readThreadLines, settleStateFromThreads, threadQuestionBlock, type ThreadLineState } from '../../../src/core/sessions/status-threads.js'
+import { THREAD_STATES } from '../../../src/core/org/threads-model.js'
 import { phaseForReport } from '../../../src/core/sessions/report-phase.js'
 import { deriveUserStatus, ANSWER_TO_READ } from '../../../src/core/user-status.js'
 
@@ -155,6 +156,29 @@ describe('the write each line makes', () => {
     const own = { ...base, state: 'working' as const, opener: { text: 'Fence work started.', at: base.createdAt, from: 'node' as const, by: 'task:t1' as const } }
     expect(patchForLine(own, { id: base.id, title: base.title, state: 'done', progress: 'The fence is up.' })).toEqual({ close: 'dropped', reply: 'The fence is up.' })
     expect(patchForLine({ ...base, state: 'working' }, { id: base.id, title: base.title, state: 'done', progress: 'The fence is up.' })).toEqual({ state: 'answered', reply: 'The fence is up.' })
+  })
+  // 2026-11-22: a task set its thread pending four times while its land sat in the queue; each
+  // status answer said "working" and the 30-minute overdue clock nagged it five times.
+  it('a working line leaves a parked thread parked, its words written quietly; a result still moves it', () => {
+    const parked = { ...base, state: 'pending' as const, reply: 'Fixes done, the land is queued.', replyAt: '2026-11-20T11:00:00.000Z' }
+    const line = (state: ThreadLineState, progress = 'Twelve fixes done, the land is queued.') => ({ id: base.id, title: base.title, state, progress })
+    expect(patchForLine(parked, line('working'))).toEqual({ state: 'pending', reply: 'Twelve fixes done, the land is queued.' })
+    expect(patchForLine(parked, line('working', parked.reply))).toBeNull()
+    expect(patchForLine(parked, line('answered', 'Landed and live.'))).toEqual({ state: 'answered', reply: 'Landed and live.' })
+    expect(patchForLine(parked, line('done', 'Landed and live.'))?.state).toBe('answered')
+    // A pending an earlier answer set (waiting) moves as the next answer says: the task took it up again.
+    expect(patchForLine({ ...parked, lineState: '2026-11-20T11:00:00.000Z' }, line('working'))).toEqual({ state: 'working', reply: 'Twelve fixes done, the land is queued.' })
+  })
+  it('across every thread state and every line state, a line never moves a thread the task parked itself into working', () => {
+    for (const from of THREAD_STATES) {
+      for (const state of STATES) {
+        const t = { ...base, state: from, ...(from === 'needs' ? { ask: 'Which fence height?' } : {}) }
+        const patch = patchForLine(t, { id: base.id, title: base.title, state, progress: 'Posts are set.' })
+        // Parked by the task itself (no lineState): never back to working by a line.
+        if (from === 'pending') expect(patch?.state, `${from} + ${state}`).not.toBe('working')
+        expect(patch?.state, `${from} + ${state}`).not.toBe('needs')
+      }
+    }
   })
 })
 

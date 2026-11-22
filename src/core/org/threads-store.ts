@@ -532,7 +532,8 @@ export async function writeOwnThreads(
     for (const w of writes) {
       for (const p of [w.patch, w.fallback]) {
         if (!p || handsToUser(p)) continue;
-        try { file = updateThread(file, w.id, p, by, at).file; done.push(w.id); break; } catch (err) { if (!(err instanceof ThreadError)) throw err; }
+        // `line`: the state it moves is the answer's own (lineState), so a later answer may move it again.
+        try { file = updateThread(file, w.id, p, by, at, undefined, { line: true }).file; done.push(w.id); break; } catch (err) { if (!(err instanceof ThreadError)) throw err; }
       }
     }
     const open = new Set(file.threads.filter((t) => !t.closed).map((t) => t.title.trim().toLowerCase()));
@@ -541,7 +542,7 @@ export async function writeOwnThreads(
       try {
         // A thread a node opens starts in his sight (openThread); it takes the task's state in the same write.
         const r = openThread(file, { title: o.title, text: o.text, from: 'node', state: 'answered' }, by, at);
-        file = o.state === 'answered' ? r.file : updateThread(r.file, r.thread.id, { state: o.state }, by, at).file;
+        file = o.state === 'answered' ? r.file : updateThread(r.file, r.thread.id, { state: o.state }, by, at, undefined, { line: true }).file;
         open.add(o.title.trim().toLowerCase());
         done.push(r.thread.id);
       } catch (err) { if (!(err instanceof ThreadError)) throw err; }

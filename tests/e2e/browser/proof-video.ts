@@ -57,7 +57,11 @@ export async function startProofVideo(page: Page): Promise<ProofVideo> {
   const stamps: Array<{ file: string; at: number }> = []
   await page.addInitScript(OVERLAY)
   const cdp = await page.context().newCDPSession(page)
+  // A frame can still arrive after stop() removed the folder (2026-11-22: ENOENT on a late frame
+  // failed a passing proof run): frames after stop are dropped.
+  let stopped = false
   cdp.on('Page.screencastFrame', (f: { data: string; sessionId: number; metadata: { timestamp?: number } }) => {
+    if (stopped) return
     const file = path.join(frames, `${String(stamps.length).padStart(6, '0')}.jpg`)
     fs.writeFileSync(file, Buffer.from(f.data, 'base64'))
     stamps.push({ file, at: f.metadata.timestamp ?? Date.now() / 1000 })
@@ -76,6 +80,7 @@ export async function startProofVideo(page: Page): Promise<ProofVideo> {
     },
     hold: (ms = 1_200) => page.waitForTimeout(ms),
     stop: async (name) => {
+      stopped = true
       await cdp.send('Page.stopScreencast').catch(() => {})
       if (stamps.length < 2) return null
       // Each frame shows until the next one came: the video keeps the real pace.

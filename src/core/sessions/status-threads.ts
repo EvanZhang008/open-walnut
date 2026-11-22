@@ -180,6 +180,14 @@ export function patchForLine(t: OrgThread, line: StatusThreadLine): ThreadPatch 
   // An answer he has not read yet keeps the thread in his sight (2026-10-31, the user: "I have not
   // even read it and it is put into wait"): it hides only once he has.
   if (state !== 'answered' && t.state === 'answered' && hasThreadNews(t)) state = 'answered';
+  // A thread the task parked itself stays parked (2026-11-22, a task that set pending four times
+  // with thread_update: each status answer said "working" because its land was still queued, and
+  // the 30-minute overdue clock nagged it five times). Both states are out of his sight, and a line
+  // cannot tell "on it for him now" from "my own work runs", so it never undoes a pending it did
+  // not set itself (lineState): his next message, a result (answered, done) or the task's own
+  // thread_update moves it. A pending an earlier answer set moves as the answer says (the task took
+  // the subject up again). Its words still go on, quietly, as pending.
+  if (state === 'working' && t.state === 'pending' && !t.lineState) state = 'pending';
   return same(t, state, reply) ? null : { state, ...(reply ? { reply } : {}) };
 }
 
