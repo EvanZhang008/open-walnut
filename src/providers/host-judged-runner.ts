@@ -26,6 +26,7 @@ import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { QueuedLine, StartBody, StartBundle } from '../core/session-channel/host-api.js'
 import type { QueuedMessage } from '../core/session-queue-store.js'
 import { claimHostStarted, hostStartedSaid, noteHostSessionStarted } from '../core/session-channel/leader-tasks.js'
+import { heldOf } from '../core/sessions/handed-holds.js'
 
 type AnyFn = (...args: any[]) => any
 type Proto = Record<string, unknown>
@@ -124,17 +125,53 @@ function inOrder(sid: string, run: () => Promise<void>): Promise<void> {
 }
 
 function lineOf(m: QueuedMessage): QueuedLine {
+  const held = heldOf(m)
   return {
     id: m.id, message: m.message,
     ...(m.userUuid ? { userUuid: m.userUuid } : {}), ...(m.lineUuid ? { lineUuid: m.lineUuid } : {}),
     ...(m.closesPrompt ? { closesPrompt: true as const } : {}), ...(m.sentBy ? { sentBy: m.sentBy } : {}),
+    ...(held ? { held } : {}),
   }
+}
+
+/** A failed hand of held rows is tried again after these waits (then the next send takes them). */
+const HAND_RETRY_MS = [5_000, 30_000, 120_000, 600_000]
+
+/**
+ * Rows this leader held for a session its host runs (after the turn, a cold wake) go to the host with
+ * their hold, in this session's command order: the host releases them (sessions/handed-holds.ts).
+ */
+export function handHeldToHost(sid: string, attempt = 0): void {
+  const host = judgingHostOf(sid)
+  if (!host) return
+  inOrder(sid, async () => {
+    const side = await leaderSide()
+    const { takeLinesForHost } = await import('../core/session-message-queue.js')
+    const taken = await takeLinesForHost(sid, { heldOnly: true })
+    if (taken.lines.length === 0) return
+    let a: Awaited<ReturnType<typeof side.sendToHost>>
+    try {
+      a = await side.sendToHost(host, { sessionId: sid, message: '', queued: taken.lines.map(lineOf), holdOnly: true, busSource: 'queue-hold' })
+    } catch (err) {
+      await taken.putBack()
+      throw err
+    }
+    if (a.ok !== true) {
+      await taken.putBack()
+      throw new Error(`the host ${host} refused the held rows: ${a.error ?? 'no reason given'}`)
+    }
+    log.session.info('host-run session: held rows went to its host', { sessionId: sid, host, rows: taken.lines.length })
+  }).catch((err: unknown) => {
+    const wait = HAND_RETRY_MS[attempt]
+    log.session.warn('host-run session: held rows did not reach its host', { sessionId: sid, host, attempt, retryInMs: wait ?? null, error: err instanceof Error ? err.message : String(err) })
+    if (wait !== undefined) setTimeout(() => handHeldToHost(sid, attempt + 1), wait).unref?.()
+  })
 }
 
 /**
  * A send to a session its host runs: the lines this leader queued for it (the send route queued
- * them here, hints and all) go with it to the host's queue, and leave this one once the host took
- * them; refused or lost, they are put back and go with the next send.
+ * them here, hints and all; a row it held goes with its hold) go with it to the host's queue, and
+ * leave this one once the host took them; refused or lost, they are put back and go with the next send.
  */
 async function forwardSend(sid: string, host: string, body: Record<string, unknown>, source: string, endsWait: boolean): Promise<void> {
   const side = await leaderSide()

@@ -2508,11 +2508,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // A turn that ends with "Prompt is too long" gets its session compacted and its unanswered
       // messages resent (src/core/sessions/context-full-recovery.ts).
       const { startContextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
-      // A recovery that held a turn's error and could not get past it: the card and the phase the error
-      // would have raised, while `still()` says the session is still in that state.
-      const raiseHeldError = async (rec: import('../core/types.js').SessionRecord, words: string, why: string, still: () => Promise<boolean>) => {
+      // A recovery that held a turn's error and could not get past it raises the card and the phase the
+      // error would have (core/sessions/held-error.ts, shared with a host's retriers); the card is the server's.
+      const heldErrorCard = async (rec: import('../core/types.js').SessionRecord, words: string) => {
         const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
-        if (!(await still())) return
         await publishSessionErrorNotification({
           title: 'Session Error',
           body: `${ref ? `${ref}: ` : ''}${words}`,
@@ -2520,34 +2519,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           sessionId: rec.claudeSessionId,
           taskId: rec.taskId,
         })
-        // The session stays the task's. A compaction's quiet turn keeps a short grace after its result,
-        // in which the phase ignores the session: wait it out.
-        if (!rec.taskId) return
-        const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
-        for (let i = 0; i < 90 && isQuietTurn(rec.claudeSessionId); i++) await new Promise((r) => setTimeout(r, 1_000))
-        if (!(await still())) return
-        const { applySessionPhase } = await import('../core/phase.js')
-        await applySessionPhase(rec.taskId, 'session:error', why, { sessionId: rec.claudeSessionId, retryOver: true })
-          .catch((err) => log.web.warn('held session error: phase not applied', { taskId: rec.taskId, why, error: String(err) }))
       }
-      const { getSessionByClaudeId: currentRecord } = await import('../core/session-tracker.js')
-      contextFullRecoveryHandle = startContextFullRecovery({
-        // Only a recovery that gave up is the user's (its banner's Compact and resend is the way on),
-        // and only while the record still holds this failure: a click may have recovered it meanwhile.
-        gaveUp: (rec, words, failedAt) => raiseHeldError(rec, words, 'context-full-recovery:gave-up', async () => {
-          const now = await currentRecord(rec.claudeSessionId).catch(() => null)
-          return now?.contextRecovery?.state === 'failed' && now.contextRecovery.at === failedAt
-        }),
-      })
+      // A host that runs its sessions raises its retriers' held cards here (core/session-channel/leader-retry-over.ts).
+      ;(await import('../core/session-channel/leader-retry-over.js')).setRetryOverCard(heldErrorCard)
+      const { contextRecoveryGaveUp, safeguardGaveUp } = await import('../core/sessions/held-error.js')
+      // Only a recovery that gave up is the user's (its banner's Compact and resend is the way on).
+      contextFullRecoveryHandle = startContextFullRecovery({ gaveUp: contextRecoveryGaveUp(heldErrorCard) })
       // Two turns in a row the model's safeguards refused move the session to another model, and what
       // got no answer is resent (src/core/sessions/safeguard-switch.ts).
       const { startSafeguardSwitch } = await import('../core/sessions/safeguard-switch.js')
-      safeguardSwitchHandle = startSafeguardSwitch({
-        // Only a switch that could not happen is the user's; a turn that runs again (someone's message)
-        // is past this error.
-        gaveUp: (rec, words) => raiseHeldError(rec, words, 'safeguard-switch:gave-up', async () =>
-          (await currentRecord(rec.claudeSessionId).catch(() => null))?.process_status !== 'running'),
-      })
+      safeguardSwitchHandle = startSafeguardSwitch({ gaveUp: safeguardGaveUp(heldErrorCard) })
       // A model the safeguard switch or an agent picked holds for one turn, then the session goes back
       // to its own (src/core/sessions/model-restore.ts).
       const { startModelRestore } = await import('../core/sessions/model-restore.js')

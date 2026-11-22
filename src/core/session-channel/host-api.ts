@@ -59,12 +59,21 @@ export type StartAnswer = { ok: true; sessionId: string; title: string } | { ok:
  * One queued line a send hands to the host (the leader's queue row, its hints already in the text):
  * the host queues it under the same id (a repeat of the same id is queued once) and drains it.
  */
-export interface QueuedLine { id?: string; message: string; userUuid?: string; lineUuid?: string; closesPrompt?: true; sentBy?: 'person' | 'agent' }
+export interface QueuedLine {
+  id?: string; message: string; userUuid?: string; lineUuid?: string; closesPrompt?: true; sentBy?: 'person' | 'agent'
+  /**
+   * A row the leader held (a message lined up for after the running turn, one held for a cold
+   * session's next wake): the host keeps it held under the same reason and releases it itself
+   * (its queue-after-turn and cold hold). Only those two reasons cross (HANDED_HOLD_REASONS).
+   */
+  held?: { reason: string; coldSend?: { source: string; endsWait?: true } }
+}
 /**
  * `queued`: the lines the leader had queued for this session, which go to the host's queue. A send
- * without it (one made on the host itself) queues its `message`.
+ * without it (one made on the host itself) queues its `message`. `holdOnly`: the lines are held
+ * rows only, handed over with their hold; the host queues them and starts no delivery.
  */
-export type SendBody = SessionSendEvent & { busSource?: string; queued?: QueuedLine[] }
+export type SendBody = SessionSendEvent & { busSource?: string; queued?: QueuedLine[]; holdOnly?: true }
 export type InterruptBody = SessionInterruptEvent & { busSource?: string }
 
 export interface CallBody {
@@ -107,5 +116,8 @@ export interface LiveState {
   lastResultOrigin?: string
   teardownReason?: string
   consumedOffset?: number
+  /** Why the host's own retriers continue this turn, and where they stopped (turn-run.ts TurnWait; turn-run-host.ts). */
+  turnWaits?: Array<{ reason: string } & Record<string, unknown>>
+  turnStops?: Array<{ reason: string } & Record<string, unknown>>
   acp?: { activity?: string; workerLive?: boolean; engineId?: string; sessionControls?: unknown; modelCatalog?: unknown }
 }

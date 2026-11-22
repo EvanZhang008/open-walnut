@@ -7,6 +7,8 @@
  *   the channel     HostChannel over that log; its rows are this host's own (rowOwnedHere)
  *   the port        hostSessionPort (host-port.ts), installed for the session classes
  *   the emitter     bus events and row writes of own sessions -> records (host-emitter.ts)
+ *   the resend family  queue-after-turn, the waits, the recoveries, the respawns, for own rows
+ *                   (host-resend.ts), subscribed before the emitter
  *   the routes      on the leader door (host-routes.ts), and SESSION_JUDGE_CAP in the report the
  *                   leader reads of this host's service (replica/front.ts status)
  *
@@ -24,6 +26,7 @@ import { createHostEmitter, type HostEmitter } from './host-emitter.js'
 import { createHostSessionPort, selfOwnApi, StartBundles } from './host-port.js'
 import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.js'
 import { liveStateOf, type LiveRunnerLike } from './host-live.js'
+import { startHostResendFamily, turnEndStamp, turnOfOwnSession, type HostResendFamily } from './host-resend.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
 import { hasLocalDaemon, isHostReplica } from '../server-role.js'
@@ -36,6 +39,7 @@ export interface HostSessions {
   emitter: HostEmitter
   routes: HostSessionRoutes
   bundles: StartBundles
+  resend: HostResendFamily
 }
 
 let current: HostSessions | null = null
@@ -99,10 +103,12 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
   const bundles = new StartBundles()
+  const [stamp, turnOf] = await Promise.all([turnEndStamp(), turnOfOwnSession()])
   const emitter = createHostEmitter({
     log, channel, hostKey: o.hostKey,
     ownRows: () => ownRows(o.hostKey),
-    liveOf: (sid) => liveStateOf(runner, sid),
+    liveOf: (sid) => liveStateOf(runner, sid, turnOf),
+    stamp,
     offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset,
     onLog: say,
   })
@@ -114,6 +120,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log: say,
   })
   installSessionPort(port)
+  // Before the emitter subscribes: at a turn end each retrier takes it first, then the emitter stamps it.
+  const resend = await startHostResendFamily({ say })
   await emitter.start()
   const [{ hostRunsSessionsNow }, { bus }] = await Promise.all([import('./switch.js'), import('../event-bus.js')])
   const routes = createHostSessionRoutes({
@@ -122,19 +130,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     bundles,
     channel: () => current?.channel ?? null,
     emit: (name, data, source) => bus.emit(name, data, ['session-runner'], { source }),
-    enqueue: async (sid, lines, source) => {
-      const [{ enqueueMessage }, { frameAsWalnut, frameForSource }] = await Promise.all([import('../session-message-queue.js'), import('../sessions/send-frame.js')])
-      for (const l of lines) {
-        // The leader's queue rows, as its send stored them: a person's line as he typed it, an agent's
-        // already framed there (framed here when it still reads as a person's, never passed as his);
-        // a line with no sender (a send made on this host) is framed for the send's own source.
-        const text = l.sentBy === 'person' ? l.message : l.sentBy === 'agent' ? frameAsWalnut(l.message, source) : frameForSource(l.message, source)
-        await enqueueMessage(sid, text, {
-          ...(l.id ? { id: l.id } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
-          ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
-        })
-      }
-    },
+    // The leader's queue rows for a session here, framed as its send route framed them, holds kept (sessions/handed-holds.ts).
+    enqueue: async (sid, lines, source) => (await import('../sessions/handed-holds.js')).queueLinesOnHost(sid, lines, source),
     // The leader deleted these (leader-drops.ts): this host's own rows of them go, and each gets its
     // `drop` record, also one this host no longer has (the leader's proof that nothing is left here).
     drop: async (sids) => {
@@ -150,7 +147,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     spillDir: path.join(dir, 'prompts'),
     log: say,
   })
-  current = { log, channel, emitter, routes, bundles }
+  current = { log, channel, emitter, routes, bundles, resend }
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
   return current
 }
@@ -160,6 +157,7 @@ export async function stopHostSessions(): Promise<void> {
   current = null
   if (!c) return
   c.emitter.stop()
+  c.resend.stop()
   c.routes.close()
   installSessionPort(null)
   const { allowOwnRowWrites } = await import('../session-db.js')

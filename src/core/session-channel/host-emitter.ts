@@ -53,6 +53,12 @@ export interface HostEmitterOptions {
   bus?: EmitterBus
   /** Install the row listener (row-hook.ts); tests pass their own. */
   rowListener?(fn: ((row: SessionRecord) => void) | null): void
+  /**
+   * What a fact keeps of its event's data: the data, or a copy with what only this host knows at the
+   * event added (a turn end's `hostTakenBy`, turn-run-host.ts). Called in the event's own tick, after
+   * the subscribers that subscribed before this one (the resend family) took it.
+   */
+  stamp?(name: string, data: unknown): unknown
   liveMs?: number
   pendingMs?: number
   now?: () => number
@@ -221,11 +227,15 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       scheduleLive(sid)
       return
     }
+    let data = event.data
+    if (o.stamp) {
+      try { data = o.stamp(event.name, event.data) } catch (err) { warn('session channel: a fact was kept without its stamp', { sessionId: sid, name: event.name, error: err instanceof Error ? err.message : String(err) }) }
+    }
     if (own.has(sid)) {
-      append(sid, event.name, event.data, { to: event.destinations })
+      append(sid, event.name, data, { to: event.destinations })
       scheduleLive(sid)
     } else {
-      hold(sid, event.name, event.data, event.destinations)
+      hold(sid, event.name, data, event.destinations)
     }
   }
 

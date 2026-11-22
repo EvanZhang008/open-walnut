@@ -89,6 +89,10 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   }
   const { startHostSessionTasks } = await import('./leader-tasks.js')
   const stopTasks = startHostSessionTasks()
+  // A host's retriers run there: their turn state and give-ups reach this leader's readers.
+  const [{ startLeaderRetryOver }, { setHostTurnSource }] = await Promise.all([import('./leader-retry-over.js'), import('../sessions/turn-run-host.js')])
+  const stopRetryOver = startLeaderRetryOver()
+  setHostTurnSource((sid) => remote.hostTurnStateOf(sid))
   const unlisten = hostServer.onHostServerView(look)
   // The switch is read again at every config write, so a start after it went off stays here.
   bus.subscribe(CONFIG_SUBSCRIBER, () => { void side.refreshFlag() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
@@ -109,6 +113,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     bus.unsubscribe(CONFIG_SUBSCRIBER)
     bus.unsubscribe(DELETE_SUBSCRIBER)
     stopTasks()
+    stopRetryOver()
+    setHostTurnSource(null)
     side.stop()
     setHostJudgeProbe(null)
     remote.setRemoteJudgedCaller(null)

@@ -231,7 +231,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (op === 'send' || op === 'interrupt') {
         const b = body as { sessionId?: unknown; busSource?: unknown }
         if (typeof b?.sessionId !== 'string' || !b.sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId is required' })
-        const { busSource, queued, ...payload } = b as Record<string, unknown>
+        const { busSource, queued, holdOnly, ...payload } = b as Record<string, unknown>
         const source = typeof busSource === 'string' && busSource ? busSource : 'host-api'
         // A send's lines are queued here first, as the leader's send route queues them for its own
         // runner: the SESSION_SEND only tells the runner to drain.
@@ -240,6 +240,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
             ? (queued as QueuedLine[]).filter((l) => l && typeof l.message === 'string')
             : typeof payload.message === 'string' && payload.message ? [{ message: payload.message }] : []
           if (lines.length > 0) await o.enqueue(b.sessionId, lines, source)
+          // Held rows handed over with their hold (sessions/handed-holds.ts): queued, nothing delivered.
+          if (holdOnly === true) return sendJson(res, 200, { ok: true })
         }
         o.emit(op === 'send' ? 'session:send' : 'session:interrupt', payload, source)
         return sendJson(res, 200, { ok: true })

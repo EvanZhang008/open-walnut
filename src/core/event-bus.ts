@@ -96,6 +96,9 @@ export const EventNames = {
   SESSION_CONTROLS_CHANGED: 'session:controls-changed',
   SESSION_RECAP_UPDATED: 'session:recap-updated',
   SESSION_TURN_SETTLED: 'session:turn-settled',
+  /** A host stopped continuing a turn of a session it runs: the error card and phase edge it held,
+   *  for the leader to raise (session-channel/leader-retry-over.ts). Never emitted for the leader's own sessions. */
+  SESSION_RETRY_OVER: 'session:retry-over',
   SESSION_MODEL_CATALOG: 'session:model-catalog',
   SESSION_PERMISSION_REQUEST: 'session:permission-request',
   SESSION_PERMISSION_RESOLVED: 'session:permission-resolved',

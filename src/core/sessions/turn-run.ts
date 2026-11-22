@@ -34,6 +34,7 @@ import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import type { BusEvent } from '../event-bus.js'
 import type { SessionRecord, SessionEndpointWait, SessionUsageLimit, SessionTurn, TurnAttempt, TurnRetryReason } from '../types.js'
+import { hostTurnOf, stampedTakenBy } from './turn-run-host.js'
 
 export type { SessionTurn, TurnAttempt, TurnRetryReason }
 
@@ -105,6 +106,8 @@ export interface TurnEndFacts {
   startRecovery?: boolean
   /** The session's record, when the reader has it. */
   record?: SessionRecord | null
+  /** A host-judged session's turn end: its host's own answer, stamped on the fact (turn-run-host.ts). */
+  hostTakenBy?: TurnRetryReason | null
 }
 
 /** One retry kind's answers. Lives in the module that owns its state, as `turnRetrier`. */
@@ -186,8 +189,18 @@ export interface TurnRun {
   stops: TurnWait[]
 }
 
-/** The session's current turn, from the rows already loaded (sync). */
+/** The waits and stops its host says of a host-judged session's turn (turn-run-host.ts), or null. */
+function hostTurn(sid: string | undefined): { waits: TurnWait[]; stops: TurnWait[] } | null {
+  const h = hostTurnOf(sid)
+  if (!h) return null
+  const known = (w: { reason: string }) => (TURN_RETRY_REASONS as readonly string[]).includes(w.reason)
+  return { waits: h.waits.filter(known) as unknown as TurnWait[], stops: h.stops.filter(known) as unknown as TurnWait[] }
+}
+
+/** The session's current turn, from the rows already loaded (sync); a host-judged one's, from its host. */
 export function turnRunNow(rec: SessionRecord, q: TurnQuestion = {}): TurnRun {
+  const host = hostTurn(rec.claudeSessionId)
+  if (host) return { attempts: rec.turn?.attempts ?? [], wait: host.waits[0] ?? null, stop: host.stops[0] ?? null, ...host }
   const waits: TurnWait[] = []
   const stops: TurnWait[] = []
   for (const row of each()) {
@@ -220,16 +233,42 @@ export async function turnWaitOf(rec: SessionRecord | null | undefined, q: TurnQ
 /** The retrier that takes this turn end event, or null: its error card is held, and when the reason
  *  keeps the phase the task keeps its phase and its session (web/server.ts, the runner). */
 export async function turnEndTakenBy(end: TurnEndFacts): Promise<TurnRetryReason | null> {
+  const stamped = stampedOf(end)
+  if (stamped !== undefined) return stamped
   await loadTurnRetriers()
   // A row may need the session's record (the context recovery: is it recoverable?): read it when the caller has none.
   if (end.record === undefined) {
     const { getSessionByClaudeId } = await import('../session-tracker.js')
     end = { ...end, record: await getSessionByClaudeId(end.sessionId).catch(() => null) }
   }
+  return takenByRows(end)
+}
+
+/** The host's answer on a host-judged session's turn-end fact, when it is one this server knows. */
+function stampedOf(end: TurnEndFacts): TurnRetryReason | null | undefined {
+  const v = stampedTakenBy(end)
+  return v === null || (v !== undefined && (TURN_RETRY_REASONS as readonly string[]).includes(v)) ? v : undefined
+}
+
+function takenByRows(end: TurnEndFacts): TurnRetryReason | null {
   for (const row of each()) {
     if (safe(row.reason, () => row.takes(end), false)) return row.reason
   }
   return null
+}
+
+/**
+ * turnEndTakenBy at the event itself (sync: rows already loaded, the record from the cache): a host
+ * stamps its answer on the turn-end fact with it, in the same tick its retriers took the end
+ * (session-channel/host-emitter.ts), so the leader decides as the host's own readers do.
+ */
+export function turnEndTakenByNow(end: TurnEndFacts): TurnRetryReason | null {
+  if (end.record === undefined) {
+    let record: SessionRecord | null = null
+    try { record = recordNow?.(end.sessionId) ?? null } catch { /* no cache: the rows read the facts */ }
+    end = { ...end, record }
+  }
+  return takenByRows(end)
 }
 
 /** The turn end event is one Walnut continues and the task keeps its phase for. */
@@ -259,6 +298,8 @@ export async function turnMidWork(rec: Pick<SessionRecord, 'claudeSessionId'> & 
     const { getSessionByClaudeIdSync } = await import('../session-tracker.js')
     rec = getSessionByClaudeIdSync(rec.claudeSessionId) ?? rec
   }
+  const host = hostTurn(rec.claudeSessionId)
+  if (host) return host.waits.find((w) => TURN_RETRY_TRAITS[w.reason].midWork)?.reason ?? null
   for (const row of each()) {
     if (!TURN_RETRY_TRAITS[row.reason].midWork) continue
     if (safe(row.reason, () => row.wait(rec as SessionRecord, {}), null)) return row.reason
@@ -273,6 +314,8 @@ export function turnMidWorkNow(sessionId: string | undefined): TurnRetryReason |
   let found: SessionRecord | null = null
   try { found = recordNow?.(sessionId) ?? null } catch { /* the cache unreadable: the rows read the id */ }
   const rec = found ?? ({ claudeSessionId: sessionId } as SessionRecord)
+  const host = hostTurn(sessionId)
+  if (host) return host.waits.find((w) => TURN_RETRY_TRAITS[w.reason].midWork)?.reason ?? null
   for (const row of each()) {
     if (TURN_RETRY_TRAITS[row.reason].midWork && safe(row.reason, () => row.wait(rec, {}), null)) return row.reason
   }
@@ -290,6 +333,13 @@ export async function turnEndAnsweredNothing(sessionId: string | undefined, end?
   const { getSessionByClaudeId } = await import('../session-tracker.js')
   const rec = await getSessionByClaudeId(sessionId).catch(() => null)
   await loadTurnRetriers()
+  const host = hostTurn(sessionId)
+  if (host) {
+    const mid = host.waits.find((w) => TURN_RETRY_TRAITS[w.reason].midWork)?.reason
+    if (mid) return mid
+    const stamped = end ? stampedOf({ ...end, sessionId }) : undefined
+    return stamped && TURN_RETRY_TRAITS[stamped].midWork ? stamped : null
+  }
   for (const row of each()) {
     if (!TURN_RETRY_TRAITS[row.reason].midWork) continue
     if (rec && safe(row.reason, () => row.wait(rec, {}), null)) return row.reason

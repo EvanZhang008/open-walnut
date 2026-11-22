@@ -18,6 +18,8 @@ import { bus, EventNames } from '../core/event-bus.js'
 import { lightSubagentRows } from '../core/subagents/registry.js'
 import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { LiveState } from '../core/session-channel/host-api.js'
+import type { HostTurnState } from '../core/sessions/turn-run-host.js'
+import { judgingHostOf } from '../core/sessions/judge-of.js'
 import { isNotPendingRefusal } from '../core/session-channel/host-permission.js'
 
 export interface HostCallBody { sid: string; target: HostCallTarget; member: string; args: unknown[] }
@@ -234,6 +236,17 @@ export function remoteJudgedSession(sid: string, host: string, kind: 'native' | 
 export function noteLiveState(sid: string, state: LiveState): void {
   liveStates.set(sid, state ?? {})
   proxies.get(sid)?.noteLive(state ?? {})
+}
+
+/**
+ * What the host's own retriers say of a host-judged session's turn, from its newest `live` record
+ * (sessions/turn-run-host.ts), or null: no such session, or a host that sends none yet.
+ */
+export function hostTurnStateOf(sid: string): HostTurnState | null {
+  if (!judgingHostOf(sid)) return null
+  const s = liveStates.get(sid)
+  if (!s || !Array.isArray(s.turnWaits)) return null
+  return { waits: s.turnWaits as HostTurnState['waits'], stops: (Array.isArray(s.turnStops) ? s.turnStops : []) as HostTurnState['stops'] }
 }
 
 export function peekRemoteJudgedSession(sid: string): RemoteJudgedSession | undefined {

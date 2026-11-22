@@ -452,6 +452,12 @@ export async function sendMessageToSession(
     coldHold.noteColdHold(sessionId);
     log.session.info('cold hold: message held for the session\'s next wake', { sessionId, messageId: msg.id, source });
   }
+  // A session its host runs and judges keeps its holds there: the held row goes to the host now,
+  // whose own queue-after-turn and cold hold release it (sessions/handed-holds.ts).
+  if (holdsRow || holdsCold) {
+    const { handHeldRowsToHost } = await import('./sessions/handed-holds.js');
+    handHeldRowsToHost(sessionId);
+  }
 
   // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
   // for a cold session's next wake waits for it). Held rows that went back in line in front of it and
@@ -872,16 +878,20 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
 /**
  * The lines of a session its host runs and judges that wait in this leader's queue, taken out:
  * they go to the host's queue with the send (session-channel/host-api.ts SendBody.queued), whose
- * runner drains them. Only rows ready to go (pending); a row held for later stays here.
+ * runner drains them. Rows ready to go (pending), and rows held for the turn's end or a cold wake,
+ * which keep their hold there (sessions/handed-holds.ts); `heldOnly`: those alone. Any other held
+ * row (parked, held for a move) stays here.
  * `put back`: the host did not take them (the same rows, in their place again).
  */
-export async function takeLinesForHost(sessionId: string): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void> }> {
+export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: boolean }): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void> }> {
+  const { isHandedHold } = await import('./sessions/handed-holds.js');
+  const goes = (m: QueuedMessage) => isHandedHold(m) || (!opts?.heldOnly && m.status === 'pending');
   const lines = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [] as QueuedMessage[];
-    const taken = queue.filter((m) => m.status === 'pending');
+    const taken = queue.filter(goes);
     if (taken.length === 0) return taken;
-    s.queues[sessionId] = queue.filter((m) => m.status !== 'pending');
+    s.queues[sessionId] = queue.filter((m) => !goes(m));
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
     return taken;
   }, false, true);

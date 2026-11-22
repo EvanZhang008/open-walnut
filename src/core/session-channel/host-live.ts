@@ -61,8 +61,11 @@ function put<K extends keyof LiveState>(out: LiveState, key: K, v: LiveState[K] 
   if (v !== undefined) out[key] = v
 }
 
+/** What the host's turn record says of a session's current turn (turn-run.ts turnRunNow): its waits and stops. */
+export type TurnOf = (sid: string) => { waits: unknown[]; stops: unknown[] } | null
+
 /** The live state of `sid`, or null when this runner holds no live object for it. */
-export function liveStateOf(runner: LiveRunnerLike, sid: string): LiveState | null {
+export function liveStateOf(runner: LiveRunnerLike, sid: string, turnOf?: TurnOf): LiveState | null {
   const s = read(() => runner.findSessionByClaudeId?.(sid))
   const a = s ? undefined : read(() => runner.findAcpSession?.(sid))
   if (!s && !a) return null
@@ -104,6 +107,11 @@ export function liveStateOf(runner: LiveRunnerLike, sid: string): LiveState | nu
   put(out, 'promptCache', read(() => runner.promptCacheOf?.(sid)))
   put(out, 'controlRequestsPending', read(() => runner.controlRequestsPendingOf?.(sid)))
   put(out, 'deliveryWait', read(() => runner.deliveryWait?.(sid)))
+  const turn = turnOf ? read(() => turnOf(sid)) : undefined
+  if (turn) {
+    out.turnWaits = turn.waits as LiveState['turnWaits']
+    out.turnStops = turn.stops as LiveState['turnStops']
+  }
   // JSON only: a Map, a function or a cycle never crosses (the channel writes JSON).
   return read(() => JSON.parse(JSON.stringify(out)) as LiveState) ?? null
 }

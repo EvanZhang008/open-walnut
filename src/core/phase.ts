@@ -678,6 +678,12 @@ async function movePhase(
   // A session this host runs for its leader: the leader moves its task from the facts it applies
   // (judge-of.ts taskSideOnLeader). Every edge of it, from any caller, stops here.
   if (taskSideOnLeader(opts?.sessionId)) {
+    // A retrier that gave up (retryOver: it ran here, with the session) moves an edge no fact the
+    // leader applies carries: it goes to the leader as one (sessions/held-error.ts).
+    if (opts?.retryOver && (trigger === 'session:error' || trigger === 'session:result')) {
+      const { sendRetryOver } = await import('./sessions/held-error.js')
+      sendRetryOver(opts.sessionId!, taskId, { phase: { trigger, why: source } })
+    }
     log.session.debug('applySessionPhase: skip (the leader moves this session\'s task)', { taskId, trigger, source, sessionId: opts?.sessionId })
     return { changed: false }
   }

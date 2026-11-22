@@ -53,6 +53,7 @@ export const SESSION_EVENT_CLASS: Readonly<Record<string, ChannelClass>> = {
   'session:controls-changed': 'fact',
   'session:recap-updated': 'leader',
   'session:turn-settled': 'fact',
+  'session:retry-over': 'fact',
   'session:model-catalog': 'fact',
   'session:permission-request': 'fact',
   'session:permission-resolved': 'fact',

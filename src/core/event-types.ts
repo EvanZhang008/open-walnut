@@ -802,6 +802,18 @@ export interface SessionTurnSettledEvent {
   v: number;
 }
 
+/**
+ * A host that runs and judges a session stopped continuing its turn (sessions/held-error.ts): the
+ * error card its retrier held (`card`), and the phase edge the give-up moves (`phase`, the
+ * applySessionPhase it made, which the host's task copy cannot take). The leader raises both.
+ */
+export interface SessionRetryOverEvent {
+  sessionId: string;
+  taskId?: string;
+  card?: { words: string };
+  phase?: { trigger: 'session:error' | 'session:result'; why: string };
+}
+
 /** The turn-complete self-report wrote a new recap tip (overview and/or recap)
  *  onto the session record. Fires minutes after the turn, so an open panel
  *  needs it: nothing else refetches the record then. Only the fields that
@@ -1536,6 +1548,7 @@ export interface EventPayloadMap {
   'session:side-thread-renamed': SessionSideThreadRenamedEvent;
   'session:recap-updated': SessionRecapUpdatedEvent;
   'session:turn-settled': SessionTurnSettledEvent;
+  'session:retry-over': SessionRetryOverEvent;
   'session:cron-fired': SessionCronFiredEvent;
   'session:will-reap': SessionWillReapEvent;
 
