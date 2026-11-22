@@ -47,25 +47,27 @@ import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-e
 import { isProcessAliveAsync } from '../utils/process.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
-import {
-  enqueueMessage,
-  markNextProcessing,
-  markProcessing,
-  migrateSessionQueue,
-  removeProcessed,
-  revertToPending,
-  parkMessages,
-  unparkAgentWaitRows,
-  parkStalePending,
-  loadQueue,
-  getAllSessionsWithPending,
-  getQueue,
-  removeTaken,
-  requeueUnanswered,
-  revertIfQueued,
-  parkIfQueued,
-  unmarkUnwritten,
-} from '../core/session-message-queue.js'
+import { callThrough, sessionPort, type SessionQueuePort } from '../core/sessions/session-port.js'
+
+// The message queue's functions, through the session port (core/sessions/session-port.ts).
+const queueFn = <K extends keyof SessionQueuePort>(name: K) => callThrough(() => sessionPort().messages.queue, name)
+const enqueueMessage = queueFn('enqueueMessage')
+const markNextProcessing = queueFn('markNextProcessing')
+const markProcessing = queueFn('markProcessing')
+const migrateSessionQueue = queueFn('migrateSessionQueue')
+const removeProcessed = queueFn('removeProcessed')
+const revertToPending = queueFn('revertToPending')
+const parkMessages = queueFn('parkMessages')
+const unparkAgentWaitRows = queueFn('unparkAgentWaitRows')
+const parkStalePending = queueFn('parkStalePending')
+const loadQueue = queueFn('loadQueue')
+const getAllSessionsWithPending = queueFn('getAllSessionsWithPending')
+const getQueue = queueFn('getQueue')
+const removeTaken = queueFn('removeTaken')
+const requeueUnanswered = queueFn('requeueUnanswered')
+const revertIfQueued = queueFn('revertIfQueued')
+const parkIfQueued = queueFn('parkIfQueued')
+const unmarkUnwritten = queueFn('unmarkUnwritten')
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { RedeliveryGuard, REDELIVERY_LOOP_REASON } from '../core/sessions/redelivery-guard.js'
 import { settleStrandedAcpRows } from './acp-stranded-rows.js'
@@ -187,7 +189,7 @@ const dropStaleNotices: typeof import('../core/sessions/stale-notice.js').dropSt
  * as its last resort.
  */
 export async function acpWalnutMcpServer(): Promise<import('./acp-worker/protocol.js').AcpMcpServer> {
-  const { walnutMcpProfile } = await import('../core/sessions/profiles.js')
+  const { walnutMcpProfile } = await sessionPort().launch.loadProfiles()
   const server = walnutMcpProfile().mcpServers?.walnut
   if (!server) throw new Error('Walnut MCP profile is unavailable')
   return sessionMcpServerToAcp('walnut', server)
@@ -736,7 +738,7 @@ function reportBatchFailed(sessionId: string, rowIds: string[], error: string, p
  */
 async function parkUnstartedFirstLine(sessionId: string, line: { text: string; uuid?: string }, reason: string, waitsFor: string): Promise<string | null> {
   try {
-    const { enqueueMessage } = await import('../core/session-message-queue.js')
+    const { enqueueMessage } = await sessionPort().messages.loadMessageQueue()
     const { launchPromptId, forgetLaunchPrompt } = await import('../core/sessions/launch-prompts.js')
     // waitsFor: Walnut sends it by itself once the agent can run (core/sessions/agent-wait-resend.ts).
     const row = await enqueueMessage(sessionId, line.text, {
@@ -1160,7 +1162,7 @@ export class ClaudeCodeSession {
       sessionId, taskId: this.taskId, requestId,
       toolName: pending?.request.tool_name, allowed: false, cancelled: true,
     }, ['*'], { source: 'session-runner' })
-    import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
+    sessionPort().records.loadTracker().then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
       const record = await getSessionByClaudeId(sessionId)
       if (record?.pendingPermission?.requestId === requestId) {
         await updateSessionRecord(sessionId, { pendingPermission: undefined })
@@ -1306,7 +1308,7 @@ export class ClaudeCodeSession {
     if (!sid) return
     const speed = this._speed.snapshot(Date.now())
     if (!speed.final) return
-    void import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+    void sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
       updateSessionRecord(sid, { lastTurnSpeed: speed }),
     ).catch((err) => log.session.warn('turn speed lane final not persisted', {
       sessionId: sid, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
@@ -1411,7 +1413,7 @@ export class ClaudeCodeSession {
     this.emitTurnSpeed(true)
     const sid = this.claudeSessionId
     if (sid) {
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(sid, { lastTurnSpeed: speed }),
       ).catch(() => {})
     }
@@ -1449,7 +1451,7 @@ export class ClaudeCodeSession {
     this._consumedOffset = v
     if (this.claudeSessionId) {
       const sid = this.claudeSessionId
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(sid, { consumedOffset: v }),
       ).catch(() => {})
     }
@@ -1951,7 +1953,7 @@ export class ClaudeCodeSession {
       // un-verifiable and the health monitor rewrites it every tick — the orphan
       // dead-pool write-amp stall).
       if (persist && sid) {
-        import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+        sessionPort().records.loadTracker().then(({ updateSessionRecord }) => {
           updateSessionRecord(sid, {
             process_status: 'running',
             activity: undefined,
@@ -1979,7 +1981,7 @@ export class ClaudeCodeSession {
     const turnGen = this._turnGen
     const lineSource = this._turnOpenLine
     const waitTurn = this._turnSeq
-    import('../core/phase.js').then(({ applySessionPhase }) =>
+    sessionPort().tasks.loadPhase().then(({ applySessionPhase }) =>
       applySessionPhase(turnStartTaskId, 'session:turn-start', `session-runner:${source}`, {
         sessionId: sid, turnGen, waitTurn, ...(lineSource !== undefined ? { lineSource } : {}),
       }),
@@ -2096,7 +2098,7 @@ export class ClaudeCodeSession {
     const followupTaskId = this.taskId
     const followupSid = this.claudeSessionId ?? undefined
     const turnGen = this._turnGen
-    import('../core/phase.js').then(({ applySessionPhase }) =>
+    sessionPort().tasks.loadPhase().then(({ applySessionPhase }) =>
       applySessionPhase(followupTaskId, 'session:result', 'session-runner:followup-closure', {
         sessionId: followupSid, turnGen,
       }),
@@ -2325,7 +2327,7 @@ export class ClaudeCodeSession {
     if (delta > 0 && this.claudeSessionId && this.pid !== null) {
       const sid = this.claudeSessionId
       const patch = { costWatermark: this._costWatermark.value, costWatermarkPid: this.pid }
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(sid, patch),
       ).catch(() => {})
     }
@@ -2777,7 +2779,7 @@ export class ClaudeCodeSession {
     if (!sid || this._mode !== 'auto' || this._isReplayedByOffset() === true) return
     const generation = this._turnGen
     const autoPermissionDenial = tools?.length ? { tools: [...new Set(tools)], at: new Date().toISOString() } : null
-    import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+    sessionPort().records.loadTracker().then(({ updateSessionRecord }) => {
       if (generation !== this._turnGen || this._mode !== 'auto') return
       return updateSessionRecord(sid, { autoPermissionDenial })
     })
@@ -3282,13 +3284,13 @@ export class ClaudeCodeSession {
         this.claudeSessionId = resumeSessionId
         if (!(await this.recoverCancelledRows())) throw new Error('Cancelled message recovery could not be saved. Retry before starting another turn')
       }
-      const { sessionStops } = await import('../core/sessions/session-stop.js')
+      const { sessionStops } = await sessionPort().recovery.loadSessionStop()
       const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
       stepDone('fenceMs')
       // Never a Claude CLI under an ACP session's id, whichever path asked for it (acp-native-guard.ts).
       await refuseNativeSpawnOnAcpRecord(resumeSessionId ?? preassignedId)
       if (this.taskId) {
-        const { restoreOwnTaskDir } = await import('../core/sessions/task-dir-place.js')
+        const { restoreOwnTaskDir } = await sessionPort().launch.loadTaskDirPlace()
         await restoreOwnTaskDir(this.taskId, resolvedCwd, host).catch(() => false)
       }
       stepDone('taskDirMs')
@@ -3349,7 +3351,7 @@ export class ClaudeCodeSession {
         // the proof of absence a probe cannot always give (a fresh home has no transcripts
         // root at all, so the probe answers "unknown"). A transcript found, or a stream that
         // answered, still keeps the resume.
-        const { getSessionByClaudeId: refusedRecord } = await import('../core/session-tracker.js')
+        const { getSessionByClaudeId: refusedRecord } = await sessionPort().records.loadTracker()
         const neverRan = typeof found !== 'string'
           && !!(await refusedRecord(resumeSessionId!).catch(() => null))?.startRefused
         let ran: boolean | undefined
@@ -3407,7 +3409,7 @@ export class ClaudeCodeSession {
       // check that could refuse the start and the transcript's reads above, right before the
       // start, which puts it back if the host refuses it (spawnPromise below).
       if (isResume && resumeNow && this.taskId) {
-        const { moveToOwnFolderBeforeSpawn } = await import('../core/sessions/org-own-folder.js')
+        const { moveToOwnFolderBeforeSpawn } = await sessionPort().launch.loadOrgOwnFolder()
         // Asked on the link this start goes through, so the answer is from the daemon that starts it.
         const t = transport as { cliHolder?: (sid: string) => Promise<import('./remote-session-manager.js').CliHolderAnswer> }
         const own = await moveToOwnFolderBeforeSpawn({
@@ -3575,7 +3577,7 @@ export class ClaudeCodeSession {
 
       // Persist outputFile + PID for resume recovery
       if (isResume && resumeSessionId) {
-        import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
           updateSessionRecord(resumeSessionId, {
             outputFile: this._outputFile ?? undefined,
             pid: this.pid ?? undefined,
@@ -3620,7 +3622,7 @@ export class ClaudeCodeSession {
         if (this._lastClaudeOutputTs >= this._spawnTs) this.clearStallDiagTimer()
       }
       // A folder that was gone and is back (or a session that moved): no banner left behind.
-      if (this.claudeSessionId) void import('../core/sessions/folder-gone.js').then((m) => m.clearFolderGone(this.claudeSessionId)).catch(() => {})
+      if (this.claudeSessionId) void sessionPort().recovery.loadFolderGone().then((m) => m.clearFolderGone(this.claudeSessionId)).catch(() => {})
       const line: SpawnLineOutcome | undefined = result.cut || result.fate
         ? { ...(result.cut ? { cut: true } : {}), ...(result.fate ? { fate: result.fate } : {}) }
         : undefined
@@ -3776,13 +3778,13 @@ export class ClaudeCodeSession {
           void this._statusCommit
             .then(async () => {
               if (sid && heldElsewhere) {
-                const { updateSessionRecord } = await import('../core/session-tracker.js')
+                const { updateSessionRecord } = await sessionPort().records.loadTracker()
                 await updateSessionRecord(sid, { heldElsewhere }).catch((recErr) => log.session.warn('start refused: recording the holder failed', {
                   sessionId: sid, error: recErr instanceof Error ? recErr.message : String(recErr),
                 }))
               }
               if (!taskId) return
-              const { applySessionPhase } = await import('../core/phase.js')
+              const { applySessionPhase } = await sessionPort().tasks.loadPhase()
               await applySessionPhase(taskId, 'session:error', 'session-runner:start-refused', {
                 ...(sid ? { sessionId: sid } : {}), processAlive: false,
               })
@@ -3845,7 +3847,7 @@ export class ClaudeCodeSession {
           })
           session._consumedOffset = -1
           if (streamEvidence.streamEpoch && record.claudeSessionId) {
-            const { updateSessionRecord } = await import('../core/session-tracker.js')
+            const { updateSessionRecord } = await sessionPort().records.loadTracker()
             await updateSessionRecord(record.claudeSessionId, {
               consumedOffset: 0,
               streamEpoch: streamEvidence.streamEpoch,
@@ -3875,9 +3877,9 @@ export class ClaudeCodeSession {
     testDaemonUrl?: string,
     opts?: { evidenceBudgetMs?: number; lineFollows?: boolean },
   ): Promise<ClaudeCodeSession> {
-    const { getTask } = await import('../core/task-manager.js')
+    const { getTask } = await sessionPort().tasks.loadTaskManager()
     const task = record.taskId ? await getTask(record.taskId).catch(() => undefined) : undefined
-    const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+    const { readRouterAreas, taskArea } = await sessionPort().launch.loadRouterAreas()
     const { WALNUT_HOME } = await import('../constants.js')
     // Only a router runs isolated (2026-11-14); a receiver profile or mark an older build left on routed work is not read.
     const routerScoped = record.profile?.areaRole === 'router' || task?.org_role === 'router'
@@ -3932,7 +3934,7 @@ export class ClaudeCodeSession {
     // OFF would stop getting the "-p mode, the user can't see AskUserQuestion"
     // correction. Best-effort: a config read failure keeps the default.
     try {
-      const { getConfig } = await import('../core/config-manager.js')
+      const { getConfig } = await sessionPort().config.loadConfigManager()
       session._permissionPromptEnabled = (await getConfig()).session?.permission_prompt !== false
     } catch { /* keep default true — the CLI flag defaults on */ }
     // Restore model from session record so context % works after server restart.
@@ -4031,7 +4033,7 @@ export class ClaudeCodeSession {
     let taskPhasePastInProgress = false
     if (record.taskId) {
       try {
-        const { getTask } = await import('../core/task-manager.js')
+        const { getTask } = await sessionPort().tasks.loadTaskManager()
         const task = await getTask(record.taskId)
         if (task && task.phase !== 'TODO' && task.phase !== 'IN_PROGRESS') {
           taskPhasePastInProgress = true
@@ -4080,7 +4082,7 @@ export class ClaudeCodeSession {
       let sshTarget: SshTarget | undefined
       if (record.host) {
         try {
-          const { getConfig } = await import('../core/config-manager.js')
+          const { getConfig } = await sessionPort().config.loadConfigManager()
           const config = await getConfig()
           if (config.hosts?.[record.host]) sshTarget = linkTarget(record.host, config)
         } catch {
@@ -4395,7 +4397,7 @@ export class ClaudeCodeSession {
           }, ['*'], { source: 'session-runner' })
         }
         if (record.pendingPermission && record.pendingPermission.requestId !== authoritativeReqId) {
-          import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+          sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
             updateSessionRecord(record.claudeSessionId, { pendingPermission: undefined }),
           ).catch(() => {})
         }
@@ -4416,7 +4418,7 @@ export class ClaudeCodeSession {
           // and the doctor's category-B exemption missed the session. The
           // daemon vouches for this request, so the record copy is authoritative.
           if (record.pendingPermission?.requestId !== pc.reqId) {
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+            sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(record.claudeSessionId, {
                 pendingPermission: {
                   ...pendingPermissionRecordFields(pc.reqId, { ...pcReq, subtype: pcReq.subtype ?? 'can_use_tool' }),
@@ -4454,7 +4456,7 @@ export class ClaudeCodeSession {
       let autoApproveBypassed = true
       if (session._mode === 'bypass') {
         try {
-          const { getConfig } = await import('../core/config-manager.js')
+          const { getConfig } = await sessionPort().config.loadConfigManager()
           const cfg = await getConfig()
           autoApproveBypassed = cfg.session?.auto_approve_bypass !== false
         } catch { /* default true */ }
@@ -4592,7 +4594,7 @@ export class ClaudeCodeSession {
   }): Promise<boolean> {
     if (this._interruptPromise) await this._interruptPromise
     if (!this._transport) return false
-    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const { sessionStops } = await sessionPort().recovery.loadSessionStop()
     const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(this.claudeSessionId!)
     // A Stop that came while this write awaited: nothing is written, and the caller settles the line.
     if (opts?.isStopped?.()) { opts.onStoppedBeforeWrite?.(); return false }
@@ -4921,7 +4923,7 @@ export class ClaudeCodeSession {
     // to the daemon liveness check. This is the upstream fix that stops the pool
     // from refilling after the batch drain cleans it.
     if (this.claudeSessionId) {
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) => {
         updateSessionRecord(this.claudeSessionId!, {
           ...(this.pid != null ? { pid: this.pid } : {}),
           ...(this._host ? { host: this._host } : {}),
@@ -5135,7 +5137,7 @@ export class ClaudeCodeSession {
       if (this._clearStartRefusedAtInit) {
         this._clearStartRefusedAtInit = false
         const sid = this.claudeSessionId
-        if (sid) void import('../core/session-tracker.js')
+        if (sid) void sessionPort().records.loadTracker()
           .then(({ updateSessionRecord }) => updateSessionRecord(sid, { startRefused: undefined }))
           .catch((err) => log.session.warn('clearing the refused-start mark failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) }))
       }
@@ -5168,7 +5170,7 @@ export class ClaudeCodeSession {
     const pid = this.pid
     if (!sid || !pid || this._lifecyclePidSaved === pid) return
     this._lifecyclePidSaved = pid
-    import('../core/session-tracker.js')
+    sessionPort().records.loadTracker()
       .then(({ updateSessionRecord }) => updateSessionRecord(sid, { lineLifecyclePid: pid }))
       .catch(() => { if (this._lifecyclePidSaved === pid) this._lifecyclePidSaved = null })
   }
@@ -5625,7 +5627,7 @@ export class ClaudeCodeSession {
    * for a Retry now.
    */
   private async settleIfUnowned(sid: string, offer: number, heldAfterWithdraw = false): Promise<void> {
-    const { settleStartRecoveryHeld } = await import('../core/session-message-queue.js')
+    const { settleStartRecoveryHeld } = await sessionPort().messages.loadMessageQueue()
     if (this._withdrawnOffer === offer) {
       // A withdrawn offer settles its rows itself (withdrawStartDeathOffer), but a hold
       // that landed after the withdraw read the queue is still to settle: the line was read.
@@ -5669,7 +5671,7 @@ export class ClaudeCodeSession {
     const row = this._spawnLineRow
     this._spawnLineRow = null
     void (async () => {
-      const queue = await import('../core/session-message-queue.js')
+      const queue = await sessionPort().messages.loadMessageQueue()
       const id = await row
       // Whatever its status (it was born held): a line put back to pending would run twice.
       if (id) await queue.removeStartRecoveryRows(sid, [id])
@@ -5710,7 +5712,7 @@ export class ClaudeCodeSession {
     const line = this._spawnFirstLine
     if (line) {
       this._spawnFirstLine = null
-      this._spawnLineRow = import('../core/session-message-queue.js').then(({ enqueueMessage, START_RECOVERY_HELD_REASON }) =>
+      this._spawnLineRow = sessionPort().messages.loadMessageQueue().then(({ enqueueMessage, START_RECOVERY_HELD_REASON }) =>
         enqueueMessage(sid, line.text, { heldReason: START_RECOVERY_HELD_REASON, ...(line.uuid ? { userUuid: line.uuid, lineUuid: line.uuid } : {}) }),
       ).then(async (row) => { await this.settleIfUnowned(sid, offer); return row.id }, (err) => {
         log.session.error('start recovery: holding the first line failed', {
@@ -5796,7 +5798,7 @@ export class ClaudeCodeSession {
     // Start recovery starts the session again (offerUnreadFirstLine): the rows wait for it, unchanged.
     if (recovering) {
       const sid = this.claudeSessionId
-      void import('../core/session-message-queue.js').then(async ({ holdForStartRecovery }) => {
+      void sessionPort().messages.loadMessageQueue().then(async ({ holdForStartRecovery }) => {
         await holdForStartRecovery(rows)
         if (sid) await this.settleIfUnowned(sid, offer, true)
       })
@@ -5976,7 +5978,7 @@ export class ClaudeCodeSession {
     this._queuedFramesFrom = pid
     const sid = this.claudeSessionId
     if (sid) {
-      import('../core/session-tracker.js')
+      sessionPort().records.loadTracker()
         .then(({ updateSessionRecord }) => updateSessionRecord(sid, { lineQueuedPid: pid }))
         .catch(() => {})
     }
@@ -6539,7 +6541,7 @@ export class ClaudeCodeSession {
     this.emitStatusChanged('NEED_ACTION', undefined, { status_reason: 'user_stopped', status_changed_by: 'user' })
     const sid = this.claudeSessionId
     if (sid) {
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(sid, { pid: undefined, pendingPermission: undefined }),
       ).catch(() => {})
     }
@@ -6787,7 +6789,7 @@ export class ClaudeCodeSession {
         if (conversationLost && this.claudeSessionId) {
           const sid = this.claudeSessionId
           const hint = `Remote JSONL missing (cwd=${this._cwd ?? 'unknown'}, host=${this._host ?? 'local'})`
-          import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+          sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
             updateSessionRecord(sid, {
               archived: true,
               archive_reason: 'remote_conversation_lost',
@@ -6866,7 +6868,7 @@ export class ClaudeCodeSession {
       this._activity = undefined
       this.emitStatusChanged('NEED_ACTION')
       const sid = this.claudeSessionId
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(sid, { pid: undefined, pendingPermission: undefined }),
       ).catch((err) => {
         log.session.warn('failed to clear PID/pendingPermission after death between turns', { sessionId: sid, error: String(err) })
@@ -6905,7 +6907,7 @@ export class ClaudeCodeSession {
     }
     this._activity = undefined
     const sid = this.claudeSessionId
-    if (sid) void import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+    if (sid) void sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
       updateSessionRecord(sid, { pid: undefined }),
     ).catch(() => {})
     this.stopLivenessMonitor()
@@ -6956,7 +6958,7 @@ export class ClaudeCodeSession {
       })
       if (this.claudeSessionId) {
         const sid = this.claudeSessionId
-        import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
           updateSessionRecord(sid, {
             process_status: 'stopped',
             status_reason: 'expected_teardown',
@@ -7077,7 +7079,7 @@ export class ClaudeCodeSession {
     // mode — an archive folded into it silently never lands.
     if (this.claudeSessionId) {
       const sid = this.claudeSessionId
-      import('../core/session-tracker.js').then(async ({ updateSessionRecord }) => {
+      sessionPort().records.loadTracker().then(async ({ updateSessionRecord }) => {
         if (conversationLost) {
           await updateSessionRecord(sid, {
             archived: true,
@@ -7548,7 +7550,7 @@ export class ClaudeCodeSession {
                 log.session.warn('resume produced different session ID, renaming record', {
                   expectedSessionId: expectedId, actualSessionId: newId, taskId: this.taskId,
                 })
-                const { renameSessionId } = await import('../core/session-tracker.js')
+                const { renameSessionId } = await sessionPort().records.loadTracker()
                 // consumedOffset MUST reset on a sid change: the watermark is a byte
                 // position in the OLD sid's stream file; the new sid gets a new file
                 // with its own coordinates, so carrying the old number over could
@@ -7575,7 +7577,7 @@ export class ClaudeCodeSession {
               }
               // Write model after persist — record is guaranteed to exist now
               if (initModel) {
-                const { updateSessionRecord } = await import('../core/session-tracker.js')
+                const { updateSessionRecord } = await sessionPort().records.loadTracker()
                 await updateSessionRecord(newId, { model: initModel })
               }
               // The persist above is async: a turn that failed at once (a native command
@@ -7658,7 +7660,7 @@ export class ClaudeCodeSession {
           }
           this._walnutMountVerdict = status.walnut
           if (this.claudeSessionId) {
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+            sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(this.claudeSessionId!, { mcpMountStatus: status }).catch(() => {}),
             ).catch(() => {})
           }
@@ -7680,7 +7682,7 @@ export class ClaudeCodeSession {
             const oldMode = this._mode
             this._mode = mapped
             if (this.claudeSessionId) {
-              import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+              sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
                 updateSessionRecord(this.claudeSessionId!, { mode: mapped, ...(mapped !== 'auto' ? { autoPermissionDenial: null } : {}) }).catch(() => {}),
               )
             }
@@ -8579,7 +8581,7 @@ export class ClaudeCodeSession {
 
               // Persist planCompleted + planFile immediately so the flag survives crashes/restarts.
               if (this.claudeSessionId) {
-                import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+                sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
                   updateSessionRecord(this.claudeSessionId!, { planCompleted: true, planFile: this.planFile ?? undefined })
                     .catch(() => {}),
                 )
@@ -8589,7 +8591,7 @@ export class ClaudeCodeSession {
               // on the plan slot), move it to plan_session_id so the UI recognizes it as
               // a plan session regardless of original mode (bypass, default, etc.).
               if (this.claudeSessionId && this.taskId) {
-                import('../core/task-manager.js').then(async ({ getTask, linkSessionSlot, clearSessionSlot }) => {
+                sessionPort().tasks.loadTaskManager().then(async ({ getTask, linkSessionSlot, clearSessionSlot }) => {
                   const sid = this.claudeSessionId!
                   const tid = this.taskId!
                   try {
@@ -8629,7 +8631,7 @@ export class ClaudeCodeSession {
                 + 'The user cannot see AskUserQuestion — it will always fail here. '
                 + 'Instead, print your questions or assumptions directly in your text output, and wait for user response.'
               Promise.all([
-                import('../core/config-manager.js').then(({ getConfig }) => getConfig()),
+                sessionPort().config.loadConfigManager().then(({ getConfig }) => getConfig()),
                 import('../core/hooks/registry.js'),
               ]).then(([cfg, { isInlineHookEnabled }]) => {
                 if (!isInlineHookEnabled('askuserquestion-p-mode-correction', cfg)) return undefined
@@ -8720,7 +8722,7 @@ export class ClaudeCodeSession {
             const sid = this.claudeSessionId
             const tid = this.taskId
             const content = msg.message.content
-            import('../core/session-hooks/builtins.js')
+            sessionPort().recovery.loadHookBuiltins()
               .then(({ autoTitleFromObservedMessage }) => autoTitleFromObservedMessage(sid, tid, content))
               .catch(() => { /* titling is best-effort */ })
           }
@@ -9145,7 +9147,7 @@ export class ClaudeCodeSession {
           log.session.warn('conversation lost — auto-archiving session', {
             sessionId: sid, taskId: this.taskId, host: this._host, cwd: this._cwd,
           })
-          import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+          sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
             updateSessionRecord(sid, {
               archived: true,
               archive_reason: 'remote_conversation_lost',
@@ -9259,7 +9261,7 @@ export class ClaudeCodeSession {
           this.pid = null
           if (this.claudeSessionId) {
             const sid = this.claudeSessionId
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+            sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(sid, { pid: undefined }),
             ).catch(() => {})
           }
@@ -9286,7 +9288,7 @@ export class ClaudeCodeSession {
           // Clear PID + pendingPermission from record to prevent stale state on future reuse
           if (this.claudeSessionId) {
             const sid = this.claudeSessionId
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+            sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(sid, { pid: undefined, pendingPermission: undefined }),
             ).catch((err) => {
               log.session.warn('failed to clear PID/pendingPermission on process exit', { sessionId: sid, error: String(err) })
@@ -9579,7 +9581,7 @@ export class ClaudeCodeSession {
             // Config read is async — use .then() since handleStreamLine is sync.
             // Add sentinel BEFORE async gap so hasPendingPermission is true during config read.
             this._pendingPermissionRequests.set(request_id, { request_id, request })
-            import('../core/config-manager.js').then(({ getConfig }) => getConfig()).then(cfg => {
+            sessionPort().config.loadConfigManager().then(({ getConfig }) => getConfig()).then(cfg => {
               if (!this._active) return  // Session killed during async gap — discard
               // Withdrawn during the async gap (control_cancel_request removed the
               // sentinel) — don't answer a request the CLI no longer has open.
@@ -9593,7 +9595,7 @@ export class ClaudeCodeSession {
                 // Sentinel already in _pendingPermissionRequests; start re-emit timer.
                 this._startPermissionReEmitTimer(request_id, request)
                 if (this.claudeSessionId) {
-                  import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+                  sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
                     updateSessionRecord(this.claudeSessionId!, {
                       pendingPermission: { ...pendingPermissionRecordFields(request_id, request), receivedAt: new Date().toISOString() },
                     }),
@@ -10038,7 +10040,7 @@ export class ClaudeCodeSession {
       const {
         emitSessionStatusChanged,
         updateSessionRecord,
-      } = await import('../core/session-tracker.js')
+      } = await sessionPort().records.loadTracker()
       const record = await updateSessionRecord(sessionId, {
         ...updates,
         ...(updates.process_status === 'error' ? { pid: this.hasPipe ? this.pid ?? undefined : undefined } : {}),
@@ -10121,7 +10123,7 @@ export class ClaudeCodeSession {
   }
 
   private async recordPermissionDecision(sid: string, toolUseId: string, line: string, onlyIfAbsent = false): Promise<void> {
-    const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId, updateSessionRecordConditionally } = await sessionPort().records.loadTracker()
     for (let attempt = 0; attempt < 3; attempt++) {
       const before = (await getSessionByClaudeId(sid).catch(() => null))?.promptAnswerLines
       // A line that only explains (noteAllowedByRule) never replaces the person's answer.
@@ -10250,7 +10252,7 @@ export class ClaudeCodeSession {
             sessionId: sid, taskId: this.taskId, requestId,
             toolName: restorePending.request.tool_name, allowed: allow, turnGen: this._turnGen,
           }, ['*'], { source: 'session-runner' })
-          const { updateSessionRecordConditionally } = await import('../core/session-tracker.js')
+          const { updateSessionRecordConditionally } = await sessionPort().records.loadTracker()
           await updateSessionRecordConditionally(sid, { pendingPermission: undefined }, (record) =>
             sameOwner() && !this._pendingPermissionRequests.has(requestId)
             && record.pendingPermission?.requestId === requestId).catch(() => undefined)
@@ -10441,8 +10443,8 @@ export class ClaudeCodeSession {
     host: string | null | undefined,
   ): Promise<import('../core/sessions/walnut-mcp-mount.js').WalnutMcpMountInput> {
     const [{ getConfig }, { walnutMcpProfile }, { WALNUT_MCP_CAPABILITY }, { getConnectedDaemonConnection }, { isCompanion }] = await Promise.all([
-      import('../core/config-manager.js'), import('../core/sessions/profiles.js'),
-      import('../core/sessions/walnut-mcp-mount.js'), import('./daemon-connection.js'), import('../core/server-role.js'),
+      sessionPort().config.loadConfigManager(), sessionPort().launch.loadProfiles(),
+      sessionPort().launch.loadWalnutMcpMount(), import('./daemon-connection.js'), import('../core/server-role.js'),
     ])
     const hostKey = host && host !== '__local__' ? host : '__local__'
     return {
@@ -10487,8 +10489,8 @@ export class ClaudeCodeSession {
     let project = this.project ?? ''
     try {
       const [{ getTask, getProjectMetadata }, { getConfig }, { readClaudePluginsOff }, { claudeScopeSettings, skillListingDescChars }] = await Promise.all([
-        import('../core/task-manager.js'),
-        import('../core/config-manager.js'),
+        sessionPort().tasks.loadTaskManager(),
+        sessionPort().config.loadConfigManager(),
         import('../core/sessions/claude-plugins-off.js'),
         import('./claude-scope-settings.js'),
       ])
@@ -10531,7 +10533,7 @@ export class ClaudeCodeSession {
     host: string | null | undefined,
   ): Promise<void> {
     try {
-      const { withWalnutMcpMount } = await import('../core/sessions/walnut-mcp-mount.js')
+      const { withWalnutMcpMount } = await sessionPort().launch.loadWalnutMcpMount()
       const mounted = withWalnutMcpMount(await this.walnutMountInput(profile, host))
       const walnut = mounted?.mcpServers?.walnut
       if (!walnut || profile?.mcpServers?.walnut) return
@@ -10621,7 +10623,7 @@ export class ClaudeCodeSession {
 
   private async tryLiveWalnutMount(state: { pid: number; tries: number; done: boolean }): Promise<void> {
     try {
-      const { liveWalnutMcpServers } = await import('../core/sessions/walnut-mcp-mount.js')
+      const { liveWalnutMcpServers } = await sessionPort().launch.loadWalnutMcpMount()
       const input = await this.walnutMountInput(this._profile, this._host)
       const servers = liveWalnutMcpServers(input)
       if (!servers) {
@@ -10646,7 +10648,7 @@ export class ClaudeCodeSession {
         // init records the real one.
         const sid = this.claudeSessionId
         if (sid) {
-          void import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
+          void sessionPort().records.loadTracker().then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
             const record = await getSessionByClaudeId(sid)
             const was = record?.mcpMountStatus?.walnut
             if (was && was !== 'blocked') return
@@ -10953,7 +10955,7 @@ export class ClaudeCodeSession {
         // client push are deliberately one decision: pushing what the store
         // rejected would poison every picker's cache with the degraded menu.
         const catSnapshot = this._modelCatalog
-        void import('../core/host-model-catalog.js')
+        void sessionPort().launch.loadHostModelCatalog()
           .then(({ saveHostModelCatalog }) => {
             if (generation !== this._transportGeneration) return false
             return saveHostModelCatalog(
@@ -11194,7 +11196,7 @@ export class ClaudeCodeSession {
         this._cliRawContextWindow = win
         const sid = this.claudeSessionId
         if (sid) {
-          void import('../core/session-tracker.js')
+          void sessionPort().records.loadTracker()
             .then(({ updateSessionRecord }) => updateSessionRecord(sid, {
               modelMaxWindow: win, modelMaxWindowSource: 'cli-model-usage', modelMaxWindowModel: this._initModel ?? this._model ?? key,
             }))
@@ -11282,7 +11284,7 @@ export class ClaudeCodeSession {
       const windowSource = this.resolvedContextWindow()?.source
       // Persist the numbers: a page loaded LATER missed this event, and then
       // only the record can turn history tokens into a percentage.
-      void import('../core/session-tracker.js')
+      void sessionPort().records.loadTracker()
         .then(({ updateSessionRecord }) => updateSessionRecord(sid, {
           modelMaxWindow: windowSize,
           modelMaxWindowSource: windowSource,
@@ -11517,7 +11519,7 @@ export class ClaudeCodeSession {
       model: appliedModel ?? null, modelChanged,
     })
     try {
-      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      const { updateSessionRecord } = await sessionPort().records.loadTracker()
       await updateSessionRecord(sid, {
         ...(effortChanged ? { effectiveEffort: next } : {}),
         ...(modelChanged ? { model: appliedModel } : {}),
@@ -11645,7 +11647,7 @@ export class ClaudeCodeSession {
       }
     }
     if (this.claudeSessionId) {
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(this.claudeSessionId!, { pendingPermission: undefined }),
       ).catch(() => {})
     }
@@ -11729,7 +11731,7 @@ export class ClaudeCodeSession {
     // Layer 2: Persist to session record on disk — survives server crashes.
     // Best-effort: don't block the event handler on disk I/O.
     if (this.claudeSessionId) {
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
         updateSessionRecord(this.claudeSessionId!, {
           pendingPermission: { ...pendingPermissionRecordFields(request_id, request), receivedAt: new Date().toISOString() },
         }),
@@ -11768,7 +11770,7 @@ export class ClaudeCodeSession {
       // permissions, so settle them as denied instead of re-asking forever.
       // Covers any archive path that forgets to call forceSettlePermissionRequests.
       if (this.claudeSessionId) {
-        import('../core/session-tracker.js')
+        sessionPort().records.loadTracker()
           .then(({ getSessionByClaudeId }) => getSessionByClaudeId(this.claudeSessionId!))
           .then(record => {
             if (record?.archived && this._pendingPermissionRequests.has(requestId)) {
@@ -11824,7 +11826,7 @@ export class ClaudeCodeSession {
     try {
       await this.persistSessionRecord(sid, cwd, { status: 'stopped', reason: 'message_not_delivered' })
       // No CLI ran: the next delivery starts this id fresh, never --resume (SessionRecord.startRefused).
-      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      const { updateSessionRecord } = await sessionPort().records.loadTracker()
       await updateSessionRecord(sid, { startRefused: { at: new Date().toISOString(), kind } })
     } catch (err) {
       log.session.warn('start refused: keeping the session record failed', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
@@ -11835,7 +11837,7 @@ export class ClaudeCodeSession {
     const taskId = this.taskId
     if (!taskId) return
     try {
-      const { linkSessionSlot, linkSession } = await import('../core/task-manager.js')
+      const { linkSessionSlot, linkSession } = await sessionPort().tasks.loadTaskManager()
       await linkSessionSlot(taskId, sid, this._mode === 'plan' ? 'plan' : 'exec')
       const { task } = await linkSession(taskId, sid)
       bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-link' })
@@ -11849,7 +11851,7 @@ export class ClaudeCodeSession {
     /** The status a NEW record starts in, when it is not the spawn's own (a refused start: stopped). */
     initial?: { status: SessionRecord['process_status']; reason: StatusReason },
   ): Promise<void> {
-    const { createSessionRecord } = await import('../core/session-tracker.js')
+    const { createSessionRecord } = await sessionPort().records.loadTracker()
     await createSessionRecord(claudeSessionId, this.taskId, this.project, cwd, {
       ...(this._modeWasNamed ? { modeChosen: true } : {}),
       pid: this.pid ?? undefined,
@@ -11925,7 +11927,7 @@ export const ACTIVE_PROCESSING_MAX_HOLD_MS = 30 * 60_000
 /** The ACP session's folder, when a failed delivery found it gone; null otherwise or when unknown. */
 async function acpFolderGone(session: AcpSession): Promise<string | null> {
   try {
-    const { folderState } = await import('../core/sessions/folder-gone.js')
+    const { folderState } = await sessionPort().recovery.loadFolderGone()
     return (await folderState(session.cwd, session.host ?? null)) === 'gone' ? session.cwd : null
   } catch { return null }
 }
@@ -11934,7 +11936,7 @@ async function acpFolderGone(session: AcpSession): Promise<string | null> {
 async function noteFolderGoneOnce(sessionId: string | null | undefined, cwd?: string | null, host?: string | null): Promise<void> {
   if (!sessionId) return
   try {
-    const { noteFolderGone } = await import('../core/sessions/folder-gone.js')
+    const { noteFolderGone } = await sessionPort().recovery.loadFolderGone()
     await noteFolderGone(sessionId, { ...(cwd ? { cwd } : {}), ...(host !== undefined ? { host } : {}) })
   } catch { /* the refusal itself still stands and is reported */ }
 }
@@ -11942,11 +11944,11 @@ async function noteFolderGoneOnce(sessionId: string | null | undefined, cwd?: st
 /** With no session record: whether the session's task belongs to an area (then its resume fails closed). */
 async function taskMayBeInArea(taskId: string | undefined): Promise<boolean> {
   if (!taskId) return false
-  const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+  const { readRouterAreas, taskArea } = await sessionPort().launch.loadRouterAreas()
   const { WALNUT_HOME } = await import('../constants.js')
   const areas = await readRouterAreas(WALNUT_HOME).catch(() => null)
   if (areas && taskArea(areas, taskId)) return true
-  const { getTask } = await import('../core/task-manager.js')
+  const { getTask } = await sessionPort().tasks.loadTaskManager()
   const task = await getTask(taskId).catch(() => null)
   return !!task && task.id === taskId && task.org_role === 'router'
 }
@@ -12257,7 +12259,7 @@ export class SessionRunner {
     if (live) return live.recoverCancelledRows(true, requireKnown)
     const rows = await cancelledRows(sessionId)
     if (!rows.length) return true
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const record = await getSessionByClaudeId(sessionId)
     if (!record || isAcpEngine(record.engine)) return !requireKnown
     const { getConnectedDaemonConnection, probeDaemonSession, readDaemonLineFate } = await import('./daemon-connection.js')
@@ -12351,7 +12353,7 @@ export class SessionRunner {
 
   /** A Stop since this delivery read its fence: a new stop id, or one awaiting its host. A storage error throws as itself. */
   private async stopFenceMoved(sessionId: string, fence: string | null): Promise<boolean> {
-    const { sessionStops, isSessionStopSuperseded } = await import('../core/sessions/session-stop.js')
+    const { sessionStops, isSessionStopSuperseded } = await sessionPort().recovery.loadSessionStop()
     try { return (await sessionStops.fence(sessionId)) !== fence }
     catch (err) { if (isSessionStopSuperseded(err)) return true; throw err }
   }
@@ -12530,7 +12532,7 @@ export class SessionRunner {
           }
           try {
             // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
-            const { prepareStartHints } = await import('../core/hints/hint-send.js')
+            const { prepareStartHints } = await sessionPort().messages.loadHintSend()
             const started = await prepareStartHints(startData)
             if (isAcpEngine(startData.engine)) {
               log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
@@ -12680,7 +12682,7 @@ export class SessionRunner {
             const liveStatus = acpSession ? 'idle' : (cliSession?.processStatus ?? 'stopped')
             const status = isError && !(workContinues && liveStatus === 'running') ? 'error' : liveStatus
 
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+            sessionPort().records.loadTracker().then(({ updateSessionRecord }) => {
               updateSessionRecord(sessionId, {
                 process_status: status,
                 ...(status === 'error' && cliSession?.hasPipe && cliSession.processPid ? { pid: cliSession.processPid } : {}),
@@ -12701,7 +12703,7 @@ export class SessionRunner {
                       ? { ...result, event: 'result', sessionId, isError: rec.process_status === 'error' || result.isError === true, record: rec }
                       : { ...eventData<'session:error'>(event), event: 'error', sessionId, isError: true, result: errorMessage, record: rec })
                     if (kept) return
-                    const { clearSessionSlot } = await import('../core/task-manager.js')
+                    const { clearSessionSlot } = await sessionPort().tasks.loadTaskManager()
                     clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
                   }).catch(() => {})
                 }
@@ -12854,7 +12856,7 @@ export class SessionRunner {
     // Durable placeholder-title sweep — retries titling from disk state when
     // every event-driven trigger failed (wedged daemon at launch, dead
     // wrapper). No-op in tests and on cloud replicas; see the module header.
-    import('../core/session-title-reconciler.js')
+    sessionPort().recovery.loadTitleReconciler()
       .then(({ startSessionTitleReconciler }) => startSessionTitleReconciler())
       .catch((err) => {
         log.session.warn('title reconciler failed to start', {
@@ -13028,7 +13030,7 @@ export class SessionRunner {
     if (inMap) return inMap
 
     try {
-      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(claudeSessionId)
       if (!record || !(await this.isSessionStillAlive(record))) return undefined
 
@@ -13109,7 +13111,7 @@ export class SessionRunner {
    */
   private async killOrphanedSessionProcesses(): Promise<void> {
     try {
-      const { listOrphanCandidates } = await import('../core/session-tracker.js')
+      const { listOrphanCandidates } = await sessionPort().records.loadTracker()
       const { sweepOrphansThroughOwner } = await import('../core/sessions/owner-stop.js')
       await sweepOrphansThroughOwner(await listOrphanCandidates(), 'session-start', {
         markExpectedTeardown: async (sid, reason) => this.markExpectedTeardown(sid, reason),
@@ -13303,7 +13305,7 @@ export class SessionRunner {
     data = frameStartData(data, framedBy)
     await this.assertStartRouting(data)
     // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
-    const { prepareStartHints } = await import('../core/hints/hint-send.js')
+    const { prepareStartHints } = await sessionPort().messages.loadHintSend()
     const started = await prepareStartHints(data)
     data = started.data
     assertDemoAdmission() // a stopping Demo starts no session (core/sessions/demo-admission.ts)
@@ -13381,9 +13383,9 @@ export class SessionRunner {
   }): Promise<void> {
     if (data.profile?.areaRole === 'router' && !data.taskId) throw new Error('An area session must name its task')
     if (data.taskId) {
-      const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+      const { readRouterAreas, taskArea } = await sessionPort().launch.loadRouterAreas()
       const { WALNUT_HOME } = await import('../constants.js')
-      const { getTask } = await import('../core/task-manager.js')
+      const { getTask } = await sessionPort().tasks.loadTaskManager()
       // A session may start for a task that does not exist (yet); only an area start needs one.
       const task = await getTask(data.taskId).catch((error) => {
         if (data.profile?.areaRole === 'router') throw error
@@ -13419,7 +13421,7 @@ export class SessionRunner {
     if ((data.resumeFile || data.transferAttemptId) && this.sdkClient?.connected) {
       throw new Error('A transfer forks the conversation through the Claude Code CLI, and this server starts sessions through the session server, which cannot fork')
     }
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const source = await getSessionByClaudeId(data.forkedFromSessionId)
     if (source?.profile?.areaId || (source?.taskId
       && !await (await import('../core/router/context-sharing.js')).mayShareTaskContext(source.taskId, undefined))) {
@@ -13442,7 +13444,7 @@ export class SessionRunner {
     const {
       getAcpIdentityReplacementTarget,
       getSessionByClaudeId,
-    } = await import('../core/session-tracker.js')
+    } = await sessionPort().records.loadTracker()
     const initialRecord = await getSessionByClaudeId(sessionId)
     if (!initialRecord || !isAcpEngine(initialRecord.engine)) return undefined
     const replacementTarget = getAcpIdentityReplacementTarget(initialRecord)
@@ -13477,7 +13479,7 @@ export class SessionRunner {
       deleteSessionRecords,
       getAcpIdentityReplacementTarget,
       getSessionByClaudeId,
-    } = await import('../core/session-tracker.js')
+    } = await sessionPort().records.loadTracker()
     let record = initialRecord ?? await getSessionByClaudeId(sessionId)
     if (!record || !isAcpEngine(record.engine)) return undefined
     // The engine this attachment belongs to. Every identity-migration check
@@ -13499,7 +13501,7 @@ export class SessionRunner {
           `ACP identity migration ${sessionId} -> ${replacementId} is incomplete or inconsistent`,
         )
       }
-      const { replaceSessionIdLinks } = await import('../core/task-manager.js')
+      const { replaceSessionIdLinks } = await sessionPort().tasks.loadTaskManager()
       if (record.taskId) {
         await replaceSessionIdLinks(record.taskId, sessionId, replacementId)
       }
@@ -13554,7 +13556,7 @@ export class SessionRunner {
       if (migratedFrom) this.acpSessions.set(migratedFrom, session)
       if (!recorded.chosen && currentRecord.mode !== session.mode) {
         // The record says what the session runs in now, so its pill stops reading Ask.
-        const { updateSessionRecord } = await import('../core/session-tracker.js')
+        const { updateSessionRecord } = await sessionPort().records.loadTracker()
         await updateSessionRecord(establishedId, { mode: session.mode }).catch(() => undefined)
       }
       await this.linkAcpSessionToTask(
@@ -13620,7 +13622,7 @@ export class SessionRunner {
       if (candidate === session) this.acpSessions.delete(key)
     }
     if (taskId) {
-      const { clearSession, clearSessionSlot } = await import('../core/task-manager.js')
+      const { clearSession, clearSessionSlot } = await sessionPort().tasks.loadTaskManager()
       await clearSessionSlot(taskId, sessionId).catch(() => {})
       await clearSession(taskId, sessionId).catch(() => {})
     }
@@ -13790,7 +13792,7 @@ export class SessionRunner {
       getTask,
       linkSession,
       linkSessionSlot,
-    } = await import('../core/task-manager.js')
+    } = await sessionPort().tasks.loadTaskManager()
 
     const slot: 'plan' | 'exec' = mode === 'plan' ? 'plan' : 'exec'
     let task = await getTask(taskId)
@@ -13917,7 +13919,7 @@ export class SessionRunner {
     let taskTitle = ''
     if (!data.title && data.taskId) {
       try {
-        const { getTask } = await import('../core/task-manager.js')
+        const { getTask } = await sessionPort().tasks.loadTaskManager()
         const { matchPlaceholderTitle } = await import('../core/sessions/quick-start.js')
         const task = await getTask(data.taskId)
         if (!matchPlaceholderTitle(task, [cwd, task.cwd])) taskTitle = (task.title ?? '').trim()
@@ -13943,7 +13945,7 @@ export class SessionRunner {
       })
     }
     try {
-      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      const { updateSessionRecord } = await sessionPort().records.loadTracker()
       await updateSessionRecord(sid, {
         title,
         description: naming.slice(0, 500),
@@ -13994,7 +13996,7 @@ export class SessionRunner {
 
     if (data.taskId) {
       try {
-        const { updateTask } = await import('../core/task-manager.js')
+        const { updateTask } = await sessionPort().tasks.loadTaskManager()
         await updateTask(data.taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
       } catch { /* task update is best-effort */ }
     }
@@ -14023,7 +14025,7 @@ export class SessionRunner {
       // title to Walnut's own model. Fire and forget; the placeholder gate and the cap live inside.
       if (data.taskId && naming.trim()) {
         const taskId = data.taskId
-        import('../core/session-hooks/builtins.js')
+        sessionPort().recovery.loadHookBuiltins()
           .then(({ autoTitleFromObservedMessage }) => autoTitleFromObservedMessage(sid, taskId, naming))
           .catch(() => { /* titling is best-effort */ })
       }
@@ -14057,7 +14059,7 @@ export class SessionRunner {
     sessionId = session.sessionId ?? sessionId
     // An engine switch replaced this session: what is queued belongs to the task's new session.
     {
-      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
       const { isSupersededSession } = await import('../core/sessions/engine-switch-marker.js')
       if (isSupersededSession(await getSessionByClaudeId(sessionId).catch(() => null))) return
       // A switch replacing it is under way: its waiting rows move with the task.
@@ -14265,7 +14267,7 @@ export class SessionRunner {
     const sid = data.preassignedSessionId
     if (!sid) return
     try {
-      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await sessionPort().records.loadTracker()
       const rec = await getSessionByClaudeId(sid)
       if (!rec || (typeof rec.pid === 'number' && rec.pid > 1) || rec.status_reason !== 'awaiting_spawn') return
       // A daemon command that timed out may still run: unknown, for the recovery probes, not a failure.
@@ -14358,18 +14360,18 @@ export class SessionRunner {
     // bypass the agent tool's resolveSessionContext().
     if (!cwd && taskId) {
       try {
-        const { getTask, getProjectMetadata } = await import('../core/task-manager.js')
+        const { getTask, getProjectMetadata } = await sessionPort().tasks.loadTaskManager()
         const task = await getTask(taskId)
         if (task) {
           // The recorded folder (task, then parent chain), only on the host it lives on
           // when the start names one (core/sessions/launch-place.ts).
           const metadata = await getProjectMetadata(task.project || '')
-          const { recordedCwdOnHost, defaultCwdOnHost } = await import('../core/sessions/launch-place.js')
+          const { recordedCwdOnHost, defaultCwdOnHost } = await sessionPort().launch.loadLaunchPlace()
           const named = data.host !== undefined
           if (named) cwd = await recordedCwdOnHost(task, data.host, metadata?.default_host)
           else {
             // A ready workspace names its own host; the rest live on the default host.
-            const { unnamedStartPlace } = await import('../core/sessions/launch-place.js')
+            const { unnamedStartPlace } = await sessionPort().launch.loadLaunchPlace()
             const place = await unnamedStartPlace(task, metadata?.default_host as string | undefined)
             cwd = place?.cwd
             if (place?.host !== undefined) data.host = place.host === '__local__' ? '' : place.host
@@ -14400,7 +14402,7 @@ export class SessionRunner {
                 `(e.g. /home/you/... on the remote host).`
               )
             }
-            const { localFallbackFolder } = await import('../core/sessions/task-dir-place.js')
+            const { localFallbackFolder } = await sessionPort().launch.loadTaskDirPlace()
             cwd = await localFallbackFolder(task.id)
           }
         }
@@ -14450,7 +14452,7 @@ export class SessionRunner {
     let taskProject: string | undefined
     if (taskId) {
       try {
-        const { updateTask, getTask } = await import('../core/task-manager.js')
+        const { updateTask, getTask } = await sessionPort().tasks.loadTaskManager()
         await updateTask(taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
         const task = await getTask(taskId)
         taskTitle = task?.title
@@ -14501,7 +14503,7 @@ export class SessionRunner {
       let source = 'live-or-record'
       if (exact === undefined) {
         try {
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
           const { spawnPrefixFromRecord } = await import('../core/sessions/spawn-prefix.js')
           const parentRecord = await getSessionByClaudeId(sideIds.parentSid)
           const prefix = parentRecord ? spawnPrefixFromRecord(parentRecord) : null
@@ -14532,7 +14534,7 @@ export class SessionRunner {
       // every managed session gets it, taskless ones included, except a slim profile, whose
       // prompt is the caller's alone (an app's ai.run lane).
       if (!data.profile?.slim) try {
-        const { buildSessionContext } = await import('../core/sessions/session-context.js')
+        const { buildSessionContext } = await sessionPort().launch.loadSessionContext()
         const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
         if (ctx.systemPrompt) {
           // Combine: caller-provided prompt takes priority, task context appended after
@@ -14553,7 +14555,7 @@ export class SessionRunner {
       const promptToStore = appendSystemPrompt
       const sidToStore = data.preassignedSessionId
       void (async () => {
-        const { updateSessionRecord } = await import('../core/session-tracker.js')
+        const { updateSessionRecord } = await sessionPort().records.loadTracker()
         try {
           await updateSessionRecord(sidToStore, { appliedAppendSystemPrompt: promptToStore })
         } catch {
@@ -14570,7 +14572,7 @@ export class SessionRunner {
     }
 
     // Resolve SSH host config from config
-    const { getConfig } = await import('../core/config-manager.js')
+    const { getConfig } = await sessionPort().config.loadConfigManager()
     const config = await getConfig()
 
     // Model and effort: the caller's pick, else the project's and Walnut's own defaults
@@ -14634,7 +14636,7 @@ export class SessionRunner {
     // parent's cwd, so every drawer prewarm would otherwise inflate that
     // directory's launcher ranking without any human launching there.
     if (cwd && !data.lane) {
-      import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
+      sessionPort().launch.loadFrequentDirs().then(({ recordDirectory }) => {
         recordDirectory(cwd, data.host ?? null, taskProject).catch(() => {})
       }).catch(() => {})
     }
@@ -14659,8 +14661,8 @@ export class SessionRunner {
           // Safe to query the record here: persistSessionRecord is awaited inside the
           // handleStreamLine init handler (~line 1720) BEFORE sessionReady is resolved,
           // so by the time this .then() runs the record is guaranteed to exist.
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-          const { addSessionToHistory, linkSessionSlot, linkSession } = await import('../core/task-manager.js')
+          const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
+          const { addSessionToHistory, linkSessionSlot, linkSession } = await sessionPort().tasks.loadTaskManager()
           const record = await getSessionByClaudeId(claudeSessionId)
           if (record?.archived) {
             await addSessionToHistory(taskId, claudeSessionId).catch((err) => {
@@ -14758,17 +14760,17 @@ export class SessionRunner {
     // Resolve cwd if not provided (same chain as handleStart)
     if (!cwd && taskId) {
       try {
-        const { getTask: getTaskFn, getProjectMetadata } = await import('../core/task-manager.js')
+        const { getTask: getTaskFn, getProjectMetadata } = await sessionPort().tasks.loadTaskManager()
         const task = await getTaskFn(taskId)
         if (task) {
           // Same rule as handleStart: a named host takes only a folder that lives on it.
           const metadata = await getProjectMetadata(task.project || '')
-          const { recordedCwdOnHost, defaultCwdOnHost } = await import('../core/sessions/launch-place.js')
+          const { recordedCwdOnHost, defaultCwdOnHost } = await sessionPort().launch.loadLaunchPlace()
           const named = data.host !== undefined
           if (named) cwd = await recordedCwdOnHost(task, data.host, metadata?.default_host)
           else {
             // A ready workspace names its own host; the rest live on the default host.
-            const { unnamedStartPlace } = await import('../core/sessions/launch-place.js')
+            const { unnamedStartPlace } = await sessionPort().launch.loadLaunchPlace()
             const place = await unnamedStartPlace(task, metadata?.default_host as string | undefined)
             cwd = place?.cwd
             if (place?.host !== undefined) data.host = place.host === '__local__' ? '' : place.host
@@ -14789,7 +14791,7 @@ export class SessionRunner {
                 `Set a cwd on the task, or set default_cwd in project "${projectLabel}" metadata.`
               )
             }
-            const { localFallbackFolder } = await import('../core/sessions/task-dir-place.js')
+            const { localFallbackFolder } = await sessionPort().launch.loadTaskDirPlace()
             cwd = await localFallbackFolder(task.id)
           }
         }
@@ -14804,7 +14806,7 @@ export class SessionRunner {
     let sdkTaskProject: string | undefined
     if (taskId) {
       try {
-        const { updateTask, getTask } = await import('../core/task-manager.js')
+        const { updateTask, getTask } = await sessionPort().tasks.loadTaskManager()
         await updateTask(taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
         const task = await getTask(taskId)
         taskTitle = task?.title
@@ -14842,7 +14844,7 @@ export class SessionRunner {
       systemPrompt = data.appendSystemPrompt
     }
     try {
-      const { buildSessionContext } = await import('../core/sessions/session-context.js')
+      const { buildSessionContext } = await sessionPort().launch.loadSessionContext()
       const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
       if (ctx.systemPrompt) {
         systemPrompt = joinCallerAndContext(systemPrompt, ctx.systemPrompt)
@@ -14884,7 +14886,7 @@ export class SessionRunner {
     this.sdkSessionMap.set(claudeSessionId, taskId)
 
     // Create session record
-    const { createSessionRecord } = await import('../core/session-tracker.js')
+    const { createSessionRecord } = await sessionPort().records.loadTracker()
     await createSessionRecord(claudeSessionId, taskId, project ?? '', cwd, {
       mode: sdkMode ?? 'default',
       title: sessionTitle,
@@ -14897,7 +14899,7 @@ export class SessionRunner {
     // Link to task
     if (taskId) {
       try {
-        const { linkSessionSlot, linkSession } = await import('../core/task-manager.js')
+        const { linkSessionSlot, linkSession } = await sessionPort().tasks.loadTaskManager()
         const slot: 'plan' | 'exec' = mode === 'plan' ? 'plan' : 'exec'
         await linkSessionSlot(taskId, claudeSessionId, slot)
         // Use the task from linkSession (has session_id set) so the browser's
@@ -14913,7 +14915,7 @@ export class SessionRunner {
 
     // Record directory usage for frequent-dirs store (fire-and-forget)
     if (cwd) {
-      import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
+      sessionPort().launch.loadFrequentDirs().then(({ recordDirectory }) => {
         recordDirectory(cwd, data.host ?? null, sdkTaskProject).catch(() => {})
       }).catch(() => {})
     }
@@ -14981,7 +14983,7 @@ export class SessionRunner {
 
     // Unconditional phase transition: session input → IN_PROGRESS
     try {
-      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(sessionId)
       if (record?.taskId) {
         // Cancel stale triage runs for this task — user has resumed, triage analysis is outdated
@@ -14991,20 +14993,20 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSendSdk: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource, isChatSendSource } = await import('../core/phase.js')
+        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource, isChatSendSource } = await sessionPort().tasks.loadPhase()
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
           sendSource: source, sendEndsWait: endsWait,
         })
         if (isPersonSendSource(source)) {
-          const { updateSessionRecord: stampHuman } = await import('../core/session-tracker.js')
+          const { updateSessionRecord: stampHuman } = await sessionPort().records.loadTracker()
           const at = new Date().toISOString()
           // Typed into the chat: the user is in it (org/user-away.ts); a letter's answer is not.
           stampHuman(sessionId, { humanInputAt: at, ...(isChatSendSource(source) ? { chatInputAt: at } : {}) }).catch(err =>
             log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
         }
         // Touch last_session_update on resume for "Recent" sidebar sort
-        const { touchLastSessionUpdate } = await import('../core/task-manager.js')
+        const { touchLastSessionUpdate } = await sessionPort().tasks.loadTaskManager()
         touchLastSessionUpdate(record.taskId).catch(err =>
           log.session.warn('touchLastSessionUpdate failed', { taskId: record.taskId, error: String(err) }))
       }
@@ -15024,7 +15026,7 @@ export class SessionRunner {
 
     // Update session record — always reset on send (user is actively resuming)
     try {
-      const { updateSessionRecord } = await import('../core/session-tracker.js')
+      const { updateSessionRecord } = await sessionPort().records.loadTracker()
       await updateSessionRecord(sessionId, {
         activity: 'Processing follow-up...',
         lastActiveAt: new Date().toISOString(),
@@ -15152,7 +15154,7 @@ export class SessionRunner {
         emitSessionStatusChanged,
         getSessionByClaudeId,
         updateSessionRecord,
-      } = await import('../core/session-tracker.js')
+      } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(sessionId)
       if (!record) return
 
@@ -15165,20 +15167,20 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSend: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource, isChatSendSource } = await import('../core/phase.js')
+        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource, isChatSendSource } = await sessionPort().tasks.loadPhase()
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
           sendSource: source, sendEndsWait: endsWait,
         })
         if (isPersonSendSource(source)) {
-          const { updateSessionRecord: stampHuman } = await import('../core/session-tracker.js')
+          const { updateSessionRecord: stampHuman } = await sessionPort().records.loadTracker()
           const at = new Date().toISOString()
           // Typed into the chat: the user is in it (org/user-away.ts); a letter's answer is not.
           stampHuman(sessionId, { humanInputAt: at, ...(isChatSendSource(source) ? { chatInputAt: at } : {}) }).catch(err =>
             log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
         }
         // Touch last_session_update on resume for "Recent" sidebar sort
-        const { touchLastSessionUpdate } = await import('../core/task-manager.js')
+        const { touchLastSessionUpdate } = await sessionPort().tasks.loadTaskManager()
         touchLastSessionUpdate(record.taskId).catch(err =>
           log.session.warn('touchLastSessionUpdate failed', { taskId: record.taskId, error: String(err) }))
       }
@@ -15241,7 +15243,7 @@ export class SessionRunner {
     // Read before the first await: a Stop during the spawn wait, prompt or mark must still count.
     const stops = targetSession.stopEpoch
 
-    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const { sessionStops } = await sessionPort().recovery.loadSessionStop()
     const stopFence = await sessionStops.fence(sessionId)
     // The panel accepts input while the CLI is still spawning (the id is minted
     // before the process exists), so the FIFO may not be created yet. Wait for the
@@ -15287,7 +15289,7 @@ export class SessionRunner {
       releaseHeld(sessionId, newMsgs.map((m) => m.id))
       // Into the running CLI, which runs on the stored prompt: a notice only when it needs it (stale-notice.ts).
       await dropStaleNotices(sessionId, newMsgs, async () => {
-        const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+        const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
         return (await getSessionByClaudeId(sessionId).catch(() => null))?.appliedAppendSystemPrompt
       })
       // A Stop before the write parks the rows unwritten; a delegated resend would deliver them after it.
@@ -15622,7 +15624,7 @@ export class SessionRunner {
     let currentAreaProfile: import('../core/types.js').SessionProfile | undefined
     let resumeRecord: SessionRecord | null | undefined
     try {
-      const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId: getSession } = await sessionPort().records.loadTracker()
       // An unreadable session store cannot say whether this was an area session.
       const record = await getSession(sessionId).catch((error) => {
         areaBound = true
@@ -15637,7 +15639,7 @@ export class SessionRunner {
       // Any area profile but an older build's receiver ('work', dropped at boot) is a router's: one that cannot say which stays scoped.
       } else if (record.profile?.areaId && record.profile.areaRole !== 'work') areaBound = true
       if (record?.taskId) {
-        const { getTask } = await import('../core/task-manager.js')
+        const { getTask } = await sessionPort().tasks.loadTaskManager()
         // A task that is gone is no area task unless other evidence says so; a store that
         // cannot be read cannot say, so that refuses.
         const found = await getTask(record.taskId).catch((error) => {
@@ -15650,7 +15652,7 @@ export class SessionRunner {
         // A prefix lookup may answer another task: only the stored id's own task counts.
         const task = found && found.id === record.taskId ? found : null
         if (task && task.org_role === 'router') areaBound = true
-        const { readRouterAreas, taskArea } = await import('../core/router/areas.js')
+        const { readRouterAreas, taskArea } = await sessionPort().launch.loadRouterAreas()
         const { WALNUT_HOME } = await import('../constants.js')
         // A task with no area mark is outside every area (the mark is never cleared), so only a
         // marked one needs the areas file to resume.
@@ -15731,7 +15733,7 @@ export class SessionRunner {
       // CLI fall back to its first allowed model. Move it to the same family's
       // row in the host catalog and persist that, so the picker agrees.
       if (resolvedModel && record) {
-        const { getHostModelCatalog } = await import('../core/host-model-catalog.js')
+        const { getHostModelCatalog } = await sessionPort().launch.loadHostModelCatalog()
         const { successorForRetiredModel } = await import('../core/sessions/retired-model.js')
         const catalog = await getHostModelCatalog(record.host).catch(() => null)
         const successor = successorForRetiredModel(catalog?.models ?? [], resolvedModel)
@@ -15740,7 +15742,7 @@ export class SessionRunner {
             sessionId, host: record.host, from: resolvedModel, to: successor,
           })
           resolvedModel = successor
-          const { updateSessionRecord } = await import('../core/session-tracker.js')
+          const { updateSessionRecord } = await sessionPort().records.loadTracker()
           await updateSessionRecord(sessionId, { cliModel: successor }).catch((err) => {
             log.session.warn('resume: persisting successor model failed', {
               sessionId, error: err instanceof Error ? err.message : String(err),
@@ -15789,10 +15791,10 @@ export class SessionRunner {
   private async resumeSpawnPrompt(sessionId: string, stored: string | undefined): Promise<string | undefined> {
     if (!stored) return this.resumeOwedPrompt(sessionId, stored)
     try {
-      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(sessionId)
       if (!record || record.appliedAppendSystemPrompt !== stored) return stored
-      const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
+      const { freshResumePrompt } = await sessionPort().recovery.loadPromptRefresh()
       // The record's facts: a resume follows the old process's end, so the runner's in-memory
       // facts are that dead process's and may be newer than an edit or a reap the record holds.
       // A respawn of a live CLI decides with the live facts itself (respawnOnCurrentPrompt).
@@ -15816,10 +15818,10 @@ export class SessionRunner {
    */
   private async resumeOwedPrompt(sessionId: string, stored: string | undefined): Promise<string | undefined> {
     try {
-      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(sessionId)
       if (!record) return stored
-      const { missingResumePrompt } = await import('../core/sessions/prompt-refresh.js')
+      const { missingResumePrompt } = await sessionPort().recovery.loadPromptRefresh()
       const fresh = await missingResumePrompt(record)
       if (!fresh) return stored
       await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: fresh })
@@ -15845,13 +15847,13 @@ export class SessionRunner {
     opts: { respawn?: boolean } = {},
   ): Promise<import('../core/types.js').SessionProfile | undefined> {
     try {
-      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(sessionId)
       if (!record) return stored
       const [{ mountOnResume }, { WALNUT_MCP_CAPABILITY }, { walnutMcpProfile }, { getConnectedDaemonConnection }, { isCompanion }, { getConfig }] = await Promise.all([
-        import('../core/sessions/resume-mcp-mount.js'), import('../core/sessions/walnut-mcp-mount.js'),
-        import('../core/sessions/profiles.js'), import('./daemon-connection.js'),
-        import('../core/server-role.js'), import('../core/config-manager.js'),
+        import('../core/sessions/resume-mcp-mount.js'), sessionPort().launch.loadWalnutMcpMount(),
+        sessionPort().launch.loadProfiles(), import('./daemon-connection.js'),
+        import('../core/server-role.js'), sessionPort().config.loadConfigManager(),
       ])
       const config = await getConfig()
       // The same inputs a fresh start reads (handleStart).
@@ -15884,7 +15886,7 @@ export class SessionRunner {
   private clearPendingResumeSessionAt(sessionId: string): void {
     void (async () => {
       try {
-        const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+        const { getSessionByClaudeId, updateSessionRecord } = await sessionPort().records.loadTracker()
         const record = await getSessionByClaudeId(sessionId)
         if (!record?.pendingResumeSessionAt) return
         await updateSessionRecord(sessionId, { pendingResumeSessionAt: undefined })
@@ -15936,7 +15938,7 @@ export class SessionRunner {
     const ANCHOR_READ_TIMEOUT_MS = 5_000
     let readTimer: NodeJS.Timeout | undefined
     try {
-      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const { getSessionByClaudeId, updateSessionRecord } = await sessionPort().records.loadTracker()
       const record = await getSessionByClaudeId(sessionId)
       // Re-read the flag: it may have been cleared between resolve and here.
       if (!record || record.pendingResumeSessionAt !== resumeSessionAt) return
@@ -16098,10 +16100,10 @@ export class SessionRunner {
   async respawnOnCurrentPrompt(sessionId: string, stillWanted: () => boolean, opts: { folder?: boolean } = {}): Promise<'respawned' | 'not-due' | 'gave-way'> {
     // Someone's restart is on its way: it runs on the current prompt too when that pays.
     if (this.nativeSessionReinitializations.has(sessionId)) return 'gave-way'
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const record = await getSessionByClaudeId(sessionId)
     if (!record || isAcpEngine(record.engine)) return 'not-due'
-    const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
+    const { freshResumePrompt } = await sessionPort().recovery.loadPromptRefresh()
     const facts = this.findSessionByClaudeId(sessionId)?.promptCache ?? record.promptCache
     // Decided by the caller (its verdict holds the rules a resume's cost rule lacks): only built here.
     const fresh = await freshResumePrompt(record, Date.now(), facts, { decided: true })
@@ -16151,7 +16153,7 @@ export class SessionRunner {
       if (by === 'system') return
       return this.refusePreparing()
     }
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
     if (isAcpEngine(record.engine)) {
@@ -16163,7 +16165,7 @@ export class SessionRunner {
         await this.acpDeliverySettlements.get(sessionId)
         this.settleInFlightTurn(sessionId)
         const restoredId = await session.restart()
-        const { updateSessionRecord, emitSessionStatusChanged } = await import('../core/session-tracker.js')
+        const { updateSessionRecord, emitSessionStatusChanged } = await sessionPort().records.loadTracker()
         const updated = await updateSessionRecord(restoredId, {
           process_status: 'idle', errorMessage: undefined, activity: undefined,
           status_reason: 'restart_reinitialize', status_changed_by: 'user',
@@ -16174,10 +16176,10 @@ export class SessionRunner {
       }
       return
     }
-    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const { sessionStops } = await sessionPort().recovery.loadSessionStop()
     const stopFence = await sessionStops.fence(sessionId)
 
-    const { getConfig } = await import('../core/config-manager.js')
+    const { getConfig } = await sessionPort().config.loadConfigManager()
     const cfg = await getConfig()
 
     // Resolve SSH target for remote sessions so the respawn lands on the right host.
@@ -16226,7 +16228,7 @@ export class SessionRunner {
     beforeSend: () => void, onSent: () => void,
     opts: { by: 'user' | 'system'; prompt?: string; quietCheck?: (target: ClaudeCodeSession) => Promise<boolean>; stillWanted?: () => boolean }): Promise<void> {
     const by = opts.by
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     // The last look before the first destructive step: the batch of a delivery preparing now is not settled here.
     if (this.nativeDeliveryPreps.has(sessionId)) return by === 'system' ? undefined : this.refusePreparing()
     // Mid-turn guard: if the session was actively processing a turn when Restart
@@ -16259,7 +16261,7 @@ export class SessionRunner {
       resumePrompt = opts.prompt
       // Stored before the spawn, as resumeSpawnPrompt does: a line frozen meanwhile compares against it.
       if (opts.prompt !== storedPrompt) {
-        const { updateSessionRecord } = await import('../core/session-tracker.js')
+        const { updateSessionRecord } = await sessionPort().records.loadTracker()
         await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: opts.prompt }).catch((err) => {
           log.session.warn('reinitialize: the new prompt was not stored; respawning on the stored one', { sessionId, error: err instanceof Error ? err.message : String(err) })
           resumePrompt = storedPrompt
@@ -16290,7 +16292,7 @@ export class SessionRunner {
             // turn and keep "working" on screen with none (same rule as Retry).
             // Written before the restart returns, so it can never land after the
             // queued message the caller sends next has made the session Running.
-            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+            sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(sessionId, { process_status: 'idle', activity: undefined, errorMessage: undefined, status_reason: 'restart_reinitialize', status_changed_by: by } as Record<string, unknown>))
               .catch(() => {})
               .finally(() => resolve())
@@ -16316,14 +16318,14 @@ export class SessionRunner {
    * reconnect into another failed attempt plus another pair of error cards.
    */
   private async redeliverPendingForHost(hostKey: string, connection?: import('../core/sessions/session-stop.js').SessionStopConnection): Promise<void> {
-    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const { sessionStops } = await sessionPort().recovery.loadSessionStop()
     await sessionStops.flush(hostKey, connection)
     // A completed task's stop this host could not receive while it was away (task-complete-stop.ts).
     // Not awaited: each stop can take seconds, and the queued messages below must not wait on them.
     void import('../core/sessions/task-complete-stop.js').then((m) => m.flushTaskCompleteStops(hostKey)).catch((err: unknown) => {
       log.session.warn('task complete stop: the flush for a host that came back threw', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
     })
-    const { getSessionByClaudeId: cancelledRecord } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId: cancelledRecord } = await sessionPort().records.loadTracker()
     for (const sid of await cancelledSessionIds()) {
       const record = await cancelledRecord(sid)
       if ((record?.host ?? '__local__') === hostKey) await this.recoverCancelledForSession(sid)
@@ -16335,7 +16337,7 @@ export class SessionRunner {
     const {
       getAcpIdentityReplacementTarget,
       getSessionByClaudeId,
-    } = await import('../core/session-tracker.js')
+    } = await sessionPort().records.loadTracker()
     // Each session on its own: one whose delivery is slow (a line being confirmed
     // with the host, a cold resume) must not hold up the others on the host.
     // processNext already serializes per session. At most REDELIVERY_PARALLEL at
@@ -16507,7 +16509,7 @@ export class SessionRunner {
       && held.target.hasPipe && held.target.stopEpoch === held.stopEpoch
     if (this.heldSendRetries.get(sessionId) !== held) return
     if (!same()) { this.cancelHeldSendRetry(sessionId); return }
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const record = await getSessionByClaudeId(sessionId)
     const rows = await getQueue(sessionId)
     if (!same()) return
@@ -16730,7 +16732,7 @@ export class SessionRunner {
     if (err instanceof BudgetCheckingError || err instanceof BudgetPausedError || isSlowHostFailure(err)) return null
     if (isPermanentDeliveryFailure(err)) return null
     daemonLinks ??= await import('./daemon-connection.js').catch(() => null)
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const host = (await getSessionByClaudeId(sessionId).catch(() => null))?.host ?? '__local__'
     if (!isHostLinkFailure(err) && !linkDown(host)) return null
     const { hostDisplayNameFor } = await import('../core/hosts/host-display-name.js')
@@ -16784,7 +16786,7 @@ export class SessionRunner {
 
   private async processNextNow(sessionId: string, mode?: string): Promise<void> {
     if (this.nativeInterrupts.has(sessionId)) await this.nativeInterrupts.get(sessionId)
-    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
     const stopRecord = await getSessionByClaudeId(sessionId)
     if (!stopRecord?.pid && (stopRecord?.status_reason === 'awaiting_spawn' || stopRecord?.status_reason === 'spawn_outcome_unknown')) {
       log.session.info('processNext: waiting for initial spawn confirmation', { sessionId })
@@ -16849,7 +16851,7 @@ export class SessionRunner {
     // queue's head now would send a later line first (see midTurnWrites).
     await this.midTurnWrites.get(sessionId)
     // No wrapper and no record: rebuild the record from the JSONL first (inc-2026-08-10), once for this delivery.
-    const rebuilt = live || stopRecord ? undefined : await (await import('../core/sessions/session-record-recovery.js')).recoverSessionRecordFromJsonl(sessionId)
+    const rebuilt = live || stopRecord ? undefined : await (await sessionPort().recovery.loadRecordRecovery()).recoverSessionRecordFromJsonl(sessionId)
     // No bound transport holds a backup line's answer here: settle backups first, so a restored older line leads.
     // A record nothing could rebuild keeps the existing error path below instead of waiting on a check it cannot pass.
     if (!live?.transportBound && rebuilt !== null && !(await this.recoverCancelledForSession(sessionId, true))) {
@@ -16927,7 +16929,7 @@ export class SessionRunner {
       // observed as a chat ERROR bubble 6s into a daemon respawn.
       if (!targetSession) {
         try {
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
           const rec = await getSessionByClaudeId(sessionId)
           if (!rec?.host || rec.host === '__local__') {
             const { ensureLocalDaemon } = await import('./session-manager.js')
@@ -16966,7 +16968,7 @@ export class SessionRunner {
       // does to the in-flight turn).
       if (!targetSession) {
         try {
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
           const record = await getSessionByClaudeId(sessionId)
           if (record && await this.isSessionStillAlive(record)) {
             log.session.info('processNext: rehydrating session via attachToExisting', {
@@ -17157,14 +17159,14 @@ export class SessionRunner {
 
       if (!targetSession) {
         // Session not in memory — create a new one to resume
-        const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+        const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
         let record = await getSessionByClaudeId(sessionId)
         // A rebuild this delivery already tried and found nothing for is not tried again.
         if (!record && rebuilt !== null) {
           // Record lost but the canonical JSONL may survive (inc-2026-08-10):
           // self-heal so the queued message can ride --resume instead of being
           // stranded pending forever and retried on every server boot.
-          const { recoverSessionRecordFromJsonl } = await import('../core/sessions/session-record-recovery.js')
+          const { recoverSessionRecordFromJsonl } = await sessionPort().recovery.loadRecordRecovery()
           record = await recoverSessionRecordFromJsonl(sessionId)
         }
         if (record) {
@@ -17185,7 +17187,7 @@ export class SessionRunner {
           const epoch = session.stopEpoch
 
           // Read config for SSH target resolution and permission_prompt setting
-          const { getConfig } = await import('../core/config-manager.js')
+          const { getConfig } = await sessionPort().config.loadConfigManager()
           const resumeConfig = await getConfig()
 
           // Resolve SSH target if session has a stored host
@@ -17252,7 +17254,7 @@ export class SessionRunner {
 
       // Resolve SSH target if the session was on a remote host, so --resume
       // spawns on the correct machine (not locally).
-      const { getConfig } = await import('../core/config-manager.js')
+      const { getConfig } = await sessionPort().config.loadConfigManager()
       const resumeConfig2 = await getConfig()
       let resumeSshTarget: SshTarget | undefined
       const resumeHost = targetSession.host

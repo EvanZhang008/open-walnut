@@ -79,21 +79,22 @@ import {
   withCoreWalnutTools,
   snapshotAcpModels,
 } from './acp-worker/protocol.js'
-import {
-  acceptAcpPrompt,
-  createSessionRecord,
-  deleteSessionRecords,
-  emitSessionStatusChanged,
-  getSessionByClaudeId,
-  rollbackAcpSessionIdMigration,
-  stageAcpSessionIdMigration,
-  updateSessionRecord,
-  updateSessionRecordConditionally,
-} from '../core/session-tracker.js'
-import {
-  migrateSessionQueue,
-  rollbackSessionQueueMigration,
-} from '../core/session-message-queue.js'
+import { callThrough, sessionPort, type SessionQueuePort, type SessionTrackerPort } from '../core/sessions/session-port.js'
+
+// Session records and the message queue, through the session port (core/sessions/session-port.ts).
+const recordFn = <K extends keyof SessionTrackerPort>(name: K) => callThrough(() => sessionPort().records.tracker, name)
+const queueFn = <K extends keyof SessionQueuePort>(name: K) => callThrough(() => sessionPort().messages.queue, name)
+const acceptAcpPrompt = recordFn('acceptAcpPrompt')
+const createSessionRecord = recordFn('createSessionRecord')
+const deleteSessionRecords = recordFn('deleteSessionRecords')
+const emitSessionStatusChanged = recordFn('emitSessionStatusChanged')
+const getSessionByClaudeId = recordFn('getSessionByClaudeId')
+const rollbackAcpSessionIdMigration = recordFn('rollbackAcpSessionIdMigration')
+const stageAcpSessionIdMigration = recordFn('stageAcpSessionIdMigration')
+const updateSessionRecord = recordFn('updateSessionRecord')
+const updateSessionRecordConditionally = recordFn('updateSessionRecordConditionally')
+const migrateSessionQueue = queueFn('migrateSessionQueue')
+const rollbackSessionQueueMigration = queueFn('rollbackSessionQueueMigration')
 import { BudgetCheckingError, BudgetPausedError } from './delivery-failure.js'
 import { piNodeFor } from './pi-adapter-node.js'
 import { acpLaunchArtifacts, configuredEngineEnv, type AcpLaunchArtifacts } from './acp-launch.js'
@@ -751,7 +752,7 @@ function retireAcpRedirectLater(
 ): void {
   const timer = setTimeout(() => {
     void (async () => {
-      const { getAcpIdentityReplacementTarget } = await import('../core/session-tracker.js')
+      const { getAcpIdentityReplacementTarget } = await sessionPort().records.loadTracker()
       const redirect = await getSessionByClaudeId(previousSessionId)
       if (!redirect || !ours(redirect)) return
       const target = getAcpIdentityReplacementTarget(redirect)
@@ -1182,7 +1183,7 @@ export class AcpSession {
     const taskId = this.taskId || undefined
     const epoch = this._backgroundEpoch
     const wanted = () => epoch === this._backgroundEpoch && this._active
-    const fence = import('../core/sessions/session-stop.js').then(({ sessionStops }) => sessionStops.fence(sessionId))
+    const fence = sessionPort().recovery.loadSessionStop().then(({ sessionStops }) => sessionStops.fence(sessionId))
     fence.catch(() => {})
     this._cursorCommit = this._cursorCommit.then(async () => {
       if (!wanted()) return
@@ -1205,7 +1206,7 @@ export class AcpSession {
     const taskId = this.taskId
     if (!taskId) return
     const sessionId = this.trackingId()
-    void import('../core/phase.js').then(({ applySessionPhase }) =>
+    void sessionPort().tasks.loadPhase().then(({ applySessionPhase }) =>
       applySessionPhase(taskId, 'session:result', `acp-session:${why}`, { sessionId }),
     ).catch((error) => {
       log.session.warn('acp: hand-back after background work failed', { sessionId, taskId, error: error instanceof Error ? error.message : String(error) })
@@ -1456,7 +1457,7 @@ export class AcpSession {
    */
   private async readPermissionPolicy(): Promise<void> {
     try {
-      const { getConfig } = await import('../core/config-manager.js')
+      const { getConfig } = await sessionPort().config.loadConfigManager()
       this._autoApproveBypass = (await getConfig()).session?.auto_approve_bypass !== false
     } catch { /* unreadable config keeps the default (on) */ }
     await import('../ops/index.js').catch(() => { /* no registry: only the fixed write list is answered */ })
@@ -1596,7 +1597,7 @@ export class AcpSession {
   private async resolveMcpServerSet(): Promise<AcpMcpServer[]> {
     let session: { acp_walnut_mcp?: boolean; acp_walnut_tools?: unknown } | undefined
     try {
-      const { getConfig } = await import('../core/config-manager.js')
+      const { getConfig } = await sessionPort().config.loadConfigManager()
       // Read structurally: both fields are optional and additive in Config.
       session = (await getConfig()).session as typeof session
     } catch (error) {
@@ -1707,7 +1708,7 @@ export class AcpSession {
       defaultInstructions = renderSelfKnowledgeContract()
     } else {
       try {
-        const { buildSessionContext } = await import('../core/sessions/session-context.js')
+        const { buildSessionContext } = await sessionPort().launch.loadSessionContext()
         defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd, this.remote ? this.host : undefined)).systemPrompt || undefined
       } catch { /* context is additive — never block establish */ }
     }
@@ -1749,7 +1750,7 @@ export class AcpSession {
     let context = this.cfg.developerInstructions?.trim() ?? ''
     if (!context) {
       try {
-        const { buildSessionContext } = await import('../core/sessions/session-context.js')
+        const { buildSessionContext } = await sessionPort().launch.loadSessionContext()
         context = (await buildSessionContext(this.taskId, this.cfg.cwd, this.remote ? this.host : undefined)).systemPrompt?.trim() ?? ''
       } catch (error) {
         log.session.warn('acp: session context unavailable for the first prompt', {
@@ -2331,7 +2332,7 @@ export class AcpSession {
           }
         }
 
-        const { replaceSessionIdLinks } = await import('../core/task-manager.js')
+        const { replaceSessionIdLinks } = await sessionPort().tasks.loadTaskManager()
         let queueMigration: Awaited<ReturnType<typeof migrateSessionQueue>> | null = null
         try {
           if (this.taskId) {

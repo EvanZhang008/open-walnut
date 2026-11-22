@@ -298,7 +298,7 @@ describe('class guard: a line waits on no side request before its write for more
   const BOUNDED_WAITS: Record<string, string> = {
     // The person's own Stop in flight: its ack (INTERRUPT_ACK_TIMEOUT_MS), else the process stop.
     'await this._interruptPromise': 'an interrupt the person asked for, not a side request',
-    "await import('../core/sessions/session-stop.js')": 'a module load, no I/O after the first',
+    'await sessionPort().recovery.loadSessionStop()': 'a module load (the session port), no I/O after the first',
     'await sessionStops.fence(this.claudeSessionId!)': 'one read of the local session record, no host',
     'await this.liveMountBeforeLine()': 'LIVE_MOUNT_LINE_WAIT_MS',
   }
