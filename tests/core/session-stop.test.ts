@@ -467,7 +467,7 @@ describe('SessionStopCoordinator.flush', () => {
     const h = makeHarness([makeRecord('s1', { host: undefined })])
     h.setConnection('__local__', null)
     await h.build().request('s1')
-    expect(h.connection).toHaveBeenCalledWith('__local__')
+    expect(h.connection).toHaveBeenCalledWith('__local__', 's1')
 
     const local = makeConnection(h.log, { auto: { ok: true, stopped: true } })
     await h.build().flush('__local__', local.conn)

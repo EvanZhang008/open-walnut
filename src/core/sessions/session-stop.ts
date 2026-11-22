@@ -32,7 +32,8 @@ export interface SessionStopDeps {
   park(sid: string): Promise<void>
   /** A withdrawn stop: put back what its park set aside (rows parked under the stop's reason since `since`). */
   unpark?(sid: string, since: string, fence: string): Promise<void>
-  connection(host: string): Promise<SessionStopConnection | null>
+  /** The link a stop of `sid` on `host` goes over (null: none up). */
+  connection(host: string, sid?: string): Promise<SessionStopConnection | null>
   /**
    * Whether a host with no live connection answers a fresh connect (host-lost.ts). Absent:
    * no probe, the stop waits for the host as before.
@@ -265,12 +266,12 @@ export class SessionStopCoordinator {
     let error: string | undefined
     try {
       const host = record.host ?? '__local__'
-      let conn = connection ?? await this.deps.connection(host)
+      let conn = connection ?? await this.deps.connection(host, sid)
       if (!conn?.connected && !connection && this.deps.probe && this.deps.lost) {
         // No live link: a fresh connect decides. One that comes up takes the stop now; one
         // that does not makes the session lost here (host-lost.ts), the task free to go on.
         const reach = await this.deps.probe(host)
-        if (reach.reachable) conn = await this.deps.connection(host)
+        if (reach.reachable) conn = await this.deps.connection(host, sid)
         else return await this.markLost(record, request, host, reach.error, by)
       }
       // A person's stop names this Walnut, so a daemon that records the session
@@ -323,6 +324,19 @@ export class SessionStopCoordinator {
   }
 }
 
+/**
+ * The link a stop of `sid` on `host` goes over. A host's own session (it runs and judges it, the
+ * row naming this host's key) is in no pool under that name: the stop goes where its CLI is
+ * reached, the session's own link, else this host's follower link (replica/self-host.ts).
+ */
+export async function stopConnectionOf(host: string, sid?: string): Promise<SessionStopConnection | null> {
+  const dc = await import('../../providers/daemon-connection.js')
+  const { thisHostKey } = await import('./session-row-owner.js')
+  if (!sid || !host || host !== thisHostKey()) return dc.getConnectedDaemonConnection(host)
+  const mgr = (await import('../../providers/session-manager.js')).getRegisteredSessionManager(sid) as { liveConnection?: SessionStopConnection | null } | undefined
+  return mgr?.liveConnection ?? (await import('../../replica/self-host.js')).selfHostConnection(host) ?? dc.getConnectedDaemonConnection(host)
+}
+
 export const sessionStops = new SessionStopCoordinator({
   get: async (sid) => (await import('../session-tracker.js')).getSessionByClaudeId(sid),
   save: async (sid, updates) => (await import('../session-tracker.js')).updateSessionRecord(sid, updates),
@@ -369,7 +383,7 @@ export const sessionStops = new SessionStopCoordinator({
       }
     }, false, true)
   },
-  connection: async (host) => (await import('../../providers/daemon-connection.js')).getConnectedDaemonConnection(host),
+  connection: stopConnectionOf,
   changed: (record) => {
     void import('../session-tracker.js').then(({ emitSessionStatusChanged }) => {
       emitSessionStatusChanged(record, {}, ['*'], { source: 'session-stop' })

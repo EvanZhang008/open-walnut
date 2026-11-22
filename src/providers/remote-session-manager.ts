@@ -335,6 +335,8 @@ export class RemoteSessionManager implements SessionManager {
   get hasPipe(): boolean { return this._hasPipe }
   /** The daemon tells a line the CLI took from one it answered (line-answer-v1, line-fate-core.ts). */
   get judgesAnswers(): boolean { return this.conn?.hasCapability(LINE_ANSWER_CAPABILITY) ?? false }
+  /** The daemon this session's CLI is reached on, while linked (a host's stop of its own session, session-stop.ts). */
+  get liveConnection(): DaemonConnection | null { return this.conn?.connected ? this.conn : null }
   /** See _lastPreparedOutbound — the echo-claim text source for delivery points. */
   get lastPreparedOutbound(): string | undefined { return this._lastPreparedOutbound }
   get tailOffset(): number { return this._fileSize }
