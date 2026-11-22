@@ -329,22 +329,21 @@ const FeedItem = memo(function FeedItem({
     <NoticeCard
       solid
       className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${activate ? ' clickable' : ''}${recovered || stale ? ' recovered' : ''}`}
-      {...(activate ? {
-        role: 'button',
-        onClick: activate,
-        handlers: {
-          tabIndex: 0,
-          onKeyDown: (e: KeyboardEvent) => {
-            // Only the row's own key: Enter or Space on its x, Details or a button inside it belongs
-            // to that control (2026-11-22 review: Enter on the x opened the row instead of closing it).
-            if (e.target !== e.currentTarget) return;
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              activate();
-            }
-          },
+      role={activate ? 'button' : undefined}
+      onClick={activate ?? undefined}
+      handlers={{
+        // A row with nothing to open takes no focus and no keys.
+        tabIndex: activate ? 0 : undefined,
+        onKeyDown: (e) => {
+          // Only the row's own key: Enter or Space on its x, Details or a button inside it belongs
+          // to that control (2026-11-22 review: Enter on the x opened the row instead of closing it).
+          if (!activate || e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activate();
+          }
         },
-      } : {})}
+      }}
       avatar={noticeAvatarOf(n)}
       who={presented.title}
       wrapTitle

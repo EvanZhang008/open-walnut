@@ -160,7 +160,9 @@ describe('one notification system', () => {
     expect(card).toContain("'wn-notice wn-glass-frost'");
     const css = read('web/src/styles/notice-card.css');
     expect(css).toMatch(/html \.wn-notice\.wn-notice \{[^}]*border: 1px solid var\(--glass-frost-border/);
-    expect(css).toMatch(/html \.wn-notice\.wn-notice \{[^}]*border-radius: 14px/);
+    // The family's one corner, --radius-notice (also the System pane's blocks, globals.css).
+    expect(css).toMatch(/:root \{ --radius-notice: 14px; \}/);
+    expect(css).toMatch(/html \.wn-notice\.wn-notice \{[^}]*border-radius: var\(--radius-notice\)/);
     expect(css).not.toMatch(/border-(?:left|right)\s*:/);
   });
 });

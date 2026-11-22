@@ -246,10 +246,12 @@ function liveFeed(now: number, breakEnds: number): Array<Record<string, unknown>
 
 test('NP-live: a running break\'s buttons, an ask\'s host, Clear and a row\'s x by key', async ({ page }) => {
   const now = Date.now()
-  // Long enough to open the panel and see the buttons, short enough to watch them go.
-  const breakEnds = now + 25_000
+  // The page's clock runs on its own and is moved past the break's end below: a busy host can take
+  // longer than any fixed wait just to show the bell (2026-11-22: 51 s, past a 25 s break).
+  const breakEnds = now + 10 * 60_000
   await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], feed: liveFeed(now, breakEnds) })
   await claudeMissing(page)
+  await page.clock.install({ time: now })
   await page.reload()
   await expect(bell(page)).toBeVisible({ timeout: 45_000 })
   await openBell(page)
@@ -276,7 +278,8 @@ test('NP-live: a running break\'s buttons, an ask\'s host, Clear and a row\'s x 
   await expect(panel).toBeVisible()
 
   // The break ends with the panel open: its buttons go, its row stays as history.
-  await expect(buttons).toHaveCount(0, { timeout: breakEnds - Date.now() + 5_000 })
+  await page.clock.fastForward(breakEnds - now + 1_000)
+  await expect(buttons).toHaveCount(0, { timeout: 10_000 })
   await expect(focus).toBeVisible()
 
   // Clear all takes what is settled and leaves the ask that still waits.

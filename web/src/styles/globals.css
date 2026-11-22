@@ -624,7 +624,7 @@ textarea::placeholder { max-width: 100%; }
    never a tinted block. */
 .notification-card {
   border: 1px solid var(--glass-frost-border);
-  border-radius: 14px;
+  border-radius: var(--radius-notice);
   background: var(--bg-elevated);
   padding: 10px 12px;
   margin-bottom: 8px;
