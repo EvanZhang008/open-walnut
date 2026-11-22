@@ -228,6 +228,8 @@ async function exportNow(node: string): Promise<void> {
   await syncFromJson(node)
   if (!nodeRow(node)?.dirty) return
   const seen = changes.get(node) ?? 0
+  // Every reply whole, also where the database keeps it once (thread-answer-refs.ts): the file is what
+  // an older build and the JSON mode read.
   const text = JSON.stringify(current(node).file, null, 2) + '\n'
   const p = threadsJsonFile(node)
   writing.add(node)

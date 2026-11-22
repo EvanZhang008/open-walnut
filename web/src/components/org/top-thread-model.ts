@@ -2,7 +2,7 @@
  * What the top of a chat shows of its task's Threads (experiment top_thread, TopThread.tsx), kept
  * apart from the component so the strip and the tests read it without React. Pure.
  */
-import type { ActionItem } from '@open-walnut/user-status';
+import type { ActionItem, ActionKind } from '@open-walnut/user-status';
 import { orderedForHim, threadCountLabel } from '@open-walnut/thread-view';
 import { threadsForHim } from '@open-walnut/thread-groups';
 import type { OrgThread } from '@/api/org-threads';
@@ -17,14 +17,51 @@ export function topThreads(threads: readonly OrgThread[] | null, now: number): O
 }
 
 /**
+ * Which Action needed items a thread can hold, so the top draws that decision once, as the
+ * thread (2026-11-21, the user, on a chat whose top showed the same question twice, the task's
+ * own ask card over its thread card holding that ask: "我真是服了你了"). Every kind is named:
+ * a new kind must say whether a thread can hold it (tests/web/top-thread.test.ts holds each).
+ *   letter  a thread opened from a decision letter (opener letter, its id the ref) or holding it (letter)
+ *   ask     the task's own ask on its thread (threads_one_card: heldAsk, askId = the decision id)
+ *   choice  a Board choice a leader's thread holds (choice: its Board and id)
+ *   question, permission, approval  live prompts and approvals: no thread holds them; they lead the top
+ */
+export const HELD_BY_THREAD: Record<ActionKind, ((it: ActionItem, t: OrgThread) => boolean) | null> = {
+  letter: (it, t) => (t.opener?.from === 'letter' && t.opener.ref === it.id) || (!!t.letter && !t.letter.done && !t.letter.off && t.letter.id === it.id),
+  ask: (it, t) => t.heldAsk?.id === it.id || t.askId === it.id,
+  choice: (it, t) => !!t.choice && !t.choice.done && !t.choice.off && t.choice.id === it.id && (!it.board || t.choice.board === it.board),
+  question: null,
+  permission: null,
+  approval: null,
+};
+
+/**
  * The task's Action needed items that are not one of the threads the top shows (`listed`,
- * topThreads): a live prompt, an approval, a choice, an ask, a letter. A letter a listed thread was
- * opened from (opener `letter`, its id as the ref) is that thread now, so it shows once, as the
- * thread; while that thread is out of the list (the node's move, snoozed) the letter shows. Pure.
+ * topThreads): a live prompt, an approval, and a letter, an ask or a choice no listed thread holds.
+ * One a listed thread holds is that thread now, so it shows once, as the thread (behind ‹ ›, the
+ * bar points to it: decisionsElsewhere); while that thread is out of the list (the node's move,
+ * snoozed, closed) or the top is hidden to its line, the item shows, so it never vanishes from both.
+ * Pure.
  */
 export function actionsNotThreads(items: readonly ActionItem[], listed: readonly OrgThread[]): ActionItem[] {
-  const letters = new Set(listed.filter((t) => t.opener?.from === 'letter' && t.opener.ref).map((t) => t.opener!.ref!));
-  return items.filter((it) => !(it.kind === 'letter' && letters.has(it.id)));
+  return items.filter((it) => {
+    const held = HELD_BY_THREAD[it.kind];
+    return !held || !listed.some((t) => held(it, t));
+  });
+}
+
+/**
+ * The other listed threads that hold one of the task's decisions (`items`), by their place in `list`:
+ * what the top's bar points to while the thread on show (`i`) is another one (review 2026-11-22:
+ * "1 / 2" with the ask on the second). The bar names it and steps to it; the strip above never
+ * redraws it, so stepping through the threads never moves the arrows under his pointer. Pure.
+ */
+export function decisionsElsewhere(list: readonly OrgThread[], i: number, items: readonly ActionItem[]): number[] {
+  const out: number[] = [];
+  list.forEach((t, k) => {
+    if (k !== i && items.some((it) => HELD_BY_THREAD[it.kind]?.(it, t))) out.push(k);
+  });
+  return out;
 }
 
 /** The hidden line's words: "16 threads (1 needs you)", "3 threads (2 need you)", "2 threads". */

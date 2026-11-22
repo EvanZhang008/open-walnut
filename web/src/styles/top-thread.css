@@ -66,6 +66,9 @@
 .top-thread-whole { all: unset; cursor: pointer; margin-left: 8px; padding: 2px 6px; border-radius: 6px; color: var(--accent); font-weight: 500; }
 .top-thread-whole:hover { background: var(--bg-secondary); }
 .top-thread-whole:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A decision of this task on another thread: the bar names it and steps to it (TopThread.tsx). */
+/* Layout only: its look is the shared .btn-link (buttons.css). */
+.top-thread-elsewhere { margin-left: 8px; display: inline-flex; align-items: center; gap: 4px; }
 /* A block of words with more below its end fades out there, never a line cut in half. */
 .top-thread-list [data-clipped="true"] {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);

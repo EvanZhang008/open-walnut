@@ -30,7 +30,8 @@ import { useNamedTasks } from './useNamedTasks';
 import { askThreadFocus, setTopThreads, useFocusedThread } from './thread-focus';
 import { ReplyThreadContext } from '@/components/sessions/reply-thread-line';
 import type { OrgThreadsState } from './useOrgThreads';
-import { TOP_HIDDEN_VIEW, hiddenLine, topIndex, topThreads } from './top-thread-model';
+import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenLine, topIndex, topThreads } from './top-thread-model';
+import type { ActionItem } from '@open-walnut/user-status';
 import type { OrgThread } from '@/api/org-threads';
 import '@/styles/top-thread.css';
 
@@ -78,16 +79,14 @@ export function useTopThreads(threads: OrgThreadsState): { at: number; list: Org
   return useMemo(() => { const at = Math.max(now, Date.now()); return { at, list: topThreads(all, at) }; }, [all, now]);
 }
 
-export function TopThread({ task, sessionId, threads, list, at }: {
-  task: Task; sessionId: string; threads: OrgThreadsState;
-  /** useTopThreads: what the top steps through, read at `at`. */
-  list: readonly OrgThread[]; at: number;
-}) {
-  const { send } = useSessionSend(sessionId);
-  const [hidden, setHidden] = usePageView(TOP_HIDDEN_VIEW.page, TOP_HIDDEN_VIEW.name, false, isBoolean);
-  const all = threads.threads;
-  const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
-  /** The thread on show: a passing cursor, not a view choice. */
+/** Where the top stands in `list`: the thread on show, and how to move to another. */
+export interface TopCursor { i: number; t: OrgThread | undefined; step(to: number): void; show(id: string): void }
+
+/**
+ * The thread on show: a passing cursor, not a view choice. Held by the chat's top (SessionTop), so
+ * the strip beside it knows which thread is on screen and draws what the others hold.
+ */
+export function useTopCursor(list: readonly OrgThread[]): TopCursor {
   const [atId, setAtId] = useState<string | null>(null);
   const lastIndex = useRef(0);
   const i = topIndex(list, atId, lastIndex.current);
@@ -99,6 +98,27 @@ export function TopThread({ task, sessionId, threads, list, at }: {
     if (i >= 0) lastIndex.current = i;
     if (t && t.id !== atId) setAtId(t.id);
   }, [i, t, atId]);
+  return {
+    i, t,
+    step: (to) => { const next = list[to]; if (next) { lastIndex.current = to; setAtId(next.id); } },
+    show: setAtId,
+  };
+}
+
+export function TopThread({ task, sessionId, threads, list, at, cursor, decisions = [] }: {
+  task: Task; sessionId: string; threads: OrgThreadsState;
+  /** useTopThreads: what the top steps through, read at `at`. */
+  list: readonly OrgThread[]; at: number;
+  /** useTopCursor over `list`. */
+  cursor: TopCursor;
+  /** The task's Action needed items the strip leaves to the threads: the bar points to one held elsewhere. */
+  decisions?: readonly ActionItem[];
+}) {
+  const { send } = useSessionSend(sessionId);
+  const [hidden, setHidden] = usePageView(TOP_HIDDEN_VIEW.page, TOP_HIDDEN_VIEW.name, false, isBoolean);
+  const all = threads.threads;
+  const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
+  const { i, t, step } = cursor;
   // A thread line in this chat about one of these steps the top to it and marks it (thread-focus.ts);
   // hidden, the top lists none, so the line opens the Threads view as without it.
   useEffect(() => {
@@ -106,7 +126,7 @@ export function TopThread({ task, sessionId, threads, list, at }: {
     return () => setTopThreads(task.id, null);
   }, [task.id, hidden, list]);
   const rootRef = useRef<HTMLDivElement>(null);
-  const focused = useFocusedThread(hidden ? undefined : task.id, list, rootRef, (x) => setAtId(x.id));
+  const focused = useFocusedThread(hidden ? undefined : task.id, list, rootRef, (x) => cursor.show(x.id));
   const tasks = useNamedTasks(t?.tasks);
   // The chat's host brings its own Threads into view (reply-thread-line.tsx): there the card reads whole.
   const host = useContext(ReplyThreadContext);
@@ -114,7 +134,9 @@ export function TopThread({ task, sessionId, threads, list, at }: {
   if (!t) return null;
   const readWhole = host && host.chat === task.id ? () => { askThreadFocus(task.id, t.id); host.showOwn(); } : undefined;
   const n = list.length;
-  const step = (to: number) => { const next = list[to]; if (next) { lastIndex.current = to; setAtId(next.id); } };
+  const elsewhere = decisionsElsewhere(list, i, decisions);
+  // Each click goes on to the next one after the thread on show, then round to the first.
+  const nextDecision = elsewhere.find((k) => k > i) ?? elsewhere[0];
   const followUp = (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId });
   if (hidden) {
     return (
@@ -136,6 +158,13 @@ export function TopThread({ task, sessionId, threads, list, at }: {
         <span className="top-thread-pos" data-testid="top-thread-pos" title={`${i + 1} of ${threadCountLabel(n)} for you`}>{i + 1} / {n}</span>
         <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{'›'}</button>
         {n - i - 1 > 0 && <span className="top-thread-left" data-testid="top-thread-left">{n - i - 1} more</span>}
+        {elsewhere.length > 0 && (
+          <button type="button" className="btn btn-link btn-sm top-thread-elsewhere" data-testid="top-thread-elsewhere" onClick={() => { if (nextDecision !== undefined) step(nextDecision); }}
+            title="A decision of this task is on another thread: show it">
+            <i className="top-thread-dot is-needs" aria-hidden="true" />
+            {elsewhere.length === 1 ? `Decision on ${elsewhere[0]! + 1} / ${n}` : `${elsewhere.length} decisions on other threads`} <span aria-hidden="true">{'›'}</span>
+          </button>
+        )}
         {clipped && readWhole && (
           <button type="button" className="top-thread-whole" data-testid="top-thread-whole" onClick={readWhole}
             title="Its words are cut off here: open it whole in the Threads view">Show all</button>

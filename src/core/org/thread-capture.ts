@@ -22,6 +22,7 @@ import {
 import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 import { keepsThreads } from './keeps-threads.js';
 import { letterThreadId } from './letter-thread-model.js';
+import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -92,6 +93,8 @@ export interface ThreadHintState {
   popped?: boolean;
   /** It went to a thread it did not name (threads-model.ts FileMessageResult.joined). */
   joined?: 'reopened' | 'recent';
+  /** His words switched this task's Threads off or back on (threads-word-switch.ts): nothing was filed. */
+  switched?: ThreadsWordSwitch;
 }
 
 export interface ThreadCapture {
@@ -119,12 +122,19 @@ export async function prepareThreadCapture(input: {
   now?: number;
 }): Promise<ThreadCapture | null> {
   const task = input.task;
-  if (!task || !keepsThreads(task)) return null;
-  const words = userWordsOf(input.message, { inChat: input.inChat });
+  if (!task) return null;
+  // "别回 thread" turns this task's Threads off, "开回 thread" back on: only his own chat words,
+  // only a task that is no Org node (Main's and a lead's Threads are the org's).
+  const keeps = keepsThreads(task);
+  const words = keeps || task.threads_on === false ? userWordsOf(input.message, { inChat: input.inChat }) : null;
   if (!words) return null;
+  const turn = !task.org_role && words.via === 'chat' && !input.threadId ? threadsSwitchIn(words.text) : null;
+  if (!keeps && turn !== 'on') return null;
   // Every replica keeps no Threads: the leader files his message when it gets it.
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return null;
+  if (turn === 'off' && keeps) return threadsSwitch(task.id, 'off');
+  if (turn === 'on' && !keeps) return threadsSwitch(task.id, 'on');
   const store = await import('./threads-store.js');
   const cur = await store.readThreads(task.id);
   const at = new Date(input.now ?? Date.now()).toISOString();
@@ -216,6 +226,30 @@ export async function prepareThreadCapture(input: {
   };
 }
 
+/** His words switch the task's Threads: the same write as its ⋮ menu's Turn off / Turn on Threads, nothing filed. */
+function threadsSwitch(taskId: string, to: ThreadsWordSwitch): ThreadCapture {
+  return {
+    hint: { threadId: '', title: '', created: false, duplicate: false, followUp: false, open: [], closed: [], switched: to },
+    async commit() {
+      // The agent is already told it switched: a busy task file (its lock) gets two more tries.
+      const { updateTask } = await import('../task-manager.js');
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await updateTask(taskId, { threads_on: to === 'on' }, { source: 'threads-word-switch' });
+          log.session.info('org threads: his words switched threads', { taskId, to });
+          return;
+        } catch (err) {
+          if (attempt >= 2) {
+            log.session.error('org threads: switch not saved', { taskId, to, error: err instanceof Error ? err.message : String(err) });
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
+    },
+  };
+}
+
 function q(s: string): string { return JSON.stringify(s); }
 
 /** A window from the environment in seconds (0 turns it off), else its default. */
@@ -234,6 +268,7 @@ function windowMs(name: string, fallback: number): number {
  */
 export function threadHintText(s: ThreadHintState): string {
   let text: string;
+  if (s.switched) return threadsSwitchedText(s.switched);
   if (s.movedTo && s.popped) return `his reply in thread ${s.threadId} ${q(s.title)} of ${s.movedTo.title} (${s.movedTo.task}), a task below you: filed there, and it goes to that task. Not yours to act on.`;
   if (s.movedTo) return `a follow-up in thread ${s.threadId} ${q(s.title)}, which moved to ${s.movedTo.title} (${s.movedTo.task}) with its work: filed there, and ${s.movedTo.title} reads it. Not yours to act on; at most tell him it is with ${s.movedTo.title} now.`;
   if (s.duplicate) text = `already filed under thread ${s.threadId} ${q(s.title)}.`;
@@ -288,7 +323,7 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
     if (t.state === 'pending') why = untitled ? 'untitled' : null;
     // A summary he wrote past comes first (2026-11-08, the user: "Walnut needs to make sure it doesn't happen").
     else if (summaryBehindHim(t)) why = 'summary';
-    else if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!.at))) why = 'reacted';
+    else if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!))) why = 'reacted';
     else if (untitled) why = 'untitled';
     else if (t.state === 'new' && xs.some((x) => x.answer)) why = 'state';
     // A card he sees always leads with the node's summary (thread-view.ts summaryOwed; 2026-11-08).

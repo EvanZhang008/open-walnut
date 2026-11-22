@@ -60,7 +60,7 @@ import { oneCardNow } from './one-card.js';
 import { storedOptions } from '../ask-options.js';
 import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { PICTURE_TITLE_WORDS } from '../human-inbox/walnut-letters/receipt-words.js';
-import { ACK_PLACES, pinnedFirst, hasThreadNews, threadReactionAt, type AckPlaced } from './thread-view.js';
+import { ACK_PLACES, pinnedFirst, hasThreadNews, readAfter, threadReactionAt, type AckPlaced } from './thread-view.js';
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
@@ -743,12 +743,18 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   return { file: { ...file, threads: prune([...file.threads, thread], input.at) }, thread, message, created: true, duplicate: false };
 }
 
-/** Persist what he saw before a follow-up can leave this subject. Silence never sets this receipt. */
+/**
+ * Persist what he saw before a follow-up can leave this subject. Silence never sets this receipt,
+ * and a message he sent before he could have read an answer (thread-view.ts readAfter) does not
+ * either: that answer stays unread, and its known mark stops before it.
+ */
 function recordReaction(t: OrgThread, at: string): OrgThread {
   const reactedAt = threadReactionAt(t) > at ? threadReactionAt(t) : at;
-  const messages = t.messages.map((m) => m.answer && m.answer.at <= at
+  const messages = t.messages.map((m) => m.answer && readAfter(m.answer, at)
     ? { ...m, readAt: m.readAt && m.readAt > at ? m.readAt : at } : m);
-  const last = [...messages].reverse().find((m) => m.answer && m.answer.at <= at);
+  // The known mark covers the answers before the first one he could not have read yet.
+  const firstUnread = messages.findIndex((m) => m.answer && !m.readAt && m.answer.at <= at);
+  const last = [...(firstUnread < 0 ? messages : messages.slice(0, firstUnread))].reverse().find((m) => m.answer && m.readAt);
   return { ...t, reactedAt, messages,
     ...(last && (!t.known || messages.findIndex((m) => m.id === last.id) >= messages.findIndex((m) => m.id === t.known!.through))
       ? { known: { through: last.id, at: reactedAt, by: 'human' as const } } : {}),
@@ -879,17 +885,24 @@ export function lastUserAt(file: ThreadsFile): string | null {
   return last;
 }
 
-/** He wrote to the node after `at` (a reply, an ok, a follow-up): what was said before may be known. */
-export function reactedSince(file: ThreadsFile, at: string): boolean {
-  const last = lastUserAt(file);
-  return !!last && last > at;
+/**
+ * He wrote to the node after the node's `word` (a reply, an ok, a follow-up), late enough to have
+ * read it (thread-view.ts readAfter): what was said before may be known.
+ */
+export function reactedSince(file: ThreadsFile, word: { at: string; text?: string }): boolean {
+  return readAfter(word, lastUserAt(file));
 }
 
 /** When the node last spoke in the exchanges through `upTo` (its answers, its first post); '' = never. */
+/** The node's newest word in `t` up to message `upTo` (its opener or an answer), with its text. */
+function nodeWordOf(t: OrgThread, upTo: number): { at: string; text?: string } | null {
+  let word: { at: string; text?: string } | null = t.opener ?? null;
+  for (const m of t.messages.slice(0, upTo + 1)) if (m.answer && m.answer.at > (word?.at ?? '')) word = m.answer;
+  return word;
+}
+
 function nodeWordAt(t: OrgThread, upTo: number): string {
-  let at = t.opener?.at ?? '';
-  for (const m of t.messages.slice(0, upTo + 1)) if (m.answer && m.answer.at > at) at = m.answer.at;
-  return at;
+  return nodeWordOf(t, upTo)?.at ?? '';
 }
 
 /** A plain acknowledgement ("ok, thanks", "got it", a short Chinese "ok"): no question in it, a few words. */
@@ -915,13 +928,14 @@ function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: s
   if (t.ackedAt && t.state === 'pending' && (!last || last.at <= t.ackedAt) && nodeWordAt(t, lastIdx) <= t.ackedAt && (!t.replyAt || t.replyAt <= t.ackedAt)) return;
   if (!last) {
     // Only the node's own post: closed once he wrote to it after it (anywhere, the node's judgment).
-    if (t.opener && reactedSince(file, t.opener.at)) return;
+    if (t.opener && reactedSince(file, t.opener)) return;
     throw notReacted('closed', t.opener?.at ?? '', words);
   }
-  if (last.answer && reactedSince(file, last.answer.at)) return;
-  // His last message is a plain reaction to what the node said before it.
-  const before = nodeWordAt(t, lastIdx - 1);
-  if (before && last.at > before && isAcknowledgement(last.text)) return;
+  if (last.answer && reactedSince(file, last.answer)) return;
+  // His last message is a plain reaction to what the node said before it, sent after he could read
+  // it (thread-view.ts readAfter: an "ok" a second after a long answer is not his reading of it).
+  const before = nodeWordOf(t, lastIdx - 1);
+  if (before && readAfter(before, last.at) && isAcknowledgement(last.text)) return;
   throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx), words);
 }
 
@@ -965,7 +979,7 @@ function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadW
   if (by === 'human') return upTo;
   for (let k = upTo; k >= 0; k--) {
     const a = t.messages[k].answer;
-    if (a && reactedSince(file, a.at)) return k;
+    if (a && reactedSince(file, a)) return k;
   }
   throw notReacted('marked known', nodeWordAt(t, upTo));
 }
@@ -1105,7 +1119,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     // An agent's prefix mark never proves the user read this thread's summary.
     if (by === 'human') next.reactedAt = at;
     const readAt = by === 'human' ? at : lastUserAt(file)!;
-    next.messages = next.messages.map((m, i) => i <= through && m.answer && m.answer.at <= readAt
+    // His own mark covers what he marked; the node's covers only what his last message could follow.
+    next.messages = next.messages.map((m, i) => i <= through && m.answer && (by === 'human' ? m.answer.at <= readAt : readAfter(m.answer, readAt))
       ? { ...m, readAt: m.readAt && m.readAt > readAt ? m.readAt : readAt } : m);
   }
   if (patch.close && (!(cur.closed && cur.closed.how === patch.close) || by === 'human' && cur.closed.reacted)) {

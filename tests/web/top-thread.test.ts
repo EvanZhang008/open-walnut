@@ -19,7 +19,8 @@ import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
 import { threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
-import { TOP_HIDDEN_VIEW, actionsNotThreads, hiddenLine, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
+import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, decisionsElsewhere, hiddenLine, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
+import { ACTION_KINDS } from '../../src/core/action-needed.js'
 import { isBoolean, shownText, storedView, viewKey, writeView } from '../../web/src/utils/view-memory'
 
 const NOW = Date.parse('2026-11-20T08:00:00.000Z')
@@ -165,6 +166,64 @@ describe('Action needed items above the top thread', () => {
     ]
     expect(actionsNotThreads(items, topThreads(threads, NOW)).map((i) => i.id)).toEqual(['req-1', 'apr-1', 'lt-b', 'lt-c', 'ask-1'])
     expect(actionsNotThreads(items, [])).toEqual(items)
+  })
+
+  it("draws one decision once: a task's ask, a letter or a Board choice a listed thread holds shows only as that thread", () => {
+    seq = 200
+    const ask = item('ask', 'ask-6vao06')
+    const choice = { ...item('choice', 'ch-1'), board: 'mvm0n3bu-6910' }
+    const letter = item('letter', 'lt-held')
+    const holding = [
+      thread('needs', 60, { heldAsk: { id: 'ask-6vao06', ask: 'What happens when the payment provider is down for 10 minutes?', was: 'answered' }, askId: 'ask-6vao06' }),
+      thread('needs', 61, { choice: { board: 'mvm0n3bu-6910', id: 'ch-1', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] } }),
+      thread('needs', 62, { letter: { id: 'lt-held', task: 'mvm0n3bu-6910', options: [] } }),
+    ]
+    const listed = topThreads(holding, NOW)
+    expect(listed).toHaveLength(3)
+    expect(actionsNotThreads([ask, choice, letter], listed)).toEqual([])
+    // Another decision, or one a thread no longer holds (the choice ended), still shows.
+    const ended = thread('needs', 63, { choice: { board: 'mvm0n3bu-6910', id: 'ch-2', options: [], done: true } })
+    const other = [item('ask', 'ask-other'), { ...item('choice', 'ch-2'), board: 'mvm0n3bu-6910' }]
+    expect(actionsNotThreads(other, topThreads([...holding, ended], NOW)).map((i) => i.id)).toEqual(['ask-other', 'ch-2'])
+  })
+
+  it('a decision on a thread behind the arrows is named on the bar, never redrawn in the strip', () => {
+    seq = 250
+    const ask = item('ask', 'ask-second')
+    // Review 2026-11-22: "1 / 2" on screen, the ask on the second thread.
+    const list = topThreads([
+      thread('needs', 80, { choice: { board: 'mvm0n3bu-6910', id: 'ch-9', options: [] } }),
+      thread('needs', 79, { heldAsk: { id: 'ask-second', ask: 'Which cache?', was: 'answered' }, askId: 'ask-second' }),
+    ], NOW)
+    const second = list.findIndex((t) => t.askId === 'ask-second')
+    expect(second).toBeGreaterThan(-1)
+    const other = second === 0 ? 1 : 0
+    // The strip leaves it to the listed thread whichever is on show, so stepping never moves the arrows.
+    expect(actionsNotThreads([ask], list)).toEqual([])
+    // On the other thread the bar points to the one that holds it; on that one it points nowhere.
+    expect(decisionsElsewhere(list, other, [ask])).toEqual([second])
+    expect(decisionsElsewhere(list, second, [ask])).toEqual([])
+    // A live prompt is held by no thread: never pointed to (the strip draws it).
+    expect(decisionsElsewhere(list, other, [item('permission', 'req-1')])).toEqual([])
+  })
+
+  it('the strip and the bar read the same cursor and the same decisions', () => {
+    const strip = fs.readFileSync('web/src/components/actions/SessionActionStrip.tsx', 'utf8')
+    expect(strip).toMatch(/const holding = hidden \? \[\] : list/)
+    expect(strip).toMatch(/cursor=\{cursor\}/)
+    expect(strip).toMatch(/decisions=\{/)
+    expect(fs.readFileSync('web/src/components/org/TopThread.tsx', 'utf8')).toMatch(/decisionsElsewhere\(list, i, decisions\)/)
+  })
+
+  it('names every Action needed kind: whether a thread can hold it, and live prompts and approvals always lead', () => {
+    expect(Object.keys(HELD_BY_THREAD).sort()).toEqual([...ACTION_KINDS].sort())
+    seq = 300
+    // A thread that matches every id cannot take a kind no thread holds.
+    const everything = thread('needs', 70, { heldAsk: { id: 'x', ask: 'x', was: 'answered' }, askId: 'x', opener: { text: 'x', at: at(69), from: 'letter', ref: 'x', by: 'node' } } as Partial<OrgThread>)
+    for (const kind of ACTION_KINDS) {
+      const kept = actionsNotThreads([item(kind, 'x')], topThreads([everything], NOW))
+      if (HELD_BY_THREAD[kind] === null) expect(kept, kind).toHaveLength(1)
+    }
   })
 })
 

@@ -433,7 +433,8 @@ export async function prepareHintedSend(
     // A task with Threads on keeps them too (filesUserAsks): its close and compaction read them there.
     const userAsk = usersWords ? await captureUserAsk(record, task, words, opts) : null;
     const plan = planHints({
-      hints, target, record, config, away, brief, threadsTidy, teamGuidance, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
+      // His words just turned this task's Threads off (org/threads-word-switch.ts): no cleanup line rides with them.
+      hints, target, record, config, away, brief, threadsTidy: thread?.hint.switched === 'off' ? null : threadsTidy, teamGuidance, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
       ...(focus !== undefined ? { focus } : {}),
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),

@@ -19,9 +19,15 @@ import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { CLOSED_KEEP_MS, ThreadError, type OrgThread, type ThreadMessage, type ThreadsFile } from './threads-model.js'
+import { expandAnswerRefs, storedMessages } from './thread-answer-refs.js'
 
-/** The newest schema this build reads; a file a newer build wrote is refused (JSON is used then). */
-export const THREADS_DB_VERSION = 1
+/**
+ * The newest schema this build reads; a file a newer build wrote is refused (JSON is used then).
+ * 2: a message row may hold its answer as `{ same: <message id> }` (thread-answer-refs.ts). A
+ * version-1 build would hand that on as an answer with no text (its routes and the phone fail on
+ * it), so it refuses the file and reads the JSON files, which keep every reply whole.
+ */
+export const THREADS_DB_VERSION = 2
 
 export const threadsDbPath = (): string => path.join(WALNUT_HOME, 'org', 'threads.sqlite')
 
@@ -142,7 +148,7 @@ export function dirtyNodes(): string[] {
  * `msgs` from the rows, or `full` (the whole thread's JSON) from threads-sync.ts's cache. A write
  * compares with these texts, never with the object, which the mutation may have changed in place.
  */
-interface Loaded { thread: OrgThread; pos: number; body?: string; msgs?: string[]; full?: string; orig?: OrgThread }
+interface Loaded { thread: OrgThread; pos: number; body?: string; msgs?: string[]; full?: string; orig?: OrgThread; stored?: string[] }
 /** A node as loaded: its file and what each thread was read from, for the write that follows (writeNode). */
 export interface NodeSnapshot { file: ThreadsFile; rows: Map<string, Loaded> }
 
@@ -150,10 +156,11 @@ const bodyText = (t: OrgThread): string => JSON.stringify({ ...t, messages: [] }
 const original = (l: Loaded): OrgThread => (l.orig ??= JSON.parse(l.full!) as OrgThread)
 const bodyOf = (l: Loaded): string => (l.body ??= bodyText(original(l)))
 const messageCount = (l: Loaded): number => (l.msgs ? l.msgs.length : original(l).messages.length)
+/** A message's row as stored: each reply once (thread-answer-refs.ts), so the rows compare as written. */
+const storedTexts = (t: OrgThread): string[] => storedMessages(t.messages).map((m) => JSON.stringify(m))
 const messageOf = (l: Loaded, seq: number): string | undefined => {
   if (l.msgs) return l.msgs[seq]
-  const m = original(l).messages[seq]
-  return m && JSON.stringify(m)
+  return (l.stored ??= storedTexts(original(l)))[seq]
 }
 
 /**
@@ -165,7 +172,9 @@ export function unchangedText(snap: NodeSnapshot, t: OrgThread): string | null {
   if (!l || l.thread !== t) return null
   const text = JSON.stringify(t)
   if (l.full !== undefined) return text === l.full ? text : null
-  return bodyText(t) === l.body && t.messages.length === l.msgs!.length && t.messages.every((m, i) => JSON.stringify(m) === l.msgs![i]) ? text : null
+  if (bodyText(t) !== l.body || t.messages.length !== l.msgs!.length) return null
+  const rows = storedTexts(t)
+  return rows.every((m, i) => m === l.msgs![i]) ? text : null
 }
 
 /**
@@ -206,7 +215,8 @@ export function loadNode(node: string, opts: { all?: boolean } = {}): NodeSnapsh
   for (const r of heads) {
     const thread = JSON.parse(r.body) as OrgThread
     const texts = byThread.get(r.id) ?? []
-    thread.messages = texts.map((t) => JSON.parse(t) as ThreadMessage)
+    // A reply stored once reads back under every message it answers (thread-answer-refs.ts).
+    thread.messages = expandAnswerRefs(texts.map((t) => JSON.parse(t) as ThreadMessage))
     rows.set(r.id, { thread, pos: r.pos, body: r.body, msgs: texts })
     threads.push(thread)
   }
@@ -269,8 +279,8 @@ export function writeNode(node: string, snap: NodeSnapshot, next: ThreadsFile, u
       s.upsertThread.run(node, t.id, pos, t.state, t.closed ? 1 : 0, closedAt(t), t.createdAt, t.updatedAt, body)
       wrote = true
     }
-    t.messages.forEach((m, seq) => {
-      const text = JSON.stringify(m)
+    storedTexts(t).forEach((text, seq) => {
+      const m = t.messages[seq]
       if (prev && messageOf(prev, seq) === text) return
       s.upsertMessage.run(node, t.id, seq, m.id, m.at, text)
       wrote = true

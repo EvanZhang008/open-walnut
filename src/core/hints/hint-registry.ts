@@ -210,7 +210,7 @@ const BUILT_IN: readonly HintSpec[] = [
     // 2026-11-01, the user: every request of his becomes a thread the node keeps; "if my multiple
     // ask is about the same thread, add it below that thread".
     defaults: { enabled: true, triggers: ['every_turn'], placement: 'after' },
-    identity: (i) => (i.thread ? `${i.thread.threadId}|${i.thread.created ? 'new' : 'in'}` : null),
+    identity: (i) => (i.thread ? `${i.thread.switched ? `switched-${i.thread.switched}` : i.thread.threadId}|${i.thread.created ? 'new' : 'in'}` : null),
     render: (i) => (i.thread ? { text: threadHintText(i.thread) } : null),
   },
   {

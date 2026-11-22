@@ -13,8 +13,9 @@ import type { Task } from '@open-walnut/core';
 import { keepsThreads } from '@open-walnut/keeps-threads';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
-import { TopThread, useTopThreads } from '@/components/org/TopThread';
-import { actionsNotThreads } from '@/components/org/top-thread-model';
+import { TopThread, useTopCursor, useTopThreads } from '@/components/org/TopThread';
+import { actionsNotThreads, TOP_HIDDEN_VIEW } from '@/components/org/top-thread-model';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import { ActionNeeded } from './ActionNeeded';
 
 export const SessionActionStrip = memo(function SessionActionStrip({ task, sessionId }: { task: Task | null | undefined; sessionId: string }) {
@@ -95,15 +96,21 @@ function SessionTop({ task, sessionId, actions }: { task: Task; sessionId: strin
   const threads = useOrgThreads(task.id, true);
   // One list and one clock for both: what the top shows and what the strip leaves to it.
   const { at, list } = useTopThreads(threads);
-  const items = actions && task.phase !== 'COMPLETE' ? actionsNotThreads(task.user_status?.actions ?? [], list) : [];
+  const cursor = useTopCursor(list);
+  // A decision a listed thread holds is drawn there, once (on another thread, the top's bar points to
+  // it); with the top hidden to its line, the strip draws it, so hiding the top never hides a question.
+  const [hidden] = usePageView(TOP_HIDDEN_VIEW.page, TOP_HIDDEN_VIEW.name, false, isBoolean);
+  const holding = hidden ? [] : list;
+  const all = task.user_status?.actions ?? [];
+  const items = actions && task.phase !== 'COMPLETE' ? actionsNotThreads(all, holding) : [];
   const shown = items.length > 0 || list.length > 0;
   const room = useTopRoom(shown);
   // Nothing to show draws nothing: an empty first child would still move the chat under the glass header.
   if (!shown) return null;
   return (
     <div className="session-top" data-testid="session-top" ref={room}>
-      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => actionsNotThreads([it], list).length > 0} />}
-      {list.length > 0 && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} />}
+      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => actionsNotThreads([it], holding).length > 0} />}
+      {list.length > 0 && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
     </div>
   );
 }

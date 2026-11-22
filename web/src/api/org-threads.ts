@@ -94,6 +94,8 @@ export interface OrgThread {
   /** Projected on read: it reads needs because it holds the task's own ask now; `id` is that ask's
    *  Action needed item, `reply` the thread's own summary under the question, `was` its stored state. */
   heldAsk?: { id: string; ask: string; reply?: string; was: string };
+  /** Projected with heldAsk: the decision id of the task's own ask it holds (the Action needed item's id). */
+  askId?: string;
   /** While it waits on him (needs): the choices he clicks, one shape wherever a choice shows
    *  (core/ask-options.ts); a click is his answer in words, the label. */
   options?: Array<{ id: string; label: string; detail?: string; recommended?: boolean }>;

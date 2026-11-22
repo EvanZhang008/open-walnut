@@ -19,6 +19,34 @@
  * Pure, shared by the web view (@open-walnut/thread-view) and the node's cleanup reminder.
  */
 
+/**
+ * Could his message sent at `hisAt` come after reading the node's words (an answer, its first
+ * post)? Only when he had the time to read them: READ_CHARS_PER_SECOND characters a second, at least
+ * READ_MIN_MS, counted from when the words were done. Unsure is unread (2026-11-21, the user: "最恶心
+ * 的是什么？我没看，但是你把它给我 mark 了"): 17% of the automatic read marks on his Walnut VP came
+ * from a message he sent seconds after a long answer, typed or dictated while it was still being
+ * written. One rule for every place that takes a later message of his as having read what came
+ * before it: exchangesOf, recordReaction, reactedSince and the node's known mark
+ * (tests/core/org/thread-read-time.test.ts lists them). His own Acknowledge, known or close needs no time.
+ */
+export const READ_CHARS_PER_SECOND = 25;
+export const READ_MIN_MS = 2_000;
+
+/** How long reading `text` takes him at least, in ms. */
+export function readMsFor(text: string | undefined): number {
+  const n = text ? Array.from(text).length : 0;
+  return Math.max(READ_MIN_MS, Math.ceil((n / READ_CHARS_PER_SECOND) * 1000));
+}
+
+/** His message at `hisAt` came long enough after `word` to have read it. Pure. */
+export function readAfter(word: { at: string; text?: string }, hisAt: string | null | undefined): boolean {
+  if (!hisAt) return false;
+  const a = Date.parse(word.at);
+  const h = Date.parse(hisAt);
+  if (!Number.isFinite(a) || !Number.isFinite(h)) return hisAt > word.at;
+  return h - a >= readMsFor(word.text);
+}
+
 /** What the view reads of a message (threads-model.ts ThreadMessage, or the web's copy of it). */
 export interface ViewMessage {
   id: string;
@@ -159,7 +187,7 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
   const ackedByHim = t.closed?.by === 'human';
   if (t.opener) {
     const o = t.opener;
-    out.push({ n: 0, messages: [], opener: o, known: ackedByHim || (!!t.reactedAt && t.reactedAt >= o.at) || t.messages.some((m) => m.at > o.at) });
+    out.push({ n: 0, messages: [], opener: o, known: ackedByHim || (!!t.ackedAt && t.ackedAt >= o.at) || readAfter(o, t.reactedAt) || t.messages.some((m) => readAfter(o, m.at)) });
   }
   let n = 1;
   let i = 0;
@@ -178,7 +206,7 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
     }
     const messages = t.messages.slice(i, j);
     const answer = first.answer as NonNullable<M['answer']> | undefined;
-    const later = t.messages.slice(j).some((m) => !!answer && m.at > answer.at);
+    const later = t.messages.slice(j).some((m) => !!answer && readAfter(answer, m.at));
     const read = messages.some((m) => !!answer && !!m.readAt && m.readAt >= answer.at);
     const marked = !t.reactedAt && !t.messages.some((m) => m.readAt) && knownThrough >= i
       && (!t.known?.at || !answer || t.known.at >= answer.at);
@@ -441,7 +469,10 @@ export function threadReactionAt(t: ViewThread): string {
 export function hasThreadNews(t: ViewThread, shared: ReadonlySet<string> = NONE): boolean {
   const reaction = threadReactionAt(t);
   const summary = summaryAt(t);
-  const summaryRead = t.known?.by === 'human' && t.known.at && t.known.at > reaction ? t.known.at : reaction;
+  // His reaction reads the summary only when it came after he could read it (readAfter); his own
+  // Acknowledge (a human known mark) always does.
+  const reacted = summary && t.reply?.trim() && !readAfter({ at: summary, text: t.reply }, reaction) ? '' : reaction;
+  const summaryRead = t.known?.by === 'human' && t.known.at && t.known.at > reacted ? t.known.at : reacted;
   if (t.reply?.trim() && summary && summary > summaryRead && (t.replyAt || !t.known && !t.reactedAt)) return true;
   return exchangesOf(t).some((x) => (x.answer || x.opener) && !x.known
     && !x.messages.some((m) => shared.has(m.id)));

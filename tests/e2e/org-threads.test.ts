@@ -251,7 +251,9 @@ describe('Org Threads', () => {
     expect((await threads()).find((x) => x.id === t.id)?.closed).toBeUndefined()
     // His words asking to close it ride the route: a quote he never wrote is refused.
     expect((await patch(t.id, { close: 'acked', user_words: 'please close this thread' }, LEAD_SID)).status).toBe(409)
-    // He reacts in the thread: now the lead may close it.
+    // He reacts in the thread once he could have read the answer (thread-view.ts readAfter): now the lead may close it.
+    const { readMsFor } = await import('../../src/core/org/thread-view.js')
+    await new Promise((r) => setTimeout(r, readMsFor('The fast model in the local config, for titles and summaries.') + 200))
     await typeIntoChat(LEAD_SID, 'ok, thanks', t.id)
     const closed = await patch(t.id, { close: 'acked' }, LEAD_SID)
     expect(closed.status, await closed.clone().text()).toBe(200)
