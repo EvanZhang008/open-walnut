@@ -1,7 +1,7 @@
 /**
  * The chat camera: a panel right above the chat
  * box, opened from the + menu. One box of one size holds every state (the live
- * picture, a recording, the preview, a refusal), so the chat moves once, when it
+ * picture, a recording, a video waiting to go in, a refusal), so the chat moves once, when it
  * opens. The box below keeps working: type or speak while the camera is on.
  *
  * What the person takes goes straight into the box's attachments (Evan,
@@ -31,7 +31,7 @@ type Mode = 'photo' | 'video';
 const isMode = (v: unknown): v is Mode => v === 'photo' || v === 'video';
 type Words = { state: 'none' | 'pending' | 'done' | 'failed'; text: string; note?: string };
 /** A recorded video not yet in the box: its words are coming, or the box refused it. */
-type Held = { clip: RecordedClip; id: number; words: Words; refused?: boolean };
+type Held = { clip: RecordedClip; id: number; words: Words; notAdded?: boolean };
 
 export interface CameraDockProps {
   onClose: () => void;
@@ -70,14 +70,33 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
   heldRef.current = held;
   const nextId = useRef(0);
   const recorder = useClipRecorder(() => { void stopRecording(); });
-  const cam = useCameraStream(true, {
+  // The camera is off while a recorded video waits to go in (nothing to aim at then).
+  const cam = useCameraStream(!held, {
     busy: recorder.recording,
-    onIdle: () => { if (!heldRef.current) onClose(); },
+    onIdle: () => closeDock(),
     onHidden: () => {
       if (recorder.recording) void stopRecording();
-      else if (!heldRef.current) onClose();
+      else closeDock();
     },
   });
+
+  /**
+   * The panel closes (×, Esc, a hidden page, idle). A video still waiting for its
+   * words goes in without them, so closing never loses it; only one the box
+   * refused (it said why) is let go.
+   */
+  function closeDock() {
+    const h = heldRef.current;
+    if (h && !h.notAdded && onClip && adding.current !== h.id) {
+      adding.current = h.id;
+      void onClip(h.clip.file, h.clip.stills, {
+        durationMs: h.clip.durationMs,
+        narration: h.words.state === 'done' ? h.words.text : undefined,
+        narrationNote: h.words.state === 'done' ? undefined : h.words.state === 'pending' ? 'words skipped' : h.words.note,
+      });
+    }
+    onClose();
+  }
 
   useEffect(() => { onMicHeld?.(recorder.recording && sound); }, [recorder.recording, sound, onMicHeld]);
   useEffect(() => () => { onMicHeld?.(false); }, [onMicHeld]);
@@ -109,12 +128,12 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
         narrationNote: h.words.state === 'done' ? undefined : h.words.note,
       });
       if (ok) { setHeld((now) => (now?.id === h.id ? null : now)); setVideosAdded((n) => n + 1); }
-      else setHeld((now) => (now?.id === h.id ? { ...now, refused: true } : now));
+      else setHeld((now) => (now?.id === h.id ? { ...now, notAdded: true } : now));
     } finally {
       adding.current = null;
     }
   }, [onClip]);
-  const heldReady = !!held && held.words.state !== 'pending' && !held.refused;
+  const heldReady = !!held && held.words.state !== 'pending' && !held.notAdded;
   useEffect(() => { if (heldReady) void addHeld(); }, [heldReady, addHeld]);
 
   async function stopRecording() {
@@ -153,17 +172,27 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
     await recorder.start(video, cam.stream, { sound: sound && !micTaken.current, base: captureBaseName(new Date()) });
   };
 
+  // A held video's first still, shown while the camera is off (let go with it).
+  const heldStill = held?.clip.stills[0];
+  const [heldCover, setHeldCover] = useState<string | null>(null);
+  useEffect(() => {
+    if (!heldStill) { setHeldCover(null); return; }
+    const url = URL.createObjectURL(heldStill);
+    setHeldCover(url);
+    return () => URL.revokeObjectURL(url);
+  }, [heldStill]);
+
   const wordsPending = held?.words.state === 'pending';
   const skipWords = () => { if (held) setWords(held.id, { state: 'none', text: '', note: 'words skipped' }); };
   const added = addedLabel(photosAdded, videosAdded);
 
   const stateClass = recorder.recording ? ' is-recording' : '';
-  const refused = cam.state === 'denied' || cam.state === 'missing' || cam.state === 'busy' || cam.state === 'failed';
+  const camBlocked = cam.state === 'denied' || cam.state === 'missing' || cam.state === 'busy' || cam.state === 'failed';
 
   return (
-    <div className={`camera-dock${stateClass}`} data-testid="camera-dock" onPointerDown={cam.touch} onKeyDown={(e) => { if (e.key === 'Escape' && !recorder.recording) { e.stopPropagation(); onClose(); } }}>
+    <div className={`camera-dock${stateClass}`} data-testid="camera-dock" onPointerDown={cam.touch} onKeyDown={(e) => { if (e.key === 'Escape' && !recorder.recording) { e.stopPropagation(); closeDock(); } }}>
       <div className="camera-dock-view">
-        {refused ? (
+        {camBlocked ? (
           <div className="camera-dock-refused" role="alert" data-testid="camera-refused">
             {ICON.camOff}
             <b>{cam.state === 'denied' ? (inMacApp() ? 'macOS is not letting Walnut use the camera' : 'Walnut can’t use the camera')
@@ -174,16 +203,21 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
               : cam.state === 'busy' ? 'Close the other app that uses it, then try again.' : 'Connect a camera, then try again.'}</span>
             <div className="camera-dock-row">
               <button type="button" className="btn btn-sm btn-primary" onClick={cam.restart}>Try again</button>
-              <button type="button" className="btn btn-sm" onClick={() => { onClose(); onPickFile(); }}>Pick a file instead</button>
+              <button type="button" className="btn btn-sm" onClick={() => { closeDock(); onPickFile(); }}>Pick a file instead</button>
             </div>
           </div>
+        ) : held && heldCover ? (
+          // The camera is off while the video waits: its first still holds the place.
+          <img className="camera-dock-media" src={heldCover} alt="The video you recorded" data-testid="camera-held-cover" />
         ) : (
           <video ref={cam.videoRef} className="camera-dock-media is-live" autoPlay muted playsInline controls={false} data-testid="camera-live" />
         )}
-        {!refused && (
+        {!camBlocked && (
           <div className="camera-dock-top">
             {recorder.recording ? (
               <span className="camera-hud is-rec" data-testid="camera-timer"><i className="camera-rec-dot" />{recordingLabel(recorder.elapsedMs)}</span>
+            ) : held ? (
+              <span className="camera-hud">Video</span>
             ) : (
               <span className="camera-hud" data-testid="camera-on"><i className="camera-live-dot" />{cam.state === 'live' ? 'Camera on' : 'Starting camera…'}</span>
             )}
@@ -195,15 +229,15 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
             {added && <span className="camera-hud" data-testid="camera-added">{added}</span>}
             <span className="camera-dock-spacer" />
             {cam.canFlip && !recorder.recording && <button type="button" className="camera-round" onClick={cam.flip} aria-label="Switch camera" title="Switch camera">{ICON.flip}</button>}
-            {!recorder.recording && <button type="button" className="camera-round" onClick={onClose} aria-label="Close camera" title="Close camera (Esc)">{ICON.close}</button>}
+            {!recorder.recording && <button type="button" className="camera-round" onClick={closeDock} aria-label="Close camera" title="Close camera (Esc)">{ICON.close}</button>}
           </div>
         )}
         {flash > 0 && <span key={flash} className="camera-flash" aria-hidden="true" />}
         {recorder.recording && <span className="camera-progress" style={{ width: `${Math.min(100, (recorder.elapsedMs / 60_000) * 100)}%` }} />}
       </div>
-      {!refused && (
+      {!camBlocked && (
         <div className="camera-dock-bar">
-          {held && (wordsPending || held.refused) ? (
+          {held && (wordsPending || held.notAdded) ? (
             <div className="camera-dock-held" data-testid="camera-held">
               {wordsPending ? <>
                 <span className="camera-dock-hint">Adding the video once its words are in…</span>
@@ -213,7 +247,7 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
                 <span className="camera-dock-hint">The video is not in the message yet</span>
                 <span className="camera-dock-spacer" />
                 <button type="button" className="btn btn-sm" onClick={() => setHeld(null)}>Discard it</button>
-                <button type="button" className="btn btn-sm btn-primary" onClick={() => { setHeld((h) => (h ? { ...h, refused: false } : h)); }}>Add the video</button>
+                <button type="button" className="btn btn-sm btn-primary" onClick={() => { setHeld((h) => (h ? { ...h, notAdded: false } : h)); }}>Add the video</button>
               </>}
             </div>
           ) : (
@@ -249,4 +283,3 @@ export function CameraDock({ onClose, onPhoto, onClip, onPickFile, micBusy, onMi
     </div>
   );
 }
-

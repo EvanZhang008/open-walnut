@@ -47,9 +47,12 @@ final class CameraCaptureModel {
         var photoRoom: () -> Int = { 5 }
         /// The names the message already holds, so a video's name is its own.
         var takenNames: () -> Set<String> = { [] }
-        /// The server's speech to text.
-        var transcribe: @Sendable (Data) async throws -> String = { data in
-            try await WalnutAPI().transcribe(audio: data, format: "m4a")
+        /// What was said in a finished video's file: its sound through the
+        /// server's speech to text (`CameraClipMaker.narrate`).
+        var narrate: @Sendable (URL) async -> CameraClipMaker.Narration = { url in
+            await CameraClipMaker.narrate(url) { data in
+                try await WalnutAPI().transcribe(audio: data, format: "m4a")
+            }
         }
     }
 
@@ -93,16 +96,18 @@ final class CameraCaptureModel {
     @ObservationIgnored private var sourceStopped = false
     /// The app is off the screen: nothing starts the camera until it is back.
     @ObservationIgnored private var away = false
-    /// The panel closed: a clip still being made is dropped when it is ready.
+    /// The panel closed: a clip still being made goes in without its words.
     @ObservationIgnored private var closed = false
     /// Making the stopped recording's clip (its stills and speech to text); its
-    /// own task, so a caller's cancellation never cuts it short, and `close`
-    /// cancels it so a dropped clip's sound is not sent anywhere.
+    /// own task, so neither a caller's cancellation nor a close cuts it short.
     @ObservationIgnored private var finishing: Task<Void, Never>?
     /// The stopped recording's speech to text, and the wait for it that either
     /// its answer or "Skip the words" ends (`wordsIn`, whichever comes first).
     @ObservationIgnored private var wordsTask: Task<Void, Never>?
     @ObservationIgnored private var wordsWait: CheckedContinuation<CameraClipMaker.Narration, Never>?
+    /// Which recording's words the wait is for: a skipped recording's late
+    /// answer never ends the next recording's wait.
+    @ObservationIgnored private var wordsGen: UUID?
     /// The person skipped the words of the recording being finished.
     @ObservationIgnored private var wordsSkipped = false
     @ObservationIgnored private var clock: Task<Void, Never>?
@@ -223,16 +228,15 @@ final class CameraCaptureModel {
         }
     }
 
-    /// Close: a video not added goes, and the camera stops. A clip still being
-    /// made is dropped when it is ready (`finishRecording`); what was added stays
-    /// in the composer.
+    /// Close: the camera stops; what was added stays in the composer. A video
+    /// being finished still goes in, without waiting for its words (its stills
+    /// are made first when they are not yet); only one the composer refused
+    /// (`.notAdded`) is dropped.
     func close() {
         closed = true
         clock?.cancel()
-        finishing?.cancel()
-        wordsTask?.cancel()
-        wordsIn(.none(note: "no narration"))
         source.stop()
+        if stage == .finishing { skipWords() }
         dropHeldClip()
         // A clip being made still reads its recording; it removes the folder when done.
         if stage != .finishing { removeRecordingDir() }
@@ -340,31 +344,31 @@ final class CameraCaptureModel {
             say("The video could not be saved.")
             return
         }
-        let clip = made.narrated(await words(for: made))
-        // Closed while it was made: nothing holds its copies any more.
-        guard !closed else { clip.files.forEach(ComposerFileStore.remove); return }
-        await deliver(clip)
+        await deliver(made.narrated(await words(for: made)))
     }
 
     /// What was said in the clip: its speech to text, or at once when the person
     /// skips the words (`skipWords`) or the camera closes.
     private func words(for clip: CameraClipMaker.Clip) async -> CameraClipMaker.Narration {
-        if closed { return .none(note: "no narration") }
-        if wordsSkipped { return .none(note: Self.wordsSkippedNote) }
+        if wordsSkipped || closed { return .none(note: Self.wordsSkippedNote) }
         let url = clip.video.localURL
-        let transcribe = actions.transcribe
+        let narrate = actions.narrate
+        let gen = UUID()
         return await withCheckedContinuation { wait in
             wordsWait = wait
+            wordsGen = gen
             wordsTask = Task { @MainActor in
-                let narration = await CameraClipMaker.narrate(url, transcribe: transcribe)
-                self.wordsIn(narration)
+                let narration = await narrate(url)
+                self.wordsIn(narration, for: gen)
             }
         }
     }
 
-    /// The words are in, skipped or dropped: the first of these ends the wait.
-    private func wordsIn(_ narration: CameraClipMaker.Narration) {
-        guard let wait = wordsWait else { return }
+    /// The words of recording `gen` are in, or skipped: the first of these ends
+    /// that recording's wait, and nothing ends another's.
+    private func wordsIn(_ narration: CameraClipMaker.Narration, for gen: UUID?) {
+        guard let gen, gen == wordsGen, let wait = wordsWait else { return }
+        wordsGen = nil
         wordsWait = nil
         wordsTask = nil
         wait.resume(returning: narration)
@@ -375,14 +379,19 @@ final class CameraCaptureModel {
         guard stage == .finishing else { return }
         wordsSkipped = true
         wordsTask?.cancel()
-        wordsIn(.none(note: Self.wordsSkippedNote))
+        wordsIn(.none(note: Self.wordsSkippedNote), for: wordsGen)
     }
 
     /// Into the composer; one it refuses is held (`.notAdded`) rather than lost.
     private func deliver(_ clip: CameraClipMaker.Clip) async {
         if actions.addClip(clip) {
             videosAdded += 1
-            await backToLive()
+            // Closed meanwhile: the camera stays off.
+            if !closed { await backToLive() }
+        } else if closed {
+            // Refused after the camera closed: nothing is left to hold it.
+            AppLog.warn("camera", "video not added after the camera closed", ["reason": "no room for another file"])
+            clip.files.forEach(ComposerFileStore.remove)
         } else {
             heldClip = clip
             stage = .notAdded

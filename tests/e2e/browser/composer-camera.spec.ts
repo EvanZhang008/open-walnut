@@ -323,6 +323,8 @@ test('a video the box cannot take (its files are full) stays in the panel to add
   await expect(composer(page)).toContainText('Only 10 files fit in one message')
   const held = dock(page).getByTestId('camera-held')
   await expect(held).toContainText('The video is not in the message yet')
+  // Nothing to aim at while it waits: the camera is off.
+  await expect.poll(() => liveTracks(page)).toEqual([])
   // Make room, then add it again: the same recording goes in.
   await composer(page).getByRole('button', { name: 'Remove notes-0.txt' }).click()
   await expect(composer(page).locator('.file-card')).toHaveCount(9)
@@ -358,4 +360,25 @@ test('a still that failed to upload is retried on its own: the video does not go
   await expect(video).toContainText(/\d+ stills?/)
   expect(videoChunks()).toBe(before)
   expect(h.chunks.filter((c) => /-still-0m00s\.jpg/.test(c.url))).toHaveLength(2)
+})
+
+test('closing the panel while a video waits for its words still puts the video in the message', async ({ page }) => {
+  await watchStreams(page)
+  // Speech to text that never answers while the spec looks.
+  await page.route('**/api/stt/transcribe', () => { /* held */ })
+  const h = await open(page)
+  await openCamera(page)
+  await liveVideoPlays(page)
+  await dock(page).getByRole('radio', { name: 'Video' }).click()
+  await dock(page).getByTestId('camera-record').click()
+  await expect(dock(page).getByTestId('camera-timer')).toHaveText(/0:0[2-9]/, { timeout: 10_000 })
+  await dock(page).getByTestId('camera-stop').click()
+  await expect(dock(page).getByTestId('camera-held')).toContainText('Adding the video once its words are in')
+  await expect.poll(() => liveTracks(page)).toEqual([])
+  await dock(page).getByRole('button', { name: 'Close camera' }).click()
+  await expect(dock(page)).toHaveCount(0)
+  const video = composer(page).locator('.file-card').filter({ hasText: /camera-\d{6}\.(?:mp4|webm)/ })
+  await expect(video).toHaveCount(1, { timeout: 20_000 })
+  await expect.poll(() => liveTracks(page)).toEqual([])
+  expect(await h.sent()).toHaveLength(0)
 })

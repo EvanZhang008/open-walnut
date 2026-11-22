@@ -144,7 +144,7 @@ final class CameraCaptureTests: XCTestCase {
             return true
         }
         actions.close = { log.closed += 1 }
-        actions.transcribe = { _ in "" }
+        actions.narrate = { url in await CameraClipMaker.narrate(url) { _ in "" } }
         return CameraCaptureModel(source: source ?? FakeCameraSource(), allowsVideo: allowsVideo, actions: actions, now: now)
     }
 
@@ -321,7 +321,7 @@ final class CameraCaptureTests: XCTestCase {
         let source = CountingSource()
         source.stopDelay = .milliseconds(500)
         let camera = model(log, source: source)
-        camera.actions.transcribe = { _ in XCTFail("skipped words are not transcribed"); return "" }
+        camera.actions.narrate = { _ in XCTFail("skipped words are not transcribed"); return .said("") }
         await camera.appear()
         camera.mode = .video
         await camera.shutter()
@@ -378,11 +378,14 @@ final class CameraCaptureTests: XCTestCase {
         camera.close()
     }
 
-    func testClosingWhileTheClipIsMadeDropsIt() async throws {
+    /// Closing while the clip's stills are still being made: they are finished,
+    /// and the video goes in without waiting for its words.
+    func testClosingWhileTheClipIsMadeStillAddsIt() async throws {
         let log = Log()
         let source = CountingSource()
         source.stopDelay = .milliseconds(500)
         let camera = model(log, source: source)
+        camera.actions.narrate = { _ in XCTFail("a closed camera's words are not transcribed"); return .said("") }
         await camera.appear()
         camera.mode = .video
         await camera.shutter()
@@ -391,10 +394,81 @@ final class CameraCaptureTests: XCTestCase {
         for _ in 0..<100 where camera.stage == .recording { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(camera.stage, .finishing)
         camera.close()
+        XCTAssertEqual(log.closed, 1, "the camera goes at once")
         await made.value
-        XCTAssertNil(camera.heldClip, "a clip made after the close is dropped with its copies")
-        XCTAssertTrue(log.clips.isEmpty, "and never goes into the message")
-        XCTAssertTrue(source.stopCancelled, "closing cancels the clip's making, so its sound goes to no speech to text")
+        XCTAssertFalse(source.stopCancelled, "closing never cuts the clip's making short")
+        let clip = try XCTUnwrap(log.clips.first, "the video still goes in")
+        XCTAssertFalse(clip.stills.isEmpty, "with its stills")
+        guard case .video(_, nil, let note?) = clip.video.clip else { return XCTFail("no narration note") }
+        XCTAssertEqual(note, CameraCaptureModel.wordsSkippedNote)
+        XCTAssertNil(camera.heldClip)
+        XCTAssertEqual(source.starts, 1, "a closed camera never starts again")
+        log.removeClips()
+    }
+
+    /// Closing while a stopped video waits for its words: it goes in now,
+    /// without them, and their late answer changes nothing.
+    func testClosingWhileTheWordsArePendingAddsTheVideoWithoutThem() async throws {
+        let log = Log()
+        let gate = WordsGate()
+        let camera = model(log)
+        camera.actions.narrate = { _ in _ = await gate.wait(); return .said("late words") }
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1.2))
+        let made = Task { await camera.shutter() }
+        for _ in 0..<100 where gate.calls < 1 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(camera.stage, .finishing, "waiting for its words")
+        camera.close()
+        await made.value
+        let clip = try XCTUnwrap(log.clips.first, "closing never drops a video being finished")
+        guard case .video(_, nil, let note?) = clip.video.clip else { return XCTFail("no narration note") }
+        XCTAssertEqual(note, CameraCaptureModel.wordsSkippedNote)
+        gate.release(1)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(log.clips.count, 1)
+        log.removeClips()
+    }
+
+    /// Each recording waits for its own words: the late answer of one whose words
+    /// were skipped never lands on the next one.
+    func testASkippedRecordingsLateWordsNeverLandOnTheNextOne() async throws {
+        let log = Log()
+        let gate = WordsGate()
+        let camera = model(log)
+        camera.actions.narrate = { _ in
+            let n = await gate.wait()
+            return .said(n == 1 ? "first words" : "second words")
+        }
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1.2))
+        let first = Task { await camera.shutter() }
+        for _ in 0..<100 where gate.calls < 1 { try await Task.sleep(for: .milliseconds(20)) }
+        camera.skipWords()
+        await first.value
+        XCTAssertEqual(log.clips.count, 1)
+        XCTAssertEqual(camera.stage, .live)
+
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .recording, "recording again")
+        try await Task.sleep(for: .seconds(1.2))
+        let second = Task { await camera.shutter() }
+        for _ in 0..<100 where gate.calls < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        gate.release(1)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(camera.stage, .finishing, "the first one's late words did not end the second's wait")
+        XCTAssertEqual(log.clips.count, 1)
+        gate.release(2)
+        await second.value
+        XCTAssertEqual(log.clips.count, 2)
+        guard case .video(_, nil, let skipped?) = log.clips[0].video.clip else { return XCTFail("first: no note") }
+        XCTAssertEqual(skipped, CameraCaptureModel.wordsSkippedNote)
+        guard case .video(_, let said?, nil) = log.clips[1].video.clip else { return XCTFail("second: no words") }
+        XCTAssertEqual(said, "second words")
+        log.removeClips()
     }
 
     /// Stop is never held up by a photo still being taken during the recording.
@@ -416,6 +490,22 @@ final class CameraCaptureTests: XCTestCase {
         XCTAssertEqual(log.photos, 1, "the photo still lands")
         log.removeClips()
         camera.close()
+    }
+
+    /// A speech to text whose answers come only when the test lets them, one per
+    /// call, and never early on a cancel (a server that answers anyway).
+    @MainActor
+    final class WordsGate {
+        private(set) var calls = 0
+        private var waits: [Int: CheckedContinuation<Void, Never>] = [:]
+        /// Waits for its release; returns which call it was (1, 2, ...).
+        func wait() async -> Int {
+            calls += 1
+            let n = calls
+            await withCheckedContinuation { waits[n] = $0 }
+            return n
+        }
+        func release(_ n: Int) { waits.removeValue(forKey: n)?.resume() }
     }
 
     /// The fake camera, counting its starts and stops.

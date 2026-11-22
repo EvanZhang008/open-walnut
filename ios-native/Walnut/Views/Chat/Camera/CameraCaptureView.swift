@@ -14,7 +14,7 @@ import UIKit
 struct CameraCaptureView: View {
     @State var model: CameraCaptureModel
     @Environment(\.scenePhase) private var scenePhase
-    /// The white flash of a photo that went in.
+    /// The white flash of the shutter, on the press (as the web's).
     @State private var flashOn = false
 
     var body: some View {
@@ -73,7 +73,6 @@ struct CameraCaptureView: View {
                 ProgressView().tint(.white).controlSize(.large)
             }
         }
-        .onChange(of: model.photosAdded) { _, _ in flash() }
     }
 
     private func flash() {
@@ -115,7 +114,10 @@ struct CameraCaptureView: View {
                 // While recording: a still without stopping the video.
                 Group {
                     if model.stage == .recording {
-                        Button { Task { await model.photoWhileRecording() } } label: {
+                        Button {
+                            flash()
+                            Task { await model.photoWhileRecording() }
+                        } label: {
                             VStack(spacing: 3) {
                                 Image(systemName: "camera.fill").font(.system(size: 20, weight: .semibold))
                                 Text("Photo").font(.caption.weight(.semibold))
@@ -170,7 +172,10 @@ struct CameraCaptureView: View {
 
     private var shutter: some View {
         let recording = model.stage == .recording
-        return Button { Task { await model.shutter() } } label: {
+        return Button {
+            if model.stage == .live && model.mode == .photo { flash() }
+            Task { await model.shutter() }
+        } label: {
             ZStack {
                 Circle().strokeBorder(.white, lineWidth: 5).frame(width: 80, height: 80)
                 if recording {

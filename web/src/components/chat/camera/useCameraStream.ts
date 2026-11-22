@@ -36,7 +36,7 @@ export interface CameraStream {
 }
 
 /**
- * `active`: the panel wants the picture now (false while it shows a preview).
+ * `active`: the panel wants the picture now (false while a recorded video waits to go in).
  * `onIdle`: the camera turned itself off with nothing captured (the panel closes).
  * `busy`: a recording runs; the idle clock never fires then.
  */
