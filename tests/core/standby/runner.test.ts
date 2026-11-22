@@ -150,11 +150,18 @@ describe('standby runner', () => {
     sb = await sandbox('remote-away')
     dbs.push(...seedHome(sb.home).dbs)
     const host = fakeStandbyHost(sb.root)
+    // Each batch attempt reads the target first, into an export of its own.
+    const exports = new Set<string>()
+    const link = { ...host.link, send(cmd: string, params?: Record<string, unknown>, ms?: number) {
+      const args = (params?.args ?? []) as string[]
+      if (cmd === 'exec.script' && args.includes('--export')) exports.add(args[args.indexOf('--export') + 1])
+      return host.link.send(cmd, params, ms)
+    } }
     const notices: Array<{ title: string; body: string }> = []
     runner = startStandbyRunner({
       settings: async () => ({ on: true, home: sb.home, dir: sb.target, host: 'standby-box', intervalSeconds: 3600 }),
       notify: async (n) => { notices.push(n); return true },
-      connect: async () => host.link,
+      connect: async () => link,
       linkWaitMs: 300,
     })
     await runner.reconcile()
@@ -164,8 +171,10 @@ describe('standby runner', () => {
     const later = vi.spyOn(Date, 'now').mockImplementation(() => real() + 6 * 60_000)
     try {
       const started = real()
+      exports.clear()
       const out = await runner.runOnce()
       expect(out?.ok).toBe(false)
+      expect(exports.size).toBe(1)
       // One attempt and no verify or state read over the dead link: a few waits of 300 ms, not minutes.
       expect(real() - started).toBeLessThan(10_000)
       const behind = notices.filter((n) => n.title === 'Standby copy is behind')
