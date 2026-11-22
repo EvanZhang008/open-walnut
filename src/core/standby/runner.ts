@@ -9,7 +9,9 @@
  * a batch every `standby.interval_seconds` (30), retries a void one soon after (a void batch
  * only means something changed at the wrong instant), runs a verify pass after each batch,
  * and sends to Walnut Health (never to the person): a drift report, once; a standby that
- * fell more than five minutes behind, once per episode.
+ * fell more than five minutes behind, once per episode. Behind is told while a batch still runs
+ * (a first batch over a slow link sends for hours), with how far it got; a batch that lands late
+ * is progress, never a new "behind", and only a batch that lands fresh ends the episode.
  */
 import path from 'node:path'
 import { log } from '../../logging/index.js'
@@ -43,6 +45,8 @@ export interface StandbyRunnerDeps {
   connect?(host: string): Promise<DaemonLink>
   /** How long a dropped link to a standby host is waited for (default 2 min; tests shorten it). */
   linkWaitMs?: number
+  /** How old the standby's batch may get before it is told behind (default 5 min; tests shorten it). */
+  behindMs?: number
 }
 
 /** Where the batches go: a folder here, or one on a standby host. */
@@ -57,6 +61,10 @@ interface StandbySite {
   unreachable?(): boolean
   /** Stop sending there (a remote site's queue of chunks): the runner stopped or its settings changed. */
   close?(): void
+  /** What the site was last seen to hold, without asking it (undefined: not seen yet). A site without it is read. */
+  seen?(): { batch: number; takenAt: string } | null | undefined
+  /** How far the batch under way got (its chunks sent, its apply), or null. */
+  progress?(): string | null
 }
 
 function localSite(home: string, dir: string): StandbySite {
@@ -86,6 +94,8 @@ function remoteSite(home: string, host: string, dir: string, walnut: string[] | 
     current: async () => (await target.state()).current,
     unreachable: () => target.unreachable,
     close: () => target.close(),
+    seen: () => target.seen,
+    progress: () => target.progress(),
   }
 }
 
@@ -135,6 +145,9 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
     let running: Promise<BatchOutcome | null> | null = null
     let ended = false
     let behindTold = false
+    const behindMs = d.behindMs ?? BEHIND_MS
+    const old = (held: { takenAt: string } | null | undefined) => !held?.takenAt || Date.now() - Date.parse(held.takenAt) > behindMs
+    const holding = (held: { batch: number; takenAt: string } | null | undefined) => held ? `batch ${held.batch}, taken at ${held.takenAt}` : 'no complete batch yet'
     const site = s.host ? remoteSite(s.home, s.host, s.dir, s.walnut, d.connect ?? defaultConnect, d.linkWaitMs) : localSite(s.home, s.dir)
     /** The last batch the site was known to hold (a host out of reach cannot say). */
     let known: { batch: number; takenAt: string } | null = null
@@ -143,7 +156,33 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
       body: `The standby copy at ${site.label} had ${r.total ?? r.items.length} path(s) changed in it directly; each was saved under drift/ and the copy put back to batch ${r.batch}: ${r.items.slice(0, 5).map((i) => `${i.p} (${i.kind})`).join(', ')}`,
       dedupScope: `standby-drift:${r.at}`,
     })
+    /** A batch that runs past `behindMs` while the standby holds nothing newer: told now, with how far it got. */
+    const tellWhileRunning = async (since: number) => {
+      if (ended || behindTold) return
+      // A remote site says what it last saw (asking it would queue behind the batch); a folder here is read.
+      const held = site.seen ? site.seen() : known ?? await site.current().catch(() => undefined)
+      if (ended || behindTold || held === undefined || !old(held)) return
+      const far = site.progress?.()
+      const secs = Math.round((Date.now() - since) / 1000)
+      behindTold = true
+      behindTold = await d.notify({
+        title: 'Standby copy is behind',
+        body: `The standby copy at ${site.label} holds ${holding(held)}. A batch has been running for ${secs < 120 ? `${secs} s` : `${Math.round(secs / 60)} min`}${far ? `: ${far}` : ''}`,
+        dedupScope: 'standby-behind',
+        recoveryKey: 'standby',
+      })
+    }
     const once = async (): Promise<BatchOutcome | null> => {
+      const since = Date.now()
+      const tick = setInterval(() => { void tellWhileRunning(since).catch(() => {}) }, behindMs)
+      tick.unref?.()
+      try {
+        return await batchOnce()
+      } finally {
+        clearInterval(tick)
+      }
+    }
+    const batchOnce = async (): Promise<BatchOutcome | null> => {
       let out: BatchOutcome | null = null
       for (let attempt = 0; attempt <= RETRIES && !ended; attempt++) {
         if (attempt) await new Promise((r) => setTimeout(r, RETRY_MS))
@@ -163,18 +202,20 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         if (now !== undefined) known = now
       }
       const status = known
-      const behind = !status?.takenAt || Date.now() - Date.parse(status.takenAt) > BEHIND_MS
+      const stale = old(status)
+      // A batch that just landed is progress, even one that took long to send: never a new "behind".
+      const behind = stale && !out?.ok
       if (behind && !behindTold) {
         const holds = away || readErr
           ? `could not be read (${away ? 'its host is out of reach' : readErr}); the last batch known there is ${status ? `batch ${status.batch}, taken at ${status.takenAt}` : 'none'}`
-          : `holds ${status?.takenAt ? `batch ${status.batch}, taken at ${status.takenAt}` : 'no complete batch yet'}`
+          : `holds ${holding(status)}`
         behindTold = await d.notify({
           title: 'Standby copy is behind',
           body: `The standby copy at ${site.label} ${holds}. Last attempt: ${out && !out.ok ? out.reason : 'ok'}`,
           dedupScope: 'standby-behind',
           recoveryKey: 'standby',
         })
-      } else if (!behind && behindTold) {
+      } else if (!stale && behindTold) {
         behindTold = false
         d.onRecovered?.()
       }

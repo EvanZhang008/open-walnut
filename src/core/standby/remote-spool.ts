@@ -9,7 +9,8 @@
  * Before each chunk is written the disk's free space is read: a chunk that would leave less than
  * the reserve free is refused (SpoolFull), so the batch is void and the disk is never filled.
  * The chunks held already still go. Each spool keeps a folder of its own, named by its process;
- * a folder whose process is gone (a leader killed mid-batch) is removed by the next spool.
+ * a folder whose process is gone (a leader killed mid-batch) is removed by the next spool
+ * (scratch.ts, which also removes another process's folder left untouched for a day).
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -87,7 +88,12 @@ export class ChunkSpool {
     await this.room(data.length)
     const file = path.join(this.dir, id)
     const t0 = performance.now()
-    await fs.writeFile(file, data, { mode: 0o600 })
+    await fs.writeFile(file, data, { mode: 0o600 }).catch(async (err: NodeJS.ErrnoException) => {
+      // Its folder was swept (left untouched for a day: scratch.ts): make it again.
+      if (err.code !== 'ENOENT') throw err
+      await fs.mkdir(this.dir, { recursive: true, mode: 0o700 })
+      await fs.writeFile(file, data, { mode: 0o600 })
+    })
     this.stats.writeMs += performance.now() - t0
     if (this.failed) { await fs.rm(file, { force: true }); throw this.failed }
     this.queued.add(id)

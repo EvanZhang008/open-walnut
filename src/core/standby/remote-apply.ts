@@ -14,6 +14,7 @@
  * target's own recovery (its journal) leaves the batch before whole. The daemon's job record is
  * never read: reading a job's output is a task's host_exec, under that task's grant.
  */
+import { linkFailureKind, markLinkFailure } from '../../providers/link-failure.js'
 import { parseStatus, type ApplyStatus } from './apply-status.js'
 
 /** The daemon's limit for one background run (src/providers/host-exec-core.ts BACKGROUND_MAX_MS). */
@@ -21,6 +22,10 @@ export const APPLY_MAX_MS = 2 * 60 * 60_000
 /** No new heartbeat for this long: ask the host whether the apply lives (it beats every 10 s). */
 const LATE_MS = 20_000
 const GROUP_CAPABILITY = 'host-exec-group-v1'
+/** A daemon that runs commands for others at all (exec.run with argv, background and a job id). */
+const EXEC_CAPABILITY = 'host-exec-v1'
+/** Who the run is for, in the host's job log and the wait a daemon update shows (no task: no task folder there). */
+const CALLER = { task: 'standby-copy' }
 
 /** What the host says of a job: its status file, and whether its process lives with a fresh heartbeat there. */
 export interface JobProbe { status: ApplyStatus | null; running: boolean }
@@ -56,16 +61,20 @@ export async function runApplyJob<T>(link: ApplyJobLink, job: ApplyJob): Promise
   const maxMs = job.maxMs ?? APPLY_MAX_MS
   const lateMs = job.lateMs ?? LATE_MS
   try {
-    const detach = await link.detach()
+    // As host_exec runs one (src/core/hosts/host-exec.ts): a detached run also ends its group.
+    const group = link.hasCapability(GROUP_CAPABILITY)
+    const detach = group && await link.detach()
     await link.call('exec.run', {
-      jobId: job.jobId, argv: job.argv, background: true, timeoutMs: maxMs,
-      ...(link.hasCapability(GROUP_CAPABILITY) ? { endGroup: true } : {}),
+      jobId: job.jobId, argv: job.argv, background: true, timeoutMs: maxMs, caller: CALLER,
+      ...(group ? { endGroup: true } : {}),
       ...(detach ? { detach: true } : {}),
     })
   } catch (err) {
     // Started already (this start sent again after its answer was lost): follow it.
-    if (refusedCode(err) !== 'job_exists') throw err
+    if (refusedCode(err) !== 'job_exists') throw startFailed(err, link.hasCapability(EXEC_CAPABILITY))
   }
+  // Until the apply writes its first status (its CLI starts, about a second), another op there is
+  // not told "busy" and waits on the target's lock instead: safe (the apply checks its base), only slower.
   const started = Date.now()
   let heardAt = started
   let lastBeat = ''
@@ -84,6 +93,15 @@ export async function runApplyJob<T>(link: ApplyJobLink, job: ApplyJob): Promise
     if (!probe.status) throw new Error(`the apply there never started (no status after ${Math.round((Date.now() - started) / 1000)} s)`)
     throw new Error(`the apply there ended without an answer (its process ${probe.status.state === 'running' ? probe.status.pid : '?'} is gone; last heard at ${probe.status.at})`)
   }
+}
+
+/** Why the start failed, with the likely cause when the host's daemon does not say it runs commands. */
+function startFailed(err: unknown, canRun: boolean): Error {
+  const why = err instanceof Error ? err.message : String(err)
+  const kind = linkFailureKind(err)
+  const e = Object.assign(new Error(`the standby host could not start the apply: ${why}${canRun || kind ? '' : ` (its Walnut daemon does not say it runs background commands, ${EXEC_CAPABILITY}: update Walnut on that host)`}`), { code: refusedCode(err) || undefined })
+  // A lost link stays a lost link for the caller's own checks.
+  return kind ? markLinkFailure(e, kind) : e
 }
 
 /** `done` as its answer, `failed` as an error; null while it runs. */

@@ -199,8 +199,15 @@ the batch, and the target's journal leaves the batch before whole for the next o
 apply runs there, `init`, `verify` and `reported` say the target is busy at once (its process
 lives and its heartbeat is fresh) instead of waiting on the target's lock: a leader that
 restarted meanwhile has void batches until the apply ends, then goes on from the batch it made.
-An apply whose status could not be read (the link went for longer than the leader waits) is
-judged by the batch the target holds afterwards. A target another leader moved meanwhile refuses the upload (it is
+An apply whose end the leader could not follow (the link went for longer than it waits, or the
+start was refused in a way that leaves it unsure) is judged by the batch the target holds
+afterwards: one that ended counts as it ended there, and one that still runs there answers
+"busy", so this batch counts as failed and the next starts from whatever it left. The job is
+started as `host_exec` starts one: its process group ended with it, detached only where the
+daemon can do both, and logged there for the caller `standby-copy`; a daemon that cannot run
+background commands (older than `host-exec-v1`) fails each batch saying to update Walnut there.
+Until the apply's CLI writes its first status (about a second), another op there waits on the
+lock instead of hearing "busy": safe, only slower. A target another leader moved meanwhile refuses the upload (it is
 against another batch), and the next batch reads it again. A chunk the leader believed the
 target held, gone there, fails one batch; the next reads the target's list again and sends it.
 
@@ -213,12 +220,18 @@ Limits:
   the job runs detached (the `work_survives_restart` experiment and `host-exec-detach-v1`).
 - The spool takes up to the batch's new chunks not sent yet on the leader's disk (about 4 GB
   for the first batch of the 20 GB home at 20 Mbit/s; an incremental batch its few MB), written
-  once more than before; see Measured.
+  once more than before; see Measured. A spool or staging folder of a leader that is gone is
+  removed by the next batch, and one of another process left untouched for a day (its pid
+  reused by some other program) too.
 - After any failure the leader reads the target's whole chunk list again (about 33 bytes a
   chunk, gzipped, one read).
 - A host out of reach is reported behind once, about five minutes after its last batch plus the
   two minutes a dropped link is waited for, naming the last batch known there; its batches are
   not tried again until the next tick.
+- A batch that runs past five minutes while the standby holds nothing newer (the first batch
+  over a slow link sends for about an hour) is reported behind once while it still runs, with
+  how much of what it staged went, or that its apply runs there. A batch that lands late is
+  progress, not a new report; the episode ends with the first batch that lands fresh.
 - Answers carry at most 50 drift items and 20 reports a pass (the rest wait on that host for the
   next pass), so a large drift never overflows the script's output.
 

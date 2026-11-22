@@ -474,7 +474,7 @@ describe('sending chunks', () => {
     await expect(t.verify()).rejects.toThrow(/closed/)
   })
 
-  it('a spool or a staging folder a killed leader left is removed by the next batch; a live one stays', async () => {
+  it('a spool or a staging folder a killed leader left is removed by the next batch, and one left a day under a reused pid; a live one stays', async () => {
     sb = await sandbox('remote-spool-leftover')
     dbs.push(...seedHome(sb.home).dbs)
     await settle()
@@ -483,11 +483,32 @@ describe('sending chunks', () => {
     const deadSpool = path.join(sb.root, 'spool', '2147483646-0a1b2c3d')
     const liveSpool = path.join(sb.root, 'spool', `${process.pid}-feedf00d`)
     const deadStaging = path.join(sb.root, 'staging', 'batch-2147483646-1')
-    for (const d of [deadSpool, liveSpool, deadStaging]) { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'x'), 'left') }
-    expect((await batch(remote(l))).ok).toBe(true)
+    // The parent process lives: its pid stands for one reused by some other program.
+    const reusedSpool = path.join(sb.root, 'spool', `${process.ppid}-0badc0de`)
+    const reusedStaging = path.join(sb.root, 'staging', `batch-${process.ppid}-2`)
+    const freshForeign = path.join(sb.root, 'spool', `${process.ppid}-5ca1ab1e`)
+    const all = [deadSpool, liveSpool, deadStaging, reusedSpool, reusedStaging, freshForeign]
+    for (const d of all) { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'x'), 'left') }
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60_000)
+    for (const d of [reusedSpool, reusedStaging, liveSpool]) fs.utimesSync(d, dayAgo, dayAgo)
+    const t = remote(l)
+    expect((await batch(t)).ok).toBe(true)
     expect(fs.existsSync(deadSpool)).toBe(false)
     expect(fs.existsSync(deadStaging)).toBe(false)
+    expect(fs.existsSync(reusedSpool)).toBe(false)
+    expect(fs.existsSync(reusedStaging)).toBe(false)
+    expect(fs.existsSync(freshForeign)).toBe(true)
     expect(fs.existsSync(liveSpool)).toBe(true)
+
+    // Its own folder swept away under it (as another leader's sweep would after a day): the next batch makes it again.
+    const own = fs.readdirSync(path.join(sb.root, 'spool')).filter((n) => n.startsWith(`${process.pid}-`) && n !== `${process.pid}-feedf00d`)
+    expect(own).toHaveLength(1)
+    fs.rmSync(path.join(sb.root, 'spool', own[0]), { recursive: true, force: true })
+    write(sb.home, 'memory/after-sweep.md', crypto.randomBytes(4096).toString('hex'))
+    await settle()
+    const again = await batch(t)
+    expect(again.ok, again.ok ? '' : again.reason).toBe(true)
+    expect(fs.readFileSync(path.join(sb.target, 'copy', 'memory/after-sweep.md'), 'utf8')).toBe(fs.readFileSync(path.join(sb.home, 'memory/after-sweep.md'), 'utf8'))
   })
 })
 

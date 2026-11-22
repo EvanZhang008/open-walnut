@@ -88,6 +88,7 @@ const PART_BYTES = 1024 * 1024
 const READ_BYTES = 4 * 1024 * 1024
 const COMMAND_TIMEOUT_MS = 60_000
 const SHORT_RUN_MS = 2 * 60_000
+const mb = (n: number) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const nonce = () => crypto.randomBytes(6).toString('hex')
 const closedError = () => new Error('the standby target was closed (the standby stopped or its settings changed)')
@@ -112,6 +113,11 @@ export class RemoteStandbyTarget implements StandbyTransport {
   unreachable = false
   /** The last apply's answer (its verify pass and the drift reports waiting). */
   lastApply: ApplyAnswer | null = null
+  /** The batch the target held when last read or made (undefined: not read yet). */
+  seen: { batch: number; takenAt: string } | null | undefined = undefined
+  /** The spool's total when the batch under way started, and the batch being applied there. */
+  private batchSpoolStart = 0
+  private applying: number | null = null
   private link: DaemonLink | null = null
   /** The target's current files as last read or made, and the manifest file they came from. */
   private base: { ref: ManifestRef; files: BatchFile[] } | null = null
@@ -298,6 +304,8 @@ export class RemoteStandbyTarget implements StandbyTransport {
     const exportTo = path.join(this.incoming, `export-${nonce()}.json.gz`)
     const args = ['--export', exportTo, '--files', ...(this.base ? ['--have-manifest', JSON.stringify(this.base.ref)] : []), ...(this.held ? [] : ['--chunks'])]
     const init = await this.receiveAgain<InitAnswer>('init', args)
+    this.see(init.state)
+    this.batchSpoolStart = this.spool.stats.spooledBytes
     const got = init.exported ? JSON.parse((await gunzip(await this.readFile(init.exported.path))).toString('utf8')) as TargetExport : {}
     if (got.chunks) this.held = new Set(got.chunks)
     let files: BatchFile[]
@@ -361,26 +369,46 @@ export class RemoteStandbyTarget implements StandbyTransport {
     const statusFile = path.join(this.incoming, statusFileName(jobId))
     try {
       this.open()
+      this.applying = manifest.batch
       answer = await runApplyJob<ApplyAnswer>(this.jobLink(), {
         jobId, statusFile, pollMs: this.o.applyPollMs, lateMs: this.o.applyLateMs,
         argv: this.receiveArgv('apply', ['--upload', file, '--verify', '--status', statusFile]),
       })
       this.stats.lastApplyMs = performance.now() - applyStarted
+      this.applying = null
     } catch (err) {
-      // Its answer was lost (the link went) or it was refused: what the target holds now says which.
+      this.applying = null
+      // Its end could not be followed (the link went, the start was refused): what the target holds
+      // now says which. One that still runs there answers "busy": this batch counts as failed, and
+      // the next starts from whatever it left.
       const now = await this.receiveAgain<InitAnswer>('init', []).catch(() => null)
+      if (now) this.see(now.state)
       const took = now?.state.current?.batch === manifest.batch && now.state.current.takenAt === manifest.takenAt
       this.reset()
       if (!took) throw err
       const changed = puts.filter((f) => { const b = before.get(f.p); return !b || b.h !== f.h || !!b.x !== !!f.x }).length
       this.lastApply = null
+      this.seen = { batch: manifest.batch, takenAt: manifest.takenAt }
       return { batch: manifest.batch, written: changed, deleted: dels.length, unchanged: !changed && !dels.length }
     }
     // A batch that changed no content writes no manifest: the target keeps the one it had.
     if (!answer.commit.unchanged && answer.manifest) this.base = { ref: answer.manifest, files: manifest.files }
     this.forgetReplaced(manifest, before, puts, dels)
     this.lastApply = answer
+    this.seen = { batch: manifest.batch, takenAt: manifest.takenAt }
     return answer.commit
+  }
+
+  private see(state: StandbyState): void {
+    this.seen = state.current ? { batch: state.current.batch, takenAt: state.current.takenAt } : null
+  }
+
+  /** Where the batch under way stands, for a notice: its apply there, or its chunks sent so far (null: nothing to say). */
+  progress(): string | null {
+    if (this.applying !== null) return `batch ${this.applying} is being applied there`
+    const staged = this.spool.stats.spooledBytes - this.batchSpoolStart
+    if (staged <= 0) return null
+    return `${mb(staged - this.spool.heldBytes)} of the ${mb(staged)} staged so far went`
   }
 
   /**
@@ -409,6 +437,8 @@ export class RemoteStandbyTarget implements StandbyTransport {
 
   /** The target's state, read there. */
   async state(): Promise<StandbyState> {
-    return (await this.receiveAgain<InitAnswer>('init', [])).state
+    const { state } = await this.receiveAgain<InitAnswer>('init', [])
+    this.see(state)
+    return state
   }
 }

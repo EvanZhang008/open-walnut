@@ -148,6 +148,52 @@ describe('standby runner', () => {
     expect(fs.readdirSync(path.join(sb.home, 'tmp', 'standby-spool'))).toEqual([])
   }, 60_000)
 
+  it('a batch that sends long is told behind while it runs, with how far it got; landing late tells no second one; a fresh batch ends it', async () => {
+    sb = await sandbox('remote-long')
+    dbs.push(...seedHome(sb.home).dbs)
+    fs.writeFileSync(path.join(sb.home, 'big.bin'), crypto.randomBytes(12 * 1024 * 1024))
+    const host = fakeStandbyHost(sb.root)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let held = true
+    const link = { ...host.link, async send(cmd: string, params?: Record<string, unknown>, ms?: number) {
+      // The first batch's chunks after the first few wait: a link far slower than the disk.
+      if (held && cmd === 'fs.writePart' && String(params?.path).includes('/chunks/') && host.log.filter((e) => e.cmd === 'fs.writePart').length > 4) await gate
+      return host.link.send(cmd, params, ms)
+    } }
+    const notices: Array<{ title: string; body: string }> = []
+    let recovered = 0
+    runner = startStandbyRunner({
+      settings: async () => ({ on: true, home: sb.home, dir: sb.target, host: 'standby-box', intervalSeconds: 3600 }),
+      notify: async (n) => { notices.push(n); return true },
+      onRecovered: () => { recovered++ },
+      connect: async () => link,
+      behindMs: 6_000,
+    })
+    await runner.reconcile()
+    const run = runner.runOnce()
+    const behind = () => notices.filter((n) => n.title === 'Standby copy is behind')
+    for (let i = 0; i < 600 && !behind().length; i++) await new Promise((r) => setTimeout(r, 25))
+    // Told while the first batch still sends: nothing there yet, and how much of what is staged went.
+    expect(behind()).toHaveLength(1)
+    expect(behind()[0].body).toMatch(new RegExp(`^The standby copy at standby-box:${sb.target.replace(/[/.]/g, '\\$&')} holds no complete batch yet\\. A batch has been running for \\d+ s: \\d+ MB of the \\d+ MB staged so far went$`))
+    // Its batch lands well past behindMs after it was taken.
+    await new Promise((r) => setTimeout(r, 2_000))
+    held = false
+    release()
+    const first = await run
+    expect(first?.ok, first && !first.ok ? first.reason : '').toBe(true)
+    // It landed more than behindMs after it was taken: progress, not a second "behind" ("Last attempt: ok").
+    expect(behind()).toHaveLength(1)
+    expect(notices.some((n) => n.body.includes('Last attempt: ok'))).toBe(false)
+    expect(recovered).toBe(0)
+    // The next batch lands fresh: the episode ends.
+    const next = await runner.runOnce()
+    expect(next?.ok).toBe(true)
+    expect(recovered).toBe(1)
+    expect(behind()).toHaveLength(1)
+  }, 60_000)
+
   it('a standby host out of reach is reported behind once, with the last batch known there, without waiting out each step', async () => {
     sb = await sandbox('remote-away')
     dbs.push(...seedHome(sb.home).dbs)
