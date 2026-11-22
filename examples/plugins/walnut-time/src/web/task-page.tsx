@@ -120,14 +120,14 @@ function laneClass(lane: 'human' | 'agent', ms: number): string {
 /** Each lane has its own scale: agent hours would flatten your minutes to nothing on a shared one. */
 /** The day list's column heads: which number is whose, in the words and colours of the
  *  totals above, so a row reads without the cards (2026-11-21 UI audit). Built from the
- *  rows' own classes, so the heads stay over their columns at every width. */
-function DayHead() {
+ *  rows' own classes and the same idle lane, so the heads stay over their values at every width. */
+function DayHead({ max }: { max: TimePair }) {
   return (
     <div className="wt-task-day-row" aria-hidden="true" style={{ cursor: 'default', paddingBottom: 0 }}>
       <span className="wt-task-day-date" />
-      <span className="wt-task-bars">
-        <span className="wt-task-bar is-human"><i style={{ width: 0 }} /><b>You</b></span>
-        <span className="wt-task-bar is-agent"><i style={{ width: 0 }} /><b>Agent</b></span>
+      <span className="wt-task-bars" data-idle={idleLane(max)}>
+        <span className="wt-task-bar is-human"><b>You</b><i style={{ width: 0 }} /></span>
+        <span className="wt-task-bar is-agent"><b>Agent</b><i style={{ width: 0 }} /></span>
       </span>
       <span className="wt-task-day-caret" />
     </div>
@@ -138,9 +138,14 @@ function DayHead() {
  * Each lane has its own scale: agent hours would flatten your minutes to nothing on a shared one.
  * A lane with no time on any day (its `max` is 0) is marked idle and keeps only its value.
  */
+/** The lane with no time on any day (its `max` is 0) while the other has some. */
+function idleLane(max: TimePair): 'human' | 'agent' | undefined {
+  return max.humanMs === 0 && max.agentMs > 0 ? 'human' : max.agentMs === 0 && max.humanMs > 0 ? 'agent' : undefined
+}
+
 function Bars({ pair, max }: { pair: TimePair; max: TimePair }) {
   const pct = (v: number, m: number) => (m > 0 ? Math.max(v > 0 ? 2 : 0, Math.round((v / m) * 100)) : 0)
-  const idle = max.humanMs === 0 && max.agentMs > 0 ? 'human' : max.agentMs === 0 && max.humanMs > 0 ? 'agent' : undefined
+  const idle = idleLane(max)
   return (
     <span className="wt-task-bars" data-idle={idle}>
       <span className="wt-task-bar is-human" title={`You: ${formatLane(pair.humanMs)}`}>
@@ -243,7 +248,7 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
           <h2>Day by day</h2>
           <span className="wt-section-hint">{focused ? names.get(focused) : 'Open a day to see its sessions'}</span>
         </div>
-        <DayHead />
+        <DayHead max={max} />
         <ol className="wt-task-days" data-testid="time-task-days">
           {rows.map(({ date, pair, day }) => {
             const expandable = !!day && (day.sessions.length > 0)
@@ -300,7 +305,7 @@ function SessionBody({ data }: { data: SessionTime }) {
       <Totals totals={data.totals} label="This session" />
       <section className="wt-section">
         <div className="wt-section-head"><h2>Day by day</h2></div>
-        <DayHead />
+        <DayHead max={max} />
         <ol className="wt-task-days" data-testid="time-task-days">
           {data.days.map((d) => (
             <li key={d.date} className="wt-task-day" data-date={d.date} data-testid="time-task-day">
