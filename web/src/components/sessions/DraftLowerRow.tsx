@@ -78,9 +78,10 @@ export function DraftLowerRow({
     <div className="draft-v6-lower" data-testid="draft-v6-lower">
       {walnut ? (
         <div ref={quickRef} className="draft-v6-chips" data-testid="draft-v6-quick-lower">
+          {/* Two Try chips when Recent chats follow, so a chat chip fits whole beside "Task settings". */}
           <span className="draft-v6-chip-group" role="group" aria-label="Try">
             <span className="draft-v6-lower-key" data-fit="key">Try</span>
-            {tryChips.slice(0, narrow ? 2 : 3).map((c) => (
+            {tryChips.slice(0, narrow || chats.length > 0 ? 2 : 3).map((c) => (
               <button key={c.label} type="button" className="btn btn-sm draft-v6-place" data-fit="chip" onMouseDown={(e) => e.preventDefault()} onClick={c.onClick}>
                 <span className="draft-v6-place-ic" aria-hidden="true">{c.icon}</span>{c.label}
               </button>
