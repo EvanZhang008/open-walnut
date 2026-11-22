@@ -199,7 +199,7 @@ target held, gone there, fails one batch; the next reads the target's list again
 Limits:
 
 - An apply runs within the daemon's script limit (10 minutes). The first batch of the 20 GB
-  synthetic home applied in 339 s on a busy dev box; a home whose apply takes longer there is
+  synthetic home applied in 339 to 390 s on a busy dev box (below); a home whose apply takes longer there is
   stopped each time, keeps the batch before (none, for a first batch) and never gets further.
   The way past it is an apply that is not a script, once the standby host runs Walnut itself.
 - While a database's changed chunks wait to go, its pin stays open: on the first batch over a
@@ -275,6 +275,32 @@ the patched large files and the append-only marks:
 
 On APFS the clone shares the blocks, so the disk writes should fall to the patched chunks too:
 not measured yet.
+
+### A target on another host
+
+`--remote [--mbit 20] [--down-mbit 100] [--rtt-ms 50] [--fast-first]` sends the batches to a
+real session daemon (the standalone twin, run from its source) on the same machine, and the
+real walnut CLI there takes them. The link is slowed in the transport, not in the system's
+network: each frame waits for its bytes at the given rate, and half the round trip each way.
+`--fast-first` sends the first batch unslowed, to measure the apply of a whole home, and then
+slows the link. The same 21.8 GB home on clouddev (2026-11-22, host load about 100 on 48 cores):
+
+| What | Measured |
+|---|---|
+| One 1 MiB chunk, one at a time / eight in flight, unslowed | 38 ms / 23.5 ms |
+| The same at 20 Mbit/s up, 50 ms round trip | 653 ms / 562 ms: the wire (1.4 MB of base64 takes 559 ms) |
+| First batch, unslowed | 884 s: 104,191 commands, 6.71 GB up (5.01 GB of chunks), 12.4 MB down; its apply there 390 s (339 s and 360 s in two earlier runs) |
+| First batch at 20 Mbit/s (estimated) | 6.71 GB / 20 Mbit/s at the 93% link use a 1.7 GB home measured = about 3,100 s, plus the 390 s apply: about 58 minutes |
+| Incremental batch at 20 Mbit/s, 50 ms, notes and two databases written all the time | 0 of 5 void; p50 44 s, max 47 s; 7 to 8 MB up, 60 commands; its apply there p50 18 s; hold p50 167 ms |
+| The same plus an ungated append every 20 ms | 0 of 5 void (7,592 appends); p50 41 s, max 42 s |
+| Verify / deep verify there | 2.0 s / 107 s, no drift |
+
+Before the send queue (`bufferBytes`), the batch read its files only as fast as the window
+of eight chunks went out, and at 20 Mbit/s 4 of 5 incremental batches were void ("late") in
+both runs above. Of an incremental batch's 44 s, the apply there (the changed databases'
+files in the copy cloned and patched: on ext4 a whole copy of each) is about 18 s, the wire
+about 3 s, and the rest the scan, the hold, the leader's database snapshots and about 60
+round trips.
 
 **Writes the gate does not hold** void a batch when they land on a file between the moment
 and its read, unless the file is marked append-only (above). Before the marks, one append
