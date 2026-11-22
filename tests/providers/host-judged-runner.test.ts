@@ -221,6 +221,10 @@ describe('a host-judged session', () => {
     expect(sent[0].op).toBe('start')
     expect(sent[0].body.largePrompt).toBe('the whole long prompt')
     expect(sent[0].body.largePromptFile).toBeUndefined()
+    // The path its message names goes with it (the host points the message at its own file), and
+    // this server's copy is gone: nothing here reads it again.
+    expect(sent[0].body.largePromptPath).toBe(spill)
+    expect(await fsp.stat(spill).then(() => true, () => false)).toBe(false)
     expect(sent[0].body.startBundle).toMatchObject({ hintsApplied: true, task: { id: 'gate-task-b' } })
     expect(sent[0].body.busSource).toBe('test')
     // The new session is the host's at once, before its row arrives.

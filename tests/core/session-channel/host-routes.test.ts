@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { WebSocket } from '#ws'
 import { createLeaderDoor, type LeaderDoor } from '../../../src/replica/leader-door.js'
-import { createHostSessionRoutes, type HostRunnerLike, type HostSessionRoutes } from '../../../src/core/session-channel/host-routes.js'
+import { SPILL_TTL_MS, createHostSessionRoutes, type HostRunnerLike, type HostSessionRoutes } from '../../../src/core/session-channel/host-routes.js'
 import { StartBundles } from '../../../src/core/session-channel/host-port.js'
 import { FactLog } from '../../../src/core/session-channel/fact-log.js'
 import { HostChannel, type ChannelFrame } from '../../../src/core/session-channel/channel.js'
@@ -208,6 +208,27 @@ describe('start, send, interrupt', () => {
     expect(fs.readFileSync(spill.localPath, 'utf8')).toBe('L'.repeat(5000))
     expect(fs.statSync(spill.localPath).mode & 0o777).toBe(0o600)
     expect(bundles.get('task-1')).toBeNull()
+  })
+
+  it('a large prompt\'s message points at the host\'s own file, and old spilled prompts are swept', async () => {
+    const dirOf = path.join(dir, 'prompts')
+    fs.mkdirSync(dirOf, { recursive: true })
+    const stale = path.join(dirOf, 'prompt-00aa.txt')
+    fs.writeFileSync(stale, 'old')
+    const old = (Date.now() - SPILL_TTL_MS - 60_000) / 1000
+    fs.utimesSync(stale, old, old)
+    const fresh = path.join(dirOf, 'prompt-00bb.txt')
+    fs.writeFileSync(fresh, 'recent')
+    const leaderPath = '/tmp/walnut-quick-start-1700000000000-abcd1234.md'
+    await post('/host-api/sessions/start', {
+      taskId: 'task-1', message: `User's full context has been saved to: ${leaderPath}\n(5,000 chars).`, largePrompt: 'L'.repeat(5000), largePromptPath: leaderPath,
+    })
+    const spill = seenAtStart!.data.largePromptFile as { localPath: string }
+    expect(seenAtStart!.data.message).toBe(`User's full context has been saved to: ${spill.localPath}\n(5,000 chars).`)
+    expect(String(seenAtStart!.data.message)).not.toContain(leaderPath)
+    expect(seenAtStart!.data.largePromptPath).toBeUndefined()
+    expect(fs.existsSync(stale)).toBe(false)
+    expect(fs.existsSync(fresh)).toBe(true)
   })
 
   it('a failed start answers why', async () => {

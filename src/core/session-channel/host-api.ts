@@ -49,6 +49,8 @@ export interface StartBundle {
  */
 export type StartBody = Omit<SessionStartEvent, 'largePromptFile'> & {
   largePrompt?: string
+  /** Where the leader spilled `largePrompt`: the path its `message` names, which the host points at its own file instead. */
+  largePromptPath?: string
   startBundle?: StartBundle
   busSource?: string
 }

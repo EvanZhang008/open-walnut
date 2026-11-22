@@ -31,6 +31,23 @@ import type { StartBundles } from './host-port.js'
 const MAX_BODY_BYTES = 32 * 1024 * 1024
 /** How long an undo of an expected teardown is kept for the leader to call. */
 const UNDO_TTL_MS = 10 * 60_000
+/** How long a spilled start prompt is kept for its session to read (a resume may read it again). */
+export const SPILL_TTL_MS = 3 * 24 * 60 * 60_000
+
+/** Remove the spilled prompts older than SPILL_TTL_MS (each start sweeps before it spills). */
+export async function sweepSpilledPrompts(dir: string, now = Date.now()): Promise<number> {
+  let names: string[]
+  try { names = await fsp.readdir(dir) } catch { return 0 }
+  let removed = 0
+  for (const name of names) {
+    if (!/^prompt-[0-9a-f]+\.txt$/.test(name)) continue
+    const p = path.join(dir, name)
+    try {
+      if (now - (await fsp.stat(p)).mtimeMs > SPILL_TTL_MS) { await fsp.rm(p, { force: true }); removed++ }
+    } catch { /* gone already */ }
+  }
+  return removed
+}
 
 type AnyFn = (...args: unknown[]) => unknown
 /** The runner as the routes use it (SessionRunner). */
@@ -139,13 +156,16 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
 
   async function start(body: StartBody): Promise<{ status: number; body: unknown }> {
     if (!body || typeof body.taskId !== 'string' || typeof body.message !== 'string') return { status: 400, body: { ok: false, error: 'taskId and message are required', why: 'bad_request' } }
-    const { largePrompt, startBundle, busSource, ...rest } = body
+    const { largePrompt, largePromptPath, startBundle, busSource, ...rest } = body
     const data: Record<string, unknown> & { taskId: string; message: string } = { ...rest }
     if (typeof largePrompt === 'string' && largePrompt.length > 0) {
       await fsp.mkdir(o.spillDir, { recursive: true, mode: 0o700 })
+      await sweepSpilledPrompts(o.spillDir, now()).catch(() => 0)
       const file = path.join(o.spillDir, `prompt-${crypto.randomBytes(8).toString('hex')}.txt`)
       await fsp.writeFile(file, largePrompt, { mode: 0o600 })
       data.largePromptFile = { localPath: file, originalLength: largePrompt.length }
+      // The message points at the leader's file, which is not here: point it at this host's.
+      if (typeof largePromptPath === 'string' && largePromptPath.length > 1) data.message = data.message.split(largePromptPath).join(file)
     }
     // The session runs on this host, through its own runtime: no host to dial from here.
     delete data.host

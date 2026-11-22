@@ -180,8 +180,14 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   const host = data.host!
   const { largePromptFile, ...rest } = data
   const payload = { ...rest } as unknown as StartBody
-  // The spilled message's file is this server's: its text goes instead (the host spills it again).
-  if (largePromptFile) payload.largePrompt = await fsp.readFile(largePromptFile.localPath, 'utf8')
+  // The spilled message's file is this server's: its text goes instead, with the path the message
+  // names, and the host spills it again and points the message at its own file.
+  if (largePromptFile) {
+    payload.largePrompt = await fsp.readFile(largePromptFile.localPath, 'utf8')
+    payload.largePromptPath = largePromptFile.localPath
+    // This server's copy is read: nothing here reads it again.
+    await fsp.rm(largePromptFile.localPath, { force: true }).catch(() => {})
+  }
   payload.startBundle = await startBundle(data)
   if (source) payload.busSource = source
   const side = await leaderSide()
