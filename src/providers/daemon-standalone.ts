@@ -4858,8 +4858,11 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   answersOnline: (ws) => ws.data?.answersOnline === true,
   // One rule for "the leader is away": the test follower.op applies (followerEntry.mayWrite).
   mayWrite: (home) => followerEntry.mayWrite(home),
-  // The companion leading takes what the follower refuses (forwardToBackup on the daemon's path).
+  // The companion leading takes what the follower refuses for want of a leader: relayed to it on its
+  // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: (home) => leaderBook.backupLead(home) !== null,
+  relayElsewhere: (call, answer) => forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer),
+  holdForLeader: (call) => offlineHost.holdWrite(call.home, call.callerSid, call.capability, call.payload) as FollowerGatewayResponse | null,
   now: () => Date.now(),
   send: (ws, ev, data) => { try { sendEvent(ws, ev, data); return true } catch { return false } },
   nextRelayId: () => ++gatewayRelayCounter,
@@ -5986,22 +5989,30 @@ function sendGatewayRequest(
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
-  plan: { deadline: number; waits: boolean; ownServerAsked?: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+  plan: { deadline: number; waits: boolean; ownServerAsked?: boolean; ownAnswerNoted?: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
 ) {
   const home = gatewayOwnerHome(callerSid)
   const target = gatewayTargetFor(home, { callerSid, op: payload.name })
   const deadline = plan.deadline
-  // No leader to relay to: a session's call goes to this host's own Walnut server first
-  // (follower-gateway-core.ts), and comes back to the rules below when it hands it back.
-  if (home && !target && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
+  // No leader to relay to, or one still taking this host's journal (answered here, below): a
+  // session's call goes to this host's own Walnut server first (follower-gateway-core.ts), and
+  // comes back to the rules below when it hands it back.
+  if (home && (!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
     const readable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
     const fallback = () => sendGatewayRequest(capability, callerSid, payload, respond, { ...plan, ownServerAsked: true })
     const left = () => gatewayCallerLeft.get(respond)?.() === true
     if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback, left }, (r) => respond(r as GatewayResponse))) return
   }
+  // The daemon's own away answer, counted once per call: a call that waits and comes again is not counted again.
+  let noted = false
+  const noteOwn = () => {
+    if (!home || plan.ownAnswerNoted || noted) return
+    noted = true
+    followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)
+  }
   // No server now and nothing sent: a call that may wait does, while it has time
   // (a deploy's restart, a link dialing again), then goes as if it had just come.
-  const waitHere = () => plan.waits && waitForPrimary(deadline, () => sendGatewayRequest(capability, callerSid, payload, respond, plan), respond)
+  const waitHere = () => plan.waits && waitForPrimary(deadline, () => sendGatewayRequest(capability, callerSid, payload, respond, noted ? { ...plan, ownAnswerNoted: true } : plan), respond)
   // A relayed read this host can answer from its copy does not end in a timeout:
   // nothing is applied twice by reading.
   const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
@@ -6023,7 +6034,7 @@ function sendGatewayRequest(
     // task, this host's only its own. Answered here when the companion cannot.
     if (!target && capability === 'tools.call' && payload.name === 'search') {
       const here = () => {
-        followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)
+        noteOwn()
         void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse))
       }
       if (forwardToBackup(home, capability, callerSid, payload, (resp) => { if (resp.ok) respond(resp); else here() })) return
@@ -6037,7 +6048,7 @@ function sendGatewayRequest(
     // (offline-host-core.ts holdWrite). Any other answer goes back as it is.
     const unreachable = (r: GatewayResponse) => !r.ok && r.error.code === 'hub_unreachable' && !target
     const heldOr = (r: GatewayResponse) => respond(unreachable(r) ? (offlineHost.holdWrite(home, callerSid, capability, payload) as GatewayResponse | null) ?? r : r)
-    followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)
+    noteOwn()
     void offlineHost.handle(home, callerSid, capability, payload).then((r) => {
       // What this host cannot answer itself goes to the companion while it
       // leads (a message to another host, a task outside the copy).

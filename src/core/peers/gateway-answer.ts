@@ -210,9 +210,13 @@ export async function answerRelayedCall(call: RelayedCall, deps: RelayedCallDeps
       log.session.info(`${deps.label}: gateway relay handled`, { host: deps.hostKey, relayId, capability, callerSid });
       return { relayId, result: outcome.result };
     }
+    // The code the caller gets: a refusal the API gave with a lifted code (a host replica's
+    // `needs_leader`) goes back with it, and is logged with it, so a line names what the daemon reads.
+    const lifted = outcome.error.api?.code && deps.liftCodes?.includes(outcome.error.api.code)
+      ? { ...outcome.error, code: outcome.error.api.code as typeof outcome.error.code } : outcome.error;
     // One line per caller and reason every few minutes, with the count left out (gateway-refusal-log.ts).
     const answered = isOpAnswerStatus(outcome.opStatus);
-    const seen = refusalLog.admit(deps.hostKey, callerSid, answered ? `status:${outcome.opStatus}` : outcome.error.code);
+    const seen = refusalLog.admit(deps.hostKey, callerSid, answered ? `status:${outcome.opStatus}` : lifted.code);
     sweepRefusalsLater(deps.label);
     // The relay worked and the API answered (a 404 for a missing id): the op's answer, not a refusal (2026-11-15).
     if (seen.write && answered) {
@@ -222,15 +226,13 @@ export async function answerRelayedCall(call: RelayedCall, deps: RelayedCallDeps
       });
     } else if (seen.write) {
       log.session.warn(`${deps.label}: gateway relay refused`, {
-        host: deps.hostKey, relayId, capability, callerSid, errorCode: outcome.error.code, ...op,
+        host: deps.hostKey, relayId, capability, callerSid, errorCode: lifted.code, ...op,
         // How the API answered (`needs_leader` and its why, say): what the caller is told next.
         ...(outcome.error.api?.code ? { apiCode: outcome.error.api.code } : {}),
         ...(typeof (outcome.error.detail as { why?: unknown } | undefined)?.why === 'string' ? { why: (outcome.error.detail as { why: string }).why } : {}),
         ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
       });
     }
-    const lifted = outcome.error.api?.code && deps.liftCodes?.includes(outcome.error.api.code)
-      ? { ...outcome.error, code: outcome.error.api.code as typeof outcome.error.code } : outcome.error;
     const reply: Reply = { relayId, ...gatewayErrorReplyFields(lifted) };
     const detail: Record<string, unknown> = {
       ...(typeof lifted.detail === 'object' && lifted.detail !== null ? lifted.detail as Record<string, unknown> : {}),

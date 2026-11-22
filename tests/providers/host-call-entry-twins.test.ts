@@ -88,7 +88,9 @@ describe('host call entry twin wiring', () => {
   it.each(TWINS)('%s: every own away answer is counted where it is given, and shown in follower.status and server.status', (_n, src) => {
     const send = fnBody(src, 'sendGatewayRequest')
     const handles = send.split('offlineHost.handle(home, callerSid, capability, payload)').length - 1
-    const notes = send.split('followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)').length - 1
+    // One counter for the call (noteOwn), counted once even when the call waits and comes again.
+    expect(send.split('followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)').length - 1).toBe(1)
+    const notes = send.split(/noteOwn\(\);?\n/).length - 1
     expect(handles).toBeGreaterThanOrEqual(2)
     expect(notes).toBe(handles)
     // The own same-host delivery (handleLocal) too, while a follower that takes those is linked; an

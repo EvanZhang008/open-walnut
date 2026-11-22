@@ -53,8 +53,16 @@ describe('follower gateway twin wiring', () => {
       expect(src).toContain('followerGateway.dropSocket(ws)')
       // One rule for "away": the hand-off asks the same test follower.op applies.
       expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerEntry\.mayWrite\(home\)/)
-      // A final refusal goes on to the companion while it leads (its forward is on the daemon's path).
+      // A final refusal goes to the companion while it leads, on its link, and is held for the Mac
+      // when it takes nothing either: never the daemon's own away answer (follower-gateway-core.ts askElsewhere).
       expect(src).toMatch(/leaderElsewhere: (\(home\) => |function \(home\) \{ return )leaderBook\.backupLead\(home\) !== null/)
+      expect(src).toMatch(/relayElsewhere: (\(call, answer\) => |function \(call, answer\) \{ return )forwardToBackup\(call\.home, call\.capability, call\.callerSid, call\.payload, answer\)/)
+      expect(src).toMatch(/holdForLeader: (\(call\) => |function \(call\) \{ return )offlineHost\.holdWrite\(call\.home, call\.callerSid, call\.capability, call\.payload\)/)
+      // A session's call while the leader still takes this host's journal goes to the follower too.
+      expect(src).toContain('(!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)')
+      // The daemon's own away answer is counted once per call, a call that waited and came again included.
+      expect(src.match(/followerGateway\.noteOwnOffline\(/g)).toHaveLength(1)
+      expect(src).toMatch(/noted \? (\{ \.\.\.plan, ownAnswerNoted: true \}|Object\.assign\(\{\}, plan, \{ ownAnswerNoted: true \}\)) : plan/)
       // A plugin job's call in the window waits for its leader or the follower, within its own deadline.
       expect(src).toContain('followerGateway.routeJob(')
       // To the leader it names the same job, in the same `caller` frame field, on every attempt.

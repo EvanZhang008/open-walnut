@@ -6108,8 +6108,11 @@ var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
   answersOnline: function (ws) { return ws.answersOnline === true; },
   // One rule for "the leader is away": the test follower.op applies (followerEntry.mayWrite).
   mayWrite: function (home) { return followerEntry.mayWrite(home); },
-  // The companion leading takes what the follower refuses (forwardToBackup on the daemon's path).
+  // The companion leading takes what the follower refuses for want of a leader: relayed to it on its
+  // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: function (home) { return leaderBook.backupLead(home) !== null; },
+  relayElsewhere: function (call, answer) { return forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer); },
+  holdForLeader: function (call) { return offlineHost.holdWrite(call.home, call.callerSid, call.capability, call.payload); },
   now: function () { return Date.now(); },
   send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
   nextRelayId: function () { return ++gatewayRelayCounter; },
@@ -7209,16 +7212,24 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
   var deadline = plan.deadline;
   var home = gatewayOwnerHome(callerSid);
   var target = gatewayTargetFor(home, { callerSid: callerSid, op: payload.name });
-  // No leader to relay to: a session's call goes to this host's own Walnut server first
-  // (follower-gateway-core.ts), and comes back to the rules below when it hands it back.
-  if (home && !target && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
+  // No leader to relay to, or one still taking this host's journal (answered here, below): a
+  // session's call goes to this host's own Walnut server first (follower-gateway-core.ts), and
+  // comes back to the rules below when it hands it back.
+  if (home && (!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
     var ownReadable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
     var fallback = function () { sendGatewayRequest(capability, callerSid, payload, respond, Object.assign({}, plan, { ownServerAsked: true })); };
     var leftOf = function () { var l = gatewayCallerLeft.get(respond); return !!l && l() === true; };
     if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, readable: ownReadable, fallback: fallback, left: leftOf }, respond)) return;
   }
+  // The daemon's own away answer, counted once per call: a call that waits and comes again is not counted again.
+  var noted = false;
+  var noteOwn = function () {
+    if (plan.ownAnswerNoted || noted) return;
+    noted = true;
+    followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked);
+  };
   // No server now and nothing sent: a call that may wait does, while it has time.
-  var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, plan); }, respond); };
+  var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, noted ? Object.assign({}, plan, { ownAnswerNoted: true }) : plan); }, respond); };
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
   // A call from outside any session is answered here only when it reads; its other
   // calls go to the companion while it leads (twin of daemon-standalone.ts).
@@ -7233,7 +7244,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     // A search goes to the companion first while it leads (twin of daemon-standalone.ts).
     if (!target && capability === 'tools.call' && payload.name === 'search') {
       var here = function () {
-        followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked);
+        noteOwn();
         offlineHost.handle(home, callerSid, capability, payload).then(function (r) { respond(r); });
       };
       if (forwardToBackup(home, capability, callerSid, payload, function (resp) { if (resp.ok) respond(resp); else here(); })) return;
@@ -7245,7 +7256,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     // Nothing could take it: a message or a memory write is held here for the server (holdWrite).
     var unreachable = function (r) { return !r.ok && r.error.code === 'hub_unreachable' && !target; };
     var heldOr = function (r) { respond(unreachable(r) ? offlineHost.holdWrite(home, callerSid, capability, payload) || r : r); };
-    followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked);
+    noteOwn();
     offlineHost.handle(home, callerSid, capability, payload).then(function (r) {
       // What this host cannot answer itself goes to the companion while it leads.
       if (unreachable(r)

@@ -15,9 +15,13 @@
  *                      a write with none is `hub_timeout` (it may have run: never twice).
  *                      A refusal the follower marks `detail.final` (its own `needs_leader`:
  *                      a route of the leader's, a write it cannot keep, a task the Mac keeps
- *                      local) is the caller's answer, while the follower may still write and
- *                      no companion leads; else it goes on as before, to the leader that
- *                      answers now (nothing ran)
+ *                      local) is the caller's answer while the follower may still write. The
+ *                      Mac back: it goes on as before, to the leader that answers now (nothing
+ *                      ran). The companion leading: relayed to it (relayElsewhere), never to
+ *                      the daemon's own away answer; what the companion does not take either
+ *                      (its "needs the Walnut server"), or with no link to it now, ends as the
+ *                      follower said, or held for the Mac where the daemon holds such a call
+ *                      (holdForLeader: a message, a memory write)
  *   a plugin job's     the follower's answer is final; no follower: `hub_unreachable`
  *   a same-host send   while the leader answers (`online`, 'follower-peer-v1'): handed to a
  *                      follower that said `answersOnline`, in place of the daemon's own
@@ -78,8 +82,19 @@ export interface FollowerGatewayDeps<S> {
   follower(home: string): S | null
   /** Whether that follower may write now (the twin's followerMayWrite: no leader answers it). */
   mayWrite(home: string): boolean
-  /** Another leader takes what the follower cannot (the cloud companion leads `home`): its refusals are never final then. */
+  /** The cloud companion leads `home` (a backup lead is recorded): what the follower refuses for want of a leader is asked of it. */
   leaderElsewhere?(home: string): boolean
+  /**
+   * Relay `call` to that leader, its answer to `answer`. False: nothing was sent (no link to it
+   * now), so the follower's answer stands. The twins' forwardToBackup.
+   */
+  relayElsewhere?(call: HandOff, answer: (r: FollowerGatewayResponse) => void): boolean
+  /**
+   * What this host keeps for the Mac of a call no leader took (the twins' offlineHost.holdWrite: a
+   * message or a memory write, held as the follower's own hold is, which the daemon refuses while
+   * the companion leads), or null.
+   */
+  holdForLeader?(call: HandOff): FollowerGatewayResponse | null
   /** Whether that follower takes a same-host send while the leader answers (its hello's `answersOnline`). */
   answersOnline?(ws: S): boolean
   now(): number
@@ -304,11 +319,15 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     deps.clearTimer(e.timer)
     const code = !resp.ok && resp.error ? resp.error.code : ''
     // `final`: the follower's word stands (a same-host send while the leader answers still goes on).
-    // Only while no leader answers: the Mac back, or the companion leading, takes what it refused.
+    // Only while no leader answers here: the Mac back takes what it refused.
     const detail = !resp.ok && resp.error ? resp.error.detail as { final?: unknown } | undefined : undefined
-    const final = !e.call.online && !!detail && typeof detail === 'object' && detail.final === true
-      && deps.mayWrite(e.call.home) && deps.leaderElsewhere?.(e.call.home) !== true
+    const final = !e.call.online && !!detail && typeof detail === 'object' && detail.final === true && deps.mayWrite(e.call.home)
     if (code === 'needs_leader' && !!detail && typeof detail === 'object' && (detail as { why?: unknown }).why === 'leader_answers' && waitOutLag(relayId, e)) return 'ok'
+    // The companion leading: the leader that answers now, asked directly (see the top).
+    if (final && code === 'needs_leader' && e.call.fallback && deps.leaderElsewhere?.(e.call.home) === true) {
+      askElsewhere(relayId, e, resp)
+      return 'ok'
+    }
     if (e.call.fallback && FALLS_BACK.indexOf(code) !== -1 && !final) {
       deps.log('info', 'gateway: this host\'s Walnut server handed the call back', { relayId, code, op: e.call.payload.name })
       e.call.fallback()
@@ -316,6 +335,30 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     }
     e.respond(resp)
     return 'ok'
+  }
+
+  /** The companion's answer means it took nothing: it needs the Mac too (its own or its API's `needs_leader`), or did not lead. */
+  function notTaken(r: FollowerGatewayResponse): boolean {
+    if (r.ok || !r.error) return false
+    const api = r.error.api && typeof r.error.api === 'object' ? (r.error.api as { code?: unknown }).code : undefined
+    return r.error.code === 'hub_unreachable' || r.error.code === 'needs_leader' || api === 'needs_leader'
+  }
+
+  /**
+   * A final `needs_leader` while the companion leads: relayed to it. What it does not take, or with
+   * no link to it, ends as the follower said, or held for the Mac (holdForLeader). Never the
+   * daemon's own away answer, so never counted as one.
+   */
+  function askElsewhere(relayId: number, e: Pending, refused: FollowerGatewayResponse): void {
+    const op = typeof e.call.payload.name === 'string' ? e.call.payload.name : undefined
+    const stand = (why: 'not_taken' | 'no_link') => {
+      const held = deps.holdForLeader?.(e.call) ?? null
+      deps.log('info', held ? 'gateway: a call nobody leading takes now is held for the Mac' : 'gateway: this host\'s Walnut server\'s refusal stands', { relayId, op, why })
+      e.respond(held ?? refused)
+    }
+    const sent = deps.relayElsewhere?.(e.call, (r) => (notTaken(r) ? stand('not_taken') : e.respond(r))) === true
+    if (sent) deps.log('info', 'gateway: this host\'s Walnut server needs a leader for the call; asked of the cloud companion, which leads', { relayId, op })
+    else stand('no_link')
   }
 
   /** A follower socket closed: what it was sent and never answered ends now. */

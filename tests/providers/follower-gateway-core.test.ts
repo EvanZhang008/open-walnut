@@ -80,20 +80,18 @@ describe('follower gateway', () => {
     expect(relay).toHaveBeenCalledOnce()
   })
 
-  it('a final refusal goes on to the leader that answers again: the Mac back (no write allowed), or the companion leading', () => {
+  it('a final refusal goes on to the leader that answers again: the Mac back (no write allowed) takes the daemon\'s path', () => {
     const kept: FollowerGatewayResponse = { ok: false, error: { code: 'needs_leader', message: 'needs the Mac', detail: { final: true } } }
-    for (const turn of ['mac', 'companion'] as const) {
-      const s = setup()
-      const respond = vi.fn()
-      const fallback = vi.fn()
-      s.g.handOff(call({ fallback }), respond)
-      // Handed while away; by its answer the Mac answers again, or the companion took the lead.
-      if (turn === 'mac') s.state.mayWrite = false
-      else s.state.companion = true
-      s.g.settle(s.sock, 101, kept)
-      expect(fallback).toHaveBeenCalledOnce()
-      expect(respond).not.toHaveBeenCalled()
-    }
+    const s = setup()
+    const respond = vi.fn()
+    const fallback = vi.fn()
+    s.g.handOff(call({ fallback }), respond)
+    // Handed while away; by its answer the Mac answers again.
+    s.state.mayWrite = false
+    s.g.settle(s.sock, 101, kept)
+    expect(fallback).toHaveBeenCalledOnce()
+    expect(respond).not.toHaveBeenCalled()
+    expect(s.relayed).toEqual([])
   })
 
   it('an error that is no hand-back goes to the caller as it is, never to the daemon\'s path', () => {
