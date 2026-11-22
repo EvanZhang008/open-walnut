@@ -182,10 +182,18 @@ describe('the companion package', () => {
     expect(fs.readFileSync(path.join(dir, 'package', 'walnut'), 'utf8')).toContain('# other')
   })
 
+  // The cache orders packages by their file's time: give each build its own second, in order,
+  // instead of waiting for the clock to move between builds.
+  function stampBuilt(id: string, i: number): void {
+    const t = new Date(Date.UTC(2026, 0, 1, 0, 0, i))
+    const f = path.join(cacheDir(), `${id}-companion-linux-arm64.tgz`)
+    if (fs.existsSync(f)) fs.utimesSync(f, t, t)
+  }
+
   it('keeps the package in use and the one before it', async () => {
-    for (const commit of ['aaa0001', 'aaa0002', 'aaa0003', 'aaa0004']) {
+    for (const [i, commit] of ['aaa0001', 'aaa0002', 'aaa0003', 'aaa0004'].entries()) {
       await buildCompanionPackage({ platform: 'linux', arch: 'arm64' }, { source: fakeSource({ id: `0.7.0-${commit}`, commit }) })
-      await new Promise((r) => setTimeout(r, 15))
+      stampBuilt(`0.7.0-${commit}`, i)
     }
     const kept = fs.readdirSync(cacheDir()).filter((n) => n.endsWith('.tgz')).sort()
     expect(kept).toEqual(['0.7.0-aaa0003-companion-linux-arm64.tgz', '0.7.0-aaa0004-companion-linux-arm64.tgz'])
@@ -194,9 +202,9 @@ describe('the companion package', () => {
 
   it('keeps the builds it is asked to keep beside the newest two, and lists and reads them back', async () => {
     const box = { platform: 'linux', arch: 'arm64' }
-    for (const commit of ['bbb0001', 'bbb0002', 'bbb0003', 'bbb0004']) {
+    for (const [i, commit] of ['bbb0001', 'bbb0002', 'bbb0003', 'bbb0004'].entries()) {
       await buildCompanionPackage(box, { source: fakeSource({ id: `0.7.0-${commit}`, commit, body: `${FAKE_WALNUT}# ${commit}\n` }), keep: ['0.7.0-bbb0001'] })
-      await new Promise((r) => setTimeout(r, 15))
+      stampBuilt(`0.7.0-${commit}`, i)
     }
     expect((await cachedCompanionPackages(box)).map((c) => c.id)).toEqual(['0.7.0-bbb0004', '0.7.0-bbb0003', '0.7.0-bbb0001'])
     const back = await cachedCompanionPackage('0.7.0-bbb0001', box)

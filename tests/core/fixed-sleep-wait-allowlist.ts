@@ -38,7 +38,6 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/cloud-setup/job.test.ts", sleep: "await new Promise((r) => setTimeout(r, 60))", reason: "negative: a cancelled job is not resurrected (no claim calls)" },
   { file: "tests/core/cloud-setup/job.test.ts", sleep: "await new Promise((r) => setTimeout(r, 60))", reason: "negative: a cancelled runner does not resurrect the job (no claim calls)" },
   { file: "tests/core/companion-build-mac.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: no automatic look before the boot delay; the work is then awaited (await t)" },
-  { file: "tests/core/companion-build-package.test.ts", sleep: "await new Promise((r) => setTimeout(r, 15))", reason: "time under test: each package needs a later timestamp so the keep-two order holds" },
   { file: "tests/core/components/embedding-trigger.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "negative: no new download inside the backoff" },
   { file: "tests/core/components/embedding-trigger.test.ts", sleep: "await new Promise((r) => setTimeout(r, 450));", reason: "time under test: sleeps past the 400 ms backoff before the next ask" },
   { file: "tests/core/components/status.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100)); // past any backoff: still never", reason: "negative: a 403 is never retried automatically" },
