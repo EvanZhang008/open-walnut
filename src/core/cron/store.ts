@@ -188,9 +188,13 @@ export async function ensureLoaded(
   if (loaded.version !== 2) dirty = true;
   state.store = { version: 2, jobs: loaded.jobs ?? [] };
   state.keptAt = Date.now();
-  state.disk = { stamp, readAt: Date.now() };
   if (dirty) {
+    state.disk = { stamp, readAt: Date.now() };
     await persist(state);
+  } else {
+    // The texts this store writes as: a persist that changes nothing in a file leaves it as it is
+    // (2026-11-22: without them, the first write after each 30 s reread rewrote cron-jobs.json).
+    state.disk = { stamp, readAt: Date.now(), ...storeTexts(state.store) };
   }
 
   if (!opts?.skipRecompute) {
@@ -255,38 +259,45 @@ export async function persist(state: CronServiceState): Promise<void> {
 
   // The one write point, so no path (a create, an edit, a replay, one added later) stores a prompt's opening as a name.
   for (const job of state.store.jobs) relabelTrigger(job);
-  const states: Record<string, CronJobState> = {};
-  const jobsWithoutState = state.store.jobs.map((job) => {
-    states[job.id] = job.state ?? {};
-    const { state: _state, ...definition } = job;
-    return definition;
-  });
-
-  const jobsText = jsonFileText({ ...state.store, jobs: jobsWithoutState });
-  // Compact: the sidecar is machine-local (never synced, never read by a person) and written on
-  // every trigger check, about once a second on the Mac; indenting made it 40% larger.
-  const stateText = JSON.stringify({ version: 1, states } satisfies CronStateFile) + '\n';
-  // A file whose text is what this process last wrote, and that nobody wrote since, is left as
-  // it is: most writes change only the runtime state, and the jobs file rides git-sync.
+  const { jobsText, stateText } = storeTexts(state.store);
+  // A file whose text is what this process last read or wrote, and that nobody wrote since, is
+  // left as it is: most writes change only the runtime state, and the jobs file rides git-sync.
   const prior = state.disk && await diskStampOf(state) === state.disk.stamp ? state.disk : undefined;
+  const writeJobs = prior?.jobsText !== jobsText;
+  const writeState = prior?.stateText !== stateText;
   try {
-    if (prior?.jobsText !== jobsText) await writeJsonText(state.deps.storePath, jobsText);
-    if (prior?.stateText !== stateText) await writeJsonText(cronStatePath(state.deps.storePath), stateText);
+    if (writeJobs) await writeJsonText(state.deps.storePath, jobsText);
+    if (writeState) await writeJsonText(cronStatePath(state.deps.storePath), stateText);
   } catch (err) {
     forgetDiskStamp(state);
     throw err;
   }
-  // Stamped after the write, under the lock: the next reload keeps this store. A file whose size
-  // is not what was just written changed again in between (a writer outside the lock): no stamp,
-  // so the next reload reads it.
+  // Stamped after the write, under the lock: the next reload keeps this store. A file written
+  // here whose size is not what was just written changed again in between (a writer outside the
+  // lock): no stamp, so the next reload reads it.
   const stamp = await diskStampOf(state);
   const sizes = stamp.split('|').map((one) => Number(one.split(':')[1]));
-  state.disk = sizes[0] === Buffer.byteLength(jobsText) && sizes[1] === Buffer.byteLength(stateText)
-    ? { stamp, readAt: prior?.readAt ?? Date.now(), jobsText, stateText }
-    : undefined;
+  const sizesHold = (!writeJobs || sizes[0] === Buffer.byteLength(jobsText)) && (!writeState || sizes[1] === Buffer.byteLength(stateText));
+  state.disk = sizesHold ? { stamp, readAt: prior?.readAt ?? Date.now(), jobsText, stateText } : undefined;
   state.keptAt = Date.now();
   // The routines copy kind's watch (replication/store-writes.ts): this is the one write point.
   noteStoreWrite('routines');
+}
+
+/** The two files' texts for `store`: definitions only (indented, git-synced), and the runtime states. */
+function storeTexts(store: CronStoreFile): { jobsText: string; stateText: string } {
+  const states: Record<string, CronJobState> = {};
+  const jobsWithoutState = store.jobs.map((job) => {
+    states[job.id] = job.state ?? {};
+    const { state: _state, ...definition } = job;
+    return definition;
+  });
+  return {
+    jobsText: jsonFileText({ ...store, jobs: jobsWithoutState }),
+    // Compact: the sidecar is machine-local (never synced, never read by a person) and written on
+    // every trigger check, about once a second on the Mac; indenting made it 40% larger.
+    stateText: JSON.stringify({ version: 1, states } satisfies CronStateFile) + '\n',
+  };
 }
 
 export function warnIfDisabled(state: CronServiceState, action: string): void {

@@ -126,6 +126,24 @@ describe('cron store: a forced reload keeps what still matches the disk', () => 
     expect(sidecar.states['job-a'].lastError).toBe('runtime only');
   });
 
+  it('after a reread (the 30 s clock), a write that changes only runtime state still leaves the jobs file untouched', async () => {
+    const state = await makeState();
+    await ops.update(state, 'job-a', { name: 'Morning digest' });
+    state.disk!.readAt = Date.now() - CRON_REREAD_MAX_MS - 1;
+    await ops.list(state, { includeDisabled: true }); // rereads both files
+    const before = await fs.stat(state.deps.storePath);
+    _resetJsonIoForTesting();
+    await locked(state, async () => {
+      const { ensureLoaded, persist } = await import('../../../src/core/cron/store.js');
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      state.store!.jobs[0]!.state.lastError = 'runtime only';
+      await persist(state);
+    });
+    expect(io(state).jobsWrites).toBe(0);
+    expect(io(state).stateWrites).toBe(1);
+    expect((await fs.stat(state.deps.storePath)).mtimeMs).toBe(before.mtimeMs);
+  });
+
   it('an op that threw after changing the store in memory: the next op reads the disk again', async () => {
     const state = await makeState();
     await ops.list(state, { includeDisabled: true });
