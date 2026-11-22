@@ -73,6 +73,45 @@ describe('linkTagsInText', () => {
     expect(linkTagsInText('https://github.com/a/b/issues/3', patterns)).toEqual(['issue:https://github.com/a/b/issues/3'])
   })
 
+  it('never cuts an id in the middle: a match that ends inside a word is no match', () => {
+    // 2026-11-22: a user pattern for a tracker's numeric ids met a link whose id is a UUID starting
+    // with digits, and tagged those digits: a URL that opens nothing.
+    const patterns = effectiveLinkPatterns({ ticket: String.raw`https://tracker\.example\.com/[A-Z]?\d{6,}` })
+    expect(linkTagsInText('see https://tracker.example.com/193305ab-1111-4222-8333-444455556666', patterns)).toEqual([])
+    expect(linkTagsInText('see https://tracker.example.com/12345678-1111-4222-8333-444455556666', patterns)).toEqual([])
+    expect(linkTagsInText('see https://tracker.example.com/T900100200, and https://tracker.example.com/1933050/comments', patterns))
+      .toEqual(['ticket:https://tracker.example.com/T900100200', 'ticket:https://tracker.example.com/1933050'])
+    // The self-report then keeps the whole link under the kind the session wrote.
+    expect(linkTagsFromField('- ticket: https://tracker.example.com/193305ab-1111-4222-8333-444455556666', patterns))
+      .toEqual(['ticket:https://tracker.example.com/193305ab-1111-4222-8333-444455556666'])
+    // A segment boundary, a query or punctuation after the match is still the same link.
+    expect(linkTagsInText('https://github.com/acme/app/pull/77/files https://github.com/acme/app/pull/78?w=1 (https://github.com/acme/app/pull/79).', DEFAULT_LINK_PATTERNS))
+      .toEqual(['pr:https://github.com/acme/app/pull/77', 'pr:https://github.com/acme/app/pull/78', 'pr:https://github.com/acme/app/pull/79'])
+    // A pattern that itself ends at a separator is a prefix by intent and keeps matching.
+    const prefix = effectiveLinkPatterns({ doc: String.raw`https://docs\.example\.com/team/` })
+    expect(linkTagsInText('https://docs.example.com/team/handbook', prefix)).toEqual(['doc:https://docs.example.com/team'])
+  })
+
+  it('every pattern Walnut ships refuses a longer id (ratchet): a new pattern fails until its sample is listed', () => {
+    // One sample per DEFAULT_LINK_PATTERNS entry, in order: it is tagged as it is, and never with more of a word after it.
+    const SAMPLES = [
+      'https://github.com/acme/app/pull/77',
+      'https://github.com/acme/app/commit/0123456789abcdef0123456789abcdef01234567',
+      'https://github.com/acme/app/issues/42',
+      'https://gitlab.com/g/sub/proj/-/merge_requests/5',
+      'https://gitlab.com/g/sub/proj/-/issues/6',
+      'https://acme.atlassian.net/browse/ENG-12',
+      'https://linear.app/acme/issue/OPS-9',
+      'https://acme.slack.com/archives/C0123ABC/p1726000000123456',
+    ]
+    expect(SAMPLES).toHaveLength(DEFAULT_LINK_PATTERNS.length)
+    DEFAULT_LINK_PATTERNS.forEach((pattern, i) => {
+      const sample = SAMPLES[i]!
+      expect(linkTagsInText(sample, [pattern]), pattern.match).toEqual([`${pattern.key}:${sample}`])
+      for (const more of ['x', '9x', '-x', '_x']) expect(linkTagsInText(`${sample}${more}`, [pattern]), `${pattern.match} + ${more}`).toEqual([])
+    })
+  })
+
   it('never stalls on a huge paste', () => {
     const text = `${'x '.repeat(400_000)} https://github.com/a/b/pull/1`
     const at = performance.now()

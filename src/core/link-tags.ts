@@ -69,12 +69,18 @@ interface CompiledPattern { key: string; re: RegExp }
 
 const compileCache = new Map<string, CompiledPattern | null>()
 
+/** A match never ends inside a word: `/\d{6,}` on `/193305ab-1111-…` would tag the id's first digits,
+ *  a URL that opens nothing (2026-11-22, a user's pattern for numeric ids met a UUID link). What
+ *  follows a match is a separator (`/`, `?`, punctuation) or the end; a pattern that itself ends at a
+ *  separator is a prefix by intent and still matches. */
+const WHOLE_WORD = String.raw`(?!(?<=[\w-])[\w-])`
+
 /** A pattern anchored at the start of one URL candidate (never run over the whole text). */
 function compile(pattern: LinkPattern): CompiledPattern | null {
   const id = `${pattern.key}\u0000${pattern.match}`
   let hit = compileCache.get(id)
   if (hit === undefined) {
-    try { hit = { key: pattern.key, re: new RegExp(`^(?:${pattern.match})`, 'i') } } catch { hit = null }
+    try { hit = { key: pattern.key, re: new RegExp(`^(?:${pattern.match})${WHOLE_WORD}`, 'i') } } catch { hit = null }
     if (compileCache.size > 200) compileCache.clear()
     compileCache.set(id, hit)
   }
@@ -96,7 +102,8 @@ function urlCandidates(text: string): string[] {
 
 /** The link tag a pattern makes of one URL candidate, or undefined when none recognises it.
  *  The pattern's match, not the whole candidate, is the URL, so `…/pull/7/files` and
- *  `…/pull/7?x=1` are the same link as `…/pull/7` wherever they were mentioned. */
+ *  `…/pull/7?x=1` are the same link as `…/pull/7` wherever they were mentioned; `…/pull/7a` is
+ *  another address and no match (WHOLE_WORD). */
 function patternTag(candidate: string, patterns: readonly LinkPattern[]): { tag: string; url: string } | undefined {
   for (const pattern of patterns) {
     const m = compile(pattern)?.re.exec(candidate)
