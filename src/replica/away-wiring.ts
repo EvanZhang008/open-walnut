@@ -34,6 +34,7 @@ import { wsWrites } from './ws-writes.js'
 import { writeActorOf } from './write-actor.js'
 import type { SessionRecord } from '../core/types.js'
 import type { AwayStart } from '../core/offline-merge/task-row-fold.js'
+import type { CallerTaskRow } from '../core/sessions/caller-placement.js'
 import type { AskLaunch } from './ask-launch.js'
 
 /** The daemon capability note writes away ride on (WP11). */
@@ -173,11 +174,9 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   }
   const port = createWritePort({
     task: shownTask,
-    callerTask: async (sid) => {
-      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-      const rec = await getSessionByClaudeId(sid).catch(() => null)
-      return rec?.taskId ? shownTask(rec.taskId) : null
-    },
+    // The leader's drain's caller (journal-actor.ts), its task read as this replica shows it.
+    createCaller: async (actor) => (await (await import('../core/offline-merge/journal-actor.js'))
+      .createCaller(actor, { readTask: async (id) => (await shownTask(id)) as CallerTaskRow | null })).caller,
     createdHere: (id) => overlay.createPending(id),
     board: shownBoard,
     noteWritten: (e) => {

@@ -22,7 +22,7 @@
  */
 
 import { RefusedWrite } from './patch-check.js';
-import type { CallerPlacement } from '../sessions/caller-placement.js';
+import type { CallerPlacement, CallerTaskRow } from '../sessions/caller-placement.js';
 
 export type JournalActorLike =
   | { kind: 'session'; sid: string }
@@ -56,11 +56,16 @@ export function actorRules(actor: JournalActorLike | undefined): ActorRules {
  * POST /tasks): a session's own placement; a plugin job an outside caller's, and when its
  * plugin keeps its tasks to its own view (plugin-task-visibility.ts) no caller at all and
  * the task stamped `plugin_only`, as `walnut.ops.call` naming the plugin gets online.
+ * The Mac's drain and a host's follower (replica/write-port.ts, reading its copy through
+ * `readTask`) both place an away create by it, so the two agree.
  */
-export async function createCaller(actor: JournalActorLike | undefined): Promise<{ caller: CallerPlacement; pluginOnly?: string }> {
+export async function createCaller(
+  actor: JournalActorLike | undefined,
+  opts: { readTask?: (id: string) => Promise<CallerTaskRow | null | undefined> } = {},
+): Promise<{ caller: CallerPlacement; pluginOnly?: string }> {
   if (actor?.kind === 'session') {
     const { resolveCallerPlacement } = await import('../sessions/caller-placement.js');
-    return { caller: await resolveCallerPlacement(actor.sid).catch(() => ({ kind: 'unknown' as const })) };
+    return { caller: await resolveCallerPlacement(actor.sid, opts).catch(() => ({ kind: 'unknown' as const })) };
   }
   if (actor?.kind === 'plugin-job') {
     const { pluginOnlyForCaller } = await import('../plugins/plugin-task-visibility.js');

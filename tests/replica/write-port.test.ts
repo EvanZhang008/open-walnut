@@ -18,6 +18,7 @@ import { createWritePort, createdRow, mintTaskId, refusalAnswer, type TaskRow, t
 import { createOverlay } from '../../src/replica/overlay.js'
 import { linkWrite } from '../../src/replica/ws-writes.js'
 import { taskExecution } from '../../src/ops/task-execution.js'
+import type { CallerPlacement } from '../../src/core/sessions/caller-placement.js'
 
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const PHONE: WriteActor = { kind: 'device', deviceId: 'dev-marina-phone', name: 'Marina phone' }
@@ -27,7 +28,7 @@ const COPY_ONLY: TaskRow = { id: 'mtaskccc-0003', title: 'Release plan', phase: 
 
 afterEach(() => cleanupJournalDirs())
 
-function rig(opts: { lose?: (n: number) => boolean; forReaders?: (row: TaskRow) => Promise<TaskRow>; callerTask?: (sid: string) => Promise<TaskRow | null> } = {}) {
+function rig(opts: { lose?: (n: number) => boolean; forReaders?: (row: TaskRow) => Promise<TaskRow>; createCaller?: (actor: WriteActor) => Promise<CallerPlacement> } = {}) {
   const dir = journalTmpDir()
   const clock = { now: T0 }
   const { host } = journalHost(dir, clock, { boards: true })
@@ -55,7 +56,7 @@ function rig(opts: { lose?: (n: number) => boolean; forReaders?: (row: TaskRow) 
     board: async () => null,
     noteWritten: (e) => { written.push(e); overlay.noteWritten(e) },
     ...(opts.forReaders ? { forReaders: opts.forReaders } : {}),
-    ...(opts.callerTask ? { callerTask: opts.callerTask } : {}),
+    ...(opts.createCaller ? { createCaller: opts.createCaller } : {}),
     now: () => clock.now,
     randomHex: (n) => (++hexN).toString(16).padStart(n * 2, '0'),
   })
@@ -67,8 +68,8 @@ function rig(opts: { lose?: (n: number) => boolean; forReaders?: (row: TaskRow) 
 describe('write port: what follower.op journals', () => {
   it('a session\'s create in another project without the user\'s words naming it is refused as the leader refuses it; nothing is kept', async () => {
     // 2026-11-21 real host run: it was kept, answered "created", then refused unheard by the drain.
-    const own: TaskRow = { id: 'mlead-task-0001', title: 'Own work', project: 'Acme' }
-    const r = rig({ callerTask: async (sid) => (sid === 'sess-caller-1' ? own : null) })
+    const own = { id: 'mlead-task-0001', title: 'Own work', project: 'Acme' }
+    const r = rig({ createCaller: async (a) => (a.kind === 'session' && a.sid === 'sess-caller-1' ? { kind: 'worker', task: own, session: { id: a.sid, host: '' } } : { kind: a.kind === 'device' ? 'human' : 'unknown' }) })
     const s = { kind: 'session' as const, sid: 'sess-caller-1' }
     const far = await r.port.taskCreate(r.write(), s, { title: 'Elsewhere work', project: 'Elsewhere' })
     expect(far).toMatchObject({ answered: false, status: 409, body: { error: { code: 'project_elsewhere' } } })

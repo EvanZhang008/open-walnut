@@ -61,6 +61,7 @@ import { CLOUD_MODE } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { isCompanion } from '../server-role.js';
 import { log } from '../../logging/index.js';
+import type { Task } from '../types.js';
 
 /** The caller's task, as placement needs it. */
 export interface CallerTask {
@@ -103,12 +104,20 @@ export function normalizeHost(host: string | undefined | null): string {
   return h === '__local__' || h === 'local' ? '' : h;
 }
 
+/** The fields of a task the caller rule reads (a store row, or a host follower's copy row). */
+export type CallerTaskRow = Pick<Task, 'id' | 'title'> & Partial<Pick<Task, 'project' | 'group_id' | 'pinned' | 'focus_tier' | 'org_role' | 'org_leads' | 'walnut_agent'>>;
+
 /**
  * Classify the caller behind an `x-walnut-caller-sid` header. Reads the task's
  * LIVE project and folder: `SessionRecord.project` is stamped when the session
- * starts and goes stale the moment the task moves.
+ * starts and goes stale the moment the task moves. `readTask`: where the caller's
+ * task is read (a host's follower reads its copy plus its own journal's writes,
+ * replica/away-wiring.ts); the task store otherwise.
  */
-export async function resolveCallerPlacement(callerSid: string | undefined): Promise<CallerPlacement> {
+export async function resolveCallerPlacement(
+  callerSid: string | undefined,
+  opts: { readTask?: (id: string) => Promise<CallerTaskRow | null | undefined> } = {},
+): Promise<CallerPlacement> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return { kind: 'human' };
   if (CLOUD_MODE) return resolveCallerOnReplica(sid);
@@ -127,7 +136,7 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
   };
   if (!record.taskId) return { kind: 'untracked', session };
   const { getTask, listFolderLabels } = await import('../task-manager.js');
-  const task = await getTask(record.taskId).catch(() => undefined);
+  const task: CallerTaskRow | undefined = await (opts.readTask ?? getTask)(record.taskId).catch(() => undefined) ?? undefined;
   if (!task) return { kind: 'untracked', session };
   const groupId = task.group_id || undefined;
   const label = groupId ? (await listFolderLabels().catch(() => new Map<string, string>())).get(groupId) : undefined;

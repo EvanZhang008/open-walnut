@@ -125,6 +125,24 @@ describe('a task made away lands where the same caller\'s create lands online', 
     expect(whereOf(away2)).toEqual(whereOf(online2))
   })
 
+  it('a session\'s create the host placed by the caller rule (project, parent, tier, pin in the record): where online puts it, once', async () => {
+    // replica/away-create-placement.ts journals what the caller rule decided on the host's copy;
+    // the drain derives the same again, and files it beside the caller in its folder itself.
+    const folder = await createFolder('Badge work', 'Acme')
+    const lead = (await addTask({ title: 'Badge lead', project: 'Acme', group_id: folder.group_id, pinned: true, focus_tier: 'focus' })).task
+    await addTask({ title: 'Other badge work', project: 'Acme', group_id: folder.group_id })
+    const sid = '44444444-5555-4666-8777-000000000004'
+    await createSessionRecord(sid, lead.id, 'Acme', '/repo/acme', { title: 'Badge lead' })
+    const online = await direct({ title: 'Print the lanyards' }, { 'x-walnut-caller-sid': sid })
+    const away = await drained({ kind: 'session', sid }, { title: 'Print the stickers', pinned: true }, { project: 'Acme', parentTaskId: lead.id, tier: 'focus' })
+    expect(online.parent_task_id).toBe(lead.id)
+    expect(whereOf(away)).toEqual(whereOf(online))
+    // A custom tier the caller had, deleted before the drain: Satellite, as an inherited one (never refused).
+    const gone = await drained({ kind: 'session', sid }, { title: 'Print the menus', pinned: true }, { project: 'Acme', parentTaskId: lead.id, tier: 'ct_deleted_tier' })
+    expect(gone).toMatchObject({ project: 'Acme', parent_task_id: lead.id, pinned: true })
+    expect(gone.focus_tier ?? '').not.toBe('ct_deleted_tier')
+  })
+
   it('a plugin job\'s: an outside caller\'s create; a plugin that keeps its tasks keeps it to its own view', async () => {
     const online = await direct({ title: 'Imported row one', project: 'Marina' }, { 'x-walnut-caller-sid': 'external', 'x-walnut-plugin-id': 'acme-sync' })
     const away = await drained({ kind: 'plugin-job', plugin: 'acme-sync', job: 'poll' }, { title: 'Imported row two' }, { project: 'Marina' })

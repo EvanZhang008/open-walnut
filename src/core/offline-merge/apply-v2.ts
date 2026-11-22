@@ -307,8 +307,9 @@ async function createTask(
     try {
       created = (await addTask({ ...input, ...rules.tier })).task;
     } catch (err) {
-      // An INHERITED custom tier deleted since: Satellite instead, as the route does.
-      if (!(rules.tierInherited && rules.tier.focus_tier && err instanceof InvalidFocusTierError)) throw err;
+      // An INHERITED custom tier deleted since: Satellite instead, as the route does. A session's
+      // queued tier is its caller's too (the host placed it by the caller rule: replica/away-create-placement.ts).
+      if (!((rules.tierInherited || kind === 'session') && rules.tier.focus_tier && err instanceof InvalidFocusTierError)) throw err;
       created = (await addTask({ ...input, pinned: true })).task;
     }
   } catch (err) {

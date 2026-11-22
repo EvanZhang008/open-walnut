@@ -48,6 +48,8 @@ import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../c
 import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../core/types.js'
 import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-check.js'
 import { createdRow, mintTaskId } from '../core/offline-merge/task-row-fold.js'
+import type { CallerPlacement } from '../core/sessions/caller-placement.js'
+import { placeAwayCreate, plainCaller } from './away-create-placement.js'
 
 /**
  * The fields a task write may queue (the task-outbox whitelist plus phase, parent,
@@ -115,8 +117,12 @@ export interface WritePortDeps {
    * the journal's row as it is.
    */
   forReaders?(row: TaskRow): Promise<TaskRow>
-  /** The task of a session on this host as this replica shows it, or null: where the leader places that session's creates. */
-  callerTask?(sid: string): Promise<TaskRow | null>
+  /**
+   * Who makes a create, as the leader's drain places it (journal-actor.ts createCaller), reading a
+   * session's task as this replica shows it: away-create-placement.ts. Absent: a device is a person,
+   * anyone else an unknown caller (nothing inherited, nothing refused).
+   */
+  createCaller?(actor: WriteActor): Promise<CallerPlacement>
   randomHex?(bytes: number): string
   now?(): number
   log?(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -258,38 +264,6 @@ export function createWritePort(deps: WritePortDeps): WritePort {
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => {})
 
-  /** A session's create the leader's rules refuse: another project the user did not name, or a parent too deep. */
-  async function callerRuleRefusal(actor: WriteActor, all: Record<string, unknown>): Promise<PortAnswer | null> {
-    if (actor.kind !== 'session' || !deps.callerTask) return null
-    const t = await deps.callerTask(actor.sid).catch(() => null)
-    if (!t) return null
-    if (typeof all.project === 'string') {
-      const elsewhere = elsewhereRefusal(actor.sid, t, all, await import('../core/sessions/caller-placement.js'))
-      if (elsewhere) return refusalAnswer('project_elsewhere', elsewhere)
-    }
-    // The new task is the caller's subtask (the caller rule): no deeper than the leader allows.
-    const { assertSubtaskDepth, SubtaskLimitError } = await import('../core/sessions/subtask-limits.js')
-    try {
-      await assertSubtaskDepth(t.id, typeof t.title === 'string' ? t.title : undefined)
-    } catch (err) {
-      if (err instanceof SubtaskLimitError) return refusalAnswer(err.code, err.message)
-    }
-    return null
-  }
-
-  function elsewhereRefusal(sid: string, t: TaskRow, all: Record<string, unknown>, cp: typeof import('../core/sessions/caller-placement.js')): string | null {
-    const { projectElsewhereRefusal } = cp
-    const leads = Array.isArray(t.org_leads) ? t.org_leads.filter((x): x is string => typeof x === 'string') : undefined
-    const caller = {
-      kind: 'worker' as const, session: { id: sid },
-      task: {
-        id: t.id, title: typeof t.title === 'string' ? t.title : t.id, project: typeof t.project === 'string' ? t.project : '',
-        ...(leads ? { orgLeads: leads } : {}), ...(typeof t.group_label === 'string' ? { group_label: t.group_label } : {}),
-      },
-    }
-    return projectElsewhereRefusal({ project: all.project as string, user_words: all.user_words }, caller as unknown as Parameters<typeof projectElsewhereRefusal>[1])
-  }
-
   /** The daemon's answer as the route's: the overlay learns a write it took at once. */
   function settle(r: ReplicaWriteResult, actor: WriteActor, record: Record<string, unknown>, ok: (reply: Record<string, unknown>) => PortAnswer, clientRequestId?: string): PortAnswer {
     if (r.kind === 'answered') return { answered: true }
@@ -369,32 +343,40 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       if (bad.length) {
         return needsLeaderAnswer('fields', `${bad.join(', ')} can only be set while your Mac answers; the task was not made.`, { fields: bad })
       }
-      // The leader's create rules for a session (create-rules.ts applyCreateRules, which the drain runs
-      // again): checked here, so a create the drain would refuse is never kept and answered "created"
-      // (2026-11-21 real host run: a create in another project was refused unheard at the drain).
-      const ruled = await callerRuleRefusal(actor, all)
-      if (ruled) return ruled
-      const at = now()
-      const id = mintTaskId(at, hex)
+      // Placed by the leader's own rules on this host's copy of the caller (away-create-placement.ts):
+      // a session's create with no project lands in its caller's project as its subtask, in its tier
+      // (2026-11-22: it landed in the Inbox here, and its start was refused for the Inbox's host). A
+      // create the leader refuses is refused now, never kept and answered "created" (2026-11-21 real
+      // host run: a create in another project was refused unheard at the drain).
       const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
       // A session's and a plugin job's parent comes from the caller rule alone, as online
       // (offline-merge/apply-v2.ts createTask): a named one is a paired device's only.
-      const namedParent = actor.kind === 'device' ? str(all.parent_task_id) : undefined
-      const placement = {
-        ...(namedParent ? { parentTaskId: namedParent } : {}),
-        ...(typeof all.project === 'string' ? { project: all.project } : {}),
-        ...(str(all.group_id) ? { groupId: str(all.group_id) } : {}),
-        ...(str(all.focus_tier) ? { tier: str(all.focus_tier) } : {}),
-      }
+      const namedParent = actor.kind === 'device' ? str(all.parent_task_id) || undefined : undefined
+      const caller = deps.createCaller ? await deps.createCaller(actor).catch(() => plainCaller(actor)) : plainCaller(actor)
+      const placed = await placeAwayCreate(all, caller, namedParent)
+      if ('refused' in placed) return refusalAnswer(placed.refused.code, placed.refused.message)
+      const { placement } = placed
+      const made = { ...fields, ...placed.fields }
+      const at = now()
+      const id = mintTaskId(at, hex)
       // The new task's fields by the same rules, on the row the Mac's create starts from.
-      const refused = macRefusalOf(createdRow(id, {}, placement, at, actor), fields)
+      const refused = macRefusalOf(createdRow(id, {}, placement, at, actor), made)
       if (refused) return refusalAnswer('bad_request', refused)
-      const args: Record<string, unknown> = { id, ...fields }
-      for (const k of ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order']) if (all[k] !== undefined && (k !== 'parent_task_id' || namedParent)) args[k] = all[k]
+      const args: Record<string, unknown> = {
+        id, ...made,
+        ...(placement.parentTaskId ? { parent_task_id: placement.parentTaskId } : {}),
+        ...(placement.project !== undefined ? { project: placement.project } : {}),
+        ...(placement.groupId ? { group_id: placement.groupId } : all.group_id !== undefined ? { group_id: all.group_id } : {}),
+        ...(placement.tier ? { focus_tier: placement.tier } : all.focus_tier !== undefined ? { focus_tier: all.focus_tier } : {}),
+        ...(all.order !== undefined ? { order: all.order } : {}),
+      }
       const r = await w.submit('task_create', args, undefined, actor)
-      return settle(r, actor, { kind: 'task-create', taskId: id, fields, placement, ...(all.order !== undefined ? { order: all.order } : {}) }, (reply) => ({
+      return settle(r, actor, { kind: 'task-create', taskId: id, fields: made, placement, ...(all.order !== undefined ? { order: all.order } : {}) }, (reply) => ({
         answered: false, status: 201,
-        body: { task: { ...createdRow(typeof reply.taskId === 'string' ? reply.taskId : id, fields, placement, at, actor), replica_sync: 'pending' }, queued: true, offline: true, opId: reply.opId },
+        body: {
+          task: { ...createdRow(typeof reply.taskId === 'string' ? reply.taskId : id, made, placement, at, actor), replica_sync: 'pending' },
+          placement: placed.answer, queued: true, offline: true, opId: reply.opId,
+        },
       }), typeof crid === 'string' && crid ? crid : undefined)
     },
     async taskMove(w, actor, taskId, anchor, tier) {

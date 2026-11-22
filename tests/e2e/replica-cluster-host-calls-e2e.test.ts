@@ -12,13 +12,15 @@
  *   awake      walnut_status by the new door is the Mac's answer, relayed; a plain same-host send
  *              A -> B by the old door is taken by the follower (online) and reaches B.
  *   away       (the Mac SIGSTOPped past its quiet window) by the new door as A: task_create with a
- *              start, task_update tags, task_send to B asking a reply (rq1) and one asking it by
+ *              start, task_create naming no project (filed in A's project as A's subtask by the leader's
+ *              caller rule, and started on devbox, the project's host), task_update tags, task_send to B asking a reply (rq1) and one asking it by
  *              default (rq2); by the old door as B: the reply to rq1, agent_memory_write on A's
  *              task, human_inbox_send, a trigger on B's task that fires (list, test, delivery by
  *              the follower, pause, resume); one task_update sent twice at once with one call id;
  *              task_history of B. The journal holds each record once, and the daemon never
  *              answers with its own away code ("gateway: daemon offline answer used").
- *   wake       the Mac holds each exactly once; B answers rq2 with the Mac awake; asleep and awake
+ *   wake       the Mac holds each exactly once (the task made with no project as A's subtask in A's
+ *              project, with its session); B answers rq2 with the Mac awake; asleep and awake
  *              again, nothing changes.
  *   local      (core/replication/host-private.ts) in a project that syncs to a fixture service of
  *              the Mac: a task created Local never reaches the replica's copy, one made local
@@ -41,6 +43,8 @@ import {
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 const NEW_TITLE = 'Book the venue from the host'
+/** Made by A with no project while the Mac is away: lands beside A, as online. */
+const PLACED_TITLE = 'Order the chairs'
 const T = {
   online: 'online note for the target', rq1: 'please check the venue list', rq2: 'please confirm the caterer',
   reply1: 'the venue list is checked', reply2: 'the caterer is confirmed', memory: 'Venue list checked by the target while the Mac slept.',
@@ -95,6 +99,8 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
   let entry: Record<string, string> = {}
   let newTask = ''
   let newSid = ''
+  let placedTask = ''
+  let placedSid = ''
   let rq1 = ''
   let rq2 = ''
   let triggerId = ''
@@ -183,6 +189,15 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     const created = okOf(await asA('task_create', { title: NEW_TITLE, project: 'Acme', message: 'start on the host' }))
     newTask = String(created.id ?? created.task?.id ?? '')
     expect(newTask).not.toBe('')
+    // No project, from inside A's task: the leader's caller rule on the follower's copy files it in A's
+    // project as A's subtask, so its start runs here (Acme's host), never "needs your Mac" for the Inbox.
+    const placed = okOf(await asA('task_create', { title: PLACED_TITLE, message: 'start beside the caller' }))
+    show('placed create', placed)
+    placedTask = String(placed.id ?? placed.task?.id ?? '')
+    expect(placedTask).not.toBe('')
+    expect(having(placed, 'parent_task_id', a.task).length, JSON.stringify(placed).slice(0, 2000)).toBeGreaterThan(0)
+    expect(having(placed, 'project', 'Acme').length, JSON.stringify(placed).slice(0, 2000)).toBeGreaterThan(0)
+    expect(JSON.stringify(placed)).not.toContain('task_runs_elsewhere')
     okOf(await asA('task_update', { id: newTask, tags: ['team:acme'] }))
     // B's turn on rq1 runs until B replied (as a model's turn does): a turn that ends unanswered
     // settles the request as `notified` (the asker is told), here and on the Mac alike.
@@ -245,6 +260,13 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     const who = (sid: unknown) => (sid === a.sid ? 'A' : sid === b.sid ? 'B' : String(sid))
     const of = (kind: string, pick: (r: Record<string, any>) => boolean = () => true) => away.filter((r) => r.kind === kind && pick(r))
     expect(of('task-create', (r) => r.taskId === newTask)).toHaveLength(1)
+    const placedRec = of('task-create', (r) => r.taskId === placedTask)
+    expect(placedRec).toHaveLength(1)
+    expect(placedRec[0]!.placement).toMatchObject({ project: 'Acme', parentTaskId: a.task })
+    expect(placedRec[0]!.placement).not.toHaveProperty('groupId')
+    const placedStart = of('session', (r) => r.taskId === placedTask)
+    expect(placedStart).toHaveLength(1)
+    placedSid = String(placedStart[0]!.sid)
     const start = of('session', (r) => r.taskId === newTask)
     expect(start).toHaveLength(1)
     newSid = String(start[0]!.sid)
@@ -268,7 +290,8 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
 
   /** What the Mac holds of the away work, counted. */
   async function macHolds(): Promise<Record<string, unknown>> {
-    const tasks = macTasks(c).filter((t) => t.title === NEW_TITLE)
+    const all = macTasks(c)
+    const tasks = all.filter((t) => t.title === NEW_TITLE)
     const r1 = await c.mac('GET', `/api/v1/requests/${rq1}`)
     const r2 = await c.mac('GET', `/api/v1/requests/${rq2}`)
     const memory = await c.mac('GET', `/api/v1/tasks/${a.task}/agent-memory`)
@@ -279,6 +302,8 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     return {
       tasks: tasks.length, tags: String(tasks[0]?.tags ?? ''),
       sessions: macSessions(c).filter((s) => s.task_id === newTask).map((s) => s.claude_session_id),
+      placed: all.filter((t) => t.title === PLACED_TITLE).map((t) => `${t.id === placedTask}|${t.project}|${t.parent_task_id}`),
+      placedSessions: macSessions(c).filter((s) => s.task_id === placedTask).map((s) => s.claude_session_id),
       rq1: r1.json.request?.status ?? r1.status, rq2: r2.json.request?.status ?? r2.status,
       memory: JSON.stringify(memory.json).split(T.memory).length - 1,
       letters: having(inbox.json, 'subject', T.letter).length,
@@ -292,7 +317,7 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     c.wakeMac()
     await c.waitBack(token)
     const want = {
-      tasks: 1, sessions: [newSid], rq1: 'replied', rq2: 'pending', memory: 1, letters: 1, trigger: [true], bRq1: 1, bRq2: 1, bFire: 1,
+      tasks: 1, sessions: [newSid], placed: [`true|Acme|${a.task}`], placedSessions: [placedSid], rq1: 'replied', rq2: 'pending', memory: 1, letters: 1, trigger: [true], bRq1: 1, bRq2: 1, bFire: 1,
     }
     let seen: Record<string, unknown> = {}
     await waitFor(async () => {
