@@ -48,7 +48,9 @@ function fixture(): OrgThread[] {
         { id: 'tm-a5c0de01', at: ago(60), text: 'Let us do system design practice', via: 'chat', answer: { text: 'The topic is a donation site.', at: ago(59) } },
         { id: 'tm-a5c0de02', at: ago(6), text: 'Ok what next', via: 'chat' },
       ] },
-    { id: READING, title: 'Reading list for the week', titled: true, state: 'answered', reply: 'Three chapters picked.', createdAt: ago(50), updatedAt: ago(40),
+    // He read its summary (he reacted 10 minutes after it): a line may move it. An answer he has
+    // not read stays in his sight whatever the line says (status-threads-consistency.test.ts).
+    { id: READING, title: 'Reading list for the week', titled: true, state: 'answered', reply: 'Three chapters picked.', replyAt: ago(45), reactedAt: ago(35), createdAt: ago(50), updatedAt: ago(35),
       messages: [{ id: 'tm-a5c0de03', at: ago(50), text: 'Pick my reading for the week', via: 'chat' }] },
   ]
 }
