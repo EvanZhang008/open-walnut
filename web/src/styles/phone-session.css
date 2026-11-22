@@ -591,13 +591,8 @@
     justify-content: center;
   }
 
-  /* Pin and Rewind touch edge to edge: a hair between them, so a tap on the
-     edge of one is not the other's. */
-  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
-    .msg-copy-btn + .msg-copy-btn, .msg-copy-actions + .msg-copy-btn, .msg-copy-btn + .msg-copy-actions
-  ) {
-    margin-left: 2px;
-  }
+  /* Pin and Rewind never touch: the strip's own gap (globals.css .session-msg-actions) keeps a tap
+     on the edge of one off the other. */
 
   /* The composer box clips anything drawn past it: these are 44 x 44 boxes. */
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(.chat-plus-btn, .mic-btn, .composer-model-pill) {

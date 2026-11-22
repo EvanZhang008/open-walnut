@@ -75,7 +75,9 @@ export const TASK_SLOT_IDS: ReadonlySet<string> = new Set(['fork', 'board', 'wat
  * that opens a view beside the chat is an on/off key (`aria-pressed`, the family's on look), never
  * a tab: a second click closes the view and the chat stays (2026-11-22 review: they read as pills
  * beside the segmented controls of the same screen). `session-header-tool` is the hook specs and
- * the row's CSS find them by.
+ * the row's CSS find them by. The header's icon keys (Watch, Locate, Minimize, Lock, Expand, Close,
+ * the task's ⋮) are the quiet icon key at the same 28 px, `btn btn-icon btn-ghost task-action-btn`,
+ * so the two clusters read as one row of tools.
  */
 export const HEADER_TOOL_CLASS = 'btn btn-ghost btn-sm session-header-tool';
 

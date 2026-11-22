@@ -2865,11 +2865,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const locateLabel = onLocateTask ? 'Locate task' : 'Find on Home';
   const locateWhy = locateWaitReason ?? (session?.taskId ? null : 'Locate becomes available once the session has loaded');
   const locateButton = taskSlot === 'absent' ? null : taskSlot === 'spacer'
-    ? <button type="button" className="btn btn-icon btn-sm task-action-btn session-panel-locate" data-header-id="locate" {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
+    ? <button type="button" className="btn btn-icon btn-ghost task-action-btn session-panel-locate" data-header-id="locate" {...TASK_SLOT_SPACER}>{ICON_LOCATE}</button>
     : (
       <button
         type="button"
-        className="btn btn-icon btn-sm task-action-btn session-panel-locate"
+        className="btn btn-icon btn-ghost task-action-btn session-panel-locate"
         data-header-id="locate"
         data-testid="session-locate-btn"
         disabled={!!locateWhy}
@@ -2883,8 +2883,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Watch: the eye beside Locate, lit while the task is watched (2026-11-19, the user of the
   // label row's Watching pill: that watching should move up there too). The kebab drops its row.
   const watchButton = taskSlot === 'absent' ? null : taskSlot === 'live' && sessionTask
-    ? <WatchButton task={sessionTask} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" />
-    : <button type="button" className="btn btn-icon btn-sm task-watch-btn task-action-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
+    ? <WatchButton task={sessionTask} small={false} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" />
+    : <button type="button" className="btn btn-icon btn-ghost task-action-btn task-watch-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
   const headerPills = (
     <>
       <WaitingChip task={sessionTask} />
@@ -3535,7 +3535,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {locateButton}
               {minimize && !shownFullscreen && (
                 <button
-                  className="btn btn-icon btn-sm task-action-btn session-panel-minimize"
+                  className="btn btn-icon btn-ghost task-action-btn session-panel-minimize"
                   data-header-id="minimize"
                   data-hidden={hid('minimize')}
                   onClick={() => minimize(sessionId)}
@@ -3550,7 +3550,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   Walnut slot has no strip and passes no onToggleLock. */}
               {onToggleLock && (
                 <button
-                  className={`btn btn-icon btn-sm task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
+                  className={`btn btn-icon btn-ghost task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
                   data-header-id="lock"
                   data-hidden={hid('lock')}
                   onClick={() => onToggleLock(sessionId)}
@@ -3563,7 +3563,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               )}
               {!inset && (
                 <button
-                  className="btn btn-icon btn-sm task-action-btn session-panel-expand"
+                  className="btn btn-icon btn-ghost task-action-btn session-panel-expand"
                   data-header-id="expand"
                   data-hidden={hid('expand')}
                   onClick={shownFullscreen ? exitFullscreen : enterFullscreen}
@@ -3578,7 +3578,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   the column underneath. Closing the column needs the normal view. */}
               {(onClose || shownFullscreen) && (
                 <button
-                  className="btn btn-icon btn-sm btn-danger task-action-btn session-panel-close"
+                  className="btn btn-icon btn-ghost task-action-btn btn-danger session-panel-close"
                   data-header-id="close"
                   onClick={shownFullscreen ? exitFullscreen : () => closePanel(sessionId)}
                   title={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab (the task keeps running)' : 'Close session panel'}
@@ -3671,7 +3671,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   {minimize && (
                     <button
                       type="button"
-                      className="btn btn-icon btn-sm task-action-btn session-panel-minimize"
+                      className="btn btn-icon btn-ghost task-action-btn session-panel-minimize"
                       onClick={() => minimize(sessionId)}
                       title="Minimize to the taskbar: its chip opens this chat again (the chat stays here, it keeps running)"
                       aria-label="Minimize session to the taskbar"
@@ -3898,7 +3898,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               <button
                 type="button"
                 data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-                className="btn btn-icon sfe-btn session-chat-collapse-btn"
+                className="btn btn-icon btn-ghost sfe-btn session-chat-collapse-btn"
                 onClick={() => collapseChat(false)}
                 title="Show chat"
                 aria-label="Show chat"
@@ -4105,7 +4105,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 <button
                   type="button"
                   data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-                  className="btn btn-icon sfe-btn session-chat-collapse-btn"
+                  className="btn btn-icon btn-ghost sfe-btn session-chat-collapse-btn"
                   onClick={() => collapseChat(true)}
                   title="Hide chat"
                   aria-label="Hide chat"

@@ -176,13 +176,14 @@ export function BackgroundMenuItem({ task, afterAction }: { task: Task; afterAct
 }
 
 /** The eye in a task's header (the task detail; a session's window buttons, `headerId` set):
- *  lit while the task is watched. */
-export function WatchButton({ task, className = '', headerId, testId = 'task-watch-btn' }: { task: Task; className?: string; headerId?: string; testId?: string }) {
+ *  lit while the task is watched. The family's quiet icon key: small (24 px) by default, 28 px
+ *  (`small={false}`) among a session header's window keys. */
+export function WatchButton({ task, className = '', small = true, headerId, testId = 'task-watch-btn' }: { task: Task; className?: string; small?: boolean; headerId?: string; testId?: string }) {
   const { watched, toggle } = useWatchToggle(task);
   return (
     <button
       type="button"
-      className={`btn btn-icon btn-sm task-watch-btn${watched ? ' is-watched' : ''} ${className}`.trim()}
+      className={`btn btn-icon btn-ghost${small ? ' btn-sm' : ''} task-watch-btn${watched ? ' is-watched' : ''} ${className}`.trim()}
       data-testid={testId}
       data-header-id={headerId}
       aria-pressed={watched}

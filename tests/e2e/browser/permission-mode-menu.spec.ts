@@ -57,8 +57,8 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
   const menu = modeMenu(pill);
   await input.fill('Keep this unsent draft while the mode changes');
 
-  // The pill is the mode's name alone.
-  await expect(pill).toHaveText('Bypass');
+  // The pill is the mode's name alone, then the menu caret.
+  await expect(pill.locator('.mode-toggle-pill-label')).toHaveText('Bypass');
   await expect(page.locator('.mode-toggle-pill-shortcut')).toHaveCount(0);
   await expect(pill).toHaveAttribute('aria-expanded', 'false');
 
@@ -136,14 +136,14 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
 
   // A pick switches: Plan in amber, then Auto.
   await pickMode(pill, 'plan');
-  await expect(pill).toHaveText('Plan');
+  await expect(pill.locator('.mode-toggle-pill-label')).toHaveText('Plan');
   await expect(pill).toHaveClass(/plan-active/);
   await expect.poll(() => writes.body.filter((b) => 'mode' in b).map((b) => b.mode)).toEqual(['plan']);
   await pill.click();
   await expect(menu.locator('[role="option"][data-mode="plan"]')).toHaveAttribute('aria-selected', 'true');
   await menu.locator('[role="option"][data-mode="auto"]').click();
   await expect(menu).toHaveCount(0);
-  await expect(pill).toHaveText('Auto');
+  await expect(pill.locator('.mode-toggle-pill-label')).toHaveText('Auto');
   await expect(pill).not.toHaveClass(/plan-active/);
   await expect.poll(() => writes.body.filter((b) => 'mode' in b).map((b) => b.mode)).toEqual(['plan', 'auto']);
 
@@ -155,12 +155,12 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
   await expect(menu.locator('[role="option"][data-mode="bypass"]')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(menu).toHaveCount(0);
-  await expect(pill).toHaveText('Bypass');
+  await expect(pill.locator('.mode-toggle-pill-label')).toHaveText('Bypass');
 
   // Shift+Tab in the box still steps the enabled cycle (Bypass → Plan).
   await input.click();
   await input.press('Shift+Tab');
-  await expect(pill).toHaveText('Plan');
+  await expect(pill.locator('.mode-toggle-pill-label')).toHaveText('Plan');
   await expect(input).toHaveValue('Keep this unsent draft while the mode changes');
   expect(errors).toEqual([]);
 });
@@ -177,7 +177,7 @@ test('a phone-width column: the menu stays on screen', async ({ page }) => {
   await fits(page, menu);
   await page.screenshot({ path: `${SHOTS}/2-phone-menu.png` });
   await menu.locator('[role="option"][data-mode="plan"]').click();
-  await expect(pill).toHaveText('Plan');
+  await expect(pill.locator('.mode-toggle-pill-label')).toHaveText('Plan');
 });
 
 test('the side chat composer and the new-task draft pick their mode from the same menu', async ({ page }) => {
@@ -199,7 +199,7 @@ test('the side chat composer and the new-task draft pick their mode from the sam
   await menu.locator('[role="option"][data-mode="plan"]').click();
   // The pick is the drawer's own: it stays open, with its draft.
   await expect(drawer).toBeVisible();
-  await expect(threadPill).toHaveText('Plan');
+  await expect(threadPill.locator('.mode-toggle-pill-label')).toHaveText('Plan');
   await expect(drawer.locator('.side-question-composer textarea')).toHaveValue('An unsent aside');
   await threadPill.click();
   await page.keyboard.press('Escape');
@@ -220,7 +220,7 @@ test('the side chat composer and the new-task draft pick their mode from the sam
   await page.screenshot({ path: `${SHOTS}/4-draft-menu.png` });
   await modeMenu(draftPill).locator('[role="option"][data-mode="accept"]').click();
   await expect(draftPill).toHaveAttribute('data-mode', 'accept');
-  await expect(draftPill).toHaveText('Accept');
+  await expect(draftPill.locator('.mode-toggle-pill-label')).toHaveText('Accept');
 });
 
 async function fs_mkdir(): Promise<void> {

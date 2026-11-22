@@ -1046,7 +1046,7 @@ export function DraftSessionPanel({
         {/* Beside session columns on Home the draft's header is as tall as theirs: an empty tool
             row of the same make stands where theirs is, so the header lines meet across the strip. */}
         <div className="session-meta-row-2 draft-header-tool-row" aria-hidden="true">
-          <span className="session-panel-window-controls"><span className="btn btn-icon btn-sm task-action-btn draft-header-tool-spacer" /></span>
+          <span className="session-panel-window-controls"><span className="btn btn-icon btn-ghost task-action-btn draft-header-tool-spacer" /></span>
         </div>
         <div className="session-panel-header-top">
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
@@ -1081,7 +1081,7 @@ export function DraftSessionPanel({
             />
           )}
           <button
-            className="btn btn-icon btn-sm btn-danger task-action-btn session-panel-close"
+            className="btn btn-icon btn-ghost task-action-btn btn-danger session-panel-close"
             onClick={phoneDraft.close}
             title="Discard this draft"
             aria-label="Discard draft session"
@@ -1191,7 +1191,8 @@ export function DraftSessionPanel({
               <div className="draft-walnut-suggests" role="group" aria-label="Quick actions">
                 <button
                   type="button"
-                  className="btn btn-sm session-action-chip"
+                  // A side path, so the quiet key: Work in and More are the draft's own keys.
+                  className="btn btn-sm btn-ghost session-action-chip"
                   data-testid="draft-customize-walnut"
                   title="Open a session in Walnut's own source code to change or fix Walnut"
                   onClick={() => { onCustomizeWalnut(draft.id); focusComposer(); }}

@@ -126,7 +126,7 @@ test('keys: ArrowDown/Up walk every row, ArrowRight and Enter open a page, Backs
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
 })
 
-test('Enter in the search box picks the first row; a multi-select pick keeps the menu; the open Display button is grey, never the accent; outside click closes', async ({ page }) => {
+test('Enter in the search box picks the first row; a multi-select pick keeps the menu; the open Display button is drawn on, never the solid accent; outside click closes', async ({ page }) => {
   await openFilterPage(page, 'project')
   await filterSearch(page).fill('hom')
   await expect(filterPage(page, 'project').locator('.fb-opt-body')).toHaveCount(1)
@@ -136,7 +136,8 @@ test('Enter in the search box picks the first row; a multi-select pick keeps the
   await expect(filterValue(page, 'project', 'Home')).toHaveAttribute('aria-pressed', 'true')
   // The property is set: Reset appears in the page head.
   await expect(filterPage(page, 'project').locator('.fb-page-head .fb-page-reset')).toHaveText('Reset')
-  // The Display button: is-active with its badge; while open, a grey fill and a hairline.
+  // The Display button: is-active with its badge; while open, the family's on look (a tint and a
+  // hairline), never the solid accent.
   await expect(filterButton(page)).toHaveClass(/is-active/)
   await expect(filterButton(page)).toHaveAttribute('aria-expanded', 'true')
   await expect(filterButton(page).locator('.tp-badge[data-testid="filter-badge"]')).toHaveText('1')
@@ -147,11 +148,11 @@ test('Enter in the search box picks the first row; a multi-select pick keeps the
     const accent = getComputedStyle(probe).backgroundColor
     probe.remove()
     const cs = getComputedStyle(el)
-    return { bg: cs.backgroundColor, shadow: cs.boxShadow, accent }
+    return { bg: cs.backgroundColor, hairline: cs.borderTopColor, accent }
   })
   expect(look.bg).not.toBe(look.accent)
   expect(look.bg).not.toBe('rgba(0, 0, 0, 0)')
-  expect(look.shadow).toContain('inset')
+  expect(look.hairline).not.toBe('rgba(0, 0, 0, 0)')
   // A press outside closes the menu; the chip stays.
   const vp = page.viewportSize()!
   await page.mouse.click(vp.width - 4, vp.height - 4)

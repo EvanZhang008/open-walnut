@@ -64,25 +64,9 @@
   font-weight: 500;
 }
 
-/* Ghost icon buttons: Find, History, ⋯, Exit fullscreen. */
-.fv-doc-icon {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.fv-doc-icon svg { width: 15px; height: 15px; display: block; }
-.fv-doc-icon:hover { background: var(--bg-hover); color: var(--fg); }
-.fv-doc-icon.active { background: var(--bg-tertiary); color: var(--fg); }
-.fv-doc-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Find, History, ⋯, Exit fullscreen: the family's quiet icon keys (btn btn-icon btn-ghost), on while
+   their view or menu is open (aria-pressed, aria-expanded). This class is their hook. */
+.fv-doc-icon { flex: none; }
 
 /* Preview · Source: the shared segmented control, placed in the bar. */
 .fv-mode-toggle {

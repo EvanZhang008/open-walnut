@@ -95,7 +95,8 @@
 }
 
 /* Composer seeds in the walnut tab's empty body: plain `.btn btn-sm` keys (buttons.css),
-   which read as keys even floating alone in the body. */
+   which read as keys even floating alone in the body. Start Task's one side path, Customize
+   Walnut, is the quiet key (`btn-ghost`): the draft's own keys (Work in, More) stay plain. */
 .draft-walnut-suggests {
   display: flex;
   flex-wrap: wrap;

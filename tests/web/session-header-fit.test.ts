@@ -296,17 +296,17 @@ describe('fitToolRow', () => {
     expect(narrow.inMore).toEqual(['board', 'terminal', 'plan', 'minimize', 'popout']);
   });
 
-  it('assumes a 24px button, not a chip, for a window button that has never been on screen', () => {
+  it('assumes a 28px button, not a chip, for a window button that has never been on screen', () => {
     // A panel drawn narrow from its first frame never shows Minimize, Open in new tab, Lock, Expand or
     // Close to be measured. 2026-10-04 they were priced like chips (44 each), so a 70px gap sat beside
-    // a "..." menu that held three of them. Fork..Board 190 + 3 gaps 18 = 208; 5 buttons 120 + 4 gaps
-    // 12 = 132; group gap 6 → 346 (446 at 44px each).
+    // a "..." menu that held three of them. Fork..Board 190 + 3 gaps 18 = 208; 5 buttons 140 + 4 gaps
+    // 12 = 152; group gap 6 → 366 (446 at 44px each).
     const unmeasured = ROW
       .filter((i) => i.id !== 'terminal' && i.id !== 'time')
       .map((i) => (i.kind === 'window' || i.kind === 'fixed' ? { ...i, width: undefined } : i));
-    expect(ASSUMED_WINDOW_WIDTH).toBe(24);
-    expect(fitToolRow(unmeasured, 346, OPTS).inMore).toEqual([]);
-    expect(fitToolRow(unmeasured, 345, OPTS).visible).toContain('lock');
+    expect(ASSUMED_WINDOW_WIDTH).toBe(28);
+    expect(fitToolRow(unmeasured, 366, OPTS).inMore).toEqual([]);
+    expect(fitToolRow(unmeasured, 365, OPTS).visible).toContain('lock');
   });
 
   it('assumes a short chip for a width it has not measured', () => {
@@ -376,7 +376,7 @@ describe('Watch and Locate are window buttons of the header (2026-11-19, the use
     expect(TOOL_ITEMS.locate).toMatchObject({ kind: 'fixed' });
     // That both need the task (TASK_SLOT_IDS) is pinned in session-header-record-gate.test.ts.
     const panel = src('sessions/SessionPanel.tsx');
-    expect(panel).toMatch(/className="btn btn-icon btn-sm task-action-btn session-panel-locate"[^\n]*data-header-id="locate"/);
+    expect(panel).toMatch(/className="btn btn-icon btn-ghost task-action-btn session-panel-locate"[^\n]*data-header-id="locate"/);
     expect(panel).toContain('data-testid="session-locate-btn"');
     expect(panel).toMatch(/<WatchButton [^\n]*className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn"/);
     // The kebab lost its Locate row, and the label row's Watch pill is gone.

@@ -4262,6 +4262,8 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .session-msg-actions {
   display: flex;
   align-items: center;
+  /* Copy, pin, split and rewind are quiet keys of one strip: apart, so a hover never joins two. */
+  gap: 4px;
   margin-top: 4px;
 }
 
@@ -13009,8 +13011,8 @@ body.walnut-dragging {
   100% { opacity: 0; max-height: 0; margin: 0; padding: 0; overflow: hidden; }
 }
 
-/* ===== Window keys of a session header and its drawers: .btn-icon.btn-sm; this class is
-   their hook (tests, the phone bar's finger size). ===== */
+/* ===== Window keys of a session header (.btn-icon.btn-ghost, 28 px) and its drawers (.btn-icon.btn-sm);
+   this class is their hook (tests, the phone bar's finger size). ===== */
 .task-action-btn {
   flex-shrink: 0;
 }
@@ -22789,15 +22791,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   color: var(--warning);
   font-weight: 600;
 }
-.session-diff-next-unviewed {
-  border: none;
-  background: transparent;
-  color: var(--accent);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  padding: 2px 4px;
-}
-.session-diff-next-unviewed:hover { text-decoration: underline; }
+/* Next unviewed is the family's quiet small key (SessionDiffView); a narrow pane keeps "Next ↓". */
 @container session-diff-filepane (max-width: 460px) {
   .session-diff-next-unviewed-text { display: none; }
 }
@@ -23000,17 +22994,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   color: var(--fg-secondary);
 }
 .compare-graph-warn { display: block; margin-top: 4px; color: var(--warning); }
-.session-diff-refresh {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-muted);
-  border-radius: var(--radius-full);
-  padding: 3px 7px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-}
-.session-diff-refresh:hover { color: var(--fg); }
 
 /* Toolbar: (md) Rendered toggle. (The tree collapse control moved into the
    tree pane itself — .sfe-tree-collapse-btn / .sfe-tree-collapsed-rail,
@@ -28475,10 +28458,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 /* The time reads as an age; the exact stamp rides a hover tooltip, because
-   "how long ago" is the question a transcript actually gets asked. */
+   "how long ago" is the question a transcript actually gets asked. Set off from the keys, so it
+   reads as the strip's fact, not one more key. */
 .msg-time {
   position: relative;
-  margin-left: 4px;
+  margin-left: 8px;
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
   white-space: nowrap;

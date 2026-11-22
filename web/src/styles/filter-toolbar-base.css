@@ -13,7 +13,11 @@
   container-name: todo-toolbar;
 }
 
-/* Toolbar button: icon + label, 28px tall. */
+/* Home's Display key is the family's quiet key (btn btn-ghost btn-sm, DisplayMenu.tsx); folded to its
+   icon it stays square, as New task does. */
+.dm-display-btn { flex-shrink: 0; min-width: 28px; }
+
+/* Toolbar button: icon + label, 28px tall (the dashboard's Collapse all). */
 .tp-btn {
   position: relative;
   display: inline-flex;
@@ -35,18 +39,12 @@
   flex-shrink: 0;
 }
 .tp-btn:hover { background: var(--bg-hover); color: var(--fg); }
-/* Open: a quiet pressed look (filled grey, hairline), never a solid accent block. */
-.tp-btn[aria-expanded='true'],
-.tp-btn[aria-pressed='true'],
+/* Pressed: a quiet look (filled grey, hairline), never a solid accent block. */
 .tp-btn:active {
   background: var(--bg-hover);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
-/* Something is set: the icon takes the accent so the state reads even without the badge. */
-.tp-btn.is-active { color: var(--accent-text); }
-.tp-btn.is-active:hover,
-.tp-btn.is-active[aria-expanded='true'] { color: var(--accent-text); }
 .tp-btn svg { flex-shrink: 0; }
 .tp-btn-label { display: inline; }
 

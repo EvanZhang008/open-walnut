@@ -8115,13 +8115,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
         <DisplayButton {...displayProps} filters={filterBar} />
         {/* A panel too narrow for the field and every button puts New task and Board into More
             (HeaderFit.tsx); Display (its menu opens from it) and Hide stay. */}
-        <button type="button" className="todo-panel-board" aria-label="Open task board" title="Board" data-fit-button="2" onClick={() => window.dispatchEvent(new Event('home:open-board'))}>
+        <button type="button" className="todo-panel-board btn btn-icon btn-ghost" aria-label="Open task board" title="Board" data-fit-button="2" onClick={() => window.dispatchEvent(new Event('home:open-board'))}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="1.5" y="2" width="13" height="12" rx="2" /><path d="M6 2v12M10 2v12" /></svg>
         </button>
         <HeaderFitMore testId="todo-panel-more" />
         <button
           type="button"
-          className="todo-panel-hide"
+          className="todo-panel-hide btn btn-icon btn-ghost"
           tabIndex={0}
           aria-label="Hide task panel"
           title="Hide task panel"

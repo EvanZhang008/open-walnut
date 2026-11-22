@@ -1391,7 +1391,7 @@ export const FileDiffPane = memo(function FileDiffPane({
               <span className="session-diff-viewed-changed" title="You marked this file viewed, then it changed">Changed since viewed</span>
             )}
             {onNextUnviewed && (
-              <button type="button" className="session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed file">
+              <button type="button" className="btn btn-sm btn-ghost session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed file">
                 Next<span className="session-diff-next-unviewed-text"> unviewed file</span> <span aria-hidden>{'↓'}</span>
               </button>
             )}
@@ -2918,7 +2918,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <button
           type="button"
           data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-          className="btn btn-icon sfe-btn sfe-tree-toggle"
+          className="btn btn-icon btn-ghost sfe-btn sfe-tree-toggle"
           onClick={() => setTreeCollapsed((c) => !c)}
           title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
           aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
@@ -2929,7 +2929,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <div className="sfe-nav-group">
           <button
             type="button"
-            className="btn btn-icon sfe-btn sfe-nav-btn"
+            className="btn btn-icon btn-ghost sfe-btn sfe-nav-btn"
             onClick={() => navigateJump(-1)}
             disabled={!canJumpBack}
             title={canJumpBack ? 'Back (⌘[)' : 'Back (no earlier jump)'}
@@ -2937,7 +2937,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           >{ICON_CHEVRON_LEFT}</button>
           <button
             type="button"
-            className="btn btn-icon sfe-btn sfe-nav-btn"
+            className="btn btn-icon btn-ghost sfe-btn sfe-nav-btn"
             onClick={() => navigateJump(1)}
             disabled={!canJumpForward}
             title={canJumpForward ? 'Forward (⌘])' : 'Forward (no later jump)'}
@@ -3020,7 +3020,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           {/* Commits the session's working-tree edits: not offered while a past commit is shown. */}
           {/* Kept in place on a one-commit view (disabled there), so the toolbar never shifts. */}
           <SessionCommitButton sessionId={sessionId} disabled={base === 'commit' || !data || empty} onCommitted={() => load(true)} />
-          <button className="session-diff-refresh" onClick={() => { forgetGitRefs(sessionId); liveCancelRef.current?.(); liveCancelRef.current = load(true, true, true); }} title="Re-scan changes">
+          <button type="button" className="btn btn-icon btn-ghost session-diff-refresh" aria-label="Re-scan changes" onClick={() => { forgetGitRefs(sessionId); liveCancelRef.current?.(); liveCancelRef.current = load(true, true, true); }} title="Re-scan changes">
             {ICON_REFRESH}
           </button>
         </div>

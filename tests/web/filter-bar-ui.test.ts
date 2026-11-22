@@ -481,7 +481,7 @@ describe('DisplayButton: the one toolbar button', () => {
     expect(btn.getAttribute('title')).toBe('Display: sort, group, layout')
     expect(btn.getAttribute('aria-haspopup')).toBe('dialog')
     expect(btn.getAttribute('aria-expanded')).toBe('false')
-    expect(btn.className).toContain('tp-btn')
+    expect(btn.className).toContain('btn btn-ghost btn-sm')
     expect(btn.className).toContain('dm-display-btn')
     expect(btn.className).not.toContain('is-active')
     expect(btn.textContent).toBe('Display')

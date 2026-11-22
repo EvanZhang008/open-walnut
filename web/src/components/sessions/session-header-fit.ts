@@ -62,9 +62,9 @@ export interface ToolRowOptions {
 
 /** A chip that has never been measured: one short chip. */
 export const ASSUMED_TOOL_WIDTH = 44;
-/** A window button that has not been measured yet (Locate waits for the task to load): a 20px ghost button
- *  with a 14px icon and 5px of padding each side. Priced like a chip it would cost 44 instead of 24. */
-export const ASSUMED_WINDOW_WIDTH = 24;
+/** A window button that has not been measured yet (Locate waits for the task to load): the header's
+ *  28 px icon key (btn btn-icon btn-ghost task-action-btn). Priced like a chip it would cost 44 instead of 28. */
+export const ASSUMED_WINDOW_WIDTH = 28;
 
 const widthOf = (item: ToolRowItem) => {
   if (item.width != null && item.width > 0) return item.width;

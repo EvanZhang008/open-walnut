@@ -2287,7 +2287,7 @@ export function FileContentView({
           /* No room for two words: one button that flips to the other view. */
           <button
             type="button"
-            className="fv-doc-icon"
+            className="btn btn-icon btn-ghost fv-doc-icon"
             onClick={() => switchTab(!showSource)}
             aria-label={showSource ? 'Show preview' : 'Show source'}
             title={showSource ? 'Show preview' : 'Show source'}
@@ -2319,7 +2319,7 @@ export function FileContentView({
         {canFind && barFold < 3 && (
           <button
             type="button"
-            className={`fv-doc-icon fv-find-btn${searchOpen ? ' active' : ''}`}
+            className="btn btn-icon btn-ghost fv-doc-icon fv-find-btn"
             onClick={() => (searchOpen ? closeSearch() : openSearch())}
             aria-pressed={searchOpen}
             aria-label="Find in file"
@@ -2333,7 +2333,7 @@ export function FileContentView({
              is an edit (it lands in the buffer and is saved like typing). */
           <button
             type="button"
-            className={`fv-doc-icon fv-history-btn${historyOpen ? ' active' : ''}`}
+            className="btn btn-icon btn-ghost fv-doc-icon fv-history-btn"
             onClick={() => setHistoryOpen((o) => !o)}
             aria-pressed={historyOpen}
             aria-label="History"
@@ -2345,7 +2345,7 @@ export function FileContentView({
         <button
           type="button"
           ref={moreBtnRef}
-          className={`fv-doc-icon fv-more-btn${moreAt ? ' active' : ''}`}
+          className="btn btn-icon btn-ghost fv-doc-icon fv-more-btn"
           onClick={openMore}
           aria-haspopup="menu"
           aria-expanded={!!moreAt}
@@ -2357,7 +2357,7 @@ export function FileContentView({
         {fullscreen && (
           <button
             type="button"
-            className="fv-doc-icon fv-fullscreen-btn"
+            className="btn btn-icon btn-ghost fv-doc-icon fv-fullscreen-btn"
             onClick={() => setFullscreen(false)}
             aria-label="Exit fullscreen"
             title="Exit fullscreen (Esc)"

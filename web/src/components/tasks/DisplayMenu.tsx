@@ -66,7 +66,9 @@ export function DisplayButton(props: DisplayButtonProps) {
       <button
         ref={buttonRef}
         type="button"
-        className={`tp-btn dm-display-btn${n > 0 ? ' is-active' : ''}`}
+        // The family's quiet toolbar key; open, it is drawn on (aria-expanded). `is-active` (a filter is
+        // set) is a hook only: the count badge says it.
+        className={`dm-display-btn btn btn-ghost btn-sm${n > 0 ? ' is-active' : ''}`}
         // Explicit tab stop: WebKit skips plain buttons on Tab (F09).
         tabIndex={0}
         aria-label="Display"

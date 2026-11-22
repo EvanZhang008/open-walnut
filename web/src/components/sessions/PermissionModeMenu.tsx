@@ -76,6 +76,8 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
       onClick={(event) => { byKeyRef.current = event.detail === 0; setOpen((value) => !value); }}
     >
       <span className="mode-toggle-pill-label">{label ?? entry?.label ?? mode}</span>
+      {/* A menu, like the model key beside it: the family's caret (turns over while open). */}
+      <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
     </button>
     {open && createPortal(
       <div

@@ -81,10 +81,10 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   // What the toolbar shows: its More (the header rule's ⋮, components/common/HeaderFit.tsx) is in the
   // row but shown only once a button no longer fits, which it does at this width.
   expect(await homeToolbar(page).evaluate(bar => [...bar.children].filter(child => child.getClientRects().length > 0).map(child => child.className.split(' ')[0])))
-    .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'todo-panel-board', 'todo-panel-hide']);
+    .toEqual(['todo-search-bar', 'new-launcher-btn', 'dm-display-btn', 'todo-panel-board', 'todo-panel-hide']);
   await expect(homeToolbar(page).locator(':scope > [data-fit-more]')).toBeHidden();
   // One menu button, Display, named by its aria-label (it holds the filters too).
-  expect(await homeToolbar(page).locator(':scope > .tp-btn').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Display']);
+  expect(await homeToolbar(page).locator(':scope > [aria-haspopup]').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Display']);
   await expect(homeToolbar(page).locator('.todo-search-input')).toBeVisible();
   // One base colour: the task column is the page background, not the grey secondary band.
   expect(await page.locator('.main-page-todo').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
@@ -108,9 +108,8 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   expect(createLook.background).toBe('rgba(0, 0, 0, 0)');
   expect(createLook.border).toBe('rgba(0, 0, 0, 0)');
   expect(createLook.color).toBe(displayLook.color);
-  // Display carries a word, so it reads in the secondary grey (the hide button is a bare
-  // icon in the muted one); it shares the hide button's background and never wears the
-  // accent at rest.
+  // Display and the hide button are the family's quiet keys: one background, the secondary
+  // grey, and never the accent at rest.
   expect(displayLook.background).toBe(hideLook.background);
   expect(displayLook.color).not.toBe('rgb(0, 122, 255)');
 

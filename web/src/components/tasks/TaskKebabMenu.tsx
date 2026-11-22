@@ -648,10 +648,13 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     <div className="task-kebab-wrapper" data-menu-open={open || undefined}>
       <button
         ref={btnRef}
-        className="btn btn-icon btn-sm task-kebab-btn"
+        className="btn btn-icon btn-sm btn-ghost task-kebab-btn"
         onClick={handleToggle}
         title="More actions"
         aria-label="More actions"
+        // The family draws an open menu's key as on (buttons.css), so the row says whose menu is open.
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         <KebabIcon />
       </button>

@@ -426,10 +426,13 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       {slot !== 'phase' && (
       <button
         ref={kebabBtnRef}
-        className="btn btn-icon btn-sm task-kebab-btn"
+        // A session header's key, the size of its window keys (it sits under Close).
+        className="btn btn-icon btn-ghost task-kebab-btn"
         onClick={handleKebabToggle}
         title="More actions"
         aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={kebabOpen}
         style={{ opacity: 1 }}
       >
         <KebabIcon />
