@@ -281,6 +281,55 @@ export function ownSessionIdsInStore(hostKey: string): string[] {
   ).pluck().all(hostKey) as string[];
 }
 
+/**
+ * The session channel's position for one host (core/session-channel/channel.ts): the fact log
+ * and the last record of it this leader applied. Written only by session-tracker's
+ * applyHostChannelBatch, in the same transaction as the records' rows, so the position and the
+ * rows it stands for never part. It lives in sessions.sqlite: it moves with the leader's data.
+ */
+export function loadChannelCursor(hostId: string): { logId: string; seq: number } | null {
+  const handle = getDb();
+  if (!handle || !hostId) return null;
+  const row = handle.prepare('SELECT log_id, seq FROM session_channel_cursor WHERE host_id = ?').get(hostId) as { log_id: string; seq: number } | undefined;
+  return row ? { logId: row.log_id, seq: Number(row.seq) || 0 } : null;
+}
+
+/** Inside the caller's write transaction: keep `cursor` as the host's position. */
+export function writeChannelCursor(handle: DatabaseType, hostId: string, cursor: { logId: string; seq: number }): void {
+  handle.prepare('INSERT OR REPLACE INTO session_channel_cursor (host_id, log_id, seq) VALUES (?, ?, ?)').run(hostId, cursor.logId, cursor.seq);
+}
+
+/** Has any host's channel ever applied here? False: no row of this store is a host's (judge-of.ts's fast path). */
+export function anyChannelCursor(): boolean {
+  const handle = getDb();
+  if (!handle) return false;
+  return handle.prepare('SELECT 1 FROM session_channel_cursor LIMIT 1').pluck().get() !== undefined;
+}
+
+/**
+ * Who judges one session, without decoding its record: its host column and whether its payload
+ * says `judge: 'host'` (a substring test first, so only such a row's payload is parsed). Null: no
+ * such row.
+ */
+export function sessionJudgeInStore(claudeSessionId: string): { host: string | null; judgedByHost: boolean } | null {
+  const handle = getDb();
+  if (!handle) return null;
+  const row = handle.prepare(
+    `SELECT host, CASE WHEN instr(coalesce(payload, ''), '"judge":"host"') > 0 AND json_valid(payload) THEN json_extract(payload, '$.judge') = 'host' ELSE 0 END AS judged FROM sessions WHERE claude_session_id = ?`,
+  ).get(claudeSessionId) as { host: string | null; judged: number } | undefined;
+  return row ? { host: row.host, judgedByHost: row.judged === 1 } : null;
+}
+
+/** A session's task and engine, without decoding its whole record (a host-judged session's proxy). */
+export function sessionTaskAndEngineInStore(claudeSessionId: string): { taskId: string | null; engine: string | null } | null {
+  const handle = getDb();
+  if (!handle) return null;
+  const row = handle.prepare(
+    `SELECT task_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.engine') END AS engine FROM sessions WHERE claude_session_id = ?`,
+  ).get(claudeSessionId) as { task_id: string | null; engine: string | null } | undefined;
+  return row ? { taskId: row.task_id, engine: row.engine } : null;
+}
+
 /** Every session id and ACP runtime id in the store, without decoding records (the ephemeral session gate's copied set). */
 export function sessionIdentitiesInStore(): string[] {
   const handle = getDb();
@@ -801,4 +850,10 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS sessions_process_status ON sessions(process_status);
   CREATE INDEX IF NOT EXISTS sessions_updated_at ON sessions(last_active_at);
   CREATE INDEX IF NOT EXISTS sessions_last_status_change ON sessions(last_status_change);
+  CREATE TABLE IF NOT EXISTS session_channel_cursor (
+    host_id TEXT,
+    log_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    PRIMARY KEY(host_id)
+  );
 `;

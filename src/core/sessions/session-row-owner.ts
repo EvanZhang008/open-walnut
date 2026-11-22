@@ -91,6 +91,26 @@ export function mergeLeaderCopy(own: SessionRecord, fromLeader: SessionRecord): 
   return out as unknown as SessionRecord
 }
 
+/**
+ * The row a leader keeps when a host's change to one of its own rows arrives (the channel's `row`
+ * record): the host's value of every host field the change names (null clears it: JSON carries no
+ * undefined), the leader's own value of every leader field. `whole`: the change is the host's whole
+ * row (born, or a rows frame), so a host field it leaves out is cleared too. With no row here yet
+ * the change is the row, its leader fields included (the host set them when it made the session).
+ */
+export function mergeHostFacts(leaderRow: SessionRecord | null, change: Readonly<Record<string, unknown>>, whole: boolean): SessionRecord {
+  const out: Record<string, unknown> = leaderRow ? { ...leaderRow } : {}
+  if (leaderRow && whole) {
+    for (const k of Object.keys(out)) if (sessionFieldOwner(k) === 'host' && !(k in change)) delete out[k]
+  }
+  for (const [k, v] of Object.entries(change)) {
+    if (leaderRow && sessionFieldOwner(k) === 'leader') continue
+    if (v === null || v === undefined) delete out[k]
+    else out[k] = v
+  }
+  return out as unknown as SessionRecord
+}
+
 /** The fields of `patch` the leader may not write on a host's row: every host field it names. */
 export function hostFieldsIn(patch: Readonly<Record<string, unknown>>): string[] {
   return Object.keys(patch).filter((k) => sessionFieldOwner(k) === 'host')

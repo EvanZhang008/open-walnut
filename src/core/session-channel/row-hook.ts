@@ -14,6 +14,11 @@ export function setOwnRowListener(fn: Listener | null): void {
   listener = fn
 }
 
+/** Is anything listening? The store reads the written rows back only then. */
+export function hasOwnRowListener(): boolean {
+  return listener !== null
+}
+
 /** After a committed write of `row` (the whole stored record). Never throws. */
 export function noteSessionRowWritten(row: SessionRecord): void {
   if (!listener) return

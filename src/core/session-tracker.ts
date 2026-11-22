@@ -15,7 +15,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transactionWhenFree } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transactionWhenFree, writeChannelCursor } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -44,7 +44,8 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
-import { ownedPartOf } from './sessions/session-row-owner.js';
+import { judgedByHost, mergeHostFacts, ownedPartOf, writingAsHost } from './sessions/session-row-owner.js';
+import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { OrgError } from './org/org-store.js';
 import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import {
@@ -211,6 +212,26 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
     }
   }
   if (removed.size > 0) sessionStoreCache = sessionStoreCache.filter((s) => !removed.has(s.claudeSessionId));
+}
+
+/**
+ * The row hook (session-channel/row-hook.ts): every row a committed section wrote, as stored now,
+ * read back only while something listens (a host that runs its sessions). A deleted row is not
+ * announced. Every write statement of this store notes its row (noteSessionRowTouched), so this
+ * is every write path; tests/core/session-channel/row-hook-ratchet.test.ts keeps it so.
+ */
+function announceWrittenRows(ids: ReadonlySet<string>): void {
+  if (!hasOwnRowListener()) return;
+  const db = getDb();
+  if (!db) return;
+  const wanted = [...ids];
+  for (let i = 0; i < wanted.length; i += 500) {
+    const chunk = wanted.slice(i, i + 500);
+    const rows = db
+      .prepare(`SELECT * FROM sessions WHERE claude_session_id IN (${chunk.map(() => '?').join(',')})`)
+      .all(...chunk) as Record<string, any>[];
+    for (const row of rows) noteSessionRowWritten(rowToSession(row));
+  }
 }
 
 /** Reset module-level state for test isolation. */
@@ -589,6 +610,7 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
         if (touched === null || changed > touched.size) invalidateSessionStoreCache();
         else patchSessionCacheRows(touched);
         if (changed > 0) noteSessionStoreWrite();
+        if (touched !== null && touched.size > 0) announceWrittenRows(touched);
         return value;
       },
       (err) => { invalidateSessionStoreCache(); throw err; },
@@ -1651,8 +1673,8 @@ export async function scrubInheritedSessionPids(
   const payloadPid = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.pid') END";
   const holdsPid = `pid IS NOT NULL OR ${payloadPid} IS NOT NULL`;
   return withWriteLock(async () => {
-    const rows = db.prepare(`SELECT pid, ${payloadPid} AS payload_pid FROM sessions WHERE ${holdsPid}`)
-      .all() as Array<{ pid: unknown; payload_pid: unknown }>;
+    const rows = db.prepare(`SELECT claude_session_id, pid, ${payloadPid} AS payload_pid FROM sessions WHERE ${holdsPid}`)
+      .all() as Array<{ claude_session_id: string; pid: unknown; payload_pid: unknown }>;
     let alive = 0;
     for (const row of rows) {
       const pid = typeof row.pid === 'number' ? row.pid : row.payload_pid;
@@ -1662,6 +1684,7 @@ export async function scrubInheritedSessionPids(
       const lockWait = transactionWhenFree((handle) => handle.prepare(
         `UPDATE sessions SET pid = NULL, payload = CASE WHEN ${payloadPid} IS NOT NULL THEN json_remove(payload, '$.pid') ELSE payload END WHERE ${holdsPid}`,
       ).run());
+      for (const row of rows) noteSessionRowTouched(row.claude_session_id);
       if (lockWait instanceof Promise) await lockWait;
     }
     return { scrubbed: rows.length, alive };
@@ -3380,6 +3403,103 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
   await removeCancelledSnapshots(ids);
   return removed;
 }
+
+// ── A host's own rows, as its session channel sends them (session-channel/leader-side.ts) ──
+
+/** One change of a host's own row: its patch, or its whole row (`born`, a rows frame). */
+export interface HostRowChange {
+  sid: string;
+  /** The whole row: a host field it leaves out is cleared. */
+  born?: boolean;
+  patch: Readonly<Record<string, unknown>>;
+  /** The record's place in the host's log: changes and renames apply in this order. */
+  seq?: number;
+}
+
+export interface HostRename { from: string; to: string; seq?: number }
+
+export interface HostChannelBatch {
+  hostId: string;
+  rows: readonly HostRowChange[];
+  renames: readonly HostRename[];
+  /** The channel's new position: kept in the same transaction as the rows. */
+  cursor: { logId: string; seq: number };
+}
+
+/**
+ * Apply one batch of a host's channel records: its row changes and renames in their log order and
+ * the channel's new position, in ONE SQLite transaction, as the writer of the host's rows
+ * (writingAsHost). A row this leader already holds keeps its leader fields (session-row-owner.ts
+ * mergeHostFacts). A change that names another host, or a row that is not the host's, is skipped
+ * and logged: a host writes only its own rows. After the commit, the status and content events a
+ * normal write announces are emitted for the rows whose status or searchable text moved.
+ */
+export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[] }> {
+  await ensureSessionInit();
+  const hostId = batch.hostId;
+  const steps: Array<{ seq: number; i: number; row?: HostRowChange; rename?: HostRename }> = [
+    ...batch.rows.map((row, i) => ({ seq: row.seq ?? 0, i, row })),
+    ...batch.renames.map((rename, i) => ({ seq: rename.seq ?? 0, i: batch.rows.length + i, rename })),
+  ].sort((a, b) => a.seq - b.seq || a.i - b.i);
+  const written: string[] = [];
+  const skipped: string[] = [];
+  const announce: Array<{ record: SessionRecord; status: boolean; content: boolean }> = [];
+  await withWriteLock(async () => {
+    const db = getDb();
+    if (!db) throw new Error('applyHostChannelBatch: SQLite handle is null');
+    const lockWait = transactionWhenFree((handle) => writingAsHost(() => {
+      const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
+      const read = (id: string): SessionRecord | null => {
+        const raw = sel.get(id) as Record<string, any> | undefined;
+        return raw ? rowToSession(raw) : null;
+      };
+      for (const step of steps) {
+        if (step.rename) {
+          const { from, to } = step.rename;
+          const old = read(from);
+          if (!old || old.host !== hostId || !judgedByHost(old)) { skipped.push(from); continue; }
+          const historyBefore = storedHistoryFields(handle, from);
+          deleteSessionRowSqlite(handle, from);
+          if (!read(to)) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, { before: historyBefore! });
+          written.push(to);
+          continue;
+        }
+        const change = step.row!;
+        const before = read(change.sid);
+        if (before && (before.host !== hostId || !judgedByHost(before))) { skipped.push(change.sid); continue; }
+        if (!before && !change.born) { skipped.push(change.sid); continue; }
+        const next = mergeHostFacts(before, change.patch, change.born === true);
+        next.claudeSessionId = change.sid;
+        if (next.host !== hostId || !judgedByHost(next)) { skipped.push(change.sid); continue; }
+        try {
+          writeSessionRowSqlite(handle, next);
+        } catch (err) {
+          // One row the store refuses (its history guard) never wedges the channel behind it.
+          log.session.warn('host channel: a row change was refused', { hostId, sessionId: change.sid, error: err instanceof Error ? err.message : String(err) });
+          skipped.push(change.sid);
+          continue;
+        }
+        written.push(change.sid);
+        announce.push({
+          record: next,
+          status: !before || !statusProjectionEquals(canonicalStatusProjection(before), canonicalStatusProjection(next))
+            || normalizedStatusRevision(before) !== normalizedStatusRevision(next),
+          content: !before || searchContentProjection(before) !== searchContentProjection(next),
+        });
+      }
+      writeChannelCursor(handle, hostId, batch.cursor);
+    }));
+    if (lockWait instanceof Promise) await lockWait;
+  });
+  if (skipped.length > 0) log.session.warn('host channel: changes skipped (not this host\'s rows)', { hostId, sessionIds: skipped.slice(0, 20), count: skipped.length });
+  for (const a of announce) {
+    if (a.status) emitSessionStatusChanged(a.record, {}, ['*'], { source: 'host-channel' });
+    if (a.content) bus.emit(EventNames.SESSION_CONTENT_UPDATED, { sessionId: a.record.claudeSessionId }, ['*'], { source: 'host-channel' });
+  }
+  return { written, skipped };
+}
+
+export { loadChannelCursor } from './session-db.js';
 
 export async function sweepOrphanedCancelledSnapshots(): Promise<void> {
   const { readQueueFileFresh, removeCancelledSnapshots } = await import('./session-queue-store.js');
