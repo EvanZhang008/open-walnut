@@ -45,6 +45,8 @@ describe("Home's panes go by content", () => {
     expect(main).toMatch(/!chatVisible && sessionColumns\.length === 0 && !triagePanelOpen && \(\s*<HomeEmptyPane onNewTask=\{handleToolbarOpenLauncher\} \/>/)
     const pane = read('pages/HomeEmptyPane.tsx')
     expect(pane).toContain('No session open')
+    // One New task, one look: the toolbar's own button, never a second one beside it.
+    expect(pane).toContain('<NewLauncherButton onOpen={onNewTask} />')
     expect(rule(globals, '.home-empty-pane')).toMatch(/flex:\s*1/)
   })
 

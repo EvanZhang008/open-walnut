@@ -18,7 +18,7 @@
 .org-leaders.is-list .org-leaders-toggle:hover .org-leaders-chevron { background: transparent; }
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }
-.org-leaders-project { padding: 4px 2px 1px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
+.org-leaders-project { padding: 4px 2px 2px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
 /* A Director's title wraps (.wn-title, OrgLeaders.tsx): the fold, dot, avatar, eye and "leads N" stay level
    with its first line, and each level steps in only LEVEL_INDENT_PX (2026-11-21, the UI audit). On the
    2px grid: the first line's middle is 13px down the row; every mark below is placed on it. */

@@ -820,9 +820,13 @@ select {
    first line (text-fit.css). */
 .notification-feed-item-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
+  gap: 2px 6px;
 }
+/* The title takes the line first; the chips, time and close keep the rest of it, and move to the
+   next line as a group when the drawer is too narrow for both (standard.md "Text that does not fit"). */
+.notification-feed-item-head > .wn-title { flex: 1 1 12em; }
 
 .notification-feed-dot {
   width: 7px;

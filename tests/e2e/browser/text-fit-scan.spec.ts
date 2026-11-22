@@ -7,7 +7,8 @@
  * titles were cut above a smaller cut source line. This scan walks those screens with long titles
  * at the user's window (1512), a laptop (1280), a small window (1024) and the Org list dragged to
  * its narrowest, and fails when a title, name, subject or summary is cut while metadata in its row
- * kept its room, or when more than 5% of one is hidden. A new view that cuts its title fails here
+ * kept its room, or when any part of one is hidden (by its own ellipsis or clamp, or by an
+ * ancestor that clips it). A new view that cuts its title fails here
  * (and its CSS fails cutTitle in tests/web/ui-standard-ratchet.test.ts).
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -67,9 +68,10 @@ for (const [width, height] of [[1512, 920], [1280, 800], [1024, 768]] as const) 
     await isolateUiPrefs(page)
     await openHome(page, baseURL!)
     const panel = '.home-navigation-scroll'
-    await page.locator(panel).getByText(/^All/).first().click()
+    // The fixture's Home groups by project: open the Garden group, where the long titles are.
+    await page.locator(panel).getByText(/^Garden\b/).first().click()
     await expect(page.locator(panel).getByText(LATIN[0])).toBeVisible({ timeout: 20_000 })
-    await expectNoCutTitle(page, [panel], `Home All ${width}`)
+    await expectNoCutTitle(page, [panel], `Home list ${width}`)
 
     const search = page.locator('input[placeholder^="Search tasks"]').first()
     await search.click()
@@ -82,6 +84,12 @@ for (const [width, height] of [[1512, 920], [1280, 800], [1024, 768]] as const) 
     await expect(page.getByTestId('org-page')).toBeVisible()
     await expect(page.getByTestId('org-page').getByText(VP).first()).toBeVisible({ timeout: 20_000 })
     await expectNoCutTitle(page, ['[data-testid="org-page"] .org-list'], `Org list ${width}`)
+
+    // The Org chart's cards: names, current task and project rows.
+    await page.getByTestId('org-open-chart').click()
+    await expect(page.getByTestId('org-chart-vps').getByText(VP).first()).toBeVisible({ timeout: 20_000 })
+    await expectNoCutTitle(page, ['[data-testid="org-chart-vps"]'], `Org chart ${width}`)
+    await page.keyboard.press('Escape')
 
     await page.getByRole('button', { name: /^Notifications/ }).first().click()
     const drawer = page.locator('.notification-panel')
@@ -109,4 +117,15 @@ test('the Org list dragged to its narrowest still cuts no name', async ({ page, 
   const width = (await list.boundingBox())!.width
   expect(width).toBeLessThan(260)
   await expectNoCutTitle(page, ['[data-testid="org-page"] .org-list'], `Org list at ${Math.round(width)} px`)
+})
+
+test('the scan finds a cut title beside metadata that kept its room, and passes a wrapped one', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.setContent(`<div id="scope" style="width:240px;font:13px sans-serif">
+    <div data-peek-row="" style="display:flex;gap:8px"><span class="demo-title" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${LATIN[0]}</span><span>2h ago</span></div>
+    <div style="display:flex;gap:8px"><span class="demo-title wn-title" style="flex:1;min-width:0;white-space:normal">${LATIN[1]}</span><span>2h ago</span></div>
+  </div>`)
+  const found = violations(await findCutTitles(page, ['#scope']))
+  expect(found.map((f) => f.text.slice(0, 20))).toEqual([LATIN[0].slice(0, 20)])
+  expect(found[0].metaKeptRoom).toBe(true)
 })

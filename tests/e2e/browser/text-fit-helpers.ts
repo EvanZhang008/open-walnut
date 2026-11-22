@@ -56,6 +56,17 @@ export async function findCutTitles(page: Page, scopes: string[], skip: string[]
           let hidden = cutOf(el)
           const parent = el.parentElement
           if (!hidden && parent && parent.childElementCount === 1 && !isTitle(parent)) hidden = cutOf(parent)
+          // Or by an ancestor that clips sideways: the text's box runs past the clipping box.
+          if (!hidden) {
+            const r = el.getBoundingClientRect()
+            for (let a = el.parentElement; a && a !== scope.parentElement; a = a.parentElement) {
+              const s = getComputedStyle(a)
+              if (s.overflowX === 'visible') continue
+              const b = a.getBoundingClientRect()
+              const over = Math.max(0, r.right - b.right) + Math.max(0, b.left - r.left)
+              if (over > 1) { hidden = over / r.width; break }
+            }
+          }
           if (!hidden) continue
           const row = el.closest('[data-peek-row]') ?? parent
           const metaKeptRoom = !!row && [...row.querySelectorAll<HTMLElement>('*')].some((m) => m !== el && !el.contains(m) && !m.contains(el) && !isTitle(m) && (m.textContent ?? '').trim().length > 2 && m.childElementCount === 0 && visible(m) && cutOf(m) === 0)
@@ -67,7 +78,7 @@ export async function findCutTitles(page: Page, scopes: string[], skip: string[]
   }, { scopes, skip, source: TITLE_CLASS_SOURCE })
 }
 
-/** The failing ones: cut while a metadata sibling kept its room, or more than `maxHidden` hidden. */
-export function violations(found: CutTitle[], maxHidden = 0.05): CutTitle[] {
+/** The failing ones: cut while a metadata sibling kept its room, or any part of it hidden. */
+export function violations(found: CutTitle[], maxHidden = 0): CutTitle[] {
   return found.filter((f) => f.metaKeptRoom || f.hidden > maxHidden)
 }
