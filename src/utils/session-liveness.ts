@@ -104,9 +104,9 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   if (session.process_status === 'stopped' || (session.process_status === 'error' && session.pid == null)) return false
 
   // A host replica's rows are copies of the Mac's (replication/kinds/sessions.ts):
-  // their process status is a label, never something to probe from here.
+  // their process status is a label, never something to probe from here. Its own sessions are no copies.
   const { processActionsRefused } = await import('../core/sessions/replica-process-guard.js')
-  if (processActionsRefused()) return session.process_status === 'running' || session.process_status === 'idle'
+  if (processActionsRefused(session)) return session.process_status === 'running' || session.process_status === 'idle'
 
   // Prefer the registry — the active SessionManager knows the truth. A manager
   // not yet bound to its session does not: attachToExisting registers it, then

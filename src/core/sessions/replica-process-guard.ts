@@ -12,25 +12,30 @@
  * and with cloud exec on it runs (and stops) its own sessions in its own
  * daemon, exactly as before.
  *
- * TODO(WP12): keyed on placement alone, this refuses every process action on a
- * host server, which is right while every session row there is a copy. When
- * WP12 runs Ask sessions on the host itself (server-role.ts runsSessions), the
- * guard must tell a copied row (it came through the sessions kind, it has no
- * pid and no output file) from a session this server started, or those would
- * never be stopped or reaped. Scope it per row then; keep the ratchet.
+ * Per row: a session this host's own service runs and judges (`judge: 'host'` with this host's
+ * key, sessions/session-row-owner.ts rowOwnedHere) is no copy, so its process is this host's to
+ * probe, stop and reap. Every other row on a host replica is still a copy and still refused. An
+ * action that names no row (an orphan sweep, a probe of a bare pid) stays refused: the host's
+ * process manager ends the CLIs of its own sessions, and a sweep from here could reach a CLI of a
+ * session the leader still runs on this machine through the old path.
  */
 
 import { log } from '../../logging/index.js'
 import { isHostReplica } from '../server-role.js'
+import { rowOwnedHere, thisHostKey } from './session-row-owner.js'
+import type { SessionRecord } from '../types.js'
 
-/** True (and logged, with the full session id) when this server must not do `action`. */
-export function refuseProcessAction(action: string, sessionId?: string | null): boolean {
+type RowOwner = Pick<SessionRecord, 'judge' | 'host'>
+
+/** True (and logged, with the full session id) when this server must not do `action` (on `row`, when it names one). */
+export function refuseProcessAction(action: string, sessionId?: string | null, row?: RowOwner | null): boolean {
   if (!isHostReplica()) return false
+  if (row && rowOwnedHere(row, thisHostKey())) return false
   log.session.warn('replica: refused a process action, sessions here are copies of the Mac\'s', { action, sessionId: sessionId ?? null })
   return true
 }
 
 /** The same question, without the log line (a hot read path asks it per row). */
-export function processActionsRefused(): boolean {
-  return isHostReplica()
+export function processActionsRefused(row?: RowOwner | null): boolean {
+  return isHostReplica() && !(row && rowOwnedHere(row, thisHostKey()))
 }

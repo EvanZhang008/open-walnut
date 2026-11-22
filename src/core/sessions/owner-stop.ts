@@ -46,6 +46,7 @@ import type { SessionRecord } from '../types.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import { stopProvenance, type StopInitiator } from './stop-provenance.js'
 import { refuseProcessAction } from './replica-process-guard.js'
+import { rowOwnedHere, thisHostKey } from './session-row-owner.js'
 
 /** Daemon capability that answers orphan stops with an ownership proof. */
 export const ORPHAN_STOP_CAPABILITY = 'orphan-stop-v1'
@@ -86,10 +87,14 @@ export interface OwnerStopDeps {
   connection(hostKey: string): Promise<OwnerConnection | null>
 }
 
-type OwnedRow = Pick<SessionRecord, 'claudeSessionId' | 'host'>
+type OwnedRow = Pick<SessionRecord, 'claudeSessionId' | 'host' | 'judge'>
 
-/** Session records store the local host as null/undefined; the daemon pool calls it '__local__'. */
-export function ownerHostKey(row: Pick<SessionRecord, 'host'>): string {
+/**
+ * Session records store the local host as null/undefined; the daemon pool calls it '__local__'.
+ * A row this host's own service runs (judge 'host' with this host's key) is local here too.
+ */
+export function ownerHostKey(row: Pick<SessionRecord, 'host' | 'judge'>): string {
+  if (rowOwnedHere(row, thisHostKey())) return '__local__'
   return row.host || '__local__'
 }
 
@@ -154,7 +159,7 @@ export async function stopThroughOwner(
   initiator: StopInitiator = 'automatic',
 ): Promise<OwnerStopOutcome> {
   // A host replica's rows are copies of the Mac's: it never asks a daemon to stop one.
-  if (refuseProcessAction(`owner_stop:${why}`, row.claudeSessionId)) return 'refused'
+  if (refuseProcessAction(`owner_stop:${why}`, row.claudeSessionId, row)) return 'refused'
   const sessionId = row.claudeSessionId
   const host = ownerHostKey(row)
   let conn: OwnerConnection | null = null
@@ -195,12 +200,12 @@ export async function stopThroughOwner(
  * shared with production, and a copied record carries production's runtime id.
  */
 export async function stopAcpThroughOwner(
-  row: Pick<SessionRecord, 'claudeSessionId' | 'host' | 'acpRuntimeId'>,
+  row: Pick<SessionRecord, 'claudeSessionId' | 'host' | 'acpRuntimeId' | 'judge'>,
   why: string,
   deps: Partial<OwnerStopDeps> = {},
   opts: { ephemeral?: boolean } = {},
 ): Promise<OwnerStopOutcome> {
-  if (refuseProcessAction(`owner_acp_stop:${why}`, row.claudeSessionId)) return 'refused'
+  if (refuseProcessAction(`owner_acp_stop:${why}`, row.claudeSessionId, row)) return 'refused'
   const sessionId = row.claudeSessionId
   const host = ownerHostKey(row)
   const runtimeId = row.acpRuntimeId

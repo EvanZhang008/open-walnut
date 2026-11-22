@@ -188,3 +188,39 @@ describe('a host replica never acts on a process named by a copied row', () => {
     }
   })
 })
+
+// A session this host's own service runs and judges (judge 'host' with this host's key) is no
+// copy: its process is this host's to stop, through this host's own process manager ('__local__').
+describe('a host replica acts on the process of a session it runs itself', () => {
+  const HOST_KEY = 'devbox-marina'
+  let savedKey: string | undefined
+  beforeAll(() => { savedKey = process.env.WALNUT_HOST_KEY; process.env.WALNUT_HOST_KEY = HOST_KEY })
+  afterAll(() => { if (savedKey === undefined) delete process.env.WALNUT_HOST_KEY; else process.env.WALNUT_HOST_KEY = savedKey })
+
+  it('stops its own session through its local process manager', async () => {
+    const conn = acceptingConn()
+    const asked: string[] = []
+    const own = copiedRow({ claudeSessionId: 'sid-marina-own-1', judge: 'host', host: HOST_KEY })
+    const outcome = await stopThroughOwner(own, 'user', 'test', { connection: async (h) => { asked.push(h); return conn } }, 'human')
+    expect(outcome).not.toBe('refused')
+    expect(asked).toEqual(['__local__'])
+    expect(conn.calls.length).toBeGreaterThan(0)
+  })
+
+  it('still refuses a host-judged row of another host, and a row the leader judges', async () => {
+    const { processActionsRefused, refuseProcessAction } = await import('../../../src/core/sessions/replica-process-guard.js')
+    const other = copiedRow({ judge: 'host', host: 'devbox-other' })
+    const leaders = copiedRow({ host: HOST_KEY })
+    for (const row of [other, leaders]) {
+      expect(processActionsRefused(row)).toBe(true)
+      expect(refuseProcessAction('test', row.claudeSessionId, row)).toBe(true)
+      const conn = acceptingConn()
+      expect(await stopThroughOwner(row, 'user', 'test', { connection: async () => conn }, 'human')).toBe('refused')
+      expect(conn.calls).toEqual([])
+    }
+    expect(processActionsRefused(copiedRow({ judge: 'host', host: HOST_KEY }))).toBe(false)
+    // An action that names no row stays refused.
+    expect(processActionsRefused()).toBe(true)
+    expect(alive(pid)).toBe(true)
+  })
+})
