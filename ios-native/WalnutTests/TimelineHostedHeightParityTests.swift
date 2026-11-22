@@ -411,9 +411,11 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         for activity in ["Thinking", "Bash · npm run test:quick in the repo root",
                          "正在读取 /tmp 下的会话流文件并核对时间戳", nil] {
             // Every shape of the live turn: reasoning before any call (its own
-            // collapsed row), the calls folded into their run row with the
-            // reasoning inside, and that run opened onto the reasoning and chips.
-            for (calls, opened) in [([LiveToolCall](), false), (tools, false), (tools, true)] {
+            // "Thinking" fold line, closed and opened onto its thinking row), the
+            // calls folded into their run row with the reasoning inside, and that
+            // run opened onto the reasoning and chips.
+            for (calls, opened) in [([LiveToolCall](), false), ([LiveToolCall](), true),
+                                    (tools, false), (tools, true)] {
                 var liveInput = TimelineInput(
                     messages: [], streaming: true,
                     liveText: "第一段结论已经写完,继续第二段。\n\n- 一\n- 二",
@@ -421,24 +423,33 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                     liveTools: calls,
                     activity: activity, showLoadEarlier: true,
                     width: pageWidth, expandedRowIDs: [])
-                if opened { liveInput = liveInput.openingAllRuns() }
+                if opened {
+                    liveInput = liveInput.openingAllRuns()
+                    liveInput.expandedRowIDs.insert(
+                        TimelineScope.namespace(liveInput.scope, TimelineRowBuilder.liveThoughtFoldID))
+                }
                 let snapshot = await actor.buildSnapshot(liveInput)
                 let kinds = snapshot.rows.map(\.content.reuseKind)
                 if calls.isEmpty {
-                    XCTAssertEqual(kinds.filter { $0 == "thinking" }.count, 1,
-                                   "reasoning before any call is one collapsed row")
+                    // A thought on its own is the "Thinking" fold line (2026-11-20),
+                    // its thinking row inside only once opened.
+                    XCTAssertEqual(kinds.filter { $0 == "toolRun" }.count, 1,
+                                   "reasoning before any call is one Thinking line")
+                    XCTAssertEqual(kinds.filter { $0 == "thinking" }.count, opened ? 1 : 0,
+                                   "the reasoning sits inside its line")
                 } else {
                     XCTAssertEqual(kinds.filter { $0 == "toolRun" }.count, 1,
                                    "the live calls must fold into one run row")
                     XCTAssertEqual(kinds.filter { $0 == "thinking" }.count, opened ? 1 : 0,
                                    "the reasoning rides the run")
                 }
-                let shape = calls.isEmpty ? "reasoning only" : "run \(opened ? "open" : "folded")"
+                let shape = "\(calls.isEmpty ? "reasoning only" : "run") \(opened ? "open" : "folded")"
                 let checked = assertFits(snapshot.rows,
                                          "live turn (\(activity ?? "no activity"), \(shape))")
-                // Load earlier + the reasoning row or the run, and the opened run's
-                // reasoning and three chips.
-                XCTAssertGreaterThanOrEqual(checked, opened ? 6 : 2, "gate checked nothing (n=\(checked))")
+                // Load earlier + the Thinking line or the run, and what opening it shows:
+                // the reasoning, plus the run's three chips.
+                let inside = opened ? (calls.isEmpty ? 1 : 4) : 0
+                XCTAssertGreaterThanOrEqual(checked, 2 + inside, "gate checked nothing (n=\(checked))")
             }
         }
     }
