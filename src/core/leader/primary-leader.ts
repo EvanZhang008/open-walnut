@@ -85,8 +85,11 @@ export function startLeaderHeartbeat(): { stop: () => void } {
 export async function announceLeaderRestart(maxWaitMs = 1_500): Promise<void> {
   if (isFollower()) return
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
+  // WALNUT_LEADER_RESTART_GRACE_MS: the live tests' shorter grace, as WALNUT_LEADER_HEARTBEAT_MS.
+  const n = Number(process.env.WALNUT_LEADER_RESTART_GRACE_MS)
+  const grace = Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : LEADER_RESTART_GRACE_MS
   await Promise.race([
-    sendLeaderHeartbeat(LEADER_RESTART_GRACE_MS).catch(() => false),
+    sendLeaderHeartbeat(grace).catch(() => false),
     new Promise((r) => { const t = setTimeout(r, maxWaitMs); t.unref?.() }),
   ])
 }

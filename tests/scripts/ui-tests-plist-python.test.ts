@@ -58,6 +58,9 @@ describe('run-ui-tests.sh picks a python whose plistlib loads', () => {
     const text = fs.readFileSync(RUN_UI, 'utf-8')
     expect(text).toContain('[ "${WALNUT_UITEST_MAY_ERASE_APP_DATA:-}" = 1 ]')
     expect(text).toContain("'WALNUT_UITEST_MAY_ERASE_APP_DATA'):")
+    // The held-reply proof video's opt-in (LetterHeldForMacUITests) rides the same way.
+    expect(text).toContain('[ -n "${WALNUT_UITEST_LETTER_VIDEO:-}" ]')
+    expect(text).toContain("'WALNUT_UITEST_LETTER_VIDEO',")
   })
 
   it('injects with the python it picked, never a bare python3', () => {

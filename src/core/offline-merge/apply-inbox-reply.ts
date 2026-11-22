@@ -30,12 +30,17 @@
  * boxes and a redrain writes nothing more. A picture whose bytes the companion no longer
  * holds is refused with the turn (a RefusedWrite, lettered): the words never arrive
  * without the pictures sent with them.
+ *
+ * `inbox-reply-direct` is a turn the companion already handed to the letter's session while
+ * this Mac was away (replica takeover, core/replica-takeover.ts): recorded on its letter the
+ * same way, with the delivery it had, and never delivered again (directOutcome).
  */
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { RefusedWrite } from './patch-check.js';
 import type { V2Context, V2Record } from './apply-v2.js';
+import type { LetterDelivery } from '../human-inbox/letter-ops.js';
 
 /**
  * The record's moment is the companion's clock plus the measured offset, an estimate: an
@@ -78,13 +83,32 @@ async function savedPictures(ctx: V2Context, record: V2Record, what: string): Pr
   return out;
 }
 
+/**
+ * `inbox-reply-direct`: the companion handed the turn to the letter's session itself while this
+ * Mac was away (replica takeover, core/replica-takeover.ts). Its outcome is recorded on the turn
+ * and nothing is delivered again: queued in that session, or not confirmed (the delivery's answer
+ * was lost, so it may have arrived) as `failed`, which only a person's Retry on this Mac sends
+ * again (the companion never does). A record that names no session still came from a delivery,
+ * so it is not confirmed either.
+ */
+function directOutcome(record: V2Record): LetterDelivery | undefined {
+  if (record.kind !== 'inbox-reply-direct') return undefined;
+  const direct = record.direct as { sessionId?: unknown; messageId?: unknown; unconfirmed?: unknown } | undefined;
+  const sessionId = typeof direct?.sessionId === 'string' && direct.sessionId ? direct.sessionId : undefined;
+  if (!sessionId || direct?.unconfirmed === true) {
+    return { status: 'failed', reason: 'direct_unconfirmed', ...(sessionId ? { sessionId } : {}) };
+  }
+  return { status: 'queued', sessionId, ...(typeof direct?.messageId === 'string' ? { messageId: direct.messageId } : {}) };
+}
+
 export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise<void> {
   const { letterId, op, text, clientId, actionId, freeText, madeAt } = record as {
     letterId?: unknown; op?: unknown; text?: unknown; clientId?: unknown; actionId?: unknown; freeText?: unknown; madeAt?: unknown;
   };
+  const delivered = directOutcome(record);
   const what = op === 'answer'
-    ? `your answer "${excerpt(actionId)}"${excerpt(freeText) ? ` ("${excerpt(freeText)}")` : ''} to a letter was not recorded`
-    : `your reply ${excerpt(text) ? `"${excerpt(text)}"` : 'with pictures'} to a letter was not delivered`;
+    ? `your answer "${excerpt(actionId)}"${excerpt(freeText) ? ` ("${excerpt(freeText)}")` : ''} to a letter was not recorded${delivered ? ' (its session has it)' : ''}`
+    : `your reply ${excerpt(text) ? `"${excerpt(text)}"` : 'with pictures'} to a letter was not ${delivered ? 'recorded on it (its session has it)' : 'delivered'}`;
   const { LETTER_ID_RE, CLIENT_ID_RE } = await import('../human-inbox/normalize.js');
   const readable = typeof letterId === 'string' && LETTER_ID_RE.test(letterId) && (op === 'reply'
     ? typeof text === 'string' && typeof clientId === 'string' && CLIENT_ID_RE.test(clientId)
@@ -101,9 +125,9 @@ export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise
       const again = await repeatsRecordedTurn(letterId as string, { kind: 'reply', clientId });
       // A turn already on its letter keeps the pictures it has: nothing is saved twice.
       const images = again || !letter ? [] : await savedPictures(ctx, record, what);
-      const out = await humanReplyAndDeliver(letterId as string, { text: text as string, clientId: clientId as string, flagsAt: since, ...(images.length ? { images } : {}) });
+      const out = await humanReplyAndDeliver(letterId as string, { text: text as string, clientId: clientId as string, flagsAt: since, ...(images.length ? { images } : {}), ...(delivered ? { delivered } : {}) });
       log.notif.info('offline handover: a reply written on the companion is on its letter', {
-        host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(images.length ? { pictures: images.length } : {}), ...(again ? { duplicate: true } : {}),
+        host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(images.length ? { pictures: images.length } : {}), ...(again ? { duplicate: true } : {}), ...(delivered ? { deliveredBy: 'companion' } : {}),
       });
       if (again) ctx.result.skipped++; else ctx.result.replayed++;
       return;
@@ -113,7 +137,7 @@ export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise
     // The store keeps the note bounded: compare it the way it was kept.
     if (answered && !answered.by && answered.actionId === actionId && (answered.freeText ?? '') === boundThreadText(note)
       && answered.at >= since - ANSWER_CLOCK_SLACK_MS) {
-      const finished = await deliverPendingAnswer(letterId as string);
+      const finished = await deliverPendingAnswer(letterId as string, delivered);
       log.notif.info('offline handover: an answer from the companion is on its letter already', {
         host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, ...(finished ? { delivered: finished.status } : {}),
       });
@@ -121,9 +145,9 @@ export async function applyInboxReply(ctx: V2Context, record: V2Record): Promise
       return;
     }
     const images = letter ? await savedPictures(ctx, record, what) : [];
-    const out = await answerLetterAndDeliver(letterId as string, { actionId: actionId as string, ...(note ? { freeText: note } : {}), flagsAt: since, ...(images.length ? { images } : {}) }, 'phone');
+    const out = await answerLetterAndDeliver(letterId as string, { actionId: actionId as string, ...(note ? { freeText: note } : {}), flagsAt: since, ...(images.length ? { images } : {}), ...(delivered ? { delivered } : {}) }, 'phone');
     log.notif.info('offline handover: an answer written on the companion is on its letter', {
-      host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(images.length ? { pictures: images.length } : {}),
+      host: ctx.hostKey, seq: record.seq, opId: record.opId, letterId, delivery: out.delivery.status, ...(images.length ? { pictures: images.length } : {}), ...(delivered ? { deliveredBy: 'companion' } : {}),
     });
     ctx.result.replayed++;
   } catch (err) {

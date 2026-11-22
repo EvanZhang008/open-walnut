@@ -136,7 +136,7 @@ const { startServer, stopServer, armGracefulSignalExit } = await import(${JSON.s
 const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
 const addr = server.address()
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
-${BOOT_TAIL}`, serverEnv(companion, { WALNUT_CLOUD_MODE: '1', WALNUT_GIT_HUB_DIR: path.join(world.base, 'hub'), WALNUT_LEADER_TICK_MS: '300' }), false)
+${BOOT_TAIL}`, serverEnv(companion, { WALNUT_CLOUD_MODE: '1', WALNUT_GIT_HUB_DIR: path.join(world.base, 'hub'), WALNUT_LEADER_TICK_MS: '300', ...twinOpts.companionEnv }), false)
 }
 
 /** The Mac's data, once: its companion (through the Mac's network), its machine tokens, both rows of the one machine. */
@@ -153,11 +153,16 @@ async function preparePrimary(): Promise<void> {
     'version: 1', 'user:', '  name: Tester', 'defaults:', '  priority: none', '  platform: local', 'provider:', '  type: claude-code',
     'hosts:',
     `  ${KEEPER}:`, '    hostname: devbox.invalid', '    label: Dev box',
-    `  ${FOUND}:`, '    hostname: devbox.invalid', '    discovered: true', '',
+    `  ${FOUND}:`, '    hostname: devbox.invalid', '    discovered: true',
+    ...(twinOpts.macConfig ?? []), '',
   ].join('\n'))
 }
 
 let firstBootSnippet = ''
+
+/** What a test file changes in the world: lines added to the Mac's config.yaml, the Mac's and the companion's extra env. */
+export interface TwinOptions { macConfig?: string[]; macEnv?: Record<string, string>; companionEnv?: Record<string, string> }
+let twinOpts: TwinOptions = {}
 
 /**
  * Boot the Mac's server. `fresh`: the first boot, which files the task and S's record, then runs
@@ -229,7 +234,7 @@ await new Promise((r) => control.listen(0, '127.0.0.1', r))
 const addr = server.address()
 process.stdout.write(JSON.stringify({ out, controlPort: control.address().port }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
-${BOOT_TAIL}`, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500' }), true, (line) => {
+${BOOT_TAIL}`, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500', ...twinOpts.macEnv }), true, (line) => {
     try {
       const j = JSON.parse(line)
       if (typeof j.controlPort === 'number') { primary.controlPort = j.controlPort; if (fresh) primary.out = j.out ?? {} }
@@ -331,8 +336,9 @@ export function sliceSids(d: LiveDaemon): string[] | null {
  * Start the world: the companion, the Mac's network, the daemon with S on it, and the Mac booted
  * with `firstBoot` run once on its first boot. `prefix`: the temp base's.
  */
-export async function setupTwinMac(prefix: string, firstBoot = ''): Promise<void> {
+export async function setupTwinMac(prefix: string, firstBoot = '', opts: TwinOptions = {}): Promise<void> {
   firstBootSnippet = firstBoot
+  twinOpts = opts
   world.base = await liveBase(prefix, ['prd', 'cod', 'de'])
   world.procs = new LiveProcs(realProcTable(), world.base)
   world.unhookTerm = resumeOnTerm(world.procs)

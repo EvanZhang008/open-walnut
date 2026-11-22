@@ -328,16 +328,25 @@ export function journalInboxState(input: { letterId: string; field: 'read' | 'pi
  */
 export interface InboxReplyPicture { name: string; bytes: Buffer }
 
+/**
+ * A turn this box already handed to the letter's session itself (replica takeover,
+ * replica-takeover.ts): the Mac records it on the letter and never delivers it again.
+ * `unconfirmed`: the delivery went out and its answer was lost, so it may or may not have
+ * reached the CLI; the Mac records it as not confirmed, and only a person's Retry on the Mac sends it again.
+ */
+export interface InboxTurnDirect { sessionId: string; messageId: string; at: number; unconfirmed?: true }
+
 /** A human turn on a letter, as the companion takes it while the Mac is away (`inbox-reply`). */
 export type InboxReplyInput =
-  | { letterId: string; op: 'reply'; text: string; clientId: string; madeAt: number; pictures?: InboxReplyPicture[] }
-  | { letterId: string; op: 'answer'; actionId: string; freeText?: string; madeAt: number; pictures?: InboxReplyPicture[] }
+  | { letterId: string; op: 'reply'; text: string; clientId: string; madeAt: number; pictures?: InboxReplyPicture[]; direct?: InboxTurnDirect }
+  | { letterId: string; op: 'answer'; actionId: string; freeText?: string; madeAt: number; pictures?: InboxReplyPicture[]; direct?: InboxTurnDirect }
 
-/** The kinds of a human turn on a letter: words only, or words with pictures (a newer Mac). */
-export const INBOX_TURN_KINDS: readonly string[] = ['inbox-reply', 'inbox-reply-pictures']
+/** The kinds of a human turn on a letter: words only, words with pictures, or one this box delivered itself (newer Macs). */
+export const INBOX_TURN_KINDS: readonly string[] = ['inbox-reply', 'inbox-reply-pictures', 'inbox-reply-direct']
 
-/** The journal kind a turn needs: a Mac that drains `inbox-reply` only would drop its pictures. */
-export function inboxTurnKind(input: { pictures?: readonly unknown[] }): 'inbox-reply' | 'inbox-reply-pictures' {
+/** The journal kind a turn needs: a Mac that drains `inbox-reply` only would drop its pictures, or deliver a direct one again. */
+export function inboxTurnKind(input: { pictures?: readonly unknown[]; direct?: InboxTurnDirect }): 'inbox-reply' | 'inbox-reply-pictures' | 'inbox-reply-direct' {
+  if (input.direct) return 'inbox-reply-direct'
   return input.pictures?.length ? 'inbox-reply-pictures' : 'inbox-reply'
 }
 
@@ -371,8 +380,10 @@ export function inboxReplyOpId(input: InboxReplyInput): string {
  * bytes a blob named by `image<i>` (appendBlobs: the bodies stay while the record waits).
  */
 export function journalInboxReply(input: InboxReplyInput): AppendResult | null {
-  if (!macDrains(inboxTurnKind(input))) return null
-  const pictures = input.pictures ?? []
+  const kind = inboxTurnKind(input)
+  if (!macDrains(kind)) return null
+  // A turn delivered here carries no pictures: the takeover leaves those for the Mac.
+  const pictures = kind === 'inbox-reply-direct' ? [] : input.pictures ?? []
   const body = input.op === 'reply'
     ? { letterId: input.letterId, op: 'reply', text: input.text, clientId: input.clientId, madeAt: input.madeAt }
     : { letterId: input.letterId, op: 'answer', actionId: input.actionId, ...(input.freeText ? { freeText: input.freeText } : {}), madeAt: input.madeAt }
@@ -380,9 +391,11 @@ export function journalInboxReply(input: InboxReplyInput): AppendResult | null {
   const r = pictures.length
     ? journalOf().appendBlobs(COMPANION_JOURNAL_HOME, { kind: 'inbox-reply-pictures', ...body, images: pictures.map((p) => p.name) },
       Object.fromEntries(pictures.map((p, i) => [`image${i}`, p.bytes])), opts)
-    : journalOf().append(COMPANION_JOURNAL_HOME, { kind: 'inbox-reply', ...body }, opts)
+    : input.direct
+      ? journalOf().append(COMPANION_JOURNAL_HOME, { kind: 'inbox-reply-direct', ...body, direct: { ...input.direct } }, opts)
+      : journalOf().append(COMPANION_JOURNAL_HOME, { kind: 'inbox-reply', ...body }, opts)
   if (r.ok) {
-    log.notif.info('companion journal: saved a reply to a letter for the Mac', { letterId: input.letterId, op: input.op, opId: r.opId, seq: r.seq, ...(pictures.length ? { pictures: pictures.length } : {}), ...(r.duplicate ? { duplicate: true } : {}) })
+    log.notif.info('companion journal: saved a reply to a letter for the Mac', { letterId: input.letterId, op: input.op, opId: r.opId, seq: r.seq, kind, ...(pictures.length ? { pictures: pictures.length } : {}), ...(r.duplicate ? { duplicate: true } : {}) })
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
   } else {
     log.notif.error('companion journal: a reply to a letter was refused', { letterId: input.letterId, op: input.op, code: r.code, why: r.why, error: r.message })

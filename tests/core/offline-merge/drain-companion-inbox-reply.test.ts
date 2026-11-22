@@ -423,3 +423,42 @@ describe('a reply with pictures taken on the companion while the Mac was away', 
     expect(delivered.sends).toEqual([])
   })
 })
+
+// Replica takeover (2026-11-21): the companion already handed the turn to the session itself.
+describe('a turn the companion delivered itself (inbox-reply-direct)', () => {
+  const direct = (seq: number, body: Record<string, unknown>, d: Record<string, unknown>) =>
+    ({ v: 2, seq, at: Date.now(), kind: 'inbox-reply-direct', rev: 1, madeAt: Date.now() - 60_000, ...body, direct: { sessionId: SID, at: Date.now() - 50_000, ...d } })
+
+  it('the companion learns the Mac takes the kind', () => {
+    expect(companion.journal.macDrains('inbox-reply-direct')).toBe(true)
+  })
+
+  it('a reply is recorded on its letter as in its session, delivered nothing, once across a redrain', async () => {
+    const id = await ask('Pick a map for the marina page')
+    const rec = direct(1, { opId: 'ir-direct-reply', letterId: id, op: 'reply', text: 'The satellite one', clientId: 'ios-d1' }, { messageId: 'ltr-ir-direct-reply' })
+    expect(await drainHanded([rec], 1)).toEqual([1])
+    const turns = await humanTurns(id)
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ text: 'The satellite one', clientId: 'ios-d1', delivery: { status: 'queued', sessionId: SID } })
+    expect(delivered.sends).toEqual([])
+    expect(refusedEntries('ir-direct-reply')).toEqual([])
+  })
+
+  it('an answer answers its letter, delivered nothing, once across a redrain', async () => {
+    const id = await ask('Pick a menu for the marina page')
+    const rec = direct(1, { opId: 'ia-direct-answer', letterId: id, op: 'answer', actionId: 'a', freeText: 'short one' }, { messageId: 'ltr-ia-direct-answer' })
+    expect(await drainHanded([rec], 1)).toEqual([1])
+    expect((await letterOf(id)).answered).toMatchObject({ actionId: 'a', freeText: 'short one' })
+    expect(await humanTurns(id)).toHaveLength(1)
+    expect((await humanTurns(id))[0].delivery).toMatchObject({ status: 'queued', sessionId: SID })
+    expect(delivered.sends).toEqual([])
+  })
+
+  it('one whose delivery answer was lost is recorded not confirmed, and never sent again by the drain', async () => {
+    const id = await ask('Pick a search box for the marina page')
+    const rec = direct(1, { opId: 'ir-direct-lost', letterId: id, op: 'reply', text: 'The wide one', clientId: 'ios-d2' }, { messageId: 'ltr-ir-direct-lost', unconfirmed: true })
+    expect(await drainHanded([rec], 1)).toEqual([1])
+    expect((await humanTurns(id))[0].delivery).toMatchObject({ status: 'failed', reason: 'direct_unconfirmed' })
+    expect(delivered.sends).toEqual([])
+  })
+})

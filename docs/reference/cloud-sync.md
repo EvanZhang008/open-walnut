@@ -116,8 +116,15 @@ copy, and takes read, pin and archive for later: they are stored under
 `cache/human-inbox-queue/` (never synced) and replayed to the Mac when its bridge
 reconnects, each with the moment the human made it, so a newer change on the Mac
 (an agent's answer that made the letter unread again) wins over the replay.
-Answers and replies still need the Mac. The companion never writes into its
-copy of `human-inbox/`. Code: `src/core/human-inbox/replica-state.ts`.
+A person's answers and replies are kept in the companion's journal
+(`inbox-reply`, `inbox-reply-pictures`) and shown on the letter at once; the Mac
+records and delivers each once when it drains. With the experiment
+`replica_takeover` on, the Mac silent for 5 minutes and the companion leading
+the host the letter's session runs on, a turn without pictures goes straight to
+that session instead (`inbox-reply-direct`): the Mac then only records it on the
+letter. The companion never writes into its copy of `human-inbox/`. Code:
+`src/core/human-inbox/replica-state.ts`, `src/web/routes/human-inbox-replica.ts`,
+`src/core/replica-takeover.ts`.
 
 ## Daemon bridge (live session talk)
 

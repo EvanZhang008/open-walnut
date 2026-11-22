@@ -236,6 +236,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A Claude Code session lists only the Walnut tools its role uses: a task lists its work tools (tasks, notes, memory, hosts, watches, subagents, the browser and Boards) and the tools of the plugin it comes from, and Main, the VPs and Ask Walnut also list Threads, the Brief, the inbox, the org and the tools of every plugin. Every other tool still runs through the walnut CLI, and the walnut tools list command shows them all by group. It applies when a session next starts its Walnut tools. Off: every session lists every tool, as before.',
     default: false,
   },
+  {
+    id: 'replica_takeover',
+    name: 'Letter replies reach a session while the Mac is away',
+    description: 'When your Mac has not answered for 5 minutes (asleep, offline or shut down) and the cloud companion has taken over for it (Settings, Phones & Cloud, Cloud companion: "Cloud companion takes over"), your replies to letters and the options you pick on them go straight to the session that sent the letter, if that session runs on another host such as a dev box. Without it they wait on the companion and reach the session when the Mac is back. Either way, the Mac records them on their letters when it returns and sends nothing twice. Replies with pictures, and sessions that run on the Mac itself, always wait for the Mac.',
+    default: false,
+  },
 ] as const;
 
 /**

@@ -270,8 +270,8 @@ def inject(target):
         # The private tasks walk: its opt-in and the fixture's two task ids. Talk against a
         # real paired server (TalkRealServerUITests): its opt-in.
         for name in ('WALNUT_UITEST_PRIVATE_TASKS', 'WALNUT_UITEST_SYNCED_TASK', 'WALNUT_UITEST_KEPT_TASK',
-                     'WALNUT_UITEST_REAL_SERVER', 'WALNUT_UITEST_MAY_ERASE_APP_DATA',
-                     'WALNUT_UITEST_LETTER_VIDEO'):
+                     'WALNUT_UITEST_REAL_SERVER', 'WALNUT_UITEST_LETTER_VIDEO',
+                     'WALNUT_UITEST_MAY_ERASE_APP_DATA'):
             if os.environ.get(name):
                 env[name] = os.environ[name]
         # Absent, not empty: the test reads presence, and an empty string would

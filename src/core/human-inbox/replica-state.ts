@@ -81,6 +81,8 @@ export interface LetterTurnEntry {
   at: number;
   /** acked only: when the Mac acked the record (this box's clock), for the TTL. */
   ackedAt?: number;
+  /** This box handed it to the letter's session itself (`inbox-reply-direct`, replica-takeover.ts). */
+  direct?: { sessionId: string; at: number; unconfirmed?: true };
 }
 
 /** A list answered from the git-synced copy. Additive to the v1 shape. */
@@ -317,6 +319,7 @@ function isTurnEntry(v: unknown): v is LetterTurnEntry {
   if (typeof e.at !== 'number' || !Number.isFinite(e.at)) return false;
   if (e.ackedAt !== undefined && (typeof e.ackedAt !== 'number' || !Number.isFinite(e.ackedAt))) return false;
   if (e.images !== undefined && (!Array.isArray(e.images) || e.images.some(n => typeof n !== 'string'))) return false;
+  if (e.direct !== undefined && (typeof e.direct?.sessionId !== 'string' || !e.direct.sessionId || typeof e.direct.at !== 'number')) return false;
   if (e.op === 'reply') return typeof e.text === 'string' && typeof e.clientId === 'string' && e.clientId.length > 0;
   return e.op === 'answer' && typeof e.actionId === 'string' && e.actionId.length > 0
     && (e.freeText === undefined || typeof e.freeText === 'string');
@@ -330,6 +333,10 @@ function turnOf(r: Record<string, unknown>, ackedAt?: number): LetterTurnEntry |
   const images = cleanPictureNames(r.images);
   if (images.length) e.images = images;
   if (ackedAt !== undefined) e.ackedAt = ackedAt;
+  const direct = r.direct as { sessionId?: unknown; at?: unknown; unconfirmed?: unknown } | undefined;
+  if (direct && typeof direct === 'object') {
+    e.direct = { sessionId: direct.sessionId as string, at: direct.at as number, ...(direct.unconfirmed === true ? { unconfirmed: true as const } : {}) };
+  }
   return isTurnEntry(e) ? e : null;
 }
 
@@ -431,8 +438,14 @@ async function liveTurns(letters: ReadonlyArray<LetterRecord> | null): Promise<L
  */
 function overlayTurn<T extends LetterRecord>(letter: T, turn: LetterTurnEntry): T {
   const bound = (text: string): string => (text.length > TURN_TEXT_MAX_CHARS ? text.slice(0, TURN_TEXT_MAX_CHARS) : text);
-  // Still in the journal: the Mac has not got it (acked turns it has, and is delivering).
-  const delivery = { status: 'pending' as const, at: turn.at, ...(turn.ackedAt === undefined ? { held: true as const } : {}) };
+  // Still in the journal: the Mac has not got it (acked turns it has, and is delivering). One
+  // this box delivered itself is in its session already (queued, as the Mac's own delivery
+  // reads), or, its answer lost, still to be confirmed (pending, not held: it may be there).
+  const delivery: ThreadEntry['delivery'] = turn.direct
+    ? (turn.direct.unconfirmed
+      ? { status: 'pending', at: turn.direct.at }
+      : { status: 'queued', at: turn.direct.at, sessionId: turn.direct.sessionId })
+    : { status: 'pending', at: turn.at, ...(turn.ackedAt === undefined ? { held: true as const } : {}) };
   let entry: ThreadEntry;
   let answered = letter.answered;
   if (turn.op === 'reply') {
@@ -455,6 +468,21 @@ function overlayTurn<T extends LetterRecord>(letter: T, turn: LetterTurnEntry): 
     delete out.settled;
   }
   return out;
+}
+
+/**
+ * The letter with a turn this box is handing to its session right now (no journal record yet,
+ * web/routes/human-inbox-takeover.ts): shown as it will read, pending (it may be there).
+ */
+export function withTurnInFlight<T extends LetterRecord>(
+  letter: T,
+  turn: { op: 'reply'; text: string; clientId: string } | { op: 'answer'; actionId: string; freeText?: string },
+): T {
+  const at = Date.now();
+  const entry = turn.op === 'reply'
+    ? { op: 'reply' as const, text: turn.text, clientId: turn.clientId }
+    : { op: 'answer' as const, actionId: turn.actionId, ...(turn.freeText ? { freeText: turn.freeText } : {}) };
+  return overlayTurn(letter, { ...entry, letterId: letter.id, at, direct: { sessionId: letter.sender?.sessionId ?? '', at, unconfirmed: true } } as LetterTurnEntry);
 }
 
 // ── The git-synced copy ──

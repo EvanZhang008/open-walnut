@@ -729,7 +729,11 @@ export async function answeredByCaller(sid: string | undefined): Promise<LetterA
 /** An action was picked (by the user, or a task for them): record it first, then deliver the choice. */
 export async function answerLetterAndDeliver(
   id: string,
-  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number },
+  input: {
+    actionId: string; freeText?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number;
+    /** A replica already handed the answer to the session (offline-merge/apply-inbox-reply.ts): record this outcome, deliver nothing. */
+    delivered?: LetterDelivery;
+  },
   source: LetterAnswerSource = 'web',
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
@@ -749,7 +753,7 @@ export async function answerLetterAndDeliver(
     ...(input.by ? { by: input.by } : {}),
     ...(replaces ? { replaces } : {}),
     ...(record.thread[turn]?.images ? { images: record.thread[turn].images } : {}),
-  });
+  }, input.delivered);
   trackInFlight(`${id}#${turn}`, attempt);
   return answerWhenDue(record, turn, attempt, wait);
 }
@@ -790,7 +794,11 @@ export async function withdrawLetterAndAnnounce(
  */
 export async function humanReplyAndDeliver(
   id: string,
-  input: { text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number; whileWaiting?: boolean; repeatOnly?: boolean },
+  input: {
+    text: string; clientId?: string; by?: LetterAnsweredBy; images?: string[]; flagsAt?: number; whileWaiting?: boolean; repeatOnly?: boolean;
+    /** A replica already handed the reply to the session (offline-merge/apply-inbox-reply.ts): record this outcome, deliver nothing. */
+    delivered?: LetterDelivery;
+  },
   wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
   await refuseApprovalByTask(id, input.by, { text: input.text });
@@ -807,7 +815,7 @@ export async function humanReplyAndDeliver(
       text: entry?.text ?? input.text,
       ...(entry?.by ? { by: entry.by } : {}),
       ...(entry?.images ? { images: entry.images } : {}),
-    });
+    }, input.delivered);
     trackInFlight(key, attempt);
   }
   return answerWhenDue(record, turn, attempt, wait);
@@ -820,7 +828,11 @@ export async function humanReplyAndDeliver(
  * or its delivery already settled. A journaled answer's redrain uses it
  * (offline-merge/apply-inbox-reply.ts): the answer is on record, so answering again is refused.
  */
-export async function deliverPendingAnswer(id: string): Promise<LetterDelivery | null> {
+export async function deliverPendingAnswer(
+  id: string,
+  /** A replica already handed it to the session: record this outcome, deliver nothing. */
+  delivered?: LetterDelivery,
+): Promise<LetterDelivery | null> {
   const record = await getLetter(id, { deferBodies: true });
   const answered = record?.answered;
   if (!record || !answered || answered.by) return null;
@@ -836,7 +848,7 @@ export async function deliverPendingAnswer(id: string): Promise<LetterDelivery |
       ...(replaces ? { replaces } : {}),
       ...(answered.freeText ? { text: answered.freeText } : {}),
       ...(record.thread[turn].images ? { images: record.thread[turn].images } : {}),
-    });
+    }, delivered);
     trackInFlight(key, attempt);
   }
   return attempt;
@@ -889,8 +901,10 @@ async function deliverAndRecord(
   record: LetterRecord,
   turn: number,
   human: { choice?: string; text?: string; by?: LetterAnsweredBy; replaces?: LetterAnsweredBy; images?: string[] },
+  /** The outcome a replica's own delivery had: recorded as it is, nothing delivered here. */
+  delivered?: LetterDelivery,
 ): Promise<LetterDelivery> {
-  const delivery = await deliverLetterToOrigin(record, human);
+  const delivery = delivered ?? await deliverLetterToOrigin(record, human);
   const entry = record.thread[turn];
   if (entry) {
     try {

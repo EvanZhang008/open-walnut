@@ -60,6 +60,17 @@ export interface DirectSendInput {
   waitForLaunch?: boolean;
   /** When the phone's send reached the companion (ms): a stop asked for after it does not hold it back. */
   acceptedAt?: number;
+  /**
+   * Send nothing while the session waits on a permission prompt (the daemon's `pendingCtrl`): a
+   * letter's answer is not the person typing into the session, and the Mac holds it behind the
+   * prompt the same way (human-inbox/letter-ops.ts deliverLetterToOrigin).
+   */
+  holdOnPrompt?: boolean;
+  /**
+   * Asked right before the first request that can start a turn: false sends nothing (the caller
+   * gave up on this delivery and kept the message another way: human-inbox-takeover.ts).
+   */
+  mayStart?: () => boolean;
 }
 
 const SPAWN_POLL_MS = 1_000;
@@ -113,6 +124,7 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
   let delivering = false;
   /** The intent goes to disk first; a delivery that provably never started takes it back. */
   const startDelivering = async (ordered = false): Promise<void> => {
+    if (input.mayStart && !input.mayStart()) throw new Error('the caller kept this message another way; not sent');
     await markDirectIntent(sessionId, messageId, { ordered });
     delivering = true;
   };
@@ -149,6 +161,10 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
     // The launch wait above can take seconds: look again.
     const stoppedSince = input.waitForLaunch ? await overtakenByStop(input) : null;
     if (stoppedSince) return stoppedSince;
+    if (input.holdOnPrompt && status.exists === true && status.alive === true && status.pendingCtrl) {
+      log.web.info('direct send held: the session waits on a permission prompt', { sessionId, host, messageId });
+      return { ok: false, kind: 'transport', offline: false, ambiguous: false, message: 'The session waits on a permission prompt' };
+    }
     if (status.exists === true && status.alive === true) {
       // send-markers-v1: the marker is written inside the delivery (see the header).
       const ordered = status.sendMarkers === true;

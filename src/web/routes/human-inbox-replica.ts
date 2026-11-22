@@ -20,6 +20,9 @@ import {
   callPrimaryControl, classifyRelayReply, sendRelayReplyError, sendV1Error as sendError, tryControlRelay, type RelayFailure,
 } from './v1-control-relay.js'
 import type { LetterStateField } from '../../core/human-inbox/store.js'
+import type { LetterRecord } from '../../core/human-inbox/types.js'
+import type { InboxReplyInput } from '../../core/companion-journal.js'
+import type { TakenTurn } from './human-inbox-takeover.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 const SERVER_RELAY_SID = '__server__'
@@ -298,6 +301,19 @@ export async function replicaLetterTurn(
   const journalable = macDrains(hasPictures(body) ? 'inbox-reply-pictures' : 'inbox-reply') && !opts.callerSid
   const madeId = op === 'reply' && journalable && body.clientId === undefined ? `rp-${crypto.randomUUID()}` : undefined
   const params = madeId ? { ...relayParams, clientId: madeId } : relayParams
+  // A turn this box already handed to its session (replica takeover): that turn, never a relay
+  // that would make the Mac, just back, deliver it a second time.
+  if (journalable) {
+    const early = turnFromBody(op, id, body, madeAt)
+    const q = await replicaState()
+    const known = early ? await q.mirrorRecord(id) : null
+    const { earlierDirectTurn } = await import('./human-inbox-takeover.js')
+    const taken = early && known ? await earlierDirectTurn(known, early) : null
+    if (taken) {
+      await answerTaken(res, q, id, known as LetterRecord, early as InboxReplyInput, taken)
+      return
+    }
+  }
   // A journalable turn answers inside the route's deadline even when the relay hangs, its
   // pictures saved and journaled inside it too (a client that gave up would resend a reply
   // with no clientId as a second turn).
@@ -309,6 +325,12 @@ export async function replicaLetterTurn(
     const reply = out.reply
     if (reply.ok === true && reply.result && typeof reply.result === 'object') {
       const result = reply.result as Record<string, unknown>
+      // The Mac has this turn now: a retry of it is never handed to the session from here.
+      const relayed = journalable ? turnFromBody(op, id, { ...body, ...(madeId ? { clientId: madeId } : {}) }, madeAt) : null
+      if (relayed) {
+        const { noteRelayedTurn } = await import('./human-inbox-takeover.js')
+        await noteRelayedTurn(inboxReplyOpId(relayed), relayed.op === 'answer' ? id : undefined)
+      }
       res.status(deliveringStatus(result)).json(result)
       return
     }
@@ -355,13 +377,35 @@ export async function replicaLetterTurn(
       return
     }
   }
-  // A retry of a turn still waiting for the Mac is that record: its pictures are not saved again.
-  if (hasPictures(body) && !waiting(input)) {
-    const pictures = await keptPictures(body)
-    if (!pictures) { fail(); return }
-    input.pictures = pictures
+  // Replica takeover (core/replica-takeover.ts): with the switch on and the Mac away long enough,
+  // a turn the relay provably did not carry goes straight to the letter's session on its host.
+  // Held otherwise, inside the session's lock either way (human-inbox-takeover.ts).
+  const turn = input
+  const { settleLetterTurn } = await import('./human-inbox-takeover.js')
+  const outcome = await settleLetterTurn(record, turn, {
+    budgetMs: opts.answerBy - (hasPictures(body) ? PICTURE_SAVE_MARGIN_MS : 0) - Date.now(),
+    mayTakeOver: (out.ok || out.notSent) && !hasPictures(body),
+    waiting: () => waiting(turn),
+    hold: async () => {
+      // A retry of a turn still waiting for the Mac is that record: its pictures are not saved again.
+      if (hasPictures(body) && !waiting(turn)) {
+        const pictures = await keptPictures(body)
+        if (!pictures) return null
+        turn.pictures = pictures
+      }
+      return journalInboxReply(turn)
+    },
+  })
+  if ('taken' in outcome) {
+    await answerTaken(res, q, id, record, input, outcome.taken)
+    return
   }
-  const saved = journalInboxReply(input)
+  if ('answerInFlight' in outcome) {
+    // One answer per letter, as the Mac keeps it: the first is still being delivered.
+    sendError(res, 409, 'conflict', 'Another answer to this letter is being delivered; it is the one that counts')
+    return
+  }
+  const saved = outcome.held
   if (!saved?.ok) {
     if (input.pictures && !Array.isArray(body.imageRefs)) await dropPictures(input.pictures.map((p) => p.name))
     fail()
@@ -371,10 +415,44 @@ export async function replicaLetterTurn(
     letterId: id, op, opId: saved.opId, seq: saved.seq, ...(saved.duplicate ? { duplicate: true } : {}),
     relay: out.ok ? classifyRelayReply(out.reply).kind : out.notSent ? 'not_sent' : 'maybe_sent',
   })
+  // The same turn again while the first was handed to its session: its record is that delivery.
+  if (saved.duplicate) {
+    const { earlierDirectTurn } = await import('./human-inbox-takeover.js')
+    const taken = await earlierDirectTurn(record, input)
+    if (taken) {
+      await answerTaken(res, q, id, record, input, taken)
+      return
+    }
+  }
   res.status(202).json({
     letter: (await q.mirrorLetter(id)) ?? (await q.mirrorRecord(id)) ?? record,
     delivery: HELD_DELIVERY,
     queued: true,
+    ...(input.op === 'reply' ? { clientId: input.clientId } : {}),
+  })
+}
+
+/** The turn as the phone sent it, for the journal's op id (null when it names none: no clientId, no option). */
+function turnFromBody(op: 'reply' | 'answer', id: string, body: Record<string, unknown>, madeAt: number): InboxReplyInput | null {
+  if (op === 'reply') {
+    return typeof body.clientId === 'string' && body.clientId
+      ? { letterId: id, op, text: typeof body.text === 'string' ? body.text.trim() : '', clientId: body.clientId, madeAt }
+      : null
+  }
+  const actionId = typeof body.actionId === 'string' ? body.actionId.trim() : ''
+  const freeText = typeof body.freeText === 'string' ? body.freeText.trim() : ''
+  return actionId ? { letterId: id, op, actionId, ...(freeText ? { freeText } : {}), madeAt } : null
+}
+
+/** The answer for a turn this box handed to its session: the Mac's own shape (200 queued, 202 while it is not confirmed). */
+async function answerTaken(
+  res: Response, q: ReplicaState, id: string, record: LetterRecord, input: InboxReplyInput, taken: TakenTurn,
+): Promise<void> {
+  const letter = (await q.mirrorLetter(id)) ?? (await q.mirrorRecord(id)) ?? record
+  res.status(taken.delivery.status === 'queued' ? 200 : 202).json({
+    // Still going (no record yet): the letter shows the turn as the record will.
+    letter: taken.inFlight ? q.withTurnInFlight(letter, input) : letter,
+    delivery: taken.delivery,
     ...(input.op === 'reply' ? { clientId: input.clientId } : {}),
   })
 }
