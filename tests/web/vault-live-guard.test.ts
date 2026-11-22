@@ -32,11 +32,11 @@ describe('vault readers follow the vault live', () => {
   const readers = files(ROOT).map((f) => path.relative(ROOT, f)).filter((rel) => !EXEMPT.has(rel) && READS.test(fs.readFileSync(path.join(ROOT, rel), 'utf8')))
 
   it('finds the readers it guards', () => {
-    // The Passwords page, Settings → Passwords and its sources group, the approval store and unlock form.
+    // The Passwords page and Settings → Passwords with its sources group. (Approvals read no vault
+    // state since 2026-11-21: any signed-in device approves with a tap, Passwords locked or not.)
     expect(readers).toEqual(expect.arrayContaining([
       'components/passwords/PasswordsApp.tsx',
       'components/settings/sections/PasswordsSection.tsx',
-      'components/approvals/approvals-store.ts',
     ]))
   })
 

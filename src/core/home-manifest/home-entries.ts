@@ -80,7 +80,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('secrets', 'secrets', 'dir', 'Credentials: plugin secrets, provider keys, sign-in tokens', { sensitive: true }),
   lead('vault-in-home', 'vault', 'dir', 'Password vault of a throwaway or fake-HOME server (the real one is outside the home)', { sensitive: true }),
   lead('router', 'router', 'dir', 'Router areas, routing ledgers, approval tokens and frozen incoming content', { sensitive: true }),
-  lead('approvals', 'approvals', 'dir', 'Approval requests, signing keys and the approvals switch', { sensitive: true }),
+  lead('approvals', 'approvals', 'dir', 'Approval requests and the approvals switch (a `keys.json` an older Walnut left is no longer read)', { sensitive: true }),
   lead('host-exec-grants', 'host-exec-grants.json', 'file', 'The user\'s grants for running commands on hosts'),
   lead('browser-control', 'browser-control.json', 'file', 'Sites the user approved for agents in the browser'),
   lead('workspaces', 'workspaces', 'dir', 'Which workspace scripts the user trusts'),
