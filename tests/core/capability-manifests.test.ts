@@ -75,6 +75,7 @@ const UPGRADE_LISTENERS: Record<string, string> = {
   'src/host-server/proxy.ts': 'the answer to an upgrade it sent on (a client event)',
   'src/providers/daemon-source.ts': "the daemon's own socket server and its client",
   'src/commands/demo-server.ts': 'the local demo server',
+  'src/core/leader/switch/handed-over.ts': 'the standby of a handed-over home: answers every upgrade 409 handed_over and closes the connection',
 }
 
 /** Code lines only: a comment that names a call is not a use. */

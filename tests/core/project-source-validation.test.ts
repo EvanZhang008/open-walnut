@@ -533,6 +533,46 @@ describe('renameProject — ms-todo remote list', () => {
     }
   });
 
+  it('a rename refused at the outward door survives a restart and runs once the doors open, once', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const work = await import('../../src/core/deferred-door-work.js');
+    await ensureProject('Acme', 'ms-todo');
+    await setProjectMetadata('Acme', { remote_list: 'Sync / Acme' });
+    await addTask({ title: 'A', project: 'Acme' });
+    const open = { now: false };
+    const closedDoors = () => doors.setOutwardDoorChecker(() => {
+      if (!open.now) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => open.now);
+    closedDoors();
+    try {
+      await renameProject('Acme', 'AcmeCorp');
+      expect(mockRenameListByName).not.toHaveBeenCalled();
+      expect((await work.readDeferredDoorWork(WALNUT_HOME)).map((e) => e.key)).toEqual(['task-sync:rename:ms-todo:Sync / Acme']);
+
+      // The restart: the store is read again, what was held in memory is gone, the runtime arms.
+      doors.setOutwardDoorChecker(null);
+      closeDb();
+      _resetForTesting();
+      doors._forgetDoorsOpenedListenersForTesting();
+      work._resetDeferredDoorWorkForTesting();
+      closedDoors();
+      work.armDeferredDoorWork(WALNUT_HOME);
+
+      open.now = true;
+      doors.notifyOutwardDoorsOpened();
+      await vi.waitFor(async () => expect(await remoteListNameFor('AcmeCorp')).toBe('AcmeCorp'));
+      expect(mockRenameListByName).toHaveBeenCalledTimes(1);
+      expect(mockRenameListByName).toHaveBeenCalledWith('Sync / Acme', 'AcmeCorp');
+      await vi.waitFor(async () => expect(await work.readDeferredDoorWork(WALNUT_HOME)).toEqual([]));
+      // Nothing is held any more: another opening renames nothing.
+      expect(await work.replayDeferredDoorWork()).toBe(0);
+      expect(mockRenameListByName).toHaveBeenCalledTimes(1);
+    } finally {
+      doors.setOutwardDoorChecker(null);
+      work._resetDeferredDoorWorkForTesting();
+    }
+  });
+
   it('does NOT rename a remote list on a MERGE (the target list already exists)', async () => {
     await ensureProject('Alpha', 'ms-todo');
     await ensureProject('Beta', 'ms-todo');

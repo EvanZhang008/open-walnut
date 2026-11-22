@@ -410,53 +410,156 @@ describe('D. deleting a duplicate never damages the survivor', () => {
 describe('E. a remote delete on a machine without the write permission', () => {
   afterEach(async () => {
     (await import('../../src/core/leader/switch/doors.js')).setOutwardDoorChecker(null);
+    (await import('../../src/core/deferred-door-work.js'))._resetDeferredDoorWorkForTesting();
   });
 
-  it('E1: sends nothing, keeps the tombstone unconfirmed, and deletes the remote copy once the doors open', async () => {
+  /**
+   * A server restart while the doors are closed: the task store is read again from disk, every
+   * subscription a closed door made in memory is gone, and the permit runtime arms the held work.
+   */
+  async function restartClosed(open: { now: boolean }): Promise<void> {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const work = await import('../../src/core/deferred-door-work.js');
+    doors.setOutwardDoorChecker(null);
+    closeDb();
+    _resetForTesting();
+    doors._forgetDoorsOpenedListenersForTesting();
+    work._resetDeferredDoorWorkForTesting();
+    registerPlugin();
+    doors.setOutwardDoorChecker(() => {
+      if (!open.now) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => open.now);
+    work.armDeferredDoorWork(WALNUT_HOME);
+  }
+
+  it('E1: sends nothing, keeps the tombstone unconfirmed, and deletes the remote copy once the doors open, after a restart too', async () => {
     const doors = await import('../../src/core/leader/switch/doors.js');
     await addTasksBulk([makeTask('t-held', 'R-HELD')]);
     recordRemoteLink({ source: SOURCE, remoteId: 'R-HELD', taskId: 't-held', remoteList: 'list-A', state: 'owned' });
-    let open = false;
+    const open = { now: false };
     doors.setOutwardDoorChecker(() => {
-      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
-    }, () => open);
+      if (!open.now) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => open.now);
 
     await deleteTask('t-held');
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.waitFor(async () => {
+      const { readDeferredDoorWork } = await import('../../src/core/deferred-door-work.js');
+      expect((await readDeferredDoorWork(WALNUT_HOME)).map((e) => e.key)).toEqual([`task-sync:delete:${SOURCE}:t-held`]);
+    });
     expect(deleteTaskHook).not.toHaveBeenCalled();
     expect(getRemoteLink(SOURCE, 'R-HELD')).toMatchObject({ state: 'deleted' });
     expect(getRemoteLink(SOURCE, 'R-HELD')?.remote_delete_confirmed).toBeFalsy();
 
-    open = true;
+    await restartClosed(open);
+    const work = await import('../../src/core/deferred-door-work.js');
+    // Closed doors replay nothing.
+    expect(await work.replayDeferredDoorWork()).toBe(0);
+    expect(deleteTaskHook).not.toHaveBeenCalled();
+
+    open.now = true;
     doors.notifyOutwardDoorsOpened();
     await vi.waitFor(() => expect(deleteTaskHook).toHaveBeenCalledTimes(1));
     expect((deleteTaskHook.mock.calls[0][0] as Task).id).toBe('t-held');
-    // Once: a second opening sends nothing more.
-    doors.notifyOutwardDoorsOpened();
-    await new Promise((r) => setTimeout(r, 20));
+    // Once: nothing is held any more, so another opening sends nothing.
+    await vi.waitFor(async () => expect(await work.readDeferredDoorWork(WALNUT_HOME)).toEqual([]));
+    expect(await work.replayDeferredDoorWork()).toBe(0);
     expect(deleteTaskHook).toHaveBeenCalledTimes(1);
   });
 
-  it('E2: a cross-source move refused at the door marks the old copy moved once the doors open', async () => {
+  it('E3: a replay the door refuses again (the delete hook refused mid-replay) is held again by the real replayer, and goes once at the next opening', async () => {
     const doors = await import('../../src/core/leader/switch/doors.js');
-    let open = false;
-    const refuse = () => { if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' }); };
+    const { readDeferredDoorWork } = await import('../../src/core/deferred-door-work.js');
+    await addTasksBulk([makeTask('t-again', 'R-AGAIN')]);
+    recordRemoteLink({ source: SOURCE, remoteId: 'R-AGAIN', taskId: 't-again', remoteList: 'list-A', state: 'owned' });
+    const open = { now: false };
+    doors.setOutwardDoorChecker(() => {
+      if (!open.now) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => open.now);
+    await deleteTask('t-again');
+    const key = `task-sync:delete:${SOURCE}:t-again`;
+    await vi.waitFor(async () => expect((await readDeferredDoorWork(WALNUT_HOME)).map((e) => e.key)).toEqual([key]));
+
+    await restartClosed(open);
+    // The doors close again as the replay sends: pushToPlugin catches the refusal and
+    // deferSyncForPermit holds the delete again, on disk.
+    deleteTaskHook.mockImplementationOnce(async () => {
+      open.now = false;
+      throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    });
+    open.now = true;
+    doors.notifyOutwardDoorsOpened();
+    await vi.waitFor(() => expect(deleteTaskHook).toHaveBeenCalledTimes(1));
+    // Held again, with no claim on it (the run that was refused has ended).
+    await vi.waitFor(async () => expect((await readDeferredDoorWork(WALNUT_HOME)).filter((e) => !e.claim).map((e) => e.key)).toEqual([key]));
+
+    open.now = true;
+    doors.notifyOutwardDoorsOpened();
+    await vi.waitFor(() => expect(deleteTaskHook).toHaveBeenCalledTimes(2));
+    await vi.waitFor(async () => expect(await readDeferredDoorWork(WALNUT_HOME)).toEqual([]));
+    // Nothing is held any more: another opening has nothing to run.
+    expect(await (await import('../../src/core/deferred-door-work.js')).replayDeferredDoorWork()).toBe(0);
+    expect(deleteTaskHook).toHaveBeenCalledTimes(2);
+  });
+
+  it('E4: a remote delete that fails (not a refusal) is held again and tried later, 5 tries in all', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const work = await import('../../src/core/deferred-door-work.js');
+    await addTasksBulk([makeTask('t-fails', 'R-FAILS')]);
+    recordRemoteLink({ source: SOURCE, remoteId: 'R-FAILS', taskId: 't-fails', remoteList: 'list-A', state: 'owned' });
+    doors.setOutwardDoorChecker(() => {}, () => true);
+    deleteTaskHook.mockRejectedValue(new Error('Graph 503'));
+    const key = `task-sync:delete:${SOURCE}:t-fails`;
+    await deleteTask('t-fails');
+    await vi.waitFor(async () => expect((await work.readDeferredDoorWork(WALNUT_HOME)).map((e) => [e.key, (e.payload as { attempts: number }).attempts])).toEqual([[key, 1]]));
+    expect(deleteTaskHook).toHaveBeenCalledTimes(1);
+    // Not before its time: an opening now runs nothing.
+    expect(await work.replayDeferredDoorWork()).toBe(0);
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      for (let tries = 2; tries <= 5; tries++) {
+        clock.mockReturnValue(realNow + tries * 2 * work.KEEP_RETRY_MS);
+        await work.replayDeferredDoorWork();
+        await vi.waitFor(() => expect(deleteTaskHook).toHaveBeenCalledTimes(tries));
+        await vi.waitFor(async () => {
+          const held = await work.readDeferredDoorWork(WALNUT_HOME);
+          expect(held.filter((e) => !e.claim).map((e) => (e.payload as { attempts: number }).attempts)).toEqual(tries < 5 ? [tries] : []);
+          if (tries === 5) expect(held).toEqual([]);
+        });
+      }
+      clock.mockReturnValue(realNow + 20 * work.KEEP_RETRY_MS);
+      expect(await work.replayDeferredDoorWork()).toBe(0);
+      expect(deleteTaskHook).toHaveBeenCalledTimes(5);
+    } finally {
+      clock.mockRestore();
+      deleteTaskHook.mockReset();
+    }
+  });
+
+  it('E2: a cross-source move refused at the door marks the old copy moved once the doors open, after a restart too', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const open = { now: false };
+    const refuse = () => { if (!open.now) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' }); };
     const calls: string[] = [];
-    const sync = {
-      updateTitle: vi.fn(async (_t: Task, title: string) => { refuse(); calls.push(`title ${title}`); }),
-      updatePhase: vi.fn(async (_t: Task, phase: string) => { refuse(); calls.push(`phase ${phase}`); }),
-    } as unknown as import('../../src/core/integration-types.js').IntegrationSync;
-    doors.setOutwardDoorChecker(refuse, () => open);
+    const updateTitle = vi.fn(async (_t: Task, title: string) => { refuse(); calls.push(`title ${title}`); });
+    const updatePhase = vi.fn(async (_t: Task, phase: string) => { refuse(); calls.push(`phase ${phase}`); });
+    const wire = () => Object.assign(registry.get(SOURCE)!.sync, { updateTitle, updatePhase });
+    wire();
+    doors.setOutwardDoorChecker(refuse, () => open.now);
     const snapshot = makeTask('t-moved', 'R-OLD');
 
-    await markOldCopyMoved(sync, snapshot, '[Moved] x');
+    await markOldCopyMoved(registry.get(SOURCE)!.sync, snapshot, '[Moved] x');
     expect(calls).toEqual([]);
 
-    open = true;
+    await restartClosed(open);
+    wire();
+    open.now = true;
     doors.notifyOutwardDoorsOpened();
     await vi.waitFor(() => expect(calls).toEqual(['title [Moved] x', 'phase COMPLETE']));
-    doors.notifyOutwardDoorsOpened();
-    await new Promise((r) => setTimeout(r, 20));
+    expect((updateTitle.mock.calls.at(-1)![0] as Task).id).toBe('t-moved');
+    const work = await import('../../src/core/deferred-door-work.js');
+    await vi.waitFor(async () => expect(await work.readDeferredDoorWork(WALNUT_HOME)).toEqual([]));
+    expect(await work.replayDeferredDoorWork()).toBe(0);
     expect(calls).toHaveLength(2);
   });
 });

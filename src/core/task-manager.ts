@@ -61,8 +61,9 @@ import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-r
 import { decideBirth } from './private-tasks/birth.js';
 import { syncRulesFor } from './private-tasks/provider-rules.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
-import { isPermitRefusal, onceOutwardDoorsOpened } from './leader/switch/doors.js';
-import type { IntegrationSync } from './integration-types.js';
+import { isPermitRefusal, leaderPermitActive } from './leader/switch/doors.js';
+import { holdDurablyUntilDoorsOpen, KEEP_RETRY_MS, registerDeferredReplay } from './deferred-door-work.js';
+import type { IntegrationSync, RegisteredPlugin } from './integration-types.js';
 import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
@@ -1757,8 +1758,8 @@ export async function resolveProjectForWrite(
  * plugin without the renameProjectRemote hook, a failed rename, or a merge (`oldAlias` null:
  * the target list already exists and the tasks genuinely have to move into it). Core never
  * imports a specific integration. A rename refused at the outward door (this machine does not
- * hold the write permission) is neither: it waits, and runs once the permission arrives (held in
- * memory: a restart while the doors are closed loses it, and the list keeps its old name).
+ * hold the write permission) is neither: it waits, and runs once the permission arrives (held on
+ * disk, deferred-door-work.ts: a restart keeps it; a later rename of the same list replaces it).
  */
 async function renameRemoteContainer(source: string, oldAlias: string | null | undefined, canonical: string, tasks: Task[]): Promise<void> {
   const remoteRename = oldAlias ? registry.get(source)?.sync.renameProjectRemote : undefined;
@@ -1773,9 +1774,8 @@ async function renameRemoteContainer(source: string, oldAlias: string | null | u
     } catch (err) {
       if (isPermitRefusal(err)) {
         log.task.info('project rename: remote container rename waits for the write permission', { project: canonical, from: oldAlias, source });
-        onceOutwardDoorsOpened(`task-sync:rename:${source}:${oldAlias}`, () => {
-          void renameRemoteContainer(source, oldAlias, canonical, tasks).catch(() => { /* best effort */ });
-        });
+        const held: HeldRename = { source, oldAlias, canonical, taskIds: tasks.map((t) => t.id) };
+        await holdDurablyUntilDoorsOpen('task-sync:rename', `task-sync:rename:${source}:${oldAlias}`, held);
         return;
       }
       log.task.warn('project rename: remote container rename failed, falling back to per-task push', {
@@ -2704,8 +2704,9 @@ const PLUGIN_CHANGE_WAIT_MS = 30_000;
  * A cross-source move's old copy, marked moved at its old service: renamed, then completed. Two
  * steps, each on its own: a title the push check refuses (it matches a private word) must not
  * leave the old copy open. A step refused at the outward door (this machine does not hold the
- * write permission) is not a failure: it runs again once the permission arrives (held in memory: a
- * restart while the doors are closed loses it, and the old copy stays open). Exported for tests.
+ * write permission) is not a failure: it runs again once the permission arrives, through the old
+ * service's plugin as it is then (held on disk, deferred-door-work.ts: a restart keeps it).
+ * Exported for tests.
  */
 export async function markOldCopyMoved(
   sync: IntegrationSync, snapshot: Task, movedTitle: string,
@@ -2728,10 +2729,71 @@ export async function markOldCopyMoved(
   log.task.info('cross-source migration: old backend mark-moved waits for the write permission', {
     taskId: snapshot.id, oldSource: snapshot.source, steps: held,
   });
-  onceOutwardDoorsOpened(`task-sync:mark-moved:${snapshot.source}:${snapshot.id}`, () => {
-    void markOldCopyMoved(sync, snapshot, movedTitle, held).catch(() => { /* logged inside */ });
-  });
+  const work: HeldMarkMoved = { snapshot, movedTitle, steps: held };
+  await holdDurablyUntilDoorsOpen('task-sync:mark-moved', `task-sync:mark-moved:${snapshot.source}:${snapshot.id}`, work);
 }
+
+/** A list rename held at a closed door (renameRemoteContainer). */
+interface HeldRename { source: string; oldAlias: string; canonical: string; taskIds: string[] }
+/** A moved copy's steps held at a closed door (markOldCopyMoved). */
+interface HeldMarkMoved { snapshot: Task; movedTitle: string; steps: Array<'title' | 'complete'> }
+/**
+ * A remote delete held at a closed door (deferSyncForPermit) or after a failure: the row is gone,
+ * so the task as it was. `attempts`: deletes that failed so far (REMOTE_DELETE_TRIES at most).
+ */
+interface HeldDelete { task: Task; attempts?: number }
+
+/** How many times a remote delete that fails is tried while a permit guards this process. */
+const REMOTE_DELETE_TRIES = 5;
+
+/**
+ * The remote copy of a deleted task, deleted. While a permit guards this process (leader switch)
+ * a delete that fails is held again, on disk, and tried again later (deferred-door-work.ts,
+ * KEEP_RETRY_MS), REMOTE_DELETE_TRIES times in all; a source with confirmRemoteDeleted is retried
+ * by the sync loop from its tombstone anyway. Without a permit, as always: one try, logged.
+ */
+async function deleteRemoteCopy(task: Task, attempts = 0): Promise<void> {
+  const r = await pushToPlugin(task, 'deleteTask');
+  if (r.success || r.deferred || !leaderPermitActive()) return;
+  const tried = attempts + 1;
+  if (tried >= REMOTE_DELETE_TRIES) {
+    log.task.warn('remote delete given up', { taskId: task.id, source: task.source, tries: tried, error: r.error });
+    return;
+  }
+  const held: HeldDelete = { task, attempts: tried };
+  await holdDurablyUntilDoorsOpen('task-sync:delete', `task-sync:delete:${task.source}:${task.id}`, held, { retryAfterMs: KEEP_RETRY_MS });
+}
+
+/**
+ * The plugin a held task-sync replays through, once it is loaded (the doors may open while a boot
+ * still loads them). Null: not loaded, the work waits for the next opening.
+ */
+async function pluginForReplay(source: string): Promise<RegisteredPlugin | null> {
+  let plugin = registry.get(source);
+  if (!plugin && !registry.isClosing() && await registry.waitForPlugins(PLUGIN_CHANGE_WAIT_MS)) plugin = registry.get(source);
+  return plugin ?? null;
+}
+
+// Held task-sync work, done once the doors open (deferred-door-work.ts; each runs only while a
+// permit guards this process). A refusal inside a replay holds it again.
+registerDeferredReplay('task-sync:rename', async (payload) => {
+  const { source, oldAlias, canonical, taskIds } = payload as HeldRename;
+  if (!(await pluginForReplay(source))) return 'keep';
+  const index = await taskIndex();
+  const tasks = taskIds.map((id) => index.get(id)).filter((t): t is Task => !!t && t.source === source).map(cloneTask);
+  await renameRemoteContainer(source, oldAlias, canonical, tasks);
+});
+registerDeferredReplay('task-sync:mark-moved', async (payload) => {
+  const { snapshot, movedTitle, steps } = payload as HeldMarkMoved;
+  const plugin = await pluginForReplay(snapshot.source);
+  if (!plugin) return 'keep';
+  await markOldCopyMoved(plugin.sync, snapshot, movedTitle, steps);
+});
+registerDeferredReplay('task-sync:delete', async (payload) => {
+  const { task, attempts } = payload as HeldDelete;
+  if (!(await pluginForReplay(task.source))) return 'keep';
+  await deleteRemoteCopy(task, attempts ?? 0);
+});
 
 /**
  * A push refused at the outward door (this machine does not hold the write permission): nothing
@@ -2742,13 +2804,13 @@ async function deferSyncForPermit(task: Task, method: string): Promise<SyncResul
   const message = `This change has not reached "${task.source}" yet: this server may not send it now, and the sync tries again`;
   if (method === 'deleteTask') {
     // The row is gone, so there is no task to stamp and the sync loop (which retries live tasks)
-    // never sees it: the remote delete runs again once the permission arrives (held in memory; a
-    // source with confirmRemoteDeleted is also retried by the sync loop from its tombstone). Its
-    // ledger row stays unconfirmed meanwhile, so no pull re-imports the remote copy.
+    // never sees it: the remote delete runs again once the permission arrives (held on disk,
+    // deferred-door-work.ts, so a restart keeps it; a source with confirmRemoteDeleted is also
+    // retried by the sync loop from its tombstone). Its ledger row stays unconfirmed meanwhile,
+    // so no pull re-imports the remote copy.
     log.task.info('remote delete deferred: no write permission on this machine', { task: task.id, source: task.source });
-    onceOutwardDoorsOpened(`task-sync:delete:${task.source}:${task.id}`, () => {
-      void pushToPlugin(task, 'deleteTask').catch(() => { /* logged inside */ });
-    });
+    const held: HeldDelete = { task };
+    await holdDurablyUntilDoorsOpen('task-sync:delete', `task-sync:delete:${task.source}:${task.id}`, held);
     return { success: false, error: message, deferred: true };
   }
   log.task.info('sync deferred: no write permission on this machine', { task: task.id, source: task.source, method });
@@ -5778,7 +5840,7 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
     });
   } else {
     // Fire-and-forget: delete from remote provider via plugin
-    pushToPlugin(task, 'deleteTask').catch((err) => {
+    deleteRemoteCopy(task).catch((err) => {
       log.task.warn('failed to delete task from remote', {
         taskId: task.id,
         source: task.source,
@@ -5957,7 +6019,7 @@ export async function deleteTasksByIds(
       });
       continue;
     }
-    pushToPlugin(task, 'deleteTask').catch((err) => {
+    deleteRemoteCopy(task).catch((err) => {
       log.task.warn('failed to delete task from remote', {
         taskId: task.id,
         source: task.source,

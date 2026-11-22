@@ -222,6 +222,9 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           break
         }
         case 'promote': {
+          // A switch back: the old home's standby (handed-over.ts) may still run there. It is
+          // stopped before its home is moved aside and the copy takes that path and its port.
+          await dstSide.stopServer()
           const r = await promoteCopy({
             switchId: st.id, standbyDir: st.standbyDir, home: st.targetHome, previousHome: st.sourceHome, reverseStandbyDir: st.reverseStandbyDir,
             skipLedgerRewrite: opts.skipLedgerRewrite || env.WALNUT_LEADER_SWITCH_SKIP_LEDGER_REWRITE === '1',

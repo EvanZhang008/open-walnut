@@ -13,6 +13,7 @@
  * (a first batch over a slow link sends for hours), with how far it got; a batch that lands late
  * is progress, never a new "behind", and only a batch that lands fresh ends the episode.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { setWriteGateEnabled } from '../../utils/write-gate.js'
@@ -47,6 +48,8 @@ export interface StandbyRunnerDeps {
   linkWaitMs?: number
   /** How old the standby's batch may get before it is told behind (default 5 min; tests shorten it). */
   behindMs?: number
+  /** After each complete batch (`takenAt`: its moment): the leader switch's cleanup (default: afterSwitchCleanup). */
+  afterBatch?(home: string, takenAt: string): Promise<void>
 }
 
 /** Where the batches go: a folder here, or one on a standby host. */
@@ -104,15 +107,15 @@ const defaultConnect = async (host: string): Promise<DaemonLink> => (await impor
 export async function defaultStandbyDeps(): Promise<StandbyRunnerDeps> {
   return {
     async settings() {
-      const [{ getConfig }, { experimentalEnabled }, { isFollower }, { WALNUT_HOME }] = await Promise.all([
-        import('../config-manager.js'), import('../experimental.js'), import('../server-role.js'), import('../../constants.js'),
+      const [{ getConfig }, { experimentalEnabled }, { bootPolicy }, { WALNUT_HOME }] = await Promise.all([
+        import('../config-manager.js'), import('../experimental.js'), import('../boot-policy.js'), import('../../constants.js'),
       ])
       const config = await getConfig()
       const raw = Number(config.standby?.interval_seconds)
       const walnut = config.standby?.walnut
       return {
-        // Never on a leader switch's trial start (core/leader/switch/): that home has not led yet.
-        on: !isFollower() && experimentalEnabled(config.experimental, 'switchable_leader') && process.env.WALNUT_LEADER_TRIAL !== '1',
+        // The leader only, and never a leader switch's trial start: that home has not led yet (its trial column).
+        on: bootPolicy('standby-copy') && experimentalEnabled(config.experimental, 'switchable_leader'),
         home: WALNUT_HOME,
         dir: config.standby?.dir,
         ...(config.standby?.host ? { host: config.standby.host } : {}),
@@ -121,7 +124,46 @@ export async function defaultStandbyDeps(): Promise<StandbyRunnerDeps> {
       }
     },
     notify: async () => false,
+    afterBatch: afterSwitchCleanup(),
   }
+}
+
+/**
+ * A home a leader switch made the leader keeps the old leader's final batch in this machine's
+ * standby folder until the switch-back window passed (core/leader/switch/standby-cleanup.ts):
+ * looked at after a complete batch of this home, which is one of its conditions. A home no
+ * switch made the leader has no history.json, and nothing of the switch is loaded.
+ */
+export type AfterSwitchCleanup = ((home: string, takenAt: string) => Promise<void>) & {
+  /** Resolves once no removal runs (tests). */
+  whenIdle(): Promise<void>
+}
+
+export function afterSwitchCleanup(): AfterSwitchCleanup {
+  let nextLook = 0
+  /** One look (and removal) at a time; started detached, so the batch loop never waits on it. */
+  let inFlight: Promise<void> | null = null
+  const look = async (home: string, takenAt: string): Promise<void> => {
+    const { cleanSwitchedStandby } = await import('../leader/switch/standby-cleanup.js')
+    const r = await cleanSwitchedStandby({ home, ownBatchTakenAt: takenAt })
+    if (r.removed) {
+      log.session.info('standby: the old leader\'s final batch removed from this machine\'s standby folder (switch-back window passed)', { dir: r.dir, switchId: r.switchId, bytes: r.bytes, refused: r.refused })
+      nextLook = Infinity
+    } else if (r.notBefore) {
+      nextLook = r.notBefore
+    } else if (r.dir && r.why === 'the folder holds no standby copy') {
+      nextLook = Infinity
+    } else if (r.dir) {
+      log.session.debug('standby: switch folder kept', { dir: r.dir, why: r.why })
+    }
+  }
+  const fn = async (home: string, takenAt: string): Promise<void> => {
+    if (inFlight || Date.now() < nextLook || !fs.existsSync(path.join(home, 'local', 'leader-switch', 'history.json'))) return
+    inFlight = look(home, takenAt)
+      .catch((err) => log.session.warn('standby: switch folder cleanup failed', { error: String(err) }))
+      .finally(() => { inFlight = null })
+  }
+  return Object.assign(fn, { whenIdle: async () => { await inFlight } })
 }
 
 export interface StandbyRunner {
@@ -201,6 +243,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         const now = await site.current().catch((err) => { readErr = String(err); return undefined })
         if (now !== undefined) known = now
       }
+      if (out?.ok && !ended) await d.afterBatch?.(s.home, out.manifest.takenAt).catch((err) => log.session.warn('standby: after-batch cleanup failed', { error: String(err) }))
       const status = known
       const stale = old(status)
       // A batch that just landed is progress, even one that took long to send: never a new "behind".

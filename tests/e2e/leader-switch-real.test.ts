@@ -27,7 +27,7 @@ const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
 const failed = (checks: Check[]) => checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`)
 
 describe('the manual leader switch, real servers', () => {
-  it('switches under load, keeps every acknowledged write, never has two leaders, refuses the old home, and switches back', async () => {
+  it('switches under load, keeps every acknowledged write, never has two leaders, keeps the old home as a standby that leads nothing and changes nothing (witnesses online and unreachable), and switches back with A leading again', async () => {
     const r = await rehearseSwitchAndBack(path.join(root, 'main'), () => {}, ports())
     expect(failed(r.checks.all)).toEqual([])
     expect(r.checks.all.length).toBeGreaterThan(20)

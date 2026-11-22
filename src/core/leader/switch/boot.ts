@@ -14,8 +14,14 @@
  * experiment off, or deleting the section, must not bring a handed-over home back as a second
  * leader. server.ts calls this with the experiment off only when the home has a
  * `local/leader-switch/` folder (no home that never took part in a switch has one).
+ *
+ * A refusal because another machine leads (the marker, or a record of the witnesses naming
+ * another holder) carries `standby`: server.ts then runs the home as a standby that leads
+ * nothing (handed-over.ts) instead of exiting. server.ts checks the marker itself before the
+ * boot touches the home, so the marker's refusal here is the backstop.
  */
 import type { PermitRuntime } from './runtime.js'
+import type { HandedOverStandby } from './handed-over.js'
 
 let current: { runtime: PermitRuntime; machine: string; trial: boolean } | null = null
 
@@ -25,7 +31,7 @@ export function currentLeaderPermit(): { runtime: PermitRuntime; machine: string
 }
 
 export class LeaderBootRefused extends Error {
-  constructor(why: string) {
+  constructor(why: string, readonly standby?: HandedOverStandby) {
     super(`Walnut does not start as the leader: ${why}`)
     this.name = 'LeaderBootRefused'
   }
@@ -36,6 +42,8 @@ export interface LeaderBootInput {
   flagOn: boolean
   isLeaderRole: boolean
   ephemeral: boolean
+  /** A leader switch's trial start (server.ts reads WALNUT_LEADER_TRIAL, the one read of it). */
+  trial?: boolean
   env?: NodeJS.ProcessEnv
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -46,10 +54,10 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
   if (input.ephemeral && env.WALNUT_EPHEMERAL_LEADER_SWITCH !== '1') return null
   const commit = Number(env.WALNUT_LEADER_SWITCH_COMMIT)
   const commitHandover = Number.isInteger(commit) && commit > 0 ? commit : undefined
-  const trial = env.WALNUT_LEADER_TRIAL === '1'
+  const trial = input.trial === true
   const { readMarker, markerRefusal, promotionRefusal } = await import('./records.js')
   const marker = readMarker(input.home)
-  if (marker) throw new LeaderBootRefused(markerRefusal(marker))
+  if (marker) throw new LeaderBootRefused(markerRefusal(marker), (await import('./handed-over.js')).handedOverAtBoot({ home: input.home, env }) ?? undefined)
   const unfinished = promotionRefusal(input.home, { trial, commit: commitHandover !== undefined })
   if (unfinished) throw new LeaderBootRefused(unfinished)
   // A switch's trial or commit start must run with its doors guarded: without the permit it
@@ -83,7 +91,8 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
   })
   if (rt.decision.kind === 'refuse') {
     await rt.stop()
-    throw new LeaderBootRefused(rt.decision.why)
+    const d = rt.decision
+    throw new LeaderBootRefused(d.why, d.leader ? (await import('./handed-over.js')).standbyForRecord({ home: input.home, env, leader: d.leader, record: d.record, why: d.why }) : undefined)
   }
   current = { runtime: rt, machine: id, trial: rt.decision.kind === 'trial' }
   const stop = rt.stop

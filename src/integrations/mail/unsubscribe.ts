@@ -60,7 +60,8 @@ import {
   type UnsubscribeHttpSeam,
 } from './unsubscribe-http.js'
 import { parseUnsubscribeMailto } from './unsubscribe-mailto.js'
-import { assertOutwardDoor, isPermitRefusal, leaderPermitActive, onceOutwardDoorsOpened } from '../../core/leader/switch/doors.js'
+import { assertOutwardDoor, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
+import { holdDurablyUntilDoorsOpen, registerDeferredReplay } from '../../core/deferred-door-work.js'
 import { unsubscribeSentence, unsubscribeVerdict } from './unsubscribe-verdict.js'
 
 export { UNSUBSCRIBE_DEADLINE_MS, UNSUBSCRIBE_RECLAIM_MS }
@@ -1034,11 +1035,12 @@ export class MailUnsubscribe {
       if (isPermitRefusal(error)) {
         // Refused before the claim (this machine does not hold the write permission): nothing
         // was done and nothing went wrong, so no reply. The answer is carried out once the
-        // permission arrives.
+        // permission arrives (held on disk: a restart keeps it; holdAnswersAcrossRestarts).
         this.deps.log.info('mail unsubscribe answer waits for the write permission', {
           letterId: answer.letterId, messageId: row.message_id,
         })
-        onceOutwardDoorsOpened(`mail-unsubscribe:${answer.letterId}`, () => { void this.onLetterAnswered(answer) })
+        const held: LetterAnswer = { letterId: answer.letterId, actionId: answer.actionId, ...(answer.freeText !== undefined ? { freeText: answer.freeText } : {}) }
+        await holdDurablyUntilDoorsOpen('mail-unsubscribe', `mail-unsubscribe:${answer.letterId}`, held)
         return true
       }
       const said = (w: MailUnsubscribeWords) => error instanceof MailServiceError
@@ -1050,6 +1052,15 @@ export class MailUnsubscribe {
       await this.reply(answer.letterId, (w) => w.nothingChanged(said(w)))
     }
     return true
+  }
+
+  /**
+   * Answers a closed door held (onLetterAnswered) are carried out by this instance once the doors
+   * open, also those a process before this one held (they are on disk). The plugin's activation
+   * calls it once; returns the unregister for its teardown.
+   */
+  holdAnswersAcrossRestarts(): () => void {
+    return registerDeferredReplay('mail-unsubscribe', async (payload) => { await this.onLetterAnswered(payload as LetterAnswer) })
   }
 
   /** Is that letter still waiting for an answer? An unknown or unreadable letter is NOT waiting. */

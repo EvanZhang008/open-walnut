@@ -90,7 +90,7 @@ import { CRON_FILE, IS_DEMO, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HO
 import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isCompanion, isFollower, isHostReplica, placement, role, serviceRuntime } from '../core/server-role.js'
 import { capabilityFacts, capabilityList, hasCapability } from '../core/capabilities.js'
-import { bootPolicy } from '../core/boot-policy.js'
+import { bootMode, bootPolicy, setBootMode } from '../core/boot-policy.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -219,9 +219,9 @@ import { setPrivacyModelReady } from '../core/private-tasks/privacy-judge.js'
 
 /**
  * Who a job turned off by the boot policy is off for, in its skip line: the
- * companion keeps its old 'cloud mode' wording, a host replica says so.
+ * companion keeps its old 'cloud mode' wording, a host replica and a leader switch's trial say so.
  */
-function offByPolicy(): string { return isHostReplica() ? 'host replica' : 'cloud mode' }
+function offByPolicy(): string { return bootMode() === 'switch-trial' ? 'leader switch trial' : isHostReplica() ? 'host replica' : 'cloud mode' }
 
 /**
  * Look up a task and build a rich reference: [id|Project / Title], or
@@ -754,7 +754,9 @@ let threadAnswersHandle: { stop: () => void } | null = null
 let topicsHandle: { stop: () => void } | null = null
 let standbyHandle: { stop: () => void } | null = null
 /** The write permission of a switchable leader (core/leader/switch/boot.ts); null with the experiment off. */
-let leaderPermitHandle: { stop: () => void } | null = null
+let leaderPermitHandle: { stop: () => Promise<void>; decision: { kind: string } } | null = null
+/** A home that handed the leader over runs this instead of the server (core/leader/switch/handed-over.ts). */
+let handedOverServer: { server: HttpServer; close: () => Promise<void> } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -1204,9 +1206,49 @@ const IN_PROCESS_DAEMON_STOP_BUDGET_MS = 4_000
  * Create and start the server.
  * Returns the running HTTP server instance.
  */
+/**
+ * Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
+ * leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
+ * constants.ts silently redirect WALNUT_HOME to an empty temp dir; if that process
+ * then binds 3456 it "successfully" serves zero tasks and 404s every session —
+ * production data looks wiped until the next clean restart (incident
+ * inc-1783280584117, 2026-07-05). Fail fast with an actionable message instead.
+ * The standby of a handed-over home checks it too, before it takes the port.
+ */
+function assertNotTestHomeOnProductionPort(port: number, dev: boolean): void {
+  if (port === DEFAULT_PORT && !dev && !IS_EPHEMERAL) {
+    const home = WALNUT_HOME
+    const looksLikeTestHome = /open-walnut-test|walnut-test/.test(home) || home.startsWith(os.tmpdir())
+    if (looksLikeTestHome) {
+      throw new Error(
+        `Refusing to bind production port ${DEFAULT_PORT} with WALNUT_HOME=${home} (a test/temp dir).\n` +
+        `  Your shell likely has leaked test env vars. Fix with:\n` +
+        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME bun run dev:prod`,
+      )
+    }
+  }
+}
+
+/**
+ * The standby of a home that handed the leader over (core/leader/switch/handed-over.ts): it
+ * listens on the server's port so its launcher keeps it, and answers who leads now.
+ */
+async function serveHandedOverHome(standby: import('../core/leader/switch/handed-over.js').HandedOverStandby, port: number, options: ServerOptions): Promise<HttpServer> {
+  assertNotTestHomeOnProductionPort(port, options.dev ?? false)
+  const { serveHandedOver } = await import('../core/leader/switch/handed-over.js')
+  log.web.warn('leader switch: this home handed the leader over; running as a standby that leads nothing', { leader: standby.leader, switchId: standby.switchId, why: standby.why })
+  // Also on stdout: the one line a person who started it by hand reads.
+  console.log(`Walnut runs as a standby: ${standby.message}`)
+  // Loopback unless the server's own bind setting names an address (bind-address.ts): it serves
+  // only this machine's launcher, app and switch command.
+  handedOverServer = await serveHandedOver(standby, { port, host: serverBindAddress({ replica: false, requested: options.bindAddress }) ?? '127.0.0.1' })
+  bootCompleted = true
+  return handedOverServer.server
+}
+
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   resetServerStopping()
-  if (httpServer) throw new Error('Server already running. Call stopServer() first.')
+  if (httpServer || handedOverServer) throw new Error('Server already running. Call stopServer() first.')
   reopenDaemonDials()
   // Bound before the first await: a stopServer or a newer boot from here on overtakes this
   // one's lane. An older boot's lane (its listener and timer) stops in this same tick.
@@ -1238,6 +1280,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (IS_EPHEMERAL) {
     const { assertEphemeralHomeIsNotProduction } = await import('../core/sessions/ephemeral-guard.js')
     assertEphemeralHomeIsNotProduction(WALNUT_HOME)
+  }
+
+  // A home that handed the leader over to another machine (the leader switch's marker,
+  // core/leader/switch/records.ts) never leads again, and it is the copy a switch would fall
+  // back to: it stays byte for byte as it is. So it boots none of the server (no lock file, no
+  // database, no log in it), only the standby that says who leads now (handed-over.ts).
+  // Checked as boot.ts checks it: a leader, and an ephemeral server only when told to.
+  if (role() === 'leader' && (!IS_EPHEMERAL || process.env.WALNUT_EPHEMERAL_LEADER_SWITCH === '1')
+    && fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))) {
+    const { handedOverAtBoot } = await import('../core/leader/switch/handed-over.js')
+    const standby = handedOverAtBoot({ home: WALNUT_HOME })
+    if (standby) return serveHandedOverHome(standby, options.port ?? DEFAULT_PORT, options)
   }
 
   // Which server this is (core/server-role.ts): a contradictory env throws here,
@@ -1343,32 +1397,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
-  // Also true for a leader switch's trial start (set after the permit below): it does as
-  // little as an ephemeral server, on a home that is about to become the leader's.
-  let isEphemeral = IS_EPHEMERAL
-  let leaderTrial = false
   // Own-server URL for agent-facing skills/tools (e.g. the walnut-install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
   // Set again after listen, where port 0 resolves to a real number.
   process.env.WALNUT_SERVER_URL = `http://${IS_DEMO ? '127.0.0.1' : 'localhost'}:${port}`
 
-  // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
-  // leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
-  // constants.ts silently redirect WALNUT_HOME to an empty temp dir; if that process
-  // then binds 3456 it "successfully" serves zero tasks and 404s every session —
-  // production data looks wiped until the next clean restart (incident
-  // inc-1783280584117, 2026-07-05). Fail fast with an actionable message instead.
-  if (port === DEFAULT_PORT && !dev && !isEphemeral) {
-    const home = WALNUT_HOME
-    const looksLikeTestHome = /open-walnut-test|walnut-test/.test(home) || home.startsWith(os.tmpdir())
-    if (looksLikeTestHome) {
-      throw new Error(
-        `Refusing to bind production port ${DEFAULT_PORT} with WALNUT_HOME=${home} (a test/temp dir).\n` +
-        `  Your shell likely has leaked test env vars. Fix with:\n` +
-        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME bun run dev:prod`,
-      )
-    }
-  }
+  assertNotTestHomeOnProductionPort(port, dev)
 
   // Single-instance lock on WALNUT_HOME: a second server on the SAME data dir
   // (even on a different port) silently corrupts task data — each process's
@@ -1449,19 +1483,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // records.ts markerFile and promotedFile, spelled out: importing records.ts here would load switch code on every boot.
       const switchMarked = fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))
         || fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'promoted.json'))
-      // A switch's trial or commit start (set only by `walnut leader switch`) is always checked: boot.ts refuses it without the permit.
-      const switchStart = process.env.WALNUT_LEADER_TRIAL === '1' || !!process.env.WALNUT_LEADER_SWITCH_COMMIT
+      // A switch's trial or commit start (set only by `walnut leader switch`) is always checked:
+      // boot.ts refuses it without the permit. The one read of WALNUT_LEADER_TRIAL.
+      const switchTrial = process.env.WALNUT_LEADER_TRIAL === '1'
+      const switchStart = switchTrial || !!process.env.WALNUT_LEADER_SWITCH_COMMIT
       if ((flagOn && witnessesSet) || switchMarked || switchStart) {
-        const { leaderPermitAtBoot } = await import('../core/leader/switch/boot.js')
-        leaderPermitHandle = await leaderPermitAtBoot({
-          home: WALNUT_HOME, flagOn, isLeaderRole: role() === 'leader', ephemeral: IS_EPHEMERAL,
-          log: (level, msg, data) => log.web[level](msg, data),
-        })
+        const { leaderPermitAtBoot, LeaderBootRefused } = await import('../core/leader/switch/boot.js')
+        try {
+          leaderPermitHandle = await leaderPermitAtBoot({
+            home: WALNUT_HOME, flagOn, isLeaderRole: role() === 'leader', ephemeral: IS_EPHEMERAL, trial: switchTrial,
+            log: (level, msg, data) => log.web[level](msg, data),
+          })
+        } catch (err) {
+          // Another machine leads (the witnesses say so): this one stays up as a standby that
+          // leads nothing and answers who does, instead of exiting into its launcher's restart loop.
+          if (!(err instanceof LeaderBootRefused) || !err.standby) throw err
+          releaseInstanceLock()
+          return serveHandedOverHome(err.standby, port, options)
+        }
       }
-      // The switch's trial start (WALNUT_LEADER_TRIAL=1) only shows the new home reads back: it
-      // picks up, recovers and reconciles no session, wakes no org node, pulls and commits no
-      // git, as an ephemeral server does not (its outward doors are closed besides).
-      if (leaderPermitHandle && process.env.WALNUT_LEADER_TRIAL === '1') { isEphemeral = true; leaderTrial = true }
+      // The switch's trial start only shows the new home reads back: every gate reads the boot
+      // policy's trial column from here on (no session, plugin, timer, git job or outward work).
+      setBootMode(leaderPermitHandle?.decision.kind === 'trial' ? 'switch-trial' : 'normal')
     }
     // This process owns the data folder now: read back what earlier servers saw of this
     // machine's sleep and when no server ran, and stamp from now on that this one is alive
@@ -2310,15 +2353,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startWaitUntilWatch()
     // Main's and the leads' promised follow-ups (src/core/sessions/promise-alarm.ts), same clock policy.
     const { startPromiseAlarms } = await import('../core/sessions/promise-alarm.js')
-    startPromiseAlarms({ ephemeral: isEphemeral })
+    startPromiseAlarms({ ephemeral: IS_EPHEMERAL })
     // A "needs you" nobody checks by script is checked again every few hours (src/core/sessions/needs-recheck.ts).
     const { startNeedsRecheck } = await import('../core/sessions/needs-recheck.js')
-    startNeedsRecheck({ ephemeral: isEphemeral })
+    startNeedsRecheck({ ephemeral: IS_EPHEMERAL })
     const { startUserAsks } = await import('../core/sessions/user-asks.js')
-    void startUserAsks({ ephemeral: isEphemeral }).catch(() => {})
+    void startUserAsks({ ephemeral: IS_EPHEMERAL }).catch(() => {})
     // Every open task's stored status against its facts, hourly (src/core/status-consistency.ts).
     const { startStatusCheck } = await import('../core/status-consistency.js')
-    startStatusCheck({ ephemeral: isEphemeral })
+    startStatusCheck({ ephemeral: IS_EPHEMERAL })
   }
 
   // ── Walnut's own health alarms, CloudWatch style (src/core/health-monitor/), off the boot path.
@@ -2394,16 +2437,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // What agents keep, in one artifacts folder, the only place for it (src/core/artifacts/migrate.ts).
     if (role() === 'leader') void import('../core/artifacts/migrate.js').then((m) => m.startArtifacts()).catch(() => {})
     // The org nodes' duties (src/core/org/duties/): each runs for the nodes that turned it on.
-    if (role() === 'leader') void import('../core/org/duties/registry.js').then((m) => m.startOrgDuties({ ephemeral: isEphemeral })).catch(() => {})
+    if (bootPolicy('org-duties')) void import('../core/org/duties/registry.js').then((m) => m.startOrgDuties({ ephemeral: IS_EPHEMERAL })).catch(() => {})
     // Main and the VPs that have no session yet start by themselves, a minute after boot (src/core/org/org-autostart.ts).
-    if (role() === 'leader') void import('../core/org/org-autostart.js').then((m) => m.startOrgAutostart(60_000, { ephemeral: isEphemeral })).catch(() => {})
+    if (bootPolicy('org-autostart')) void import('../core/org/org-autostart.js').then((m) => m.startOrgAutostart(60_000, { ephemeral: IS_EPHEMERAL })).catch(() => {})
     // Starts queued for a free host slot begin by themselves once a host has room (src/core/sessions/start-queue.ts);
     // a companion never drains, an ephemeral server only what it queued itself.
     // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
     if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
     // Messages held for a cold session's next wake go out by their max hold, a restart's included (src/core/sessions/cold-hold.ts).
     if (role() === 'leader') void import('../core/sessions/cold-hold.js').then((m) => m.startColdHold()).catch(() => {})
-    if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: isEphemeral })).catch(() => {})
+    if (bootPolicy('start-queue')) void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
     // An idle Claude Code session near where it compacts by itself is compacted shortly before its
@@ -2602,8 +2645,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { browserRefreshRouter, browserSignInsRouter } = await import('./routes/browser-sign-in.js')
       app.use('/api/auth/browser', browserRefreshRouter)
       app.use('/api/devices', browserSignInsRouter)
-      // A browser not renewed for a year is signed out here (core/browser-sign-in.ts).
-      ;(await import('../core/browser-sign-in.js')).startBrowserSignInSweep()
+      // A browser not renewed for a year is signed out here (core/browser-sign-in.ts). Not in a
+      // leader switch's trial (its trial column): the sweep writes the devices.
+      if (bootPolicy('browser-sign-in-sweep')) (await import('../core/browser-sign-in.js')).startBrowserSignInSweep()
     }
     app.use('/api/expose', exposeRouter)
     app.use('/api/host-servers', hostServersRouter)
@@ -3466,10 +3510,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // otherwise its hosts are the developer's real ones (src/lib/real-ssh-guard.ts).
       const { realSshReachAllowed } = await import('../lib/real-ssh-guard.js')
       const sshAllowed = realSshReachAllowed()
-      if (!isEphemeral && bootPolicy('terminal-sweep') && !sshAllowed) {
+      if (!IS_EPHEMERAL && bootPolicy('terminal-sweep') && !sshAllowed) {
         log.web.info('terminal sweep skipped: a server under test without ssh isolation never runs ssh')
       }
-      if (!isEphemeral && bootPolicy('terminal-sweep') && sshAllowed) {
+      if (!IS_EPHEMERAL && bootPolicy('terminal-sweep') && sshAllowed) {
         // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
         import('./terminal/dtach-lifecycle.js')
           .then(({ reapOrphanDtach }) => reapOrphanDtach())
@@ -3654,7 +3698,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // guard, so git-sync (the user's backups) always starts.
   // (Its own worst case: 7 steps of 20s plus a 2 min wait for an in-flight sync.)
   const COMPACTION_RECOVERY_DEADLINE_MS = 5 * 60_000
-  const compactionRecovered: Promise<void> = !isEphemeral && bootPolicy('git-compaction')
+  const compactionRecovered: Promise<void> = !IS_EPHEMERAL && bootPolicy('git-compaction')
     ? new Promise<void>((resolve) => {
       const deadline = setTimeout(() => {
         log.git.warn('compaction crash recovery still running after its deadline; starting git-sync anyway', { deadlineMs: COMPACTION_RECOVERY_DEADLINE_MS })
@@ -3678,7 +3722,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Linked pull requests: status on the task, news to its session, a merge completes it
   // (core/pull-requests/pr-watch.ts). An ephemeral or test server reads only through a
   // stand-in gh (WALNUT_GH_BIN), never the user's real GitHub account.
-  if (bootPolicy('pr-watch') && !process.env.VITEST && (!isEphemeral || process.env.WALNUT_GH_BIN)) {
+  if (bootPolicy('pr-watch') && !process.env.VITEST && (!IS_EPHEMERAL || process.env.WALNUT_GH_BIN)) {
     void (async () => {
       try {
         const { startPrWatch } = await import('../core/pull-requests/pr-watch.js')
@@ -3693,7 +3737,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // Change links' status (core/changes/watch.ts): off unless the `change_status` experiment is on,
   // which every look asks. Same rule for a test or ephemeral server as the pull request watch.
-  if (bootPolicy('change-watch') && !process.env.VITEST && (!isEphemeral || process.env.WALNUT_GH_BIN)) {
+  if (bootPolicy('change-watch') && !process.env.VITEST && (!IS_EPHEMERAL || process.env.WALNUT_GH_BIN)) {
     void (async () => {
       try {
         const { startChangeWatch } = await import('../core/changes/watch.js')
@@ -3706,7 +3750,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })()
   }
 
-  if (bootPolicy('session-auto-recover') && !isEphemeral) {
+  if (bootPolicy('session-auto-recover') && !IS_EPHEMERAL) {
     const { getConfig } = await import('../core/config-manager.js')
     const { startSessionAutoRecover } = await import('../core/session-auto-recover.js')
     if ((await getConfig()).hooks?.overrides?.['session-auto-recover']?.enabled !== false) {
@@ -3724,8 +3768,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Each dead session's record as it stood BEFORE the reconciler marked it:
   // its last projected status is restart recovery's fallback fact.
   const beforeReconcile = new Map<string, import('../core/types.js').SessionRecord>()
-  if (!bootPolicy('session-reconcile') || leaderTrial) {
-    log.session.info(leaderTrial ? 'leader switch trial: skipping session reconciliation (it would mark the old leader\'s sessions dead in the new home)' : `${offByPolicy()}: skipping session reconciliation`)
+  if (!bootPolicy('session-reconcile')) {
+    log.session.info(`${offByPolicy()}: skipping session reconciliation`)
   } else try {
     const { reconcileSessions } = await import('../core/session-reconciler.js')
     const { listSessions } = await import('../core/session-tracker.js')
@@ -3771,7 +3815,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // An engine switch a restart interrupted, or one waiting for a turn's end, goes on
     // once the hosts had a moment to come back (core/sessions/engine-switch-watch.ts).
     // Never on an ephemeral server: its copied switches are the real Walnut's work.
-    if (!isEphemeral) setTimeout(() => {
+    if (!IS_EPHEMERAL) setTimeout(() => {
       void import('../core/sessions/engine-switch-watch.js').then((m) => m.resumeEngineSwitches()).catch((err) => {
         log.session.warn('engine switch resume failed', { error: err instanceof Error ? err.message : String(err) })
       })
@@ -3948,20 +3992,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   // An ephemeral server backs nothing up, unless a test of backups asks for it
   // (it then backs up its own temp data home to the destination its config names).
-  if (isEphemeral && process.env.WALNUT_EPHEMERAL_BACKUP === '1') await startBackups()
+  if (IS_EPHEMERAL && process.env.WALNUT_EPHEMERAL_BACKUP === '1') await startBackups()
 
   // Topics: a woken member's reply is posted back as its message (core/topics/topic-replies.ts) and
   // person members are mailed (core/topics/topic-mail.ts), only while the experiment topics is on:
   // started and stopped with it (core/topics/topics-runtime.ts). An ephemeral server too, so
   // dev:ephemeral can try the feature; its mail bridge sends nothing unless
   // WALNUT_TOPICS_MAIL_IN_TEST=1 (its copy of the data holds the user's real accounts and people).
-  topicsHandle = (await import('../core/topics/topics-runtime.js')).startTopicsRuntime()
+  // Not in a leader switch's trial (its trial column): it posts replies and mails people.
+  if (bootPolicy('topics-runtime')) topicsHandle = (await import('../core/topics/topics-runtime.js')).startTopicsRuntime()
 
   // The standby copy of the data folder (core/standby/), only while the experiment
   // switchable_leader is on and standby.dir is set; started and stopped with it. Never on an
   // ephemeral server (its home is a copy of the user's data, and its config names the user's
   // target), unless a test of the standby asks for it.
-  if (!isEphemeral || process.env.WALNUT_EPHEMERAL_STANDBY === '1') {
+  if (!IS_EPHEMERAL || process.env.WALNUT_EPHEMERAL_STANDBY === '1') {
     const { startStandbyRunner, defaultStandbyDeps } = await import('../core/standby/runner.js')
     standbyHandle = startStandbyRunner({
       ...(await defaultStandbyDeps()),
@@ -3970,7 +4015,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
-  if (!isEphemeral) {
+  if (!IS_EPHEMERAL) {
     if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit(compactionRecovered)
 
     // Pull after listen without gating HTTP, once the data repo is ready (data-repo-boot.ts:
@@ -4000,9 +4045,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Disk watermark monitor: warn at 80% used, block writes (507) + git
     // pull-only at 90% (see src/core/disk-watermark.ts). Runs on every
     // non-ephemeral box — the 2026-08-12 ENOSPC outage hit the cloud
-    // companion, but the primary box has the same failure mode.
+    // companion, but the primary box has the same failure mode. Not in a leader switch's trial
+    // (its trial column): a timer that notifies, and the commit start watches the disk.
     const { startDiskWatermarkMonitor } = await import('../core/disk-watermark.js')
-    diskWatermarkHandle = startDiskWatermarkMonitor({
+    if (bootPolicy('disk-watermark')) diskWatermarkHandle = startDiskWatermarkMonitor({
       // Both levels share the 'disk' condition: freeing space fixes them
       // together, so one recovery signal retires whichever card is showing.
       notify: (title, body, dedupScope) => {
@@ -4398,7 +4444,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startUsageLimitWait, usageLimitWaitEnabled } = await import('../core/sessions/usage-limit-wait.js')
     if (usageLimitWaitEnabled()) {
       usageLimitWaitHandle = startUsageLimitWait({
-        pickUp: !isEphemeral,
+        pickUp: !IS_EPHEMERAL,
         handBack: async (rec, words) => {
           const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
           await publishSessionErrorNotification({
@@ -4640,7 +4686,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   sessionRunner.init(reconnectable)
   // Folders that came back: what a gone folder stopped (a session's messages, a trigger) runs
   // again, once the runner takes sends and the restart's recovery is done (folder-back.ts).
-  if (bootPolicy('session-auto-recover') && !isEphemeral && (await (await import('../core/config-manager.js')).getConfig()).hooks?.overrides?.['session-auto-recover']?.enabled !== false) {
+  if (bootPolicy('session-auto-recover') && !IS_EPHEMERAL && (await (await import('../core/config-manager.js')).getConfig()).hooks?.overrides?.['session-auto-recover']?.enabled !== false) {
     void sessionRunner.startupRecoveryDone.then(() => import('../core/sessions/folder-back.js')).then((m) => m.sendWhereFoldersCameBack()).catch((err: unknown) => {
       log.session.warn('folder back: the startup look failed', { error: err instanceof Error ? err.message : String(err) })
     })
@@ -4717,7 +4763,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     historyReadyRefresher?.stop()
     // Copied data must not trigger a host-wide warmup or mask cold-open acceptance.
     // Refresher acceptance can opt in on its isolated server explicitly.
-    if (!isEphemeral || process.env.WALNUT_HISTORY_READY_REFRESH === '1') {
+    if (!IS_EPHEMERAL || process.env.WALNUT_HISTORY_READY_REFRESH === '1') {
       historyReadyRefresher = await (await import('../core/history-ready-refresh.js')).startHistoryReadyRefresher()
     }
 
@@ -5089,13 +5135,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     unsubscribeHostPhase = () => { offBeforeFoundHost?.(); offFoundHostAlert() }
     // This machine's SSH certificate running out: ONE letter a few hours ahead, the same thread at expiry.
     const { startCertExpiryAlert } = await import('../core/hosts/ssh-cert-expiry-alert.js')
-    const offCertExpiryAlert = await startCertExpiryAlert({ enabled: !hostFixtureMode() && (!isEphemeral || process.env.WALNUT_SSH_CERT_LETTER === '1') })
+    const offCertExpiryAlert = await startCertExpiryAlert({ enabled: !hostFixtureMode() && (!IS_EPHEMERAL || process.env.WALNUT_SSH_CERT_LETTER === '1') })
     const offBeforeCertExpiry = unsubscribeHostPhase
     unsubscribeHostPhase = () => { offBeforeCertExpiry?.(); offCertExpiryAlert() }
 
     const warmupGate = hostWarmupGateReason({
       // Inside the leader-only host-wiring block: never the companion.
-      cloudMode: false, ephemeral: isEphemeral, env: process.env, config: await getConfig(),
+      cloudMode: false, ephemeral: IS_EPHEMERAL, env: process.env, config: await getConfig(),
     })
     // The replica check on a real dev box warms its one isolated host as a real server would,
     // and no other (providers/ephemeral-replica-host.ts).
@@ -5162,7 +5208,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       log.web.warn('plugin jobs: could not start', { error: err instanceof Error ? err.message : String(err) })
     })
     // Lid opened / network changed: redial failed and reconnecting hosts once (C51).
-    if (!isEphemeral && !process.env.VITEST && process.env.WALNUT_TEST_HOST_FIXTURE_MODE !== '1') {
+    if (!IS_EPHEMERAL && !process.env.VITEST && process.env.WALNUT_TEST_HOST_FIXTURE_MODE !== '1') {
       const { startHostWakeRedial } = await import('../core/hosts/host-connect-action.js')
       // Kept so shutdown stops the 5s / 10s pollers with the rest of the host wiring.
       const stopWake = await startHostWakeRedial(() => hostDefs)
@@ -5921,7 +5967,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       // Git pull: fetch data pushed by remote hooks (best-effort). Only where git
       // sync writes the data dir (the Mac): a replica reads copies (boot-policy git-pull).
-      if (!isEphemeral && bootPolicy('git-pull')) {
+      if (!IS_EPHEMERAL && bootPolicy('git-pull')) {
         try {
           await gitPullWalnut()
           log.web.info('git pull completed for session result')
@@ -6221,7 +6267,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       // Git pull: fetch data pushed by remote hooks (best-effort).
       // Skip for delivery failures — nothing remote ran, and the host may be down.
-      if (!isEphemeral && !isDeliveryFailure && bootPolicy('git-pull')) {
+      if (!IS_EPHEMERAL && !isDeliveryFailure && bootPolicy('git-pull')) {
         try {
           await gitPullWalnut()
           log.web.info('git pull completed for session error')
@@ -6512,8 +6558,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Load integration plugins --
   try {
-    // A leader switch's trial start (core/leader/switch/) loads no plugin: a plugin's own code may send outward.
-    if (bootPolicy('plugins') && !(leaderPermitHandle && process.env.WALNUT_LEADER_TRIAL === '1')) {
+    // A leader switch's trial start loads no plugin (its trial column): a plugin's own code may send outward.
+    if (bootPolicy('plugins')) {
       await loadPlugins(registry)
       log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
       // Tasks a removed plugin kept to its own view come back to the board (Task.plugin_only):
@@ -6619,8 +6665,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }, { global: true, interest: ['plugin:runtime-changed'] })
 
   // Focus spaces (experiment focus_workspace): the focus file and its quiet hold agree at start,
-  // and the switch turned off ends a focus left on (core/focus-spaces/lifecycle.ts).
-  if (!isFollower()) {
+  // and the switch turned off ends a focus left on (core/focus-spaces/lifecycle.ts). The leader
+  // only; not in a leader switch's trial (its trial column): it writes the focus file and its hold.
+  if (bootPolicy('focus-spaces')) {
     void import('../core/focus-spaces/lifecycle.js').then((m) => m.startFocusSpaces()).catch((err) => {
       log.web.warn('focus spaces did not start', { error: String(err) })
     })
@@ -6698,7 +6745,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     await cronService.start()
     // The routers' wakes follow their tasks once the engine and the router:pending template are up (core/router/wake.ts).
-    if (!isEphemeral && role() === 'leader') {
+    if (!IS_EPHEMERAL && role() === 'leader') {
       const { reconcileRouterWakes, routerWakeRegistered } = await import('../core/router/wake.js')
       void reconcileRouterWakes({ isLive: routerWakeRegistered }).catch((err) => {
         log.cron.warn('router wakes not reconciled', { error: err instanceof Error ? err.message : String(err) })
@@ -7525,6 +7572,16 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   localDaemonLaneOwner++
   localDaemonLane?.stop()
   localDaemonLane = null
+  // The next boot in this process decides its own mode (a trial's must not outlive it).
+  setBootMode('normal')
+  // A handed-over home's standby started nothing else: it only stops listening, within a bounded step.
+  if (handedOverServer) {
+    const s = handedOverServer
+    handedOverServer = null
+    beginShutdownSteps({ bailMs: opts.bailMs })
+    await shutdownStep('handed-over standby', () => s.close(), { budgetMs: 2_000 })
+    return
+  }
   // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
   markServerStopping()
   // A stopping leader acts on nothing more: its outward doors close now, and its write

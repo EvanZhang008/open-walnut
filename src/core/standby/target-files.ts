@@ -60,9 +60,15 @@ export function manifestPath(t: TargetPaths, batch: number): string {
   return path.join(t.batches, `${batch}.json`)
 }
 
+/** Whether resolved path `a` is `b` or lies under it (`/` contains everything). */
+export function pathInside(a: string, b: string): boolean {
+  const rel = path.relative(b, a)
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
 /** Refuse a target inside the home (it would copy itself) or a home inside the target. */
 export async function checkTargetPlace(home: string, dir: string): Promise<void> {
-  const inside = (a: string, b: string) => a === b || a.startsWith(`${b}${path.sep}`)
+  const inside = pathInside
   // As written and with symlinks resolved: a link to the home (or into it) is the home.
   for (const [h, d] of [[path.resolve(home), path.resolve(dir)], [await realPart(home), await realPart(dir)]]) {
     if (inside(d, h) || inside(h, d)) throw new Error(`the standby target ${path.resolve(dir)} and the home ${path.resolve(home)} must not contain each other`)

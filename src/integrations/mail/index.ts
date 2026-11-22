@@ -342,6 +342,10 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     if (await unsubscribe.onLetterAnswered(event)) return
     await approvals.onLetterAnswered(event)
   })
+  // An unsubscribe answer a closed door held (leader switch) is done once the doors open, also
+  // one the process before this one held: it is on disk (core/deferred-door-work.ts). A replica
+  // answers nothing, so holds nothing.
+  const unregisterHeldAnswers = walnut.replica ? () => undefined : unsubscribe.holdAnswersAcrossRestarts()
 
   /**
    * One sweep shortly AFTER activate, before the first tick's interval elapses.
@@ -568,6 +572,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // reaching for "the current one" could.
   return {
     dispose: async () => {
+      unregisterHeldAnswers()
       unregisterTopicTransport()
       unregisterItemSource()
       unregisterRouterSource()

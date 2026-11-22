@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { BOOT_POLICY, bootPolicy, bootPolicyDecisions, jobsOfCapability, type BootJob, type BootRow } from '../../src/core/boot-policy.js'
+import { BOOT_POLICY, bootMode, bootPolicy, bootPolicyDecisions, jobsOfCapability, setBootMode, type BootJob, type BootRow } from '../../src/core/boot-policy.js'
 import { CAPABILITIES, capabilityOfJob, defaultCapabilities, type Capability } from '../../src/core/capabilities.js'
 import { listTsFiles } from '../helpers/cloud-mode-scan.js'
 
@@ -107,6 +107,14 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'private-task-gate': leaderOnly, // new: the Mac pushes tasks to outside services, so it judges them first
   'host-network-door': cloudOnly, // new: the companion keeps the machine list and checks every join
   'host-network': leaderOnly, // new: the Mac reads the list and dials the machines
+  'org-duties': leaderOnly, // added with the trial column: server.ts `if (role() === 'leader')`
+  'org-autostart': leaderOnly, // added with the trial column: server.ts `if (role() === 'leader')`
+  'start-queue': leaderOnly, // added with the trial column: server.ts `if (role() === 'leader')`
+  'standby-copy': leaderOnly, // added with the trial column: standby/runner.ts `on: !isFollower() && ...`
+  'disk-watermark': always, // added with the trial column: server.ts `if (!isEphemeral)` alone, on every box
+  'browser-sign-in-sweep': leaderOnly, // added with the trial column: server.ts `if (role() === 'leader')`
+  'focus-spaces': leaderOnly, // added with the trial column: server.ts `if (!isFollower())`
+  'topics-runtime': always, // added with the trial column: server.ts started it with no gate
 }
 
 /**
@@ -126,8 +134,11 @@ const SELF_GATED: Array<[BootJob, string]> = [
   ['plugin-jobs', 'src/core/plugin-jobs/index.ts'],
 ]
 
-/** What a host replica starts: the tunnel's proxy trust and its own credentialed calls. Everything else is off. */
-const HOST_ON = new Set<BootJob>(['trust-proxy', 'self-api-credential'])
+/**
+ * What a host replica starts: the tunnel's proxy trust and its own credentialed calls, and the
+ * disk watermark and the topics runtime every box runs (rows since the trial column; their gates were `!isEphemeral` alone and none). Everything else is off.
+ */
+const HOST_ON = new Set<BootJob>(['trust-proxy', 'self-api-credential', 'disk-watermark', 'topics-runtime'])
 
 describe('boot policy', () => {
   it('every row has an old truth and every old truth a row', () => {
@@ -243,5 +254,171 @@ describe('boot policy: one replica column plus capability rows', () => {
     expect(bootPolicyDecisions('host').on.sort()).toEqual([...HOST_ON].sort())
     // The companion's own pipeline rows are the companion's alone, whatever a host's set says.
     for (const job of Object.keys(COMPANION_UNTIL) as BootJob[]) expect(bootPolicy(job, 'host', all), job).toBe(false)
+  })
+})
+
+/**
+ * The leader and replica columns as they stood at b66fcb0e61, before the trial column was
+ * added: [job, leader, replica, companionUntil?]. Frozen here, so a row whose leader or replica
+ * value changes fails, whatever the gate expressions above say.
+ */
+const BEFORE_TRIAL: Array<[string, boolean, boolean, string?]> = [
+  ['foreign-db-guard', true, false],
+  ['cloud-exec', false, false],
+  ['local-daemon', true, false],
+  ['cloud-box-probe', true, false],
+  ['local-claude-probe', true, false],
+  ['trust-proxy', false, true],
+  ['companion-ingest-routes', false, false],
+  ['backup-routes', true, false],
+  ['plugin-apps', true, false],
+  ['host-network-door', false, false],
+  ['host-network', true, false],
+  ['plugin-jobs', true, false],
+  ['v1-forward', false, false, '5b'],
+  ['backup-leader', false, false],
+  ['leader-heartbeat', true, false],
+  ['replica-pushes', true, false],
+  ['self-api-credential', false, true],
+  ['setup-token-banner', false, false],
+  ['terminal-sweep', true, false],
+  ['letter-push', true, false],
+  ['work-card', true, false],
+  ['approvals', true, false],
+  ['audio', true, false],
+  ['git-pull', true, false],
+  ['git-auto-commit', true, false],
+  ['git-maintenance', true, false],
+  ['git-compaction', true, false],
+  ['session-auto-recover', true, false],
+  ['session-reconcile', true, false],
+  ['completed-task-session-migration', true, false, '2c'],
+  ['one-session-per-task', true, false],
+  ['stream-file-cleanup', true, false],
+  ['session-integrity-check', true, false],
+  ['notes-watcher', true, false],
+  ['notes-semantic', true, false],
+  ['search-wiring', true, false],
+  ['thread-ai', true, false],
+  ['revoke-queue', true, false],
+  ['send-path-canary', true, false],
+  ['primary-store-jobs', true, false],
+  ['companion-queues', false, false, '5b'],
+  ['companion-stream-door', true, false],
+  ['companion-stream-forward', false, false, '5b'],
+  ['hub-port-door', true, false],
+  ['hook-task-domains', true, false],
+  ['session-request-sweep', true, false],
+  ['lane-orphan-passes', true, false],
+  ['lane-ask-sync', true, false],
+  ['pin-retirement', true, false],
+  ['usage-collect', true, false],
+  ['budget-letters', true, false],
+  ['session-health-monitor', true, false],
+  ['overview-maintainer', true, false],
+  ['project-summary', true, false],
+  ['host-learning', true, false],
+  ['routine-wake', true, false],
+  ['workspace-watch', true, false],
+  ['host-wiring', true, false],
+  ['expose-runtime', true, false],
+  ['update-check', true, false, '5b'],
+  ['plugins', true, false, '5b'],
+  ['companion-plugin-cards', false, false, '5b'],
+  ['plugin-sync-polling', true, false],
+  ['cron', true, false],
+  ['triage-bootstrap', true, false],
+  ['board-store-watch', true, false],
+  ['board-kanban-watch', true, false],
+  ['board-reminders', true, false],
+  ['wait-until', true, false],
+  ['health-monitor', true, false],
+  ['user-status', true, false],
+  ['host-exec-grants', true, false],
+  ['fleet-secrets', true, false],
+  ['private-task-gate', true, false],
+  ['title-reconciler', true, false],
+  ['link-tags', true, false],
+  ['pr-watch', true, false],
+  ['change-watch', true, false],
+  ['notes-indexer', true, false],
+  ['stt-auto-setup', true, false],
+]
+
+/**
+ * Rows added with the trial column, each with what its gate did before: `role() === 'leader'`
+ * and `!isFollower()` are both the leader (placement mac) and no replica (server-role.ts:
+ * role leader holds exactly on placement mac, a follower is the companion or a host);
+ * `!isEphemeral` alone is every placement.
+ */
+const ADDED_WITH_TRIAL: Array<[string, boolean, boolean]> = [
+  ['org-duties', true, false],
+  ['org-autostart', true, false],
+  ['start-queue', true, false],
+  ['standby-copy', true, false],
+  // `if (!isEphemeral)` alone: on for every placement, a host replica and the companion too.
+  ['disk-watermark', true, true],
+  // Round 1 of the review: `role() === 'leader'`, `!isFollower()`, and no gate at all.
+  ['browser-sign-in-sweep', true, false],
+  ['focus-spaces', true, false],
+  ['topics-runtime', true, true],
+]
+
+/** What a leader switch's trial start runs: the databases and their migrations, the guard on them, a static route (routes that act outward, like backup uploads, are off). */
+const TRIAL_ON = new Set<BootJob>(['foreign-db-guard', 'plugin-apps', 'completed-task-session-migration'])
+
+describe('boot policy: the trial column', () => {
+  it('the leader and replica columns are, row by row, what they were before the trial column', () => {
+    const want = [...BEFORE_TRIAL, ...ADDED_WITH_TRIAL]
+    expect(rows.map((r) => [r.job, r.leader, r.replica, ...(r.companionUntil ? [r.companionUntil] : [])])).toEqual(want)
+  })
+
+  it('a normal boot reads no trial column: every placement decides as before', () => {
+    expect(bootMode()).toBe('normal')
+    for (const [job, leader, replica] of [...BEFORE_TRIAL, ...ADDED_WITH_TRIAL]) {
+      expect(bootPolicy(job as BootJob, 'mac'), job).toBe(leader)
+      expect(bootPolicy(job as BootJob, 'host'), job).toBe(replica)
+      expect(bootPolicy(job as BootJob, 'cloud'), job).toBe(OLD_TRUTH[job as BootJob](true))
+    }
+  })
+
+  it.each(rows.map((r) => [r.job, r] as const))('%s: on in a trial only where the trial needs it, and only where the leader runs it', (job, row) => {
+    expect(row.trial, job).toBe(TRIAL_ON.has(job as BootJob))
+    if (row.trial) expect(row.leader, job).toBe(true)
+    expect(bootPolicy(job as BootJob, 'mac', new Set(), 'switch-trial')).toBe(row.trial)
+  })
+
+  it('the trial mode, once set, is what every gate reads by default; a later boot sets it back', () => {
+    try {
+      setBootMode('switch-trial')
+      expect(bootPolicy('cron')).toBe(false)
+      expect(bootPolicy('plugins')).toBe(false)
+      expect(bootPolicy('foreign-db-guard')).toBe(true)
+      expect(bootPolicyDecisions('mac').on.sort()).toEqual([...TRIAL_ON].sort())
+    } finally {
+      setBootMode('normal')
+    }
+    expect(bootPolicy('cron', 'mac')).toBe(true)
+  })
+
+  it('the trial reads one column: no gate checks WALNUT_LEADER_TRIAL or flips isEphemeral on its own', () => {
+    const offenders: string[] = []
+    for (const f of listTsFiles(ROOT, 'src')) {
+      const text = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      // server.ts reads it once (the boot mode); side.ts sets it for the server it starts.
+      const reads = (text.match(/process\.env\.WALNUT_LEADER_TRIAL|env\.WALNUT_LEADER_TRIAL\s*(===|!==)/g) ?? []).length
+      const allowed = f === path.join('src', 'web', 'server.ts') ? 1 : 0
+      if (reads > allowed) offenders.push(`${f}: ${reads} read(s)`)
+    }
+    expect(offenders).toEqual([])
+    const server = fs.readFileSync(path.join(ROOT, 'src/web/server.ts'), 'utf8')
+    expect(server).not.toMatch(/isEphemeral\s*=|leaderTrial/)
+  })
+
+  it('the doc lists the trial column row by row, as the table has it', () => {
+    const doc = fs.readFileSync(path.join(ROOT, 'docs/reference/leader-switch.md'), 'utf8')
+    const section = doc.slice(doc.indexOf('### The trial column'))
+    const listed = new Map([...section.matchAll(/^\| `([a-z0-9-]+)` \| (on|off) \|/gm)].map((m) => [m[1], m[2] === 'on']))
+    expect(Object.fromEntries(listed)).toEqual(Object.fromEntries(rows.map((r) => [r.job, r.trial])))
   })
 })

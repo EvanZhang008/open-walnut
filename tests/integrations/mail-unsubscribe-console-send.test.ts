@@ -59,6 +59,10 @@ interface Harness {
   drafts: MailDrafts
   approvals: MailApprovals
   unsubscribe: MailUnsubscribe
+  /** What `unsubscribe` was built from: a restart builds another from the same. */
+  unsubscribeDeps: ConstructorParameters<typeof MailUnsubscribe>[0]
+  /** The harness's own temp folder (a home for what is held on disk). */
+  root: string
   letters: {
     send: ReturnType<typeof vi.fn>
     reply: ReturnType<typeof vi.fn>
@@ -146,7 +150,7 @@ async function openHarness(): Promise<Harness> {
   const approvals = new MailApprovals({
     store, service, drafts, sends, letters: letters as unknown as ApprovalLetters, events: mailEvents, log,
   });
-  const unsubscribe = new MailUnsubscribe({
+  const unsubscribeDeps: ConstructorParameters<typeof MailUnsubscribe>[0] = {
     store,
     service,
     events: mailEvents,
@@ -155,7 +159,8 @@ async function openHarness(): Promise<Harness> {
     letters: letters as unknown as ApprovalLetters,
     log,
     now: () => clock.at,
-  });
+  };
+  const unsubscribe = new MailUnsubscribe(unsubscribeDeps);
   // As index.ts wires it: an unsubscribe mail's row settles with its send.
   mailEvents.onSendSettled((event) => { void unsubscribe.onSendSettled(event.sendId, event.state) });
 
@@ -170,7 +175,7 @@ async function openHarness(): Promise<Harness> {
   });
 
   return {
-    store, service, drafts, approvals, unsubscribe, letters, events, sent, mode, sendable, clock,
+    store, service, drafts, approvals, unsubscribe, unsubscribeDeps, root, letters, events, sent, mode, sendable, clock,
   };
 }
 
@@ -636,11 +641,13 @@ describe('a machine without the write permission sends nothing', () => {
     expect(await draftRows(one)).toHaveLength(1);
   });
 
-  it('an answered unsubscribe letter refused at the door is carried out once the doors open, with no error reply', async () => {
+  it('an answered unsubscribe letter refused at the door survives a restart and is carried out once the doors open, once, with no error reply', async () => {
     const one = await openHarness();
     await one.service.ingestPage(ACCOUNT, [mailtoOnly()]);
     const doors = await import('../../src/core/leader/switch/doors.js');
+    const work = await import('../../src/core/deferred-door-work.js');
     refuseDoors();
+    work.armDeferredDoorWork(one.root);
     // The ledger row a letter names (requestFromAgent writes it); only its message is read here.
     vi.spyOn(one.store.write, 'unsubscribeByRef')
       .mockResolvedValue({ account_id: ACCOUNT, message_id: MESSAGE } as UnsubscribeRow);
@@ -648,11 +655,31 @@ describe('a machine without the write permission sends nothing', () => {
     expect(await one.unsubscribe.onLetterAnswered({ letterId: 'lt-unsub', actionId: 'unsubscribe' } as never)).toBe(true);
     expect(run).toHaveBeenCalledTimes(1);
     expect(one.letters.reply).not.toHaveBeenCalled();
+    expect((await work.readDeferredDoorWork(one.root)).map((e) => e.payload)).toEqual([{ letterId: 'lt-unsub', actionId: 'unsubscribe' }]);
+
+    // The restart: what was held in memory is gone; the plugin activates again (a new instance on
+    // the same ledger), the runtime arms, and the doors open.
     setOutwardDoorChecker(null);
-    run.mockResolvedValue({ status: 'done', method: 'mailto', at: one.clock.at, message: 'Done.' } as never);
-    doors.notifyOutwardDoorsOpened();
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(one.letters.reply).toHaveBeenCalledTimes(1));
+    doors._forgetDoorsOpenedListenersForTesting();
+    work._resetDeferredDoorWorkForTesting();
+    const after = new MailUnsubscribe(one.unsubscribeDeps);
+    const rerun = vi.spyOn(after, 'run').mockResolvedValue({ status: 'done', method: 'mailto', at: one.clock.at, message: 'Done.' } as never);
+    setOutwardDoorChecker(() => {}, () => true);
+    work.armDeferredDoorWork(one.root);
+    const unregister = after.holdAnswersAcrossRestarts();
+    try {
+      doors.notifyOutwardDoorsOpened();
+      await vi.waitFor(() => expect(rerun).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(one.letters.reply).toHaveBeenCalledTimes(1));
+      expect(run).toHaveBeenCalledTimes(1);
+      await vi.waitFor(async () => expect(await work.readDeferredDoorWork(one.root)).toEqual([]));
+      // Nothing is held any more: another opening carries out nothing.
+      expect(await work.replayDeferredDoorWork()).toBe(0);
+      expect(rerun).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+      work._resetDeferredDoorWorkForTesting();
+    }
   });
 
   it('a mailto unsubscribe is refused before its ledger claim', async () => {

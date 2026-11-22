@@ -4,6 +4,11 @@
  * a server is found by its home's single-instance lock (server.lock.json: pid and port) and
  * started as a child process. A remote side (a later phase) implements the same calls over
  * the links between machines; the flow (flow.ts) does not change.
+ *
+ * A home that handed the leader over may run a standby instead (handed-over.ts): it holds the
+ * server's port but no lock in the home, so `runningServer()` (a server that may lead) does not
+ * count it. `stopServer()` stops it too, and `startServer()` stops it first: a switch back
+ * starts the leader on that port.
  */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -11,6 +16,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { MachinePlace } from './settings.js'
 import { switchDir } from './records.js'
+import { confirmStandby, readStandbyServer, type StandbyServer } from './handed-over.js'
 
 export type ServerMode = 'leader' | 'trial'
 
@@ -18,9 +24,11 @@ export interface StartResult { ok: boolean; pid?: number; why?: string; logTail?
 
 export interface SwitchSide {
   readonly machine: MachinePlace
-  /** The live server on this side's home, if any. */
+  /** The live server on this side's home that may lead (a standby is not one), if any. */
   runningServer(): { pid: number; port: number | null } | null
-  /** A planned stop (SIGTERM, then SIGKILL after `graceMs`); resolves once the process is gone. */
+  /** The standby of a handed-over home running on this side, if any. */
+  standbyServer(): StandbyServer | null
+  /** A planned stop of the server and of a standby (SIGTERM, then SIGKILL after `graceMs`); resolves once both are gone. `wasRunning`: the server was. */
   stopServer(graceMs?: number): Promise<{ wasRunning: boolean }>
   /**
    * Start the server on this side's home and wait until it answers, or fails to.
@@ -37,6 +45,18 @@ function alive(pid: number): boolean {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** SIGTERM, SIGKILL after `graceMs`; resolves once the process is gone. Never a pid <= 1. */
+async function stopPid(pid: number, graceMs: number): Promise<void> {
+  if (!alive(pid)) return
+  try { process.kill(pid, 'SIGTERM') } catch { /* gone already */ }
+  const deadline = Date.now() + graceMs
+  while (alive(pid) && Date.now() < deadline) await sleep(100)
+  if (alive(pid)) {
+    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    while (alive(pid)) await sleep(50)
+  }
+}
 
 function defaultCli(): string {
   // src/core/leader/switch/side.ts -> src/cli.ts; dist/... bundles resolve their own entry.
@@ -59,21 +79,28 @@ export class LocalSide implements SwitchSide {
     }
   }
 
+  standbyServer(): StandbyServer | null {
+    return readStandbyServer(this.machine.home, { ...process.env, ...this.machine.env })
+  }
+
+  /** Stops this home's standby, once its port confirmed the pid its file names (a pid is used again). */
+  private async stopStandby(graceMs: number): Promise<void> {
+    const standby = this.standbyServer()
+    if (standby && await confirmStandby(standby)) await stopPid(standby.pid, graceMs)
+  }
+
   async stopServer(graceMs = 30_000): Promise<{ wasRunning: boolean }> {
+    await this.stopStandby(graceMs)
     const s = this.runningServer()
     if (!s) return { wasRunning: false }
-    try { process.kill(s.pid, 'SIGTERM') } catch { /* gone already */ }
-    const deadline = Date.now() + graceMs
-    while (alive(s.pid) && Date.now() < deadline) await sleep(100)
-    if (alive(s.pid)) {
-      try { process.kill(s.pid, 'SIGKILL') } catch { /* gone */ }
-      while (alive(s.pid)) await sleep(50)
-    }
+    await stopPid(s.pid, graceMs)
     return { wasRunning: true }
   }
 
   async startServer(mode: ServerMode, timeoutMs = 120_000, commitHandover?: number): Promise<StartResult> {
     const m = this.machine
+    // A standby of this home holds the port the server is to listen on.
+    await this.stopStandby(30_000)
     const cmd = m.start ?? [process.execPath, defaultCli(), 'web', '--port', String(m.port)]
     fs.mkdirSync(switchDir(m.home), { recursive: true, mode: 0o700 })
     const logFile = path.join(switchDir(m.home), `server-${mode}.log`)
@@ -91,6 +118,13 @@ export class LocalSide implements SwitchSide {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       if (exited !== null) return { ok: false, why: `the server exited during its start (code ${exited})`, logTail: tail(logFile) }
+      // It came up as a standby (its home handed over, or another machine leads): no start.
+      const standby = this.standbyServer()
+      if (standby && await confirmStandby(standby)) {
+        const st = await this.api('GET', '/api/leader/status').catch(() => null)
+        await stopPid(standby.pid, 10_000)
+        return { ok: false, why: `it runs as a standby: ${(st?.json as { message?: string } | null)?.message ?? 'another machine leads'}`, logTail: tail(logFile) }
+      }
       const r = await this.api('GET', '/api/health').catch(() => null)
       const running = this.runningServer()
       if (r && r.status < 500 && running) return { ok: true, pid: running.pid }

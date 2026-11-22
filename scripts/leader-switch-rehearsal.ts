@@ -3,7 +3,7 @@
  * "Rehearsal"): real servers on synthetic homes, three local witnesses, the real
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
- *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--all]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--all] [--keep]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
@@ -19,7 +19,7 @@ import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit,
 const args = process.argv.slice(2)
 const root = args[0]
 if (!root || root.startsWith('--')) {
-  console.error('usage: bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--all] [--no-back] [--port-base N]')
+  console.error('usage: bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--all] [--no-back] [--port-base N] [--keep]')
   process.exit(2)
 }
 const has = (f: string) => args.includes(f)
@@ -60,5 +60,19 @@ if (has('--flag-off') || all) {
   await rehearseFlagOff(path.join(work, 'flag-off'), print, ports())
   await rehearseNoWitnesses(path.join(work, 'no-witnesses'), print, ports())
 }
-console.log(failed ? `${failed} check(s) FAILED; evidence in ${work}` : `all checks passed; evidence in ${work}`)
+// The standby copies and the promoted homes are read-only on purpose (src/core/standby/), so a
+// plain `rm -rf` of the work dir fails and leaves gigabytes behind: make the tree writable again,
+// and drop it when every check passed (--keep keeps it); a failed run keeps it as evidence.
+makeWritable(work)
+if (!failed && !has('--keep')) fs.rmSync(work, { recursive: true, force: true })
+console.log(failed ? `${failed} check(s) FAILED; evidence in ${work} (writable, remove it with rm -rf)` : `all checks passed; ${has('--keep') ? `evidence in ${work}` : `work dir ${work} removed (--keep keeps it)`}`)
 process.exit(failed ? 1 : 0)
+
+function makeWritable(dir: string): void {
+  try { fs.chmodSync(dir, fs.statSync(dir).mode | 0o700) } catch { return }
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name)
+    if (e.isDirectory()) makeWritable(p)
+    else if (e.isFile()) { try { fs.chmodSync(p, fs.statSync(p).mode | 0o600) } catch { /* gone */ } }
+  }
+}

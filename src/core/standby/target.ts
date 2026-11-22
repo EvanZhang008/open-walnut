@@ -25,7 +25,7 @@ import { CHUNK_BYTES, hashFile, sha256 } from './chunks.js'
 import { DriftRecorder } from './drift.js'
 import { limiter } from './scan.js'
 import {
-  EXEC_MODE, FILE_MODE, chunkPath, closeDirs, copyStatOf, currentFiles, fsyncPath, manifestPath, openDirs,
+  EXEC_MODE, FILE_MODE, OPEN_DIR_MODE, chunkPath, closeDirs, copyStatOf, currentFiles, fsyncPath, manifestPath, openDirs,
   pruneEmptyParents, readCopyStats, readJson, readState, removeEmptyDirs, removeTree, safeRel, targetPaths, writeCopyStats, writeDurable, writeState,
   type TargetPaths,
 } from './target-files.js'
@@ -399,6 +399,79 @@ export class StandbyTarget {
       if (!old) continue
       for (const id of chunkIds(old)) if (!keep.has(id)) await fs.rm(chunkPath(this.t, id), { force: true }).catch(() => {})
     }
+  }
+
+  /**
+   * Empty the target: every batch it holds goes (standby.json, manifests, chunks, the copy and
+   * its stats), drift/ stays. A sender after it finds no batch and sends a whole one. Under the
+   * target's lock; `refuse(state)` read there says why not (null: go on). Each entry is first
+   * renamed into `.discard-<time>/` in the target, standby.json first, then that folder removed:
+   * a failure or a kill leaves either the old target or a `.discard-*` folder that
+   * finishDiscard completes. A top-level entry that is a link (or resolves outside the target) is
+   * refused and left as it is; below, removeTree removes a link as a link and never follows it.
+   */
+  async discard(refuse: (s: StandbyState) => string | null): Promise<{ ok: true; bytes: number; refused: string[] } | { ok: false; why: string }> {
+    return this.locked(async () => {
+      const s = await readState(this.t)
+      const why = refuse(s)
+      if (why) return { ok: false as const, why }
+      const bin = path.join(this.t.root, `.discard-${Date.now()}`)
+      await fs.mkdir(bin, { mode: OPEN_DIR_MODE })
+      const refused = await this.moveBatchesInto(bin)
+      await this.removeBins()
+      return { ok: true as const, bytes: s.current?.bytes ?? 0, refused }
+    })
+  }
+
+  /**
+   * What a discard that failed or was killed partway left: with no standby.json (it goes first),
+   * the batch entries still there join its `.discard-*` folder, then those folders go. A target
+   * with no such folder is not touched (a sender's first batch may be arriving). True when there
+   * was one.
+   */
+  async finishDiscard(): Promise<boolean> {
+    if (!(await this.bins()).length) return false
+    await this.locked(async () => {
+      const bins = await this.bins()
+      if (!bins.length) return
+      const stateThere = await fs.lstat(this.t.state).then(() => true, () => false)
+      if (!stateThere) await this.moveBatchesInto(bins[0]!)
+      await this.removeBins()
+    })
+    return true
+  }
+
+  /** The `.discard-*` folders of this target (real folders only). */
+  private async bins(): Promise<string[]> {
+    const out: string[] = []
+    for (const name of (await fs.readdir(this.t.root).catch(() => [] as string[])).sort()) {
+      if (!/^\.discard-\d+$/.test(name)) continue
+      const p = path.join(this.t.root, name)
+      if ((await fs.lstat(p).catch(() => null))?.isDirectory()) out.push(p)
+    }
+    return out
+  }
+
+  private async removeBins(): Promise<void> {
+    for (const p of await this.bins()) await removeTree(p)
+  }
+
+  /**
+   * Rename the batch entries (standby.json first) into `bin`, a folder of this target. Only real
+   * entries inside the real root move; a link, or one that resolves outside, is refused (named).
+   */
+  private async moveBatchesInto(bin: string): Promise<string[]> {
+    const root = await fs.realpath(this.t.root)
+    const refused: string[] = []
+    for (const p of [this.t.state, this.t.batches, this.t.chunks, this.t.copy, this.t.copyStat, this.t.apply]) {
+      const st = await fs.lstat(p).catch(() => null)
+      if (!st) continue
+      if (st.isSymbolicLink() || !(await fs.realpath(p)).startsWith(`${root}${path.sep}`)) { refused.push(path.basename(p)); continue }
+      if (st.isDirectory()) await fs.chmod(p, OPEN_DIR_MODE).catch(() => {})
+      await fs.rename(p, path.join(bin, path.basename(p)))
+      if (p === this.t.state) await fsyncPath(this.t.root)
+    }
+    return refused
   }
 
   /** Bring the target back to one complete batch after a crash (callers hold the lock). */

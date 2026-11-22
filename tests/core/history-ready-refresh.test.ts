@@ -228,7 +228,7 @@ describe('when a host comes back', () => {
 describe('brakes', () => {
   it('the server does not warm copied histories without an explicit isolated-run opt-in', () => {
     const server = fs.readFileSync('src/web/server.ts', 'utf8');
-    expect(server).toMatch(/if \(!isEphemeral \|\| process\.env\.WALNUT_HISTORY_READY_REFRESH === '1'\)\s*\{\s*historyReadyRefresher = await/);
+    expect(server).toMatch(/if \(!IS_EPHEMERAL \|\| process\.env\.WALNUT_HISTORY_READY_REFRESH === '1'\)\s*\{\s*historyReadyRefresher = await/);
   });
 
   it('nothing is queued under memory pressure, and a queue is dropped when it starts', async () => {

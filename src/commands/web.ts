@@ -79,9 +79,13 @@ export async function runWeb(options: {
   }
 
   // Normal server
+  // A home that handed the leader over (the leader switch's marker) boots only the standby that
+  // says who leads (core/leader/switch/handed-over.ts) and stays byte for byte as it is: no
+  // restored-data switch and no update install, both of which write in the home.
+  const handedOver = fs.existsSync(path.join((await import('../constants.js')).WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))
   // "Use this restored data" (Settings, Backup): the restored folder becomes the data
   // folder now, before anything below reads it (core/backup/restore-switch.ts).
-  {
+  if (!handedOver) {
     const { WALNUT_HOME } = await import('../constants.js')
     const { applyPendingSwitch } = await import('../core/backup/restore-switch.js')
     const sw = await applyPendingSwitch(WALNUT_HOME)
@@ -112,7 +116,9 @@ export async function runWeb(options: {
   {
     // A thin parent may loop later, after a live install replaced this version's files.
     await preloadRestartLoop()
-    const outcome = await runStartupUpdate(readConfigAuto, { readyAlso: readyFile })
+    const outcome: Awaited<ReturnType<typeof runStartupUpdate>> = handedOver
+      ? { kind: 'continue', decision: { action: 'skip', reason: 'disabled', note: 'this home handed the leader over' } }
+      : await runStartupUpdate(readConfigAuto, { readyAlso: readyFile })
     if (outcome.kind === 'stopped') {
       // Stopped while it installed (it cleaned up): the shell's code for that signal.
       process.exit(128 + (os.constants.signals[outcome.signal] ?? 0))

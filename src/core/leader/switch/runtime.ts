@@ -22,14 +22,18 @@
  *     only take Walnut down whenever two witnesses are unreachable.
  * A trial server (the switch's test start of the new leader, WALNUT_LEADER_TRIAL=1) never asks
  * for the permission and takes no instance lock: every door stays closed.
+ * A refusal that names the machine that leads now (`leader`) makes the server a standby
+ * (handed-over.ts) instead of an exit.
  *
  * While it leads it renews every `renewEveryMs`; an answer that names another holder ends its
  * permission at once (the client drops the lease). A lease that ran out without a renew
  * standing goes back to waiting (doors closed) and asks again.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { appendMayAct, markerRefusal, readMarker, readOpOutcomes, recordOpOutcomes, summarize, writeUnresolvedOps } from './records.js'
 import { openPermitClient, proposeAndWait, readStanding, type PermitHandle } from './permit-ops.js'
-import { notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
+import { DEFERRED_DOOR_WORK_FILE, notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
 import type { LeaderSwitchSettings } from './settings.js'
 import type { PermitRecord } from '../permit/types.js'
 import { PermitNotHeld } from '../permit/client.js'
@@ -39,7 +43,8 @@ export type BootDecision =
   | { kind: 'lead'; record: PermitRecord }
   | { kind: 'trial' }
   | { kind: 'waiting'; why: string }
-  | { kind: 'refuse'; why: string }
+  /** `leader`: another machine leads now (the server then runs as a standby, handed-over.ts). */
+  | { kind: 'refuse'; why: string; leader?: string; record?: PermitRecord }
 
 export type RuntimeState = 'leading' | 'trial' | 'waiting' | 'handing-over' | 'handed-over' | 'lost' | 'stopped'
 
@@ -90,7 +95,7 @@ type Want = 'renew' | 'grant' | 'none'
  * What this process should send, given what a majority holds. `refuse` marks an answer that
  * will not change by waiting (another machine leads, or a switch to here nobody committed).
  */
-export function wantFor(standing: PermitRecord | null | undefined, me: string, nonce: string, commitHandover?: number): { want: Want; why?: string; refuse?: boolean; released?: boolean } {
+export function wantFor(standing: PermitRecord | null | undefined, me: string, nonce: string, commitHandover?: number): { want: Want; why?: string; refuse?: boolean; released?: boolean; leader?: string } {
   if (standing === undefined) return { want: 'none', why: 'no majority of the witnesses answered' }
   if (standing === null) return { want: 'grant' }
   if (standing.kind === 'handover') {
@@ -104,25 +109,29 @@ export function wantFor(standing: PermitRecord | null | undefined, me: string, n
       // stopped (the marker is gone): nobody can cancel it any more, so it runs out first.
       return { want: 'grant', why: `waiting for this machine's earlier handover (record ${standing.number}) to run out at the witnesses` }
     }
-    return { want: 'none', refuse: true, why: `the witnesses hold a handover from machine ${standing.from} to ${standing.to} (record ${standing.number})` }
+    return { want: 'none', refuse: true, leader: standing.to, why: `the witnesses hold a handover from machine ${standing.from} to ${standing.to} (record ${standing.number})` }
   }
   if (standing.kind === 'release') {
     // Given back by a planned stop: free at once, for the machine that gave it back only
     // (another machine takes over a lead only through a switch).
     if (standing.by === me) return { want: 'grant', why: `this machine released record ${standing.number}`, released: true }
-    return { want: 'none', refuse: true, why: `machine ${standing.by} released the permission for its own restart (record ${standing.number})` }
+    return { want: 'none', refuse: true, leader: standing.by, why: `machine ${standing.by} released the permission for its own restart (record ${standing.number})` }
   }
-  if (standing.holder !== me) return { want: 'none', refuse: true, why: `the witnesses name machine ${standing.holder} as the holder (record ${standing.number})` }
+  if (standing.holder !== me) return { want: 'none', refuse: true, leader: standing.holder, why: `the witnesses name machine ${standing.holder} as the holder (record ${standing.number})` }
   if (standing.nonce === nonce) return { want: 'renew' }
   return { want: 'grant', why: `waiting for the record of an earlier process of this machine (record ${standing.number}) to run out at the witnesses` }
 }
 
 const tick = (ms: number) => new Promise((r) => { setTimeout(r, ms).unref?.() })
 
-async function acquire(h: PermitHandle, me: string, commitHandover?: number): Promise<{ ok: boolean; record?: PermitRecord; why?: string; refused?: boolean }> {
+type Acquired = { ok: boolean; record?: PermitRecord; why?: string; refused?: boolean; leader?: string; standing?: PermitRecord }
+
+async function acquire(h: PermitHandle, me: string, commitHandover?: number): Promise<Acquired> {
+  const refusal = (w: ReturnType<typeof wantFor>, standing: PermitRecord | null | undefined): Acquired =>
+    ({ ok: false, why: w.why, refused: !!w.refuse, ...(w.leader ? { leader: w.leader } : {}), ...(standing ? { standing } : {}) })
   const read = await readStanding(h)
   const w = wantFor(read.standing, me, h.client.incarnation(), commitHandover)
-  if (w.want === 'none') return { ok: false, why: w.why, refused: !!w.refuse }
+  if (w.want === 'none') return refusal(w, read.standing)
   if (w.want === 'renew') {
     const r = await proposeAndWait(h, (c) => c.renew())
     if (r?.outcome === 'chosen') return { ok: true, record: r.record }
@@ -135,7 +144,7 @@ async function acquire(h: PermitHandle, me: string, commitHandover?: number): Pr
   if (!w.released) await tick(h.client.grantDelayMs())
   const again = await readStanding(h)
   const w2 = wantFor(again.standing, me, h.client.incarnation(), commitHandover)
-  if (w2.want === 'none') return { ok: false, why: w2.why, refused: !!w2.refuse }
+  if (w2.want === 'none') return refusal(w2, again.standing)
   const g = await proposeAndWait(h, (c) => c.requestGrant())
   if (g?.outcome === 'chosen') return { ok: true, record: g.record }
   return { ok: false, why: w.why ?? `the witnesses did not take this machine's grant (${g?.outcome ?? 'no record'})` }
@@ -258,6 +267,12 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   }, () => { observe(); return isOpen() })
   // Registered with the checker: a send never passes a door that has a permit but no op ids.
   setOutwardSender({ begin: beginSend, report: reportSend })
+  // Work a closed door held on disk before this process (a list rename, a moved copy, a remote
+  // delete, an unsubscribe answer) is done at the first opening (src/core/deferred-door-work.ts).
+  // No file, nothing held: that module is not loaded here (a hold made later subscribes itself).
+  if (!opts.trial && fs.existsSync(path.join(home, ...DEFERRED_DOOR_WORK_FILE.split('/')))) {
+    void import('../../deferred-door-work.js').then((m) => m.armDeferredDoorWork(home)).catch(() => {})
+  }
 
   let decision: BootDecision
   const marker = readMarker(home)
@@ -285,7 +300,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       if (taken?.ok) { lock = taken.lock; lock.start() }
       const got = await acquire(h, me, opts.commitHandover)
       if (got.ok) decision = { kind: 'lead', record: got.record! }
-      else if (got.refused) decision = { kind: 'refuse', why: got.why! }
+      else if (got.refused) decision = { kind: 'refuse', why: got.why!, ...(got.leader ? { leader: got.leader } : {}), ...(got.standing ? { record: got.standing } : {}) }
       else decision = { kind: 'waiting', why: got.why ?? 'no majority of the witnesses answered' }
     }
   }

@@ -59,28 +59,31 @@ lock; `boot.ts`, `runtime.ts`):
 
 | What it finds | What it does |
 |---|---|
-| `local/leader-switch/handed-over.json` in its home | **refuses to boot**, with or without witnesses, **and with the experiment or the section gone**: "this data home was handed over to machine X ... it never leads again" (or "a switch is under way: --resume or --cancel") |
+| `local/leader-switch/handed-over.json` in its home | **runs as a standby** ([Standby](#standby)), with or without witnesses, **and with the experiment or the section gone**: it opens nothing in the home and answers "this machine handed the leader to X (switch S)" (or "is handing the leader to X: --resume or --cancel") |
 | `local/leader-switch/promoted.json` not yet `led` (a standby copy the switch is still making into this home) | refuses, unless it is the switch's own trial or commit start |
 | another leader server of this machine holds the instance lock | refuses |
-| a majority of witnesses names another machine | refuses |
+| a majority of witnesses names another machine (its record, a handover between two others, or another machine's release) | **runs as a standby** naming that machine |
 | a handover to this machine it was not told to commit | refuses ("`walnut leader switch --resume` finishes it") |
 | its own record of this process, or none at all (the very first leader) | leads; renews every 15 s |
 | a record an earlier process of this machine wrote (a restart, or the old leader's handover after a switch rolled back once its server had stopped) | **boots with every outward door closed** until that record runs out at the witnesses (up to a minute), then grants itself and leads |
 | no majority answers | **boots with every outward door closed** and keeps asking every 5 s |
 
-Why refuse in the first rows and not in the last: a refused home is known not to be the data
-home any more (booting it would take writes into a dead copy, and there is no read-only mode).
+Why not lead in the first rows and lead in the last: a handed-over home is known not to be the
+data home any more (booting it as the server would take writes into a dead copy). It does not
+exit either: a launcher would restart it in a loop. It stays up as a standby that leads nothing.
 A home without the marker was never handed over (the marker is written before any handover
 record), so its data is the newest there is; refusing would take Walnut down whenever two
 witnesses are unreachable. While its doors are closed it sends nothing, fires no routine and
 claims no trigger. An ephemeral server never asks the witnesses (its config is the user's),
 unless `WALNUT_EPHEMERAL_LEADER_SWITCH=1`.
 
-`resolveServerRole()` and `boot-policy.ts` are unchanged: the permission is checked beside
-them, not inside.
+`resolveServerRole()` is unchanged, and so are the leader and replica columns of
+`boot-policy.ts`: the permission is checked beside them, not inside. The switch's trial start is
+the table's third column ([The trial column](#the-trial-column)).
 
 `GET /api/leader/status` (mounted only while the permit runs): version, machine, trial or not,
-and the permission (state, may act, time left, record).
+and the permission (state, may act, time left, record). A standby answers it too, with
+`standby: true` and who leads ([Standby](#standby)).
 
 ## The switch
 
@@ -114,9 +117,10 @@ in the old home before it runs and is safe to repeat; `--resume` continues after
 6. **trial**: an offline self-check (every file of the batch at its size, every database
    through integrity_check with the old home's row count, config.yaml naming no path in the
    old home), then the new leader starts with `WALNUT_LEADER_TRIAL=1`: it never asks for the
-   permission, so every outward door stays closed; it loads no plugin, runs no standby,
-   reconciles, recovers and picks up no session and does what an ephemeral server does not
-   (no git pull or commit, no org autostart or duties); its version must read the data, the
+   permission, so every outward door stays closed, and every gate reads the boot policy's
+   trial column ([below](#the-trial-column)): HTTP, the databases and their migrations, and
+   nothing else (no plugin, standby copy, session, timer, routine, git job or outward work);
+   its version must read the data, the
    old home's newest task and a note must read back through its API. Then it stops. A
    resumed trial skips the size and row comparison (its server may have touched the home).
 7. **commit**: the new leader starts for real, told the handover's number: its own `renew` on
@@ -146,6 +150,179 @@ good is the new holder's record on top of it. So the "handover-started" record i
 One switch command runs per home at a time (`local/leader-switch/switch.lock`): a second
 `--resume` or `--cancel` from another terminal is refused while the first runs.
 
+### The trial column
+
+`BOOT_POLICY` (`src/core/boot-policy.ts`) has a third column beside `leader` and `replica`:
+`trial`, what the switch's trial start runs. The permission's boot step decides the trial
+(`WALNUT_LEADER_TRIAL=1`, read once in `src/web/server.ts` and passed to `boot.ts`); server.ts
+then sets the boot mode (`setBootMode('switch-trial')`) before the first gate reads the table,
+and from there `bootPolicy(job)` is on only where the row's `trial` is (a trial is a leader
+start, so a row on in a trial is on in the leader column too). The trial needs HTTP, the
+databases and their migrations to read the home back; everything else is off, routes that act
+outward included (it listens on a real port: `backup-routes` is off, a POST there uploads with no door). This replaced
+the trial's scattered checks (a second `WALNUT_LEADER_TRIAL` read before the plugin load, one
+in the standby runner, and `isEphemeral = true` for the rest of the boot). Eight gates that
+had no row got one (`org-duties`, `org-autostart`, `start-queue`, `browser-sign-in-sweep`:
+`role() === 'leader'` before; `standby-copy`, `focus-spaces`: `!isFollower()` before;
+`disk-watermark`: `!isEphemeral` alone before, and `topics-runtime`: no gate at all, so both
+are on in the replica column too), each with the leader and replica values its gate had;
+`tests/core/boot-policy.test.ts` pins both columns, row by row, to their values before the
+trial column, and this table to the code.
+
+| Job | Trial | Why |
+|---|---|---|
+| `foreign-db-guard` | on | the guard that no other process holds the databases the trial opens |
+| `cloud-exec` | off | off in the leader column already (a companion or replica job) |
+| `local-daemon` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none (no session daemon) |
+| `cloud-box-probe` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `local-claude-probe` | off | probes the Claude CLI on this machine: the trial starts no session |
+| `trust-proxy` | off | off in the leader column already (a companion or replica job) |
+| `companion-ingest-routes` | off | off in the leader column already (a companion or replica job) |
+| `backup-routes` | off | a POST uploads a backup with no outward door: the trial listens on a real port |
+| `plugin-apps` | on | a static route only; no plugin loads |
+| `host-network-door` | off | off in the leader column already (a companion or replica job) |
+| `host-network` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `plugin-jobs` | off | plugin code may send outward: no plugin loads in a trial |
+| `v1-forward` | off | off in the leader column already (a companion or replica job) |
+| `backup-leader` | off | off in the leader column already (a companion or replica job) |
+| `leader-heartbeat` | off | tells the companion the Mac leads: the trial does not lead |
+| `replica-pushes` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `self-api-credential` | off | off in the leader column already (a companion or replica job) |
+| `setup-token-banner` | off | off in the leader column already (a companion or replica job) |
+| `terminal-sweep` | off | reaches hosts over ssh: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `letter-push` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `work-card` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `approvals` | off | its clock expires and pushes approvals: nobody asks the trial for one |
+| `audio` | off | capture and transcription: nothing to record in a trial |
+| `git-pull` | off | writes the data repo: no git pull, commit, compaction or maintenance before the commit |
+| `git-auto-commit` | off | writes the data repo: no git pull, commit, compaction or maintenance before the commit |
+| `git-maintenance` | off | writes the data repo: no git pull, commit, compaction or maintenance before the commit |
+| `git-compaction` | off | writes the data repo: no git pull, commit, compaction or maintenance before the commit |
+| `session-auto-recover` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `session-reconcile` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none (it would mark the old leader's sessions dead) |
+| `completed-task-session-migration` | on | a data migration, as the databases' own; idempotent, the commit start finds it done |
+| `one-session-per-task` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none (it detaches sessions and makes daemon triggers) |
+| `stream-file-cleanup` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `session-integrity-check` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `notes-watcher` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `notes-semantic` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `search-wiring` | off | search indexing: the trial reads one note by its path |
+| `thread-ai` | off | model calls on session results: none in a trial |
+| `revoke-queue` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `send-path-canary` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `primary-store-jobs` | off | projections, backups, keep-awake, usage waits: a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `companion-queues` | off | off in the leader column already (a companion or replica job) |
+| `companion-stream-door` | off | a listener for other machines: the trial takes no connection from them |
+| `companion-stream-forward` | off | off in the leader column already (a companion or replica job) |
+| `hub-port-door` | off | a listener for other machines: the trial takes no connection from them |
+| `hook-task-domains` | off | hook actions on task and routine events: a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `session-request-sweep` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `lane-orphan-passes` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `lane-ask-sync` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `pin-retirement` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `usage-collect` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `budget-letters` | off | letters to the user: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `session-health-monitor` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none |
+| `overview-maintainer` | off | model calls that write project skills: a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `project-summary` | off | model calls: a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `host-learning` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `routine-wake` | off | routines and triggers: no routine fires in a trial |
+| `workspace-watch` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `host-wiring` | off | ssh, host daemons and their alerts: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `expose-runtime` | off | the public tunnel: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `update-check` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `plugins` | off | plugin code may send outward: no plugin loads in a trial |
+| `companion-plugin-cards` | off | off in the leader column already (a companion or replica job) |
+| `plugin-sync-polling` | off | plugin code may send outward: no plugin loads in a trial |
+| `cron` | off | routines and triggers: no routine fires in a trial |
+| `triage-bootstrap` | off | writes routines into cron-jobs.json: the commit start does |
+| `board-store-watch` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `board-kanban-watch` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `board-reminders` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `wait-until` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it (with promised follow-ups, rechecks, asks, status checks) |
+| `health-monitor` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `user-status` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `host-exec-grants` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `fleet-secrets` | off | sends secrets to hosts: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `private-task-gate` | off | resumes the checks of pushes to outside services: no push leaves a trial |
+| `title-reconciler` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `link-tags` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `pr-watch` | off | reads GitHub: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `change-watch` | off | reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `notes-indexer` | off | a timer or watcher that acts on the data: the trial only reads back; the commit start runs it |
+| `stt-auto-setup` | off | downloads a voice model: reaches outside the home: the trial sends, pushes, dials and probes nothing |
+| `org-duties` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none (the org nodes' duties) |
+| `org-autostart` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none (Main and the VPs) |
+| `start-queue` | off | sessions are the old leader's until the commit: the trial starts, wakes, recovers and reconciles none (queued starts) |
+| `standby-copy` | off | this home has not led yet: it is copied nowhere until the commit |
+| `disk-watermark` | off | a timer that notifies and stops writes at 90%: the commit start watches the disk |
+| `browser-sign-in-sweep` | off | signs out browsers a year old, writing the devices: the commit start does |
+| `focus-spaces` | off | writes the focus file and its quiet hold: the commit start does |
+| `topics-runtime` | off | posts members' replies and mails people: the trial sends nothing |
+
+What is not a row stays as it was: starts that only follow `role() === 'leader'` sit inside
+rows a trial turns off (the session and org clocks under `user-status`, the router wakes under
+`cron`), except the boot's data migrations (router areas, VP titles, artifacts) and the browser
+sign-in routes (routes only: their yearly sweep is a row), which a trial runs.
+
+## Standby
+
+A home that handed the leader over (the marker), or whose boot finds the witnesses naming
+another machine, does not exit: it runs as a standby on the server's port, so a launcher keeps
+it and no restart loop starts.
+
+**It opens nothing in the home.** The handed-over home is what a switch falls back to and stays
+byte for byte as it was: opening its databases would write their WAL and shm files and run
+migrations, and the server's lock file would land in it. So the standby is not the server with
+its jobs turned off (a boot policy column of all `off`, read by gates the standby never
+reaches, would mean nothing); server.ts checks the marker before the instance lock, the
+databases and the first log line, and starts `src/core/leader/switch/handed-over.ts` instead:
+
+- `GET /api/leader/status`: `standby: true`, `leader` (the machine the witnesses name now, read
+  live and read-only, else the one the marker names), `switchId`, the marker, the record,
+  `message` ("this machine handed the leader to machine-b (switch S)"), and
+  `permit: { state: 'standby', mayAct: false }`;
+- `GET /` (and `/index.html`): **200**, a short page that says the same and names the leader;
+  `GET /api/health` and `GET /api/config`: **200** `{ standby: true, leader, switchId, message }`.
+  These are what the Mac app checks before it attaches (`desktop/main.swift` checkExistingServer
+  and pollForServer want a 200 on `/`, then `/api/config` for the login session): with a 409 it
+  would try the next port and start a second server, or count the start as failed and restart.
+  A health probe therefore counts a standby as up: whether it leads is `standby` in
+  `GET /api/leader/status`;
+- every other request: **409** `{ code: 'handed_over', error: <message>, leader, switchId }`,
+  reads included (it has no data open to read).
+
+It listens on loopback (127.0.0.1) unless the server's own bind setting names an address
+(`bind-address.ts`: `--bind`, `WALNUT_BIND_ADDRESS`). Status requests at the same moment share
+one read of the witnesses. A second standby of the same home, while one runs (its pid file names
+it and its port confirms), starts nothing and exits with the error "a standby of this home
+already runs".
+
+It writes one file, outside the home: its pid and port beside the instance lock
+(`leader-instance/standby-<hash of the home>.json`, `machine-id.ts standbyServerFile`), removed
+when it stops or exits. A SIGKILL leaves it, so the switch's side signals the pid it names only
+once that pid's port answers that it is this standby (`confirmStandby`). Logs go to the run dir,
+as every server's. `walnut web` on a marked home skips what it does before the server (the
+switch to restored data, the update on restart), both of which write in the home. It reaches no outward door and fires nothing, so the door
+log in the home gets no line; the rehearsal hashes the whole home (every path and its bytes)
+before and after a standby run, with the witnesses online and with all of them unreachable.
+
+Found through the witnesses instead (no marker: a home that never handed over, say machine B's
+own home started while A leads), the boot reached the instance lock and the permission's first
+line already; the lock is let go and the standby starts. That home was not the fallback copy.
+
+**Back to leading.** `walnut leader switch --back`, run from the new leader, ends with the old
+machine leading again: the switch's side (`side.ts`) counts a standby as no running server
+(preflight does not refuse it), stops it before the promotion moves its home aside (the
+handed-over home is kept as `<home>.before-<switch>`), and every `startServer` on a home stops
+its standby first, since it holds the port. The fresh copy then starts as the trial and the
+leader on that path. A start the switch makes that comes up as a standby (another machine
+leads) fails at once with the standby's message instead of waiting for a server that never
+comes. Under a launcher that restarts what it sees stop, a stopped standby can be started
+again between that stop and the switch's start (the port is then taken, or a standby runs on
+the promoted path); stopping it through the launcher is the next phase's. Becoming the new leader's replica (taking its data while on standby) is the
+cross-machine phase's work.
+
 ### `--back`
 
 `walnut leader switch --back` from the new leader's home, within `back_window_hours`
@@ -157,6 +334,39 @@ switch back needs that copy to be recent too. The handed-over old home is moved 
 
 **What a switch back cannot undo**: anything already sent outward (mail, pushes, a plugin's
 posts), and the time the new leader's routines already ran.
+
+### The old leader's last batch on the new machine
+
+The promotion moves the copy out of the new machine's standby folder (its `standby_dir`), but
+the chunks and the manifest of the final batch stay there: as large as the home, and nothing
+sends to that folder any more. Through the switch-back window they are kept: the old leader's
+last state, for a person to look at should the new home turn out wrong, and a switch back
+finds the old leader sending into a folder that holds most chunks already. Past it, the new
+leader's standby runner removes them after a complete batch of its own
+(`src/core/leader/switch/standby-cleanup.ts`, from `afterSwitchCleanup` in
+`src/core/standby/runner.ts`; started detached, one at a time, so the batch loop never waits on
+a removal of 20 GB), when all of these hold:
+
+- the home leads because of that switch (its last `history.json` entry, `promoted.json` `led` by
+  the same switch), no switch from it is under way, and it carries no handed-over marker;
+- `back_window_hours` passed since the commit;
+- the home's own standby took a complete batch after the commit, so the data has a second copy
+  before this one goes;
+- the folder's last batch was committed before the switch committed: a later one means a
+  standby sends there again (the old machine leads again), and it is left alone;
+- the folder neither holds nor sits in the home or the home's own standby target, links
+  resolved (the own target only when it is a folder here: with `standby.host` it is on that
+  host, and the folder's own state and lock, which every sender to it commits through, keep
+  it safe).
+
+`StandbyTarget.discard` empties it under the target's lock: `standby.json` first, then the
+manifests, chunks, copy and stats are renamed into `.discard-<time>/` and that is removed. A
+failure or a kill partway leaves the old folder or a `.discard-*` folder: the next look
+(`finishDiscard`, which acts only when such a folder is there) moves what is left of the batch
+into it and removes it. The folder stays, empty: a valid target for a later sender, which sends
+a whole batch. `drift/` stays. A top-level entry (`chunks/`, `copy/`, ...) that is a link, or
+resolves outside the folder, is left as it is; a link deeper inside (in `copy/`, say) is removed
+as a link and never followed, so nothing outside the folder is touched.
 
 ### What a person sees
 
@@ -170,7 +380,7 @@ posts), and the time the new leader's routines already ran.
 | the cancel cannot reach a majority, or no majority answers whether the new leader committed | both sides stay stopped | "rerun with --cancel (no witness majority, no leader)", exit 1 |
 | a second switch command on the same home | refused | "another `walnut leader switch` runs on this home" |
 | the new leader does not start after the commit | it cannot roll back; the old home stays handed over | "committed, but the new leader did not start ... rerun with --resume", exit 1 |
-| someone starts the old home by hand | it refuses to boot, experiment on or off | the marker's message |
+| someone starts the old home by hand | it runs as a standby, experiment on or off, witnesses reachable or not: leads nothing, opens nothing in the home | `/api/leader/status` says who leads; every other request 409 `handed_over` |
 | someone starts the half-promoted new home by hand | it refuses to boot | "the standby copy that switch X is making into the new leader's home" |
 
 ## Restarts
@@ -207,9 +417,27 @@ Only a Walnut with the experiment on **and** witnesses set up registers a checke
 **A refusal never loses the work and never repeats it**: a routine slot stays due and its
 catch-up runs it once; a trigger fire is not claimed or acked, so the daemon replays it; an
 approved mail stays `approved` and the reconcile sends it once the doors open; pushes are held
-on disk and one push says what waited; a remote delete, list rename or lead wake waits for the
-doors to open (in memory: a restart while closed drops those three; the sync tick retries a
-delete for trackers that have it). Routes answer 503 with a plain message.
+on disk and one push says what waited; a lead wake waits for the doors to open in memory. A
+remote delete, a list rename, the old copy of a cross-source move ("[Moved]", completed) and an
+answered unsubscribe letter are held on disk instead, in `cache/leader-deferred-work.json`
+(`src/core/deferred-door-work.ts`, leader data: it moves with the home, so what the old leader
+held during a handover is done by the new one). One entry per key (a second rename of the same
+list replaces the first); the permit runtime arms it at boot, and at each opening of the doors
+every entry is claimed: stamped in the file with this process (host, pid, a token of this
+incarnation), run, and only then removed. Delivery is **at least once**: a stop or a crash
+between the claim and the removal leaves the stamped entry, and the next replay takes back a
+stamp of a process that is gone (another host's, a dead pid's, an earlier incarnation's, or one
+over an hour old) and runs it again. A second run is harmless: the rename or the moved mark is
+set again, a delete is answered 404, and the unsubscribe ledger's claim refuses a second
+attempt. A refusal during the replay holds it again; an entry whose plugin is not loaded gives
+its claim back and is tried again every 5 minutes and at each opening. A remote delete that
+fails (an error, not a refusal) is held again for a later try, 5 tries in all; a source with
+`confirmRemoteDeleted` is also retried by the sync tick from its tombstone. The file is read
+under its lock and any read error but a missing file stops the change, so an I/O error never
+writes the held work away; a file that does not parse is moved aside to `.corrupt-<time>`
+(logged) and the work goes on from empty. With no permit guarding the process, or on a boot
+that is not normal (a switch's trial), nothing reads or writes that file.
+Routes answer 503 with a plain message.
 
 **Op ids.** A mail send also registers its op id (`mail:<idempotency key>`) with the witnesses
 before it goes out (`beginOutwardSend`: the permit core's `registerOps` and `beginSend`) and
@@ -241,19 +469,23 @@ make the downtime long.
 
 ## Rehearsal
 
-`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--all]`
+`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--all] [--keep]`
 runs on any Linux dev box (in a Walnut dev container: `walnut-dev run bun ...`). It builds two
 machines and three witnesses in `<work dir>`, starts A on a synthetic home with tasks, notes,
 a plugin's files and a routine, keeps a standby copy at B, drives writes through A's API, runs
 the real `walnut leader switch`, and prints one line per check: every acknowledged write on
 B by content, op ids replayed on B apply none twice, the routine's slots each fired once, the
-two machines' permission logs never overlap, A started by hand refuses online and with every
-witness unreachable, B's writes come back with `--back`. `--kills` kills the command at each
+two machines' permission logs never overlap, A started by hand (online, and with every witness
+unreachable) runs as a standby that names B, answers a write `handed_over`, writes no door line
+and leaves its home's hash unchanged, B's writes come back with `--back` and A leads again
+(its standby stopped by the switch), B started by hand then is a standby naming A. `--kills` kills the command at each
 step (after the handover, during the final batch, during and after the promotion, during the trial,
 between the commit's majority and its marker, after the commit) and resumes it; `--trials`
 breaks the copy (a corrupt database, a missing note, an old program) and expects a rollback;
 `--flag-off` checks that nothing of it runs with the experiment off. Its test is
-`tests/e2e/leader-switch-real.test.ts`.
+`tests/e2e/leader-switch-real.test.ts`. The standby copies and promoted homes are read-only, so at
+the end the run makes `<work dir>` writable again and removes it when every check passed (`--keep`
+keeps it); a failed run keeps it, writable, as evidence.
 
 ## Not built yet
 
@@ -274,13 +506,18 @@ breaks the copy (a corrupt database, a missing note, an old program) and expects
   final batch is complete, so a send claimed and not settled at the stop is in the copy's
   ledger and listed as "outcome unknown" (mail; its reaper never sends a `sending` row again).
   They matter for an automatic takeover, where the copy may lag.
-- **The trial runs as a leader role** with the reductions above; the full quieting (a trial
-  placement in `boot-policy.ts`) changes the boot policy and waits for the project lead.
-- **Old leader under a service launcher**: a real machine's launcher restarts a server it
-  sees stop, and the marker then refuses it in a loop; the next phase stops it through the
-  launcher instead of a signal.
-- After a successful switch the new machine's standby folder keeps the chunks of the batches
-  it received (as large as the home); nothing removes them yet.
+- **Old leader under a service launcher**: the old home now comes back as a standby, so a
+  launcher's restart no longer loops. The switch still stops the old leader with a signal; a
+  launcher that restarts it during the switch gets a standby on the port, which a rollback's
+  start of the old leader (`side.ts`) stops first, and the launcher may then start another.
+  Stopping it through the launcher is the next phase's.
+- **The standby takes no data**: it answers who leads and nothing else; becoming the new
+  leader's replica is the cross-machine phase's.
+- **A switch back with a launcher** (known risk, left for the cross-machine phase): the switch
+  stops the old home's standby right before the promotion, and a launcher that restarts what it
+  sees stop can start the standby again in that gap. It then holds the port the trial and the
+  new leader need (their start fails and the switch rolls back), or runs on the promoted path.
+  The fix is to stop it through the launcher, which this phase does not touch.
 - No Settings screen (it needs the user's approval of the design).
 - Backups are not a door: a stopped old leader backs up nothing, but a server that lost the
   permission while running keeps its backup schedule.

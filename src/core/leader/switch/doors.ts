@@ -61,7 +61,7 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'mail-send', file: 'integrations/mail/approvals.ts', fn: 'mintAndSend', onRefusal: 'throws before the approval is minted; an answered letter stays for the reconcile of the server that may send. Refused later at sends.execute, once the ledger row exists, the send is QUEUED for every caller (writeLedgerAndRun runQueued answers the approved row, never "did not act"): the reconcile of a server that may send runs it once' },
   { kind: 'mail-send', file: 'integrations/mail/sends.ts', fn: 'execute', opIds: true, onRefusal: 'begins op mail:<idempotency key> before the claim: a refusal for want of the permission leaves the row approved for the reconcile of a server that may send (within 24 h of the approval, else it settles failed). A known op settles the row by its state, never sent again under that id: sent as sent; not-sent as failed; unknown as failed while the row is still approved (never claimed, so never sent), else unknown' },
   { kind: 'mail-send', file: 'core/topics/topic-mail.ts', fn: 'passOnce', onRefusal: 'the pass is skipped silently, like a held server; a refusal inside a send clears its marker and is not a failure' },
-  { kind: 'mail-unsubscribe', file: 'integrations/mail/unsubscribe.ts', fn: 'run', onRefusal: 'throws before the ledger claim, so no lock is held; an answered letter runs again once the doors open (held in memory: lost on a restart while closed, and the person answers again); no op id: a click after a failure is a new attempt, the HTTP rungs are idempotent, and the mailto rung sends through sends.execute (op ids); a mailto row settles from its send (onSendSettled, and before any reclaim), so a queued mail is never minted twice' },
+  { kind: 'mail-unsubscribe', file: 'integrations/mail/unsubscribe.ts', fn: 'run', onRefusal: 'throws before the ledger claim, so no lock is held; an answered letter runs again once the doors open (held on disk, cache/leader-deferred-work.json: a restart keeps it); no op id: a click after a failure is a new attempt, the HTTP rungs are idempotent, and the mailto rung sends through sends.execute (op ids); a mailto row settles from its send (onSendSettled, and before any reclaim), so a queued mail is never minted twice' },
   { kind: 'mail-write', file: 'integrations/mail/service.ts', fn: 'markRead', onRefusal: 'throws to the caller before the provider is asked (a route answers 503)' },
   { kind: 'mail-write', file: 'integrations/mail/service.ts', fn: 'markReadMany', onRefusal: 'throws to the caller before the provider is asked (a route answers 503)' },
   { kind: 'mail-write', file: 'integrations/mail/invites.ts', fn: 'respond', onRefusal: 'throws to the caller before the answer is sent (a route answers 503)' },
@@ -91,7 +91,7 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'session-wake', file: 'core/boards/board-reminders.ts', fn: 'fire', onRefusal: 'throws before the reminder is marked fired; the sweep holds it, as above' },
   { kind: 'session-wake', file: 'core/boards/board-reminders.ts', fn: 'arm', onRefusal: 'a due reminder re-arms after a minute, not a second' },
   { kind: 'session-wake', file: 'core/org/lead-waits.ts', fn: 'tellLead', onRefusal: 'wakes no lead session and leaves the note untold; the lead is told once the doors open' },
-  { kind: 'task-sync', file: 'core/private-tasks/sync-guard.ts', fn: 'guardSync', onRefusal: 'every write method (SYNC_METHOD_DOORS) throws: a push stamps sync_error for the sync loop (no card), a create is not an attempt, a remote delete, a list rename and a moved copy run once the doors open (held in memory: lost on a restart while closed; a delete of a source with confirmRemoteDeleted is also retried by the sync loop from its tombstone)' },
+  { kind: 'task-sync', file: 'core/private-tasks/sync-guard.ts', fn: 'guardSync', onRefusal: 'every write method (SYNC_METHOD_DOORS) throws: a push stamps sync_error for the sync loop (no card), a create is not an attempt, a remote delete, a list rename and a moved copy run once the doors open (held on disk, cache/leader-deferred-work.json: a restart keeps them; a delete of a source with confirmRemoteDeleted is also retried by the sync loop from its tombstone)' },
   { kind: 'plugin-fetch', file: 'core/plugins/server-api.ts', fn: 'fetch', onRefusal: 'a write method throws to the plugin; reads still go' },
   { kind: 'git-push', file: 'integrations/git-sync.ts', fn: 'syncInner', onRefusal: 'the push is skipped, the pull still runs' },
   { kind: 'git-push', file: 'integrations/git-compaction.ts', fn: 'compactionDoorRefusal', onRefusal: 'asked by the server before it forks the compaction worker (which ends in a force push): the run is skipped and the daily timer tries again' },
@@ -206,7 +206,8 @@ const onceListeners = new Map<string, () => void>()
 
 /**
  * Run `fn` once, the next time the doors open (this machine got the permission): work a refusal
- * held back (a trigger push, the held pushes, a routine's timer, a remote delete) goes then. One
+ * held back (a trigger push, the held pushes, a routine's timer) goes then. In memory: work a
+ * restart must not lose is held on disk instead (src/core/deferred-door-work.ts). One
  * subscription per `key`: a second call with the same key replaces the first, so a refusal
  * repeated every minute subscribes once. Never called while no permit guards.
  */
@@ -232,6 +233,21 @@ export function holdUntilDoorsOpen(key: string, fn: () => void, say?: () => void
     fn()
   })
 }
+
+/**
+ * Tests only: forget every subscription, as a restart does (what a closed door held in memory is
+ * gone; what it held on disk, deferred-door-work.ts, is not).
+ */
+export function _forgetDoorsOpenedListenersForTesting(): void {
+  onceListeners.clear()
+  heldSaid.clear()
+}
+
+/**
+ * Where work a closed door held is kept on disk, relative to the home (src/core/deferred-door-work.ts).
+ * Here, so the permit runtime can tell at boot whether there is any without loading that module.
+ */
+export const DEFERRED_DOOR_WORK_FILE = 'cache/leader-deferred-work.json'
 
 /** The permit runtime only. */
 export function notifyOutwardDoorsOpened(): void {

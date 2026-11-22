@@ -8,6 +8,7 @@
  * `WALNUT_MACHINE_ID_FILE` names another file. It is for running two "machines" on one
  * computer (the one-machine rehearsal and its tests); nothing in production sets it.
  */
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,4 +37,14 @@ export function permitHolderId(env: NodeJS.ProcessEnv = process.env): string | n
  */
 export function leaderInstanceLockPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(path.dirname(machineIdFile(env)), 'leader-instance', 'lock')
+}
+
+/**
+ * Where the standby of a handed-over home (handed-over.ts) says it runs: pid and port, for the
+ * switch's side (side.ts) that stops it before a leader starts on that home. Beside the instance
+ * lock, never in the home itself: the handed-over home stays byte for byte as it was.
+ */
+export function standbyServerFile(home: string, env: NodeJS.ProcessEnv = process.env): string {
+  const key = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16)
+  return path.join(path.dirname(machineIdFile(env)), 'leader-instance', `standby-${key}.json`)
 }

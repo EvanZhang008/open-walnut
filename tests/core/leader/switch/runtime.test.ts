@@ -273,10 +273,14 @@ describe('leaderPermitAtBoot', () => {
     await expect(leaderPermitAtBoot({ home: home('machine-a'), flagOn: false, isLeaderRole: true, ephemeral: false, env: {} }))
       .rejects.toThrow(/handed over to machine machine-b/)
     expect(leaderPermitActive()).toBe(false)
+    // The refusal carries the standby the server runs instead of exiting (handed-over.ts).
+    const err = await leaderPermitAtBoot({ home: home('machine-a'), flagOn: false, isLeaderRole: true, ephemeral: false, env: {} }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LeaderBootRefused)
+    expect((err as LeaderBootRefused).standby).toMatchObject({ leader: 'machine-b', switchId: 's1', message: 'this machine handed the leader to machine-b (switch s1)' })
   })
 
   it('a switch\'s trial or commit start without the permit (experiment off or no section) refuses: it would run with no door closed', async () => {
-    await expect(leaderPermitAtBoot({ home: home('machine-b'), flagOn: false, isLeaderRole: true, ephemeral: false, env: { WALNUT_LEADER_TRIAL: '1' } }))
+    await expect(leaderPermitAtBoot({ home: home('machine-b'), flagOn: false, isLeaderRole: true, ephemeral: false, trial: true, env: {} }))
       .rejects.toThrow(/no outward door closed/)
     await expect(leaderPermitAtBoot({ home: home('machine-b'), flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_LEADER_SWITCH_COMMIT: '4' } }))
       .rejects.toThrow(/no usable leader_switch section/)
@@ -287,7 +291,7 @@ describe('leaderPermitAtBoot', () => {
     await expect(leaderPermitAtBoot({ home: home('machine-b'), flagOn: false, isLeaderRole: true, ephemeral: false, env: {} }))
       .rejects.toThrow(/making into the new leader's home/)
     // Its own trial start passes the promotion check (and then needs the permit: refused here with the experiment off).
-    await expect(leaderPermitAtBoot({ home: home('machine-b'), flagOn: false, isLeaderRole: true, ephemeral: false, env: { WALNUT_LEADER_TRIAL: '1' } })).rejects.toThrow(/no outward door closed/)
+    await expect(leaderPermitAtBoot({ home: home('machine-b'), flagOn: false, isLeaderRole: true, ephemeral: false, trial: true, env: {} })).rejects.toThrow(/no outward door closed/)
     writePromoted(home('machine-b'), { switchId: 's2', state: 'led', at: new Date().toISOString() })
     expect(await leaderPermitAtBoot({ home: home('machine-b'), flagOn: false, isLeaderRole: true, ephemeral: false, env: {} })).toBeNull()
   })
@@ -316,6 +320,17 @@ describe('leaderPermitAtBoot', () => {
     await start('machine-b')
     await expect(leaderPermitAtBoot({ home: home('machine-a'), flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_MACHINE_ID_FILE: idFile('machine-a') } }))
       .rejects.toThrow(/does not start as the leader: the witnesses name machine machine-b/)
+    // Another machine leads: the server becomes a standby naming it, the record with it.
+    const err = await leaderPermitAtBoot({ home: home('machine-a'), flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_MACHINE_ID_FILE: idFile('machine-a') } }).catch((e: unknown) => e)
+    expect((err as LeaderBootRefused).standby).toMatchObject({ leader: 'machine-b', switchId: null, record: { holder: 'machine-b' } })
+    expect((err as LeaderBootRefused).standby?.message).toMatch(/^machine machine-b leads \(permit record \d+\): this machine does not$/)
+  })
+
+  it('no machine id is no standby: a refusal that names no other leader carries none', async () => {
+    writeConfig()
+    const err = await leaderPermitAtBoot({ home: home('machine-a'), flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_MACHINE_ID_FILE: path.join(root, 'none') } }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(LeaderBootRefused)
+    expect((err as LeaderBootRefused).standby).toBeUndefined()
   })
 })
 

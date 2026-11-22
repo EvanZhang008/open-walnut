@@ -9,7 +9,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import YAML from 'yaml'
 import Database from '../../src/lib/sqlite.js'
-import { makeWorld, REPO, type Machine, type World } from './world.js'
+import { makeWorld, REPO, treeHash, type Machine, type World } from './world.js'
 import { standbyStatus } from '../../src/core/standby/index.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
@@ -182,6 +182,35 @@ export function cronDoorCalls(home: string): MayActLine[] {
   return readMayAct(home).filter((l) => l.event === 'door' && l.kind === 'cron-fire')
 }
 
+/**
+ * A handed-over home started by hand runs as a standby (src/core/leader/switch/handed-over.ts):
+ * it starts and stays up, names the machine that leads, answers a write `handed_over`, reaches
+ * no outward door through a routine's period, and leaves its home byte for byte as it was.
+ */
+export async function checkStandby(c: Checks, w: World, m: Machine, leader: string, label: string): Promise<void> {
+  const before = treeHash(m.home)
+  const t0 = Date.now()
+  const s = await w.byHand(m, label.replace(/[^a-z0-9]+/gi, '-').toLowerCase())
+  try {
+    const st = s.ok ? await w.api(m, 'GET', '/api/leader/status').catch(() => null) : null
+    const j = st?.json
+    c.add(`${label}: starts and stays up as a standby naming ${leader}`, s.ok && st?.status === 200 && j?.standby === true && j?.leader === leader && j?.permit?.mayAct === false,
+      s.ok ? JSON.stringify({ leader: j?.leader, state: j?.permit?.state, record: j?.record?.number ?? null, message: j?.message }) : s.logText().split('\n').slice(-4).join(' | '))
+    const write = s.ok ? await w.api(m, 'POST', '/api/tasks', { title: 'written on a standby', project: 'Rehearsal' }).catch(() => null) : null
+    const read = s.ok ? await w.api(m, 'GET', '/api/tasks').catch(() => null) : null
+    c.add(`${label}: a write is answered handed_over, naming ${leader}`, write?.status === 409 && write.json?.code === 'handed_over' && String(write.json?.error).includes(`handed the leader to ${leader}`) && read?.status === 409,
+      `write ${write?.status} ${JSON.stringify(write?.json)}; read ${read?.status}`)
+    // One period of the rehearsal's 15 s routine while it runs: nothing may fire or pass a door.
+    await sleep(16_000)
+    const doors = readMayAct(m.home).filter((l) => l.t >= t0)
+    c.add(`${label}: it reaches no outward door and fires nothing (no line in its door log)`, s.ok && doors.length === 0, `${doors.length} line(s) since its start`)
+  } finally {
+    await s.stop()
+  }
+  const after = treeHash(m.home)
+  c.add(`${label}: its home is byte for byte as before (a hash of every path and its content)`, before === after, `${before.slice(0, 12)} -> ${after.slice(0, 12)}`)
+}
+
 /** The main scenario: switch under load, every check, the classic mistake, switch back. */
 export async function rehearseSwitchAndBack(root: string, print: (c: Check) => void, opts: { portA?: number; portB?: number; fillerGb?: number; noBack?: boolean; log?: (s: string) => void } = {}): Promise<{ checks: Checks; downtimeMs?: number; backDowntimeMs?: number }> {
   const log = opts.log ?? (() => {})
@@ -241,27 +270,33 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     c.add('the routine fired each slot exactly once in total across the switch', twice.length === 0 && dupA === 0 && dupB === 0 && slotsB.size > 0,
       `${slotsA.size} slot(s) on A, ${slotsB.size} on B, ${twice.length} on both, repeats A ${dupA} B ${dupB}`)
     // The classic mistake: the old app started again by hand, online...
-    const again = await a.startServer('leader', 60_000)
-    c.add('A started again by hand after the commit does not lead (witnesses online)', !again.ok && /handed over/.test(again.logTail ?? ''), (again.logTail ?? '').split('\n').filter((l) => /leader/.test(l)).slice(-1).join(''))
-    if (again.ok) await a.stopServer()
+    await checkStandby(c, w, w.a, w.b.id, 'A started again by hand after the commit (witnesses online)')
     // ...and with every witness unreachable.
     for (const x of w.witnesses) fs.renameSync(x.dir, `${x.dir}.off`)
-    const offline = await a.startServer('leader', 60_000)
-    for (const x of w.witnesses) fs.renameSync(`${x.dir}.off`, x.dir)
-    c.add('A started again by hand with all witnesses unreachable does not lead', !offline.ok && /handed over/.test(offline.logTail ?? ''), (offline.logTail ?? '').split('\n').filter((l) => /leader/.test(l)).slice(-1).join(''))
-    if (offline.ok) await a.stopServer()
-    // Control: the marker is what refuses offline. Without it, A boots with its doors closed.
+    try {
+      await checkStandby(c, w, w.a, w.b.id, 'A started again by hand with all witnesses unreachable')
+    } finally {
+      for (const x of w.witnesses) fs.renameSync(`${x.dir}.off`, x.dir)
+    }
+    // Control: the marker is what makes the standby offline. Without it, A boots with its doors closed.
     const markerPath = path.join(w.a.home, 'local', 'leader-switch', 'handed-over.json')
     const saved = fs.readFileSync(markerPath)
     fs.rmSync(markerPath)
     for (const x of w.witnesses) fs.renameSync(x.dir, `${x.dir}.off`)
-    const unmarked = await a.startServer('leader', 60_000)
+    const hashBefore = treeHash(w.a.home)
+    const unmarked = await w.byHand(w.a, 'control-unmarked')
     const unmarkedStatus = unmarked.ok ? await status(w, w.a) : null
-    await a.stopServer()
+    await unmarked.stop()
+    const hashAfter = treeHash(w.a.home)
     for (const x of w.witnesses) fs.renameSync(`${x.dir}.off`, x.dir)
     fs.writeFileSync(markerPath, saved)
     c.add('control: without the marker, A offline boots but acts on nothing (doors closed, waiting)', unmarked.ok && unmarkedStatus?.mayAct === false && unmarkedStatus?.state === 'waiting', JSON.stringify(unmarkedStatus))
+    // ...and the home's hash notices a real server's boot (its lock file, databases, door log): the standby checks above are not blind.
+    c.add('control: the home hash changes when a real server boots on it', hashBefore !== hashAfter, `${hashBefore.slice(0, 12)} -> ${hashAfter.slice(0, 12)}`)
     if (opts.noBack) return { checks: c, downtimeMs: st?.downtimeMs }
+    // A's standby is left running for the switch back: the switch stops it and A leads again.
+    const standbyA = await w.byHand(w.a, 'before-back')
+    c.add('A runs as a standby while B leads, before the switch back', standbyA.ok && !!a.standbyServer() && !a.runningServer(), `standby ${JSON.stringify(a.standbyServer())}`)
     // Switch back: B's writes come along.
     const onB: Seeded['tasks'] = []
     for (let i = 0; i < 5; i++) {
@@ -278,11 +313,11 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     const sb = readSwitchState(w.b.home)
     if (!c.add('switch back B -> A completes', back.code === 0 && sb?.step === 'done', `exit ${back.code}; ${back.out.trim().split('\n').slice(-3).join(' | ')}`)) return { checks: c, downtimeMs: st?.downtimeMs }
     c.add('A leads again with the write permission', !!(await status(w, w.a))?.mayAct)
+    c.add('A\'s standby was stopped by the switch back; the leader now holds its port', !a.standbyServer() && !!a.runningServer() && (await w.api(w.a, 'GET', '/api/leader/status')).json?.standby !== true)
+    await standbyA.stop()
     await checkCarried(c, w, w.a, w.b, { tasks: [...s.tasks, ...acked, ...onB], notes: [...s.notes, noteB], pluginFiles: [...s.pluginFiles, late] }, 'B -> A')
     c.add("A's handed-over home is kept beside the new one", fs.existsSync(`${w.a.home}.before-${sb!.id}`) && readMarker(`${w.a.home}.before-${sb!.id}`)?.state === 'handed-over')
-    const bAgain = await b.startServer('leader', 60_000)
-    c.add('B started again by hand after the switch back does not lead', !bAgain.ok && /handed over/.test(bAgain.logTail ?? ''))
-    if (bAgain.ok) await b.stopServer()
+    await checkStandby(c, w, w.b, w.a.id, 'B started again by hand after the switch back')
     return { checks: c, downtimeMs: st?.downtimeMs, backDowntimeMs: sb?.downtimeMs }
   } finally {
     await a.stopServer().catch(() => {})
@@ -458,6 +493,9 @@ export async function rehearseRestart(root: string, print: (c: Check) => void, p
   const w = makeWorld(root, { ...ports })
   const a = w.side(w.a)
   const firstActAfter = (t: number) => readMayAct(w.a.home).find((l) => l.t > t && l.mayAct && l.event !== 'door')?.t
+  // The status route can say mayAct a moment before the server's lease line reaches may-act.jsonl
+  // (seen at load 62): wait for the line, up to 10 s, instead of reading once.
+  const waitActAfter = (t: number) => waitFor('the lease line after the restart', async () => firstActAfter(t), 10_000, 100).catch(() => undefined)
   try {
     if (!c.add('restart: A starts as the leader', (await a.startServer('leader', 300_000)).ok)) return c
     await seed(w, w.a, 2)
@@ -468,7 +506,7 @@ export async function rehearseRestart(root: string, print: (c: Check) => void, p
     c.add('restart: the planned stop released the permission', !!released)
     const startedP = await a.startServer('leader', 120_000)
     const okP = await waitFor('A to act after the planned restart', async () => (await status(w, w.a))?.mayAct === true, 120_000).then(() => true).catch(() => false)
-    const openP = released ? firstActAfter(released.t) : undefined
+    const openP = released ? await waitActAfter(released.t) : undefined
     c.plannedMs = released && openP ? openP - released.t : undefined
     c.add('restart: after a planned restart the doors are closed under 5 s', startedP.ok && okP && c.plannedMs !== undefined && c.plannedMs < 5_000, `closed ${c.plannedMs ?? '?'} ms (release to the new process acting, its boot included)`)
     // Crash: SIGKILL, no release.
@@ -478,7 +516,7 @@ export async function rehearseRestart(root: string, print: (c: Check) => void, p
     await waitFor('A to be gone', async () => !a.runningServer(), 10_000).catch(() => null)
     const startedC = await a.startServer('leader', 120_000)
     const okC = await waitFor('A to act after the crash', async () => (await status(w, w.a))?.mayAct === true, 180_000).then(() => true).catch(() => false)
-    const openC = firstActAfter(killedAt)
+    const openC = await waitActAfter(killedAt)
     c.crashMs = openC ? openC - killedAt : undefined
     c.add('restart: after a crash the doors open again once the dead process\'s record ran out', startedC.ok && okC && c.crashMs !== undefined, `closed ${c.crashMs ?? '?'} ms`)
     // The routine: a 15 s slot came due while the doors were closed; it fires once after they open.

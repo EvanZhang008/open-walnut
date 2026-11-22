@@ -7,6 +7,7 @@
  * Nothing here reads or writes outside `root`: no ~/.open-walnut, no :3456.
  */
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +30,35 @@ export interface World {
   api(m: Machine, method: string, urlPath: string, body?: unknown, opId?: string): Promise<{ status: number; json: any; headers: Headers }>
   /** `walnut <args>` with the leader's home, as a separate process; resolves with its exit and output. */
   cli(home: string, args: string[], env?: Record<string, string>): Promise<{ code: number | null; signal: string | null; out: string }>
+  /**
+   * A machine's server started by hand, as a person (or a launcher) would: its log in the
+   * machine's folder, never in the home (LocalSide logs into the home's switch folder).
+   * Resolves once it answers /api/leader/status, or exits.
+   */
+  byHand(m: Machine, label: string, timeoutMs?: number): Promise<ByHand>
+}
+
+export interface ByHand { ok: boolean; pid?: number; log: string; logText(): string; stop(): Promise<void> }
+
+/**
+ * Every path under `dir` with its kind and its bytes (sha256), sorted: equal hashes mean nothing
+ * in the folder was created, removed or changed. Modes and times are not counted.
+ */
+export function treeHash(dir: string): string {
+  const h = createHash('sha256')
+  const walk = (rel: string) => {
+    const abs = path.join(dir, rel)
+    const entries = fs.readdirSync(abs, { withFileTypes: true }).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
+    for (const e of entries) {
+      const p = path.join(rel, e.name)
+      if (e.isDirectory()) { h.update(`d ${p}\n`); walk(p) }
+      else if (e.isSymbolicLink()) h.update(`l ${p} ${fs.readlinkSync(path.join(dir, p))}\n`)
+      else if (e.isFile()) h.update(`f ${p} ${createHash('sha256').update(fs.readFileSync(path.join(dir, p))).digest('hex')}\n`)
+      else h.update(`o ${p}\n`)
+    }
+  }
+  walk('')
+  return h.digest('hex')
 }
 
 function machine(root: string, name: string, port: number): Machine {
@@ -89,6 +119,32 @@ export function makeWorld(root: string, opts: { portA: number; portB: number; in
         child.stderr.on('data', (d) => { out += String(d) })
         child.on('exit', (code, signal) => resolve({ code, signal, out }))
       })
+    },
+    async byHand(m, label, timeoutMs = 120_000) {
+      const log = path.join(m.dir, `by-hand-${label}.log`)
+      const fd = fs.openSync(log, 'a', 0o600)
+      const cmd = m.start!
+      const child = spawn(cmd[0]!, cmd.slice(1), { env: { ...process.env, ...m.env, OPEN_WALNUT_HOME: m.home }, detached: true, stdio: ['ignore', fd, fd] })
+      fs.closeSync(fd)
+      let exited = false
+      child.on('exit', () => { exited = true })
+      child.unref()
+      const logText = () => { try { return fs.readFileSync(log, 'utf8') } catch { return '' } }
+      const alive = () => { try { process.kill(child.pid!, 0); return true } catch { return false } }
+      const stop = async () => {
+        if (!child.pid || !alive()) return
+        try { process.kill(child.pid, 'SIGTERM') } catch { /* gone */ }
+        for (let i = 0; i < 300 && alive(); i++) await new Promise((r) => setTimeout(r, 100))
+        if (alive()) try { process.kill(child.pid, 'SIGKILL') } catch { /* gone */ }
+      }
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline && !exited) {
+        const r = await fetch(`http://127.0.0.1:${m.port}/api/leader/status`, { signal: AbortSignal.timeout(5_000) }).catch(() => null)
+        if (r) return { ok: true, pid: child.pid, log, logText, stop }
+        await new Promise((res) => setTimeout(res, 250))
+      }
+      await stop()
+      return { ok: false, log, logText, stop }
     },
   }
   return world
