@@ -12,12 +12,12 @@
  */
 import { useState } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
-import { capabilityChips, gauges, offlineLine, problemsOf, problemTitle, roleChips, sessionsTitle, sessionsUnknown, sparks, spendUnknown, systemLine, timeline } from './host-fleet-dashboard-model';
+import { capabilityChips, gauges, offlineLine, problemsOf, problemTitle, roleChips, sessionsTitle, sessionsUnknown, spendUnknown, systemLine } from './host-fleet-dashboard-model';
 import { localMachineName, statusKind, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { FleetNumber } from './FleetNumber';
-import { Chips, FleetFacts, Ring, SparkRow } from './HostFleetVitals';
+import { Chips, FleetFacts, FleetHistory, Ring } from './HostFleetVitals';
 import type { ActionState } from './useHostFleet';
 import { RETRY_FAILED_TEXT, useHostActions } from '@/hooks/useHostActions';
 import { useHostStatus } from '@/hooks/useHostStatus';
@@ -60,7 +60,6 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
   // A read that failed says so in its own line, so the stale reading's line would only repeat it.
   const problems = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale'));
   const first = problems[0];
-  const segments = timeline(host, now);
   // The local machine's name, as its row and its diagram node say.
   const name = host.local ? localMachineName(host) : host.label;
   return (
@@ -74,23 +73,7 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
       <div className="hf-vitals">
         {gauges(host).map((g) => <Ring key={g.key} g={g} />)}
       </div>
-      <div className="hf-history" data-testid="host-fleet-history">
-        <div className="hf-lane">
-          <span className="hf-lane-label">Online</span>
-          <div className="hf-timeline" role="img" aria-label="Online over the last 12 hours" data-testid="host-fleet-timeline">
-            {segments.map((s) => (
-              <i key={`${s.from}-${s.tone}`} data-tone={s.tone} title={s.title} style={{ left: `${s.from * 100}%`, width: `${(s.to - s.from) * 100}%` }} />
-            ))}
-          </div>
-          <span className="hf-lane-value" />
-        </div>
-        {sparks(host).map((c) => <SparkRow key={c.key} s={c} />)}
-        <div className="hf-lane hf-lane-axis" aria-hidden="true">
-          <span />
-          <div className="hf-timeline-axis"><span>12 h ago</span><span>6 h</span><span>{host.now?.stale ? 'Last reading' : 'Now'}</span></div>
-          <span />
-        </div>
-      </div>
+      <FleetHistory host={host} now={now} />
       <div className="hf-numbers">
         <div data-testid="host-fleet-sessions" data-source={host.sessions.source ?? undefined} title={sessionsTitle(host, now)}>
           <FleetNumber className="hf-big" value={host.sessions.running} unknown={sessionsUnknown(host)} />

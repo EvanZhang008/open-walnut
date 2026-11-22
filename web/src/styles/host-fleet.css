@@ -77,8 +77,10 @@
 .hf-big { font-size: var(--font-size-2xl); line-height: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* The last 12 hours: one lane each, label | chart | value, on one time axis. */
-.hf-history { display: flex; flex-direction: column; gap: 4px; }
-.hf-lane { display: grid; grid-template-columns: 56px minmax(0, 1fr) 52px; align-items: center; gap: 8px; min-height: 20px; }
+/* One grid for every lane (subgrid), so the value column fits its widest line ("Since 8:55 PM")
+   and every chart keeps the same width and time axis. */
+.hf-history { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(52px, max-content); gap: 4px 8px; }
+.hf-lane { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 20px; }
 .hf-lane-label { font-size: var(--font-size-sm); color: var(--settings-help-fg); white-space: nowrap; }
 .hf-lane-value { font-size: var(--font-size-sm); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--fg-secondary); }
 .hf-lane-axis { min-height: 0; }

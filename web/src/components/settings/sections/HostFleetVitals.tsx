@@ -75,7 +75,6 @@ export interface SystemLine { text: string; meta?: ReactNode; action?: ReactNode
 
 /** The reading: system, rings, the last 12 hours, sessions and spend, what it can do. */
 export function FleetVitals({ host, now, system }: { host: FleetHost; now: number; system?: SystemLine }) {
-  const segments = timeline(host, now);
   const read = readLabel(host, now);
   const failure = readFailure(host, now);
   return (
@@ -96,24 +95,7 @@ export function FleetVitals({ host, now, system }: { host: FleetHost; now: numbe
       <div className="hf-vitals">
         {gauges(host).map((g) => <Ring key={g.key} g={g} />)}
       </div>
-      <div className="hf-history" data-testid="host-fleet-history">
-        <div className="hf-lane">
-          <span className="hf-lane-label">Online</span>
-          <div className="hf-timeline" role="img" aria-label="Online over the last 12 hours" data-testid="host-fleet-timeline">
-            {segments.map((s) => (
-              <i key={`${s.from}-${s.tone}`} data-tone={s.tone} title={s.title} style={{ left: `${s.from * 100}%`, width: `${(s.to - s.from) * 100}%` }} />
-            ))}
-          </div>
-          {/* A stretch with no record says so in words beside the lane (the charts under it are blank there). */}
-          <span className="hf-lane-value" data-testid="host-fleet-record-since">{segments[0]?.note}</span>
-        </div>
-        {sparks(host).map((c) => <SparkRow key={c.key} s={c} />)}
-        <div className="hf-lane hf-lane-axis" aria-hidden="true">
-          <span />
-          <div className="hf-timeline-axis"><span>12 h ago</span><span>6 h</span><span>{host.now?.stale ? 'Last reading' : 'Now'}</span></div>
-          <span />
-        </div>
-      </div>
+      <FleetHistory host={host} now={now} />
       <div className="hf-numbers">
         <div data-testid="host-fleet-sessions" data-source={host.sessions.source ?? undefined} title={sessionsTitle(host, now)}>
           <FleetNumber className="hf-big" value={host.sessions.running} unknown={sessionsUnknown(host)} />
@@ -175,6 +157,31 @@ export function FleetFacts({ host, now, omit = [], fit: judge = true }: { host: 
           </div>
         )}
       </dl>
+    </div>
+  );
+}
+
+/** A host's last 12 hours: online, then its charts, on one time axis (the dashboard card and the detail). */
+export function FleetHistory({ host, now }: { host: FleetHost; now: number }) {
+  const segs = timeline(host, now);
+  return (
+    <div className="hf-history" data-testid="host-fleet-history">
+      <div className="hf-lane">
+        <span className="hf-lane-label">Online</span>
+        <div className="hf-timeline" role="img" aria-label="Online over the last 12 hours" data-testid="host-fleet-timeline">
+          {segs.map((s) => (
+            <i key={`${s.from}-${s.tone}`} data-tone={s.tone} title={s.title} style={{ left: `${s.from * 100}%`, width: `${(s.to - s.from) * 100}%` }} />
+          ))}
+        </div>
+        {/* A stretch with no record says so in words beside the lane (the charts under it are blank there). */}
+        <span className="hf-lane-value" data-testid="host-fleet-record-since">{segs[0]?.note}</span>
+      </div>
+      {sparks(host).map((c) => <SparkRow key={c.key} s={c} />)}
+      <div className="hf-lane hf-lane-axis" aria-hidden="true">
+        <span />
+        <div className="hf-timeline-axis"><span>12 h ago</span><span>6 h</span><span>{host.now?.stale ? 'Last reading' : 'Now'}</span></div>
+        <span />
+      </div>
     </div>
   );
 }
