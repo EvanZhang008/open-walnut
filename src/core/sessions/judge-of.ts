@@ -110,9 +110,20 @@ export function judgeOfRecord(rec: Pick<SessionRecord, 'judge' | 'host'> | null 
   return judgedByHost(rec) && !rowOwnedHere(rec, thisHostKey()) ? 'host' : 'legacy'
 }
 
-/** Records this server runs itself: a host-judged one is its host's (a leader-side scan skips it). */
-export function leaderJudgedRecords<R extends Pick<SessionRecord, 'judge' | 'host'>>(recs: readonly R[]): R[] {
-  return recs.filter((r) => judgeOfRecord(r) === 'legacy')
+/**
+ * Does this server run and judge `sid` itself? On the leader: every session but a host's (judgeOf
+ * 'legacy'). On a host replica that runs its sessions: only its own rows (taskSideOnLeader); a
+ * copied row is its leader's (or another host's) to judge, never this one's. The resend, respawn
+ * and recovery family asks this on both sides, so each session has exactly one of them acting.
+ */
+export function judgedHere(sid: string): boolean {
+  return thisHostKey() ? taskSideOnLeader(sid) : judgeOf(sid) === 'legacy'
+}
+
+/** The records this server runs and judges itself (a boot scan): judgedHere, from the record alone. */
+export function judgedHereRecords<R extends Pick<SessionRecord, 'judge' | 'host'>>(recs: readonly R[]): R[] {
+  const here = thisHostKey()
+  return here ? recs.filter((r) => rowOwnedHere(r, here)) : recs.filter((r) => judgeOfRecord(r) === 'legacy')
 }
 
 /** The session a bus event is about (its data's sessionId), if any. */
@@ -122,14 +133,15 @@ export function sessionOfEvent(event: { data: unknown }): string | undefined {
 }
 
 /**
- * A bus handler for the sessions this server runs itself: an event of a host-judged session (a
- * fact its host sent) is skipped, since its host did that session's own work already. The leader's
- * resend, respawn and recovery subscribers take their handler through this.
+ * A bus handler for the sessions this server runs and judges itself (judgedHere): on the leader an
+ * event of a host-judged session (a fact its host sent) is skipped, since its host did that
+ * session's own work already; on a host an event of a copied row is skipped. The resend, respawn
+ * and recovery subscribers take their handler through this.
  */
-export function leaderJudgedOnly<E extends { data: unknown }, R>(handler: (event: E) => R): (event: E) => R | undefined {
+export function judgedHereOnly<E extends { data: unknown }, R>(handler: (event: E) => R): (event: E) => R | undefined {
   return (event: E) => {
     const sid = sessionOfEvent(event)
-    if (sid && judgeOf(sid) === 'host') return undefined
+    if (sid && !judgedHere(sid)) return undefined
     return handler(event)
   }
 }

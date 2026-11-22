@@ -12,7 +12,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-judge-of'
 import { _resetSessionTrackerForTesting, applyHostChannelBatch, createSessionRecord } from '../../../src/core/session-tracker.js'
 import { closeDb } from '../../../src/core/session-db.js'
 import {
-  _resetJudgeOfForTesting, judgeOf, judgeOfRecord, judgeOfStart, judgingHostOf, leaderJudgedOnly, leaderJudgedRecords, noteHostJudged, setHostJudgeProbe,
+  _resetJudgeOfForTesting, judgeOf, judgeOfRecord, judgeOfStart, judgingHostOf, judgedHereOnly, judgedHereRecords, noteHostJudged, setHostJudgeProbe,
 } from '../../../src/core/sessions/judge-of.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 
@@ -55,7 +55,7 @@ describe('judgeOf', () => {
     expect(judgeOfRecord({ judge: 'host', host: 'devbox' })).toBe('host')
     expect(judgeOfRecord({ host: 'devbox' })).toBe('legacy')
     expect(judgeOfRecord({ judge: 'host', host: '' })).toBe('legacy')
-    expect(leaderJudgedRecords([{ judge: 'host' as const, host: 'a' }, { host: 'b' }])).toEqual([{ host: 'b' }])
+    expect(judgedHereRecords([{ judge: 'host' as const, host: 'a' }, { host: 'b' }])).toEqual([{ host: 'b' }])
   })
 })
 
@@ -72,11 +72,11 @@ describe('judgeOfStart', () => {
   })
 })
 
-describe('leaderJudgedOnly', () => {
+describe('judgedHereOnly', () => {
   it('skips the events of a host\'s session and passes every other one through', () => {
     noteHostJudged('h1', 'devbox')
     const seen: string[] = []
-    const handler = leaderJudgedOnly((e: { name: string; data: unknown }) => { seen.push(e.name) })
+    const handler = judgedHereOnly((e: { name: string; data: unknown }) => { seen.push(e.name) })
     handler({ name: 'session:result', data: { sessionId: 'h1' } })
     handler({ name: 'session:result', data: { sessionId: 'l1' } })
     handler({ name: 'session:deleted', data: { sessionIds: ['h1'] } })

@@ -29,7 +29,7 @@
  * session lifecycle — the cloud replica proxies and must not double-fire).
  */
 
-import { leaderJudgedOnly } from './sessions/judge-of.js'
+import { judgedHereOnly } from './sessions/judge-of.js'
 import { bus, EventNames } from './event-bus.js'
 import type { BusEvent } from './event-bus.js'
 import type { SessionRecord } from './types.js'
@@ -418,7 +418,7 @@ export function startSessionAutoContinue(
 ): { stop: () => void; instance: SessionAutoContinue } {
   const sac = new SessionAutoContinue(cfg, deps)
   instance = sac
-  bus.subscribe('session-auto-continue', leaderJudgedOnly(sac.handleEvent), {
+  bus.subscribe('session-auto-continue', judgedHereOnly(sac.handleEvent), {
     global: true,
     interest: [
       'session:result', 'session:send', 'session:message-queued',

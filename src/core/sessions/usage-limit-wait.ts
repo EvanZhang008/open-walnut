@@ -23,7 +23,7 @@
  * The wait lives on the session record (`usageLimit`, a field no status write touches), so a server
  * restart picks it up again. Primary only.
  */
-import { leaderJudgedOnly, leaderJudgedRecords } from './judge-of.js'
+import { judgedHereOnly, judgedHereRecords } from './judge-of.js'
 import { bus, EventNames } from '../event-bus.js'
 import type { BusEvent } from '../event-bus.js'
 import type { SessionRecord, SessionUsageLimit, SessionUsageLimitContinued } from '../types.js'
@@ -529,7 +529,7 @@ function defaultDeps(handBack: UsageLimitWaitDeps['handBack']): UsageLimitWaitDe
     setTimer: (fn, ms) => { const h = setTimeout(fn, ms); h.unref?.(); return h },
     clearTimer: (h) => clearTimeout(h),
     getSession: async (sid) => (await import('../session-tracker.js')).getSessionByClaudeId(sid),
-    listSessions: async () => leaderJudgedRecords(await (await import('../session-tracker.js')).listSessions()),
+    listSessions: async () => judgedHereRecords(await (await import('../session-tracker.js')).listSessions()),
     patchWait: async (sid, fn) => {
       // A compare-and-set on the wait alone, as endpointWait is written (sessions/endpoint-wait.ts).
       const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js')
@@ -604,7 +604,7 @@ export function startUsageLimitWait(opts: {
   }
   const waiter = new UsageLimitWaiter({ ...defaultDeps(handBack), ...opts.deps }, testTiming ?? {})
   instance = waiter
-  bus.subscribe('session-usage-limit-wait', leaderJudgedOnly(waiter.handleEvent), {
+  bus.subscribe('session-usage-limit-wait', judgedHereOnly(waiter.handleEvent), {
     global: true,
     interest: [
       'session:result', 'session:error', 'session:send', 'session:message-queued', 'session:deleted',

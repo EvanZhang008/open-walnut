@@ -22,7 +22,7 @@
  * the work for any reader (`safeguardSwitchHolds`: the error card, the hand-back, turnHold).
  * Primary only (server.ts).
  */
-import { leaderJudgedOnly, leaderJudgedRecords } from './judge-of.js'
+import { judgedHereOnly, judgedHereRecords } from './judge-of.js'
 import { randomUUID } from 'node:crypto'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import { log } from '../../logging/index.js'
@@ -655,12 +655,12 @@ export const turnRetrier: TurnRetrier<'safeguard_switch'> = {
 export function startSafeguardSwitch(deps: Partial<SafeguardSwitchDeps> = {}): { stop: () => void; instance: SafeguardSwitch } {
   const sw = new SafeguardSwitch(deps)
   instance = sw
-  bus.subscribe('safeguard-switch', leaderJudgedOnly(sw.handleEvent), {
+  bus.subscribe('safeguard-switch', judgedHereOnly(sw.handleEvent), {
     global: true,
     interest: ['session:message-queued', 'session:messages-delivered', 'session:user-line', 'session:queued-cancelled',
       'session:interrupt', 'session:result', 'session:deleted'],
   })
-  void import('../session-tracker.js').then(({ listSessions }) => sw.rebuild(async () => leaderJudgedRecords(await listSessions())))
+  void import('../session-tracker.js').then(({ listSessions }) => sw.rebuild(async () => judgedHereRecords(await listSessions())))
     .then((n) => { if (n) log.session.info('safeguard switch: refused streaks picked up', { count: n }) })
     .catch((err) => log.session.warn('safeguard switch rebuild failed', { error: err instanceof Error ? err.message : String(err) }))
   return {

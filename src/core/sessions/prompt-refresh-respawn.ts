@@ -28,7 +28,7 @@
  * and the next turn end decides again). Primary only (server.ts). WALNUT_PROMPT_REFRESH=0 turns it
  * off with the cold-resume refresh; WALNUT_PROMPT_REFRESH_RESPAWN=0 turns off only this.
  */
-import { leaderJudgedOnly } from './judge-of.js';
+import { judgedHereOnly } from './judge-of.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
@@ -341,7 +341,7 @@ export function startPromptRefreshRespawn(
   deps: Partial<PromptRefreshRespawnDeps> = {},
 ): { stop: () => void; instance: PromptRefreshRespawn } {
   const instance = new PromptRefreshRespawn({ ...defaultDeps(runner, idleCompactionArmed), ...deps });
-  bus.subscribe('prompt-refresh-respawn', leaderJudgedOnly(instance.handleEvent), {
+  bus.subscribe('prompt-refresh-respawn', judgedHereOnly(instance.handleEvent), {
     global: true,
     interest: ['session:result', 'session:error', 'session:send', 'session:deleted'],
   });

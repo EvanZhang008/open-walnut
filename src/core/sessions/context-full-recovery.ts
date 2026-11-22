@@ -22,7 +22,7 @@
  * error) runs it again on a person's click. Claude Code sessions only: a lane,
  * the embedded runner and ACP engines are left alone. Primary only (server.ts).
  */
-import { leaderJudgedOnly, leaderJudgedRecords } from './judge-of.js';
+import { judgedHereOnly, judgedHereRecords } from './judge-of.js';
 import { randomUUID } from 'node:crypto';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
@@ -1050,12 +1050,12 @@ export function startContextFullRecovery(deps: Partial<ContextFullRecoveryDeps> 
   const recovery = new ContextFullRecovery(deps);
   instance = recovery;
   const removeQuietListener = addQuietTurnEndListener(recovery.onQuietEnd);
-  bus.subscribe('context-full-recovery', leaderJudgedOnly(recovery.handleEvent), {
+  bus.subscribe('context-full-recovery', judgedHereOnly(recovery.handleEvent), {
     global: true,
     interest: ['session:message-queued', 'session:messages-delivered', 'session:user-line', 'session:queued-cancelled', 'session:usage-update',
       'session:interrupt', 'session:result', 'session:error', 'session:deleted'],
   });
-  void import('../session-tracker.js').then(({ listSessions }) => recovery.rebuild(async () => leaderJudgedRecords(await listSessions())))
+  void import('../session-tracker.js').then(({ listSessions }) => recovery.rebuild(async () => judgedHereRecords(await listSessions())))
     .then((n) => { if (n) log.session.info('context recovery: compactions a restart caught, looked for in their hosts', { count: n }); })
     .catch((err) => log.session.warn('context recovery rebuild failed', { error: err instanceof Error ? err.message : String(err) }));
   return {
