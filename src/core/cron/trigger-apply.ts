@@ -275,7 +275,9 @@ export async function applyTriggerChecked(
     } else {
       job.state.consecutiveErrors = 0;
       job.state.lastError = undefined;
-      job.updatedAtMs = atMs;
+      // No updatedAtMs: a good check changes no definition. It once moved the definitions file
+      // (cron-jobs.json, 0.9 MB, git-synced) on every check of every trigger, about once a second
+      // on the Mac (2026-11-22), and nothing reads it (the routines copy and the revision leave it out).
     }
     const health = notCounted ? {} : checkHealth(job, event.outcome, atMs);
 

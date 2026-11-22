@@ -144,7 +144,7 @@ describe('a host replica keeps the routines copy', () => {
     expect((await readRoutinesCopy({ includeDisabled: true }))!.find((j) => j.id === job(3).id)!.state).toMatchObject({ lastStatus: 'error', lastError: 'exit 1' })
   })
 
-  it('real quiet trigger checks (the engine writes updatedAtMs, nextRunAtMs, lastCheck, checkLog) move no row; an error check is one row', async () => {
+  it('real quiet trigger checks (the engine writes nextRunAtMs, lastCheck, checkLog) move no row; an error check is one row', async () => {
     setReplica(false)
     let now = 50_000
     const service = await macCronService(() => now)
@@ -167,8 +167,9 @@ describe('a host replica keeps the routines copy', () => {
     }
     for (let i = 0; i < 3; i++) {
       await check('quiet')
-      // The engine did move its clocks on the Mac.
-      expect(macJob().updatedAtMs).toBe(now)
+      // The engine did move its clocks on the Mac (the runtime ones: a quiet check leaves the
+      // definition's updatedAtMs as it was, trigger-check-leaves-definitions.test.ts).
+      expect(macJob().updatedAtMs).toBeLessThan(now)
       expect(macState()).toMatchObject({ nextRunAtMs: now + 300_000, lastCheck: { atMs: now, outcome: 'quiet' } })
       expect(macState().checkLog.length).toBe(i + 1)
       const from = h.calls.length
