@@ -73,6 +73,8 @@ test('a tighter column keeps the model name and drops the percentage, which come
   await expect(pct).toHaveCount(0);
   await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
   await expect(model).toHaveText(/^Fable$/);
+  // It shows one word, but its name still says the whole model (a screen reader hears which one).
+  await expect(model).toHaveAccessibleName(/^Fable \S/);
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);

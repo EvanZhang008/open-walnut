@@ -106,9 +106,11 @@ describe('task menus share one row definition', () => {
 
   it('a session menu opens with Open, Window and Panels, and Open holds what Views held', () => {
     const open = files.find((f) => f.rel === 'components/sessions/SessionMenuOpen.tsx')!.src;
-    const group = open.slice(open.indexOf('label="Open"'), open.indexOf('</KebabGroup>', open.indexOf('label="Open"')));
+    const at = open.indexOf('label="Open panel"');
+    expect(at).toBeGreaterThan(-1);
+    const group = open.slice(at, open.indexOf('</KebabGroup>', at));
     for (const row of ['Changed', 'Files', 'Terminal', 'Board', '<SessionViewItems']) expect(group).toContain(row);
-    expect(open).toContain('label="Window"');
+    expect(open).toContain('label="Open in window"');
     expect(open).toContain('<PanelCountRow');
     expect(files.find((f) => f.rel === 'components/sessions/SessionPanel.tsx')!.src).toContain('renderMenuOpen(close)');
     // The old separate Views group is gone everywhere.

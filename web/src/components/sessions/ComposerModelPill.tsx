@@ -368,6 +368,12 @@ export function ComposerModelPill({
   // waits for a wider column. The row decides (ComposerControlsBar measures the
   // short form and the detail apart); the pill only renders what it is told.
   const fit = useComposerRowFit();
+  // A condensed pill shows one family word ("Codex"); its name still says the whole model, so a
+  // screen reader (and a test looking for "GPT Fast") hears which one is picked.
+  const condensedName = (label: string) => fit.condensed && shortModelName(label) !== label
+    ? `${label}${contextPercent != null ? `, ${contextPercent}% context used` : ''}` : undefined;
+  const acpLabel = withEngineName(engineUi.displayName, acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName));
+  const cliLabel = displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto');
   const renderLabel = (label: string, detail: ReactNode) => fit.condensed ? (
     <>
       <span className="composer-model-pill-short">{shortModelName(label)}</span>
@@ -388,13 +394,14 @@ export function ComposerModelPill({
       className={`btn btn-sm btn-ghost${fit.condensed ? ' btn-tight' : ''} composer-model-pill`}
       ref={setPillEl}
       title={`Switch ${engineUi.displayName} model${extraTitle}`}
+      aria-label={condensedName(acpLabel)}
       onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
     >
       {/* 3 tiers: the provider's own name (minus its provider prefix — a pill
           reading "Amazon Bedrock/Claude…" is all provider, no model), else
           prettify the id, else the engine. */}
       {renderLabel(
-        withEngineName(engineUi.displayName, acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName)),
+        acpLabel,
         contextPercent != null && (
           <span className="session-detail-context-pct" data-condensed-detail title={`Context ${contextPercent}% used`}> {contextPercent}%</span>
         ),
@@ -411,10 +418,11 @@ export function ComposerModelPill({
       className={`btn btn-sm btn-ghost${fit.condensed ? ' btn-tight' : ''} composer-model-pill`}
       ref={setPillEl}
       title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort${extraTitle}`}
+      aria-label={condensedName(cliLabel)}
       onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
     >
       {renderLabel(
-        displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto'),
+        cliLabel,
         contextPercent != null && (
           <span
             className="session-detail-context-pct"

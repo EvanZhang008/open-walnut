@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import fs from 'node:fs/promises';
-import { barOf, controlOf, mockControlsSession, CTRL_SESSION } from './composer-controls-overflow-helpers';
+import { barOf, controlOf, expectNoteAndBtwOnce, mockControlsSession, CTRL_SESSION } from './composer-controls-overflow-helpers';
 import { openDraft } from './draft-helpers';
 
 test.use({ viewport: { width: 1200, height: 760 }, deviceScaleFactor: 1 });
@@ -130,12 +130,11 @@ test('short draft menu and phone composer retain reachable direct controls and s
   const panel = await enterHome(page);
   await page.setViewportSize({ width: 390, height: 600 });
   const composer = panel.locator('.session-panel-input').last();
-  await expect(composer.locator('.composer-direct-control[data-add-control="btw"]')).toBeVisible();
-  await expect(composer.locator('.composer-direct-control[data-add-control="note"]')).toBeVisible();
-  // On a phone the model pill's percentage gives way before Note and btw (44 px finger
-  // targets) fold: they stay on the row beside Bypass and the model's name (foldDirectButtons).
-  await expect(barOf(panel)).not.toHaveAttribute('data-direct-folded', 'true');
-  await expect(controlOf(panel, 'model').locator('.composer-model-pill-short')).toHaveText('Fable');
+  // A 390 px phone row cannot hold Side chat and Session note (44 px finger targets) beside Bypass
+  // and the model: they fold into the + menu, once each, and the model keeps its name.
+  await expect(barOf(panel)).toHaveAttribute('data-direct-folded', 'true');
+  expect(await expectNoteAndBtwOnce(panel)).toBe('menu');
+  await expect(controlOf(panel, 'model').locator('button')).toContainText('Fable');
   await composer.locator('.chat-plus-btn').first().click();
   await composer.getByRole('menuitem', { name: 'More actions', exact: true }).click();
   await fits(page, page.getByRole('menu', { name: 'More composer actions' }));

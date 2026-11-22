@@ -178,7 +178,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'shortcuts', label: 'Keyboard shortcuts', title: 'Keyboard shortcuts', group: 'configure',
     icon: 'keyboard', tint: '#636366',
-    description: 'See every shortcut. Pick a new key for any that has a Change button.',
+    description: 'See every shortcut and pick a new key for any that has a Change button.',
     keywords: ['keyboard', 'shortcut', 'shortcuts', 'key', 'keys', 'hotkey', 'command', 'new task', 'close column', 'cmd'],
     render: () => <KeyboardShortcutsSection />,
   },

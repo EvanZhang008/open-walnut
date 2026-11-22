@@ -220,7 +220,7 @@ describe('a filter into a folder', () => {
     expect(saved.status).toBe(200)
     await engine.idle()
     const rules = (await get<RulesResponse>('/rules')).body
-    expect(rules.rules[0]).toMatchObject({ id: 'r-ci', moveTo: 'CI runs', summary: 'From a sender with "CI.EXAMPLE" with "run failed" in the subject → CI runs, filed into CI runs' })
+    expect(rules.rules[0]).toMatchObject({ id: 'r-ci', moveTo: 'CI runs', summary: 'From a sender with "CI.EXAMPLE" with "run failed" in the subject → CI runs, filed into a folder of that name' })
 
     const applied = await send<{ found: number; queued: number; skipped: number }>('POST', '/rules/apply', { ruleId: 'r-ci' })
     expect(applied).toEqual({ status: 202, body: { found: 6, queued: 5, skipped: 1 } })
