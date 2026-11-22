@@ -43,6 +43,8 @@ const MBIT = flag('mbit', 20)
 const DOWN_MBIT = flag('down-mbit', 100)
 const RTT_MS = flag('rtt-ms', 50)
 const FAST_FIRST = args.includes('--fast-first')
+/** --big-mb N: one more batch, with the writers on, after a new file of N MiB (an incremental larger than any buffer). */
+const BIG_MB = flag('big-mb', 0)
 const home = path.join(work, 'home')
 const target = path.join(work, 'target')
 const log = (...a: unknown[]) => console.log(`[bench ${new Date().toISOString().slice(11, 19)}]`, ...a)
@@ -297,6 +299,20 @@ async function main(): Promise<void> {
     }
   })()
   result.withUngatedAppends = { ...(await run(`incremental (plus an ungated append every ${APPEND_MS} ms)`)), appendEveryMs: APPEND_MS, appends }
+  if (BIG_MB) {
+    const big = path.join(home, 'artifacts', `big-change-${Date.now()}.bin`)
+    fs.mkdirSync(path.dirname(big), { recursive: true })
+    for (let i = 0; i < BIG_MB; i++) fs.appendFileSync(big, rnd(1024 * 1024))
+    const u0 = wireMB()
+    const out = await oneBatch()
+    result.bigChange = {
+      mb: BIG_MB, ok: out.ok, ...(out.ok ? {} : { reason: out.reason.slice(0, 160) }),
+      totalMs: Math.round(out.stats.totalMs), holdMs: Math.round(out.stats.holdMs), pinMs: Math.round(out.stats.pinMs),
+      sentMB: +(out.stats.sentBytes / 1024 ** 2).toFixed(1),
+      ...(remote ? { applyMs: Math.round(remote.stats.lastApplyMs), spoolPeakMB: +(remote.stats.spoolPeakBytes / 1024 ** 2).toFixed(1), wireUpMB: +((wireMB()!.up - u0!.up) / 1024 ** 2).toFixed(1) } : {}),
+    }
+    log(`incremental with a new ${BIG_MB} MiB file (writers on)`, result.bigChange)
+  }
   appending = false
   await appender
   writing = false

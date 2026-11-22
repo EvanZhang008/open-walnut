@@ -262,14 +262,44 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     for (const [id, data] of heldChunks) await send(id, data)
     heldChunks.clear()
 
-    // 3. stage the changed files the hold did not read (the databases are pinned: they wait)
+    const out = new Map<string, BatchFile>()
+    // 3. copy each changed database as pinned, first: each one's pin ends once it is copied (the
+    // chunks wait in the transport, never on the link), so the leader's WAL is checkpointed again
+    // while the files are read and sent
+    for (let i = 0; i < dbs.length; i++) {
+      const d = dbs[i]
+      const src = dbStats.get(d.p)!
+      const last = prev.get(d.p)
+      // Unchanged since the last batch's stat, and no commit between this stat and the pins.
+      if (last?.db && sameStat(last.src, src) && steady.has(d.p)) { out.set(d.p, last); continue }
+      let dig: FileDigest
+      try {
+        dig = await pinner.copy(i)
+        const missing = await opts.transport.missing(dig.chunks.filter((id) => !known.has(id)))
+        const want = dig.chunks.map((id, at) => (missing.has(id) ? at : -1)).filter((at) => at >= 0)
+        for (let k = 0; k < want.length; k += 32) {
+          const part = want.slice(k, k + 32)
+          const data = await pinner.chunks(part)
+          for (let j = 0; j < part.length; j++) await send(dig.chunks[part[j]], data[j])
+        }
+        await pinner.drop()
+      } catch (err) {
+        throw new VoidBatch(`database ${d.p} cannot be copied: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      stats.stagedFiles++
+      stats.stagedBytes += dig.size
+      out.set(d.p, fileEntry(d.p, dig.size, dig.h, dig.chunks, false, src, true))
+    }
+    await pinner.close()
+    stats.pinMs = performance.now() - pinnedFrom
+
+    // 4. stage the changed files the hold did not read
     for (const e of changed) if (!staged.has(e.p)) await stage(e.p, send)
 
-    // 4. re-scan, and place every path of either scan or of the moment's dirs
+    // 5. re-scan, and place every path of either scan or of the moment's dirs
     const s2 = await scanHome(opts.home)
     stats.rescanMs = s2.ms
     if (s2.unreadable.length) throw new VoidBatch(`cannot read ${s2.unreadable.slice(0, 5).join(', ')}`)
-    const out = new Map<string, BatchFile>()
     const dbPaths = new Set(dbs.map((d) => d.p))
     const paths = new Set([...s1.files.keys(), ...s2.files.keys(), ...staged.keys(), ...atMoment.listed])
     for (const rel of [...paths].sort()) {
@@ -278,7 +308,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       if (existed === null) throw new VoidBatch(`${rel}: whether it existed at the batch's moment is unknown`)
       const then = s1.files.get(rel)
       const now = s2.files.get(rel)
-      if (dbPaths.has(rel)) continue // pinned: copied below
+      if (dbPaths.has(rel)) continue // copied above, as pinned
       if (then?.db || now?.db) throw new VoidBatch(`database ${rel} appeared around the batch's moment`)
       const mark = marks.get(rel)
       if (mark) {
@@ -317,34 +347,6 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     for (const rel of s2.files.keys()) {
       if (s2.files.get(rel)!.db && !dbPaths.has(rel) && atMoment.existed(rel) !== false) throw new VoidBatch(`database ${rel} appeared around the batch's moment`)
     }
-
-    // 5. copy each changed database as pinned (pinned since the moment, so any time is fine)
-    for (let i = 0; i < dbs.length; i++) {
-      const d = dbs[i]
-      const src = dbStats.get(d.p)!
-      const last = prev.get(d.p)
-      // Unchanged since the last batch's stat, and no commit between this stat and the pins.
-      if (last?.db && sameStat(last.src, src) && steady.has(d.p)) { out.set(d.p, last); continue }
-      let dig: FileDigest
-      try {
-        dig = await pinner.copy(i)
-        const missing = await opts.transport.missing(dig.chunks.filter((id) => !known.has(id)))
-        const want = dig.chunks.map((id, at) => (missing.has(id) ? at : -1)).filter((at) => at >= 0)
-        for (let k = 0; k < want.length; k += 32) {
-          const part = want.slice(k, k + 32)
-          const data = await pinner.chunks(part)
-          for (let j = 0; j < part.length; j++) await send(dig.chunks[part[j]], data[j])
-        }
-        await pinner.drop()
-      } catch (err) {
-        throw new VoidBatch(`database ${d.p} cannot be copied: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      stats.stagedFiles++
-      stats.stagedBytes += dig.size
-      out.set(d.p, fileEntry(d.p, dig.size, dig.h, dig.chunks, false, src, true))
-    }
-    await pinner.close()
-    stats.pinMs = performance.now() - pinnedFrom
 
     // 6. commit (every chunk was sent as it was read)
     const manifest: BatchManifest = {

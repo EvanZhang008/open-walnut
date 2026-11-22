@@ -15,7 +15,8 @@
  *
  * Any database that cannot be opened, pinned or copied fails the whole batch.
  *
- * Cost: a database is held in the worker's memory while it is written out (its size).
+ * Cost: a database is held in the worker's memory while it is written out (its size). Its pin
+ * ends as soon as it is copied (`copy`), so each database's WAL is held only for its own copy.
  */
 import { Worker } from 'node:worker_threads'
 import Database, { WORKER_SQLITE } from '../../lib/sqlite.js'
@@ -99,6 +100,8 @@ parentPort.on('message', (m) => {
       const o = open[m.index]
       const u8 = o.db.serialize()
       held = Buffer.from(u8.buffer, u8.byteOffset, u8.byteLength)
+      // Copied: this database's pin ends now, so its WAL can be checkpointed while the others are copied.
+      try { o.db.exec('COMMIT') } catch {}
       const crypto = require('node:crypto')
       const sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
       const chunks = []

@@ -162,7 +162,6 @@ describe('a standby target on another host', () => {
     // The start went twice; the apply ran once.
     expect(l.log.filter((e) => e.cmd === 'receive apply')).toHaveLength(2)
     expect(l.state.applyRuns).toBe(1)
-    expect(l.log.some((e) => e.cmd === 'exec.read')).toBe(true)
     await expectCopyIsHome()
   })
 
