@@ -81,6 +81,53 @@ enum WebContentProcess {
 
     private final class WeakView { weak var value: WKWebView?; init(_ v: WKWebView) { value = v } }
 
+    /// Before a swap: the page empties in its own process while it is still in its window, and
+    /// `then` builds the new one. A page process that dies holding its graphics leaves them charged
+    /// to kernel_task until the app quits, closed and released or not (2026-11-22: a swap of a page
+    /// holding 450 MB of graphics, kernel_task +450 MB), while a page loaded again in its process
+    /// frees them itself (flat on every reload since 11-21). The blank page's commit starts the
+    /// release, and the graphics leave over the next seconds (a test page: 554 MB, still 135 MB a
+    /// second after the commit, 8 MB a second later), so `then` waits 2 s and then until the
+    /// process's footprint stops falling, all within 8 s. The blank page takes the window's colour
+    /// (`background`), so the wait reads as the page changing, not as a window gone white. Its
+    /// drafts are written on the way out, as on any reload; the caller reads `pageURL` before this.
+    static func emptyInPlace(_ view: WKWebView, background: NSColor? = nil, then: @escaping () -> Void) {
+        let process = pid(view)
+        let until = Date().addingTimeInterval(8)
+        view.stopLoading()
+        view.loadHTMLString("<html style=\"background:\(css(background))\"></html>", baseURL: nil)
+        whenUnloaded(view, until: until) {
+            let wait = min(2, until.timeIntervalSinceNow)
+            guard wait > 0 else { return then() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                settle(process, last: process.flatMap(physFootprint), quiet: 0, until: until, then: then)
+            }
+        }
+    }
+
+    /// The page a view shows, never the blank page `emptyInPlace` or a retire put there.
+    static func pageURL(_ view: WKWebView) -> URL? {
+        guard let url = view.url, url.scheme != "about" else { return nil }
+        return url
+    }
+
+    private static func css(_ color: NSColor?) -> String {
+        guard let c = color?.usingColorSpace(.sRGB) else { return "transparent" }
+        return String(format: "rgb(%d,%d,%d)", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
+    }
+
+    /// Calls `then` once two reads half a second apart find the footprint no longer falling (under
+    /// 1% less), or at `until`.
+    private static func settle(_ process: pid_t?, last: UInt64?, quiet: Int, until: Date, then: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let now = process.flatMap(physFootprint)
+            let falling = now != nil && last != nil && Double(now!) < Double(last!) * 0.99
+            let quietNow = falling ? 0 : quiet + 1
+            if now == nil || quietNow >= 2 || Date() >= until { return then() }
+            settle(process, last: now, quiet: quietNow, until: until, then: then)
+        }
+    }
+
     /// Runs `then` once the view shows the blank page its unload navigated to (the old page's
     /// pagehide has run by then), or at `until` for a page too busy to get there.
     private static func whenUnloaded(_ view: WKWebView, until: Date, then: @escaping () -> Void) {

@@ -50,7 +50,7 @@ describe('a web view the Mac app replaces is retired', () => {
   it('finds the places that swap a web view into a window', () => {
     const names = sites().map((s) => `${s.file}:${s.fn}`)
     expect(names).toContain('desktop/main.swift:loadWebUI')
-    expect(names).toContain('desktop/main.swift:recyclePopout')
+    expect(names).toContain('desktop/main.swift:replacePopout')
   })
 
   it('every one retires the old page, or only fills a new window', () => {
@@ -125,7 +125,7 @@ describe('a page process is ended only by a deliberate swap', () => {
   /** Functions that end a live page process, each with why a new process is the point. */
   const SWAPS: Record<string, string> = {
     'desktop/main.swift:loadWebUI': 'the swap itself, reached with newProcess: true (recycleWebContent) or for a page built for another port',
-    'desktop/main.swift:recyclePopout': 'a popout window\'s watchdog swap, asked by WebContentPolicy.replacesProcess like the main window\'s',
+    'desktop/main.swift:replacePopout': 'a popout window\'s watchdog swap (recyclePopout), asked by WebContentPolicy.replacesProcess like the main window\'s',
     'desktop/DemoApp.swift:run': 'the separate demo app starting or resetting its demo: a new demo server, never a deploy of the person\'s',
     'desktop/DemoApp.swift:webView': 'the demo app\'s page whose demo server is gone (failed provisional navigation)',
     'desktop/main.swift:windowWillClose': 'a popout window the person closed: its page goes with it',
@@ -149,6 +149,35 @@ describe('a page process is ended only by a deliberate swap', () => {
   it('every function that ends a page process is a listed swap', () => {
     expect(enders().filter((n) => !(n in SWAPS)), 'reload the page in its process instead, or list the swap with why a new process is the point').toEqual([])
     expect(Object.keys(SWAPS).filter((n) => !enders().includes(n)), 'the list names only functions that end a page process').toEqual([])
+  })
+
+  it('a swap empties the page in its own process before the new one is built', () => {
+    // 2026-11-22: a swap of a page still holding 450 MB of graphics left kernel_task 450 MB larger;
+    // the page emptied in its process while still in its window gives them back first.
+    const src = stripped('desktop/main.swift')
+    const body = (name: string) => {
+      const at = src.indexOf(`func ${name}(`)
+      expect(at, name).toBeGreaterThan(-1)
+      const next = src.slice(at + 5).search(/\n    (?:@objc )?(?:private )?func /)
+      return src.slice(at, next < 0 ? undefined : at + 5 + next)
+    }
+    const recycle = body('recycleWebContent')
+    expect(recycle.indexOf('WebContentProcess.emptyInPlace(old')).toBeGreaterThan(-1)
+    expect(recycle.indexOf('loadWebUI(url: current, newProcess: true)')).toBeGreaterThan(recycle.indexOf('WebContentProcess.emptyInPlace(old'))
+    const popout = body('recyclePopout')
+    expect(popout.indexOf('replacePopout(')).toBeGreaterThan(popout.indexOf('WebContentProcess.emptyInPlace(old'))
+    expect(popout.indexOf('WebContentProcess.emptyInPlace(old')).toBeGreaterThan(-1)
+    expect([...src.matchAll(/\breplacePopout\(/g)].length, 'replacePopout is reached only after the page emptied').toBe(2)
+    // Links wait for the new page instead of reaching the emptying one.
+    expect(recycle.indexOf('consolePageLoaded = false')).toBeGreaterThan(-1)
+    expect(recycle.indexOf('consolePageLoaded = false')).toBeLessThan(recycle.indexOf('WebContentProcess.emptyInPlace(old'))
+    // A second ask while a page empties waits for the first.
+    for (const fn of [recycle, popout]) expect(fn).toContain('emptyingPage.contains(key)')
+  })
+
+  it('the page a view shows is read past the blank page a swap or retire puts there', () => {
+    const src = stripped('desktop/main.swift')
+    expect([...src.matchAll(/\b(?:old|child\??)\.url\s*\?\?/g)].map((m) => m[0]), 'read WebContentProcess.pageURL, never .url ?? (it is about:blank while a page empties)').toEqual([])
   })
 
   it('only a recycle asks loadWebUI for a new process; a server found again reuses the page', () => {

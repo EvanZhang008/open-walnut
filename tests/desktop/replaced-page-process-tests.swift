@@ -84,7 +84,44 @@ final class Tests: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         return view
     }
 
+    /// The graphics a page process owns (footprint's "Owned physical footprint (unmapped) (graphics)",
+    /// dirty column), in MB: what kernel_task inherits when the process dies holding it.
+    func graphicsMB(_ pid: pid_t) -> Double? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/footprint")
+        task.arguments = ["-p", String(pid)]
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self)
+        guard let line = text.split(separator: "\n").first(where: { $0.contains("Owned physical footprint (unmapped) (graphics)") }) else { return 0 }
+        let parts = line.split(separator: " ")
+        guard parts.count >= 2, let n = Double(parts[0]) else { return nil }
+        switch parts[1] { case "GB": return n * 1024; case "MB": return n; case "KB": return n / 1024; default: return 0 }
+    }
+
+    /// Before the swap, as the app's swaps do (WebContentProcess.emptyInPlace): each page empties in
+    /// its own process while still in the window, and gives its graphics back before it is ended
+    /// (2026-11-22: a swap of a page still holding 450 MB of graphics left kernel_task 450 MB larger).
     func swap() {
+        let pids = olds.compactMap(WebContentProcess.pid)
+        let before = pids.map { graphicsMB($0) ?? -1 }
+        var emptied = 0
+        for old in olds { WebContentProcess.emptyInPlace(old) { emptied += 1 } }
+        waitUntil(deadline: Date().addingTimeInterval(20), { emptied == self.olds.count }) { _ in
+            let after = pids.map { self.graphicsMB($0) ?? -1 }
+            print("     graphics MB before emptying: \(before), when emptyInPlace calls back: \(after)")
+            check(before.allSatisfy { $0 >= 20 }, "each page holds graphics before the swap (else the next check proves nothing)")
+            check(zip(before, after).allSatisfy { $0.1 >= 0 && $0.1 <= max(16, $0.0 * 0.1) },
+                  "a page emptied in its process gives its graphics back before it is ended")
+            self.swapNow()
+        }
+    }
+
+    func swapNow() {
         let pids = olds.compactMap(WebContentProcess.pid)
         let starts = pids.map(WebContentProcess.startTime)
         check(pids.count == 3 && Set(pids).count == 3, "each page has its own page process")

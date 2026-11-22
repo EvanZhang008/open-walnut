@@ -121,6 +121,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// (AppLink.swift); handed over once a page finishes loading.
     var pendingAppLinks: [URL] = []
     var consolePageLoaded = false
+    /// Web views whose page is emptying in its process before a swap (WebContentProcess.emptyInPlace):
+    /// a second ask for the same swap waits for the first instead of reading the blank page.
+    var emptyingPage: Set<ObjectIdentifier> = []
     /// The server port the page in `webView` was built for (its bridges hold that port), and
     /// whether its configuration strips the glass: a page built otherwise is rebuilt.
     var webViewPort: Int?
@@ -1638,6 +1641,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // A server found again on the port the page already talks to (a restart, every deploy):
         // the page loads again in its own process. Ending that process instead left the graphics
         // it held charged to kernel_task until the app quit (2026-11-21: +107 MB on one deploy).
+        // A swap that is emptying this page builds the console itself once the page is empty.
+        if !newProcess, let page = webView, emptyingPage.contains(ObjectIdentifier(page)) { return }
         if !newProcess, let page = webView, webViewPort == port,
            webViewReducesGlass == WebContentPolicy.reduceGlass(UserDefaults.standard) {
             page.stopLoading()
@@ -1771,12 +1776,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// (`WebContentWatchdog.retireReplacedPage`): it did not always exit on its own.
     func recycleWebContent(reason: String) {
         guard let old = webView, let port = serverPort else { return }
-        let current = old.url ?? URL(string: "http://localhost:\(port)")!
+        let key = ObjectIdentifier(old)
+        guard !emptyingPage.contains(key) else { return }
+        let current = WebContentProcess.pageURL(old) ?? URL(string: "http://localhost:\(port)")!
         DesktopLogger.shared.log("webcontent_recycle_started", fields: [
             "reason": reason,
             "path": current.path + (current.query.map { "?\($0)" } ?? ""),
         ])
-        loadWebUI(url: current, newProcess: true)
+        emptyingPage.insert(key)
+        // Links that arrive meanwhile wait for the new page (deliverAppLinks).
+        consolePageLoaded = false
+        WebContentProcess.emptyInPlace(old, background: window.backgroundColor) { [weak self, weak old] in
+            guard let self else { return }
+            self.emptyingPage.remove(key)
+            guard let old, self.webView === old else { return }
+            self.loadWebUI(url: current, newProcess: true)
+        }
     }
 
     /// View → Restart Page Process: the manual path for the same swap the
@@ -2415,6 +2430,8 @@ extension AppDelegate: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // The blank page a swap empties the old page to (WebContentProcess.emptyInPlace) is not the console.
+        if webView.url?.absoluteString == "about:blank" { return }
         if webView !== self.webView {
             popoutWatchdogs[ObjectIdentifier(webView)]?.pageDidFinishLoading()
             return
@@ -2487,7 +2504,7 @@ extension AppDelegate: WKNavigationDelegate {
         case .openInAppWindow:
             if let target = popoutWindows.first(where: { key, target in
                 let child = target.contentView as? WKWebView
-                guard let current = child?.url ?? popoutURLs[key] else { return false }
+                guard let current = child.flatMap(WebContentProcess.pageURL) ?? popoutURLs[key] else { return false }
                 return linkPolicy.isSameWindowTarget(current, url)
             })?.value {
                 presentPopout(target)
@@ -2555,11 +2572,31 @@ extension AppDelegate: WKNavigationDelegate {
 
     func recyclePopout(_ old: WKWebView) {
         let key = ObjectIdentifier(old)
-        guard let target = popoutWindows[key], let url = old.url ?? popoutURLs[key] else { return }
+        guard !emptyingPage.contains(key), let target = popoutWindows[key],
+              let url = WebContentProcess.pageURL(old) ?? popoutURLs[key] else { return }
         if target.attachedSheet != nil || pendingWindowCloses.contains(key) {
             popoutWatchdogs[key]?.attach(webView: old, window: target)
             return
         }
+        emptyingPage.insert(key)
+        WebContentProcess.emptyInPlace(old, background: target.backgroundColor) { [weak self, weak old, weak target] in
+            guard let self else { return }
+            self.emptyingPage.remove(key)
+            guard let old, let target, target.contentView === old, self.popoutWindows[key] === target,
+                  !self.pendingWindowCloses.contains(key) else { return }
+            // A sheet came up meanwhile: no swap under it; the page comes back where it was.
+            guard target.attachedSheet == nil else {
+                self.popoutWatchdogs[key]?.attach(webView: old, window: target)
+                old.load(URLRequest(url: url))
+                return
+            }
+            self.replacePopout(old, in: target, at: url)
+        }
+    }
+
+    /// The popout's new page, in a new process, at the page its old one showed (recyclePopout).
+    private func replacePopout(_ old: WKWebView, in target: NSWindow, at url: URL) {
+        let key = ObjectIdentifier(old)
         let child = WKWebView(frame: old.frame, configuration: old.configuration)
         child.navigationDelegate = self
         child.uiDelegate = self
