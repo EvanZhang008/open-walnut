@@ -56,7 +56,9 @@ function PendingPrompt({ message }: { message?: string }) {
 
 /** The header of both states (spinner and failed): the folder, its host, the state, and close.
  *  On the header rule (header-fit.css): the title cuts last, the close never covers it. */
-function PendingHeader({ cwd, dirName, hostTag, status, onClose }: {
+/** The header of a session panel that has no session yet (starting, failed, a workspace being
+ *  prepared): its folder, host, state and close, on the header rule. */
+export function PendingHeader({ cwd, dirName, hostTag, status, onClose }: {
   cwd: string; dirName: string; hostTag?: string; status: ReactNode; onClose: () => void;
 }) {
   return (

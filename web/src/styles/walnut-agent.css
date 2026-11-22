@@ -618,13 +618,19 @@
    the session header), so the draft's header lines meet its neighbours' (draft-first-frame.spec.ts). */
 .main-page-session-column .draft-session-panel .session-panel-header-top { min-height: 28px; }
 .draft-header-tool-spacer { visibility: hidden; pointer-events: none; }
-/* There the draft's discard x stands where every column's close is: on the tool row, over the
-   spacer (the header's padding: 12px top, 14px right), not small in the title row. */
-.main-page-session-column .draft-session-panel .session-panel-header-top > .session-panel-close {
+/* Beside other session columns the draft's discard x stands where every column's close is: on the
+   tool row, over the spacer (the header's padding: 12px top, 14px right). Alone in the strip there
+   is no other close to line up with, so it stays in its title row, on the line of "New task" and
+   "Draft" (2026-11-22 UI audit: lifted there, it sat above the title's line, apart from it). */
+.main-page-session-column:has(~ .main-page-session-column) .draft-session-panel .session-panel-header-top > .session-panel-close,
+.main-page-session-column ~ .main-page-session-column .draft-session-panel .session-panel-header-top > .session-panel-close {
   position: absolute;
   top: 12px;
   right: 14px;
 }
+/* Its title is a short fixed label, so it holds only its own words: the 8em floor a session's
+   title keeps left a gap before "Draft". */
+.draft-session-panel .session-panel-title-area > .session-panel-title { min-width: min-content; }
 /* Dark: the amber fill is light, so its words are dark (the extension's dark buttons do the same). */
 :root[data-theme="dark"] .ask-walnut-drawer.is-panel .ask-walnut-drawer-new.is-head { color: #1f1d1b; }
 @media (prefers-color-scheme: dark) {

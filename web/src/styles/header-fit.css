@@ -6,39 +6,26 @@
  * item from another are never cut) wraps onto more lines, any other cuts with an ellipsis.
  */
 [data-fit-header] { display: flex; align-items: center; min-width: 0; }
-[data-fit-header] [data-fit-title].wn-title { min-width: 0; flex-shrink: 1; }
-[data-fit-header] [data-fit-title]:not(.wn-title) {
-  min-width: 0;
-  flex-shrink: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* A title whose text is one control (a rename button) cuts inside that control. A flex title
-   lets it shrink; a percent max-width would feed back into the title's own size and cut it early. */
-[data-fit-header] [data-fit-title]:not(.wn-title) > :only-child:not(.wn-title) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* A subtitle gives way first: it takes only the room left over (flex-basis 0), so the title never
-   loses even a sub-pixel (which already shows its ellipsis) while the subtitle still shows. */
-[data-fit-header] [data-fit-sub] {
-  min-width: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* A title (or a name in the header) that is a flex box, an icon or a caret beside its words, cuts inside its words, marked
-   `data-fit-cut`; the icon stays whole. */
+[data-fit-header] [data-fit-title] { min-width: 0; flex-shrink: 1; }
+/* What cuts with an ellipsis, never the words that tell one item from another (.wn-title):
+   - a title, and a title whose text is one control (a rename button), inside that control
+     (a percent max-width there would feed back into the title's own size and cut it early);
+   - a subtitle (`data-fit-sub`), which gives way first;
+   - the words of a title or name that is a flex box (`data-fit-cut`: an icon or a caret beside
+     its words, which stay whole). */
+[data-fit-header] [data-fit-title]:not(.wn-title),
+[data-fit-header] [data-fit-title]:not(.wn-title) > :only-child:not(.wn-title),
+[data-fit-header] [data-fit-sub],
 [data-fit-header] [data-fit-cut] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The subtitle takes only the room left over (flex-basis 0), so the title never loses even a
+   sub-pixel (which already shows its ellipsis) while the subtitle still shows; it grows only up
+   to its own text, so the parts after it keep their place. */
+[data-fit-header] [data-fit-sub] { flex: 1 1 0; max-width: max-content; }
 [data-fit-header] [data-fit-actions] { display: flex; align-items: center; flex: none; }
 
 .header-fit-icon { display: inline-flex; align-items: center; justify-content: center; }

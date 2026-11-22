@@ -11669,8 +11669,8 @@ body.walnut-dragging {
   font-size: var(--font-size-md);
 }
 
-/* The row is on the header rule (header-fit.css): a name too long for the row cuts with an
-   ellipsis, last, and the peek shows it whole; it never runs into the star. */
+/* The row is on the header rule (header-fit.css): the name (.wn-title) wraps, last, and never runs
+   into the star. */
 .todo-group-project-header .todo-group-project-name {
   min-width: 0;
 }

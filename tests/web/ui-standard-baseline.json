@@ -933,7 +933,7 @@
     "components/workspaces/DraftWorkspaceRow.tsx": 3,
     "components/workspaces/ProjectScriptsDialog.tsx": 4,
     "components/workspaces/WorkspaceMenuSection.tsx": 9,
-    "components/workspaces/WorkspacePreparingPanel.tsx": 2,
+    "components/workspaces/WorkspacePreparingPanel.tsx": 1,
     "pages/DashboardPage.tsx": 1,
     "pages/NotesPage.tsx": 2,
     "pages/OpenAgentRefPage.tsx": 1,

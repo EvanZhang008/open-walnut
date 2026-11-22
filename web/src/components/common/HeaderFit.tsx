@@ -125,16 +125,21 @@ export function FitButton({ icon, label, step = 1, keep, iconOnly, className = '
   );
 }
 
-interface MoreItem { el: HTMLButtonElement; name: string; disabled: boolean }
+interface MoreItem { el: HTMLElement; name: string; disabled: boolean; pressed?: boolean }
 
 /** The buttons the header put away, in row order, each by the name it carries. */
 function hiddenItems(row: HTMLElement | null): MoreItem[] {
   if (!row) return [];
-  return [...row.querySelectorAll<HTMLButtonElement>('[data-fit-button]:not([data-fit-keep])')].map((el) => ({
-    el,
-    name: el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent ?? '').trim(),
-    disabled: el.disabled,
-  }));
+  return [...row.querySelectorAll<HTMLElement>('[data-fit-button]:not([data-fit-keep])')].map((el) => {
+    const pressed = el.getAttribute('aria-pressed');
+    return {
+      el,
+      name: el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent ?? '').trim(),
+      disabled: el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true',
+      // A toggle (a filter chip, Assistant) says in the menu whether it is on.
+      pressed: pressed === 'true' ? true : pressed === 'false' ? false : undefined,
+    };
+  });
 }
 
 /**
@@ -186,6 +191,7 @@ export function HeaderFitMore({ testId }: { testId?: string }) {
             key: `${i}-${it.name}`,
             label: it.name,
             disabled: it.disabled,
+            ...(it.pressed !== undefined ? { checked: it.pressed, toggle: true } : {}),
             // Focus goes back to More first, so a dialog the action opens returns focus there.
             onSelect: () => { buttonRef.current?.focus(); it.el.click(); },
           }))}

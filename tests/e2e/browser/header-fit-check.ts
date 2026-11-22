@@ -7,7 +7,8 @@
  * - `title`: the title is narrower than it needs to stay readable (its own text, or
  *   HEADER_TITLE_MIN_PX, whichever is less), so it reads as one clipped letter; or it cuts its
  *   text while a subtitle beside it (`[data-fit-sub]`) still shows, which must give way first;
- * - `more`: the More button shows while nothing is put away into it (`data-fit-overflow`).
+ * - `more`: the More button shows while nothing is put away into it (`data-fit-overflow`), or
+ *   while the row has no button that could go into it (an empty menu).
  *
  * The members are found on the live page, never from a list, so a header added tomorrow is
  * checked by the same sweep (header-fit-sweep.spec.ts). `findHeaderProblems` runs in the page
@@ -105,8 +106,12 @@ export function findHeaderProblems(minTitlePx: number): HeaderProblem[] {
     }
     // The More button only while the buttons are put away into it.
     for (const more of head.querySelectorAll('[data-fit-more]')) {
-      if (shown(more) && head.closest('[data-toolbar-fold]')?.getAttribute('data-fit-overflow') !== 'true') {
+      if (!shown(more)) continue;
+      const row = more.closest('[data-toolbar-fold]');
+      if (row?.getAttribute('data-fit-overflow') !== 'true') {
         problems.push({ kind: 'more', header: name, detail: 'More shows while no button is put away into it' });
+      } else if (!row.querySelector('[data-fit-button]:not([data-fit-keep])')) {
+        problems.push({ kind: 'more', header: name, detail: 'More shows with nothing that can go into it (an empty menu)' });
       }
     }
     if (!title) continue;

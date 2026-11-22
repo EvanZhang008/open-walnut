@@ -261,6 +261,15 @@
   border-left: 1px solid var(--border);
 }
 .session-file-explorer-body.is-no-file .sfe-preview-empty-wrap > .empty-state { padding-left: 16px; padding-right: 16px; }
+/* With no file open the bar holds the layout key, "Go to a folder…" and the tree's own keys. Once the
+   bar is too narrow for the words, the button is its folder icon (its title names it), never a cut
+   "Go to a f…" (2026-11-22 UI audit, session Files at 1512). */
+.sfe-empty-bar { container-type: inline-size; }
+.sfe-goto-icon { display: none; }
+@container (max-width: 220px) {
+  .sfe-empty-bar .sfe-goto-icon { display: inline-flex; }
+  .sfe-empty-bar .sfe-goto-label { display: none; }
+}
 .sfe-preview-empty-wrap {
   height: 100%;
   display: flex;

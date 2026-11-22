@@ -117,7 +117,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
   return (
     <aside className={`org-side org-side-card${locked ? ' is-locked' : ''}`} data-testid="org-side" data-target={sideTargetParam(target)} aria-label="Opened task">
       <header className="org-side-card-head" data-fit-header="">
-        <h3 className="org-side-card-title wn-title" data-fit-title="" data-testid="org-side-title">
+        <h3 className="org-side-card-title" data-fit-title="" data-testid="org-side-title">
           {loading ? 'Loading…' : task ? task.title : 'That task is gone.'}{/* empty-state-ok: the card's heading while its task loads */}
         </h3>
         {onToggleLock && (

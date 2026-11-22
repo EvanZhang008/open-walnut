@@ -1598,7 +1598,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         >
           {/* With no file open the tree already names its folder: the bar offers the path
               field instead of a second copy of the same place. */}
-          {!selectedFile ? <span className="sfe-crumb is-last"><span className="sfe-crumb-text">Go to a folder…</span></span>
+          {/* In a narrow bar it is its folder icon alone, named on hover (the header rule: a button folds to its icon). */}
+          {!selectedFile ? <span className="sfe-crumb is-last sfe-goto"><span className="header-fit-icon sfe-goto-icon" aria-hidden="true">{ICON_FOLDER}</span><span className="sfe-crumb-text sfe-goto-label">Go to a folder…</span></span>
             : pathCrumbs(tildePath(shownPath, hostHome)).map((seg, idx, all) => (
             <span key={idx} className={`sfe-crumb${idx === all.length - 1 ? ' is-last' : ''}`}>
               {idx > 0 && <span className="sfe-crumb-sep" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}

@@ -130,7 +130,9 @@ export function attachFold(row: HTMLElement, { keepSelector, measure }: {
     if (!el || !row.getClientRects().length) return false;
     const buttons = [...row.querySelectorAll<HTMLElement>('[data-fit-button]')];
     const foldSteps = Math.min(TOOLBAR_FIT_MAX_STEPS, Math.max(0, ...buttons.map((b) => Number(b.dataset.fitButton) || 1)));
-    const maxStep = foldSteps + (row.querySelector('[data-fit-more]') ? 1 : 0);
+    // The More step only when a button can go into it (a keep button never does): an empty More is a dead key.
+    const canPutAway = row.querySelector('[data-fit-more]') && row.querySelector('[data-fit-button]:not([data-fit-keep])');
+    const maxStep = foldSteps + (canPutAway ? 1 : 0);
     if (step > maxStep) { set(maxStep, foldSteps); return true; }
     widthAt[step] = [...buttons, ...row.querySelectorAll<HTMLElement>('[data-fit-more]')]
       .reduce((px, b) => px + b.getBoundingClientRect().width, 0);

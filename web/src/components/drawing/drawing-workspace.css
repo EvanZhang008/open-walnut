@@ -159,6 +159,11 @@
 .drawing-workspace-status[data-state="missing"],
 .drawing-workspace-status[data-state="error"] { color: var(--error); }
 .drawing-workspace-actions { margin-left: auto; gap: 4px; }
+/* The host's own part of the bar (DrawingPad: "Beside the chat" and its note) sits at the right
+   before the buttons, and its note gives way first (it is metadata, never the title). */
+.drawing-workspace-extra { margin-left: auto; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.drawing-workspace-extra + .drawing-workspace-actions { margin-left: 0; }
+.drawing-workspace-extra > :not(button) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawing-workspace-attach { margin-right: 4px; }
 
 /* Notices under the header. */

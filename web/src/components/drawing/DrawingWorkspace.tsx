@@ -733,9 +733,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   : title}
               </h2>}
           {state && <span className="drawing-workspace-status" data-fit-sub="" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
+          {/* What the host adds (the Drawing pad's "Beside the chat" and its note) stays a part of the
+              row that can wrap and shrink, never inside the fixed group of buttons. */}
+          {barExtra && <div className="drawing-workspace-extra">{typeof barExtra === 'function' ? barExtra({ saveNow: () => saveNow(sync.current) }) : barExtra}</div>}
           {/* The buttons are pushed right by an auto margin, which the header rule counts as free room. */}
           <div className="drawing-workspace-actions" data-fit-actions="">
-          {typeof barExtra === 'function' ? barExtra({ saveNow: () => saveNow(sync.current) }) : barExtra}
           {/* The one primary action keeps its own look; it folds to its icon after Assistant (the header rule). */}
           {onAttach && <button type="button" className="drawing-primary-button drawing-workspace-attach" data-fit-button={2} aria-label="Attach PNG" onClick={() => void attach()} disabled={!!busy || !hasScene || !canAttach || !Canvas} title={canAttach ? 'Add this drawing to your message as a picture' : 'Attachment limit reached'}>
             <span className="header-fit-icon" aria-hidden="true"><Icon d={ICON.attach} /></span><span data-fit-label>{busy === 'attach' ? 'Attaching…' : 'Attach PNG'}</span></button>}

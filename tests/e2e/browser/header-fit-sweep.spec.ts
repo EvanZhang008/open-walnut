@@ -160,6 +160,27 @@ test('the Org list header: the Org chart icon and the gear; the title always rea
   await page.evaluate((k) => localStorage.removeItem(k), LIST_KEY)
 })
 
+// A toggle put away into More still says whether it is on (the Tasks page's filter chips).
+test('a toggle in the More menu reads on or off', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await loadHome(page)
+  await sidebarTo(page, '/tasks')
+  const bar = page.locator('.tp-toolbar')
+  await bar.evaluate((el) => { (el as HTMLElement).style.width = '440px' })
+  const more = page.getByTestId('tp-toolbar-more')
+  await expect(more).toBeVisible()
+  expect(await problems(page), 'the Tasks toolbar at 440 px').toEqual([])
+  await more.click()
+  const menu = page.locator('.header-fit-more-menu')
+  const toggles = menu.getByRole('menuitemcheckbox')
+  await expect(toggles.first()).toBeVisible()
+  const pressed = await bar.locator('[data-fit-button][aria-pressed]:not([data-fit-keep])').evaluateAll(
+    (els) => els.map((e) => [e.getAttribute('aria-label') || e.getAttribute('title') || (e.textContent ?? '').trim(), e.getAttribute('aria-pressed')]))
+  for (const [name, on] of pressed) await expect(menu.getByRole('menuitemcheckbox', { name: name ?? '' }), name ?? '').toHaveAttribute('aria-checked', on ?? 'false')
+  await page.keyboard.press('Escape')
+})
+
 test('the task panel at its narrowest: New task and Board go into More, which works by keyboard', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1280, height: 900 })
