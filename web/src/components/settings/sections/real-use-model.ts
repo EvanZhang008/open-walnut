@@ -125,6 +125,14 @@ export function failuresText(codes: Record<string, number>): string {
   return total === 1 ? `1 failure: ${words}.` : `All ${num(total)} failures: ${words}.`;
 }
 
+/** A request's reads that took 5 s or more, with its p95: "2 of 7 reads took 5 s or more; 95% under 8.2 s." */
+export function slowText(r: Pick<UsageRow, 'calls' | 'slow' | 'msP95'>): string | null {
+  if (r.calls <= 0) return null;
+  const p95 = r.msP95 === null ? '' : ` 95% under ${msText(r.msP95)}.`;
+  if (r.slow <= 0) return `No read took 5 s or more.${p95}`;
+  return `${num(r.slow)} of ${num(r.calls)} read${r.calls === 1 ? '' : 's'} took 5 s or more;${p95}`;
+}
+
 export function sizesText(r: Pick<UsageRow, 'sizeP50' | 'sizeP95'>): string | null {
   if (r.sizeP50 === null || r.sizeP95 === null) return null;
   return `Half under ${sizeText(r.sizeP50)} characters, 95% under ${sizeText(r.sizeP95)}.`;

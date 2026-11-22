@@ -13,7 +13,7 @@
 
 .real-use {
   container: real-use / inline-size;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
 }
 
@@ -25,20 +25,20 @@
   flex-wrap: wrap;
   gap: 4px 16px;
   margin: 0 0 4px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 .ru-count b { color: var(--fg); font-weight: 600; }
-.ru-meta { margin: 0 0 12px; font-size: 12px; }
+.ru-meta { margin: 0 0 12px; font-size: var(--font-size-sm); }
 .ru-bad, .ru-count.ru-bad b { color: var(--settings-error-text); }
 
 /* ── Blocks: Tools, Requests, Page errors, Watches, Notes ── */
 .ru-block { margin: 24px 0 0; }
-.ru-h { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--fg); }
-.ru-caption { margin: 0 0 8px; font-size: 12px; }
-.ru-legend { margin: 0; font-size: 12px; line-height: 16px; }
+.ru-h { margin: 0 0 4px; font-size: var(--font-size-lg); font-weight: 600; color: var(--fg); }
+.ru-caption { margin: 0 0 8px; font-size: var(--font-size-sm); }
+.ru-legend { margin: 0; font-size: var(--font-size-sm); line-height: 16px; }
 .ru-legend b { color: var(--fg); font-weight: 600; }
-.ru-empty { margin: 0; padding: 12px 8px; font-size: 13px; color: var(--fg-secondary); }
+.ru-empty { margin: 0; padding: 12px 8px; font-size: var(--font-size-md); color: var(--fg-secondary); }
 .ru-empty-all { margin: 12px 0 0; padding: 12px 0; }
 
 .ru-toolbar {
@@ -48,7 +48,7 @@
   gap: 8px 12px;
   margin: 0 0 8px;
 }
-.ru-toolbar-label { margin-left: auto; font-size: 12px; }
+.ru-toolbar-label { margin-left: auto; font-size: var(--font-size-sm); }
 /* The Find a setting box's look (settings-nav.css), at a toolbar's width and without the nav's margins. */
 .settings-container .real-use .ru-find { flex: 0 1 240px; width: 240px; min-width: 0; margin: 0; }
 .app-shell-navigation .settings-container .settings-layout[data-phone-settings] .real-use .ru-find { margin: 0; }
@@ -59,7 +59,7 @@
   margin: 0 0 8px;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 .ru-table th {
@@ -84,28 +84,20 @@
 .ru-w-state { width: 112px; }
 .ru-w-who { width: 120px; }
 .ru-zero { color: var(--fg-muted); }
-.ru-share { color: var(--fg-muted); font-size: 11px; }
+.ru-share { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .ru-table td.ru-name { color: var(--fg); }
-.ru-mono { font-family: var(--font-mono); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; }
+.ru-mono { font-family: var(--font-mono); font-size: var(--font-size-sm); color: var(--fg); overflow-wrap: anywhere; }
 
-/* A row's name is its button: chevron and name, the whole width of the cell. */
+/* A row's name: chevron and name, the whole width of the cell (the row is the toggle). */
 .ru-open {
-  appearance: none;
   display: inline-flex;
   align-items: flex-start;
   gap: 4px;
   max-width: 100%;
   min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
   cursor: pointer;
 }
-.ru-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ru-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ru-chev { display: inline-flex; flex: none; margin-top: 2px; color: var(--fg-muted); transition: transform 120ms ease-out; }
 .ru-row.is-open .ru-chev { transform: rotate(90deg); }
 .ru-kind { min-width: 0; overflow-wrap: anywhere; }
@@ -116,7 +108,7 @@
 .ru-spark-uses { stroke: var(--fg-muted); }
 .ru-spark-bad { stroke: var(--error); }
 
-.ru-detail { font-size: 12px; line-height: 16px; }
+.ru-detail { font-size: var(--font-size-sm); line-height: 16px; }
 .ru-more-row td { padding: 8px; border-bottom: 1px solid var(--border); }
 
 /* States: the dot keeps its colour; the words reach 4.5:1 on white, and wrap rather than cut. */
@@ -130,7 +122,7 @@
   vertical-align: top;
   overflow-wrap: anywhere;
 }
-.ru-sub { display: block; margin-top: 4px; font-size: 11px; }
+.ru-sub { display: block; margin-top: 4px; font-size: var(--font-size-xs); }
 .ru-target { display: block; }
 .ru-target + .ru-target { margin-top: 4px; }
 
@@ -143,7 +135,7 @@
   gap: 4px 12px;
   padding: 8px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 .ru-when { min-width: 80px; font-variant-numeric: tabular-nums; }
 .ru-note-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }

@@ -17,7 +17,7 @@ import { SettingsIcon } from '../settings-icons';
 import { sparkPaths } from './host-fleet-dashboard-model';
 import {
   ROWS_SHOWN, alarmLine, alarmStatus, failuresText, isToolSort, matchesFind, msText, pageKindParts, pctText, rangeWord,
-  realErrors, rowKey, seriesTitle, sizeText, sizesText, slowIsHigh, sortRows, spilledText, stepWord, type ToolSort,
+  realErrors, rowKey, seriesTitle, sizeText, sizesText, slowText, slowIsHigh, sortRows, spilledText, stepWord, type ToolSort,
 } from './real-use-model';
 
 export const HEALTH_PATH = '/settings#walnut-health';
@@ -73,7 +73,7 @@ function toolCols(range: UsageRange): Col[] {
     { head: 'Bad args', title: 'Calls the tool refused for their arguments', cls: 'ru-num ru-w-small ru-wide', cell: (r) => <Num n={r.badArgs} /> },
     { head: 'Cut (confirmed)', cls: 'ru-num ru-w-cut ru-mid', cell: (r) => <Num n={r.cut} bad /> },
     { head: 'Over budget', cls: 'ru-num ru-w-over ru-wide', cell: (r) => <Num n={r.overLimit} /> },
-    { head: 'Answer p95 (chars)', title: 'The answer size 95% of calls stay under, in characters', cls: 'ru-num ru-w-size ru-mid', cell: (r) => sizeText(r.sizeP95) },
+    { head: 'Answer p95', title: 'The answer size 95% of calls stay under, in characters', cls: 'ru-num ru-w-size ru-mid', cell: (r) => sizeText(r.sizeP95) },
     { head: 'Largest (chars)', cls: 'ru-num ru-w-largest ru-wide', cell: (r) => sizeText(r.largest) },
     sparkCol(range),
     STATE_COL,
@@ -107,7 +107,7 @@ function hiddenNumbers(r: UsageRow): { wide: string | null; small: string | null
 }
 
 function RowDetail({ row, now, range }: { row: UsageRow; now: number; range: UsageRange }) {
-  const sizes = row.kind === 'op' ? sizesText(row) : null;
+  const sizes = row.kind === 'op' ? sizesText(row) : row.kind === 'http' ? slowText(row) : null;
   const spilled = row.kind === 'op' ? spilledText(row.spilled) : null;
   const narrow = hiddenNumbers(row);
   return (
@@ -155,7 +155,7 @@ function UsageTable({ kind, rows, cols, range, now, empty }: { kind: UsageKind; 
         {rows.length > ROWS_SHOWN && (
           <tr className="ru-more-row">
             <td colSpan={span}>
-              <button type="button" className="settings-addons-link" data-testid={`real-use-all-${kind}`} onClick={() => setAll(!all)}>
+              <button type="button" className="btn btn-link" data-testid={`real-use-all-${kind}`} onClick={() => setAll(!all)}>
                 {all ? `Show the first ${ROWS_SHOWN}` : `Show all ${rows.length.toLocaleString('en-US')} ${noun}`}
               </button>
             </td>
@@ -170,13 +170,15 @@ function UsageRowView({ row, cols, open, span, range, now, onToggle }: { row: Us
   const state = row.alarm?.state ?? 'none';
   return (
     <>
-      {/* The name is the row's button (Enter and Space open it); a click anywhere on the row does too. */}
-      <tr className={`health-row ru-row${open ? ' is-open' : ''}`} data-row={row.name} data-state={state} onClick={onToggle}>
+      {/* The row opens as Walnut Health's do: a click anywhere on it, or Enter or Space on it. */}
+      <tr className={`health-row ru-row${open ? ' is-open' : ''}`} data-row={row.name} data-state={state} onClick={onToggle}
+        role="button" tabIndex={0} aria-expanded={open}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}>
         <td className="ru-name">
-          <button type="button" className="ru-open" aria-expanded={open}>
+          <span className="ru-open">
             <span className="ru-chev" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
             {row.kind === 'page' ? <span className="ru-kind"><PageKind name={row.name} /></span> : <code className="ru-mono">{row.name}</code>}
-          </button>
+          </span>
         </td>
         {cols.map((c, i) => <td key={i} className={c.cls}>{c.cell(row)}</td>)}
       </tr>
@@ -195,11 +197,6 @@ function FindBox({ value, onChange }: { value: string; onChange: (v: string) => 
       <SettingsIcon glyph="magnifier" size={13} className="settings-filter-glyph" />
       <MicInput fieldClassName="mic-field-compact" type="search" data-no-draft="search" className="settings-filter" data-testid="real-use-find"
         placeholder="Find a tool" aria-label="Find a tool" autoComplete="off" spellCheck={false} value={value} setText={onChange} />
-      {value && (
-        <button type="button" className="settings-filter-clear" aria-label="Clear the search" onClick={() => onChange('')}>
-          <SettingsIcon glyph="circle-x" size={14} />
-        </button>
-      )}
     </div>
   );
 }
@@ -213,7 +210,7 @@ export function ToolsBlock({ rows, range, now }: BlockProps) {
   const ops = rows.filter((r) => r.kind === 'op');
   const shown = sortRows(ops.filter((r) => matchesFind(r.name, find)), sort);
   const empty = ops.length === 0 ? `No tool calls in the last ${rangeWord(range)}.` : (
-    <>No tool matches “{find.trim()}”. <button type="button" className="settings-addons-link" onClick={() => setFind('')}>Clear the search</button></>
+    <>No tool matches “{find.trim()}”. <button type="button" className="btn btn-link" onClick={() => setFind('')}>Clear the search</button></>
   );
   return (
     <section className="ru-block" data-testid="real-use-tools">

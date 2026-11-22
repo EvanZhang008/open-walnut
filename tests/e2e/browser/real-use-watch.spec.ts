@@ -89,7 +89,7 @@ test('a cut answer is counted, a shipped task names a watch before it closes, an
   await expect(row).toBeVisible({ timeout: 20_000 })
   // Walnut Health's usage.cut alarm rang on it (one confirmed cut in the hour).
   await expect(row).toContainText('Alarm', { timeout: 120_000 })
-  await row.locator('button.ru-open').click()
+  await row.locator('.ru-open').click()
   await expect(pane.getByTestId('real-use-detail')).toBeVisible()
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'real-use-tools.png') })
   const watch = pane.locator('[data-testid="real-use-watches"] tr.ru-watch-row[data-state="watching"]').first()

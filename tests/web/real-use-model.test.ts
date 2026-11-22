@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_WATCH_CHECKS, alarmLine, noteRecipientName, alarmStatus, checksText, failuresText, matchesFind, msText, noteStatus, pageKindParts, pctText,
+  DEFAULT_WATCH_CHECKS, alarmLine, noteRecipientName, slowText, alarmStatus, checksText, failuresText, matchesFind, msText, noteStatus, pageKindParts, pctText,
   recordedText, sizeText, sizesText, slowIsHigh, sortRows, spilledText, stamp, summaryOf, targetResultText, watchStatus, watchWhen,
 } from '../../web/src/components/settings/sections/real-use-model'
 import type { UsageRow } from '../../web/src/api/usage-watch'
@@ -121,6 +121,9 @@ describe('the summary', () => {
 describe("a row's detail", () => {
   it('lists every failure code, most first', () => {
     expect(failuresText({})).toBe('No failures.')
+    // A request's detail says how many reads were slow beside 'No failures' (review, 2026-11-22).
+    expect(slowText({ calls: 7, slow: 2, msP95: 8_200 })).toBe('2 of 7 reads took 5 s or more; 95% under 8.2 s.')
+    expect(slowText({ calls: 33, slow: 0, msP95: 11 })).toBe('No read took 5 s or more. 95% under 11 ms.')
     expect(failuresText({ timeout: 1 })).toBe('1 failure: timeout 1.')
     expect(failuresText({ bad_input: 9, host_unreachable: 25, user_kind: 11, zero: 0, a_tie: 9 }))
       .toBe('All 54 failures: host_unreachable 25, user_kind 11, a_tie 9, bad_input 9.')
