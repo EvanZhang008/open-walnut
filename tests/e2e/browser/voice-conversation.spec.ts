@@ -11,12 +11,13 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { useSyntheticMic } from './fake-mic'
+import { dropFakes } from './route-teardown'
 import { injectEvent, MOCK_SESSION_ID, mockSession, open, waitForStream, waitForWs } from './mock-session-harness'
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'MediaRecorder: Chromium only on Linux')
 
 // Keyboard remounts the composer, which reads /api/config again as the page closes.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 
 const LOUD = 0.3
 const QUIET = 0.0005

@@ -14,6 +14,7 @@ import type { Config } from '../types.js';
 import { resolveSecret } from '../../model/providers/secret.js';
 import { createElevenLabsEngine, ELEVENLABS_DEFAULT_MODEL, ELEVENLABS_DEFAULT_VOICE } from './engine-elevenlabs.js';
 import { TtsError, type TtsAudio, type TtsEngine, type TtsEngineId, type TtsRequest } from './types.js';
+import { registerMemoryHolder } from '../observability/memory-ledger.js';
 
 export { TtsError } from './types.js';
 export type { TtsEngineId } from './types.js';
@@ -73,6 +74,11 @@ const CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const CACHE_MAX_ENTRIES = 200;
 const cache = new Map<string, { mime: string; bytes: Uint8Array }>();
 let cacheBytes = 0;
+registerMemoryHolder({
+  name: 'tts.speech',
+  budgetBytes: CACHE_MAX_BYTES,
+  read: () => ({ entries: cache.size, bytes: cacheBytes }),
+});
 
 function cacheKey(engine: TtsEngine, req: TtsRequest): string {
   return [engine.id, engine.model, engine.voice, req.language ?? '', req.text].join('\u0000');

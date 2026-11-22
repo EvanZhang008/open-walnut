@@ -11,7 +11,8 @@
  * the speech).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from './useLeanCallback';
 import { transcribeAudio } from '../api/stt';
 import { spokenReply, voiceStatus, type SpokenReply, type TtsEngineId } from '../api/voice';
 import { openVoice, reduceVoice, type VoiceEffect, type VoiceEvent, type VoiceState } from '../voice/conversation-machine';
@@ -82,7 +83,7 @@ export function useVoiceConversation(
   const micOpeningRef = useRef<Promise<VoiceMic | null> | null>(null);
 
   // One place every event goes through: reduce, keep, run the effects.
-  const dispatch = useCallback((event: VoiceEvent) => {
+  const dispatch = useLeanCallback((event: VoiceEvent) => {
     const current = stateRef.current;
     if (!current) return;
     const step = reduceVoice(current, event);
@@ -178,7 +179,7 @@ export function useVoiceConversation(
     }
   };
 
-  const stop = useCallback(() => {
+  const stop = useLeanCallback(() => {
     genRef.current++;
     speakerRef.current?.stop();
     speakerRef.current = null;
@@ -194,7 +195,7 @@ export function useVoiceConversation(
     setMicWarning(null);
   }, []);
 
-  const start = useCallback(() => {
+  const start = useLeanCallback(() => {
     if (stateRef.current || ctxRef.current) return;
     const gen = ++genRef.current;
     setOpening(true);
@@ -240,9 +241,9 @@ export function useVoiceConversation(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stop]);
 
-  const tap = useCallback(() => dispatch({ type: 'tap' }), [dispatch]);
+  const tap = useLeanCallback(() => dispatch({ type: 'tap' }), [dispatch]);
 
-  const replay = useCallback(() => {
+  const replay = useLeanCallback(() => {
     if (lastReplyRef.current) dispatch({ type: 'replay', spoken: lastReplyRef.current.text });
   }, [dispatch]);
 

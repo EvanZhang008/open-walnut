@@ -370,6 +370,9 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
     'web/src/components/chat/camera/CameraDock.tsx': "the chat camera's live picture and its video preview: muted elements, and the page silencer holds them",
     'web/src/components/chat/camera/camera-frames.ts': "a muted video element that reads a phone video's frames for its stills, never played aloud",
     'web/src/components/chat/camera/useCameraStream.ts': "the chat camera's live picture: a muted element with no sound track (the camera asks for no audio)",
+    'web/src/hooks/useVoiceConversation.ts': "voice conversation's AudioContext: the page silencer gives it a sink of none",
+    'web/src/voice/voice-speaker.ts': 'reads answers through that AudioContext (sink of none) or speechSynthesis (a counted no-op under the page silencer)',
+    'web/src/voice/voice-mic.ts': 'a meter on the mic: its graph never reaches the speakers',
   };
 
   it('lists every file that can make sound', () => {

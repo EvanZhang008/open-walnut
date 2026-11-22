@@ -2537,7 +2537,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // Voice conversation (experimental): a pause sends what was said, with the voice-reply hint,
   // so the answer opens with a short spoken part that is read aloud.
   const voiceOn = useExperimental('voice_conversation');
-  const sendVoice = useCallback((text: string) => send(sessionId, text, undefined, { hints: { 'voice-reply': {} } }), [send, sessionId]);
+  const sendVoice = useLeanCallback((text: string) => send(sessionId, text, undefined, { hints: { 'voice-reply': {} } }), [send, sessionId]);
   const voice = useVoiceConversation(sessionId, sendVoice);
 
   const mainQuickActions = useMainQuickPlusActions(
