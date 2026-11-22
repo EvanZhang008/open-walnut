@@ -125,9 +125,38 @@ export function hostStartsInFlight(): ReadonlySet<string> {
   return new Set(inFlight.keys())
 }
 
+/**
+ * A start whose answer was lost (sent, no answer): when its in-flight time runs out with no born row
+ * from the host, the host never took it. The seed is the leader's again and the start fails as one
+ * that never ran (`onLost`), so it never sits as a running session nobody runs.
+ */
+const lostStarts = new Set<string>()
+function armLostStartCheck(sid: string, host: string, handed: boolean, why: string, onLost?: (err: Error) => Promise<void>): void {
+  lostStarts.add(sid)
+  const timer = setTimeout(() => {
+    if (!lostStarts.delete(sid)) return // its born row came
+    inFlight.delete(sid)
+    forgetHostJudged(sid)
+    void (async () => {
+      const tracker = await import('../core/session-tracker.js')
+      if (handed) await tracker.takeSeedBack(sid, host)
+      log.session.warn('host start: no born row came for a start whose answer was lost; it failed', { sessionId: sid, host, error: why })
+      await onLost?.(new Error(`the host ${host} never started the session (${why})`))
+    })().catch((err: unknown) => log.session.warn('host start: failing a lost start failed', { sessionId: sid, host, error: err instanceof Error ? err.message : String(err) }))
+  }, lostStartMs())
+  timer.unref?.()
+}
+
+/** How long a start whose answer was lost waits for its born row (tests shorten it). */
+function lostStartMs(): number {
+  const n = Number(process.env.WALNUT_HOST_START_LOST_MS)
+  return Number.isFinite(n) && n > 0 ? n : IN_FLIGHT_MS
+}
+
 /** The host's born row of `sid` was applied here (leader-side.ts): its start is no longer in flight. */
 export function noteHostStartBorn(sid: string): void {
   inFlight.delete(sid)
+  lostStarts.delete(sid)
 }
 
 /**
@@ -196,7 +225,11 @@ async function startBundle(data: StartData): Promise<StartBundle> {
  * `commit` is their commit (hint-send.ts), run once the host named the session. `source`: the bus
  * source of the start, which frames its first message on the host as it would here.
  */
-export async function startOnJudgingHost<T extends StartData>(data: T, commit: (sid: string) => Promise<void>, source?: string): Promise<{ claudeSessionId: string; title: string }> {
+export async function startOnJudgingHost<T extends StartData>(
+  data: T, commit: (sid: string) => Promise<void>, source?: string,
+  /** A start whose answer was lost and whose born row never came: fail it as a start that never ran. */
+  onLost?: (err: Error) => Promise<void>,
+): Promise<{ claudeSessionId: string; title: string }> {
   const host = data.host!
   const { largePromptFile, ...rest } = data
   const payload = { ...rest } as unknown as StartBody
@@ -229,11 +262,24 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   try {
     a = await side.startOnHost(host, payload)
   } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    // Never sent (no stream to the host): the host cannot have it, so it is a refusal: the seed is
+    // the leader's again and the start fails here (round 3 MF1).
+    const { requestNotSent } = await import('../core/session-channel/leader-side.js')
+    if (requestNotSent(err)) {
+      if (typeof seeded === 'string' && seeded) {
+        inFlight.delete(seeded)
+        forgetHostJudged(seeded)
+        if (handed) await tracker.takeSeedBack(seeded, host).catch(() => {})
+      }
+      throw new Error(`the host ${host} did not get the start: ${why}`)
+    }
     // No answer (the leader's timeout, a link that dropped): the host may have taken it, so it is
     // the host's (one owner): never failed here as the leader's own, never run here. Its born row
-    // says it started, the host's own row says how it ended (R2-H2).
-    const why = err instanceof Error ? err.message : String(err)
+    // says it started, the host's own row says how it ended (R2-H2). When no born row comes while
+    // the start is in flight, the host never took it: the seed is taken back and fails then.
     if (typeof seeded === 'string' && seeded) {
+      armLostStartCheck(seeded, host, handed, why, onLost)
       log.session.warn('host start: no answer from the host; the session stays the host\'s and its channel tells what became of it', { sessionId: seeded, host, error: why })
       void commit(seeded).catch(() => {})
       return { claudeSessionId: seeded, title: '' }
@@ -381,5 +427,6 @@ export function installHostJudgedRouting(proto: object): void {
 export function _resetHostJudgedRunnerForTesting(): void {
   kinds.clear()
   inFlight.clear()
+  lostStarts.clear()
   _resetHostJudgedSendForTesting()
 }

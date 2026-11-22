@@ -24,7 +24,7 @@ import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../.
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
 import { _resetHostSessionTasksForTesting, startHostSessionTasks } from '../../src/core/session-channel/leader-tasks.js'
 import { _resetRemoteJudgedSessionsForTesting, noteLiveState, setRemoteJudgedCaller, type HostCallBody, isRemoteJudgedSession } from '../../src/providers/remote-judged-session.js'
-import type { LeaderSide } from '../../src/core/session-channel/leader-side.js'
+import { HostRequestNotSent, type LeaderSide } from '../../src/core/session-channel/leader-side.js'
 import { applyHostChannelBatch, getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -34,12 +34,13 @@ import { getRegisteredSessionManager } from '../../src/providers/session-manager
 
 const HOST_SID = '50000000-0000-4000-8000-0000000000c1'
 
-function fakeSide(o: { refuse?: boolean; lost?: boolean } = {}) {
+function fakeSide(o: { refuse?: boolean; lost?: boolean; notSent?: boolean } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, unknown> }> = []
   const calls: Array<{ host: string } & HostCallBody> = []
   const side = {
     startOnHost: async (host: string, body: Record<string, unknown>) => {
       sent.push({ op: 'start', host, body })
+      if (o.notSent) throw new HostRequestNotSent(host, new Error('the host devbox is not connected'))
       if (o.lost) throw new Error('request timed out after 120000 ms')
       if (o.refuse) return { ok: false, error: 'no claude here' }
       return { ok: true, sessionId: (body.preassignedSessionId as string | undefined) ?? 'started-on-host', title: 'Host title' }
@@ -168,6 +169,55 @@ describe('a host-judged session', () => {
     expect(hostStartsInFlight().has(seeded)).toBe(true)
     noteHostStartBorn(seeded)
     expect(hostStartsInFlight().has(seeded)).toBe(false)
+  })
+
+  async function seededStart(o: { notSent?: boolean; lost?: boolean }) {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { updateTask } = await import('../../src/core/task-manager.js')
+    await updateTask('gate-task-b', { phase: 'TODO' })
+    const seeded = '50000000-0000-4000-8000-0000000000e2'
+    await createSessionRecord(seeded, 'gate-task-b', 'p', '/w', { host: 'devbox', title: 'Seeded', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' })
+    fakeSide(o)
+    return { h, seeded }
+  }
+
+  it('MF1: a start that never reached the host (no stream) fails here and its seed is the leader\'s again', async () => {
+    const { h, seeded } = await seededStart({ notSent: true })
+    await expect(h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')).rejects.toThrow(/did not get the start/)
+    // The leader's own row again, as for any start that failed here (its caller writes the failure).
+    expect((await getSessionByClaudeId(seeded))?.judge).toBeUndefined()
+    expect(hostStartsInFlight().has(seeded)).toBe(false)
+    expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId(seeded))).toBe(false)
+  })
+
+  it('MF1: a start whose answer was lost and whose born row never comes is taken back and fails when its wait runs out', async () => {
+    process.env.WALNUT_HOST_START_LOST_MS = '60'
+    try {
+      const { h, seeded } = await seededStart({ lost: true })
+      const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+      expect(r.claudeSessionId).toBe(seeded)
+      expect((await getSessionByClaudeId(seeded))?.judge).toBe('host')
+      await vi.waitFor(async () => {
+        const row = await getSessionByClaudeId(seeded)
+        expect(row?.judge).toBeUndefined()
+        expect(row).toMatchObject({ process_status: 'error', status_reason: 'api_error' })
+      })
+      expect(hostStartsInFlight().has(seeded)).toBe(false)
+    } finally { delete process.env.WALNUT_HOST_START_LOST_MS }
+  })
+
+  it('MF1: a lost answer whose born row comes in time stays the host\'s', async () => {
+    process.env.WALNUT_HOST_START_LOST_MS = '60'
+    try {
+      const { h, seeded } = await seededStart({ lost: true })
+      await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+      noteHostStartBorn(seeded)
+      // Past the wait: nothing taken back, nothing failed.
+      await new Promise((r) => setTimeout(r, 120))
+      expect(await getSessionByClaudeId(seeded)).toMatchObject({ judge: 'host', process_status: 'idle', status_reason: 'awaiting_spawn' })
+    } finally { delete process.env.WALNUT_HOST_START_LOST_MS }
   })
 
   it('its result runs no turn end here: no processNext, no record write; a legacy result still does', async () => {

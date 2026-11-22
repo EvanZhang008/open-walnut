@@ -58,6 +58,13 @@ export class StartBundles {
   }
 
   /** Run `fn` as start `startId`: the reads it makes answer from its own bundle first. */
+  /** Is a start of the session `sid` (its preassigned id) running here now? */
+  startingSid(sid: string): boolean {
+    const at = this.now()
+    for (const e of this.byStart.values()) if (e.sid === sid && e.until > at) return true
+    return false
+  }
+
   run<T>(startId: string, fn: () => Promise<T>): Promise<T> {
     return this.current.run(startId, fn)
   }

@@ -289,8 +289,12 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (op === 'send' || op === 'interrupt') {
         const b = body as { sessionId?: unknown; busSource?: unknown }
         if (typeof b?.sessionId !== 'string' || !b.sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId is required' })
-        // An interrupt reaches a process: only of a session this host owns. (A send only queues, by row id.)
-        if (op === 'interrupt' && o.owns && !(await o.owns(b.sessionId))) return sendJson(res, 403, { ok: false, error: NOT_OWN_SESSION })
+        // Only a session this host owns, or one starting here now: an interrupt reaches a process, and a
+        // send to a session this host does not have would be queued here for nobody while the leader
+        // drops its lines as delivered (round 3 MF2). Refused, the leader keeps them and tries again.
+        if (o.owns && !(await o.owns(b.sessionId)) && !(op === 'send' && o.bundles.startingSid(b.sessionId))) {
+          return sendJson(res, 403, { ok: false, error: NOT_OWN_SESSION })
+        }
         const { busSource, queued, holdOnly, ...payload } = b as Record<string, unknown>
         const source = typeof busSource === 'string' && busSource ? busSource : 'host-api'
         // A send's lines are queued here first, as the leader's send route queues them for its own

@@ -12554,7 +12554,7 @@ export class SessionRunner {
             const { prepareStartHints } = await sessionPort().messages.loadHintSend()
             const started = await prepareStartHints(startData)
             if (startGoesToHost(started.data.host)) {
-              await startOnJudgingHost(started.data, (sid) => started.commit(sid), event.source)
+              await startOnJudgingHost(started.data, (sid) => started.commit(sid), event.source, (err) => this.failUnspawnedStart(startData, err))
             } else if (isAcpEngine(startData.engine)) {
               log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
               void started.commit((await this.handleAcpStart(started.data)).claudeSessionId)
@@ -13332,7 +13332,7 @@ export class SessionRunner {
     const started = await prepareStartHints(data)
     data = started.data
     assertDemoAdmission() // a stopping Demo starts no session (core/sessions/demo-admission.ts)
-    if (startGoesToHost(data.host)) return startOnJudgingHost(data, (sid) => started.commit(sid), framedBy)
+    if (startGoesToHost(data.host)) return startOnJudgingHost(data, (sid) => started.commit(sid), framedBy, (err) => this.failUnspawnedStart(data, err))
     if (isAcpEngine(data.engine)) {
       const r = await this.handleAcpStart(data)
       void started.commit(r.claudeSessionId)

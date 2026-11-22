@@ -106,6 +106,20 @@ function startedOf(hostId: string, sid: string, row: Record<string, unknown>): R
   return { sessionId: sid, claudeSessionId: sid, taskId: str(row.taskId), project: str(row.project) ?? '', host: hostId }
 }
 
+/** A request that never left this server (no stream to the host): the host cannot have taken it. */
+export class HostRequestNotSent extends Error {
+  readonly notSent = true
+  constructor(hostKey: string, cause: unknown) {
+    super(`the request did not reach the host ${hostKey}: ${cause instanceof Error ? cause.message : String(cause)}`)
+    this.name = 'HostRequestNotSent'
+  }
+}
+
+/** Did this error come from a request that never left this server? */
+export function requestNotSent(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { notSent?: unknown }).notSent === true
+}
+
 export function createLeaderSide(deps: LeaderSideDeps) {
   const hosts = new Map<string, HostState>()
   let flag = false
@@ -352,7 +366,10 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   }
 
   async function defaultRequest(hostKey: string, route: string, body: unknown, timeoutMs: number): Promise<HostCallAnswer> {
-    const stream = await deps.openStream(hostKey, 'session-call')
+    let stream: Duplex
+    // No stream: nothing reached the host (not connected, the stream refused). The caller knows the
+    // host never saw it, unlike a request sent whose answer was lost.
+    try { stream = await deps.openStream(hostKey, 'session-call') } catch (err) { throw new HostRequestNotSent(hostKey, err) }
     const { requestOver } = await import('../host-server/request-over.js')
     const res = await requestOver(stream, 'POST', route, Buffer.from(JSON.stringify(body ?? {})), timeoutMs)
     const text = await res.text()

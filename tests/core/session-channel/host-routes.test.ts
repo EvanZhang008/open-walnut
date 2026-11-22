@@ -168,6 +168,16 @@ describe('/call', () => {
     expect(emitted.filter((e) => e.name === 'session:interrupt')).toEqual([])
   })
 
+  it('MF2: a send to a session this host does not have is refused and queues nothing; one starting here is taken', async () => {
+    const r = await post('/host-api/sessions/send', { sessionId: 'sid-leaders', queued: [{ id: 'qm-1', message: 'hi' }] })
+    expect(r).toEqual({ status: 403, body: { ok: false, error: 'not_own_session' } })
+    expect(emitted).toEqual([])
+    // The same id while a start of it runs here (its bundle names it): the lines wait for it.
+    bundles.put('start-1', 'task-1', { task: { id: 'task-1' } } as never, 'sid-leaders')
+    expect(await post('/host-api/sessions/send', { sessionId: 'sid-leaders', queued: [{ id: 'qm-2', message: 'hi' }] })).toEqual({ status: 200, body: { ok: true } })
+    expect(emitted.map((e) => e.name)).toEqual(['enqueue', 'session:send'])
+  })
+
   it('an expected teardown gives back an undo the leader calls once', async () => {
     const r = await post('/host-api/sessions/call', { sid: 'sid-1', target: 'session', member: 'markExpectedTeardown', args: ['respawn'] })
     const undoId = (r.body.value as { undoId: string }).undoId
