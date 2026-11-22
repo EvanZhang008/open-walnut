@@ -57,7 +57,7 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
     return (
       <button
         type="button"
-        className="org-new-director"
+        className="btn btn-sm org-new-director"
         data-testid="org-new-director"
         {...(inList ? { role: 'option', 'aria-selected': false } : {})}
         title="Make a task that is a Director from the start; your first message in its chat starts it"

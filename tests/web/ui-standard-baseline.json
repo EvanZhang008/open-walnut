@@ -635,7 +635,6 @@
     "components/org/OrgChartSheet.tsx": 3,
     "components/org/OrgEditableName.tsx": 1,
     "components/org/OrgLeaders.tsx": 1,
-    "components/org/OrgNewDirector.tsx": 1,
     "components/org/OrgNodeDetail.tsx": 3,
     "components/org/OrgNodeEditor.tsx": 1,
     "components/org/OrgRouterSettings.tsx": 1,

@@ -46,9 +46,12 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
         <div className="agent-card-actions">
           <div className="agent-menu-wrapper">
             <button
-              className="btn btn-sm btn-icon agent-menu-btn"
+              className="btn btn-sm btn-icon btn-ghost agent-menu-btn"
               onClick={() => { setMenuOpen(!menuOpen); setConfirmAction(null); }}
               title="Actions"
+              aria-label="Actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
               &#8942;
             </button>
