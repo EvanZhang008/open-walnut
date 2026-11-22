@@ -100,7 +100,7 @@ describe('GET /api/v1/files/locate', () => {
     const res = await request(createApp()).get(`/api/v1/files/locate?ref=${encodeURIComponent(p)}`)
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({ path: p, found: false, missing: true })
-    expect(res.body.checked[0]).toBe('Local')
+    expect(res.body.checked[0]).toBe('This Mac')
   })
 
   it('SANDBOX: rejects traversal', async () => {

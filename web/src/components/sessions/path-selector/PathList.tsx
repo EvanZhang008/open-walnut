@@ -20,6 +20,7 @@ import { HostConnectSteps } from './HostConnectSteps';
 import { HostStatusDot } from './HostStatusDot';
 import { isMoreRow, moreRowText } from './history-cap';
 import { hostTagTitle } from './host-tag';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 interface PathParts {
   parent: string;
@@ -124,7 +125,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   const liveNotes: LiveNote[] = [];
   if (pathMode) {
     for (const [hostKey, state] of hostStates) {
-      const label = hostKey === '__local__' ? 'Local' : (hostLabels?.get(hostKey) ?? hostKey);
+      const label = hostKey === '__local__' ? LOCAL_HOST_LABEL : (hostLabels?.get(hostKey) ?? hostKey);
       // The note on top already says it; a test server's 'off' is one line, drawn once elsewhere.
       if (noteHosts?.has(hostKey) && state.status !== 'done') continue;
       if (state.status === 'error' && state.hostError?.kind === 'ephemeral') continue;
@@ -146,7 +147,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   if (pathMode) {
     for (const [hostKey, state] of hostStates) {
       if (state.status !== 'done' || !state.incomplete) continue;
-      const label = hostKey === '__local__' ? 'Local' : (hostLabels?.get(hostKey) ?? hostKey);
+      const label = hostKey === '__local__' ? LOCAL_HOST_LABEL : (hostLabels?.get(hostKey) ?? hostKey);
       incompleteNotes.push({ key: hostKey, label, message: state.incomplete.message });
     }
   }

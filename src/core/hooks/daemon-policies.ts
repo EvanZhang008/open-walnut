@@ -34,10 +34,14 @@ export interface DaemonPolicyDescriptor {
   /** true = delivered via the hooks-v1 push (applies hot on connected daemons,
    *  no restart); absent/false = read from spawn env (needs daemon restart). */
   hotPushed?: boolean;
+  /** One short line for the person. */
   note: string;
+  /** The technical part of the note, shown on hover. */
+  noteDetail?: string;
 }
 
-const DAEMON_RESTART_NOTE = 'Read at daemon spawn: a change takes effect after the daemon restarts (next session start on that host after `bun run dev:prod`, or daemon idle-exit).';
+const DAEMON_RESTART_NOTE = 'A change applies once the host\'s daemon restarts, at the next session start there.';
+const DAEMON_RESTART_DETAIL = 'Read at daemon spawn: a change takes effect after the daemon restarts (next session start on that host after `bun run dev:prod`, or daemon idle-exit).';
 
 export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
   {
@@ -116,6 +120,7 @@ export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
       },
     ],
     note: DAEMON_RESTART_NOTE,
+    noteDetail: DAEMON_RESTART_DETAIL,
   },
   {
     id: 'permission-auto-respond-by-mode',
@@ -126,5 +131,6 @@ export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
     isEnabled: (c) => c.session?.auto_approve_bypass !== false,
     setter: (enabled) => ({ session: { auto_approve_bypass: enabled } } as Partial<Config>),
     note: DAEMON_RESTART_NOTE,
+    noteDetail: DAEMON_RESTART_DETAIL,
   },
 ];

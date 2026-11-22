@@ -34,6 +34,8 @@ export interface HookInfo {
   /** Present + non-empty when the hook has knobs beyond on/off. */
   settings?: HookSetting[]
   note?: string
+  /** The note's technical part (config keys, modules), for hover. */
+  noteDetail?: string
 }
 
 export interface HookPatchResult {

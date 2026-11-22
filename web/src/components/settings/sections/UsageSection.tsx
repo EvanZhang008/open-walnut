@@ -249,7 +249,8 @@ function HowCounted({ report }: { report: CostReport }) {
     <details className="settings-group usage-how" data-testid="usage-how">
       <summary>How this is counted</summary>
       <SettingsGroup>
-        <SettingsRow label="Prices" help={`Tokens at the model's public list price${report.prices.source === 'litellm' ? ' (LiteLLM price list' : ' (built-in price list'}${asOf ? `, ${asOf})` : ')'}, by prompt size. An estimate, not a bill: no discounts, credits or taxes.`} />
+        <SettingsRow label="Prices" help="Tokens at each model's public list price, by prompt size. An estimate, not a bill: no discounts, credits or taxes."
+          title={`From the ${report.prices.source === 'litellm' ? 'LiteLLM' : 'built-in'} price list${asOf ? `, ${asOf}` : ''}.`} />
         <SettingsRow label="Sources" help="Claude Code from each host's transcripts, Codex and OpenCode from their session records, Walnut from its own records." />
         <SettingsRow label="Up to date" help={report.countedUntil.length
           ? report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')

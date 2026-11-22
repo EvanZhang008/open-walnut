@@ -223,12 +223,12 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   await expect(cell(fact, 'you-total')).toHaveText('50m', { timeout: 30_000 })
   await expect(cell(fact, 'agent-total')).toHaveText('3h 02m')
   // A labelled row in Session info (2026-11-02 menu redesign: the Time row moved there from the
-  // menu's head), under the host's own Web servers row and above Created; its "Header" toggle at
+  // menu's head), under the host's own Web servers row and above Created; its "Show in header" toggle at
   // the end, off.
   const row = menu.locator(PLUGIN_FACT)
   await expect(row.locator('.task-kebab-fact-label')).toHaveText('Time')
   await expect(row.locator('.task-kebab-fact-value')).toHaveText('You 50m \u00b7 Agent 3h 02m')
-  await expect(row.getByTestId('session-fact-pin')).toHaveText('Header')
+  await expect(row.getByTestId('session-fact-pin')).toHaveText('Show in header')
   await expect(row.getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
   await expect(fact).toHaveAttribute('title', /You: 50m total, 20m today, 50m in 7 days/)
   await expect(fact).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
@@ -239,7 +239,7 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
     menu.locator('.task-kebab-item').filter({ hasText: /^Task details$/ }).boundingBox(),
   ])
   expect(rowBox!.y).toBeLessThan(createdBox!.y)
-  // One line (its Header toggle makes it a little taller than a plain row), never a
+  // One line (its "Show in header" toggle makes it a little taller than a plain row), never a
   // stacked block.
   expect(rowBox!.height).toBeLessThan(detailBox!.height * 1.5)
   await page.screenshot({ path: `${SHOTS}/session-menu-fact.png`, clip: { x: menuBox!.x, y: menuBox!.y, width: menuBox!.width, height: menuBox!.height } })
@@ -262,7 +262,7 @@ test('the menu row pins the time to every session header, kept across a reload',
   const item = header.locator(`[data-header-id="slot:${SLOT_KEY}"]`)
   await expect(item).toHaveCount(0)
 
-  // The same menu a right-click on the header opens: turn the row's "Header" on.
+  // The same menu a right-click on the header opens: turn the row's "Show in header" on.
   await header.click({ button: 'right', position: { x: 6, y: 6 } })
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
@@ -276,7 +276,7 @@ test('the menu row pins the time to every session header, kept across a reload',
   await expect(menu).toBeVisible()
   const chip = item.getByTestId('time-session-chip')
   await expect(chip).toBeVisible()
-  // The pill: an icon and one whole unit per lane ("You" and "Agent" are there for a reader).
+  // The pill: per lane an icon, its name ("You", "Agent") and one whole unit.
   await expect(chip).toHaveText('You 50m \u00b7 Agent 3h')
   await expect(chip).toHaveAttribute('aria-label', /Time on this session\. You: 50m total, .*Agent: 3h 02m total/)
   // Its exact numbers are its native tooltip; nothing grows out of it (task-slots.tsx TimeChip).

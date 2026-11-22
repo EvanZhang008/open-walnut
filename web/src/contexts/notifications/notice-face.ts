@@ -4,6 +4,7 @@
  * tests/web/notice-face.test.ts, which also fails when a new kind has no face here.
  */
 import type { NoticeTone } from '@/components/common/NoticeCard';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import type { Notification, NotificationKind, NotificationSeverity } from './types';
 
 /** Who a notice is from when no session or task names it. */
@@ -111,7 +112,7 @@ export function feedRowSource(
   const detail = [
     session && session !== sender ? `Session: ${session}` : '',
     n.sessionId ? `Session id: ${n.sessionId}` : '',
-    host ? `Host: ${host}${local ? ' (this computer)' : ''}` : '',
+    host ? `Host: ${local ? LOCAL_HOST_LABEL : host}` : '',
   ].filter(Boolean);
   return { text: parts.length ? parts.join(' \u00b7 ') : null, detail: detail.length ? detail.join('\n') : null };
 }

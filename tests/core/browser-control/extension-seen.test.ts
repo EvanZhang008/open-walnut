@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { _resetExtensionsSeenForTesting, extensionsSeen, forgetExtension, noteExtension } from '../../../src/core/browser-control/extension-seen'
 import { LIVE_MS, extRows, updateOf, type ExtSeen } from '../../../web/src/components/settings/sections/browser-extension-model'
+import { HELP_MAX } from '../../web/ui-words-scan'
 
 beforeEach(() => _resetExtensionsSeenForTesting())
 
@@ -56,17 +57,32 @@ describe('the words Settings shows', () => {
     const [r] = extRows([device], [], new Map(), shipped, now)
     expect(r).toMatchObject({ live: false, update: 'unknown' })
     expect(r.line).toMatch(/^Last heard .*Version not reported yet.*Agents can't use this browser\.$/)
+    // Why it is not reported moves to the row's hover.
+    expect(r.detail).toContain('An older extension')
   })
 
   it('connected now when heard from within LIVE_MS or polling for agents; the agents part names what it lets in', () => {
     const [on] = extRows([device], [seen({})], new Map([['extension-aaaaaa', ['view-stream']]]), shipped, now)
     expect(on).toMatchObject({ live: true, update: 'current', label: 'Walnut extension (Chrome on Mac)' })
-    expect(on.line).toBe('Connected. Version 0.6.25 (build bbbbbb2), up to date. Agents can use this browser.')
+    expect(on.line).toBe('Connected. Version 0.6.25, up to date. Agents can use this browser.')
+    expect(on.detail).toBe('Build bbbbbb2. It runs the build this Walnut ships.')
     const [handed] = extRows([device], [seen({ at: new Date(now - LIVE_MS - 1000).toISOString() })], new Map([['extension-aaaaaa', ['handed-tabs-only']]]), shipped, now)
     expect(handed.live).toBe(true)
     expect(handed.line).toMatch(/Agents use only tabs you share\.$/)
     const [old] = extRows([device], [seen({ at: new Date(now - LIVE_MS - 1000).toISOString() })], new Map(), shipped, now)
     expect(old.live).toBe(false)
     expect(old.line).toMatch(/^Last heard 15 min ago\. /)
+  })
+
+  it('the line stays one short help line for every update kind, heard from long ago; the rest is on hover', () => {
+    const longAgo = new Date(now - 30 * 86_400_000).toISOString()
+    const kinds: Partial<ExtSeen>[] = [{}, { build: 'aaaaaa111111' }, { build: 'aaaaaa111111', install: 'unpacked' }, { install: 'store' }, { build: undefined, install: undefined }]
+    const lines = kinds.map((over) => extRows([device], [seen({ ...over, version: '10.20.300', at: longAgo })], new Map(), shipped, now)[0])
+    lines.push(extRows([device], [], new Map(), shipped, now)[0])
+    expect(new Set(lines.map((r) => r.update))).toEqual(new Set(['current', 'updating', 'reload', 'store', 'unknown']))
+    for (const r of lines) {
+      expect(r.line.length, r.line).toBeLessThanOrEqual(HELP_MAX)
+      expect(r.detail.length).toBeGreaterThan(0)
+    }
   })
 })

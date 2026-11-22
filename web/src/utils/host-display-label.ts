@@ -4,11 +4,11 @@
  * Order: the live status label (it follows a rename in Settings without a
  * reload), then the label the caller already carries (a working-dirs row, the
  * draft's `hostLabel`), then the alias. No host at all (or `__local__`) is this
- * machine: "Local", the same word the folder picker's host tab uses. The cloud
+ * machine: "This Mac", the same word the folder picker's host tab uses. The cloud
  * box's alias is internal and never shown: without a label it is "Cloud", the
  * server's twin rule (core/hosts/host-display-name.ts).
  */
-export const LOCAL_HOST_LABEL = 'Local';
+export const LOCAL_HOST_LABEL = 'This Mac';
 
 /** This machine in a sentence ("This Mac" / "This computer", as the server's start source names it):
  *  the new task draft's Where field (experiment project_first_start), where the host leads the path. */

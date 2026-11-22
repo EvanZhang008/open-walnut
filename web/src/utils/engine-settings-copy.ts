@@ -18,6 +18,7 @@ import type {
   EngineSettingsWriteScope,
 } from '@/api/engine-settings';
 import { LOCAL_HOST } from '@/api/engine-settings';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 const ELLIPSIS = '…';
 
@@ -110,7 +111,7 @@ export function aboutScopeLine(
  * used to disagree on the case; they all read this function verbatim now.
  */
 export function hostLabel(host: string | undefined): string {
-  return !host || host === LOCAL_HOST ? 'This Mac' : host;
+  return !host || host === LOCAL_HOST ? LOCAL_HOST_LABEL : host;
 }
 
 /** "for sessions in <cwd>" or, for a session without a working directory, just "for sessions". */

@@ -17,7 +17,7 @@ describe('sessionKebabMetaRows', () => {
   it('the host, then Created and Updated, the session times, relative', () => {
     const rows = sessionKebabMetaRows(session, NOW)
     expect(rows.map((r) => [r.label, r.value])).toEqual([
-      ['Host', 'Local'],
+      ['Host', 'This Mac'],
       ['Created', '1w ago'],
       ['Updated', '2h ago'],
     ])
@@ -52,17 +52,17 @@ describe('sessionKebabMetaRows', () => {
     expect(sessionKebabMetaRows({ ...session, host: 'devbox' }, NOW)[0].title).toBe('devbox')
   })
 
-  it('every spelling of this machine reads Local', () => {
+  it('every spelling of this machine reads This Mac', () => {
     for (const host of [undefined, '', '__local__', 'local']) {
       const row = sessionKebabMetaRows({ ...session, host, hostname: 'ignored.example.test' }, NOW)[0]
-      expect(row.value, String(host)).toBe('Local')
-      expect(row.title, String(host)).toBe('Local')
+      expect(row.value, String(host)).toBe('This Mac')
+      expect(row.title, String(host)).toBe('This Mac')
     }
   })
 
   it('just now, and a clock-skewed future time is just now too', () => {
     const rows = sessionKebabMetaRows({ startedAt: at(2026, 9, 28, 18, 29, 40), lastActiveAt: at(2026, 9, 28, 18, 31) }, NOW)
-    expect(rows.map((r) => r.value)).toEqual(['Local', 'just now', 'just now'])
+    expect(rows.map((r) => r.value)).toEqual(['This Mac', 'just now', 'just now'])
   })
 
   it('a missing or bad time drops its row; the host row always stays', () => {

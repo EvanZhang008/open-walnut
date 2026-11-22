@@ -20,7 +20,7 @@ import { peekPendingInstall, subscribeOpenLinks } from '@/utils/open-link'
 import { BuiltinAppsGrid, BuiltinDetail, foldedPluginRows, heldPlugins, useBuiltinEntries } from '@/components/apps-page/BuiltinAppsGrid'
 import { MakeAppCard } from '@/components/apps-page/MakeAppCard'
 import { AppQuickOpen } from '@/components/apps-page/AppQuickOpen'
-import { builtinParts, builtinsMatching, builtinsShown } from '@/components/apps-page/builtin-apps'
+import { BUILTIN_APPS_TITLE, builtinParts, builtinsMatching, builtinsShown } from '@/components/apps-page/builtin-apps'
 import { GET_MORE_TITLE, PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
 import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
@@ -163,7 +163,7 @@ function AppsPageBody() {
     { id: 'all', label: 'All' },
     ...chipCategories.map((category) => ({ id: category, label: PLUGIN_CATEGORY_LABELS[category] })),
     { id: 'get', label: GET_MORE_TITLE },
-    { id: 'builtin', label: 'Built-in apps' },
+    { id: 'builtin', label: BUILTIN_APPS_TITLE },
   ]
 
   return (
@@ -239,7 +239,7 @@ function AppsPageBody() {
         {showBuiltin && builtinHits > 0 && (
           <section className="apps-section" data-testid="apps-builtin" aria-labelledby="apps-builtin-title">
             <h2 className="apps-section-title" id="apps-builtin-title">
-              Built-in apps
+              {BUILTIN_APPS_TITLE}
               <span className="apps-section-count">{`${onRail} of ${allParts.length} parts on the sidebar`}</span>
             </h2>
             <BuiltinAppsGrid entries={visibleBuiltins} folded={folded} facts={heldFacts} onOpen={openApp} onOpenPlugin={openPlugin} />

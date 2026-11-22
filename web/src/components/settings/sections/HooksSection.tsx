@@ -197,7 +197,7 @@ function HookRow({ hook, name, error, showTag, onToggle, onSettingCommit }: {
         {hook.source === 'daemon-policy' && (
           <SettingsRow indent label="Source" control={<code className="settings-mono-value">daemon-policy</code>} />
         )}
-        {hook.note && <SettingsRow indent label="Note" help={<CodeText text={hookDescription(hook.note)} />} />}
+        {hook.note && <SettingsRow indent label="Note" help={<CodeText text={hookDescription(hook.note)} />} title={hook.noteDetail} />}
         {/* Knobs only while the hook is ON: tuning for something that isn't
             running reads as "configured and active" when it isn't. */}
         {hook.enabled && <HookSettingRows hook={hook} onCommit={onSettingCommit} />}

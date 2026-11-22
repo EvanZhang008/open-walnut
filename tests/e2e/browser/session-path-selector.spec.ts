@@ -118,7 +118,7 @@ test('segment fuzzy: prefix hit beats substring hit; ghost text; ArrowRight acce
 
 test('exact leaf-prefix hit ranks first, above a high-frecency history subsequence match', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // 'mcp' leaf-prefix-hits 'mcps'; it only subsequence-hits the high-frecency
@@ -136,7 +136,7 @@ test('exact leaf-prefix hit ranks first, above a high-frecency history subsequen
 
 test('exact typed segment + deep highlighted row: Tab descends ONE level, never the full path', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // 'walnut' typed exactly — no ghost (nothing left to complete). The fixture's
@@ -154,7 +154,7 @@ test('exact typed segment + deep highlighted row: Tab descends ONE level, never 
 
 test('Tab case-corrects: lowercase typed segment completes to the REAL-cased dir', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // Fixture has 'AcmeCapsDev/'. Type it all-lowercase; ghost shows the remainder;
@@ -176,7 +176,7 @@ test('Tab case-corrects: lowercase typed segment completes to the REAL-cased dir
 
 test('Tab completes to the SAME candidate the ghost predicts (not the highlighted history row)', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // 'wallet' prefix-extends only 'wallets' (a live sibling), NOT the high-frecency
@@ -192,7 +192,7 @@ test('Tab completes to the SAME candidate the ghost predicts (not the highlighte
 
 test('Enter also drills into the ghost candidate, matching the prediction', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   await input(page).fill(`${fixtureRoot}/projects/wallet`)
@@ -204,7 +204,7 @@ test('Enter also drills into the ghost candidate, matching the prediction', asyn
 
 test('ArrowDown overrides the ghost highlight — explicit navigation wins for Tab', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   await input(page).fill(`${fixtureRoot}/projects/wal`)
@@ -240,7 +240,7 @@ test('hidden dirs appear only when the typed segment starts with a dot', async (
 test('nonexistent leaf → create & start row; confirming sends createCwd:true', async ({ page }) => {
   await openPicker(page)
   // Single-host mode required for the create row — switch to Local tab if present
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   const newDir = `${fixtureRoot}/projects/brand-new-dir`
@@ -279,7 +279,7 @@ test('nonexistent leaf → create & start row; confirming sends createCwd:true',
 
 test('explicit empty state when the typed directory does not exist', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   await input(page).fill(`${fixtureRoot}/nope/deeper/`)
@@ -316,7 +316,7 @@ test('status button stays clickable while ghost text is visible', async ({ page 
   await openPicker(page)
   // In multi-host mode, pin to Local so a slow/dead SSH host cannot keep validity
   // unknown. Single-host mode is already local and intentionally renders no tabs.
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) {
     await localTab.click()
     await expect(localTab).toHaveAttribute('aria-pressed', 'true')
@@ -326,7 +326,7 @@ test('status button stays clickable while ghost text is visible', async ({ page 
   // which flips the input to has-ghost mode (transparent bg + z-index lift).
   await input(page).fill(`${fixtureRoot}/projects/wal`)
   await expect(page.locator('.sps-ghost-text')).toBeVisible()
-  // Button must have settled to a clickable (non-disabled) verdict on Local.
+  // Button must have settled to a clickable (non-disabled) verdict on This Mac.
   await expect(page.locator('.sps-status-btn')).toBeEnabled()
 
   // The status button must still receive the click (regression: the z-index-
@@ -339,7 +339,7 @@ test('status button shows existence verdict: green ✓ for real dir, amber "+ fo
   await openPicker(page)
   // Local tab: 'missing' requires EVERY host to settle — on All, one slow/dead
   // SSH host pins validity at 'unknown' (↵) forever and the assertion flakes.
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // Existing dir → valid (green ✓)
@@ -356,7 +356,7 @@ test('status button shows existence verdict: green ✓ for real dir, amber "+ fo
 
 test('⇧Enter on a missing path routes to create & start (createCwd:true), not a plain start', async ({ page }) => {
   await openPicker(page)
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = page.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   const newDir = `${fixtureRoot}/projects/created-via-shift-enter`

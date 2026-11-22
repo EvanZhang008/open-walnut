@@ -14211,13 +14211,6 @@ a.task-kebab-info:hover {
   color: var(--fg);
 }
 
-.agent-card-id {
-  font-size: var(--font-size-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-card-lock {
   font-size: var(--font-size-sm);
   opacity: 0.5;

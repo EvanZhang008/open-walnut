@@ -50,7 +50,7 @@ describe('buildHostTabs: hosts found in ~/.ssh/config and not added (2026-11-11)
 });
 
 describe('buildHostTabs', () => {
-  it('All, Local, each enabled host, then Removed hosts only when a removed host has history', () => {
+  it('All, This Mac, each enabled host, then Removed hosts only when a removed host has history', () => {
     const m = buildHostTabs({ configured, dirs });
     expect(m.tabs.map((t) => t.key)).toEqual([ALL_TAB, LOCAL_TAB, 'devbox', 'buildbox', REMOVED_TAB]);
     expect(m.tabs.at(-1)).toMatchObject({ label: REMOVED_TAB_LABEL, kind: 'removed' });
@@ -94,7 +94,7 @@ describe('tab helpers', () => {
     expect(tabInfersHost('devbox')).toBe(false);
   });
 
-  it('a host tab has the dot sentence as its only title; All and Local have none', () => {
+  it('a host tab has the dot sentence as its only title; All and This Mac have none', () => {
     const m = buildHostTabs({ configured, dirs });
     const dot = { kind: 'warn' as const, title: 'Build box: Claude Code on Build box is 2.1.220.' };
     expect(tabTitle(m.tabs[3], dot)).toBe(dot.title);

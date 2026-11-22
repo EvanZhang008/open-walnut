@@ -136,11 +136,13 @@ export function PasswordsSection({ config, onSave }: Props) {
         <SettingsRow
           label="Keep Passwords unlocked"
           className="settings-row-stacked"
-          help={!vaultReady
+          help={status?.unlockFor === 'always'
+            ? 'Forever: a key on this Mac lets agents use Passwords while you are away; any program running as you could read it.'
+            : status ? unlockFootText(status) : undefined}
+          title={!vaultReady
             ? `How long Passwords stay unlocked after you last use them. ${UNLOCK_CHANGE_WHEN}`
             : status?.unlockFor === 'always'
-              ? 'Forever: a key on this Mac lets agents use Passwords while you are away; any program running as you could read it.'
-              : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} ${UNLOCK_CHANGE_WHEN}`}
+              ? undefined : `${status?.unlockFor === 'restart' ? '' : 'Restarting Walnut keeps it. '}${UNLOCK_CHANGE_WHEN}`}
           control={<SegmentedControl<UnlockFor> id="pw-unlock-for" aria-label="Keep Passwords unlocked" value={vaultReady ? foreverTo ?? status?.unlockFor ?? '48h' : null} disabled={!vaultReady || busy === 'unlock' || busy === 'forever'}
             options={UNLOCK_OPTIONS.map((o) => ({ value: o.value, label: unlockOptionLabel(o, status?.lockAfterIdleMinutes), testId: `pw-unlock-${o.value}` }))}
             onChange={pickUnlock} />}

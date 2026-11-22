@@ -24,7 +24,7 @@ import { ApiError } from '@/api/client';
 import { normalizeServiceInput } from '@/utils/service-link';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels, useHostRoutes } from '@/hooks/useHostDisplayLabel';
-import { hostRouteTunnelWords, remoteHostTag } from '@/utils/host-display-label';
+import { hostRouteTunnelWords, LOCAL_HOST_LABEL, remoteHostTag } from '@/utils/host-display-label';
 import { DaemonUpdateFix } from './HostFeatureUnavailable';
 import { serverKey, type SessionServersState } from '@/hooks/useSessionServers';
 import { SessionServerList, type SessionServerListProps } from './SessionServerList';
@@ -273,8 +273,8 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
   // Before an answer (or after none came: a stopped server), the session's host says where it is.
   const sessionRemote = !!host && host !== '__local__';
   const hostBadge = info
-    ? (remote ? remoteHostTag(info.host, tunnelHost, hostVia(info.host)) : 'Local')
-    : requestedUrl && activeLocalPort(requestedUrl) !== null ? (sessionRemote ? remoteHostTag(host!, hostName(host!), hostVia(host)) : 'Local') : '';
+    ? (remote ? remoteHostTag(info.host, tunnelHost, hostVia(info.host)) : LOCAL_HOST_LABEL)
+    : requestedUrl && activeLocalPort(requestedUrl) !== null ? (sessionRemote ? remoteHostTag(host!, hostName(host!), hostVia(host)) : LOCAL_HOST_LABEL) : '';
   // How a port of a remote host opens here, by that host's real connection.
   const remotePortHint = sessionRemote
     ? `A port on ${hostName(host)} opens ${hostRouteTunnelWords(hostVia(host))}.`

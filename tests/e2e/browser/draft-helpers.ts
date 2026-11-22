@@ -9,7 +9,7 @@
  * new route in — that is exactly what `openDraftOnCwd` provides.
  *
  * Driving idiom copied verbatim from tests/e2e/browser/session-path-selector.spec.ts
- * and codex-lifecycle.spec.ts: switch to the Local host tab when the fixture is in
+ * and codex-lifecycle.spec.ts: switch to the This Mac host tab when the fixture is in
  * multi-host mode, fill `.sps-search-input` with the absolute path, then
  * Shift+Enter to confirm (an engine is picked afterwards on the composer's model
  * pill, `pickDraftEngine`: the picker only picks a folder and a host). The only difference is
@@ -221,7 +221,7 @@ export async function serverHome(page: Page): Promise<string> {
 /** The folder pill's empty-state copy. */
 export const CHOOSE_FOLDER = 'Choose folder and host…'
 /** A New task with no folder picked starts in the home folder (draft-home-default.ts). */
-export const HOME_FOLDER = 'Folder/Host: Home folder · Local'
+export const HOME_FOLDER = 'Folder/Host: Home folder · This Mac'
 /** The More menu's Project section (page-scoped: the menu is portalled). */
 export const draftMenuProject = (page: Page): Locator => page.locator('[data-testid="draft-menu-project"]')
 
@@ -533,9 +533,9 @@ export async function pickDraftFolder(
   // the codex audit fails the test).
   await expect(picker.locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
 
-  // Multi-host fixtures render host tabs; pin to Local so a slow/dead SSH host
+  // Multi-host fixtures render host tabs; pin to This Mac so a slow/dead SSH host
   // can't leave path validity 'unknown'. Single-host mode renders no tabs.
-  const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = picker.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // The picker picks a folder and a host, nothing else: the task fields live in

@@ -350,8 +350,8 @@ test('N8: no MD / Rich / pin / time strip under a bubble; one Message actions bu
   const errors = await openFixtureSession(page, 'pw-history-turns-session')
   const history = page.locator('.session-history')
   await expect(history.locator('.session-msg-actions')).toHaveCount(0)
-  await expect(history.getByText('Rich', { exact: true })).toHaveCount(0)
-  await expect(history.getByText('MD', { exact: true })).toHaveCount(0)
+  await expect(history.getByText('Copy rich text', { exact: true })).toHaveCount(0)
+  await expect(history.getByText('Copy Markdown', { exact: true })).toHaveCount(0)
   // A one-line message stays one line: the bubble is no taller than its text.
   const user = history.locator('.session-msg-user').last()
   await user.scrollIntoViewIfNeeded()

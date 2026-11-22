@@ -129,7 +129,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // Both suggestions landed, badged ✦: the project, and the folder it declares.
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · This Mac✦`)
   // C7: the task decisions are chips, each badged.
   for (const [field, words] of [['pinTier', 'Focus'], ['priority', 'Immediate'], ['dueDate', `Due ${dayWords(3)}`]] as const) {
     await expect(draftDecisionChip(panel, field)).toContainText(words)
@@ -144,7 +144,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // This is the case the whole feature exists to count, and one record carrying a
   // kept field beside a changed one is what makes the per-field table meaningful.
   await pickDraftProject(page, panel, USER_PROJECT)
-  await expect(draftCwdPill(panel), 'the folder stays as the AI left it').toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
+  await expect(draftCwdPill(panel), 'the folder stays as the AI left it').toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · This Mac✦`)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-override-before-commit.png`, fullPage: false })
 

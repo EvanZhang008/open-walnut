@@ -57,7 +57,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
   else {
     // An SSH alias that differs from its label is worth knowing; the cloud box's alias is internal.
     const alias = draft.host && draft.host !== CLOUD_BOX_ALIAS && hostName !== draft.host ? ` (alias ${draft.host})` : '';
-    const lines = [`Folder: ${draft.cwd}`, `Host: ${draft.host ? hostName : `${LOCAL_HOST_LABEL} (this machine)`}${alias}`];
+    const lines = [`Folder: ${draft.cwd}`, `Host: ${draft.host ? hostName : LOCAL_HOST_LABEL}${alias}`];
     if (ai) lines.push('Walnut picked this folder from what you typed.');
     // A host with something to say: the same one sentence as its picker tab.
     title = saysSomething ? hostDot!.title : lines.join('\n');

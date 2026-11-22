@@ -330,7 +330,7 @@ test('live Claude Code session uses its engine name on Homepage', async ({ page 
   test.setTimeout(90_000)
   const audit = await installBrowserAudit(page, walnutHome)
   const { panel: draft, picker } = await openPicker(page)
-  const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = picker.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   // Keep the default Claude engine selected. Driven by hand on the stubbed,

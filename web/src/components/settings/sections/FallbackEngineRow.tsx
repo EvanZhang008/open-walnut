@@ -143,8 +143,9 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
         // One short line, the rest under its More (2026-11-22, the audit's second and third looks).
         help={<span data-testid="fallback-engine-help">What new tasks do when the default engine runs out.</span>}
         more={<span data-testid="fallback-engine-more">{picked
-          ? 'A new task starts on this engine while the default engine is out of usage on its machine. Sessions already running wait for the reset.'
-          : `Pick an engine for new tasks while the default engine is out of usage on its machine. ${FALLBACK_OFF_LABEL}: new tasks start on the default engine once its usage resets, as sessions already running do.`}</span>}
+          ? 'New tasks start on this engine while the default one is out of usage. Sessions already running wait for the reset.'
+          : `Pick an engine for new tasks while the default one is out of usage. ${FALLBACK_OFF_LABEL}: new tasks wait too.`}</span>}
+        title={picked ? undefined : `${FALLBACK_OFF_LABEL}: new tasks start on the default engine once its usage resets, as sessions already running do.`}
         error={engine.error}
         data-testid="fallback-engine-row"
         control={(

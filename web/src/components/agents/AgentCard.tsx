@@ -35,13 +35,13 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
   const badges = badgeInfo(agent);
 
   return (
-    <div className="agent-card card">
+    <div className="agent-card card" data-agent-id={agent.id}>
       <div className="agent-card-header">
         <div className="agent-card-title-row">
           {badges.map((b) => <span key={b.label} className={b.className}>{b.label}</span>)}
-          <span className="agent-card-name">{agent.name}</span>
+          {/* The id is for an agent (its config key), never visible text; the hover keeps it findable. */}
+          <span className="agent-card-name" title={`Agent id: ${agent.id}`}>{agent.name}</span>
           {isBuiltin && <span className="agent-card-lock" title="Built-in: editing saves your own version, and Reset to Default brings the original back">&#128274;</span>}
-          <span className="agent-card-id text-muted font-mono">{agent.id}</span>
         </div>
         <div className="agent-card-actions">
           <div className="agent-menu-wrapper">

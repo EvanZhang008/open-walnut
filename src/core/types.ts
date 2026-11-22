@@ -1,4 +1,4 @@
-export { EXPERIMENTAL_FEATURES, EVERY_EXPERIMENT, everyExperimentOn, experimentalEnabled } from './experimental.js';
+export { EXPERIMENTAL_FEATURES, EVERY_EXPERIMENT, everyExperimentOn, experimentalEnabled, experimentSummary } from './experimental.js';
 export type { ExperimentalFlags, ExperimentalFeatureId } from './experimental.js';
 export { INBOX_PROJECT, isInboxProject, projectOrInbox } from './inbox-project.js';
 import { SESSION_EFFORT_IDS, type SessionEffort } from './session-effort.js';

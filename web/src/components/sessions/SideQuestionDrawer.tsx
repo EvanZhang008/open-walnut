@@ -860,7 +860,7 @@ function SideQuestionDrawerBody({
             // chip row is empty and the only pickable threads are in the shelf.
             liveThreads.length === 0 && archivedThreads.length === 0
               ? <EmptyState size="section" testId="side-question-empty" title="No side chats yet"
-                  hint="Ask something below: each side chat is a hidden copy of this session, so its answers never enter the main chat." />
+                  hint="Ask something below: a side chat sees this session, but its answers never enter the main chat." />
               : <EmptyState size="section" testId="side-question-empty" title="New side chat"
                   hint={liveThreads.length === 0 ? 'Ask below, or reopen one from Archived above.' : 'Ask below, or pick one above to follow up.'} />
           )}

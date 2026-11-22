@@ -105,7 +105,7 @@ test('the menu ends with Host, Created and Updated from the session record', asy
     await expect(row.locator('.task-kebab-meta-value'), `${key} value`).toHaveText(RELATIVE)
     await expect(row, `${key} hover`).toHaveAttribute('title', await exactOf(page, iso))
   }
-  await expect(meta.locator('[data-meta="host"] .task-kebab-meta-value')).toHaveText('Local')
+  await expect(meta.locator('[data-meta="host"] .task-kebab-meta-value')).toHaveText('This Mac')
   // The host lives in the metadata rows now: no separate SSH line.
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 

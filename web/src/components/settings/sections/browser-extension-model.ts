@@ -22,8 +22,10 @@ export interface ExtRowModel {
   live: boolean
   version?: string
   update: ExtUpdate
-  /** One sentence: connected or when last heard from, the version, how it updates, agents. */
+  /** One short line: connected or when last heard from, the version, how it updates, agents. */
   line: string
+  /** The rest, for the row's hover: the build and why the update or version is what it is. */
+  detail: string
 }
 
 /** The extension checks in every 10 minutes (self-update.ts); a little more than that still reads as connected. */
@@ -54,12 +56,21 @@ export function updateOf(seen: ExtSeen | undefined, shipped: ExtShipped | null |
   return seen.install ? 'reload' : 'unknown'
 }
 
+/** Short words for the row's line; UPDATE_DETAIL says the rest on hover. */
 const UPDATE_WORDS: Record<ExtUpdate, string> = {
   current: 'up to date',
-  updating: 'a newer build is ready: it updates itself within 10 minutes',
-  reload: 'older than this Walnut: set it up from Walnut\'s folder below once, and it updates itself from then on',
-  store: 'updates through the browser\'s store',
-  unknown: 'how it updates is not reported yet (an older extension, or one that has not checked in since Walnut started)',
+  updating: 'updates itself within 10 minutes',
+  reload: 'outdated: set it up again below',
+  store: 'updates through its store',
+  unknown: 'how it updates is not known yet',
+}
+const NOT_REPORTED_WHY = 'An older extension, or one that has not checked in since Walnut started.'
+const UPDATE_DETAIL: Record<ExtUpdate, string> = {
+  current: 'It runs the build this Walnut ships.',
+  updating: 'A newer build is ready: it updates itself within 10 minutes.',
+  reload: 'Older than this Walnut. Set it up from Walnut\'s folder below once, and it updates itself from then on.',
+  store: 'It updates through the browser\'s store.',
+  unknown: `How it updates is not reported yet. ${NOT_REPORTED_WHY}`,
 }
 
 /** `polling`: the browsers that let agents in now (device → its caps, GET /api/v1/browser/status `browsers`). */
@@ -72,9 +83,10 @@ export function extRows(devices: ExtDevice[], seen: ExtSeen[], polling: Readonly
     const update = updateOf(s, shipped)
     const parts = [
       live ? 'Connected' : `Last heard ${ago(s?.at ?? d.lastUsedAt, now)}`,
-      s?.version ? `Version ${s.version}${s.build ? ` (build ${s.build.slice(0, 7)})` : ''}, ${UPDATE_WORDS[update]}` : 'Version not reported yet (an older extension, or one that has not checked in since Walnut started)',
+      s?.version ? `Version ${s.version}, ${UPDATE_WORDS[update]}` : 'Version not reported yet',
       !polling.has(d.name) ? AGENTS_IN_BROWSER.none : polling.get(d.name)!.includes('handed-tabs-only') ? AGENTS_IN_BROWSER.shared : AGENTS_IN_BROWSER.all,
     ]
-    return { device: d.name, label: d.info?.deviceName ?? 'Walnut extension', live, ...(s?.version ? { version: s.version } : {}), update, line: `${parts.join('. ')}.` }
+    const detail = s?.version ? `${s.build ? `Build ${s.build.slice(0, 7)}. ` : ''}${UPDATE_DETAIL[update]}` : `Version not reported yet. ${NOT_REPORTED_WHY}`
+    return { device: d.name, label: d.info?.deviceName ?? 'Walnut extension', live, ...(s?.version ? { version: s.version } : {}), update, line: `${parts.join('. ')}.`, detail }
   })
 }

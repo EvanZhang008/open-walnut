@@ -53,7 +53,7 @@ async function openPicker(page: Page): Promise<Locator> {
   await expect(picker(page)).toBeVisible()
   await expect(picker(page).locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
   // Pin Local so a dead fixture SSH host cannot hold the verdict at 'unknown'.
-  const localTab = picker(page).locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = picker(page).locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
   if ((await input(page).inputValue()) !== '') {
     await input(page).press('Escape')

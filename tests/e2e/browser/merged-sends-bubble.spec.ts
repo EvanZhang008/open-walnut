@@ -212,7 +212,7 @@ for (const listed of [true, false]) {
     const users = await userTimeline(page);
     expect(users.filter((t) => t.includes(A)), `"${A}" shows exactly once`).toHaveLength(1);
     expect(users.at(-1)).toContain(later.at(-1)!);
-    // textContent carries each row's action labels ("MD", "Rich", its age): match by words.
+    // textContent carries each row's action labels ("Copy Markdown", "Copy rich text", its age): match by words.
     const tail = users.slice(-4);
     expect(tail[0]).toContain(`${A}`);
     expect(tail[0]).toContain(B);

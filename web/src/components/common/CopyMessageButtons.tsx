@@ -25,10 +25,10 @@ async function writeRich(markdown: string): Promise<void> {
 export function CopyMessageButtons({ markdown }: CopyMessageButtonsProps) {
   return (
     <span className="msg-copy-actions">
-      <CopyButton text={markdown} label="MD" kind="ghost" icon keepLabel isolate write={writeMarkdown}
-        className="msg-copy-btn" title="Copy as Markdown" aria-label="Copy as Markdown" />
-      <CopyButton text={markdown} label="Rich" kind="ghost" icon keepLabel isolate write={writeRich}
-        className="msg-copy-btn" title="Copy as rich text (formatted: paste into Docs, Word, email)" aria-label="Copy as rich text" />
+      <CopyButton text={markdown} label="Copy Markdown" kind="ghost" icon keepLabel isolate write={writeMarkdown}
+        className="msg-copy-btn" title="Copy the message as Markdown source" aria-label="Copy Markdown" />
+      <CopyButton text={markdown} label="Copy rich text" kind="ghost" icon keepLabel isolate write={writeRich}
+        className="msg-copy-btn" title="Copy the message as rich text: keeps formatting when pasted into a doc or email" aria-label="Copy rich text" />
     </span>
   );
 }

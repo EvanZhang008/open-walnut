@@ -199,7 +199,7 @@ test('host tab carries a live status dot: connecting → connected → failed, e
   expect(await dot.getAttribute('aria-label')).toBeNull()
   expect(await dot.getAttribute('title')).toBeNull()
   // Local and All never get a dot: there is nothing to connect to.
-  await expect(page.locator('.sps-host-tab', { hasText: 'Local' }).locator('.sps-host-dot')).toHaveCount(0)
+  await expect(page.locator('.sps-host-tab', { hasText: 'This Mac' }).locator('.sps-host-dot')).toHaveCount(0)
   await expect(page.locator('.sps-host-tab', { hasText: 'All' }).locator('.sps-host-dot')).toHaveCount(0)
 
   await pushStatus(page, status('connected'))

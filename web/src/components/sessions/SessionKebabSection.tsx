@@ -30,6 +30,7 @@ import { SessionMetaFacts } from './SessionMetaFacts';
 import {
   useSessionPanelMode,
   useLiveAutoPanelCount,
+  autoPanelCountWords,
   MIN_PANELS,
   MAX_PANELS,
   type SessionPanelMode,
@@ -86,7 +87,7 @@ const PANEL_CHOICES: SessionPanelMode[] = [
 export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
   const { mode, setMode } = useSessionPanelMode();
   const autoCount = useLiveAutoPanelCount();
-  const autoNote = autoCount === null ? null : `Auto: ${autoCount} column${autoCount === 1 ? '' : 's'} now`;
+  const autoNote = autoCount === null ? null : `Auto: ${autoPanelCountWords(autoCount)}`;
   return (
     <div className="task-kebab-panels" data-testid="kebab-panels">
       <span className="task-kebab-icon">{VIEWS_ICON}</span>

@@ -80,7 +80,7 @@ async function openDraftWithEngine(page: Page, cwd: string, id: string): Promise
   // Gate on a listed row first so the host tabs have rendered (same reason as
   // openDraftOnCwd: a bare isVisible() races the working-dirs fetch under load).
   await expect(picker.locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
-  const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = picker.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
 
   const input = picker.locator('.sps-search-input')

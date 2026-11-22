@@ -8,7 +8,7 @@
  * 3. Create/promote/delete are optimistic AND reversible — a failure restores the
  *    pre-action state instead of leaving a phantom chip or a lost thread.
  * 4. Standby prewarm is fire-and-forget + throttled: it can never reject into the
- *    UI, and re-clicking "+ New" must not fan out spawns.
+ *    UI, and re-clicking "New side chat" must not fan out spawns.
  * 5. Only ONE drawer instance may claim "open" (two open popovers would mount two
  *    useSessionStream subscriptions for one thread session id).
  */

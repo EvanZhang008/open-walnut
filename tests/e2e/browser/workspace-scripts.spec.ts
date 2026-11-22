@@ -126,7 +126,7 @@ test("a repository setup nobody allowed holds a person's start until they choose
   const menu = draftTaskMenu(page)
   await expect(menu).toBeVisible({ timeout: 10_000 })
   // The typed folder, not the home default it replaced.
-  await expect(draftCwdPill(draft)).toHaveAccessibleName(`Folder and host: ${repo} on Local. Change`)
+  await expect(draftCwdPill(draft)).toHaveAccessibleName(`Folder and host: ${repo} on This Mac. Change`)
   await menu.getByTestId('draft-menu-workspace').click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
   await expect(draft.getByTestId('draft-workspace-row').getByTestId('draft-workspace-provider-git-worktree')).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 })

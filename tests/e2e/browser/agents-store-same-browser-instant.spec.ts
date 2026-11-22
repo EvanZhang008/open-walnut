@@ -67,7 +67,7 @@ test('renaming an agent on /agents reaches the home switcher without a reload', 
     await page.keyboard.press('Escape')
 
     await gotoAgentsPage(page)
-    const card = page.locator('.agent-card', { hasText: agent.id })
+    const card = page.locator(`.agent-card[data-agent-id="${agent.id}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
     await card.locator('.agent-menu-btn').click()
     await card.locator('.agent-menu-item', { hasText: 'Edit' }).click()
@@ -77,7 +77,7 @@ test('renaming an agent on /agents reaches the home switcher without a reload', 
     await page.locator('#agent-name').fill(renamed)
     await form.locator('button[type="submit"]').click()
     await expect(form).toHaveCount(0, { timeout: 15_000 })
-    await expect(page.locator('.agent-card', { hasText: agent.id })).toContainText(renamed)
+    await expect(page.locator(`.agent-card[data-agent-id="${agent.id}"]`)).toContainText(renamed)
 
     // Back home through the sidebar — no reload, so the switcher can only be
     // right if it reads the same list the page just wrote.
@@ -101,8 +101,8 @@ test('an agent created outside the browser appears on /agents live', async ({ pa
   const name = `Store Push Agent ${Date.now()}`
   const agent = await createAgentViaApi(name)
   try {
-    await expect(page.locator('.agent-card', { hasText: agent.id })).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('.agent-card', { hasText: agent.id })).toContainText(name)
+    await expect(page.locator(`.agent-card[data-agent-id="${agent.id}"]`)).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator(`.agent-card[data-agent-id="${agent.id}"]`)).toContainText(name)
   } finally {
     await deleteAgentViaApi(agent.id)
   }

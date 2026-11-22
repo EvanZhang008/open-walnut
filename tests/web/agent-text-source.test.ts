@@ -34,7 +34,7 @@ describe('source-bound locate requests', () => {
     for (const [host, elsewhereHost] of [[undefined, 'devbox'], ['devbox', undefined]] as const) {
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ path: REQ.path, host: elsewhereHost, found: true, elsewhere: true }))))
       expect(await locatePath(REQ.path, { host, sourceOnly: true })).toEqual({
-        path: REQ.path, ...(host ? { host } : {}), found: false, missing: true, checked: [host ?? 'Local'],
+        path: REQ.path, ...(host ? { host } : {}), found: false, missing: true, checked: [host ?? 'This Mac'],
       })
     }
   })

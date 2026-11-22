@@ -99,6 +99,7 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
             data-update={r.update}
             label={<><span className="ext-live-dot" data-live={r.live ? 'true' : 'false'} aria-hidden="true" />{r.label}</>}
             help={r.line}
+            title={r.detail}
             control={<SettingsButton variant="danger" busy={busy === r.device} onClick={() => void remove(r.device)}>Remove</SettingsButton>}
           />
         ))}

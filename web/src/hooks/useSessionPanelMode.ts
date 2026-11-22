@@ -126,6 +126,14 @@ function publishLiveAutoCount(n: number) {
   liveAutoCount = n;
   for (const listener of liveCountListeners) listener();
 }
+/**
+ * The words that name the count Auto gives in this window ("2 columns now"), the same in
+ * the session kebab's Columns note and the Display menu's Session columns row.
+ */
+export function autoPanelCountWords(n: number): string {
+  return `${n} column${n === 1 ? '' : 's'} now`;
+}
+
 /** Auto's panel count at the home strip's width; null until the home page has measured it. */
 export function useLiveAutoPanelCount(): number | null {
   return useSyncExternalStore(subscribeLiveCount, () => liveAutoCount, () => null);

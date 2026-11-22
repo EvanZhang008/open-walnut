@@ -40,7 +40,10 @@ export interface HookInfo {
    *  Settings → Hooks and written back via PATCH { settings: {...} }. Absent or
    *  empty = the hook is a plain on/off switch. */
   settings?: HookSettingInfo[];
+  /** One short line for the person (Settings shows it under the hook). */
   note?: string;
+  /** The technical part of the note (config keys, modules), shown on hover. */
+  noteDetail?: string;
 }
 
 function describeConditions(hook: HookDefinition): string[] {
@@ -100,7 +103,8 @@ const INLINE_ENTRIES: InlineEntry[] = [
     actionDetail: 'Inject a one-per-turn corrective message via the session control pipe',
     conditions: ['Tool is AskUserQuestion', 'Live control pipe available'],
     mutable: 'config-override',
-    note: 'Enforced inline in the session reader (needs the live pipe + per-turn state). hooks.overrides["askuserquestion-p-mode-correction"].enabled=false disables it.',
+    note: 'Walnut applies this itself while it reads a live session.',
+    noteDetail: 'Enforced inline in the session reader (needs the live pipe + per-turn state). hooks.overrides["askuserquestion-p-mode-correction"].enabled=false disables it.',
     isEnabled: (c) => c.hooks?.overrides?.['askuserquestion-p-mode-correction']?.enabled !== false,
   },
   {
@@ -116,7 +120,8 @@ const INLINE_ENTRIES: InlineEntry[] = [
     actionDetail: 'Send a delayed continue message to the session',
     conditions: ['Error is retry exhaustion', 'Rate limit not exceeded'],
     mutable: 'config-override',
-    note: 'Module: core/session-auto-continue.ts (epoch/TOCTOU semantics). Env defaults (WALNUT_AUTO_CONTINUE_*) still apply; hooks.overrides["session-auto-continue"].enabled=false wins over env.',
+    note: 'Turning it off here wins over the environment defaults.',
+    noteDetail: 'Module: core/session-auto-continue.ts (epoch/TOCTOU semantics). Env defaults (WALNUT_AUTO_CONTINUE_*) still apply; hooks.overrides["session-auto-continue"].enabled=false wins over env.',
     isEnabled: (c) => c.hooks?.overrides?.['session-auto-continue']?.enabled !== false
       && process.env.WALNUT_AUTO_CONTINUE_ENABLED !== '0',
   },
@@ -201,6 +206,7 @@ export async function getHookInventory(): Promise<HookInfo[]> {
       configPath: policy.configPath ?? undefined,
       settings: policy.settings?.map(s => resolveSetting(s, config)),
       note: policy.note,
+      noteDetail: policy.noteDetail,
     });
   }
 

@@ -2,7 +2,7 @@
  * Plugin facts about a session (walnut.ui.slot 'session.meta'), e.g. the time it took.
  *
  * Their home is the TOP of the ⋮ menu (the same menu a right-click on the header opens):
- * one labelled row each, seen without scrolling a tall menu. Each row has a "Header"
+ * one labelled row each, seen without scrolling a tall menu. Each row has a "Show in header"
  * toggle; a fact the user turns on there also shows on every session's header row, as a
  * label-less chip the row fit measures like its own and is the first to move into "...".
  * Nothing is pinned by default: the header row's width belongs to the host's own tools
@@ -54,7 +54,7 @@ function PinButton({ pinned, title, onToggle }: { pinned: boolean; title: string
         : `Also show ${title} on every session's header`}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
     >
-      Header
+      Show in header
     </Chip>
   );
 }

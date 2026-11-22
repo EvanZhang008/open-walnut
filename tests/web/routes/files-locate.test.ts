@@ -105,7 +105,7 @@ describe('locateClickedPath', () => {
       expect(r.host).toBe(host)
       expect(r.elsewhere).toBeUndefined()
       expect(state.asked).toEqual([host ?? ''])
-      expect(r.checked).toEqual([host ? 'Dev box' : 'Local'])
+      expect(r.checked).toEqual([host ? 'Dev box' : 'This Mac'])
     }
   })
 
@@ -173,7 +173,7 @@ describe('locateClickedPath', () => {
     const r = await locateClickedPath({ ref: MAC_VIDEO, host: 'devbox', cwd: '/home/someone/work' })
     expect(r).toMatchObject({ path: MAC_VIDEO, host: 'devbox', found: false, missing: true })
     expect(r.checked?.[0]).toBe('Dev box')
-    expect(r.checked).toEqual(expect.arrayContaining(['Local', 'spare']))
+    expect(r.checked).toEqual(expect.arrayContaining(['This Mac', 'spare']))
     expect(r.path).not.toBe('/')
   })
 

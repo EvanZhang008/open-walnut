@@ -3,6 +3,7 @@ import { fileDocKey, publishDocSaved } from '@/stores/file-save-signal';
 import { asDeadlineError } from '@/utils/request-failure';
 import { apiPost } from './client';
 import { deadlineSignal } from '../utils/deadline-signal';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 export interface FileContentResponse {
   content: string | null;
@@ -592,7 +593,7 @@ export async function locatePath(
       const result: LocateResponse = await res.json();
       const foundHost = result.host && !['__local__', 'local'].includes(result.host) ? result.host : undefined;
       if (ctx.sourceOnly && (result.elsewhere || foundHost !== host)) {
-        return { path: ref, ...(host ? { host } : {}), found: false, missing: true, checked: [host ?? 'Local'] };
+        return { path: ref, ...(host ? { host } : {}), found: false, missing: true, checked: [host ?? LOCAL_HOST_LABEL] };
       }
       return result;
     }

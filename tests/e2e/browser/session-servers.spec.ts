@@ -387,7 +387,7 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await view.getByRole('button', { name: 'Reload' }).click()
   await expect(view.getByTestId('session-web-error-title')).toContainText(`localhost:${latePort}`, { timeout: 20_000 })
   await expect(view.getByTestId('session-web-error-body')).toHaveText(`The server on :${latePort} stopped.`)
-  await expect(view.locator('.session-code-host')).toHaveText('Local')
+  await expect(view.locator('.session-code-host')).toHaveText('This Mac')
   await expect(view.locator('.session-web-iframe')).toHaveCount(0)
   await startServer(WEB, latePort, { WALNUT_SESSION_ID: SESSION_ID })
   await expect(panel.frameLocator('.session-web-iframe').getByText('DEV_SERVER_MARKER')).toBeVisible({ timeout: 30_000 })

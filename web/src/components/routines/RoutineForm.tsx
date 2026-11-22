@@ -15,6 +15,7 @@ import { RoutineTaskField } from './RoutineTaskField';
 import { editKey } from './routine-groups';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { Radio, SegmentedControl, type SegmentedOption } from '@/components/controls';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -519,7 +520,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     }
     if (f.kind === 'select') {
       const opts = withCurrent(f.optionsKey === 'hosts' ? options.hosts : f.optionsKey === 'models' ? options.models : [], value);
-      const defaultLabel = f.optionsKey === 'hosts' ? 'Local' : 'Default';
+      const defaultLabel = f.optionsKey === 'hosts' ? LOCAL_HOST_LABEL : 'Default';
       return (
         <select
           id={`routine-f-${f.name}`}
@@ -805,7 +806,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                       value={check.host}
                       onChange={(e) => setCheck({ ...check, host: e.target.value })}
                     >
-                      <option value="">Local</option>
+                      <option value="">{LOCAL_HOST_LABEL}</option>
                       {withCurrent(options.hosts, check.host).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>

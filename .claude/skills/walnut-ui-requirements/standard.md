@@ -534,7 +534,9 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
 8. **A setting is a label, a control and at most one short help line** (120 characters, about two
    lines). A settings panel holds settings, never a page of explanations: the why goes on the row's
    hover or in Settings' own page for it (2026-11-21, the user on the Org settings panel, a switch
-   under two paragraphs and a four-point list: "the setting is shit", "no taste").
+   under two paragraphs and a four-point list: "the setting is shit", "no taste"). An experiment's
+   line is its `summary` in `src/core/experimental.ts` (its description is the hover); the drawn
+   length of every pane's help lines is checked by `tests/e2e/browser/settings-help-short.spec.ts`.
 
 ## Tokens (from `globals.css` `:root`)
 

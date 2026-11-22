@@ -5,10 +5,10 @@
  * in-context surfaces show the same choice and the same count. The task panel has it
  * because that is where the user is when the strip feels too crowded or too sparse
  * (2026-09-23: "this should show the number of session panels we can adjust"). Under Auto
- * the row also says how many panels Auto means in this window right now.
+ * the row also says how many panels Auto means in this window right now ("Auto (2 now)").
  */
 import {
-  MAX_PANELS, MIN_PANELS, useLiveSessionPanelCount, useSessionPanelMode, type SessionPanelMode,
+  autoPanelCountWords, MAX_PANELS, MIN_PANELS, useLiveSessionPanelCount, useSessionPanelMode, type SessionPanelMode,
 } from '@/hooks/useSessionPanelMode';
 import type { ViewOptionGroup } from './ViewDropdown';
 
@@ -30,7 +30,7 @@ export function sessionPanelsViewGroup(
       title: 'How many session panels sit side by side on the home page (the same setting as Settings, General)',
       choices: CHOICES.map((value) => ({
         key: value,
-        label: value === 'auto' ? (mode === 'auto' && liveCount !== null ? `Auto (${liveCount})` : 'Auto') : value,
+        label: value === 'auto' ? (mode === 'auto' && liveCount !== null ? `Auto (${autoPanelCountWords(liveCount)})` : 'Auto') : value,
         active: mode === value,
         title: value === 'auto'
           ? `Fit the window width${liveCount !== null && mode === 'auto' ? `: ${liveCount} now` : ''}`

@@ -387,7 +387,7 @@ export function DraftLaunchBar({
  * The host part of each quick chip's label, only where two chips share a
  * folder name (user, 2026-09-25: the host is noise otherwise; people know where
  * their folders live). A colliding remote chip names its host, a colliding
- * local one says "Local". Returns '' for "no suffix".
+ * local one says "This Mac". Returns '' for "no suffix".
  */
 function useQuickChipHostLabels(chips: readonly WorkingDirEntry[]): (d: WorkingDirEntry) => string {
   const statuses = useAllHostStatus();

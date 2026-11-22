@@ -26,6 +26,7 @@
 import { matchQuality, qualityRank, fuzzyScore, type MatchQuality } from '@/utils/fuzzy';
 import type { WorkingDirEntry } from '@/api/sessions';
 import type { InputState } from './input-model';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 /** Frecency: count decayed by age with a ~7-day half-life. */
 const FRECENCY_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -154,7 +155,7 @@ export function buildSections(ranked: RankedItem[], opts: BuildSectionsOpts): Se
     });
     return hostKeys.map(key => ({
       id: `host:${key}`,
-      label: key === '__local__' ? 'Local' : (byHost.get(key)![0].hostLabel ?? key),
+      label: key === '__local__' ? LOCAL_HOST_LABEL : (byHost.get(key)![0].hostLabel ?? key),
       hostKey: key,
       items: byHost.get(key)!,
     }));

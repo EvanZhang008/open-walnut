@@ -98,7 +98,8 @@ test('1+2. the pill reads the launch default first in the row, its menu picks a 
   await panel.locator('.session-panel-input').screenshot({ path: `${SHOTS}/2-plan.png` })
   await pickMode(modePill(panel), 'auto')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'auto')
-  await expect(modeLabel(panel)).toHaveText('Auto')
+  // Auto (like Default) also names a model or an effort, so the draft's pill adds the noun.
+  await expect(modeLabel(panel)).toHaveText('Auto mode')
   await expect(modePill(panel)).not.toHaveClass(/plan-active/)
   await pickMode(modePill(panel), 'bypass')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'bypass')

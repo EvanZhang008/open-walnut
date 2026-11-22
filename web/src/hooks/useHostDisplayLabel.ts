@@ -13,7 +13,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import { getAllHostStatus, getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { hostDisplayLabel, hostRoute, type HostRoute } from '@/utils/host-display-label';
 
-/** One host's name. No host, or `__local__`, is "Local". */
+/** One host's name. No host, or `__local__`, is "This Mac". */
 export function useHostDisplayLabel(alias: string | null | undefined): string {
   const remote = alias && alias !== '__local__' ? alias : null;
   const read = () => (remote ? getHostStatus(remote)?.label : undefined);

@@ -357,7 +357,7 @@ test('a category chip narrows the plugins and stays picked; a search with no mat
   await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cards.count()).toBeGreaterThan(0)
   expect(await cards.count()).toBeLessThan(total)
-  // Built-in apps shows only a card whose plugin is in the category (Calendar under Time & focus).
+  // Built-in sidebar apps shows only a card whose plugin is in the category (Calendar under Time & focus).
   expect(await page.getByTestId('apps-builtin').locator('.apps-card:not([data-plugin])').count()).toBe(0)
   await expect(page.getByTestId('apps-get-more')).toHaveCount(0)
   await expect(page.getByTestId('apps-make')).toHaveCount(0)

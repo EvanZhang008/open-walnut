@@ -43,7 +43,7 @@ export async function openDraftOnCwd(page: Page, cwd: string, opts: { engine?: '
   await expect(picker).toBeVisible({ timeout: 10_000 })
   // The host tabs render with the history rows: wait for a row before looking for them.
   await expect(picker.locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
-  const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = picker.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await click(page, localTab)
   await expect(picker.locator('.pin-tier-options, .provider-rail-item')).toHaveCount(0)
   const search = picker.locator('.sps-search-input')

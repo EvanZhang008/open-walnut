@@ -7,7 +7,7 @@
  * from, Update) lives on its detail page. A plugin that is a part of another (`slack-mcp`
  * of Slack, a mail account of Mail) has no card of its own: its parent's card names it,
  * and its parent's detail page holds it. A plugin a built-in app carries (Calendar, Mail) is
- * that app's card in Built-in apps, never a second card here. A plugin with an App has Open and
+ * that app's card in Built-in sidebar apps, never a second card here. A plugin with an App has Open and
  * that App's sidebar switch on its card, as a built-in app has.
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'

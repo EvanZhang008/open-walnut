@@ -198,7 +198,9 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     await row.locator('summary').click()
     await expect(row).toContainText('this computer')
     // The row says a walnut approve in the person's own script always asks.
-    await expect(page.getByTestId('settings-approvals-ask-me-row')).toContainText('A walnut approve in your own script always asks you')
+    // One short help line; the rest, the script's own approve included, is the row's hover.
+    await expect(page.getByTestId('settings-approvals-ask-me-row')).toContainText('Agents wait for your yes')
+    await expect(page.getByTestId('settings-approvals-ask-me-row')).toHaveAttribute('title', /A walnut approve in your own script always asks you/)
     if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
 
     // On again from Settings: the next ask waits for the person.

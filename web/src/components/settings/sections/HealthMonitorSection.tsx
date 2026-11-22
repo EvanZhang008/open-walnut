@@ -76,11 +76,16 @@ export function Spark({ points, state }: { points: Array<number | null>; state: 
   );
 }
 
-function whatWalnutDid(row: AlarmRow): string {
+/**
+ * The row's last action, with when: it is a record of what was done, which a server whose actions
+ * are off (or a later mute) does not undo, so it reads as the past (2026-11-22 audit: "opened a fix
+ * task and started it" under "nothing is filed or started" read as a contradiction).
+ */
+function whatWalnutDid(row: AlarmRow, now: number): string {
   if (row.held) return row.override?.enabled === false ? 'Turned off: no actions' : 'Muted: no actions for now';
   const last = row.actions[row.actions.length - 1];
   if (!last) return row.state === 'ALARM' ? 'Nothing done yet' : ''; // empty-state-ok: a table cell's value
-  return last.detail;
+  return `${last.detail}, ${ago(last.at, now)}`;
 }
 
 function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onChanged: () => void }) {
@@ -190,7 +195,7 @@ export function HealthMonitorSection() {
               fixesToday={view.fixesToday} fixesPerDay={view.fixesPerDay} actionsOn={view.actions} />
             <table className="health-table">
               <thead>
-                <tr><th>State</th><th>Alarm</th><th>Now</th><th>Last 24 h</th><th>What Walnut did</th></tr>
+                <tr><th>State</th><th>Alarm</th><th>Now</th><th>Last 24 h</th><th>Last action</th></tr>
               </thead>
               <tbody>
                 {view.alarms.map((row) => (
@@ -230,7 +235,7 @@ function FixTasksRow({ mode, actionsOn, onChanged, fixesToday, fixesPerDay }: {
       <SegmentedControl<FixTasksMode> value={shown} options={FIX_OPTIONS} onChange={(v) => void pick(v)}
         aria-label="When an alarm needs a fix" disabled={!actionsOn} />
       <span className="health-count health-dim" data-testid="health-fixes-today">Fix tasks today: {fixesToday} of {fixesPerDay}</span>
-      {!actionsOn && <span className="health-fix-note" data-testid="health-fix-actions-off">Actions are off on this server: alarms only show here, nothing is filed or started.</span>}
+      {!actionsOn && <span className="health-fix-note" data-testid="health-fix-actions-off">Actions are off on this server, so nothing new is filed or started. Last action shows what was done before.</span>}
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't change it: ${error}`}</SettingsNotice>}
     </div>
   );
@@ -251,7 +256,7 @@ function AlarmRows({ row, now, open, onToggle, onChanged }: { row: AlarmRow; now
         </td>
         <td className="health-value">{fmt(row.value, row.unit)}</td>
         <td><Spark points={row.spark} state={row.state} /></td>
-        <td className="health-did">{whatWalnutDid(row)}</td>
+        <td className="health-did">{whatWalnutDid(row, now)}</td>
       </tr>
       {open && (
         <tr className="health-detail-row">

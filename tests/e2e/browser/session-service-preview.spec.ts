@@ -79,7 +79,7 @@ test('a localhost link opens the page in the Web view, and every other shape kee
   await expect(address(panel)).toHaveValue(`http://localhost:${servicePort}/report`)
   await expect(frame(panel).getByText('SERVICE_REPORT_MARKER')).toBeVisible({ timeout: 20_000 })
   await expect(frame(panel).getByText('25 stages to 13 stages')).toBeVisible()
-  await expect(webView(panel).locator('.session-code-host')).toHaveText('Local')
+  await expect(webView(panel).locator('.session-code-host')).toHaveText('This Mac')
   // The chat stays beside it, and nothing navigated or opened a tab.
   await expect(chat(panel).getByText('Both pages are up')).toBeVisible()
   expect(loads - loadsAfterBoot, 'the console navigated away').toBe(0)

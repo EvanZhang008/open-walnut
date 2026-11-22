@@ -1,6 +1,6 @@
 /**
  * The draft launch bar's last row says what each control is (2026-09-24):
- * "Folder/Host: ~ · Local" for a fresh draft (its home default) / "Folder/Host: x · host", then "Project: y" once
+ * "Folder/Host: ~ · This Mac" for a fresh draft (its home default) / "Folder/Host: x · host", then "Project: y" once
  * the folder decided one ("New project: y" when Start will create it), then
  * More. The project is changed in More's Project section, and the row's height
  * never depends on whether the project chip is there, so a quick folder click
@@ -45,7 +45,7 @@ test('a fresh draft starts in the home folder, and says nothing about a project'
   await loadHome(page)
   const panel = await openDraft(page)
   await expect(draftCwdPill(panel)).toHaveText(HOME_FOLDER)
-  await expect(draftCwdPill(panel)).toHaveAttribute('aria-label', /^Folder and host: .+ on Local\. Change$/)
+  await expect(draftCwdPill(panel)).toHaveAttribute('aria-label', /^Folder and host: .+ on This Mac\. Change$/)
   await expect(draftProjectPill(panel)).toHaveCount(0)
   expect(await lastChildClass(panel)).toContain('draft-more-btn')
   // The project is still settable before any folder: More's first section.
@@ -64,7 +64,7 @@ test('a folder a project owns reads Folder/Host and Project; a new folder reads 
   await loadHome(page)
 
   const panel = await openDraftOnCwd(page, owned)
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(owned)} · Local`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(owned)} · This Mac`)
   const title = await draftCwdPill(panel).getAttribute('title')
   expect(title).toContain(`Folder: ${owned}`)
   expect(title).toContain('Host: Local (this machine)')
@@ -185,7 +185,7 @@ test('a quick folder names its host only when two chips share a folder name', as
   const chips = draftQuickChips(panel)
   await expect(chips).toHaveCount(4)
   const texts = (await chips.allTextContents()).map((t) => t.trim()).sort()
-  expect(texts).toEqual(['solo-local', 'solo-remote', 'walnut · Big remote host', 'walnut · Local'])
+  expect(texts).toEqual(['solo-local', 'solo-remote', 'walnut · Big remote host', 'walnut · This Mac'])
   await draftLaunchBar(panel).screenshot({ path: `${SHOTS}/quick-chips-collision.png` })
 })
 

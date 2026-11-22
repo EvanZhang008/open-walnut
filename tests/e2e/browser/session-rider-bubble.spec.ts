@@ -175,7 +175,7 @@ test('the words after an org digest are a user bubble; the digest is a card abov
   // Copy yields the words only. The bubble's own copy button: a right-click in
   // WebKit selects the word under it and opens the quote bar instead of the menu.
   await b.hover()
-  await b.getByRole('button', { name: 'Copy as Markdown' }).click()
+  await b.getByRole('button', { name: 'Copy Markdown' }).click()
   const copied = await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)
   expect(copied.at(-1)).toBe('RIDER_TYPED_ONE first paragraph.\n\nSecond paragraph of the same message.')
 })

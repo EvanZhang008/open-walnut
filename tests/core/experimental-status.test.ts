@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { EVERY_EXPERIMENT, EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, effectiveExperimentalFlags, experimentalEnabled, keepsOwnSwitch, validExperimentalFlags } from '../../src/core/experimental.js';
+import { EVERY_EXPERIMENT, EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, effectiveExperimentalFlags, experimentSummary, experimentalEnabled, keepsOwnSwitch, validExperimentalFlags } from '../../src/core/experimental.js';
+import { HELP_MAX } from '../web/ui-words-scan.js';
 import { workerStatus } from '../../src/core/worker-status.js';
 import { childrenByParent, completeStatusFacts, statusOf, type StatusFacts } from '../../src/core/user-status-sync.js';
 import type { Task } from '../../src/core/types.js';
@@ -59,6 +60,16 @@ describe('experimental choices', () => {
       // Its row says so, since the switch above it says "every experiment is on".
       expect(EXPERIMENTAL_FEATURES.find((f) => f.id === id)!.description).toContain('keeps its own switch');
     }
+  });
+
+  it('every experiment shows one short help line in Settings; a longer description needs a summary', () => {
+    for (const feature of EXPERIMENTAL_FEATURES) {
+      const line = experimentSummary(feature);
+      expect(line.length, feature.id).toBeLessThanOrEqual(HELP_MAX);
+      expect(line, feature.id).not.toMatch(/[–—]/);
+    }
+    // A registry entry may still leave `summary` out when its description is short enough.
+    expect(experimentSummary({ description: 'Short.' })).toBe('Short.');
   });
 
   it('the resolved map keeps unknown flags and gives every registered experiment its value', () => {

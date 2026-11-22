@@ -17,7 +17,8 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { scanAll, scanFile, hasRawId, secondNameOf, NOT_SHOWN, WEB_SRC, type WordCounts, type WordHit } from './ui-words-scan';
+import { scanAll, scanFile, hasRawId, secondNameOf, NOT_SHOWN, WEB_SRC, HELP_MAX, type WordCounts, type WordHit } from './ui-words-scan';
+import { EXPERIMENTAL_FEATURES, experimentSummary } from '../../src/core/experimental';
 
 const BASELINE = path.join(__dirname, 'ui-words-baseline.json');
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
@@ -72,6 +73,15 @@ describe('UI standard: plain words', () => {
     expect(kinds("log.info('ui', 'sent with task_send now');")).toEqual([]);
     expect(kinds(`const a = <Row label="Org" help="${'x'.repeat(121)}" />;`)).toEqual(['longHelp']);
     expect(kinds(`const a = <Row label="Org" help="${'x'.repeat(120)}" />;`)).toEqual([]);
+  });
+
+  // The Experimental page draws each registry entry's line (experimentSummary): a literal the
+  // source scan never sees (2026-11-22 audit: forty three-line paragraphs).
+  it('every experiment shows a help line of at most HELP_MAX characters', () => {
+    const long = EXPERIMENTAL_FEATURES
+      .filter((f) => experimentSummary(f).length > HELP_MAX)
+      .map((f) => `${f.id}: ${experimentSummary(f).length} chars (give it a summary)`);
+    expect(long).toEqual([]);
   });
 
   it('every file it leaves out exists, and the standard names this test', () => {

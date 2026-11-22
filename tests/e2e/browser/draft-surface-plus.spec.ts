@@ -251,7 +251,7 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
   // Half two: the project's declared folder, patched in when the detail fetch
   // lands. This is what proves the label's "+" routes through the SAME handler as
   // the All-view project header rather than merely setting a pill.
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · Local`, { timeout: 15_000 })
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · This Mac`, { timeout: 15_000 })
   await expect(draftCwdPill(panel)).toHaveAttribute('title', new RegExp(`^Folder: ${surfaceCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`))
   // Registry-sourced, so NOT ✦-badged.
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
@@ -305,7 +305,7 @@ test('the /tasks group header "+" lands on home with a draft seeded from that pr
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${SURFACE_PROJECT}`)
   // The folder half: only handleOpenLauncherForProject patches this in, so its
   // presence is what distinguishes the fix from a generic "open a draft" event.
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · Local`, { timeout: 15_000 })
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · This Mac`, { timeout: 15_000 })
   // The header's click handler toggles the group's collapse: the "+" must not have
   // also folded it (checked after the navigation, so the state is the persisted one).
   const collapsed = await page.evaluate(() => {

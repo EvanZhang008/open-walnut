@@ -17,6 +17,7 @@ import { matchQuality, qualityRank, type MatchQuality } from '@/utils/fuzzy';
 import type { WorkingDirEntry } from '@/api/sessions';
 import type { HostListingLite } from './input-model';
 import { frecencyScore, type RankedItem, type Section } from './ranking';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 export const HOME_FOLDERS_LABEL = '🏠 home folders';
 
@@ -80,7 +81,7 @@ export function buildHomeFolderSections(opts: HomeFolderOpts): Section[] {
     });
     sections.push({
       id: `home:${hostKey}`,
-      label: perHost ? `${HOME_FOLDERS_LABEL} · ${hostKey === '__local__' ? 'Local' : hostLabel}` : HOME_FOLDERS_LABEL,
+      label: perHost ? `${HOME_FOLDERS_LABEL} · ${hostKey === '__local__' ? LOCAL_HOST_LABEL : hostLabel}` : HOME_FOLDERS_LABEL,
       hostKey,
       items,
     });

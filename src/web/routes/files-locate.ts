@@ -104,7 +104,7 @@ export interface LocateResult {
 }
 
 /** The name the web console gives this machine (web/src/utils/host-display-label.ts). */
-const LOCAL_NAME = 'Local'
+const LOCAL_NAME = 'This Mac'
 
 /** A `/Users/` path is written on a Mac, a `/home/` path on Linux. */
 function pathOrigin(p: string): 'mac' | 'linux' | null {

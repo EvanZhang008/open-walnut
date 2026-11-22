@@ -86,7 +86,7 @@ test.describe('Walnut Health', () => {
     const row = page.getByTestId('health-fix-tasks')
     await expect(row.getByRole('radiogroup', { name: 'When an alarm needs a fix' })).toHaveAttribute('aria-disabled', 'true')
     for (const id of ['health-fix-start', 'health-fix-record', 'health-fix-off']) await expect(row.getByTestId(id).locator('input')).toBeDisabled()
-    await expect(row.getByTestId('health-fix-actions-off')).toHaveText('Actions are off on this server: alarms only show here, nothing is filed or started.')
+    await expect(row.getByTestId('health-fix-actions-off')).toHaveText('Actions are off on this server, so nothing new is filed or started. Last action shows what was done before.')
   })
 
   test('the fix-task switch shows the saved choice and changes it on the server, both ways', async ({ page }) => {

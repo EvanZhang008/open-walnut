@@ -115,7 +115,8 @@ test('one picture: dollars first, and every Break down by choice shows its lines
   await expect(pane.getByTestId('usage-summary')).not.toContainText(/verified|matched|reconcil/i)
   await expect(pane.getByTestId('usage-unpriced')).toHaveText('Not in the total: 14 requests to internal-model (Claude Code) have no public price.')
   await how.locator(':scope > summary').click()
-  await expect(how).toContainText('LiteLLM price list')
+  // The price list it used is the Prices row's hover; its help line stays short.
+  await expect(how.locator('[title*="LiteLLM price list"]')).toHaveCount(1)
   await expect(how).toContainText('Walnut from its own records')
 
   // The most expensive tasks follow, one line each, short sessions folded.

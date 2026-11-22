@@ -26,6 +26,12 @@ import { appOnSidebar, type AppPreferences, type SidebarDefault } from '@/apps/p
 import type { RegisteredApp } from '@/apps/registry'
 import { railItemKey, type RailItemId } from '@/apps/rail-items'
 
+/**
+ * The name of this section and of its filter chip: Walnut's own pages, whose parts go on the
+ * sidebar. Not "Built-in plugins" (source-sections.ts), the plugins that ship with Walnut.
+ */
+export const BUILTIN_APPS_TITLE = 'Built-in sidebar apps'
+
 export type AppPartKind = 'page' | 'side-bar' | 'home-panel'
 
 /** One thing of an app the sidebar can show: its page, a side bar, a Home panel. */

@@ -88,7 +88,7 @@ describe('a row in the notification center', () => {
     // A fork reads by its own name, as its avatar does, never by the machine prefix (2026-11-22 review).
     expect(fork.text).toBe('walnut \u2014 Claude finished the response');
     expect(fork.detail).toContain('Session: Fork of Session');
-    expect(fork.detail).toContain('Host: local (this computer)');
+    expect(fork.detail).toContain('Host: This Mac');
     expect(feedRowSource({ sessionTitle: 'cffc7f02-aaaa-bbbb' }).text).toBeNull();
     expect(feedRowSource({ project: 'Walnut' })).toEqual({ text: 'Walnut', detail: null });
     expect(feedRowSource({ sessionTitle: 'Walnut', project: 'Walnut' }).text).toBe('Walnut');

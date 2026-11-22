@@ -82,7 +82,7 @@ describe('buildHomeFolderSections', () => {
     ]);
     const sections = buildHomeFolderSections({ ...base, word: 'work', byHost, perHost: true });
     expect(sections.map(s => s.id)).toEqual(['home:__local__', 'home:devbox']);
-    expect(sections[0].label).toBe(`${HOME_FOLDERS_LABEL} · Local`);
+    expect(sections[0].label).toBe(`${HOME_FOLDERS_LABEL} · This Mac`);
     expect(sections[1].label).toBe(`${HOME_FOLDERS_LABEL} · Big dev box`);
     expect(sections[0].items[0]).toMatchObject({ cwd: '/Users/alice/workbench', host: null });
   });

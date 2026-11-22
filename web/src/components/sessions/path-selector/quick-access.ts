@@ -16,6 +16,7 @@
  */
 import type { HostListingLite } from './input-model';
 import type { RankedItem, Section } from './ranking';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 export const QUICK_ACCESS_LABEL = '⭐ Quick access';
 
@@ -82,7 +83,7 @@ export function buildQuickAccessSections(opts: QuickAccessOpts): Section[] {
     const hostLabel = host ? (hostLabels.get(hostKey) ?? hostKey) : undefined;
     sections.push({
       id: `quick:${hostKey}`,
-      label: perHost ? `${QUICK_ACCESS_LABEL} · ${hostLabel ?? 'Local'}` : QUICK_ACCESS_LABEL,
+      label: perHost ? `${QUICK_ACCESS_LABEL} · ${hostLabel ?? LOCAL_HOST_LABEL}` : QUICK_ACCESS_LABEL,
       hostKey,
       items: quickAccessRows(state.dirs, state.parent, { host, hostLabel }),
     });

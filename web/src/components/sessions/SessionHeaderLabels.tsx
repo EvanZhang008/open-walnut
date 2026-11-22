@@ -159,7 +159,8 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
           }}
         >
           {TAG_ICON}
-          <span className="session-header-labels-count">{count}</span>
+          {/* The count says what it counts on screen too, not only on hover (2026-11-22 words audit). */}
+          <span className="session-header-labels-count">{count}</span>{count === 1 ? ' tag' : ' tags'}
         </button>
       )}
       {createPortal(

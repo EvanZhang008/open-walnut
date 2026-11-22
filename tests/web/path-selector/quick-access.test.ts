@@ -66,7 +66,7 @@ describe('quickAccessRows', () => {
 });
 
 describe('buildQuickAccessSections', () => {
-  const hostLabels = new Map([['__local__', 'Local'], ['devbox', 'Big dev box']]);
+  const hostLabels = new Map([['__local__', 'This Mac'], ['devbox', 'Big dev box']]);
 
   it('shows on the unresolved ~/ (the All tab keeps the raw ~)', () => {
     const sections = buildQuickAccessSections({
@@ -104,7 +104,7 @@ describe('buildQuickAccessSections', () => {
       ['__local__', done(HOME + '/', LISTING)],
     ]);
     const sections = buildQuickAccessSections({ dir: '~/', byHost, homeByHost: new Map(), hostLabels, perHost: true });
-    expect(sections.map(s => s.label)).toEqual([`${QUICK_ACCESS_LABEL} · Local`, `${QUICK_ACCESS_LABEL} · Big dev box`]);
+    expect(sections.map(s => s.label)).toEqual([`${QUICK_ACCESS_LABEL} · This Mac`, `${QUICK_ACCESS_LABEL} · Big dev box`]);
     expect(sections[1].items.map(r => r.cwd)).toEqual(['/home/me', '/home/me/projects']);
     expect(sections[1].items.every(r => r.host === 'devbox')).toBe(true);
   });

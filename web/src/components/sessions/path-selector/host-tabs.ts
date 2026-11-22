@@ -1,7 +1,7 @@
 /**
  * The folder picker's host tabs (spec 4.1), as a pure model plus one hook.
  *
- * Tabs = All, Local, one per ENABLED configured host, one per host found in
+ * Tabs = All, This Mac, one per ENABLED configured host, one per host found in
  * ~/.ssh/config and not added yet (it offers Connect, never lists), then a trailing muted
  * "Removed hosts" tab that holds the history of hosts no longer in Settings
  * (removed or disabled), only when such history exists. A host that leaves
@@ -16,6 +16,7 @@ import { hostDotOf, hostProblemOf, READINESS_ANSWER_GRACE_MS, type HostDot } fro
 import type { HostStatus } from '@/api/hosts';
 import type { ConfiguredHost, FoundHost, WorkingDirEntry } from '@/api/sessions';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 export const ALL_TAB = 'all';
 export const LOCAL_TAB = '__local__';
@@ -53,7 +54,7 @@ export function buildHostTabs(input: {
   const live = new Set(liveHosts.map((h) => h.alias));
   const tabs: HostTab[] = [
     { key: ALL_TAB, label: 'All', kind: 'all' },
-    { key: LOCAL_TAB, label: 'Local', kind: 'local' },
+    { key: LOCAL_TAB, label: LOCAL_HOST_LABEL, kind: 'local' },
   ];
   for (const h of liveHosts) {
     if (tabs.some((t) => t.key === h.alias)) continue;

@@ -42,6 +42,7 @@ import { useHistoryCap } from './path-selector/useHistoryCap';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList, type PathListEmpty } from './path-selector/PathList';
 import { freshLauncherMeta } from './task-meta-constants';
+import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 
 export interface QuickStartPath {
   cwd: string;
@@ -948,7 +949,7 @@ export function SessionPathSelector({
         hostStates={visibleHostStates}
         hostLabels={hostLabels}
         pathMode={pathMode || !!homeWord}
-        activeHostLabel={currentHostLabel ?? 'Local'}
+        activeHostLabel={currentHostLabel ?? LOCAL_HOST_LABEL}
         createOption={createOption && shownFieldPath(createOption, homeOfKey(createTarget))}
         emptyHint={emptyHint}
         onItemClick={drillOrFill}

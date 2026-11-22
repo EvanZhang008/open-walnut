@@ -233,7 +233,7 @@ async function openPicker(page: Page, panel: Locator): Promise<Locator> {
   await draftCwdPill(panel).click()
   const picker = page.locator('.session-path-selector')
   await expect(picker.locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
-  const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
+  const localTab = picker.locator('.sps-host-tab', { hasText: 'This Mac' })
   if (await localTab.isVisible()) await localTab.click()
   // No task fields in the picker any more: the tier lives in More.
   await expect(picker.locator('.pin-tier-options, .task-kebab-tier-btn')).toHaveCount(0)
@@ -361,7 +361,7 @@ test('an emptied composer (after the debounce) withdraws AI tier, dates, project
   const model = await draftModelPill(panel).getAttribute('data-model')
   await typeAndSettle(page, mock, 'tidy the marina backlog by friday')
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${project.name}✦`)
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(project.cwd)} · Local✦`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(project.cwd)} · This Mac✦`)
   await expect(draftDecisionChips(panel)).toHaveCount(2)
   await expect(panel.locator('.draft-decisions-key')).toHaveText('✦ = decided by Walnut')
 

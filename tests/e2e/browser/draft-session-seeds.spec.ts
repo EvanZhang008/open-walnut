@@ -142,7 +142,7 @@ test('project header "+" opens a draft in one click with the project AND its def
   // Half two — the project's declared folder, patched in when the detail fetch
   // lands (the column opens FIRST on purpose, so this is polled, not awaited
   // before the assertion above).
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(seedCwd)} · Local`, { timeout: 15_000 })
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(seedCwd)} · This Mac`, { timeout: 15_000 })
   await expect(draftCwdPill(panel)).toHaveAttribute('title', new RegExp(`^Folder: ${seedCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`))
 
   // The seeded folder is NOT ✦-badged: it came from the registry, not the AI.
@@ -354,7 +354,7 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(1)
   // The AI project drags its folder along (one gesture configures both, same rule
   // the quick chips follow) — and that folder is ✦ too, since nobody picked it.
-  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · This Mac✦`)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03a-ai-backfill.png`, fullPage: false })
 
