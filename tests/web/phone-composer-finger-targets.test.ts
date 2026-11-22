@@ -42,7 +42,7 @@ describe('phone composer row finger targets', () => {
 
   it('every direct button on the input box gets a 44 px hit area', () => {
     const src = read('web/src/components/chat/ComposerDirectControl.tsx');
-    const cls = /className=\{`side-question-pill ([\w-]+)/.exec(src)?.[1];
+    const cls = /className=\{`(?:btn[\w-]* )*side-question-pill ([\w-]+)/.exec(src)?.[1];
     expect(cls).toBe('composer-direct-control');
     expect(raised.has(cls!)).toBe(true);
     expect(wide.has(cls!)).toBe(true);
