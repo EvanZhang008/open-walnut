@@ -44,7 +44,10 @@ describe('follower gateway twin wiring', () => {
       // (plugin-jobs-core.ts callerOfRun) for the follower and the leader alike.
       expect(src).toMatch(/pluginJobs\.callerOfRun\(req\.sid\)/)
       expect(src).not.toMatch(/kind: 'plugin-job', plugin: job\.plugin/)
-      expect(src).toMatch(/followerGateway\.routeJob\(\{ home(: home)?, capability(: capability)?, callerSid: EXTERNAL_CALLER_SID, payload(: payload)?, caller(: caller)?, deadline(: deadline)? \}/)
+      expect(src).toMatch(/followerGateway\.routeJob\(\{ home(: home)?, capability(: capability)?, callerSid: EXTERNAL_CALLER_SID, payload(: payload)?, caller(: caller)?, deadline(: deadline)?, left(: leftOf)? \}/)
+      // A call handed again after a lagging refusal ends as a first hand would: its caller gone, or the daemon stopping.
+      expect(src).toMatch(/followerGateway\.handOff\(\{ home(: home)?, capability(: capability)?, callerSid(: callerSid)?, payload(: payload)?, deadline(: deadline)?, readable(: ownReadable)?, fallback(: fallback)?, left(: leftOf)? \}/)
+      expect(src).toMatch(/stopping: (\(\) => |function \(\) \{ return )daemonCommands\.closed/)
       // Its answer is taken only from that follower socket.
       expect(src).toContain('followerGateway.settle(ws, relayId, followerGateway.responseOf(')
       expect(src).toContain('followerGateway.dropSocket(ws)')

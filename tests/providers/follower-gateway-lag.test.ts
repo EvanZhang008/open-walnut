@@ -122,6 +122,50 @@ describe('a hand-back while the follower\'s view of the leader lags', () => {
     expect(s.sock.sent).toHaveLength(1)
   })
 
+  it('handed again only as a first hand would be: a caller that hung up ends it, a daemon that stops answers it so; counted while it waits', () => {
+    // A session's call whose `walnut` was stopped in the gap: neither handed again nor answered offline.
+    const s = setup()
+    let gone = false
+    const c = sessionCall(s, { left: () => gone })
+    s.g.settle(s.sock, 101, lagging)
+    expect(s.g.pendingCount()).toBe(1)
+    gone = true
+    s.state.now += 500
+    s.fire()
+    expect(s.sock.sent).toHaveLength(1)
+    expect(c.offline).not.toHaveBeenCalled()
+    expect(c.relayed).not.toHaveBeenCalled()
+    expect(c.respond).not.toHaveBeenCalled()
+    expect(s.g.pendingCount()).toBe(0)
+    expect(s.logs.some((l) => /its caller left/.test(l.msg))).toBe(true)
+
+    // A plugin job's call: the same, before the job's own route could run.
+    const j = setup()
+    const again = vi.fn()
+    const respond = vi.fn()
+    let jobGone = false
+    j.g.routeJob(call({ callerSid: 'external', caller: { kind: 'plugin-job', plugin: 'acme-sync', job: 'poll' }, left: () => jobGone }), respond, again)
+    j.g.settle(j.sock, 101, lagging)
+    jobGone = true
+    j.state.now += 500
+    j.fire()
+    expect(j.sock.sent).toHaveLength(1)
+    expect(again).not.toHaveBeenCalled()
+    expect(respond).not.toHaveBeenCalled()
+
+    // The daemon stopping in the gap (its follower link closing): the caller is told, nothing is handed on.
+    const d = setup()
+    const dc = sessionCall(d)
+    d.g.settle(d.sock, 101, lagging)
+    d.state.stopping = true
+    d.state.now += 500
+    d.fire()
+    expect(d.sock.sent).toHaveLength(1)
+    expect(dc.respond).toHaveBeenCalledWith({ ok: false, error: { code: 'hub_unreachable', message: 'daemon is shutting down; retry after reconnecting', detail: { stopping: true } } })
+    expect(dc.offline).not.toHaveBeenCalled()
+    expect(dc.relayed).not.toHaveBeenCalled()
+  })
+
   it('a same-host send while the leader answers is not held: its refusal goes to the leader at once', () => {
     const s = setup()
     s.sock.answersOnline = true

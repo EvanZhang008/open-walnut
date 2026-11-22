@@ -45,6 +45,11 @@ export const LEADER_ONLY_TRIGGER_FIELDS: Readonly<Record<string, string>> = {
   session: 'the task a trigger wakes is its owner, which only your Mac changes',
   prompt: `this host delivers the fires itself while your Mac is away, and a prompt over ${DELIVER_PROMPT_MAX / 1024} KB does not fit what it carries`,
   enabled: 'a pause or a resume goes alone here (trigger_pause, trigger_resume)',
+  // routines-core.ts settleCheckActsFor: a new command or folder is the writer's check, so the task it
+  // acts for (whose grants its `walnut` calls get: hosts/trigger-caller.ts) changes with it.
+  run: 'who a check acts for is decided by your Mac when what it runs changes',
+  cwd: 'who a check acts for is decided by your Mac when where it runs changes',
+  check: 'removing a check makes it a scheduled routine, whose clock and grants your Mac decides',
 }
 const OTHER_FIELD = 'only what trigger_update changes is changed on this host'
 
@@ -58,16 +63,62 @@ function merged(row: Job, patch: CronJobPatch): Job {
   return job as unknown as Job
 }
 
-/** The row with the changes made here over it (followerTriggers `changes`, trigger_update's arguments). */
-export function withChanges(row: Job, changes: Record<string, unknown> | undefined): Job {
+/**
+ * The row with the changes made here over it (followerTriggers `changes`, trigger_update's arguments);
+ * null when the Mac's merge refuses them on this row (the copy changed under them: the Mac made it a
+ * template check, say), which says nothing of what the daemon runs.
+ */
+export function withChanges(row: Job, changes: Record<string, unknown> | undefined, onRefused?: (err: unknown) => void): Job | null {
   if (!changes || Object.keys(changes).length === 0) return row
   try {
     const patch = normalizeCronJobPatch(buildTriggerUpdatePatch(row as TriggerJobLike, { ...changes, id: row.id }).patch)
     return patch ? merged(row, patch) : row
-  } catch {
-    return row
+  } catch (err) {
+    onRefused?.(err)
+    return null
   }
 }
+
+/** What a trigger's armed def runs, laid over its row: name, interval, command, folder, time limit, target, prompt. */
+export function armedOver(row: Job, def: ArmedDef): Job {
+  const check: Record<string, unknown> = { ...((row.check as Record<string, unknown> | undefined) ?? {}), run: def.check.run }
+  if (def.check.cwd) check.cwd = def.check.cwd
+  else delete check.cwd
+  if (typeof def.check.timeoutSeconds === 'number') check.timeoutSeconds = def.check.timeoutSeconds
+  const executor = (row.executor ?? { type: 'session', config: {} }) as { type?: unknown; config?: Record<string, unknown> }
+  const config = { ...(executor.config ?? {}) }
+  if (def.deliver?.taskId) config.target = def.deliver.taskId
+  if (typeof def.deliver?.prompt === 'string') config.prompt = def.deliver.prompt
+  return {
+    ...row, name: def.name, schedule: { ...((row.schedule as Record<string, unknown> | undefined) ?? {}), kind: 'every', everyMs: def.everyMs },
+    check, executor: { ...executor, config },
+  }
+}
+
+type ArmedDef = { id: string; name: string; everyMs: number; check: { run: string; cwd?: string; timeoutSeconds?: number }; deliver?: { taskId?: string; prompt?: string } }
+
+/** Triggers whose changes here the copy's row refused, warned about once each (bounded). */
+const warnedUnmerged = new Set<string>()
+
+/**
+ * A trigger's row with what this host changed: the Mac's merge of the changes, or, when that merge
+ * refuses them, the def the daemon runs laid over the copy's row, so a read never shows a trigger
+ * other than the one that runs here (warned once per trigger).
+ */
+export function rowWithHereChanges(row: Job, def: ArmedDef, changes: Record<string, unknown> | undefined, warn: (msg: string, data: Record<string, unknown>) => void): Job {
+  let why = ''
+  const out = withChanges(row, changes, (err) => { why = err instanceof Error ? err.message : String(err) })
+  if (out) return out
+  if (!warnedUnmerged.has(def.id)) {
+    if (warnedUnmerged.size >= 500) warnedUnmerged.clear()
+    warnedUnmerged.add(def.id)
+    warn('replica: a trigger\'s changes on this host no longer merge onto the copy\'s row; it reads as its armed def', { triggerId: def.id, fields: Object.keys(changes ?? {}), error: why })
+  }
+  return armedOver(row, def)
+}
+
+/** Test hook: forget which triggers were warned about. */
+export function _resetUnmergedWarningsForTesting(): void { warnedUnmerged.clear() }
 
 /** The fields of a patch on `row` only the Mac may change (empty: none). */
 export function leaderOnlyTriggerFields(row: TriggerJobLike, body: Record<string, unknown>): string[] {
@@ -76,6 +127,11 @@ export function leaderOnlyTriggerFields(row: TriggerJobLike, body: Record<string
   if (check) {
     if (str(check.host) !== str(row.check?.host)) out.push('host')
     if (!same(check.template, row.check?.template)) out.push('template')
+    // As check-host-policy.ts checkCommandChanged compares them (trimmed).
+    if (str(check.run) !== str(row.check?.run)) out.push('run')
+    if (str(check.cwd) !== str(row.check?.cwd)) out.push('cwd')
+  } else if ('check' in body && body.check === null) {
+    out.push('check')
   }
   const ex = body.executor && typeof body.executor === 'object' ? body.executor as { type?: unknown; config?: Record<string, unknown> } : null
   if (ex) {

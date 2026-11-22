@@ -6118,6 +6118,7 @@ var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
   setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
   clearTimer: function (t) { clearTimeout(t); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
+  stopping: function () { return daemonCommands.closed; },
 });
 
 // Trigger fires no server claimed, delivered by this host's own Walnut server while its
@@ -7213,7 +7214,8 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
   if (home && !target && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
     var ownReadable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
     var fallback = function () { sendGatewayRequest(capability, callerSid, payload, respond, Object.assign({}, plan, { ownServerAsked: true })); };
-    if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, readable: ownReadable, fallback: fallback }, respond)) return;
+    var leftOf = function () { var l = gatewayCallerLeft.get(respond); return !!l && l() === true; };
+    if (followerGateway.handOff({ home: home, capability: capability, callerSid: callerSid, payload: payload, deadline: deadline, readable: ownReadable, fallback: fallback, left: leftOf }, respond)) return;
   }
   // No server now and nothing sent: a call that may wait does, while it has time.
   var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, plan); }, respond); };
@@ -7609,7 +7611,8 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond, caller,
         if (left && left()) return logMsg('info', "gateway: a plugin job's waiting call ends, its caller left", { home: home, op: payload.name });
         sendPluginJobGatewayRequest(home, capability, payload, respond, caller, deadline, true);
       };
-      if (followerGateway.routeJob({ home: home, capability: capability, callerSid: EXTERNAL_CALLER_SID, payload: payload, caller: caller, deadline: deadline }, respond, again, waited === true) !== 'none') return;
+      var leftOf = function () { var l = gatewayCallerLeft.get(respond); return !!l && l() === true; };
+      if (followerGateway.routeJob({ home: home, capability: capability, callerSid: EXTERNAL_CALLER_SID, payload: payload, caller: caller, deadline: deadline, left: leftOf }, respond, again, waited === true) !== 'none') return;
     }
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home: home, op: payload.name, waited: waited === true });
     return respond(gatewayError('hub_unreachable', waited === true

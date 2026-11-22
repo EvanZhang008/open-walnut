@@ -49,7 +49,7 @@ import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../
 import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-check.js'
 import { createdRow, mintTaskId } from '../core/offline-merge/task-row-fold.js'
 import type { CallerPlacement } from '../core/sessions/caller-placement.js'
-import { placeAwayCreate, plainCaller } from './away-create-placement.js'
+import { INHERITED_PROJECT_CAP, placeAwayCreate, plainCaller } from './away-create-placement.js'
 
 /**
  * The fields a task write may queue (the task-outbox whitelist plus phase, parent,
@@ -123,6 +123,8 @@ export interface WritePortDeps {
    * anyone else an unknown caller (nothing inherited, nothing refused).
    */
   createCaller?(actor: WriteActor): Promise<CallerPlacement>
+  /** The follower link's daemon capabilities (null: not known yet): whether its journal keeps an inherited project. */
+  capabilities?(): readonly string[] | null
   randomHex?(bytes: number): string
   now?(): number
   log?(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -355,7 +357,11 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       const caller = deps.createCaller ? await deps.createCaller(actor).catch(() => plainCaller(actor)) : plainCaller(actor)
       const placed = await placeAwayCreate(all, caller, namedParent)
       if ('refused' in placed) return refusalAnswer(placed.refused.code, placed.refused.message)
-      const { placement } = placed
+      // A project taken from the caller rides the record for this host's own readers only, on a
+      // daemon that keeps it (INHERITED_PROJECT_CAP); an older one gets none, as before the caller
+      // rule ran here, and the drain still files the task under its caller.
+      const placement = { ...placed.placement }
+      if (placement.inheritedProject !== undefined && deps.capabilities?.()?.includes(INHERITED_PROJECT_CAP) !== true) delete placement.inheritedProject
       const made = { ...fields, ...placed.fields }
       const at = now()
       const id = mintTaskId(at, hex)
@@ -366,6 +372,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
         id, ...made,
         ...(placement.parentTaskId ? { parent_task_id: placement.parentTaskId } : {}),
         ...(placement.project !== undefined ? { project: placement.project } : {}),
+        ...(placement.inheritedProject !== undefined ? { inherited_project: placement.inheritedProject } : {}),
         ...(placement.groupId ? { group_id: placement.groupId } : all.group_id !== undefined ? { group_id: all.group_id } : {}),
         ...(placement.tier ? { focus_tier: placement.tier } : all.focus_tier !== undefined ? { focus_tier: all.focus_tier } : {}),
         ...(all.order !== undefined ? { order: all.order } : {}),
@@ -374,7 +381,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       return settle(r, actor, { kind: 'task-create', taskId: id, fields: made, placement, ...(all.order !== undefined ? { order: all.order } : {}) }, (reply) => ({
         answered: false, status: 201,
         body: {
-          task: { ...createdRow(typeof reply.taskId === 'string' ? reply.taskId : id, made, placement, at, actor), replica_sync: 'pending' },
+          task: { ...createdRow(typeof reply.taskId === 'string' ? reply.taskId : id, made, placed.placement, at, actor), replica_sync: 'pending' },
           placement: placed.answer, queued: true, offline: true, opId: reply.opId,
         },
       }), typeof crid === 'string' && crid ? crid : undefined)

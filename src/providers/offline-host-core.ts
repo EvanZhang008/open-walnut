@@ -239,7 +239,7 @@ export type OfflineRecord =
 export type OfflineFieldWrite = { base: unknown; value: unknown }
 export type OfflineRecordV2 =
   | { kind: 'task-fields'; op: 'task_update' | 'task_complete'; taskId: string; fields: Record<string, OfflineFieldWrite> }
-  | { kind: 'task-create'; taskId: string; fields: Record<string, unknown>; placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string }; order?: unknown }
+  | { kind: 'task-create'; taskId: string; fields: Record<string, unknown>; placement: { parentTaskId?: string; project?: string; inheritedProject?: string; groupId?: string; tier?: string }; order?: unknown }
   | { kind: 'task-move'; taskId: string; anchor: { after?: string; before?: string } | null; tier?: string; base?: unknown }
   | { kind: 'board'; op: string; args: Record<string, unknown>; postId?: string }
   | { kind: 'note'; path: string; noteId?: string; mode: 'put' | 'create' | 'delete'; baseHash: string | null; baseBlob: string | null; oursBlob: string | null }
@@ -1075,7 +1075,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const p = r.placement ?? {}
         created.push({
           ...(r.fields as Record<string, unknown>), id: r.taskId, title: String((r.fields as { title?: unknown }).title ?? ''),
-          ...(p.parentTaskId ? { parent_task_id: p.parentTaskId } : {}), ...(p.project !== undefined ? { project: p.project } : {}),
+          ...(p.parentTaskId ? { parent_task_id: p.parentTaskId } : {}),
+          ...(p.project !== undefined ? { project: p.project } : p.inheritedProject !== undefined ? { project: p.inheritedProject } : {}),
           ...(p.groupId ? { group_id: p.groupId } : {}), ...(p.tier ? { focus_tier: p.tier } : {}),
         } as OfflineSliceTask)
         continue
@@ -2437,7 +2438,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         record = built.record
       } else if (kind === 'task-create') {
         if (!OP_ID_RE.test(taskId)) return fail('bad_request', 'task_create needs the id the replica minted')
-        const placementKeys = ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order', 'id']
+        // inherited_project (follower-create-inherited-v1): the project a session's create took from its
+        // caller, for this host's readers only; every drain ignores it (replica/away-create-placement.ts).
+        const placementKeys = ['parent_task_id', 'project', 'inherited_project', 'group_id', 'focus_tier', 'order', 'id']
         const fields: Record<string, unknown> = {}
         for (const [k, v] of Object.entries(args)) if (placementKeys.indexOf(k) === -1) fields[k] = v
         const bad = Object.keys(fields).filter((k) => QUEUEABLE.indexOf(k) === -1)
@@ -2445,6 +2448,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
         const placement = {
           ...(str(args.parent_task_id) ? { parentTaskId: str(args.parent_task_id) } : {}), ...(typeof args.project === 'string' ? { project: args.project } : {}),
+          ...(typeof args.project !== 'string' && typeof args.inherited_project === 'string' ? { inheritedProject: args.inherited_project } : {}),
           ...(str(args.group_id) ? { groupId: str(args.group_id) } : {}), ...(str(args.focus_tier) ? { tier: str(args.focus_tier) } : {}),
         }
         record = { kind: 'task-create', taskId, fields, placement, ...(args.order !== undefined ? { order: args.order } : {}) }

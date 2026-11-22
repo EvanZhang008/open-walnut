@@ -22,7 +22,7 @@ import { registry } from '../../../src/core/integration-registry.js';
 import { createSpySync, createMockPlugin } from '../plugin-test-utils.js';
 import { setPrivacyJudgeForTest } from '../../../src/core/private-tasks/privacy-judge.js';
 import { settleSyncGates } from '../../../src/core/private-tasks/sync-gate.js';
-import { projectOwnsHold } from '../../../src/core/private-tasks/hold-owner.js';
+import { PARENT_MADE_LOCAL_REASON, projectOwnsHold } from '../../../src/core/private-tasks/hold-owner.js';
 import { keptFromHosts } from '../../../src/core/replication/host-private.js';
 import { SYNC_HOLD_STATES, type SyncHold } from '../../../src/core/types.js';
 
@@ -85,6 +85,31 @@ describe('a project-level change keeps every hold the task owns', () => {
     }
     for (const id of [...made, ...legacy]) expect((await getTask(id)).sync_hold).toBeUndefined();
   });
+
+  it('a batch begun before `via` existed: a subtask that went local with a project-made parent goes with it; one of a person\'s or a stopped push\'s stays', async () => {
+    const T = '2026-11-20T00:00:00.000Z'
+    const family = async (parentHold: SyncHold, childAt = T) => {
+      const parent = await heldTask(parentHold)
+      const { task } = await addTask({ title: `Child of ${parentHold.reason}`, project: PROJECT, source: 'local', parent_task_id: parent } as never)
+      const child: SyncHold = { target: PLUGIN, state: parentHold.state, ...(parentHold.by ? { by: parentHold.by } : {}), reason: PARENT_MADE_LOCAL_REASON, at: childAt }
+      await setTaskSyncHold(task.id, child)
+      return { parent, child: task.id, hold: child }
+    }
+    const batch = await family({ target: PLUGIN, state: 'chosen', by: 'user', reason: 'Its project stopped syncing to Fake', at: T })
+    const person = await family({ target: PLUGIN, state: 'chosen', by: 'user', reason: 'You made it local', at: T })
+    const agent = await family({ target: PLUGIN, state: 'chosen', by: 'user', reason: 'An agent made it local', at: T })
+    const pushStop = await family({ target: PLUGIN, state: 'private', by: 'model', reason: 'Looks private', at: T })
+    // Another step's subtask under a batch parent (another time): its own.
+    const later = await family({ target: PLUGIN, state: 'chosen', by: 'user', reason: 'Its project stopped syncing to Fake', at: T }, '2026-11-20T09:00:00.000Z')
+    const out = await setProjectLocal(PROJECT)
+    // The two batch parents and the batch's child.
+    expect(out).toMatchObject({ holdsCleared: 3 })
+    expect((await getTask(batch.child)).sync_hold).toBeUndefined()
+    for (const f of [person, agent, pushStop, later]) expect((await getTask(f.child)).sync_hold).toEqual(f.hold)
+    for (const f of [person, agent, pushStop]) expect((await getTask(f.parent)).sync_hold).toBeDefined()
+    // The reason alone never says a project made it.
+    expect(projectOwnsHold(batch.hold)).toBe(false)
+  })
 
   it('a held task moved into a project that syncs nowhere keeps its own hold (updateTask, filing)', async () => {
     for (const h of OWN_HOLDS) {

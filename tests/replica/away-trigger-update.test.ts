@@ -7,10 +7,10 @@
  * alone, by name and with why; nothing is sent then. A second change reads the first one back
  * (followerTriggers `changes`), so the def armed for it keeps both.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Request, Response } from 'express'
-import { awayTriggers, type AwayTriggersDeps, type HereTrigger } from '../../src/replica/away-triggers.js'
-import { LEADER_ONLY_TRIGGER_FIELDS, leaderOnlyTriggerFields, withChanges } from '../../src/replica/away-trigger-update.js'
+import { awayTriggers, withHere, type AwayTriggersDeps, type HereTrigger } from '../../src/replica/away-triggers.js'
+import { LEADER_ONLY_TRIGGER_FIELDS, _resetUnmergedWarningsForTesting, leaderOnlyTriggerFields, rowWithHereChanges, withChanges } from '../../src/replica/away-trigger-update.js'
 import { buildTriggerUpdatePatch, triggerUpdateArgsOf, TRIGGER_UPDATE_FIELDS } from '../../src/core/routines/trigger-update-patch.js'
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import { OFFLINE_HEADER } from '../../src/replica/dispatch.js'
@@ -91,12 +91,12 @@ describe('trigger_update on the follower', () => {
 
   it('every field trigger_update changes rides as its own argument, the rest of the row untouched', async () => {
     const { update, sent } = harness()
-    await update({ id: ROW.id, every: '10m', prompt: 'Look again.', description: 'Checks it every 10 minutes.', name: 'Pipe watch', run: 'bash check2.sh', cwd: '', maxFiresPerDay: 0, watches: 'own' })
+    // The command and its folder are the Mac's (what only the Mac decides, below).
+    await update({ id: ROW.id, every: '10m', prompt: 'Look again.', description: 'Checks it every 10 minutes.', name: 'Pipe watch', maxFiresPerDay: 0, watches: 'own' })
     expect(sent[0]!.args.args).toEqual({
-      id: ROW.id, every: 600_000, prompt: 'Look again.', description: 'Checks it every 10 minutes.', name: 'Pipe watch', run: 'bash check2.sh', cwd: '', maxFiresPerDay: 0, watches: 'own',
+      id: ROW.id, every: 600_000, prompt: 'Look again.', description: 'Checks it every 10 minutes.', name: 'Pipe watch', maxFiresPerDay: 0, watches: 'own',
     })
-    expect(sent[0]!.args.def).toMatchObject({ name: 'Pipe watch', everyMs: 600_000, check: { run: 'bash check2.sh', timeoutSeconds: 30 }, deliver: { prompt: 'Look again.' } })
-    expect((sent[0]!.args.def as { check: Record<string, unknown> }).check.cwd).toBeUndefined()
+    expect(sent[0]!.args.def).toMatchObject({ name: 'Pipe watch', everyMs: 600_000, check: { run: 'bash check.sh', cwd: '/work', timeoutSeconds: 30 }, deliver: { prompt: 'Look again.' } })
   })
 
   it('a trigger paused on the Mac and not armed here is changed from the copy\'s row and stays paused', async () => {
@@ -167,8 +167,23 @@ describe('what only the Mac decides', () => {
     expect(await old.route('PATCH', `/v1/routines/${ROW.id}`, { name: 'Renamed' })).toMatchObject({ status: 503, body: { error: { code: 'needs_leader' } } })
   })
 
-  it('leaderOnlyTriggerFields: trigger_update\'s own patch has none', () => {
-    const { patch } = buildTriggerUpdatePatch(ROW, { id: ROW.id, run: 'bash x.sh', prompt: 'y', every: '1m', watches: 'outside' })
+  it('a new command or folder: who the check acts for is the Mac\'s to decide (routines-core.ts settleCheckActsFor), so those fields alone need it', async () => {
+    const { update, sent } = harness()
+    const run = await update({ id: ROW.id, run: 'bash other.sh', name: 'Renamed' }).catch((e: { body?: unknown }) => e.body)
+    expect(run).toMatchObject({ error: { code: 'needs_leader', why: 'fields', fields: ['run'], reasons: { run: LEADER_ONLY_TRIGGER_FIELDS.run } } })
+    expect(String((run as { error: { message: string } }).error.message)).toMatch(/^run \(who a check acts for is decided by your Mac when what it runs changes\)/)
+    const both = await update({ id: ROW.id, run: 'bash other.sh', cwd: '/elsewhere' }).catch((e: { body?: unknown }) => e.body)
+    expect(both).toMatchObject({ error: { why: 'fields', fields: ['run', 'cwd'] } })
+    expect(await update({ id: ROW.id, cwd: '' }).catch((e: { body?: unknown }) => e.body)).toMatchObject({ error: { fields: ['cwd'] } })
+    // The same command again (padded, as the Mac trims it) is no change of it.
+    expect(leaderOnlyTriggerFields(ROW, { check: { ...ROW.check, run: '  bash check.sh ' } })).toEqual([])
+    // A check removed (the routine becomes a scheduled one, acting for no one).
+    expect(leaderOnlyTriggerFields(ROW, { check: null })).toEqual(['check'])
+    expect(sent).toEqual([])
+  })
+
+  it('leaderOnlyTriggerFields: trigger_update\'s own patch of the other fields has none', () => {
+    const { patch } = buildTriggerUpdatePatch(ROW, { id: ROW.id, timeoutSeconds: 60, prompt: 'y', every: '1m', watches: 'outside' })
     expect(leaderOnlyTriggerFields(ROW, patch)).toEqual([])
   })
 })
@@ -178,8 +193,42 @@ describe('the patch and its arguments (trigger-update-patch.ts)', () => {
     const args = { every: 120_000, timeoutSeconds: 90, maxFiresPerDay: 5, prompt: 'New words.', description: 'New description.', name: 'New name', run: 'bash new.sh', cwd: '/elsewhere', watches: 'own' }
     expect(Object.keys(args).sort()).toEqual([...TRIGGER_UPDATE_FIELDS].sort())
     for (const [k, v] of Object.entries(args)) {
-      const after = withChanges(structuredClone(ROW), { [k]: v })
+      const after = withChanges(structuredClone(ROW), { [k]: v })!
       expect(triggerUpdateArgsOf(ROW, after), k).toEqual({ [k]: v })
     }
+  })
+})
+
+describe('changes made here that the copy\'s row no longer takes', () => {
+  // The Mac made it a template check meanwhile (its command is the plugin's), while this host runs
+  // the command it set: the Mac's merge refuses `run` on that row.
+  const TEMPLATED = { ...ROW, check: { ...ROW.check, run: 'acme-mail check', template: { id: 'acme:mail' } } }
+  const ARMED = { ...DEF, name: 'Pipe watch', everyMs: 60_000, check: { run: 'bash mine.sh', timeoutSeconds: 45 }, deliver: { taskId: TASK, prompt: 'Look here.' } }
+  const changes = { run: 'bash mine.sh', every: 60_000, name: 'Pipe watch' }
+
+  it('a read shows the def the daemon runs, never the copy\'s row without the changes; warned once per trigger', () => {
+    _resetUnmergedWarningsForTesting()
+    expect(withChanges(structuredClone(TEMPLATED), changes)).toBeNull()
+    const warn = vi.fn()
+    const row = rowWithHereChanges(structuredClone(TEMPLATED), ARMED, changes, warn)
+    expect(row).toMatchObject({
+      id: ROW.id, name: 'Pipe watch', schedule: { kind: 'every', everyMs: 60_000 },
+      check: { run: 'bash mine.sh', host: 'devbox', timeoutSeconds: 45 },
+      executor: { type: 'session', config: { target: TASK, prompt: 'Look here.' } },
+    })
+    expect((row.check as Record<string, unknown>).cwd).toBeUndefined()
+    rowWithHereChanges(structuredClone(TEMPLATED), ARMED, changes, warn)
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]![1]).toMatchObject({ triggerId: ROW.id, fields: ['run', 'every', 'name'] })
+    // Changes the row takes: merged as before, no warning.
+    const fine = vi.fn()
+    expect(rowWithHereChanges(structuredClone(ROW), DEF, { timeoutSeconds: 120 }, fine)).toMatchObject({ check: { timeoutSeconds: 120, run: 'bash check.sh' } })
+    expect(fine).not.toHaveBeenCalled()
+  })
+
+  it('the trigger route answers that row (withHere)', () => {
+    _resetUnmergedWarningsForTesting()
+    const job = withHere(structuredClone(TEMPLATED), { id: ROW.id, state: 'armed', def: ARMED, changes }, 'devbox', 5_000)
+    expect(job).toMatchObject({ enabled: true, check: { run: 'bash mine.sh' }, schedule: { everyMs: 60_000 } })
   })
 })

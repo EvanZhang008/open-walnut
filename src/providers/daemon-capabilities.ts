@@ -1256,6 +1256,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // pause, and `follower.trigger.test {args, actor}` runs a check once, writing no state. Both twins.
   // Optional: without it the follower reads its routines copy alone and hands trigger_test back.
   'follower-triggers-v1',
+  // 'follower-create-inherited-v1' (offline-host-core.ts handleFollower, replica/away-create-placement.ts):
+  // `follower.op` task_create takes `inherited_project`, the project a session's create took from its
+  // caller, into the record's `placement.inheritedProject`, which this host's readers show and every
+  // drain ignores (the leader files the task under its caller where the caller is then). Shared code,
+  // so both twins. Optional: without it the follower journals no inherited project, as before.
+  'follower-create-inherited-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

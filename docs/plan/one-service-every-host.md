@@ -313,6 +313,10 @@ permission prompts still name Walnut.
   sessions has a decision in `tests/replica/away-task-reads-table.ts`, which the route ratchet holds.
 - **The leader's side.** A plugin job is an actor of the journal; a task's session started on the host is
   adopted by the `task-start` drain; a task made away lands where the same caller's create lands online. A
+  project the session's create took from its caller rides the record as `inheritedProject`, which the host's
+  own readers and its start read and no drain does: the leader files the task under its caller where the
+  caller is then, so a caller moved to another project meanwhile takes its subtask (and the session the
+  host started for it) along, never a refusal of a create the host already answered. A
   session record the leader does not take is a refusal into the letter, never a retry that holds the host's
   later records (an error that may pass, such as a busy database, is still retried). A session the host
   started alone that is refused, or given up after its retries, has its CLI ended through the daemon that owns
@@ -398,7 +402,10 @@ permission prompts still name Walnut.
   host did not stays (the host's value wins a field both changed, as for every trigger record). Only a leader
   that drains `trigger-update` gets one; an older one answers `needs_leader` (`mac_too_old`). What only the
   leader decides answers `needs_leader` (`fields`) for those fields alone, each named with why: the check's
-  host, a template, the task it wakes, a prompt over 32 KB; a trigger whose check runs on another host or a
+  host, a template, the task it wakes, a prompt over 32 KB, and the check's command or folder (`run`, `cwd`)
+  or its removal: the task a check acts for, whose grants its `walnut` calls get, is decided by the leader
+  when what it runs changes (`settleCheckActsFor`), and a host-armed new command would act for the old task
+  until the record drained; a trigger whose check runs on another host or a
   scheduled routine (its clock is the leader's) needs the leader whole.
 - **Not yet.** The watcher that ends a session's turn stays in the daemon until step C. A prompt that asks
   the person for an approval goes through the old socket.

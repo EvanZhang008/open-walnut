@@ -178,6 +178,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     createCaller: async (actor) => (await (await import('../core/offline-merge/journal-actor.js'))
       .createCaller(actor, { readTask: async (id) => (await shownTask(id)) as CallerTaskRow | null })).caller,
     createdHere: (id) => overlay.createPending(id),
+    capabilities: () => link.capabilities(),
     board: shownBoard,
     noteWritten: (e) => {
       // A create's first word to browsers is task:created with the page's correlation

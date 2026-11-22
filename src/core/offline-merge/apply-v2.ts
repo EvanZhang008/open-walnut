@@ -186,6 +186,8 @@ const CREATE_FIELDS = new Set(['title', 'description', 'priority', 'due_date', '
 async function applyTaskCreate(ctx: V2Context, record: V2Record): Promise<void> {
   const minted = String(record.taskId ?? '');
   const fields = (record.fields ?? {}) as Record<string, unknown>;
+  // Its `inheritedProject` (a project a session's create took from its caller on the host) is never
+  // read: the caller rule files the task under its caller where the caller is now (task-row-fold.ts FoldPlacement).
   const placement = (record.placement ?? {}) as { parentTaskId?: string; project?: string; groupId?: string; tier?: string };
   const bad = unqueueableFields(fields);
   if (bad.length) throw new RefusedWrite(`${bad.join(', ')} can only be set while the Mac answers; the task was not created`);

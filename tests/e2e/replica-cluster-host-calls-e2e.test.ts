@@ -262,7 +262,9 @@ describe.each(TWINS)('a host\'s own service answers its sessions\' calls by both
     expect(of('task-create', (r) => r.taskId === newTask)).toHaveLength(1)
     const placedRec = of('task-create', (r) => r.taskId === placedTask)
     expect(placedRec).toHaveLength(1)
-    expect(placedRec[0]!.placement).toMatchObject({ project: 'Acme', parentTaskId: a.task })
+    // The project it took from A rides for this host's readers only; the Mac files it under A where A is then.
+    expect(placedRec[0]!.placement).toMatchObject({ inheritedProject: 'Acme', parentTaskId: a.task })
+    expect(placedRec[0]!.placement).not.toHaveProperty('project')
     expect(placedRec[0]!.placement).not.toHaveProperty('groupId')
     const placedStart = of('session', (r) => r.taskId === placedTask)
     expect(placedStart).toHaveLength(1)

@@ -24,6 +24,29 @@ export function projectOwnsHold(hold: Pick<SyncHold, 'via' | 'reason'> | undefin
   return LEGACY_PROJECT_REASONS.some((p) => reason.startsWith(p));
 }
 
+/**
+ * The reason a subtask's hold carries when it went local with its parent (task-manager.ts makeTaskLocal):
+ * written for a project made local, for a person's or an agent's Local, and for a stopped push alike,
+ * so the reason alone never says a project made it.
+ */
+export const PARENT_MADE_LOCAL_REASON = 'Its parent task was made local';
+
+/**
+ * projectOwnsHold for a task whose parent the caller can read: also a subtask's hold made before
+ * `via` existed in the same step as its parent's (the same time and service) when the project owns the
+ * parent's (a project made local in batches that span an upgrade: its parents are cleared, so are they).
+ */
+export function projectOwnsTaskHold(
+  task: { sync_hold?: SyncHold | null; parent_task_id?: string | null },
+  parentOf: (id: string) => { sync_hold?: SyncHold | null } | undefined,
+): boolean {
+  const hold = task.sync_hold;
+  if (projectOwnsHold(hold)) return true;
+  if (!hold || hold.via !== undefined || hold.reason !== PARENT_MADE_LOCAL_REASON || !task.parent_task_id) return false;
+  const parent = parentOf(task.parent_task_id)?.sync_hold;
+  return !!parent && parent.at === hold.at && parent.target === hold.target && projectOwnsHold(parent);
+}
+
 /** The hold a task keeps once its project syncs nowhere: its own, or none when the project made it. */
 export function holdWhenProjectLocal<H extends SyncHold>(hold: H): H | null {
   return projectOwnsHold(hold) ? null : hold;

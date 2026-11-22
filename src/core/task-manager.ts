@@ -59,7 +59,7 @@ import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { linkTargetOfTag, newLinkTags, relabelLinkTags, mergeLinkNames, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-remote-links.js';
 import { decideBirth } from './private-tasks/birth.js';
-import { holdWhenProjectLocal, projectOwnsHold } from './private-tasks/hold-owner.js';
+import { holdWhenProjectLocal, projectOwnsHold, projectOwnsTaskHold, PARENT_MADE_LOCAL_REASON } from './private-tasks/hold-owner.js';
 import { syncRulesFor } from './private-tasks/provider-rules.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
 import { isPermitRefusal, leaderPermitActive } from './leader/switch/doors.js';
@@ -2477,7 +2477,8 @@ export async function setProjectLocal(project: string): Promise<{ name: string; 
     if (synced > 0) throw new Error(`${synced} task(s) in "${key}" still sync to ${from}; make them local first`);
     // Only the holds a project step made to stop the sync go; a task's own hold (private,
     // chosen, unjudged, checking) stays, and keeps it off every host's copies (hold-owner.ts).
-    const cleared = inProject.filter((t) => t.sync_hold && t.sync_hold.target === from && projectOwnsHold(t.sync_hold));
+    const byId = new Map(store.tasks.map((t) => [t.id, t] as const));
+    const cleared = inProject.filter((t) => t.sync_hold && t.sync_hold.target === from && projectOwnsTaskHold(t, (id) => byId.get(id)));
     for (const t of cleared) t.sync_hold = undefined;
     store.projects = { ...projects, [key]: { ...projects[key], source: 'local' } };
     await writeStore(store);
@@ -9795,7 +9796,7 @@ export async function makeTaskLocal(
       t.sync_error = undefined;
       t.sync_hold = {
         ...hold, target: oldSource,
-        ...(t === task ? {} : { reason: 'Its parent task was made local' }),
+        ...(t === task ? {} : { reason: PARENT_MADE_LOCAL_REASON }),
         ...(oldExt ? { outside: { source: oldSource, ext: oldExt, state: 'kept' as const } } : {}),
       };
       t.updated_at = now;

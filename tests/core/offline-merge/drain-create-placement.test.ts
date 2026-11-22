@@ -10,6 +10,8 @@
  *     plugin that keeps its tasks to its own view, kept there (`plugin_only`) as online;
  *   - a parent the record names: honoured for a paired device as before; for a session's and a
  *     plugin job's create ignored, as the online create routes read none from the body;
+ *   - a caller moved to another project before the drain: the task follows it (the project the
+ *     host inherited rides as `inheritedProject`, which no drain reads), its away start adopted;
  *   - the session a lead's away start ran on the host (`run: 'task'`): adopted as its task's
  *     own for a task that host's journal made, refused for a task the Mac made (why the
  *     replica starts only the first kind alone: away-starts.ts `task_made_on_mac`).
@@ -141,6 +143,41 @@ describe('a task made away lands where the same caller\'s create lands online', 
     const gone = await drained({ kind: 'session', sid }, { title: 'Print the menus', pinned: true }, { project: 'Acme', parentTaskId: lead.id, tier: 'ct_deleted_tier' })
     expect(gone).toMatchObject({ project: 'Acme', parent_task_id: lead.id, pinned: true })
     expect(gone.focus_tier ?? '').not.toBe('ct_deleted_tier')
+  })
+
+  it('a caller moved to another project before the drain: lands under it in its project NOW, its away start adopted, never refused', async () => {
+    // The host's copy had the caller in Lantern (a lagging copy, or the user moved it while the link
+    // was down); the Mac has it in Marina. The host journaled the project it inherited as
+    // `inheritedProject` (replica/away-create-placement.ts), which the drain never reads.
+    const lead = (await addTask({ title: 'Moved lead', project: 'Marina', pinned: true, focus_tier: 'focus' })).task
+    const sid = '44444444-5555-4666-8777-000000000005'
+    await createSessionRecord(sid, lead.id, 'Marina', '/repo/marina', { title: 'Moved lead' })
+    const actor = { kind: 'session', sid }
+    const online = await direct({ title: 'Count the chairs' }, { 'x-walnut-caller-sid': sid })
+    const id = minted()
+    const started = '66666666-7777-4888-9999-000000000005'
+    const j = journal([
+      createRec(id, actor, { title: 'Count the tables', pinned: true }, { parentTaskId: lead.id, inheritedProject: 'Lantern', tier: 'focus' }),
+      {
+        v: 2, seq: ++seqN, at: Date.now() - 50_000, kind: 'session', opId: `op-place-${seqN}`, rev: 1, actor,
+        sid: started, taskId: id, host: HOST, cwd: '/repo/lantern', mode: 'default', title: 'Count the tables', startedAt: Date.now() - 50_000,
+        firstMessage: 'Count the tables', run: 'task',
+      },
+    ])
+    await runOfflineHandover(j.conn as never)
+    expect(j.pending).toHaveLength(0)
+    const away = await getTask(id)
+    expect(away).toMatchObject({ project: 'Marina', parent_task_id: lead.id })
+    expect(whereOf(away)).toEqual(whereOf(online))
+    // The session the host started for it (in Lantern's folder there) is the task's own, as a task
+    // moved to another project online keeps its running session.
+    expect(away.session_ids ?? []).toContain(started)
+    expect(await getSessionByClaudeId(started)).toMatchObject({ taskId: id, host: HOST })
+    // The same create with the inherited project journaled as NAMED (the record before this fix): refused.
+    const named = minted()
+    const k = journal([createRec(named, actor, { title: 'Count the lamps', pinned: true }, { parentTaskId: lead.id, project: 'Lantern', tier: 'focus' })])
+    await runOfflineHandover(k.conn as never)
+    await expect(getTask(named)).rejects.toThrow()
   })
 
   it('a plugin job\'s: an outside caller\'s create; a plugin that keeps its tasks keeps it to its own view', async () => {

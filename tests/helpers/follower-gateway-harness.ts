@@ -14,7 +14,7 @@ export function setup(o: { linked?: Sock | null } = {}) {
   const logs: Array<{ level: string; msg: string; data?: Record<string, unknown> }> = []
   let id = 100
   /** Whether the follower may write (the twin's followerMayWrite), and the clock. */
-  const state = { mayWrite: true, now: 1_000, companion: false }
+  const state = { mayWrite: true, now: 1_000, companion: false, stopping: false }
   const g = createFollowerGateway<Sock>({
     follower: () => (link.ws && link.ws.answersLocal ? link.ws : null),
     mayWrite: () => state.mayWrite,
@@ -28,6 +28,7 @@ export function setup(o: { linked?: Sock | null } = {}) {
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
     clearTimer: (t) => { (t as { cleared: boolean }).cleared = true },
     log: (level, msg, data) => { logs.push({ level, msg, ...(data ? { data } : {}) }) },
+    stopping: () => state.stopping,
   })
   // The timers set so far only: one a fired timer sets fires on the next call.
   const fire = () => { for (const t of [...timers]) if (!t.cleared) { t.cleared = true; t.fn() } }

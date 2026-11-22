@@ -22,8 +22,13 @@ import { pointTaskAtSession, slotOfMode } from '../sessions/task-session-link.js
 /** A task row as a reader shows it. */
 export type FoldRow = Record<string, unknown> & { id: string }
 
-/** Where a create places its task (a `task-create` record's `placement`). */
-export interface FoldPlacement { parentTaskId?: string; project?: string; groupId?: string; tier?: string }
+/**
+ * Where a create places its task (a `task-create` record's `placement`). `project` is a project the
+ * create NAMED, which the leader's drain checks as named; `inheritedProject` is the one a session's
+ * create took from its caller on the host's copy, for the host's own readers only: every drain
+ * ignores it and files the task under the caller where the caller is THEN (replica/away-create-placement.ts).
+ */
+export interface FoldPlacement { parentTaskId?: string; project?: string; inheritedProject?: string; groupId?: string; tier?: string }
 
 /** A pending journal record, as far as the fold reads it. */
 export interface FoldRecord {
@@ -71,7 +76,7 @@ export function createdRow(id: string, fields: Record<string, unknown>, placemen
   const keptBy = keptByMaker(maker)
   const pinned = keptBy ? false : placement.tier ? true : typeof fields.pinned === 'boolean' ? fields.pinned : madeByHuman(maker) ? true : undefined
   return {
-    id, phase: 'TODO', status: 'todo', priority: 'none', project: projectOrInbox(placement.project), created_at: iso, updated_at: iso,
+    id, phase: 'TODO', status: 'todo', priority: 'none', project: projectOrInbox(placement.project ?? placement.inheritedProject), created_at: iso, updated_at: iso,
     ...(placement.groupId ? { group_id: placement.groupId } : {}),
     ...(placement.parentTaskId ? { parent_task_id: placement.parentTaskId } : {}),
     ...(placement.tier && !keptBy ? { focus_tier: placement.tier } : {}),

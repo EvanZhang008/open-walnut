@@ -92,6 +92,8 @@ export interface FollowerGatewayDeps<S> {
   setTimer(fn: () => void, ms: number): unknown
   clearTimer(t: unknown): void
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
+  /** This daemon stops (the twins' daemonCommands.closed): a call handed again later ends as a new one would. */
+  stopping?(): boolean
 }
 
 export interface HandOff {
@@ -113,6 +115,8 @@ export interface HandOff {
   online?: boolean
   /** A plugin job's call: routes it afresh (the twin's `again`), set by routeJob. */
   reroute?: () => void
+  /** Its caller hung up (the twins' gatewayCallerLeft): nobody reads it, so it is not handed again. */
+  left?: () => boolean
 }
 
 export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
@@ -121,6 +125,8 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
   /** `lagSince`: when the follower first refused this call with `leader_answers` while this daemon saw the leader away. */
   interface Pending { ws: S; call: HandOff; respond: (r: FollowerGatewayResponse) => void; timer: unknown; lagSince?: number }
   const pending = new Map<number, Pending>()
+  /** Calls between two hands of the lag wait (waitOutLag): out of `pending`, still the follower's. */
+  const lagging = new Set<number>()
   /** How often a plugin job's waiting call looks again, and the time it keeps for its attempt after. */
   const JOB_WAIT_STEP_MS = 250
   const JOB_WAIT_SPARE_MS = 2_000
@@ -265,7 +271,19 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     if (now + LAG_STEP_MS - lagSince > LAG_MAX_MS || e.call.deadline - now - LAG_STEP_MS < LAG_SPARE_MS) return false
     const op = typeof e.call.payload.name === 'string' ? e.call.payload.name : undefined
     if (e.lagSince === undefined) deps.log('info', 'gateway: this host\'s Walnut server does not see the leader away yet; the call goes to it again', { relayId, op })
+    lagging.add(relayId)
     deps.setTimer(() => {
+      lagging.delete(relayId)
+      // As the first hand checks (the twins' handleGatewayLine, routeJob's `again`): a daemon that
+      // stops answers it so, and a caller that left is not handed again, nor routed on.
+      if (deps.stopping?.() === true) {
+        e.respond({ ok: false, error: { code: 'hub_unreachable', message: 'daemon is shutting down; retry after reconnecting', detail: { stopping: true } } })
+        return
+      }
+      if (e.call.left?.() === true) {
+        deps.log('info', 'gateway: a call this host\'s Walnut server refused ends before it is handed again, its caller left', { relayId, op })
+        return
+      }
       if (!deps.mayWrite(home)) {
         deps.log('info', 'gateway: the leader answers again; a call this host\'s Walnut server refused is routed afresh', { relayId, op })
         goOn()
@@ -321,5 +339,5 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
     return { ok: false, error }
   }
 
-  return { answers, answersOnline, handOff, routeJob, holds, settle, dropSocket, responseOf, noteOwnAnswer, noteOwnOffline, ownAnswers, pendingCount: () => pending.size }
+  return { answers, answersOnline, handOff, routeJob, holds, settle, dropSocket, responseOf, noteOwnAnswer, noteOwnOffline, ownAnswers, pendingCount: () => pending.size + lagging.size }
 }

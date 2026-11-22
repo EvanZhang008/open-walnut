@@ -4,9 +4,11 @@
  * applyCreateRules, the drain's journal-actor.ts createCaller reading the caller's task through
  * the replica's copy), over the REAL offline host and journal (offline-host-core.ts):
  *   - a session's create with no project: the caller's project, as its subtask, in its board tier;
- *     the record holds that project, parent and tier, never the caller's folder (the leader files
- *     it beside its caller under its own lock), and the answer's `placement` says so in the
- *     leader's shape;
+ *     the record holds that parent and tier and the project as `inheritedProject` (this host's readers
+ *     show it, every drain ignores it, so a caller moved meanwhile takes its subtask along), never the
+ *     caller's folder (the leader files it beside its caller under its own lock), and the answer's
+ *     `placement` says so in the leader's shape; a daemon without follower-create-inherited-v1 gets no
+ *     project in the record at all;
  *   - naming the caller's own project: the same; another project without the user's words:
  *     refused, nothing kept;
  *   - a caller with no task (a plugin job, a device, a session no copy knows): as before;
@@ -24,6 +26,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-away-create-
 import { WALNUT_HOME } from '../../src/constants.js'
 import { JHOME, journalTmpDir, cleanupJournalDirs, journalHost, jslice, journalLines } from '../helpers/offline-journal-harness.js'
 import { createWritePort, type TaskRow, type WriteActor } from '../../src/replica/write-port.js'
+import { INHERITED_PROJECT_CAP } from '../../src/replica/away-create-placement.js'
 import { createOverlay } from '../../src/replica/overlay.js'
 import { linkWrite } from '../../src/replica/ws-writes.js'
 import { createCaller } from '../../src/core/offline-merge/journal-actor.js'
@@ -54,7 +57,7 @@ beforeAll(async () => {
 
 afterEach(() => cleanupJournalDirs())
 
-function rig() {
+function rig(caps: readonly string[] | null = [INHERITED_PROJECT_CAP]) {
   const dir = journalTmpDir()
   const clock = { now: T0 }
   const { host } = journalHost(dir, clock)
@@ -74,6 +77,7 @@ function rig() {
     noteWritten: (e) => overlay.noteWritten(e),
     // As away-wiring.ts wires it: the drain's caller, its task read as this replica shows it.
     createCaller: async (actor) => (await createCaller(actor, { readTask: async (id) => (await shown(id)) as CallerTaskRow | null })).caller,
+    capabilities: () => caps,
     now: () => clock.now,
     randomHex: (n) => (++hexN).toString(16).padStart(n * 2, '0'),
   })
@@ -95,7 +99,7 @@ describe('an away create is placed by the leader\'s caller rule', () => {
     expect(body.task).toMatchObject({ project: 'Marina', parent_task_id: CALLER.id, pinned: true, focus_tier: 'focus' })
     const [rec] = r.records()
     expect(rec).toMatchObject({ kind: 'task-create', actor: session(CALLER_SID), fields: { title: 'Fix the follower create', pinned: true } })
-    expect(rec.placement).toEqual({ parentTaskId: CALLER.id, project: 'Marina', tier: 'focus' })
+    expect(rec.placement).toEqual({ parentTaskId: CALLER.id, inheritedProject: 'Marina', tier: 'focus' })
     // What this host shows of it until the leader's row comes back: the same place.
     expect(await r.shown(rec.taskId)).toMatchObject({ project: 'Marina', parent_task_id: CALLER.id, pinned: true, focus_tier: 'focus' })
   })
@@ -112,15 +116,29 @@ describe('an away create is placed by the leader\'s caller rule', () => {
     // A tier the create names wins over the caller's, as online.
     const named = await r.port.taskCreate(r.write(), session(CALLER_SID), { title: 'Parked work', focus_tier: 'wait' })
     expect(bodyOf(named).placement).not.toHaveProperty('tier')
-    expect(r.records()[1].placement).toEqual({ parentTaskId: CALLER.id, project: 'Marina', tier: 'wait' })
+    expect(r.records()[1].placement).toEqual({ parentTaskId: CALLER.id, inheritedProject: 'Marina', tier: 'wait' })
     expect(r.records()[1].fields).not.toHaveProperty('pinned')
+  })
+
+  it('a daemon that keeps no inherited project: none in the record (the drain files it under the caller), the answer still says where', async () => {
+    for (const caps of [[], null]) {
+      const r = rig(caps)
+      const made = await r.port.taskCreate(r.write(), session(CALLER_SID), { title: 'Fix it on an older daemon' })
+      expect(made).toMatchObject({ answered: false, status: 201 })
+      expect(bodyOf(made).placement).toMatchObject({ project: 'Marina', parent_task_id: CALLER.id })
+      expect(bodyOf(made).task).toMatchObject({ project: 'Marina', parent_task_id: CALLER.id })
+      expect(r.records()[0].placement).toEqual({ parentTaskId: CALLER.id, tier: 'focus' })
+      // A project the create names rides as before.
+      await r.port.taskCreate(r.write(), session(CALLER_SID), { title: 'Named on an older daemon', project: 'Marina' })
+      expect(r.records()[1].placement).toEqual({ parentTaskId: CALLER.id, project: 'Marina', tier: 'focus' })
+    }
   })
 
   it('an unpinned caller\'s subtask stays off the board, as online', async () => {
     const r = rig()
     const made = await r.port.taskCreate(r.write(), session(UNPINNED_SID), { title: 'Quiet subtask' })
     expect(bodyOf(made).placement).toMatchObject({ project: 'Marina', parent_task_id: UNPINNED.id, tier: 'unpinned' })
-    expect(r.records()[0]).toMatchObject({ fields: { pinned: false }, placement: { parentTaskId: UNPINNED.id, project: 'Marina' } })
+    expect(r.records()[0]).toMatchObject({ fields: { pinned: false }, placement: { parentTaskId: UNPINNED.id, inheritedProject: 'Marina' } })
     expect(bodyOf(made).task.pinned).toBe(false)
   })
 

@@ -33,7 +33,7 @@ import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../co
 import { parseWaitUntil } from '../core/task-wait-clock.js'
 import { log } from '../logging/index.js'
 import { namesKeptLocal, refreshLocalTasksHere, type LocalTasksHere } from '../core/replication/kinds/local-tasks.js'
-import { updateHere, withChanges } from './away-trigger-update.js'
+import { rowWithHereChanges, updateHere } from './away-trigger-update.js'
 
 /** The daemon capability the reads and the test ride on. */
 export const FOLLOWER_TRIGGERS_CAP = 'follower-triggers-v1'
@@ -89,7 +89,7 @@ export function withHere(job: Job | null, t: HereTrigger, host: string, now: num
     state: {},
   }
   // A change made here, with the Mac's own merge (away-trigger-update.ts).
-  const base = withChanges(made, t.changes)
+  const base = rowWithHereChanges(made, def, t.changes, (msg, data) => log.web.warn(msg, data))
   const state: Record<string, unknown> = { ...((base.state as Record<string, unknown> | undefined) ?? {}) }
   const s = t.status
   if (typeof s?.nextRunAtMs === 'number') state.nextRunAtMs = s.nextRunAtMs

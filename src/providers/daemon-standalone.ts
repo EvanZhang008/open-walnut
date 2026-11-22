@@ -4868,6 +4868,7 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
   clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
   log: (level, msg, data) => logMsg(level, msg, data),
+  stopping: () => daemonCommands.closed,
 })
 
 // Trigger fires no server claimed, delivered by this host's own Walnut server while its
@@ -5995,7 +5996,8 @@ function sendGatewayRequest(
   if (home && !target && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)) {
     const readable = capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
     const fallback = () => sendGatewayRequest(capability, callerSid, payload, respond, { ...plan, ownServerAsked: true })
-    if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback }, (r) => respond(r as GatewayResponse))) return
+    const left = () => gatewayCallerLeft.get(respond)?.() === true
+    if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback, left }, (r) => respond(r as GatewayResponse))) return
   }
   // No server now and nothing sent: a call that may wait does, while it has time
   // (a deploy's restart, a link dialing again), then goes as if it had just come.
@@ -6459,7 +6461,8 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
         if (gatewayCallerLeft.get(respond)?.()) return logMsg('info', 'gateway: a plugin job\'s waiting call ends, its caller left', { home, op: payload.name })
         sendPluginJobGatewayRequest(home, capability, payload, respond, caller, deadline, true)
       }
-      if (followerGateway.routeJob({ home, capability, callerSid: EXTERNAL_CALLER_SID, payload, caller, deadline }, (r) => respond(r as GatewayResponse), again, waited) !== 'none') return
+      const left = () => gatewayCallerLeft.get(respond)?.() === true
+      if (followerGateway.routeJob({ home, capability, callerSid: EXTERNAL_CALLER_SID, payload, caller, deadline, left }, (r) => respond(r as GatewayResponse), again, waited) !== 'none') return
     }
     logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home, op: payload.name, waited })
     return respond(gatewayError('hub_unreachable', waited
