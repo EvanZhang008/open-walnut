@@ -35,7 +35,6 @@
   /* WebKit keeps its native push-button look under a custom background (Mac app). */
   -webkit-appearance: none;
   appearance: none;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
@@ -186,10 +185,15 @@
 
 /* ── Full width: a key that takes the whole line (Unlock, Continue), its label centred. A quiet
    full-width key is a row in a menu or list: its label starts at the left. ── */
-.btn-block {
-  display: flex;
-  width: 100%;
-}
+.btn-block { width: 100%; }
+
+/* How a key is laid out (inline-flex, or flex across the line) is declared at zero specificity, so a
+   class beside `btn` that hides or re-lays the key (`.md-code-fold { display: none }`) always wins,
+   whichever stylesheet loads first (2026-11-22: the code block's Fold key never hid). `hidden` hides
+   a key too. Guard: tests/web/button-family-display.test.ts. */
+:where(.btn) { display: inline-flex; }
+:where(.btn-block) { display: flex; }
+.btn[hidden] { display: none; }
 .btn-block.btn-ghost {
   justify-content: flex-start;
   text-align: left;
