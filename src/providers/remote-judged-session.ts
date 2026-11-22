@@ -14,6 +14,8 @@
  * session-snapshot-apply.ts and session-reconcile.ts.
  */
 import { log } from '../logging/index.js'
+import { bus, EventNames } from '../core/event-bus.js'
+import { lightSubagentRows } from '../core/subagents/registry.js'
 import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { LiveState } from '../core/session-channel/host-api.js'
 
@@ -58,7 +60,6 @@ export class RemoteJudgedSession {
   get lastResultOrigin(): string | undefined { return this.state.lastResultOrigin }
   get cliSlashCommands(): unknown { return this.state.cliSlashCommands ?? null }
   get cachedAppliedSettings(): unknown { return this.state.appliedSettings }
-  get backgroundTasksSnapshot(): unknown { return this.state.backgroundTasks ?? [] }
   get inTurn(): boolean { return this.state.inTurn === true }
   get turnRunning(): boolean { return this.state.turnRunning === true }
   get teamActive(): boolean { return this.state.teamActive === true }
@@ -78,6 +79,22 @@ export class RemoteJudgedSession {
   /** The host does not mirror its context windows (yet): what a session with no model facts shows. */
   contextWindowsForUi(): { modelMax: number | null; autoCompactAt: number | null; estimate?: boolean; source?: string } {
     return { modelMax: null, autoCompactAt: null }
+  }
+  /**
+   * The Background panel of the session: its host's ledger (its CLI's agents and commands, from the
+   * newest `live` state) with the Walnut subagents this leader runs for it (subagents/registry.ts:
+   * a session's subagent_run runs on the leader), as a session here answers it. Null: neither has any.
+   */
+  backgroundTasksSnapshot(sid: string = this.sid): Record<string, unknown> | null {
+    const host = this.state.backgroundTasks as Record<string, unknown> | null | undefined
+    const light = lightSubagentRows(sid)
+    if (!host && light.length === 0) return null
+    return withLeaderSubagentRows(host ?? { sessionId: sid, inFlight: 0, tasks: [], phases: [], agents: [] }, sid)
+  }
+  /** The panel's update, said here: the rows of this leader's subagents are only here (not on the host). */
+  emitBackgroundTasks(): void {
+    const payload = this.backgroundTasksSnapshot()
+    if (payload) bus.emit(EventNames.SESSION_BACKGROUND_TASKS, payload as never, ['main-ai', 'web-ui'], { source: 'light-subagents' })
   }
   hasActiveBackgroundWork(): boolean { return (this.state.outliving ?? []).includes('background') }
   hasPendingBackgroundTasks(): boolean { return false }
@@ -148,7 +165,6 @@ export class RemoteJudgedSession {
   detach(): void { this.send('detach', [], 'session') }
   kill(): void { this.send('kill', [], 'session') }
   forceSettlePermissionRequests(...a: unknown[]): void { this.send('forceSettlePermissionRequests', a, 'session') }
-  emitBackgroundTasks(...a: unknown[]): void { this.send('emitBackgroundTasks', a, 'session') }
   adoptAppliedSettings(...a: unknown[]): void { this.send('adoptAppliedSettings', a, 'session') }
 
   /**
@@ -174,6 +190,19 @@ export class RemoteJudgedSession {
       void marked.then((undoId) => { if (undoId) this.send('undoExpectedTeardown', [undoId], 'session') })
     }
   }
+}
+
+/**
+ * A host session's Background panel payload (its ledger, as its host sent it) with the rows of the
+ * Walnut subagents this leader runs for that session added: they are the leader's (their runs, their
+ * sessions), so the host's ledger never has them. A row of the host's with the same id is replaced.
+ */
+export function withLeaderSubagentRows<P extends Record<string, unknown>>(payload: P, sid: string): P {
+  const light = lightSubagentRows(sid)
+  if (light.length === 0) return payload
+  const ids = new Set(light.map((t) => t.taskId))
+  const own = Array.isArray(payload.tasks) ? (payload.tasks as Array<{ taskId?: unknown }>).filter((t) => !ids.has(String(t?.taskId))) : []
+  return { ...payload, tasks: [...own, ...light] }
 }
 
 /** One proxy per session id, kept for the life of this server (identity fences compare them). */

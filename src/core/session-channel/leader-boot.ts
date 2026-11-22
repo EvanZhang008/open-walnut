@@ -50,7 +50,11 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     loadCursor: async (hostId) => loadChannelCursor(hostId),
     emit: (name, data, opts) => {
       if (saidHereAlready(name, data)) return
-      bus.emit(name, data, reemitDestinations(opts.to), { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) })
+      // The host's ledger, with the rows of the Walnut subagents this leader runs for the session.
+      const sid = (data as { sessionId?: unknown } | null)?.sessionId
+      const said = name === EventNames.SESSION_BACKGROUND_TASKS && typeof sid === 'string' && data && typeof data === 'object'
+        ? remote.withLeaderSubagentRows(data as Record<string, unknown>, sid) : data
+      bus.emit(name, said, reemitDestinations(opts.to), { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) })
     },
     noteLive: remote.noteLiveState,
     noteRename: (from, to) => {
