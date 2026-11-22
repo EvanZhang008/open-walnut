@@ -59,7 +59,7 @@ beside `btn` carries only layout (margin, flex, width).
 
 | Class | Use | Look |
 |---|---|---|
-| `.btn` | any action (Save draft, Edit, Retry) | the text colour mixed into the page colour, 8 % (18 % in dark), as a solid fill (never see-through), no border, corner `--radius-sm` (8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (the accent mixed 14 % into the page colour, a step stronger than hover even in a chat, whose accent is grey; `--accent-text` label), and a quiet trigger whose menu is open (`.btn-ghost[aria-expanded="true"]`) keeps its hover fill |
+| `.btn` | any action (Save draft, Edit, Retry) | the text colour mixed into the page colour, 8 % (18 % in dark), as a solid fill (never see-through), no border, corner `--radius-sm` (8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle` with a half-accent hairline and `--accent-text` label, kept under the pointer, so even in a chat, whose accent is grey, an on key never reads as merely hovered; `data-on="true"` is the same look), and a quiet trigger whose menu is open (`.btn-ghost[aria-expanded="true"]`) keeps its hover fill |
 | `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this; a settings page's header action too) | min-height 28 px, padding 2 px 10 px, 12 px |
 | `.btn-primary` | the one main action of a view | `--btn-primary-fill` (the accent 86 % toward black, so white reads at 4.5:1 in both themes), `--on-accent` text, hover `--btn-primary-fill-hover` (74 %) |
 | `.btn-danger` | a destructive action | `--btn-danger-text` label (the error red 70 % toward the text colour, 4.5:1 on the grey key) on the plain key; with `.btn-primary` the solid red confirm (Yes, delete, `--btn-danger-fill`) |
@@ -289,19 +289,18 @@ colour for the dark theme; write `var(--fg)`.
 
 ## What exists today that breaks this (the ratchet counts them)
 
-Counted on 2026-11-21 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
+Counted on 2026-11-22 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
 `tests/web/ui-standard-baseline.json`):
 
-- 3 rules restyle `.btn` outside the family's two homes (`styles/buttons.css`, and the card
-  family in `components/actions/ask-card.css`), for example `styles/answer-box.css` (the send
-  circle) and `styles/inline-answer.css`.
-- 90 rules in 43 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
+- 1 rule restyles `.btn` outside the family's two homes (`styles/buttons.css`, and the card
+  family in `components/actions/ask-card.css`): `styles/inline-answer.css`.
+- 73 rules in 40 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
   corner instead of a `.btn` variant.
-- 1215 `<button>` elements in 440 TSX files carry no `btn` class (choice controls with role tab,
+- 1098 `<button>` elements in 417 TSX files carry no `btn` class (choice controls with role tab,
   radio, switch, checkbox or option aside). A new file starts at 0.
 - 21 raw `#007aff` / `#0a84ff` in 9 files where `var(--accent)` belongs.
 - Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):
-  `rawColour`, `radiusNotToken`, `pillRadius` (86: the pill-shaped controls and labels),
+  `rawColour`, `radiusNotToken`, `pillRadius` (69: the pill-shaped controls and labels),
   `fontSizeOffScale`, `shadowLiteral`, `zIndexLiteral`, `spacingOffGrid`. Their counts per file are
   in the same baseline; a new file starts at 0.
 - 8 rules in 2 files style an input box outside `input-box.css`: the floating composers' glass

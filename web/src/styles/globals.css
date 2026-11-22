@@ -19260,35 +19260,9 @@ td.usage-share-col {
   flex-shrink: 0;
 }
 
-/* Ghost text buttons — no resting box; hover reveals a soft accent wash. */
-.session-action-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 7px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  font-family: inherit;
-  color: var(--fg-muted);
-  background: transparent;
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
-  line-height: 1.6;
-}
-
-.session-action-chip:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.session-action-chip-active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
+/* The draft row's keys (folder, project, sync, clear) are `.btn btn-sm` (buttons.css); an open
+   picker says so with aria-pressed. `.session-action-chip` stays on them only as a hook for code
+   and specs, and carries no look. */
 /* A count inside a key (Threads 2, Web 1) or a menu row (Inbox 3): one badge everywhere. */
 .session-action-chip-count {
   display: inline-flex;
