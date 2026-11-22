@@ -15,6 +15,7 @@ import { classifyHomePath, homeEntries, homePathClass, outsideHomeEntries, type 
 import { EXCLUDED_DIRS, backupTakes } from './scan.js';
 import { AVG_CHUNK, MAX_CHUNK, MIN_CHUNK, SMALL_FILE_BYTES, chunkStream } from './repo/chunker.js';
 import { restorePathOf } from './repo/restore.js';
+import { pickReadBackNote } from '../trial-start/read-back.js';
 import type { TreeEntry } from './repo/format.js';
 import type { Repository } from './repo/repository.js';
 
@@ -237,10 +238,14 @@ export async function checkDatabases(target: string, tree: TreeEntry[]): Promise
   };
 }
 
-/** A note of the restored folder, read back whole as text. */
+/**
+ * A note of the restored folder, read back whole as text: the one the boot check reads through the
+ * server too (pickReadBackNote), else any Markdown file of the notes and artifacts folders.
+ */
 export async function readBackNote(target: string, tree: TreeEntry[]): Promise<{ path: string } | { error: string } | null> {
-  const notes = tree.map((e) => restorePathOf(e.p)).filter((p) => p.endsWith('.md') && /^(artifacts\/notes|notes|artifacts)\//.test(p)).sort();
-  const rel = notes.find((p) => p.startsWith('artifacts/notes/')) ?? notes[0];
+  const files = tree.map((e) => restorePathOf(e.p));
+  const notes = files.filter((p) => p.endsWith('.md') && /^(artifacts\/notes|notes|artifacts)\//.test(p)).sort();
+  const rel = pickReadBackNote(files)?.rel ?? notes.find((p) => p.startsWith('artifacts/notes/')) ?? notes[0];
   if (!rel) return null;
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(path.join(target, rel)));

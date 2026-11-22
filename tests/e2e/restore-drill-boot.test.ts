@@ -107,6 +107,8 @@ describe('a backup whose copy boots', () => {
     expect(boot.ok, JSON.stringify(boot, null, 2)).toBe(true)
     expect(r.ok, JSON.stringify(r.checks, null, 2)).toBe(true)
     expect(boot.detail).toContain(`read back task "${TITLE}" (${taskId}) and note notes/garden.md`)
+    // The read-back of the files names the same note the server read back.
+    expect(check(r, 'read-back').detail).toContain('note notes/garden.md')
     expect(boot.detail).toMatch(/every outward door closed/)
     expect(boot.detail).toMatch(/(\d+) of \1 databases pass integrity_check after its migrations/)
     // The config named the live home: pointed at the copy before the boot.
