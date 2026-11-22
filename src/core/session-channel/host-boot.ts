@@ -97,7 +97,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   const dir = path.join(stateDir, 'session-channel')
   const log = await FactLog.open({ dir, walnutId: o.walnutId, log: say })
   // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
-  const { allowOwnRowWrites } = await import('../session-db.js')
+  const { allowOwnRowWrites, noteOwnRowGone } = await import('../session-db.js')
   allowOwnRowWrites(o.hostKey)
   // The emitter is made just below; the leader's resync asks reach it once it is.
   let emitterRef: HostEmitter | null = null
@@ -121,8 +121,9 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   const port = createHostSessionPort({
     hostKey: o.hostKey, bundles, api: selfOwnApi,
     sessionOfTask: (taskId) => emitter.ownSessionOfTask(taskId),
-    onRename: (from, to) => emitter.noteRename(from, to),
-    onDrop: (sids) => emitter.noteDrop(sids),
+    // A row removed here is not taken back from the leader's copy before the leader applied it (session-db.ts noteOwnRowGone).
+    onRename: (from, to) => { noteOwnRowGone(from); emitter.noteRename(from, to) },
+    onDrop: (sids) => { for (const sid of sids) noteOwnRowGone(sid); emitter.noteDrop(sids) },
     log: say,
   })
   installSessionPort(port)

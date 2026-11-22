@@ -355,6 +355,31 @@ export function sessionIdentitiesInStore(): string[] {
  * commit through `PRAGMA data_version`. Off a host replica (tests) it uses the
  * shared handle.
  */
+/**
+ * Own rows this host removed lately (a rename's old id, a drop), sid -> when. The leader's copy
+ * may still name one as this host's until it applies the channel's record of it: such a row is
+ * never stored again (applySessionCopy). A seed the leader hands this host for a start (its row
+ * marked this host's before the host ever had it) is not among them and comes down as usual.
+ */
+const ownRowsGone = new Map<string, number>()
+const OWN_GONE_TTL_MS = 60 * 60_000
+const OWN_GONE_MAX = 5_000
+
+/** The host removed its own row `sid` (port onRename / onDrop, session-channel/host-boot.ts). */
+export function noteOwnRowGone(sid: string, now = Date.now()): void {
+  if (!sid) return
+  ownRowsGone.delete(sid)
+  if (ownRowsGone.size >= OWN_GONE_MAX) ownRowsGone.delete(ownRowsGone.keys().next().value!)
+  ownRowsGone.set(sid, now)
+}
+
+function ownRowGoneLately(sid: string, now = Date.now()): boolean {
+  const at = ownRowsGone.get(sid)
+  if (at === undefined) return false
+  if (now - at > OWN_GONE_TTL_MS) { ownRowsGone.delete(sid); return false }
+  return true
+}
+
 export function applySessionCopy(change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[]; ownHost?: string }): { keptOwn: number; skippedOwn: number } {
   const shared = getDb();
   if (!shared) throw new Error('session-db: applySessionCopy() called before database was successfully opened');
@@ -383,11 +408,10 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
     }
     for (const r of change.rows ?? []) {
       const mine = ownRow(r.claudeSessionId);
-      // A row the leader holds as this host's own that this host does not have (it renamed or
-      // dropped it, and the leader has not applied that yet): never stored here, or it would read
-      // as an own row and come back to the leader as a session born again. Own rows are born only
-      // through the own-row writer.
-      if (!mine && own && rowOwnedHere(r, own)) { skippedOwn++; continue; }
+      // A row the leader holds as this host's own that this host removed (it renamed or dropped
+      // it, and the leader has not applied that yet): never stored again, or it would read as an
+      // own row and come back to the leader as a session born again.
+      if (!mine && own && rowOwnedHere(r, own) && ownRowGoneLately(r.claudeSessionId)) { skippedOwn++; continue; }
       const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : r);
       const bound: Record<string, unknown> = {};
       for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
