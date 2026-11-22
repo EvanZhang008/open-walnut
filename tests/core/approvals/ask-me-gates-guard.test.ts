@@ -50,6 +50,7 @@ const GATES: Record<string, Gate> = {
   'src/integrations/calendar/service.ts': { asks: 2, kept: 'the same protected calendar write, refused at once' },
   // Not an ask: the source set reads a refusal as being about one event, not the source's health.
   'src/integrations/calendar/mail-calendars.ts': { asks: 1, kept: 'a calendar server Walnut found for a mail account: its password goes there, so only the person at the Mac approves it, and an agent is refused at once' },
+  'src/integrations/calendar/sign-in/routes.ts': { asks: 1, kept: 'the OAuth client a calendar sign-in uses (the app the consent page names): only the person at the Mac sets it, and an agent is refused at once' },
   'src/integrations/calendar/source-set.ts': { asks: 1, kept: 'the same protected calendar write: a refusal read as about one event, so it never marks the source down' },
   'src/core/calendar/sources/eventkit.ts': { asks: 2, kept: 'the same protected calendar write: the helper\'s confirmation dialog' },
 };

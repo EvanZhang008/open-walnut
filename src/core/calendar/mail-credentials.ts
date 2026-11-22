@@ -13,7 +13,10 @@
  * - the answer is that account's address, login name, server names and password, nothing
  *   else (no account list, no other secret);
  * - the calendar may write one thing back, the account's calendar server (`caldav_url`), and
- *   only when the person picked it in the account's row ("Use this server").
+ *   only when the person picked it in the account's row ("Use this server");
+ * - for an account that signs in for its calendar instead (a Gmail or Microsoft 365 account,
+ *   also on its own domain), `account(accountId)` answers the address and server names alone, no
+ *   password: which provider it is and that it is a real account.
  *
  * Who calls is read from the service registry (`currentServiceCaller`) on the first line of
  * each method, as that value is only set during the synchronous part of a call.
@@ -31,8 +34,13 @@ export interface MailCalendarCredentials {
   hosts: { imap?: string; smtp?: string; caldav?: string }
 }
 
+/** A mail account as the calendar may know it without its password. */
+export type MailCalendarAccount = Omit<MailCalendarCredentials, 'password' | 'username'>
+
 export interface MailCalendarCredentialProvider {
   credentials(accountId: string): Promise<MailCalendarCredentials | undefined>
+  /** The account's address and servers, no password; undefined when there is no such account. */
+  account?(accountId: string): Promise<MailCalendarAccount | undefined>
   /** Save the account's calendar server; false when there is no such account. */
   setCalendarServer?(accountId: string, url: string): Promise<boolean>
 }
@@ -42,6 +50,8 @@ export interface CoreMailCalendarCredentialsApi {
   provide(kind: string, provider: MailCalendarCredentialProvider): Disposable
   /** One account's credentials, for the calendar plugin only; undefined when there are none. */
   credentials(accountId: string): Promise<MailCalendarCredentials | undefined>
+  /** One account's address and servers (no password), for the calendar plugin only. */
+  account(accountId: string): Promise<MailCalendarAccount | undefined>
   /** Save one account's calendar server (https, or this machine), for the calendar plugin only. */
   setCalendarServer(accountId: string, url: string): Promise<boolean>
 }
@@ -88,6 +98,22 @@ export function createMailCalendarCredentials(): CoreMailCalendarCredentialsApi 
           ...(found.hosts.imap ? { imap: found.hosts.imap } : {}),
           ...(found.hosts.smtp ? { smtp: found.hosts.smtp } : {}),
           ...(found.hosts.caldav ? { caldav: found.hosts.caldav } : {}),
+        },
+      }
+    },
+    async account(accountId) {
+      const caller = currentServiceCaller()
+      if (caller !== READER) throw new Error('Only the calendar plugin may read mail accounts for calendars')
+      if (typeof accountId !== 'string') return undefined
+      const found = await providers.get(kindOf(accountId))?.account?.(accountId)
+      if (!found || found.accountId !== accountId) return undefined
+      // Only these fields cross.
+      return {
+        accountId: found.accountId,
+        address: found.address,
+        hosts: {
+          ...(found.hosts.imap ? { imap: found.hosts.imap } : {}),
+          ...(found.hosts.smtp ? { smtp: found.hosts.smtp } : {}),
         },
       }
     },

@@ -2,7 +2,8 @@
  * A mail account's calendar as a calendar source, read and written over CalDAV.
  *
  * The account's password is asked for on every use (the mail plugin's credential service
- * reads it from its own secret store) and never kept here. What is kept: where the calendars
+ * reads it from its own secret store) and never kept here. A Google account signed in for its
+ * calendar (sign-in/) is the same source with a sign-in (`bearer`) in place of the password. What is kept: where the calendars
  * are (found once, again after the server says a path is gone) and the calendar list (five
  * minutes, so Settings and the calendar views reading `/sources` do not each cost a request).
  *
@@ -25,8 +26,8 @@ import type {
   CalendarSourceStatus,
 } from '../types.js';
 import { ATTENDEES_READONLY_TEXT } from '../event-rules.js';
-import { davRequest, escapeXml, parseMultistatus, textOf, type DavAnswer, type DavCredentials, type DavRequest, type FetchLike } from './dav.js';
-import { discoverCalendars, listHome, type DiscoveredCalendar, type Discovery, type DiscoveryDeps, type MailAccountForCalendar } from './discovery.js';
+import { davRequest, escapeXml, parseMultistatus, textOf, type DavAnswer, type DavRequest, type FetchLike } from './dav.js';
+import { credsOf, discoverCalendars, listHome, type DiscoveredCalendar, type Discovery, type DiscoveryDeps, type MailAccountForCalendar } from './discovery.js';
 import { newEventCalendar, editTimes, removeOccurrence } from './edit.js';
 import { eventsOfResource, instanceOf, isRecurring, occurrenceOf, splitResource, type EpochRange, type ResourceContext } from './events.js';
 import { parseIcs, props, serializeIcs, type IcsComponent } from './ics.js';
@@ -71,10 +72,28 @@ export function createCalDavSource(options: CalDavSourceOptions): CalendarSource
   /** Set when the last read asked for more than `MAX_READ_DAYS`. */
   let clipped: string | undefined;
 
-  const dav = (acct: MailAccountForCalendar, req: DavRequest): Promise<DavAnswer> => {
-    const creds: DavCredentials = { username: acct.username || acct.address, password: acct.password };
-    return davRequest(creds, req, options.fetch, options.lookup);
+  /**
+   * A refused sign-in or password forgets where the calendars are, so the next calendar list asks
+   * the server again instead of answering from memory: an answer from memory would read as the
+   * account working again and clear the row's "sign in again".
+   */
+  const forgetOnRefusal = (err: unknown): never => {
+    if (err instanceof CalendarHelperError && (err.code === 'needs-sign-in' || err.code === 'auth-failed')) {
+      discovery = null;
+      listedAt = 0;
+    }
+    throw err;
   };
+
+  const dav = (acct: MailAccountForCalendar, req: DavRequest): Promise<DavAnswer> =>
+    davRequest(credsOf(acct), req, options.fetch, options.lookup).then((answer) => {
+      // A 403 on a write is one read-only calendar, not a refusal of the account.
+      if (answer.status === 401 || (answer.status === 403 && (req.method === 'PROPFIND' || req.method === 'REPORT'))) {
+        discovery = null;
+        listedAt = 0;
+      }
+      return answer;
+    }, forgetOnRefusal);
 
   const account = async (): Promise<MailAccountForCalendar> => {
     const found = await options.credentials();
@@ -116,7 +135,7 @@ export function createCalDavSource(options: CalDavSourceOptions): CalendarSource
             return { ...known, calendars: await listHome(acct, known.homeUrl, options) };
           } catch (err) {
             // The home moved or is gone: look for it again from the start.
-            if (err instanceof CalendarHelperError && err.code === 'auth-failed') throw err;
+            if (err instanceof CalendarHelperError && (err.code === 'auth-failed' || err.code === 'needs-sign-in')) throw err;
           }
         }
         return discoverCalendars(acct, options);

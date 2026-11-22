@@ -47,16 +47,36 @@ export function mailCalendarHelp(match: MailCalendarMatch): string {
 }
 
 /**
- * A mail account's calendar read from its own server (the `mail_calendars` experiment): the
- * line its row says. `status` is that calendar's source status from `GET /sources`.
+ * A mail account's calendar read from its own server, or from Google or Microsoft with its
+ * sign-in (the `mail_calendars` experiment): the line its row says. `status` is that calendar's
+ * source status from `GET /sources`; `provider` names where a signed-in one comes from.
  */
-export function mailServerCalendarHelp(status: { available: boolean; reason?: string; message?: string }, calendarCount: number): string {
+export function mailServerCalendarHelp(status: { available: boolean; reason?: string; message?: string }, calendarCount: number, provider?: 'Google' | 'Microsoft', keepsGrant = provider === 'Microsoft'): string {
+  const from = provider ?? 'its mail server'
   if (!status.available) {
-    if (status.reason === 'disabled') return 'Its calendar comes from its mail server; external calendars are off above.'
+    if (status.reason === 'disabled') return `Its calendar comes from ${from}; external calendars are off above.`
+    if (status.reason === 'needs-sign-in') return `${status.message ?? `The ${provider ?? 'provider'} sign-in for its calendar ended.`} Its events stay as they were read until then.`
     return `Its calendar is not read right now: ${status.message ?? 'its server did not answer.'}`
   }
-  if (calendarCount === 0) return 'Its calendar comes from its mail server.'
-  return `Its calendar comes from its mail server: ${calendarCount === 1 ? 'one calendar' : `${calendarCount} calendars`}, listed above under its address.`
+  // `keepsGrant`: Remove does not end the grant (Microsoft has no revoke; a Google one Drive backups share is left alone).
+  const signOut = !provider ? ''
+    : ` Remove its calendar also signs Walnut out of it on this computer${keepsGrant ? ` (Walnut stays in your ${provider} account's app list until you remove it there)` : ''}.`
+  if (calendarCount === 0) return `Its calendar comes from ${from}.${signOut}`
+  return `Its calendar comes from ${from}: ${calendarCount === 1 ? 'one calendar' : `${calendarCount} calendars`}, listed above under its address.${signOut}`
+}
+
+/** The line of a Gmail or Outlook row whose calendar is not read yet (it signs in instead of using a password). */
+export function signInRowHelp(provider: 'Google' | 'Microsoft', s: { clientReady: boolean; clientFrom?: string; signedIn: boolean; email?: string; clientSetupAt?: string }): string {
+  const need = provider === 'Google'
+    ? 'Gmail calendars need a Google sign-in; a mail password cannot read them.'
+    : 'Outlook and Microsoft 365 calendars need a Microsoft sign-in; a mail password cannot read them.'
+  if (s.signedIn) return `Signed in to ${provider}${s.email ? ` as ${s.email}` : ''}, but its calendar is not read yet. Add its calendar to try again.`
+  if (!s.clientReady) {
+    return s.clientSetupAt
+      ? `${need} First set up a ${provider} client on the row of ${s.clientSetupAt} above (once, for every ${provider} account).`
+      : `${need} First set up a ${provider} client below (once, about 5 minutes).`
+  }
+  return `${need} Sign in with ${provider} to read it here${s.clientFrom === 'drive' ? ', with the Google client your Drive backups use' : ''}.`
 }
 
 /** The line of a row that can still get its calendar from the mail server. */

@@ -2,8 +2,8 @@
  * In-process fake of Google's OAuth endpoints and the Drive v3 subset that
  * Walnut's Drive backup store uses, over node:http on 127.0.0.1.
  *
- * OAuth: /o/oauth2/v2/auth (optional consent page), /token (authorization_code
- * with PKCE S256 check, refresh_token), /revoke. Drive: files list/create/
+ * OAuth (fake-oauth.ts): /o/oauth2/v2/auth (optional consent page), /token
+ * (authorization_code with PKCE S256 check, refresh_token), /revoke. Drive: files list/create/
  * get/delete/about under /drive/v3, and multipart, resumable and media
  * uploads under /upload/drive/v3. Every Drive call needs a valid, unexpired
  * Bearer token. Errors use Google's JSON shape.
@@ -13,7 +13,8 @@
  */
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { createFakeOAuth } from './fake-oauth.js';
 
 export interface FakeDriveFile {
   id: string;
@@ -128,9 +129,11 @@ export async function startFakeGoogleDrive(
   } = {},
 ): Promise<FakeGoogleDrive> {
   const ttl = opts.accessTokenTtlSec ?? 3600;
-  const codes = new Map<string, { clientId: string; redirectUri: string; challenge: string; scope: string }>();
-  const refreshTokens = new Map<string, { clientId: string; scope: string }>();
-  const accessTokens = new Map<string, number>();
+  // Google's sign-in endpoints, shared with the calendar's fakes (fake-oauth.ts).
+  const oauth = createFakeOAuth({
+    ttlSec: ttl,
+    ...(opts.consentPage ? { consentPage: { title: 'Sign in with Google (test)', lines: ['See, edit, create, and delete only the specific Google Drive files you use with this app'] } } : {}),
+  });
   const files = new Map<string, StoredFile>();
   // `done` is the file a finished session wrote: Drive answers a repeated PUT with it.
   const sessions = new Map<string, { fileId?: string; metadata: Record<string, unknown>; done?: string }>();
@@ -142,11 +145,7 @@ export async function startFakeGoogleDrive(
   const now = () => new Date((clock = Math.max(clock + 1, Date.now()))).toISOString();
   let url = '';
 
-  const mintAccessToken = (ttlSec = ttl) => {
-    const t = `ya29.fake-${id()}`;
-    accessTokens.set(t, Date.now() + ttlSec * 1000);
-    return t;
-  };
+  const mintAccessToken = (ttlSec = ttl) => oauth.mintAccessToken(ttlSec);
 
   const json = (res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=UTF-8', ...headers });
@@ -155,10 +154,6 @@ export async function startFakeGoogleDrive(
   const driveError = (res: http.ServerResponse, status: number, reason: string, message = REASON_MESSAGES[reason] ?? reason,
     headers: Record<string, string> = {}) =>
     json(res, status, { error: { code: status, message, errors: [{ domain: 'global', reason, message }] } }, headers);
-  const html = (res: http.ServerResponse, status: number, body: string) => {
-    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(body);
-  };
   const resource = (f: StoredFile) => ({
     kind: 'drive#file', id: f.id, name: f.name, mimeType: f.mimeType, parents: f.parents,
     createdTime: f.createdTime, modifiedTime: f.modifiedTime,
@@ -192,75 +187,6 @@ export async function startFakeGoogleDrive(
     json(res, 200, resource(f));
   };
 
-  const oauth = async (req: http.IncomingMessage, res: http.ServerResponse, u: URL): Promise<boolean> => {
-    if (req.method === 'GET' && u.pathname === '/o/oauth2/v2/auth') {
-      const p = u.searchParams;
-      const redirectUri = p.get('redirect_uri') ?? '';
-      if (!p.get('client_id') || !redirectUri || p.get('response_type') !== 'code' || !p.get('state')
-        || !p.get('code_challenge') || p.get('code_challenge_method') !== 'S256') {
-        html(res, 400, '<h1>400. That is an error.</h1><p>Error 400: invalid_request</p>');
-        return true;
-      }
-      const code = `4/fake-${id()}`;
-      codes.set(code, { clientId: p.get('client_id')!, redirectUri, challenge: p.get('code_challenge')!, scope: p.get('scope') ?? '' });
-      const back = (params: Record<string, string>) => {
-        const r = new URL(redirectUri);
-        for (const [k, v] of Object.entries(params)) r.searchParams.set(k, v);
-        return r.toString();
-      };
-      const allow = back({ state: p.get('state')!, code, scope: p.get('scope') ?? '' });
-      if (!opts.consentPage) {
-        res.writeHead(302, { Location: allow });
-        res.end();
-        return true;
-      }
-      const deny = back({ state: p.get('state')!, error: 'access_denied' });
-      const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-      html(res, 200, `<!doctype html><html><head><meta charset="utf-8"><title>Sign in with Google (test)</title>
-<style>body{font:15px/1.5 system-ui,sans-serif;background:#f1f3f4;margin:0}main{background:#fff;max-width:28rem;margin:4rem auto;padding:2rem;border:1px solid #dadce0;border-radius:8px}
-h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5rem;border-radius:4px;text-decoration:none;margin-right:.5rem}
-.allow{background:#1a73e8;color:#fff}.cancel{color:#1a73e8}</style></head><body><main>
-<h1>Sign in with Google (test)</h1><p><strong>Walnut</strong> wants access to your Google Account</p>
-<ul><li>See, edit, create, and delete only the specific Google Drive files you use with this app</li></ul>
-<p><a class="btn cancel" id="cancel" href="${attr(deny)}">Cancel</a><a class="btn allow" id="allow" href="${attr(allow)}">Allow</a></p>
-</main></body></html>`);
-      return true;
-    }
-    if (req.method === 'POST' && (u.pathname === '/token' || u.pathname === '/revoke')) {
-      const form = new URLSearchParams((await readBody(req)).toString('utf-8'));
-      if (u.pathname === '/revoke') {
-        const t = form.get('token') ?? '';
-        if (!refreshTokens.delete(t) && !accessTokens.delete(t)) return json(res, 400, { error: 'invalid_token', error_description: 'Token expired or revoked' }), true;
-        json(res, 200, {});
-        return true;
-      }
-      const bad = (desc: string) => json(res, 400, { error: 'invalid_grant', error_description: desc });
-      const grant = form.get('grant_type');
-      if (grant === 'authorization_code') {
-        const c = codes.get(form.get('code') ?? '');
-        codes.delete(form.get('code') ?? '');
-        if (!c) return bad('Malformed auth code.'), true;
-        if (c.clientId !== form.get('client_id')) return json(res, 401, { error: 'invalid_client', error_description: 'Unauthorized' }), true;
-        if (c.redirectUri !== form.get('redirect_uri')) return json(res, 400, { error: 'redirect_uri_mismatch', error_description: 'Bad Request' }), true;
-        const verifier = form.get('code_verifier') ?? '';
-        if (createHash('sha256').update(verifier).digest('base64url') !== c.challenge) return bad('Invalid code verifier.'), true;
-        const rt = `1//fake-${id()}`;
-        refreshTokens.set(rt, { clientId: c.clientId, scope: c.scope });
-        json(res, 200, { access_token: mintAccessToken(), expires_in: ttl, refresh_token: rt, scope: c.scope, token_type: 'Bearer' });
-        return true;
-      }
-      if (grant === 'refresh_token') {
-        const r = refreshTokens.get(form.get('refresh_token') ?? '');
-        if (!r) return bad('Token has been expired or revoked.'), true;
-        json(res, 200, { access_token: mintAccessToken(), expires_in: ttl, scope: r.scope, token_type: 'Bearer' });
-        return true;
-      }
-      json(res, 400, { error: 'unsupported_grant_type', error_description: `Invalid grant_type: ${grant}` });
-      return true;
-    }
-    return false;
-  };
-
   const drive = async (req: http.IncomingMessage, res: http.ServerResponse, u: URL): Promise<void> => {
     const line = `${req.method} ${u.pathname}${u.search}`;
     const at = failures.findIndex((f) => !f.match || f.match.test(line));
@@ -268,9 +194,7 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
       const [fail] = failures.splice(at, 1);
       return driveError(res, fail.status, fail.reason, undefined, fail.retryAfter ? { 'Retry-After': fail.retryAfter } : {});
     }
-    const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-    const exp = token ? accessTokens.get(token) : undefined;
-    if (!exp || exp <= Date.now()) {
+    if (!oauth.validBearer(req.headers.authorization)) {
       return json(res, 401, { error: { code: 401, message: 'Request had invalid authentication credentials.', errors: [{ reason: 'authError', message: 'Invalid Credentials' }], status: 'UNAUTHENTICATED' } });
     }
     const m = req.method ?? 'GET';
@@ -365,7 +289,7 @@ h1{font-size:1.4rem;font-weight:400}a.btn{display:inline-block;padding:.5rem 1.5
     const u = new URL(req.url ?? '/', 'http://127.0.0.1');
     requests.push(`${req.method} ${u.pathname}${u.search}`);
     void (async () => {
-      if (await oauth(req, res, u)) return;
+      if (await oauth.handle(req, res, u)) return;
       if (u.pathname.startsWith('/drive/') || u.pathname.startsWith('/upload/')) return drive(req, res, u);
       res.writeHead(404);
       res.end();

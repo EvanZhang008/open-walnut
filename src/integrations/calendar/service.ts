@@ -341,12 +341,6 @@ export class CalendarService {
     if (!events.some((e) => e.id === id)) throw new CalendarHelperError(`event not found: ${id}`, 'not-found');
   }
 
-  /** One window from every usable source, merged; throws only when every source failed. */
-  private async readWindow(from: string, to: string): Promise<CalendarEvent[]> {
-    const { items } = await this.sources.readAll(this.sources.usable(), (m) => m.source.listEvents(from, to), { key: `${from}|${to}` });
-    return items;
-  }
-
   /** Fetch + cache one month window, collapsing concurrent callers onto a single
    *  helper invocation. Announces an update when the window really changed. */
   private async fetchWindow(key: string, from: string, to: string): Promise<CalendarEvent[]> {
@@ -360,7 +354,11 @@ export class CalendarService {
       let settled = false;
       for (let attempt = 0; attempt < 3 && !settled; attempt++) {
         const gen = this.writeGen;
-        events = await this.readWindow(window.from, window.to);
+        // Every usable source at once; throws only when every one failed.
+        const read = await this.sources.readAll(this.sources.usable(), (m) => m.source.listEvents(window.from, window.to), { key: `${window.from}|${window.to}` });
+        // As in refreshAll: a source that failed this time keeps the events it gave before (its status says why).
+        const kept = read.failed.length ? (before?.events ?? []).filter((e) => read.failed.includes(e.source)) : [];
+        events = kept.length ? [...read.items, ...kept] : read.items;
         settled = gen === this.writeGen;
       }
       if (!settled) return events; // writes keep coming: answer, but cache nothing that may be old

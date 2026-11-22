@@ -49,8 +49,8 @@ export interface CalendarEvent {
 
 export interface CalendarSourceStatus {
   id: CalendarSourceId;
-  /** Set for a mail account's calendar. */
-  kind?: 'caldav';
+  /** Set for a mail account's calendar: its CalDAV server (Google's too), or Microsoft Graph. */
+  kind?: 'caldav' | 'graph';
   /** The mail account it comes with (`imap:<id>`). */
   account?: string;
   /** The account's address. */
@@ -154,4 +154,76 @@ export function addMailCalendar(accountId: string, address: string, server?: str
 /** Stop reading a mail account's calendar (the calendar itself is untouched). */
 export function removeMailCalendar(accountId: string) {
   return apiDelete<{ removed: boolean; sources: CalendarSourceStatus[] }>(`/api/calendar/mail-accounts/${encodeURIComponent(accountId)}/calendar`);
+}
+
+// ── A Gmail or Outlook account's calendar by sign-in (sign-in/routes.ts) ──
+
+export type SignInProviderName = 'Google' | 'Microsoft';
+
+export interface SignInClientView {
+  ready: boolean;
+  /** `calendar`: set on this page; `drive`: Drive backups' Google client; `builtin`: Walnut's own (or the environment's). */
+  from?: 'calendar' | 'drive' | 'builtin';
+  clientId?: string;
+}
+
+export interface CalendarSignInStatus {
+  /** The `mail_calendars` experiment is off. */
+  off?: boolean;
+  provider: SignInProviderName | null;
+  client?: SignInClientView;
+  signedIn?: boolean;
+  /** Who signed in. */
+  email?: string;
+  /** Remove leaves Walnut in the account's app list (a Google grant Drive backups share, or any Microsoft one). */
+  keepsGrant?: boolean;
+  pending?: boolean;
+  /** The provider's page of the sign-in under way. */
+  authUrl?: string;
+  /** How the last sign-in ended; `signedIn` when only reading the calendar failed. */
+  outcome?: { ok: true; email?: string } | { ok: false; message: string; signedIn: boolean; cancelled?: boolean; held?: { email: string } };
+}
+
+const signInPath = (accountId: string) => `/api/calendar/mail-accounts/${encodeURIComponent(accountId)}/sign-in`;
+
+export function getCalendarSignIn(accountId: string, address: string) {
+  return apiGet<CalendarSignInStatus>(`${signInPath(accountId)}?address=${encodeURIComponent(address)}`);
+}
+
+/** Open a sign-in; the browser goes to `authUrl`. `no-client`: the provider needs a client first. */
+export function startCalendarSignIn(accountId: string, address: string) {
+  return apiPost<{ ok: true; authUrl: string } | { ok: false; reason: string; message: string }>(signInPath(accountId), { address });
+}
+
+/** The browser was on another device: the address it landed on finishes the sign-in. */
+export function completeCalendarSignIn(accountId: string, url: string) {
+  return apiPost<{ ok: true } | { ok: false; message: string; held?: { email: string } }>(`${signInPath(accountId)}/complete`, { url }, { timeoutMs: 60_000, quietStatuses: [400] });
+}
+
+/** A sign-in as another account than the row's: `use` keeps it and reads its calendar, else it is discarded. */
+export function decideCalendarSignIn(accountId: string, use: boolean) {
+  return apiPost<{ ok: true } | { ok: false; message: string }>(`${signInPath(accountId)}/decide`, { use }, { timeoutMs: 60_000, quietStatuses: [400] });
+}
+
+export function cancelCalendarSignIn(accountId: string) {
+  return apiPost<{ ok: boolean }>(`${signInPath(accountId)}/cancel`, {});
+}
+
+/** Set the client a provider's sign-in uses; it is checked with the provider before it is kept. */
+export function saveSignInClient(provider: SignInProviderName, clientId: string, clientSecret?: string) {
+  return apiPost<{ ok: true; client: SignInClientView } | { ok: false; message: string }>(
+    `/api/calendar/sign-in-clients/${provider}`,
+    { client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}) },
+    { timeoutMs: 45_000, quietStatuses: [400] },
+  );
+}
+
+/**
+ * Which of these mail accounts sign in for their calendar, and with whom: told by their address
+ * and their mail servers (a Google Workspace or Microsoft 365 account on its own domain too).
+ */
+export function getSignInProviders(accountIds: string[]) {
+  return apiGet<{ off?: boolean; providers: Record<string, SignInProviderName> }>(
+    `/api/calendar/mail-accounts/sign-in-providers?ids=${accountIds.map(encodeURIComponent).join(',')}`,
+  );
 }

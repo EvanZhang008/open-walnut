@@ -7,7 +7,9 @@
  *   2. a known provider: iCloud, Fastmail and Yahoo (by the address's domain or the IMAP host);
  *   3. RFC 6764: https://<domain>/.well-known/caldav, then the `_caldavs._tcp.<domain>` SRV record.
  * Google and Microsoft accept only their own sign-in (OAuth) for calendars, never a mail
- * password, so their accounts are reported as needing one and the password is never tried.
+ * password, so their accounts are reported as needing one and the password is never tried. A
+ * Google account signed in that way (sign-in/) comes here with its `bearer` and Google's CalDAV
+ * address as its `caldav_url`, and is found like any other.
  *
  * The password goes only where the account itself points (RFC 6764 section 8): its `caldav_url`
  * (typed in its settings, or a found server the person picked) or a known provider. Every other
@@ -34,6 +36,7 @@ import {
   hrefIn,
   parseMultistatus,
   textOf,
+  type DavBearer,
   type DavCredentials,
   type DavResponse,
   type FetchLike,
@@ -51,6 +54,8 @@ export interface MailAccountForCalendar {
   username?: string;
   password: string;
   hosts: { imap?: string; smtp?: string; caldav?: string };
+  /** A provider's sign-in instead of the password (a Google account signed in for calendars). */
+  bearer?: DavBearer;
 }
 
 export interface DiscoveredCalendar {
@@ -151,11 +156,21 @@ class Budget {
   }
 }
 
-function credsOf(account: MailAccountForCalendar): DavCredentials {
-  return { username: account.username || account.address, password: account.password };
+/** What a request for this account carries: its sign-in, else its saved password. */
+export function credsOf(account: MailAccountForCalendar): DavCredentials {
+  return account.bearer ?? { username: account.username || account.address, password: account.password };
 }
 
-function failStatus(status: number, host: string): CalendarHelperError {
+/** The server's own words, short (Google says which API is not enabled). */
+function serverWords(text: string): string {
+  const plain = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return plain ? `: ${plain.slice(0, 200)}` : '';
+}
+
+function failStatus(status: number, host: string, account: MailAccountForCalendar, text = ''): CalendarHelperError {
+  if (account.bearer && status === 403) {
+    return new CalendarHelperError(`${host} refused Walnut's calendar request (403)${serverWords(text)}. If it names an API that is not enabled, enable it for your ${account.bearer.provider} client and try again.`, 'auth-failed');
+  }
   if (status === 401 || status === 403) {
     return new CalendarHelperError(`${host} refused the saved mail password for calendars. Some providers want an app password made for calendars; set one on the mail account and try again.`, 'auth-failed');
   }
@@ -185,7 +200,7 @@ function colorOf(r: DavResponse): string | undefined {
 /** The calendars at a calendar home (PROPFIND depth 1). */
 export async function listHome(account: MailAccountForCalendar, homeUrl: string, deps: DiscoveryDeps = {}, timeoutMs = DAV_TIMEOUT_MS): Promise<DiscoveredCalendar[]> {
   const answer = await davRequest(credsOf(account), { method: 'PROPFIND', url: homeUrl, depth: '1', body: LIST_BODY, timeoutMs }, deps.fetch, deps.lookup);
-  if (answer.status !== 207) throw failStatus(answer.status, new URL(answer.url).host);
+  if (answer.status !== 207) throw failStatus(answer.status, new URL(answer.url).host, account, answer.text);
   const homePath = new URL(answer.url).pathname.replace(/\/?$/, '/');
   return parseMultistatus(answer.text)
     .filter((r) => isCalendar(r) && new URL(r.href, answer.url).pathname.replace(/\/?$/, '/') !== homePath)
@@ -215,7 +230,7 @@ async function homeFrom(account: MailAccountForCalendar, start: string, budget: 
   const creds = credsOf(account);
   const first = await davRequest(creds, { method: 'PROPFIND', url: start, depth: '0', body: PRINCIPAL_BODY, timeoutMs: budget.timeout() }, deps.fetch, deps.lookup);
   if ([404, 405, 501].includes(first.status)) return null;
-  if (first.status !== 207) throw failStatus(first.status, new URL(first.url).host);
+  if (first.status !== 207) throw failStatus(first.status, new URL(first.url).host, account, first.text);
   const answer = parseMultistatus(first.text)[0];
   const home = hrefIn(answer?.props.get('calendar-home-set'));
   if (home) return onSameSite(home, first.url);
@@ -223,7 +238,7 @@ async function homeFrom(account: MailAccountForCalendar, start: string, budget: 
   if (!principal) return null;
   const principalUrl = onSameSite(principal, first.url);
   const second = await davRequest(creds, { method: 'PROPFIND', url: principalUrl, depth: '0', body: HOME_BODY, timeoutMs: budget.timeout() }, deps.fetch, deps.lookup);
-  if (second.status !== 207) throw failStatus(second.status, new URL(second.url).host);
+  if (second.status !== 207) throw failStatus(second.status, new URL(second.url).host, account, second.text);
   const found = hrefIn(parseMultistatus(second.text)[0]?.props.get('calendar-home-set'));
   return found ? onSameSite(found, second.url) : null;
 }
@@ -251,7 +266,7 @@ async function probe(start: string, budget: Budget, deps: DiscoveryDeps): Promis
  */
 export async function discoverCalendars(account: MailAccountForCalendar, deps: DiscoveryDeps = {}): Promise<Discovery> {
   const provider = signInProvider(account);
-  if (provider) {
+  if (provider && !account.bearer) {
     throw new CalendarHelperError(signInNeededText(provider), 'needs-sign-in');
   }
   const budget = new Budget(DISCOVERY_BUDGET_MS);

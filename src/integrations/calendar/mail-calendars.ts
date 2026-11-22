@@ -16,6 +16,11 @@
  * any other `server` is refused (409) and nothing is sent, so no caller can point a saved
  * password at a host of its choosing. A `caldav_url` typed in the IMAP account's own settings is
  * another matter: that form asks for the password again.
+ *
+ * A Google or Microsoft account cannot be read with its mail password; it signs in instead
+ * (sign-in/), and once signed in its calendar is added here the same way (`readSignedInCalendar`).
+ * Its source is the signed-in one (sign-in/sources.ts). "Remove its calendar" forgets the
+ * sign-in too.
  */
 import { CalendarHelperError } from '../../core/calendar/helper-error.js';
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js';
@@ -24,6 +29,9 @@ import type { CoreMailCalendarCredentialsApi } from '../../core/calendar/mail-cr
 import { calendarErrorCode } from './api.js';
 import { fromPersonHere } from './routes.js';
 import { createCalDavSource } from './caldav/source.js';
+import { signedInCalendarSource } from './sign-in/sources.js';
+import type { CalendarSignInStore } from './sign-in/store.js';
+import { clearCalendarSignInState } from './sign-in/flow.js';
 import { signInNeededText, signInProvider } from './sign-in-provider.js';
 import { mailCalendarsOn, readCalendarConfig, readExperimentalFlags, type CalendarConfigPatcher } from './config.js';
 import { caldavSourceIdFor, calendarSourceOf } from './event-rules.js';
@@ -32,9 +40,13 @@ import type { CalendarInfo, CalendarSourceReason, CalendarSourceStatus } from '.
 
 const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._-]{1,128}$/;
 
-/** The factory activate installs: one CalDAV source per mail account, its password asked of the host's broker. */
-export function mailCalendarSourceFactory(broker: CoreMailCalendarCredentialsApi): MailCalendarSourceFactory {
-  return (accountId) => createCalDavSource({ accountId, credentials: () => broker.credentials(accountId) });
+/**
+ * The factory activate installs: per mail account, its signed-in source when it signed in with
+ * its provider, else a CalDAV source whose password is asked of the host's broker.
+ */
+export function mailCalendarSourceFactory(broker: CoreMailCalendarCredentialsApi | undefined, signIns?: CalendarSignInStore): MailCalendarSourceFactory {
+  return (accountId) => (signIns && signedInCalendarSource(signIns, accountId))
+    ?? createCalDavSource({ accountId, credentials: async () => broker?.credentials(accountId) });
 }
 
 export type AddMailCalendarResult =
@@ -118,6 +130,22 @@ export function addMailCalendar(
   });
 }
 
+/**
+ * A sign-in just saved: add the account's calendar, or, when it is read already (a sign-in that
+ * had expired), read it again so its row stops saying to sign in.
+ */
+export async function readSignedInCalendar(service: CalendarService, accountId: string, patchConfig: CalendarConfigPatcher, address: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const current = (await readCalendarConfig()).mail_calendar_accounts ?? [];
+  if (!current.includes(accountId)) {
+    const added = await addMailCalendar(service, accountId, patchConfig, { address });
+    return added.ok ? { ok: true } : { ok: false, message: added.message };
+  }
+  await service.listCalendarsDetailed().catch(() => undefined);
+  await service.refreshAll().catch(() => undefined);
+  const status = service.statuses().find((s) => s.id === caldavSourceIdFor(accountId));
+  return !status || status.available ? { ok: true } : { ok: false, message: status.message ?? 'Its calendar did not answer.' };
+}
+
 /** Stop reading the account's calendar. Its events leave every view; the calendar itself is untouched. */
 export function removeMailCalendar(service: CalendarService, accountId: string, patchConfig: CalendarConfigPatcher): Promise<{ removed: boolean }> {
   return serial(async () => {
@@ -140,7 +168,7 @@ function accountIdFrom(request: PluginRouteRequest): string {
   }
 }
 
-export function registerMailCalendarRoutes(walnut: WalnutServerPluginApi, resolve: () => CalendarService, broker?: CoreMailCalendarCredentialsApi): void {
+export function registerMailCalendarRoutes(walnut: WalnutServerPluginApi, resolve: () => CalendarService, broker?: CoreMailCalendarCredentialsApi, signIns?: CalendarSignInStore): void {
   const patch: CalendarConfigPatcher = (next) => walnut.config.patch(next);
   const saveServer: SaveCalendarServer | undefined = broker ? (accountId, url) => broker.setCalendarServer(accountId, url) : undefined;
 
@@ -170,7 +198,13 @@ export function registerMailCalendarRoutes(walnut: WalnutServerPluginApi, resolv
   walnut.http.route('delete', '/mail-accounts/:accountId/calendar', async (request) => {
     try {
       const service = resolve();
-      const result = await removeMailCalendar(service, accountIdFrom(request), patch);
+      const accountId = accountIdFrom(request);
+      const result = await removeMailCalendar(service, accountId, patch);
+      // Its sign-in goes with it (the provider is told when it can be): adding it again signs in again.
+      if (signIns && ACCOUNT_ID_RE.test(accountId)) {
+        clearCalendarSignInState(accountId);
+        await signIns.forget(accountId).catch((err: unknown) => walnut.log.warn('forgetting a calendar sign-in failed', { error: String(err).slice(0, 200) }));
+      }
       return { json: { ...result, sources: service.statuses() } };
     } catch (err) {
       return { status: 503, json: { error: err instanceof Error ? err.message : String(err) } };

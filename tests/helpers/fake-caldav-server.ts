@@ -11,7 +11,8 @@
  *     is the client's work here);
  *   - GET, PUT (If-Match / If-None-Match: *) and DELETE (If-Match) with real ETags; a stale
  *     ETag is 412, a write to a read-only calendar 403;
- *   - Basic auth on every request (401 otherwise).
+ *   - Basic auth on every request (401 otherwise), or, with `bearer`, a provider's access token
+ *     (Google's CalDAV takes only that).
  *
  * `beforeWrite` lets a test change a resource between the client's read and its write, which
  * is how a 412 conflict is produced on purpose.
@@ -32,6 +33,8 @@ export interface FakeCalDavOptions {
   calendars: FakeCalendar[];
   /** path → ics text */
   resources?: Record<string, string>;
+  /** Accept a Bearer token instead of Basic auth: whether this Authorization header is a valid one. */
+  bearer?: (authorization: string | undefined) => boolean;
 }
 
 export interface FakeCalDavServer {
@@ -103,7 +106,8 @@ export async function startFakeCalDav(options: FakeCalDavOptions): Promise<FakeC
       if (state.failWith) return send(state.failWith, 'down');
       if (state.failPath && path.startsWith(state.failPath.prefix)) return send(state.failPath.status, 'broken');
       if (path === '/.well-known/caldav') return send(301, '', { Location: '/dav/' });
-      if (req.headers.authorization !== expected) return send(401, 'no', { 'WWW-Authenticate': 'Basic realm="fake"' });
+      const authorized = options.bearer ? options.bearer(req.headers.authorization) : req.headers.authorization === expected;
+      if (!authorized) return send(401, 'no', { 'WWW-Authenticate': options.bearer ? 'Bearer realm="fake"' : 'Basic realm="fake"' });
       const method = req.method ?? '';
 
       if (method === 'PROPFIND' && (path === '/dav/' || path === '/dav')) {

@@ -23,8 +23,13 @@ import {
   type CalendarService,
 } from './service.js'
 import { createCalendarTools } from './tools.js'
-import { mailCalendarSourceFactory, registerMailCalendarRoutes } from './mail-calendars.js'
+import { mailCalendarSourceFactory, readSignedInCalendar, registerMailCalendarRoutes } from './mail-calendars.js'
 import type { CoreMailCalendarCredentialsApi } from '../../core/calendar/mail-credentials.js'
+import { WALNUT_HOME } from '../../constants.js'
+import { CalendarSignInStore } from './sign-in/store.js'
+import { calendarGrantMayGo, resolveCalendarClient, type ClientSecrets } from './sign-in/providers.js'
+import { registerSignInRoutes } from './sign-in/routes.js'
+import type { SignInDeps } from './sign-in/flow.js'
 
 /**
  * The Permission Doctor's grant event (payload: `PermissionGrantedEvent`, declared in
@@ -70,7 +75,20 @@ export async function activate(walnut: WalnutServerPluginApi): Promise<Disposabl
   // from the host's broker, which hands it to this plugin only. Lazy, so a Walnut without the
   // broker just has no such calendars.
   const mailCredentials = walnut.services.get<CoreMailCalendarCredentialsApi>('core:mail-calendar-credentials')
-  service.setMailCalendarSourceFactory(mailCalendarSourceFactory(mailCredentials))
+  // A Google or Microsoft account signs in instead (sign-in/): its tokens are files of this
+  // machine, its OAuth client in this plugin's secret store.
+  const secrets: ClientSecrets = walnut.secrets
+  const resolveClient = (provider: Parameters<typeof resolveCalendarClient>[0]) => resolveCalendarClient(provider, secrets, WALNUT_HOME)
+  const signIns = new CalendarSignInStore(WALNUT_HOME, async (provider) => (await resolveClient(provider))?.client ?? null, {
+    mayRevoke: (t, file) => calendarGrantMayGo(t, file, WALNUT_HOME),
+  })
+  await signIns.load().catch((err: unknown) => walnut.log.warn('reading calendar sign-ins failed', { error: String(err).slice(0, 200) }))
+  service.setMailCalendarSourceFactory(mailCalendarSourceFactory(mailCredentials, signIns))
+  const signInDeps: SignInDeps = {
+    store: signIns,
+    client: resolveClient,
+    afterSignIn: (accountId, address) => readSignedInCalendar(getCalendarService(), accountId, (patch) => walnut.config.patch(patch), address),
+  }
 
   for (const tool of createCalendarTools(getCalendarService, (patch) => walnut.config.patch(patch))) {
     walnut.registry.tool({
@@ -101,7 +119,8 @@ export async function activate(walnut: WalnutServerPluginApi): Promise<Disposabl
   // Resolved per request, not captured: the route tests swap the service instance between
   // requests while the server stays up.
   registerCalendarRoutes(walnut, getCalendarService)
-  registerMailCalendarRoutes(walnut, getCalendarService, mailCredentials)
+  registerMailCalendarRoutes(walnut, getCalendarService, mailCredentials, signIns)
+  registerSignInRoutes(walnut, signInDeps, secrets, (accountId) => mailCredentials.account(accountId))
 
   // The experiment switched in Settings takes effect at once: mail accounts' calendars come
   // or go without a restart. Only a switch of `mail_calendars` reloads anything.

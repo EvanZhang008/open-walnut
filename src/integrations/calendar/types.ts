@@ -97,9 +97,12 @@ export type CalendarSourceReason =
 
 export interface CalendarSourceStatus {
   id: CalendarSourceId;
-  /** Set for a mail account's calendar; absent for the Mac's calendars (older clients read only `eventkit`). */
-  kind?: 'caldav';
-  /** The mail account this calendar comes with (`imap:<id>`), for a CalDAV source. */
+  /**
+   * Set for a mail account's calendar: `caldav` (its server, or Google's with its sign-in) or
+   * `graph` (Microsoft's, through Graph); absent for the Mac's calendars (older clients read only `eventkit`).
+   */
+  kind?: 'caldav' | 'graph';
+  /** The mail account this calendar comes with (`imap:<id>`), for a mail account's source. */
   account?: string;
   /** What the user knows the source by (the account's address), for a CalDAV source. */
   label?: string;
@@ -132,7 +135,7 @@ export interface CalendarEventCreate {
 /** A create as callers hand it to CalendarService: no calendar id means the configured default. */
 export type CalendarEventCreateInput = Omit<CalendarEventCreate, 'calendarId'> & { calendarId?: string };
 
-/** A pluggable event source: EventKit, and a CalDAV source per mail account that brings its calendar. */
+/** A pluggable event source: EventKit, and one per mail account that brings its calendar (CalDAV, or Graph for Microsoft). */
 export interface CalendarSource {
   id: CalendarSourceId;
   /** Extra status fields a non-EventKit source reports about itself (kind, account, label). */

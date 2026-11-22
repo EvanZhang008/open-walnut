@@ -43,6 +43,11 @@ function provideCalendarCredentials(walnut: WalnutServerPluginApi, store: ImapAc
           },
         }
       },
+      async account(accountId) {
+        const entry = await store.entry(accountId)
+        if (!entry) return undefined
+        return { accountId: entry.accountId, address: entry.settings.address, hosts: { imap: entry.settings.host, ...(entry.smtp ? { smtp: entry.smtp.host } : {}) } }
+      },
       setCalendarServer: (accountId, url) => store.setCalendarServer(accountId, url),
     })
   } catch (error: unknown) {

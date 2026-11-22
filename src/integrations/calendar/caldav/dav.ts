@@ -15,6 +15,13 @@
  * A request without credentials (a probe of a guessed host) may follow a redirect to another
  * site, as nothing secret rides on it.
  *
+ * A provider's sign-in (Google, Microsoft: `DavBearer`) is an access token instead of a password,
+ * and stricter: it goes only to the hosts the provider named (`hosts`), never to another host of
+ * the same domain, and a redirect anywhere else stops (there is no other server to pick). A 401
+ * renews the token once and asks again; a second 401 means the sign-in itself is no good any
+ * more (`needs-sign-in`). The same request also carries Microsoft Graph's JSON calls
+ * (graph/source.ts), so the calendar has one HTTP client for every server it reads.
+ *
  * Hrefs are kept as the server wrote them (percent-encoded) and only resolved against a base.
  *
  * XML is read with htmlparser2's streaming parser (already a dependency) into a small tree.
@@ -30,10 +37,28 @@ const MAX_REDIRECTS = 5;
 /** No calendar answer Walnut reads is near this; a bigger one is refused, not buffered. */
 export const MAX_ANSWER_BYTES = 10 * 1024 * 1024;
 
-export interface DavCredentials { username: string; password: string }
+export interface DavPassword { username: string; password: string }
+
+/** A provider's sign-in: its access token, renewed on demand, for its own hosts only. */
+export interface DavBearer {
+  /** Whose sign-in it is ("Google"), for the messages. */
+  provider: string;
+  /** The access token (cached by its getter). */
+  token: () => Promise<string>;
+  /** A fresh access token, after a server refused the one it had. */
+  renew: () => Promise<string>;
+  /** `host` (with its port, when it has one) of every server the token may go to. */
+  hosts: readonly string[];
+}
+
+export type DavCredentials = DavPassword | DavBearer;
+
+export function isBearer(creds: DavCredentials | null): creds is DavBearer {
+  return !!creds && 'token' in creds;
+}
 
 export interface DavRequest {
-  method: 'PROPFIND' | 'REPORT' | 'GET' | 'PUT' | 'DELETE';
+  method: 'PROPFIND' | 'REPORT' | 'GET' | 'PUT' | 'DELETE' | 'POST' | 'PATCH';
   url: string;
   depth?: '0' | '1';
   body?: string;
@@ -58,7 +83,7 @@ export function mayCarryPassword(url: URL): boolean {
   return url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHost(url.hostname));
 }
 
-function basic(c: DavCredentials): string {
+function basic(c: DavPassword): string {
   return `Basic ${Buffer.from(`${c.username}:${c.password}`, 'utf8').toString('base64')}`;
 }
 
@@ -144,19 +169,37 @@ export function joinSplitCharacters(bytes: Uint8Array): Uint8Array {
   return out.subarray(0, n);
 }
 
+/** Where a sign-in may not go: a host its provider did not name. */
+function bearerRefused(creds: DavBearer, url: URL): CalendarHelperError {
+  return new CalendarHelperError(`Walnut sends its ${creds.provider} sign-in only to ${creds.hosts.join(', ')}; ${url.host} is not one of them.`, 'fetch-error');
+}
+
 /**
  * One request, redirects followed, within its deadline. Network failures become `fetch-error`.
  * `creds` null sends no password at all (a probe of a host the account never named).
  */
 export async function davRequest(creds: DavCredentials | null, req: DavRequest, fetchImpl: FetchLike = fetch, lookup?: LookupAll): Promise<DavAnswer> {
+  if (!isBearer(creds)) return davRequestOnce(creds, null, req, fetchImpl, lookup);
+  const first = await davRequestOnce(creds, await creds.token(), req, fetchImpl, lookup);
+  if (first.status !== 401) return first;
+  // The token may simply have expired early: renew it once and ask again.
+  const again = await davRequestOnce(creds, await creds.renew(), req, fetchImpl, lookup);
+  if (again.status === 401) {
+    throw new CalendarHelperError(`${creds.provider} no longer accepts Walnut's sign-in for this calendar. Sign in again.`, 'needs-sign-in');
+  }
+  return again;
+}
+
+async function davRequestOnce(creds: DavCredentials | null, token: string | null, req: DavRequest, fetchImpl: FetchLike, lookup?: LookupAll): Promise<DavAnswer> {
   const start = new URL(req.url);
   let url = start;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (creds && !mayCarryPassword(url)) {
-      throw new CalendarHelperError(`Walnut sends a mail password only over https; ${url.origin} is not https.`, 'fetch-error');
+      throw new CalendarHelperError(`Walnut sends ${isBearer(creds) ? `a ${creds.provider} sign-in` : 'a mail password'} only over https; ${url.origin} is not https.`, 'fetch-error');
     }
+    if (isBearer(creds) && !creds.hosts.includes(url.host)) throw bearerRefused(creds, url);
     const headers: Record<string, string> = {
-      ...(creds ? { Authorization: basic(creds) } : {}),
+      ...(creds ? { Authorization: isBearer(creds) ? `Bearer ${token}` : basic(creds) } : {}),
       ...(req.depth !== undefined ? { Depth: req.depth } : {}),
       ...(req.body !== undefined ? { 'Content-Type': req.contentType ?? 'application/xml; charset=utf-8' } : {}),
       ...req.headers,
@@ -186,6 +229,8 @@ export async function davRequest(creds: DavCredentials | null, req: DavRequest, 
       } catch {
         throw new CalendarHelperError(`${url.host} redirected to an address that is not one (${location.slice(0, 80)}).`, 'fetch-error');
       }
+      // A sign-in has no other server to pick: off its hosts, the redirect is simply refused.
+      if (isBearer(creds) && !creds.hosts.includes(next.host)) throw bearerRefused(creds, next);
       await checkRedirect(start, next, !!creds, req.method, lookup);
       url = next;
       continue;

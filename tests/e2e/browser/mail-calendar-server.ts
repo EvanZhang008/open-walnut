@@ -9,6 +9,11 @@
  * pick that host ("Use <host>") before its password goes there. The Mac's calendar source is a mock
  * with no calendars (a Mac with no accounts), so nothing compiles the EventKit helper.
  *
+ * A Gmail and an Outlook account bring theirs by signing in: fakes of Google (its sign-in and a
+ * CalDAV server taking only its token) and Microsoft (its sign-in, with a consent page, and
+ * Graph) run in this process, each holding one event today. The Google client is the one Drive
+ * backups would use (the environment's); Microsoft has none, so its row walks through making one.
+ *
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon dirs all
  * point inside one temp directory that is removed on shutdown.
  *
@@ -37,10 +42,15 @@ process.argv.push('--_ephemeral-child')
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 
 const { ics, startFakeCalDav } = await import('../../helpers/fake-caldav-server.js')
+const { GOOGLE_CLIENT, graphEvent, startFakeGoogleCalendar, startFakeMicrosoftGraph } = await import('../../helpers/fake-calendar-providers.js')
 const { localIdFor } = await import('../../../src/integrations/mail-imap/config.js')
 
 const ADDRESS = 'pat@example.com'
 const GMAIL = 'sam@gmail.com'
+const OUTLOOK = 'sam@outlook.com'
+/** A Google Workspace account on its own domain: Google's only by its mail server. */
+const WORKSPACE = 'kim@acme.example'
+const WORKSPACE_PICKED = 'kim.lee@gmail.com'
 const LEE = 'lee@example.org'
 const WORK = '/dav/calendars/pat/work/'
 const caldav = await startFakeCalDav({ username: ADDRESS, password: 'app-pass', calendars: [{ path: WORK, name: 'Mail calendar', color: '#aa3300' }] })
@@ -48,6 +58,14 @@ const today = new Date()
 const at = (h: number) => new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, 0, 0)
 const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
 caldav.put(`${WORK}dentist.ics`, ics(['UID:dentist', `DTSTART:${stamp(at(15))}`, `DTEND:${stamp(at(16))}`, 'SUMMARY:Dentist from mail']))
+// Google: an event at 20:00 local today; Microsoft: one at 21:00 local (Graph speaks UTC).
+// The Workspace account's sign-in picks a personal Google account instead (the row asks first).
+const google = await startFakeGoogleCalendar({ calendars: [{ path: WORK, name: 'Sam (Google)' }], email: (hint) => (hint === WORKSPACE ? WORKSPACE_PICKED : hint) })
+google.caldav.put(`${WORK}lunch.ics`, ics(['UID:lunch', `DTSTART:${stamp(at(20))}`, `DTEND:${stamp(at(21))}`, 'SUMMARY:Dinner from Google']))
+const graph = await startFakeMicrosoftGraph({ calendars: [{ id: 'cal-1', name: 'Calendar', hexColor: '#0f6cbd', canEdit: true }], consentPage: true })
+const utcIso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, '')
+graph.put('cal-1', graphEvent('Review from Outlook', utcIso(at(21)), utcIso(at(22))))
+Object.assign(process.env, google.env, graph.env, { WALNUT_GDRIVE_CLIENT_ID: GOOGLE_CLIENT.id, WALNUT_GDRIVE_CLIENT_SECRET: GOOGLE_CLIENT.secret })
 const leeCaldav = await startFakeCalDav({ username: LEE, password: 'lee-pass', calendars: [{ path: WORK, name: 'Lee calendar' }] })
 // "localhost" sends Walnut to 127.0.0.1: another host, so the password must not follow on its own.
 const redirector = http.createServer((_req, res) => {
@@ -70,6 +88,8 @@ await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ v
 await fs.writeFile(path.join(tmpBase, 'secrets', 'plugins', 'mail-imap.json'), JSON.stringify({
   [`password.${localIdFor(ADDRESS)}`]: 'app-pass',
   [`password.${localIdFor(GMAIL)}`]: 'gmail-pass',
+  [`password.${localIdFor(OUTLOOK)}`]: 'outlook-pass',
+  [`password.${localIdFor(WORKSPACE)}`]: 'workspace-pass',
   [`password.${localIdFor(LEE)}`]: 'lee-pass',
 }), { mode: 0o600 })
 
@@ -87,6 +107,8 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
         // The IMAP server is never reached (port 1 refuses at once); only the calendar is.
         [localIdFor(ADDRESS)]: { address: ADDRESS, imap_host: '127.0.0.1', imap_port: 1, imap_tls: 'tls', display_name: 'Pat', caldav_url: `${caldav.origin}/.well-known/caldav` },
         [localIdFor(GMAIL)]: { address: GMAIL, imap_host: 'imap.gmail.com', imap_port: 993, imap_tls: 'tls' },
+        [localIdFor(OUTLOOK)]: { address: OUTLOOK, imap_host: 'outlook.office365.com', imap_port: 993, imap_tls: 'tls' },
+        [localIdFor(WORKSPACE)]: { address: WORKSPACE, imap_host: 'imap.gmail.com', imap_port: 993, imap_tls: 'tls' },
         [localIdFor(LEE)]: { address: LEE, imap_host: '127.0.0.1', imap_port: 1, imap_tls: 'tls', caldav_url: `http://localhost:${redirectPort}/` },
       },
     },
@@ -110,7 +132,7 @@ const apiTarget = `http://127.0.0.1:${apiAddress.port}`
 const { createServiceHandle } = await import('../../../src/core/plugins/service-registry.js')
 const mailBase = createServiceHandle<{ adoptAccounts(providerId: string): Promise<string[]> }>({ key: 'mail:base', publisherId: 'mail' })
 const adopted = await mailBase.adoptAccounts('imap')
-if (adopted.length !== 3) throw new Error(`mail calendar fixture: expected three adopted IMAP accounts, got ${JSON.stringify(adopted)}`)
+if (adopted.length !== 5) throw new Error(`mail calendar fixture: expected five adopted IMAP accounts, got ${JSON.stringify(adopted)}`)
 
 const { createServer: createViteServer } = await import('vite')
 const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
@@ -140,6 +162,10 @@ const fixture = {
   home: tmpBase,
   account: `imap:${localIdFor(ADDRESS)}`,
   gmailAccount: `imap:${localIdFor(GMAIL)}`,
+  outlookAccount: `imap:${localIdFor(OUTLOOK)}`,
+  workspaceAccount: `imap:${localIdFor(WORKSPACE)}`,
+  workspacePicked: WORKSPACE_PICKED,
+  microsoftClientId: (await import('../../helpers/fake-calendar-providers.js')).MICROSOFT_CLIENT_ID,
   leeAccount: `imap:${localIdFor(LEE)}`,
   leeServerHost: new URL(leeCaldav.origin).host,
 }
@@ -150,6 +176,8 @@ const shutdown = async () => {
   await stopServer()
   await caldav.close().catch(() => {})
   await leeCaldav.close().catch(() => {})
+  await google.close().catch(() => {})
+  await graph.close().catch(() => {})
   redirector.close()
   redirector6.close()
   try {

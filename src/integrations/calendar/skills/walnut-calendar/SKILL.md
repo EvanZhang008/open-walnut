@@ -191,6 +191,13 @@ moves only within its day; to move it to another day, move one occurrence. A cal
 somewhere the account does not point is answered as `found-server`; only the person picks it
 (the row's "Use <host>"), and a `server` Walnut did not just report for that account is refused (409).
 
+A Gmail or Outlook / Microsoft 365 account cannot be read with a mail password; it signs in with
+Google or Microsoft instead (the row's "Sign in with Google / Microsoft"). Its ids start with
+`caldav:<mail account id>/` too, its source's `kind` is `caldav` (Google) or `graph` (Microsoft),
+and the same write rules hold. The sign-in itself needs the person on the provider's own page,
+so an agent cannot finish one: when a source answers `needs-sign-in` (the sign-in expired or was
+revoked; its events read before still show), tell the user to choose "Sign in again" on that row.
+
 ## Error codes
 
 | HTTP | code | meaning |

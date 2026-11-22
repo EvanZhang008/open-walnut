@@ -8,12 +8,13 @@
  * plainly when it cannot (a provider that needs its own sign-in, a server with no calendar, its
  * error). A calendar read that way has "Remove its calendar". A server Walnut found somewhere
  * the account does not point gets no password until the person picks it here ("Use <host>").
+ * A Gmail or Outlook account signs in with its provider instead (CalendarSignInRow.tsx).
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { listMailAccounts, type MailAccountDto } from '@/api/mail'
-import { addMailCalendar, removeMailCalendar, type CalendarInfo, type CalendarSourceStatus } from '@/api/calendar'
+import { addMailCalendar, getSignInProviders, removeMailCalendar, type CalendarInfo, type CalendarSourceStatus, type SignInProviderName } from '@/api/calendar'
 import { calendarSourceOf } from '../../../../../src/integrations/calendar/event-rules'
-import { signInNeededText, signInProvider } from '../../../../../src/integrations/calendar/sign-in-provider'
+import { signInProvider } from '../../../../../src/integrations/calendar/sign-in-provider'
 import { useExperimental } from '@/hooks/useExperimental'
 import { ensureCalendarsLoaded } from '@/stores/calendar-events-store'
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection'
@@ -23,9 +24,10 @@ import {
   addMailCalendarHelp,
   mailCalendarHelp,
   mailCalendarMatch,
-  mailServerCalendarHelp,
   type MailCalendarMatch,
 } from './calendar-mail-accounts'
+import { CalendarSignInRow } from './CalendarSignInRow'
+import { MailServerCalendarRow } from './MailServerCalendarRow'
 
 function hostOf(url: string): string {
   try {
@@ -58,17 +60,37 @@ export function CalendarMailAccounts({ calendars, sources = [], onChanged }: Pro
   const [said, setSaid] = useState<Record<string, string>>({})
   // Per account: a calendar server found where the account does not point, for the person to pick.
   const [found, setFound] = useState<Record<string, string>>({})
+  // Bumped when a sign-in client was kept: every sign-in row reads where it stands again.
+  const [signInVersion, setSignInVersion] = useState(0)
+  const changed = useCallback(() => {
+    void ensureCalendarsLoaded(true)
+    onChanged?.()
+  }, [onChanged])
+  // Per account: the provider it signs in with, as the server tells it from its mail servers too.
+  const [providers, setProviders] = useState<Record<string, SignInProviderName>>({})
   useEffect(() => {
     let live = true
     listMailAccounts().then((answer) => { if (live) setAccounts(answer.accounts ?? []) }, () => { if (live) setAccounts([]) })
     return () => { live = false }
   }, [])
+  useEffect(() => {
+    if (!serverCalendars || !accounts?.length) return
+    let live = true
+    getSignInProviders(accounts.map((a) => a.accountId)).then((answer) => { if (live) setProviders(answer.providers ?? {}) }, () => {})
+    return () => { live = false }
+  }, [serverCalendars, accounts])
   if (!accounts || accounts.length === 0) return null
-
-  const changed = () => {
-    void ensureCalendarsLoaded(true)
-    onChanged?.()
+  // A provider's client is set up on its first row only; the others point there.
+  const providerOf = (account: MailAccountDto) => providers[account.accountId] ?? signInProvider({ address: account.address })
+  const ownOf = (account: MailAccountDto) => (serverCalendars ? sources.find((s) => (s.kind === 'caldav' || s.kind === 'graph') && s.account === account.accountId) : undefined)
+  /** A row of a sign-in account (its calendar read, or not here through the Mac). */
+  const signsIn = (account: MailAccountDto) => serverCalendars && !!providerOf(account) && (!!ownOf(account) || mailCalendarMatch(account.address, calendars).kind !== 'here')
+  const setupRow: Partial<Record<SignInProviderName, MailAccountDto>> = {}
+  for (const account of accounts) {
+    const p = providerOf(account)
+    if (p && signsIn(account) && !setupRow[p]) setupRow[p] = account
   }
+
   const without = (map: Record<string, string>, id: string) => { const next = { ...map }; delete next[id]; return next }
   const add = async (account: MailAccountDto, server?: string) => {
     setBusy(account.accountId)
@@ -103,46 +125,54 @@ export function CalendarMailAccounts({ calendars, sources = [], onChanged }: Pro
     <SettingsGroup
       heading="Mail accounts"
       description={serverCalendars
-        ? "A mail account's calendar comes in through this Mac when the Mac has that account too, or straight from its mail server: Add its calendar uses the password saved for its mail."
+        ? "A mail account's calendar comes in through this Mac when the Mac has that account too, or straight from its mail server: Add its calendar uses the password saved for its mail. A Gmail or Outlook account signs in with Google or Microsoft instead."
         : 'Walnut reads calendars through this Mac, so a mail account\'s calendar comes in once the Mac has that account too. Mail set up only in Walnut (IMAP) carries no calendar.'}
       data-testid="calendar-mail-accounts"
     >
       {accounts.map((account) => {
         const label = account.displayName && account.displayName !== account.address ? `${account.displayName} (${account.address})` : account.address
-        const own = serverCalendars ? sources.find((s) => s.kind === 'caldav' && s.account === account.accountId) : undefined
-        if (own) {
-          const count = calendars.filter((c) => calendarSourceOf(c.id) === own.id).length
+        const own = ownOf(account)
+        const count = own ? calendars.filter((c) => calendarSourceOf(c.id) === own.id).length : 0
+        const match = mailCalendarMatch(account.address, calendars)
+        // A Google or Microsoft account signs in for its calendar; a mail password never reads it.
+        const signIn = providerOf(account)
+        if (signIn && signsIn(account)) {
           return (
-            <SettingsRow
+            <CalendarSignInRow
               key={account.accountId}
-              data-testid={`calendar-mail-account-${account.accountId}`}
-              data-match="server"
+              account={account}
               label={label}
-              help={said[account.accountId] ?? mailServerCalendarHelp(own, count)}
-              state={own.available || own.reason === 'disabled' ? undefined : 'warning'}
-              control={
-                <span className="settings-addons-inline">
-                  <SettingsTag tone={own.available ? 'success' : 'neutral'}>{own.available ? 'Calendar here' : 'Not read'}</SettingsTag>
-                  <SettingsButton
-                    variant="danger"
-                    busy={busy === account.accountId}
-                    busyLabel="Removing..."
-                    disabled={busy !== null && busy !== account.accountId}
-                    onClick={() => void remove(account)}
-                    data-testid={`calendar-mail-remove-${account.accountId}`}
-                  >
-                    Remove its calendar
-                  </SettingsButton>
-                </span>
-              }
+              provider={signIn}
+              tag={MATCH_TAG[match.kind]}
+              own={own}
+              calendarCount={count}
+              version={signInVersion}
+              clientSetup={setupRow[signIn] === account ? true : setupRow[signIn]!.address}
+              busy={busy}
+              said={said[account.accountId]}
+              onRemove={() => void remove(account)}
+              onChanged={changed}
+              onClientSaved={() => setSignInVersion((v) => v + 1)}
             />
           )
         }
-        const match = mailCalendarMatch(account.address, calendars)
+        if (own) {
+          return (
+            <MailServerCalendarRow
+              key={account.accountId}
+              accountId={account.accountId}
+              label={label}
+              own={own}
+              calendarCount={count}
+              said={said[account.accountId]}
+              busy={busy}
+              onRemove={() => void remove(account)}
+            />
+          )
+        }
         // Only an IMAP account's saved password can read a calendar server, and never Google's or Microsoft's.
-        const signIn = match.kind === 'here' ? null : signInProvider({ address: account.address })
         const canAdd = serverCalendars && match.kind !== 'here' && account.providerId === 'imap' && !signIn
-        const failure = said[account.accountId] ?? (serverCalendars && signIn && match.kind === 'missing' ? signInNeededText(signIn) : undefined)
+        const failure = said[account.accountId]
         return (
           <SettingsRow
             key={account.accountId}

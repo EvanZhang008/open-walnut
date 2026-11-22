@@ -45,6 +45,7 @@ const APPROVAL_RULES: Record<string, { markers: number; rule: string }> = {
   'src/integrations/calendar/routes.ts': { markers: 3, rule: 'outward: changing a calendar event Walnut did not make (others see it) needs the user\'s yes on the Mac' },
   'src/integrations/calendar/service.ts': { markers: 2, rule: 'outward: the same protected calendar write, refused when it cannot be confirmed' },
   'src/integrations/calendar/mail-calendars.ts': { markers: 1, rule: 'credentials: sending a mail account\'s password to a calendar server Walnut found needs the person at the Mac to approve that host' },
+  'src/integrations/calendar/sign-in/routes.ts': { markers: 1, rule: 'credentials: setting, replacing or removing the OAuth client a mail account\'s calendar sign-in uses needs the person at the Mac' },
   'src/integrations/calendar/source-set.ts': { markers: 1, rule: 'outward: the same protected calendar write; its refusal is read as about one event, never the source' },
   'src/core/calendar/sources/eventkit.ts': { markers: 2, rule: 'outward: the macOS confirmation dialog for that write' },
   'src/ops/task-lifecycle.ts': { markers: 2, rule: 'permissions: a session changing its own permission mode' },

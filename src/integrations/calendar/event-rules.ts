@@ -7,9 +7,13 @@
  * Id shapes, per source:
  * - EventKit (the Mac's calendars): the ids macOS gives, unchanged, so existing clients and
  *   stored ids (hidden events, the default calendar) keep working byte for byte.
- * - A mail account's calendar (CalDAV): `caldav:<mail account id>/<rest>`, where `<rest>` is
- *   the server's resource or collection path in base64url (no `/` and no `#` in it), and an
- *   occurrence of a recurring event adds `#<epoch seconds of its original start>` as EventKit's do.
+ * - A mail account's calendar: `caldav:<mail account id>/<rest>`, whatever reads it. Over CalDAV
+ *   (its own server, or Google's with a sign-in) `<rest>` is the server's resource or collection
+ *   path in base64url (no `/` and no `#` in it), and an occurrence of a recurring event adds
+ *   `#<epoch seconds of its original start>` as EventKit's do. Through Microsoft Graph it is the
+ *   calendar's id in base64url, and for an event `.` and the event's id in base64url (each
+ *   occurrence has its own). The prefix stays `caldav:` for every mail account's calendar, so ids
+ *   stored before Graph sources existed, and the clients that read them, are unchanged.
  *   An EventKit id is a UUID-style string and never starts with `caldav:`.
  */
 
