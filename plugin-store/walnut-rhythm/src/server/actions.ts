@@ -353,6 +353,8 @@ export function focusExtend(runtime: RhythmRuntime, args: Record<string, unknown
     const minutes = clampMinutes(args.minutes, EXTEND_DEFAULT_MINUTES, EXTEND_RANGE.min, EXTEND_RANGE.max)
     runtime.focus = extendPhase(runtime.focus, { now: runtime.now(), minutes })
     runtime.markDirty()
+    // A longer break moves its notice's end, and the end of the buttons that answer it.
+    if (runtime.focus.phase === 'break') await runtime.reviseBreakNotice()
     const what = runtime.focus.phase === 'focus' ? 'The block' : 'The break'
     return finish(runtime, `${what} runs ${minutes} min more, until ${clockTime(runtime.focus.endsAt)}.`)
   })

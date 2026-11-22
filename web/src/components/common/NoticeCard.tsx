@@ -13,7 +13,7 @@
 import type { CSSProperties, HTMLAttributes, MouseEventHandler, ReactNode, Ref } from 'react';
 import { PersonAvatar } from '@/components/quickbar/PersonAvatar';
 import type { Notification, NotificationSeverity } from '@/contexts/notifications/types';
-import { noticeTone } from '@/contexts/notifications/notice-face';
+import { avatarName, noticeTone } from '@/contexts/notifications/notice-face';
 import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
 import '@/styles/notice-card.css';
 
@@ -55,13 +55,15 @@ export const SEVERITY_GLYPH: Record<NotificationSeverity, ReactNode> = {
 /**
  * A notification's avatar, the same on its toast and on its row in the notification center: the
  * task or session it is about (its letters in their steady colour), else its severity's glyph.
+ * The letters come from the name a person gave it, never from a fork's machine prefix or an id.
  */
 export function noticeAvatarOf(
   n: Pick<Notification, 'kind' | 'severity' | 'resolved' | 'sessionTitle' | 'sessionId' | 'taskId'>,
   name: string | undefined = n.sessionTitle,
 ): NoticeAvatarSpec {
   const id = n.taskId ?? n.sessionId;
-  if (id && name?.trim()) return { person: { id, title: name.trim(), kind: 'task' } };
+  const title = avatarName(name);
+  if (id && title) return { person: { id, title, kind: 'task' } };
   return { glyph: n.kind === 'permission' ? SEVERITY_GLYPH.warning : SEVERITY_GLYPH[n.severity] ?? SEVERITY_GLYPH.info, tone: noticeTone(n) };
 }
 

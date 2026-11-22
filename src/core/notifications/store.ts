@@ -790,6 +790,25 @@ export async function replaceNotification(
   return out;
 }
 
+/**
+ * Change ONE record in place, found by dedupKey: the same notice, revised (a break that got
+ * longer moves its text and its buttons' expiresAt), so it keeps its id, place, time and read
+ * state and nothing alerts again. Null when the record is gone (the person dismissed it): a
+ * revision never brings a notice back.
+ */
+export async function reviseNotification(input: NewNotification): Promise<NotificationRecord | null> {
+  const out = await withWriteLock(() => withStore((store) => {
+    const idx = store.notifications.findIndex(n => n.dedupKey === input.dedupKey);
+    if (idx === -1) return null;
+    const prev = store.notifications[idx]!;
+    const record: NotificationRecord = { ...input, id: prev.id, timestamp: prev.timestamp, read: prev.read };
+    store.notifications[idx] = record;
+    return { ...record };
+  }));
+  if (out) reportOwnCards([{ mode: 'replace', key: out.dedupKey, record: { ...out } }]);
+  return out;
+}
+
 /** Remove ONE record by dedupKey and return it (null when absent), so the caller
  *  can broadcast `notification:removed` with its id. */
 export async function removeNotification(dedupKey: string): Promise<NotificationRecord | null> {

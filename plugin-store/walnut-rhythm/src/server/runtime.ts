@@ -17,7 +17,7 @@ import { normalizeConfig, type RhythmConfig } from './config'
 import { applyDay, emptyDay, parseDay, type DayChange, type DayLog } from './day-log'
 import {
   advanceFocus, desiredHold, focusOnBoot, IDLE_FOCUS, sameHold,
-  type FocusDurations, type FocusEvent, type FocusState, type HoldSpec,
+  type BreakKind, type CompletedBlock, type FocusDurations, type FocusEvent, type FocusState, type HoldSpec,
 } from './focus'
 import type { MacosBridge } from './macos-bridge'
 import { DndController } from './macos-dnd'
@@ -68,6 +68,8 @@ export class RhythmRuntime {
   private dayDirty = false
   private chain: Promise<unknown> = Promise.resolve()
   private warned = new Set<string>()
+  /** The break notice raised in this process, so a longer break can revise it (reviseBreakNotice). */
+  private breakNotice: { block: CompletedBlock; breakKind: BreakKind; endsAt: number } | null = null
   /** Rebuilt after every step; the ticker schedules the precise focus timeout from it. */
   onStepped: (now: number) => void = () => undefined
   /** Emits the public state; wired by the entry so this file stays free of the view shape. */
@@ -203,6 +205,7 @@ export class RhythmRuntime {
       if (event.lateMs < LATE_NOTIFY_MS && event.breakEndsAt > now) {
         const minutes = Math.round((event.breakEndsAt - block.endedAt) / MINUTE_MS)
         await this.raise(focusDoneNotice(block, event.breakKind, minutes, event.breakEndsAt))
+        this.breakNotice = { block, breakKind: event.breakKind, endsAt: event.breakEndsAt }
       }
     } else {
       await this.dismiss(KEY_FOCUS_DONE)
@@ -213,6 +216,25 @@ export class RhythmRuntime {
 
   // ── effects ───────────────────────────────────────────────────────────────
 
+  /**
+   * The break got longer (+5 min break): the block-done notice says the new end, and its End break
+   * and Another block last until then instead of going at the old end (they expire with the break).
+   * Revised in place, with no new alert; a notice the person dismissed stays gone. A notice raised
+   * before a restart is not known here and keeps its first end.
+   */
+  async reviseBreakNotice(): Promise<void> {
+    const raised = this.breakNotice
+    if (!raised || this.focus.phase !== 'break' || this.focus.endsAt === raised.endsAt) return
+    const endsAt = this.focus.endsAt
+    const minutes = Math.round((endsAt - raised.block.endedAt) / MINUTE_MS)
+    try {
+      await this.walnut.notifications.notify({ ...focusDoneNotice(raised.block, raised.breakKind, minutes, endsAt), update: true })
+      this.breakNotice = { ...raised, endsAt }
+    } catch (error) {
+      this.warnOnce('notice:revise', 'Rhythm could not move the break notice to the new end', { error: String(error) })
+    }
+  }
+
   /** Dismiss-then-notify, so the feed never holds a stale copy of the same reminder. */
   async raise(notice: PluginNotifyInput): Promise<void> {
     await this.dismiss(notice.dedupKey)
@@ -221,6 +243,8 @@ export class RhythmRuntime {
   }
 
   async dismiss(dedupKey: string): Promise<void> {
+    // The break notice is gone (ended, skipped, a new block): nothing is left to revise.
+    if (dedupKey === KEY_FOCUS_DONE) this.breakNotice = null
     try { await this.walnut.notifications.dismiss(dedupKey) }
     catch (error) { this.warnOnce(`dismiss:${dedupKey}`, 'Rhythm could not dismiss a reminder', { dedupKey, error: String(error) }) }
   }

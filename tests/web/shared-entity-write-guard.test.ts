@@ -69,7 +69,7 @@ const ALLOWED: Record<string, string> = {
   '@/api/org-threads components/org/useOrgThreads.ts': 'it IS the node threads store',
   // ── letters ──
   '@/api/human-inbox components/inbox/SessionInboxPane.tsx': 'passed to the letter store\'s applyLetterChange as the write it runs after the optimistic patch',
-  '@/api/human-inbox components/common/NotificationPanel.tsx': 'passed to the letter store\'s applyLetterChange as the write it runs after the optimistic patch',
+  '@/api/human-inbox components/common/useNotificationLetters.ts': 'passed to the letter store\'s applyLetterChange as the write it runs after the optimistic patch',
   '@/api/human-inbox components/inbox/LetterView.tsx': 'an answer is delivered to a session and can be refused: shown as sending, then patched into the letter store',
   '@/api/human-inbox components/org/OrgInlineAnswer.tsx': 'an answer is delivered to a session and can be refused: the Org row leaves on the click (answers.start, which predicts the status in the task store), then patched into the letter store',
 }

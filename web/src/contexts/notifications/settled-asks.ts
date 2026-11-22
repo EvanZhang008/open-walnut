@@ -29,3 +29,13 @@ export function withSettledAsks(feed: Notification[], stateOf: (requestId: strin
   });
   return out ?? feed;
 }
+
+/**
+ * The dedupKeys a Clear of `list` dismisses (the notification center's header): every settled
+ * entry, never an ask still waiting for its answer. Dismissing a pending permission request removes
+ * its only card in the bell while the session stays stuck on it (2026-11-22 review: "Clear asks"
+ * did exactly that), so an unanswered ask leaves only by being answered, or by its own x.
+ */
+export function clearableKeys(list: readonly Notification[]): string[] {
+  return list.filter((n) => !(n.kind === 'permission' && !n.resolved)).map((n) => n.dedupKey);
+}

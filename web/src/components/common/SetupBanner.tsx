@@ -91,6 +91,10 @@ export interface LocalClaudeNotice {
   node: ReactNode;
   /** The section's x (named for what it hides); the card that frames it places it. */
   dismiss: ReactNode;
+  /** The section's one main action alone (Update Claude Code, Open API settings), for a card that
+   *  shows only its head: a problem whose fix is a button shows that button without a click
+   *  (2026-11-22 review: the compact card hid Update behind its title). Null when it has none. */
+  action: ReactNode;
   /** Which notice renders (null: none). */
   kind: LocalNoticeKind | ClaudeBannerView['kind'] | null;
 }
@@ -101,7 +105,7 @@ const TITLES: Record<ClaudeBannerView['kind'], string> = {
   'sign-in': 'Sign in to Claude Code',
 };
 
-const NONE: LocalClaudeNotice = { present: false, title: null, summary: null, node: null, dismiss: null, kind: null };
+const NONE: LocalClaudeNotice = { present: false, title: null, summary: null, node: null, dismiss: null, action: null, kind: null };
 
 /** The state in one sentence (the server's first, when it named one). */
 function summaryOf(kind: LocalNoticeKind | ClaudeBannerView['kind'], view: ClaudeBannerView | null, health: SystemHealth): string {
@@ -178,12 +182,17 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
   if (kind === 'provider') {
     return {
       present: true, title, summary, kind, dismiss,
+      action: <ProviderActions panel onNavigateSettings={onNavigateSettings} />,
       node: <ProviderSection header={header} panel={!firstUse} health={health} onNavigateSettings={onNavigateSettings} />,
     };
   }
+  const fixPending = { pending, error: actionError, panel: true } as const;
   if (kind !== 'install' && view) {
     return {
       present: true, title, summary, kind, dismiss,
+      action: view.kind === 'outdated' && view.fixable
+        ? <FixRow view={view} label="Update Claude Code" {...fixPending} onFix={() => act(() => fixLocalClaude('claude_outdated'), 'update')} />
+        : null,
       node: (
         <QuietSection
           header={header}
@@ -198,8 +207,12 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
       ),
     };
   }
+  const install = view?.kind === 'install' && view.fixable && view.problem ? view : null;
   return {
     present: true, title, summary, kind, dismiss,
+    action: install
+      ? <FixRow view={install} label="Install Claude Code" {...fixPending} onFix={() => act(() => fixLocalClaude(install.problem!.kind), 'install')} />
+      : <div className="ask-card-answer setup-actions"><ApiSettingsButton onNavigateSettings={onNavigateSettings} /></div>,
     node: (
       <InstallSection
         header={header}
@@ -237,9 +250,7 @@ function InstallSection({ header, view, pending, error, onFix, onNavigateSetting
   // outside a session's rows it is plain local state.
   const alternatives = useDetailsDisclosure('setup-first-use-alternatives');
   const otherWays = useDetailsDisclosure('setup-panel-other-ways');
-  const apiSettings = (
-    <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
-  );
+  const apiSettings = <ApiSettingsButton onNavigateSettings={onNavigateSettings} />;
   // The command is the way on when Walnut cannot run the install itself; else it is one of the other ways.
   const manualIsMain = !install?.fixable && !demo && !install?.failed?.command;
   return (
@@ -310,14 +321,24 @@ function ProviderSection({ header, panel, health, onNavigateSettings }: {
           Walnut runs on <strong>{name}</strong>, and it has no key or sign-in it can use yet. Add one in API settings.
         </p>
       )}
-      <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt ab-local-alt'}>
-        <span className="text-sm text-muted">Use another provider instead?</span>
-        <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>
-          Open API settings
-        </button>
-      </div>
+      <ProviderActions panel={panel} onNavigateSettings={onNavigateSettings} />
     </section>
   );
+}
+
+/** The provider section's way on: API settings, the one action it has. */
+function ProviderActions({ panel, onNavigateSettings }: { panel: boolean; onNavigateSettings: (hash?: string) => void }) {
+  return (
+    <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt ab-local-alt'}>
+      <span className="text-sm text-muted">Use another provider instead?</span>
+      <ApiSettingsButton onNavigateSettings={onNavigateSettings} />
+    </div>
+  );
+}
+
+/** The one Open API settings button every section offers. */
+function ApiSettingsButton({ onNavigateSettings }: { onNavigateSettings: (hash?: string) => void }) {
+  return <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>Open API settings</button>;
 }
 
 /** The one-click fix: its button, "Installing Claude Code...", or why it failed with the command to run. */

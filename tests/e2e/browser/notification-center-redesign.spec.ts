@@ -369,9 +369,10 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   await expect(bashCard.locator('.notification-feed-item-title')).toHaveText('Bash')
   await expect(bashCard.locator('.nfc-card-cmd')).toHaveText(BASH_COMMAND)
   await expect(bashCard.locator('.nfc-card-sub', { hasText: 'Clean the demo directory' })).toBeVisible()
-  // Who it came from, once, as one quiet last line; the host is a debug detail in its title.
+  // Who it came from, once, as one quiet last line, with the other computer it runs on (part of
+  // the decision, and a phone has no hover; 2026-11-22 review); the host is in its title too.
   const source = bashCard.locator('.nfc-row-source')
-  await expect(source).toHaveText('PW NFC fixture session \u00b7 Walnut')
+  await expect(source).toHaveText('PW NFC fixture session \u00b7 Walnut \u00b7 on nfc-host')
   await expect(source).toHaveAttribute('title', /Host: nfc-host/)
   await expect(bashCard.locator('.nfc-chip')).toHaveCount(0)
   // …and the buttons that answer it, without opening the session.

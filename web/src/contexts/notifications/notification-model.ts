@@ -15,6 +15,7 @@
 import { parseAskUserQuestionInput, type AskQuestion } from '@/components/sessions/ask-user-question';
 import type { Notification, NotificationAcpOption, NotificationKind } from './types';
 import { wireActionsOf } from './notification-actions';
+import { shortSessionId } from './notice-face';
 import { taskPath } from '@/utils/task-path';
 import { FOUND_HOST_CARD_PREFIX } from '@open-walnut/found-host-offer';
 
@@ -422,10 +423,9 @@ export function linkTargetOf(n: Notification): string | null {
 }
 
 /** Session label for the card/toast context line: friendly title, else short id. */
-export function sessionLabelOf(n: Notification): string | undefined {
+export function sessionLabelOf(n: Pick<Notification, 'sessionTitle' | 'sessionId'>): string | undefined {
   if (n.sessionTitle) return n.sessionTitle;
-  if (!n.sessionId) return undefined;
-  return n.sessionId.length > 8 ? `${n.sessionId.slice(0, 8)}…` : n.sessionId;
+  return n.sessionId ? shortSessionId(n.sessionId) : undefined;
 }
 
 // ── Error categories + human copy ────────────────────────────────────────────

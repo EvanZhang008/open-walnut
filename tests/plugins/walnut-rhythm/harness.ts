@@ -70,7 +70,8 @@ export function makeHarness(options: HarnessOptions) {
   let userHold: QuietHold | null = null
   const live = (hold: QuietHold | null) => (hold && (hold.until === undefined || hold.until > clock.t) ? hold : null)
   const notifications = {
-    async notify(notice: PluginNotifyInput) { calls.push({ type: 'notify', notice }); feed.set(notice.dedupKey, notice) },
+    // A revision (update) changes only a notice still in the feed, as the host does.
+    async notify(notice: PluginNotifyInput) { calls.push({ type: 'notify', notice }); if (!notice.update || feed.has(notice.dedupKey)) feed.set(notice.dedupKey, notice) },
     async error() { /* not used */ },
     async recover() { /* not used */ },
     async dismiss(key: string) { calls.push({ type: 'dismiss', key }); feed.delete(key) },

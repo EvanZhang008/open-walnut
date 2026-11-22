@@ -112,7 +112,8 @@ const LOCAL_STATUS: Record<string, string> = {
  * This machine's Claude Code (or AI provider) as one notice card: severity by its dot and a short
  * title, the x at its top right (2026-11-21 audit: a light yellow block with an orange border, its
  * own icon and spacing, the x at the bottom). It is the first screen's big block only while no
- * agent can run here at all (agentCannotRun); otherwise it is its head, opened by a click.
+ * agent can run here at all (agentCannotRun); otherwise it is its head, opened by a click, with
+ * its one main action (Update Claude Code, Open API settings) still in sight under it.
  */
 function LocalClaudeCard({ local, health }: { local: ReturnType<typeof useLocalClaudeNotice>; health: SystemHealth }) {
   const blocking = agentCannotRun(health);
@@ -136,7 +137,7 @@ function LocalClaudeCard({ local, health }: { local: ReturnType<typeof useLocalC
       end={local.dismiss}
       bodyFlush
     >
-      {expanded ? local.node : undefined}
+      {expanded ? local.node : local.action ?? undefined}
     </NoticeCard>
   );
 }

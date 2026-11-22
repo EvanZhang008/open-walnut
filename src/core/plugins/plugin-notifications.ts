@@ -37,6 +37,9 @@ export interface PluginNoticeInput {
   /** error() only: the person must act (PluginNotice.needsYou). */
   needsYou?: boolean
   kind?: 'skill' | 'reminder'
+  /** reminder only: revise the record still in the feed under this key in place (no new alert);
+   *  nothing when it is gone (PluginNotifyInput.update). */
+  update?: boolean
   actions?: Array<{ label: string; args?: Record<string, unknown>; expiresAt?: number } & (
     | { op: string; dialog?: never }
     | { dialog: string; op?: never }
@@ -132,6 +135,12 @@ export function createPluginNotifications(options: {
         sessionId: notice.sessionId,
         ...(actions ? { actions } : {}),
       } as const
+      if (kind === 'reminder' && notice.update === true) {
+        const { reviseNotification } = await import('../notifications/store.js')
+        const record = await reviseNotification(input)
+        if (record) bus.emit('notification:updated', record, ['web-ui'], emitSource)
+        return
+      }
       if (kind === 'reminder') {
         const { replaceNotification } = await import('../notifications/store.js')
         const { record, replaced } = await replaceNotification(input)

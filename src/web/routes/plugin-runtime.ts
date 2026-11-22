@@ -53,6 +53,7 @@ import {
 } from '../../core/plugins/plugin-web-module.js'
 import { callPluginOp, listPluginOps, pluginOpCallerSid, type PluginOpCaller } from '../../core/plugins/server-api.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
+import { ACTION_EXPIRES_HEADER, expiredActionRefusal } from '../../core/plugins/notice-action-expiry.js'
 import {
   callPrimaryPluginOp,
   listPrimaryPluginOps,
@@ -575,6 +576,12 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       const rawOpName = req.params.opName
       const opName = Array.isArray(rawOpName) ? rawOpName[0] : rawOpName
       if (!/^[a-z0-9_]{1,128}$/.test(opName)) throw new Error('Invalid operation name')
+      // A notice button whose moment passed (a break that ended) runs nothing, here or relayed.
+      const expired = expiredActionRefusal(req.headers[ACTION_EXPIRES_HEADER])
+      if (expired) {
+        res.status(410).json({ error: expired })
+        return
+      }
       const args = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
         ? req.body as Record<string, unknown>
         : {}

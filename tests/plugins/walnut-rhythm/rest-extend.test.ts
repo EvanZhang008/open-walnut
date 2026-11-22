@@ -149,6 +149,44 @@ describe('Extend', () => {
     expect(more.message).toBe('The break runs 5 min more, until 09:10.')
     expect(runtime.focus).toMatchObject({ phase: 'break', endsAt: NINE + 10 * MIN })
   })
+
+  // 2026-11-22 review: the block-done notice's End break and Another block expire with the break;
+  // a longer break moved the break and left the buttons going at the first end.
+  it('a longer break moves its notice and its buttons to the new end, with no new alert', async () => {
+    const { h, runtime } = await boot({ macos_focus_shortcuts: false })
+    await actions.focusStart(runtime, {})
+    await h.tick(runtime, 25 * MIN + 1)
+    const first = h.notices('focus-done')
+    expect(first).toHaveLength(1)
+    expect(first[0]!.notice.actions!.map((a) => a.expiresAt)).toEqual([NINE + 30 * MIN, NINE + 30 * MIN])
+    await actions.focusExtend(runtime, {})
+    const revised = h.notices('focus-done')
+    expect(revised).toHaveLength(2)
+    expect(revised[1]!.notice).toMatchObject({
+      update: true,
+      title: 'Focus block done, 10 min break',
+      body: '25 min. Stand up and move; the break ends at 09:35.',
+    })
+    expect(revised[1]!.notice.actions!.map((a) => [a.label, a.expiresAt])).toEqual([['End break', NINE + 35 * MIN], ['Another block', NINE + 35 * MIN]])
+    // Revised, never re-raised: the old one was not dismissed for it (a dismiss then notify alerts again).
+    expect(h.calls.slice(h.calls.indexOf(first[0]!) + 1).some((call) => call.type === 'dismiss' && call.key === 'focus-done')).toBe(false)
+    expect(h.feed.get('focus-done')!.actions![0]!.expiresAt).toBe(NINE + 35 * MIN)
+  })
+
+  it('a break notice the person dismissed stays gone when the break gets longer; a rest has none to move', async () => {
+    const { h, runtime } = await boot({ macos_focus_shortcuts: false })
+    await actions.focusStart(runtime, {})
+    await h.tick(runtime, 25 * MIN + 1)
+    h.feed.delete('focus-done')
+    await actions.focusExtend(runtime, {})
+    expect(h.feed.has('focus-done')).toBe(false)
+    // End break, then a rest of its own: +5 min revises nothing.
+    await actions.breakSkip(runtime)
+    await actions.focusRest(runtime, { minutes: 5 })
+    const before = h.notices('focus-done').length
+    await actions.focusExtend(runtime, {})
+    expect(h.notices('focus-done')).toHaveLength(before)
+  })
 })
 
 describe('Focus now during a break', () => {

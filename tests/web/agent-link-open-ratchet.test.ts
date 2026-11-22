@@ -214,7 +214,8 @@ describe('the app-level opener', () => {
   it('a letter link opens the notification center on that letter', () => {
     expect(anywhere).toContain("OPEN_CENTER_EVENT = 'notification:open-center'")
     // The center already opens a letter named on that event (its return-to-letter path).
-    expect(read('components/common/NotificationPanel.tsx')).toMatch(/addEventListener\('notification:open-center', restore\)/)
+    // The center's letter state is its own hook (useNotificationLetters.ts).
+    expect(read('components/common/useNotificationLetters.ts')).toMatch(/addEventListener\('notification:open-center', restore\)/)
     expect(read('components/layout/Sidebar.tsx')).toMatch(/addEventListener\(OPEN_CENTER_EVENT, handleOpenCenter\)/)
     // A pop-out has no center: the app's window opens it.
     expect(app).toMatch(/useOpenLetterRequests\(isPopoutPath\(location\.pathname\)\)/)
@@ -223,10 +224,11 @@ describe('the app-level opener', () => {
   it('closing a letter a link opened returns to the link: the center it opened goes too', () => {
     expect(anywhere).toMatch(/new CustomEvent\(OPEN_CENTER_EVENT, \{ detail: \{ letterId, link: true \} \}\)/)
     const panel = read('components/common/NotificationPanel.tsx')
-    expect(panel).toMatch(/linkPending\.current = \(event as CustomEvent\)\.detail\?\.link === true/)
+    const letters = read('components/common/useNotificationLetters.ts')
+    expect(letters).toMatch(/linkPending\.current = \(event as CustomEvent\)\.detail\?\.link === true/)
     expect(panel).toMatch(/if \(linkOpened\.current\) \{ linkOpened\.current = false; onClose\(\); \}/)
     // A letter chosen from the center's own list is the center's, never closed with it.
-    expect(panel).toMatch(/const openLetter = useCallback\(\(id: string\) => \{\s*linkOpened\.current = false;/)
+    expect(letters).toMatch(/const openLetter = useCallback\(\(id: string\) => \{\s*linkOpened\.current = false;/)
   })
 
   it('the notification center stays above a full-screen surface and below its letter reader', () => {

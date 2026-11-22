@@ -4,7 +4,7 @@
  * folded away or gone before it is read; a click on a notice opens what it is about).
  */
 import { describe, expect, it } from 'vitest';
-import { KIND_SOURCE, feedRowSource, feedRowStatus, keepInSight, noticeSource, noticeStatus } from '../../web/src/contexts/notifications/notice-face';
+import { KIND_SOURCE, avatarName, feedRowSource, feedRowStatus, keepInSight, noticeSource, noticeStatus } from '../../web/src/contexts/notifications/notice-face';
 import { linkTargetOf } from '../../web/src/contexts/notifications/notification-model';
 import { ERROR_TOAST_MIN_MS, TOAST_DURATION_MS, toastLifetimeMs, type NotificationKind } from '../../web/src/contexts/notifications/types';
 
@@ -72,9 +72,18 @@ describe('a row in the notification center', () => {
     expect(feedRowStatus({ kind: 'permission', severity: 'warning', read: false })).toEqual({ tone: 'ask', text: 'Needs you' });
   });
 
-  it('its last line says who sent it, once; session ids, fork names and the host are only its title', () => {
+  it('its last line says who sent it, once; the full session id and a fork\'s name are only its title', () => {
+    // Another computer is part of the decision (an ask to delete a folder on a dev box is not one
+    // on this Mac), and a phone has no hover: its host stays on the line (2026-11-22 review).
     expect(feedRowSource({ sessionTitle: 'Fix the login', project: 'Walnut', host: 'clouddev', sessionId: 'abc12345-0000' }))
-      .toEqual({ text: 'Fix the login \u00b7 Walnut', detail: 'Session id: abc12345-0000\nHost: clouddev' });
+      .toEqual({ text: 'Fix the login \u00b7 Walnut \u00b7 on clouddev', detail: 'Session id: abc12345-0000\nHost: clouddev' });
+    expect(feedRowSource({ sessionTitle: 'Fix the login', host: 'devbox' }, 'Dev box').text).toBe('Fix the login \u00b7 on Dev box');
+    // This computer is no news, by its alias, whatever its display name.
+    for (const host of ['local', '__local__', 'localhost']) {
+      expect(feedRowSource({ sessionTitle: 'Fix the login', host }, 'Local').text, host).toBe('Fix the login');
+    }
+    // A session nobody titled reads by its short id, as the toast names it.
+    expect(feedRowSource({ sessionId: 'abc12345-6789-0000' }).text).toBe('Session abc12345\u2026');
     const fork = feedRowSource({ sessionTitle: 'Fork of Session: walnut \u2014 Claude finished the response', host: 'local', sessionId: 'cffc7f02-1111' });
     expect(fork.text).toBeNull();
     expect(fork.detail).toContain('Session: Fork of Session');
@@ -83,5 +92,15 @@ describe('a row in the notification center', () => {
     expect(feedRowSource({ project: 'Walnut' })).toEqual({ text: 'Walnut', detail: null });
     expect(feedRowSource({ sessionTitle: 'Walnut', project: 'Walnut' }).text).toBe('Walnut');
     expect(feedRowSource({})).toEqual({ text: null, detail: null });
+  });
+
+  it('its avatar\'s letters come from the name a person gave it, never a fork\'s prefix or an id', () => {
+    expect(avatarName('Fork of Session: garden \u2014 the chart draft')).toBe('garden \u2014 the chart draft');
+    expect(avatarName('Fork of Session: Fork of Session: garden')).toBe('garden');
+    expect(avatarName('Fix the login')).toBe('Fix the login');
+    expect(avatarName('cffc7f02-1111-2222')).toBe('');
+    expect(avatarName('cffc7f02\u2026')).toBe('');
+    expect(avatarName('Fork of Session: cffc7f02')).toBe('');
+    expect(avatarName(undefined)).toBe('');
   });
 });

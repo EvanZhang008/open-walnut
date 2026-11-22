@@ -1,20 +1,20 @@
 /**
  * The rows of the notification center's feed (NotificationPanel.tsx), each drawn as the one notice
- * card (NoticeCard, `solid` inside the panel): the same frame, avatar, bold title, status as a dot
- * and a word, and two-line preview as every toast (2026-11-21 audit: the center's rows were a third
+ * card (NoticeCard, `solid` inside the panel): the same frame, avatar, bold title and status as a
+ * dot and a word as every toast, with the whole text where a toast shows two lines (2026-11-21 audit: the center's rows were a third
  * card of their own, unread ones tinted blue with a strong border, the time beside a title cut
  * before it said which task, and the source as two stacked chips).
  *
  * A row reads: its title (in full, never cut: standard.md "Text that does not fit"; the × at its
  * top right), one quiet line with its status, when and how often, its whole text, one quiet line
- * naming who it came from (the debug
- * details, a session id or a host, in that line's title), then what it offers to do.
+ * naming who it came from (and the host when it is another computer; the full session id in that
+ * line's title), then what it offers to do.
  * tests/web/notice-card-guard.test.ts fails on a row drawn some other way.
  */
-import { memo, useEffect, useReducer, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import {
   personFixesCard, toolNameOf, formatRelative, effectiveTs, linkTargetOf, resolvedLabelOf,
-  categoryOf, presentError, letterIdOf, nextActionExpiry, displayActionsOf,
+  categoryOf, presentError, letterIdOf,
   type Notification,
 } from '@/contexts/notifications';
 import { feedRowSource, feedRowStatus } from '@/contexts/notifications/notice-face';
@@ -24,6 +24,7 @@ import { NotificationActionButtons } from './NotificationActionButtons';
 import { NoticeCard, NoticeStatus, noticeAvatarOf } from './NoticeCard';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { useDisplayActions } from '@/hooks/useDisplayActions';
 import { startNotificationFix } from '@/api/notifications';
 import { useLocalAgentBlocked } from '@/utils/local-agent-runnable';
 import { taskPath } from '@/utils/task-path';
@@ -127,8 +128,7 @@ export function FeedGroups({
   );
 }
 
-/** The × at a row's top right, the same on every card. */
-/** Who a row came from, and what only helps debugging (a session id, a host): one hover away. */
+/** Who a row came from (the host when it is another computer), and what only helps debugging (the full session id): one hover away. */
 function useRowSource(n: Notification): { text: string | null; detail: string | null } {
   const hostName = useHostDisplayLabel(n.host);
   return feedRowSource(n, n.host ? hostName : undefined);
@@ -150,18 +150,6 @@ function RowMeta({ n, detail, extra }: { n: Notification; detail: string | null;
 function RowSource({ source }: { source: { text: string | null; detail: string | null } }) {
   if (!source.text) return null;
   return <div className="nfc-row-source" title={source.detail ?? undefined}>{source.text}</div>;
-}
-
-/** A row re-renders when its next button expires, so an open panel drops it then too. */
-function useActionExpiry(n: Notification): void {
-  const [, tick] = useReducer((x: number) => x + 1, 0);
-  const next = nextActionExpiry(n);
-  useEffect(() => {
-    if (next === null) return undefined;
-    // Capped so a far-off expiry never overflows setTimeout's 32-bit delay.
-    const timer = window.setTimeout(tick, Math.min(Math.max(0, next - Date.now()) + 50, 2 ** 30));
-    return () => window.clearTimeout(timer);
-  }, [next]);
 }
 
 /**
@@ -269,7 +257,8 @@ const FeedItem = memo(function FeedItem({
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  useActionExpiry(n);
+  // Drawn again when its next button expires, so an open panel drops it then too.
+  const shownActions = useDisplayActions(n);
   const source = useRowSource(n);
   // Claude Code cannot run on this computer: no Fix with agent (the same gate as every repair start).
   const agentBlocked = useLocalAgentBlocked();
@@ -309,9 +298,7 @@ const FeedItem = memo(function FeedItem({
     : null;
   // A record's own button LIST (a plugin reminder's Done / Snooze), without the ones whose
   // moment passed (a break that ended): then the row is history and offers none.
-  const noticeActions = n.actions && n.actions.length > 0 && !recovered && !stale
-    ? displayActionsOf(n)
-    : [];
+  const noticeActions = n.actions && n.actions.length > 0 && !recovered && !stale ? shownActions : [];
 
   const startFix = async (restart: boolean) => {
     if (fixBusy || fixesInFlight.has(n.dedupKey)) return;
@@ -348,6 +335,9 @@ const FeedItem = memo(function FeedItem({
         handlers: {
           tabIndex: 0,
           onKeyDown: (e: KeyboardEvent) => {
+            // Only the row's own key: Enter or Space on its x, Details or a button inside it belongs
+            // to that control (2026-11-22 review: Enter on the x opened the row instead of closing it).
+            if (e.target !== e.currentTarget) return;
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               activate();

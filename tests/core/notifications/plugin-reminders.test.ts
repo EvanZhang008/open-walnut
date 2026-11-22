@@ -188,6 +188,33 @@ describe('walnut.notifications.notify (reminder + actions)', () => {
     expect(unreadCount).toBe(1);
   });
 
+  // A break that got longer moves its notice's end and its buttons' expiresAt (2026-11-22 review).
+  it('a reminder revised with update: in place (same id, time, read state), announced as updated, no new alert', async () => {
+    const { api } = pluginApi('walnut-rhythm');
+    await api.notifications.notify({ kind: 'reminder', title: 'Focus block done, 5 min break', dedupKey: 'focus-done', actions: [{ label: 'End break', op: 'break_skip', expiresAt: 1_000 }] });
+    const first = (await listNotifications()).feed[0];
+    await markRead([first.id]);
+    seen.length = 0;
+
+    await api.notifications.notify({ kind: 'reminder', update: true, title: 'Focus block done, 10 min break', dedupKey: 'focus-done', actions: [{ label: 'End break', op: 'break_skip', expiresAt: 2_000 }] });
+    expect(seen.map(e => e.name)).toEqual(['notification:updated']);
+    const { feed, unreadCount } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({ id: first.id, timestamp: first.timestamp, read: true, title: 'Focus block done, 10 min break' });
+    expect(feed[0].actions?.[0]).toMatchObject({ label: 'End break', expiresAt: 2_000 });
+    expect(unreadCount).toBe(0);
+  });
+
+  it('a revision of a reminder the person dismissed brings nothing back', async () => {
+    const { api } = pluginApi('walnut-rhythm');
+    await api.notifications.notify({ kind: 'reminder', title: 'Focus block done', dedupKey: 'focus-done' });
+    await api.notifications.dismiss('focus-done');
+    seen.length = 0;
+    await api.notifications.notify({ kind: 'reminder', update: true, title: 'Focus block done, longer', dedupKey: 'focus-done' });
+    expect(seen).toEqual([]);
+    expect((await listNotifications()).feed).toHaveLength(0);
+  });
+
   it('a skill notice keeps first-write-wins under the same key', async () => {
     const { api } = pluginApi('walnut-rhythm');
     await api.notifications.notify({ title: 'first', dedupKey: 'same' });

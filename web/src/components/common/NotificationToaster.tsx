@@ -32,7 +32,7 @@ import '@/styles/undo-toast.css';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
-  linkTargetOf, resolvedLabelOf, displayActionsOf,
+  linkTargetOf, resolvedLabelOf,
   type Notification,
 } from '@/contexts/notifications';
 import {
@@ -56,6 +56,7 @@ import { pendingAt, useApprovals } from '@/components/approvals/approvals-store'
 import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sessions/prompt-keys';
 import { useNotificationCenterOpen } from '@/stores/notification-center-open';
 import { useShiftClickGuard } from './useShiftClickGuard';
+import { useDisplayActions } from '@/hooks/useDisplayActions';
 
 /** Upward travel that dismisses a toast on the phone (it sits at the top of the screen). */
 const SWIPE_DISMISS_PX = 40;
@@ -345,6 +346,8 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
   const [open, setOpen] = useState(false);
   const titleRef = useRef<HTMLSpanElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Its buttons now, drawn again when the next one expires (a toast still up past a break's end).
+  const shownActions = useDisplayActions(toast);
   // A title the server cut shows whole (its few lines, then Details); the raw rest stays detail.
   const whole = wholeTitle(toast.title, toast.detail);
   const cut = useCutOff([titleRef, bodyRef], `${whole.title}\n${toast.body ?? ''}\n${phone}`);
@@ -445,13 +448,13 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
       {toast.actions && toast.actions.length > 0 ? (
         <NotificationActionButtons
           n={toast}
-          actions={displayActionsOf(toast)}
+          actions={shownActions}
           variant="toast"
           onNavigate={(to) => navigateToTarget(to, navigate)}
           onInteract={onPin}
           onDone={() => { onDismiss(); onRead(); }}
         />
-      ) : toast.action && (
+      ) : toast.action && shownActions.length > 0 && (
         <button
           className="notification-toast-action"
           onClick={(e) => {

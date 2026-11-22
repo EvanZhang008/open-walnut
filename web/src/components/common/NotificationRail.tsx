@@ -18,10 +18,11 @@ import '@/components/actions/ask-card.css';
 /** Rail tabs: the notification sections plus the ambient System zone. */
 export type RailSection = NotificationSection | 'system';
 
-/** What Clear says it clears, per section (Inbox and System list nothing it could clear). */
+/** What Clear says it clears, per section (Inbox and System list nothing it could clear). An ask
+ *  still waiting for its answer is never cleared (useNotificationFeedView clearableKeys). */
 const CLEAR_LABEL: Partial<Record<RailSection, string>> = {
   all: 'Clear all',
-  action: 'Clear asks',
+  action: 'Clear answered',
   errors: 'Clear errors',
   automation: 'Clear automation',
 };
@@ -46,8 +47,8 @@ export function NotificationPanelHeader({ section, category, canClear, onClear, 
             type="button"
             className="btn nfc-header-clear"
             title={section === 'all'
-              ? 'Dismiss every notification in the list. Letters stay in the Inbox.'
-              : `Dismiss what this list shows (${label.replace(/^Clear /, '')}). The other sections keep theirs.`}
+              ? 'Dismiss every notification in the list. Letters stay in the Inbox, and asks waiting for an answer stay.'
+              : `Dismiss what this list shows (${label.replace(/^Clear /, '')}). Asks waiting for an answer stay, and the other sections keep theirs.`}
             onClick={onClear}
           >
             {label}

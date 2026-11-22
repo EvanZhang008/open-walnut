@@ -66,28 +66,52 @@ export function feedRowStatus(n: Pick<Notification, 'kind' | 'severity' | 'resol
 
 /** A session's name that only says how it was made ("Fork of Session: ..."), or an id: not a sender. */
 const MACHINE_LABEL = /^(fork of session\b|session [0-9a-f]{6,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){0,4}\b)/i;
+/** The prefixes a fork's name is made of, any number deep. */
+const FORK_PREFIX = /^(?:fork of session:\s*)+/i;
 /** Host names that mean "this computer": no news on a row. */
 const LOCAL_HOSTS = new Set(['local', 'localhost', '__local__']);
 
+/** A short session id (its first 8 characters), the name of a session nobody titled. */
+export function shortSessionId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}\u2026` : id;
+}
+
 /**
- * The one quiet last line of a row: who it came from, then the project, each once. What only
- * helps debugging (the session id, a fork's machine name, the host) is not on the row; it is the
- * line's `title`, one hover away (2026-11-21 audit: "Fork of Session: ...", "local" and a short id
- * sat as two stacked chips under the words and did not say who sent it).
+ * The name an avatar's letters come from: a session's title without the prefix a fork's name
+ * is made of ("Fork of Session: garden" reads "garden", never "FO"), and nothing for a name that
+ * is only an id (the avatar then shows its glyph).
+ */
+export function avatarName(title: string | undefined): string {
+  const name = (title ?? '').trim().replace(FORK_PREFIX, '').trim();
+  return name && !MACHINE_LABEL.test(name) ? name : '';
+}
+
+/**
+ * The one quiet last line of a row: who it came from, the project, and the host when it is
+ * another computer, each once. A session nobody titled reads by its short id. What only helps
+ * debugging (the full session id, a fork's machine name) is not on the row; it is the line's
+ * `title`, one hover away (2026-11-21 audit: "Fork of Session: ...", "local" and a short id sat as
+ * two stacked chips under the words and did not say who sent it). The host stays in sight because
+ * it is part of a decision: "rm -rf build/" on a dev box is not the same ask as on this Mac, and a
+ * phone has no hover (2026-11-22 review).
  */
 export function feedRowSource(
   n: Pick<Notification, 'sessionTitle' | 'sessionId' | 'host' | 'project'>,
   hostLabel?: string,
 ): { text: string | null; detail: string | null } {
   const session = n.sessionTitle?.trim() || '';
-  const sender = session && !MACHINE_LABEL.test(session) ? session : '';
+  const sender = session
+    ? (MACHINE_LABEL.test(session) ? '' : session)
+    : n.sessionId ? `Session ${shortSessionId(n.sessionId)}` : '';
   const project = n.project?.trim() || '';
-  const parts = [sender, project && project !== sender ? project : ''].filter(Boolean);
-  const host = (hostLabel ?? n.host ?? '').trim();
+  const alias = (n.host ?? '').trim();
+  const local = !alias || LOCAL_HOSTS.has(alias.toLowerCase());
+  const host = (hostLabel ?? alias).trim();
+  const parts = [sender, project && project !== sender ? project : '', !local && host ? `on ${host}` : ''].filter(Boolean);
   const detail = [
     session && session !== sender ? `Session: ${session}` : '',
     n.sessionId ? `Session id: ${n.sessionId}` : '',
-    host ? `Host: ${host}${LOCAL_HOSTS.has(host.toLowerCase()) ? ' (this computer)' : ''}` : '',
+    host ? `Host: ${host}${local ? ' (this computer)' : ''}` : '',
   ].filter(Boolean);
   return { text: parts.length ? parts.join(' \u00b7 ') : null, detail: detail.length ? detail.join('\n') : null };
 }

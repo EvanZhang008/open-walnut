@@ -99,6 +99,23 @@ export function nextActionExpiry(n: Pick<Notification, 'action' | 'actions'>, no
   return next;
 }
 
+/**
+ * How long until a card showing `n` must draw its buttons again (the next one expires), or null
+ * when none will. A beat past the moment so the expired button is gone when it redraws, and capped
+ * so a far-off expiry never overflows setTimeout's 32-bit delay.
+ */
+export function actionExpiryDelayMs(next: number | null, now: number = Date.now()): number | null {
+  if (next === null) return null;
+  return Math.min(Math.max(0, next - now) + 50, 2 ** 30);
+}
+
+/**
+ * The header an `op` button sends its expiry in: the server refuses the op past it
+ * (plugin-runtime.ts), so a click that raced the moment, or a page that missed its redraw, never
+ * runs a button whose moment passed. The value came from the server's own record.
+ */
+export const ACTION_EXPIRES_HEADER = 'x-walnut-action-expires-at';
+
 /** Where an `op` button POSTs. Null when the action is not a runnable op. */
 export function opActionPath(a: NotificationAction): string | null {
   if (a.kind !== 'op' || !a.pluginId || !a.op) return null;
@@ -120,7 +137,10 @@ export async function runOpAction(
   try {
     const res = await fetchImpl(path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(typeof a.expiresAt === 'number' ? { [ACTION_EXPIRES_HEADER]: String(a.expiresAt) } : {}),
+      },
       body: JSON.stringify(a.args ?? {}),
       signal: AbortSignal.timeout(OP_TIMEOUT_MS),
     });

@@ -8,13 +8,18 @@
  *   - displayActionsOf (the one list both the toast and the panel's row render) leaves out an
  *     expired button, and never falls back to the older single `action` when every listed one expired;
  *   - the plugin host carries a plugin's `expiresAt` onto the host button and refuses a bad one;
- *   - Rhythm's break notice sets it to the break's end on both its buttons.
+ *   - Rhythm's break notice sets it to the break's end on both its buttons;
+ *   - a card or toast left open draws itself again a beat after the next expiry (useDisplayActions);
+ *   - an op button sends its expiry, and the op route refuses it past that moment, by the server's clock.
  */
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
-  actionExpired, displayActionsOf, nextActionExpiry, wireActionsOf,
+  ACTION_EXPIRES_HEADER, actionExpired, actionExpiryDelayMs, displayActionsOf, nextActionExpiry, runOpAction, wireActionsOf,
 } from '../../web/src/contexts/notifications/notification-actions';
 import { pluginNoticeActions } from '../../src/core/plugins/plugin-notifications';
+import { ACTION_EXPIRES_HEADER as SERVER_HEADER, expiredActionRefusal } from '../../src/core/plugins/notice-action-expiry';
 import { focusDoneNotice, breakOverNotice } from '../../plugin-store/walnut-rhythm/src/server/notices';
 
 const NOW = 1_800_000_000_000;
@@ -76,5 +81,57 @@ describe('a notice button\'s expiry', () => {
     expect(displayActionsOf({ actions }, NOW + 60_000).map((a) => a.label)).toEqual(['End break', 'Another block']);
     const over = breakOverNotice({ minutes: 45, breakMinutes: 10 });
     expect(over.actions!.every((a) => a.expiresAt === undefined)).toBe(true);
+  });
+});
+
+describe('an open card or toast drops an expired button on time', () => {
+  it('redraws a beat after the next expiry, at once for one already past, never for none', () => {
+    expect(actionExpiryDelayMs(NOW + 1_000, NOW)).toBe(1_050);
+    expect(actionExpiryDelayMs(NOW - 5_000, NOW)).toBe(50);
+    expect(actionExpiryDelayMs(null, NOW)).toBeNull();
+    // A far-off moment never overflows setTimeout's 32-bit delay (it would fire at once).
+    expect(actionExpiryDelayMs(NOW + 10 ** 12, NOW)).toBe(2 ** 30);
+  });
+
+  it('the toast and the feed row both draw their buttons through the one hook', () => {
+    const web = path.resolve(__dirname, '../../web/src');
+    for (const rel of ['components/common/NotificationToaster.tsx', 'components/common/NotificationFeedCards.tsx']) {
+      const src = fs.readFileSync(path.join(web, rel), 'utf8');
+      expect(src, rel).toContain('useDisplayActions(');
+      // No surface computes the list once at render and keeps it past its moment.
+      expect(src, rel).not.toMatch(/displayActionsOf\(/);
+    }
+  });
+});
+
+describe('the server refuses a button whose moment passed', () => {
+  it('the console sends the button\'s expiry in the header the route reads', async () => {
+    expect(ACTION_EXPIRES_HEADER).toBe(SERVER_HEADER);
+    const sent: Array<Record<string, string>> = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      sent.push(init?.headers as Record<string, string>);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    const [timed, plain] = wireActionsOf([op('End break', NOW), op('Done')]);
+    await runOpAction(timed!, fetchImpl);
+    await runOpAction(plain!, fetchImpl);
+    expect(sent[0]![ACTION_EXPIRES_HEADER]).toBe(String(NOW));
+    expect(ACTION_EXPIRES_HEADER in sent[1]!).toBe(false);
+  });
+
+  it('a refusal reaches the person as the failure the button shows', async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: expiredActionRefusal(String(NOW), NOW + 1) }), { status: 410 })) as typeof fetch;
+    const [timed] = wireActionsOf([op('End break', NOW)]);
+    expect(await runOpAction(timed!, fetchImpl)).toEqual({ ok: false, message: 'This button is no longer available: the moment it was for has passed' });
+  });
+
+  it('refuses only a real moment that is past by its own clock', () => {
+    expect(expiredActionRefusal(String(NOW), NOW)).toMatch(/no longer available/);
+    expect(expiredActionRefusal(String(NOW), NOW - 1)).toBeNull();
+    // Not a notice button, an older console, or junk: the op runs as before.
+    expect(expiredActionRefusal(undefined, NOW)).toBeNull();
+    expect(expiredActionRefusal('soon', NOW)).toBeNull();
+    expect(expiredActionRefusal(['1', '2'], NOW)).toBeNull();
+    expect(expiredActionRefusal('0', NOW)).toBeNull();
   });
 });

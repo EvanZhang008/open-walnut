@@ -10,7 +10,7 @@ export {
   systemIssueCount, errorsBadgeCount, letterIdOf, personFixesCard,
 } from './notification-model';
 export {
-  displayActionsOf, actionExpired, nextActionExpiry, runOpAction, opActionPath, wireActionsOf, MAX_NOTIFICATION_ACTIONS,
+  displayActionsOf, actionExpired, nextActionExpiry, actionExpiryDelayMs, ACTION_EXPIRES_HEADER, runOpAction, opActionPath, wireActionsOf, MAX_NOTIFICATION_ACTIONS,
 } from './notification-actions';
 export type { OpActionResult } from './notification-actions';
 export {

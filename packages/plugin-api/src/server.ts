@@ -489,6 +489,13 @@ export type PluginNoticeAction = {
  */
 export interface PluginNotifyInput extends PluginNotice {
   kind?: 'skill' | 'reminder'
+  /**
+   * `kind: 'reminder'` only: revise the reminder still in the feed under this dedupKey in place
+   * (new title, body, buttons) without alerting again: the same notice, changed (a break that got
+   * longer moves its "End break" expiresAt). Does nothing when the person already dismissed it.
+   * An older Walnut ignores the flag and re-fires the reminder (it alerts again).
+   */
+  update?: boolean
   /** At most three, primary first. */
   actions?: PluginNoticeAction[]
 }

@@ -23,27 +23,25 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { takeInboxReturn } from '@/components/inbox/item-drafts';
+import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhonePullToRefresh } from '@/components/tasks/PhonePullToRefresh';
 import {
-  useNotifications, sectionOf, sectionCounts, effectiveTs, groupErrorsByCategory,
-  partitionErrorsByCause, systemIssueCount, errorsBadgeCount, requestIdOf,
-  type Notification, type NotificationSection,
+  useNotifications, sectionCounts, systemIssueCount, errorsBadgeCount,
+  type NotificationSection,
 } from '@/contexts/notifications';
-import { getPermissionRequest } from '@/stores/permission-request-store';
-import { FeedGroups, collapseSameOrigin } from './NotificationFeedCards';
+import { FeedGroups } from './NotificationFeedCards';
+import { NotificationErrorBlocks } from './NotificationErrorBlocks';
 import { NotificationPanelHeader, RailButton, RailSubButton, type RailSection } from './NotificationRail';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
 import { updateAvailable, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { NotificationProblems, useDisabledHosts, useProblemHosts } from './NotificationProblems';
-import { ErrorCategoryTitle } from './ErrorCategoryTitle';
+import { useNotificationFeedView } from './useNotificationFeedView';
+import { useNotificationLetters } from './useNotificationLetters';
 import { HealthErrorsLink } from './HealthErrorsLink';
 import { landingSectionFor } from '@/utils/host-attention';
-import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { localNoticeIsFailure, localNoticeShows } from '@/utils/local-claude-banner';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
@@ -51,59 +49,15 @@ import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { navigateToTarget } from '@/utils/open-session';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
-import { log } from '@/utils/log';
-import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useShiftClickGuard } from './useShiftClickGuard';
-import { InboxPane, isInboxLayout, type InboxLayout } from '@/components/inbox/InboxPane';
-import { usePageView } from '@/utils/view-memory';
-import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import { ApprovalRows, usePendingApprovals } from '@/components/approvals/ApprovalRow';
-import {
-  filterInboxLetters, readUnreadOnlyPref, writeUnreadOnlyPref,
-} from '@/components/inbox/inbox-filter';
-import {
-  setLetterArchived, setLetterPinned, setLetterRead,
-  type LetterEnvelope,
-} from '@/api/human-inbox';
 
 interface NotificationPanelProps {
   open: boolean;
   onClose: () => void;
   sidebarCollapsed: boolean;
-}
-
-
-/** How long an ask answered in this browser stays in Needs you after it settles. */
-const ANSWERED_HOLD_MS = 3500;
-
-/**
- * The feed's asks answered in this browser that just settled: Needs you keeps them
- * ANSWERED_HOLD_MS with their outcome ("Denied with note “…”"), instead of the row
- * vanishing the moment the server stamps it, which read as nothing having happened.
- */
-function useAnsweredHereHold(feed: readonly Notification[]): ReadonlySet<string> {
-  const [held, setHeld] = useState<ReadonlySet<string>>(() => new Set());
-  const seen = useRef<Set<string> | null>(null);
-  const timers = useRef<number[]>([]);
-  useEffect(() => {
-    const first = seen.current === null;
-    if (first) seen.current = new Set();
-    for (const n of feed) {
-      if (n.kind !== 'permission' || !n.resolved || seen.current!.has(n.id)) continue;
-      seen.current!.add(n.id);
-      const rid = requestIdOf(n);
-      if (first || !rid || !getPermissionRequest(rid)?.answeredHere) continue;
-      setHeld((prev) => new Set(prev).add(n.id));
-      timers.current.push(window.setTimeout(() => setHeld((prev) => {
-        const next = new Set(prev);
-        next.delete(n.id);
-        return next;
-      }), ANSWERED_HOLD_MS));
-    }
-  }, [feed]);
-  useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
-  return held;
 }
 
 export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed }: NotificationPanelProps) {
@@ -144,7 +98,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   const localClaude = localNotice !== null;
   // Only a failure counts as an error: not installed or not signed in yet is a first-run step.
   const localClaudeFailing = localNotice !== null && localNoticeIsFailure(health, localNotice);
-  const { feed, loaded, unreadCount, markAllRead, markLocalRead, dismissFeed } = useNotifications();
+  const { feed, loaded, unreadCount, markAllRead, dismissFeed } = useNotifications();
   // A card that moved up under the pointer (the one above was answered) waits a beat before a click counts.
   const shiftGuard = useShiftClickGuard('.notification-feed-item');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -191,72 +145,9 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // minutes. The button says that while it runs instead of looking wedged.
   const fixNeedsClone = canFix && selfRepair?.source === null;
 
-  // Letters live in their OWN store (durable documents), so the rail reads them
-  // from there instead of from the 200-entry feed — which can have dropped a
-  // letter's envelope while the letter itself is still in the inbox. Fetching is
-  // gated on the panel being open; every letter WS event refreshes it (D8).
-  const [showArchived, setShowArchived] = useState(false);
-  const [openLetterId, setOpenLetterId] = useState<string | null>(null);
-  // Cards remain the default for existing installs; an explicit Split choice is kept.
-  const [inboxLayout, setInboxLayout] = usePageView<InboxLayout>('inbox', 'layout', 'cards', isInboxLayout);
-  const inboxSplit = section === 'inbox' && inboxLayout === 'split';
-  const location = useLocation();
-  const returningLetter = useRef<string | undefined>(undefined);
-  // A letter a link opened onto a closed center: closing it takes the center with it, back to where the link was.
-  const linkOpened = useRef(false);
-  const linkPending = useRef(false);
-  useEffect(() => {
-    const restoreReturn = () => {
-      const letterId = takeInboxReturn();
-      if (!letterId) return;
-      returningLetter.current = letterId;
-      // Both the Sidebar and this panel install listeners on mount. Restore after those effects.
-      queueMicrotask(() => window.dispatchEvent(new CustomEvent('notification:open-center', { detail: { letterId } })));
-    };
-    restoreReturn();
-    window.addEventListener('popstate', restoreReturn);
-    return () => window.removeEventListener('popstate', restoreReturn);
-  }, [location.key, location.pathname, location.search]);
-  useEffect(() => {
-    const restore = (event: Event) => {
-      const letterId = (event as CustomEvent).detail?.letterId;
-      if (typeof letterId === 'string') {
-        returningLetter.current = letterId;
-        if (open) { setOpenLetterId(letterId); returningLetter.current = undefined; }
-        else linkPending.current = (event as CustomEvent).detail?.link === true;
-      }
-    };
-    window.addEventListener('notification:open-center', restore);
-    return () => window.removeEventListener('notification:open-center', restore);
-  }, [open]);
-  useEffect(() => {
-    if (open && returningLetter.current) {
-      linkOpened.current = linkPending.current;
-      linkPending.current = false;
-      setOpenLetterId(returningLetter.current);
-      returningLetter.current = undefined;
-    }
-  }, [open]);
-  const inbox = useHumanInbox({ enabled: open, archived: showArchived });
-  const inboxRef = useRef(inbox);
-  inboxRef.current = inbox;
-
-  // The Inbox "Unread" filter. `keptReadIds` are the letters read WHILE it was
-  // on: they stay listed until the filter flips or the panel closes, so opening
-  // one does not pull its row out from under the cursor (inbox-filter.ts).
-  const [unreadOnly, setUnreadOnly] = useState(readUnreadOnlyPref);
-  const [keptReadIds, setKeptReadIds] = useState<ReadonlySet<string>>(() => new Set());
-  const unreadOnlyRef = useRef(unreadOnly);
-  unreadOnlyRef.current = unreadOnly;
-  const toggleUnreadOnly = useCallback(() => {
-    const next = !unreadOnlyRef.current;
-    writeUnreadOnlyPref(next);
-    setUnreadOnly(next);
-    setKeptReadIds(prev => (prev.size ? new Set() : prev));
-  }, []);
-  useEffect(() => {
-    if (!open) setKeptReadIds(prev => (prev.size ? new Set() : prev));
-  }, [open]);
+  // The Inbox's letters, its filter and layout, and the letter open in the reader.
+  const letters = useNotificationLetters(open, section);
+  const { inbox, inboxSplit, openLetterId, setOpenLetterId, linkOpened } = letters;
   // Escape belongs to the top-most layer: with the reader open, the panel must
   // not also close (both listeners sit on `document`, so stopPropagation in the
   // reader cannot help — the panel has to opt out itself).
@@ -267,47 +158,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // view holds only archived rows, which badged the Inbox 0.
   const counts = useMemo(() => sectionCounts(feed, inbox.liveLetters), [feed, inbox.liveLetters]);
   const approvals = usePendingApprovals();
-
-  // Letter mutations: patch locally (the panel must feel instant), call the
-  // route, resync on failure. Read state ALSO mirrors onto the feed envelope so
-  // the bell badge drops without waiting for the WS round-trip.
-  const markLetterRead = useCallback((id: string, read = true) => {
-    const current = inboxRef.current.byId.get(id);
-    if (current && current.read === read) return;
-    markLocalRead([`letter:${id}`], read);
-    if (read && unreadOnlyRef.current) {
-      setKeptReadIds(prev => (prev.has(id) ? prev : new Set(prev).add(id)));
-    }
-    // The store stamps `readAt` on the flip (letter-store.ts mergeLetterPatch):
-    // that is the clock behind a read decision's grace window (isOpenDecision).
-    void inboxRef.current.applyChange(id, { read }, () => setLetterRead(id, read), 'read');
-  }, [markLocalRead]);
-
-  const toggleLetterPin = useCallback((letter: LetterEnvelope) => {
-    const pinned = !letter.pinned;
-    void inboxRef.current.applyChange(letter.id, { pinned }, () => setLetterPinned(letter.id, pinned), 'pin');
-  }, []);
-
-  // Archiving moves the letter between the live feed and the Archived view, so
-  // the list is re-read once the route settles rather than left showing a row
-  // that no longer belongs to the current filter.
-  const toggleLetterArchive = useCallback((letter: LetterEnvelope) => {
-    const archived = !letter.archived;
-    void inboxRef.current
-      .applyChange(letter.id, { archived }, () => setLetterArchived(letter.id, archived), 'archive')
-      .then(() => inboxRef.current.refresh());
-  }, []);
-
-  const openLetter = useCallback((id: string) => {
-    linkOpened.current = false;
-    setOpenLetterId(id);
-    log.info('inbox', 'letter reader opened', { letterId: id });
-  }, []);
-
-  // Closing the panel closes the reader with it (the reader renders inside the
-  // panel's portal): without this, the next panel open would silently pop the
-  // letter the user had already walked away from.
-  useEffect(() => { if (!open) { setOpenLetterId(null); linkOpened.current = false; } }, [open]);
 
   // The System zone's own health signal. `hasIssues` is useSystemHealth's own
   // derivation (git-sync unprotected or failing) — the same one the Sidebar's
@@ -321,112 +171,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     indexUnhealthy: searchIndexUnhealthy(indexStatus),
   });
 
-  // The error cards each problem host caused (causeKey `host:<alias>`), newest
-  // first: they render under that host's row at the top of All and Errors, so
-  // the rest of the view leaves them out and a host reads as one block.
-  const problemAliases = useMemo(() => problemHosts.map(p => p.alias).join('\n'), [problemHosts]);
-  const hostCards = useMemo(() => {
-    const aliases = new Set(problemAliases ? problemAliases.split('\n') : []);
-    const byHost = new Map<string, Notification[]>();
-    for (const n of feed) {
-      if (sectionOf(n) !== 'errors' || !n.causeKey) continue;
-      const alias = hostOfCauseKey(n.causeKey);
-      if (!alias || !aliases.has(alias)) continue;
-      const list = byHost.get(alias);
-      if (list) list.push(n);
-      else byHost.set(alias, [n]);
-    }
-    for (const list of byHost.values()) list.sort((a, b) => effectiveTs(b) - effectiveTs(a));
-    return byHost;
-  }, [feed, problemAliases]);
-  const hostCardIds = useMemo(() => new Set([...hostCards.values()].flat().map(n => n.id)), [hostCards]);
-
-  // Items of the active section, newest first. Sorting on effectiveTs (not
-  // timestamp) keeps a folded recurring error at the top of the list — its
-  // `timestamp` is first-seen and can be hours old while it is still firing.
-  const answeredHeld = useAnsweredHereHold(feed);
-  const items = useMemo(() => {
-    // Inbox rows come from the letter store, not the feed (see `inbox` above).
-    const pool = section === 'system' || section === 'inbox' ? []
-      : section === 'all' ? feed.filter(n => !hostCardIds.has(n.id))
-      // An ask answered here stays a beat in Needs you, saying which choice went.
-      : feed.filter(n => sectionOf(n) === section || (section === 'action' && answeredHeld.has(n.id)));
-    return [...pool].sort((a, b) => effectiveTs(b) - effectiveTs(a));
-  }, [feed, section, hostCardIds, answeredHeld]);
-
-  const inboxRows = useMemo(
-    () => filterInboxLetters(inbox.letters, unreadOnly, keptReadIds),
-    [inbox.letters, unreadOnly, keptReadIds],
-  );
-
-  // Same-origin entries collapse into one expandable group (iPhone-style):
-  // a cron job's repeated runs stack under the job name, a session's permission
-  // asks stack under the session. Groups keep the newest-first item order.
-  const groups = useMemo(() => collapseSameOrigin(items), [items]);
-
-  // Errors get a SECOND level of structure: a category header per family, so
-  // three failures of one plugin read as one problem. Category order is
-  // most-recent-activity (groupErrorsByCategory), and the same-origin collapse
-  // still applies INSIDE each category — the two groupings answer different
-  // questions ("what family" vs "is this the same origin repeating").
-  //
-  // Computed from the FEED, not from the active section's items: the rail lists
-  // the categories as sub-entries under Errors (so a specific family is one
-  // click away from anywhere), which means the grouping has to exist even while
-  // the user is reading another section.
-  const sortedErrors = useMemo(
-    () => feed.filter(nn => sectionOf(nn) === 'errors').sort((a, b) => effectiveTs(b) - effectiveTs(a)),
-    [feed],
-  );
-
-  const errorCats = useMemo(() => groupErrorsByCategory(sortedErrors), [sortedErrors]);
-
-  // The selected category, validated against what actually exists: when the last
-  // card of the chosen family recovers or is dismissed, the view falls back to
-  // all errors instead of pinning an empty pane to a stale filter.
-  const activeErrorCategory =
-    errorCategory && errorCats.some(g => g.category === errorCategory) ? errorCategory : null;
-
-  // …and a THIRD level, above the families: the ROOT CAUSE. One outage fans out
-  // into unrelated conditions (a task's session start, a route 5xx, a delivery
-  // failure), so it lands as four red cards in four families and reads as four
-  // problems. Cards sharing an open `causeKey` fold into one block instead —
-  // only in the all-errors view, because drilling into a family means the user
-  // asked for that family's whole list.
-  // A problem host's cards are under its row already (hostCards), so they are
-  // not a cause block a second time.
-  const errorCauses = useMemo(() => (
-    section === 'errors' && !activeErrorCategory
-      ? partitionErrorsByCause(sortedErrors.filter(n => !hostCardIds.has(n.id)))
-      : null
-  ), [sortedErrors, section, activeErrorCategory, hostCardIds]);
-
-  const errorBlocks = useMemo(() => {
-    if (section !== 'errors') return null;
-    // Whatever a cause block already shows is left OUT of the family blocks, so
-    // a card appears exactly once. Drilled into a family there are no cause
-    // blocks, so the family keeps its full list (errorCats, as before).
-    const cats = errorCauses ? groupErrorsByCategory(errorCauses.rest) : errorCats;
-    return cats
-      .filter(g => !activeErrorCategory || g.category === activeErrorCategory)
-      .map(g => ({
-        category: g.category,
-        count: g.items.length,
-        groups: collapseSameOrigin(g.items),
-      }));
-  }, [errorCats, errorCauses, section, activeErrorCategory]);
-
-  // What the header's Clear dismisses: the whole feed on All (null), else exactly what this view
-  // lists, so "Clear errors" never takes the asks with it; nothing in Inbox or System.
-  const clearKeys = useMemo<string[] | null>(() => {
-    if (section === 'all') return null;
-    if (section === 'inbox' || section === 'system') return [];
-    if (section === 'errors') {
-      const list = activeErrorCategory ? errorCats.find(g => g.category === activeErrorCategory)?.items ?? [] : sortedErrors;
-      return list.map(n => n.dedupKey);
-    }
-    return items.map(n => n.dedupKey);
-  }, [section, activeErrorCategory, errorCats, sortedErrors, items]);
+  // What the active section lists, its error families and causes, and what Clear dismisses.
+  const { hostCards, groups, errorCats, activeErrorCategory, errorCauses, errorBlocks, clearKeys } = useNotificationFeedView({
+    feed, section, errorCategory, problemHosts,
+  });
 
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
@@ -444,12 +192,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     // its own sub-entry (pickErrorCategory below).
     setErrorCategory(null);
   }, [inboxSplit]);
-
-  const changeInboxLayout = useLeanCallback((next: InboxLayout) => {
-    // A choice to leave the right reader is not a request to open a modal over the list.
-    if (inboxSplit && next !== 'split') setOpenLetterId(null);
-    setInboxLayout(next);
-  }, [inboxSplit, setInboxLayout]);
 
   const pickErrorCategory = useCallback((category: string) => {
     userPickedSection.current = true;
@@ -544,6 +286,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
 
   if (!open) return null;
 
+  // What every list's cards share: the group state, the way out, and the fix gate.
+  const cardProps = {
+    expandedGroups, onToggleGroup: toggleGroup, onNavigate, onDismissKey: (key: string) => dismissFeed([key]), canFix, fixNeedsClone,
+  };
   // The problems lead All and the all-errors view (never a drilled-in family,
   // which is the list the user asked for); each host's cards sit under its row.
   const problemsHere = (section === 'all' || (section === 'errors' && !activeErrorCategory))
@@ -558,16 +304,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       renderHostCards={(alias) => {
         const cards = hostCards.get(alias);
         return cards?.length ? (
-          <FeedGroups
-            groups={[{ key: `host:${alias}`, items: cards }]}
-            expandedGroups={expandedGroups}
-            onToggleGroup={toggleGroup}
-            onNavigate={onNavigate}
-            onDismissKey={key => dismissFeed([key])}
-            showCategoryChip
-            canFix={canFix}
-            fixNeedsClone={fixNeedsClone}
-          />
+          <FeedGroups groups={[{ key: `host:${alias}`, items: cards }]} showCategoryChip {...cardProps} />
         ) : null;
       }}
     />
@@ -582,9 +319,9 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       if (linkOpened.current) { linkOpened.current = false; onClose(); }
     }}
     onLetterUpdated={inbox.mergeLetter}
-    onMarkRead={markLetterRead}
-    onTogglePin={toggleLetterPin}
-    onToggleArchive={toggleLetterArchive}
+    onMarkRead={letters.markLetterRead}
+    onTogglePin={letters.toggleLetterPin}
+    onToggleArchive={letters.toggleLetterArchive}
     onNavigate={onNavigate}
   />;
 
@@ -605,8 +342,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
         <NotificationPanelHeader
           section={section}
           category={section === 'errors' ? activeErrorCategory : null}
-          canClear={clearKeys !== null ? clearKeys.length > 0 : feed.length > 0}
-          onClear={() => { dismissFeed(clearKeys ?? undefined); setExpandedGroups(new Set()); }}
+          canClear={clearKeys.length > 0}
+          onClear={() => { dismissFeed(clearKeys); setExpandedGroups(new Set()); }}
           onClose={onClose}
         />
 
@@ -702,115 +439,43 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               <NotificationSystemPane indexStatus={indexStatus} disabled={disabledHosts} onLeave={onClose} onNavigate={onNavigate} />
             ) : section === 'inbox' ? (
               <InboxPane
-                layout={inboxLayout}
-                onLayoutChange={changeInboxLayout}
+                layout={letters.inboxLayout}
+                onLayoutChange={letters.changeInboxLayout}
                 selectedId={openLetterId}
                 reader={letterReader}
-                letters={inboxRows}
+                letters={letters.inboxRows}
                 loaded={inbox.loaded}
                 error={inbox.error}
-                showArchived={showArchived}
-                onToggleArchived={() => setShowArchived(v => !v)}
-                unreadOnly={unreadOnly}
-                onToggleUnreadOnly={toggleUnreadOnly}
-                onOpen={openLetter}
+                showArchived={letters.showArchived}
+                onToggleArchived={letters.toggleArchived}
+                unreadOnly={letters.unreadOnly}
+                onToggleUnreadOnly={letters.toggleUnreadOnly}
+                onOpen={letters.openLetter}
                 onNavigate={onNavigate}
-                onTogglePin={toggleLetterPin}
-                onToggleArchive={toggleLetterArchive}
-                onToggleRead={(l) => markLetterRead(l.id, !l.read)}
+                onTogglePin={letters.toggleLetterPin}
+                onToggleArchive={letters.toggleLetterArchive}
+                onToggleRead={(l) => letters.markLetterRead(l.id, !l.read)}
               />
             ) : groups.length === 0 && !problems ? (
               (section === 'action' || section === 'all') && approvals.length > 0 ? null : <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
             ) : errorBlocks ? (
-              /* Errors: one block per ROOT CAUSE, then one per CATEGORY. The
-                 header is the whole point of the grouping — it names the cause or
-                 the family and how many cards are in it, so a rail of twenty reds
-                 becomes four readable problems. */
+              /* Errors: one block per root cause, then one per family (NotificationErrorBlocks). */
               <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-feed">
                 {problems}
-                {/* Root-cause blocks first: they name the ONE thing that broke
-                    ("Can't reach devbox"), and the cards under them are the
-                    conditions it produced. A single group so the existing
-                    collapse shows the newest card + "Show N more" — the whole
-                    point is that an outage takes up one block, not four. */}
-                {errorCauses?.causes.map(cause => (
-                  <div key={cause.causeKey} className="nfc-cat-block">
-                    <div className="nfc-cat-header nfc-cause-header">
-                      <ErrorCategoryTitle causeKey={cause.causeKey} label={cause.label} />
-                      <span className="nfc-cat-count">{cause.items.length}</span>
-                    </div>
-                    <FeedGroups
-                      groups={[{ key: `cause:${cause.causeKey}`, items: cause.items }]}
-                      expandedGroups={expandedGroups}
-                      onToggleGroup={toggleGroup}
-                      onNavigate={onNavigate}
-                      onDismissKey={key => dismissFeed([key])}
-                      // A cause block mixes families by construction (Sessions +
-                      // API under one outage), so unlike a family block its
-                      // header can't name the family — each card wears the chip.
-                      showCategoryChip
-                      canFix={canFix}
-                      fixNeedsClone={fixNeedsClone}
-                    />
-                  </div>
-                ))}
-                {errorBlocks.map(block => (
-                  <div key={block.category} className="nfc-cat-block">
-                    {/* The header doubles as the drill-down: clicking a family in
-                        the all-errors view filters to it (same move as its rail
-                        sub-entry). Filtered, the header stops being a button and
-                        gains "Show all" — the way back mirrors the way in. Same
-                        two-family gate as the rail sub-entries: with one family
-                        the all view IS the category view, so there is nothing to
-                        drill into. */}
-                    <div className="nfc-cat-header">
-                      {activeErrorCategory || errorCats.length < 2 ? (
-                        <span className="nfc-cat-name">{block.category}</span>
-                      ) : (
-                        <button
-                          className="nfc-cat-name nfc-cat-drill"
-                          title={`Show only ${block.category} errors`}
-                          onClick={() => pickErrorCategory(block.category)}
-                        >
-                          {block.category}
-                        </button>
-                      )}
-                      <span className="nfc-cat-count">{block.count}</span>
-                      {activeErrorCategory && (
-                        <button
-                          className="nfc-cat-showall"
-                          onClick={() => { userPickedSection.current = true; setErrorCategory(null); }}
-                        >
-                          Show all
-                        </button>
-                      )}
-                    </div>
-                    <FeedGroups
-                      groups={block.groups}
-                      expandedGroups={expandedGroups}
-                      onToggleGroup={toggleGroup}
-                      onNavigate={onNavigate}
-                      onDismissKey={key => dismissFeed([key])}
-                      canFix={canFix}
-                      fixNeedsClone={fixNeedsClone}
-                    />
-                  </div>
-                ))}
+                <NotificationErrorBlocks
+                  causes={errorCauses?.causes}
+                  blocks={errorBlocks}
+                  activeCategory={activeErrorCategory}
+                  drillable={errorCats.length >= 2}
+                  onPickCategory={pickErrorCategory}
+                  onShowAll={() => { userPickedSection.current = true; setErrorCategory(null); }}
+                  cardProps={cardProps}
+                />
               </div>
             ) : (
               <div ref={shiftGuard.ref} onClickCapture={shiftGuard.onClickCapture} className="notification-feed">
                 {problems}
-                <FeedGroups
-                  groups={groups}
-                  expandedGroups={expandedGroups}
-                  onToggleGroup={toggleGroup}
-                  onNavigate={onNavigate}
-                  onDismissKey={key => dismissFeed([key])}
-                  onOpenLetter={openLetter}
-                  showCategoryChip={section === 'all'}
-                  canFix={canFix}
-                  fixNeedsClone={fixNeedsClone}
-                />
+                <FeedGroups groups={groups} onOpenLetter={letters.openLetter} showCategoryChip={section === 'all'} {...cardProps} />
               </div>
             )}
           </div>
