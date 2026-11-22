@@ -1,7 +1,8 @@
 /**
- * Who the quick bar talks to: the order of its people list, the person it starts on, and the
- * name said at the start of a dictation ("to Walnut VP, ..."), which picks that person.
- * Pure functions, so tests/web/quickbar-people.test.ts pins every rule.
+ * Who the quick bar talks to: the order of its people list, the person it starts on (the last one
+ * chosen), the one Shift-Tab switches to, and the name said at the start of a dictation ("to
+ * Walnut VP, ..."), which picks that person. Pure functions, so tests/web/quickbar-people.test.ts
+ * pins every rule.
  */
 
 import { stateCountLabel } from '@open-walnut/user-status';
@@ -20,24 +21,60 @@ export interface QuickPerson {
 /** `kind` since 2026-11-20 (older entries have none). */
 export interface RecentSend { id: string; title: string; at: number; kind?: QuickPerson['kind'] }
 
-/** The person the bar opens on is the last one sent to, for this long; then the CEO. */
-export const STAY_WITH_LAST_MS = 10 * 60_000;
 /** Tasks sent to within this long are listed above the other tasks. */
 export const RECENT_TASK_MS = 48 * 3_600_000;
 const RECENTS_KEY = 'walnut:quickbar-recents';
 const MAX_RECENTS = 12;
+/**
+ * Who was chosen last, newest first: picked in the list, by a number key or Shift-Tab, or sent to.
+ * The bar opens on the newest, however long ago (2026-11-22, the user: "the quick search should
+ * remember the last time selection, if I choose walnut, it will choose walnut again"; until then
+ * it stayed on the last send for ten minutes only, then went back to the CEO).
+ */
+const CHOSEN_KEY = 'walnut:quickbar-chosen';
+const MAX_CHOSEN = 6;
 
 export function readRecents(): RecentSend[] {
+  return readList(RECENTS_KEY);
+}
+
+type Remembered = Pick<QuickPerson, 'id' | 'title'> & { kind?: QuickPerson['kind'] };
+
+function readList(key: string): RecentSend[] {
   try {
-    const value = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]');
+    const value = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(value) ? value.filter((r) => r && typeof r.id === 'string' && typeof r.at === 'number') : [];
   } catch { return []; }
 }
 
-export function rememberSend(person: Pick<QuickPerson, 'id' | 'title'> & { kind?: QuickPerson['kind'] }, now = Date.now()): RecentSend[] {
-  const next = [{ id: person.id, title: person.title, at: now, ...(person.kind ? { kind: person.kind } : {}) }, ...readRecents().filter((r) => r.id !== person.id)].slice(0, MAX_RECENTS);
-  try { localStorage.setItem(RECENTS_KEY, JSON.stringify(next)); } catch { /* private mode: no memory */ }
+function pushList(key: string, max: number, person: Remembered, now: number): RecentSend[] {
+  const next = [{ id: person.id, title: person.title, at: now, ...(person.kind ? { kind: person.kind } : {}) }, ...readList(key).filter((r) => r.id !== person.id)].slice(0, max);
+  try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* private mode: no memory */ }
   return next;
+}
+
+/** A send is a choice too: the bar opens on that person next time. */
+export function rememberSend(person: Remembered, now = Date.now()): RecentSend[] {
+  rememberChoice(person, now);
+  return pushList(RECENTS_KEY, MAX_RECENTS, person, now);
+}
+
+export function readChosen(): RecentSend[] {
+  return readList(CHOSEN_KEY);
+}
+
+/**
+ * The person chosen by hand (list, number key, Shift-Tab): the bar opens on them next time. The
+ * CEO chosen while the people list did not load has no id: kept as such, it opens on the CEO.
+ */
+export function rememberChoice(person: Remembered, now = Date.now()): void {
+  if (person.id || person.kind === 'ceo') pushList(CHOSEN_KEY, MAX_CHOSEN, person, now);
+}
+
+/** Every person in these lists once, the most recently chosen first. */
+function choicesOf(...lists: ReadonlyArray<readonly RecentSend[]>): RecentSend[] {
+  const all = lists.flat().sort((a, b) => b.at - a.at);
+  return all.filter((r, i) => all.findIndex((x) => x.id === r.id) === i);
 }
 
 export interface PeopleSection { label: string; people: QuickPerson[] }
@@ -72,14 +109,35 @@ export function sectionPeople(people: readonly QuickPerson[], recents: readonly 
   ].filter((s) => s.people.length > 0);
 }
 
-/** The last person sent to within STAY_WITH_LAST_MS, else the CEO, else the first listed. */
-export function startingPerson(people: readonly QuickPerson[], recents: readonly RecentSend[], now = Date.now()): QuickPerson | null {
-  const last = recents[0];
-  if (last && now - last.at <= STAY_WITH_LAST_MS) {
-    const listed = people.find((p) => p.id === last.id);
-    if (listed) return listed;
+/**
+ * The last person chosen (or sent to), however long ago, while the list still holds them; else
+ * the CEO, else the first listed. A task that finished since is no longer listed: the CEO then.
+ */
+export function startingPerson(people: readonly QuickPerson[], recents: readonly RecentSend[], chosen: readonly RecentSend[] = []): QuickPerson | null {
+  const last = choicesOf(chosen, recents)[0];
+  const listed = last ? people.find((p) => p.id === last.id) : undefined;
+  return listed ?? people.find((p) => p.kind === 'ceo') ?? people[0] ?? null;
+}
+
+/**
+ * Who Shift-Tab switches to from `shown`: the CEO from anyone else; from the CEO, back to the last
+ * one chosen who is not the CEO and is still listed (`listed`: every row the list shows, recent
+ * tasks included). `undefined` when there is nobody to go back to (the Tab list opens instead);
+ * `null` is the CEO when the people list did not load (the chip then says CEO).
+ */
+export function quickSwitchTarget(
+  shown: QuickPerson | null,
+  listed: readonly QuickPerson[],
+  recents: readonly RecentSend[],
+  chosen: readonly RecentSend[],
+): QuickPerson | null | undefined {
+  const ceo = listed.find((p) => p.kind === 'ceo') ?? null;
+  if (shown && shown.kind !== 'ceo') return ceo;
+  for (const r of choicesOf(chosen, recents)) {
+    const hit = listed.find((p) => p.id === r.id);
+    if (hit && hit.kind !== 'ceo') return hit;
   }
-  return people.find((p) => p.kind === 'ceo') ?? people[0] ?? null;
+  return undefined;
 }
 
 const GAP = /[\s\p{P}\p{S}]/u;
@@ -194,12 +252,12 @@ export function personLine(p: Pick<QuickPerson, 'kind' | 'needs' | 'line' | 'sta
 }
 
 /**
- * The person the bar opens on when the people list did not load: the last one sent to within
- * STAY_WITH_LAST_MS, as startingPerson would pick from a loaded list, else null (the chip then
- * says CEO, and the words go to the CEO).
+ * The person the bar opens on when the people list did not load: the last one chosen or sent to,
+ * as startingPerson would pick from a loaded list, else null (the chip then says CEO, and the
+ * words go to the CEO).
  */
-export function personOfRecent(recents: readonly RecentSend[], now = Date.now()): QuickPerson | null {
-  const last = recents[0];
-  if (!last || now - last.at > STAY_WITH_LAST_MS) return null;
+export function personOfRecent(recents: readonly RecentSend[], chosen: readonly RecentSend[] = []): QuickPerson | null {
+  const last = choicesOf(chosen, recents)[0];
+  if (!last?.id) return null;
   return { id: last.id, title: last.title, kind: last.kind ?? 'task', project: '', state: '', stateLabel: '', line: '', needs: 0 };
 }

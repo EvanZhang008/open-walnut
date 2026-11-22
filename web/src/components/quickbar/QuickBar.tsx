@@ -21,7 +21,7 @@ import { draftKey } from '@/utils/drafts';
 import { fetchQuickPeople, type QuickImage } from '@/api/quick';
 import { focusNoteOf } from '@/focus-spaces/focus-model';
 import { log } from '@/utils/log';
-import { addresseeOf, personOfRecent, readRecents, sectionPeople, startingPerson, type QuickPerson } from './quickbar-people';
+import { addresseeOf, personOfRecent, quickSwitchTarget, readChosen, readRecents, rememberChoice, sectionPeople, startingPerson, type QuickPerson } from './quickbar-people';
 import { MODES, matchMode, modeSpec, type QuickMode } from './quickbar-modes';
 import { QuickBarResults, type QuickBarResultsHandle, type QuickResult } from './QuickBarResults';
 import { QuickBarAsk, useQuickAsk } from './QuickBarAsk';
@@ -122,6 +122,9 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
   // or emptied (an edit during the count keeps the person the count names).
   const pickedByHand = useRef(false);
   const addressTaken = useRef(false);
+  // A pick by hand changes who the chip names (shownFor reads the ref): this renders it, even when
+  // the person picked is the one already held (a typed address showed another).
+  const [, setHandPicks] = useState(0);
 
   const dictation = useBoxDictation(boxRef, text, setText);
   const stt = useSpeechToText({ onDraft: dictation.onDraft, onTranscribe: dictation.onTranscribe, onRefine: dictation.onRefine });
@@ -147,13 +150,13 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       setPeople(rows);
       setFocusNote(focusNoteOf(focus));
       // The person the chip shows stays (words may be on their way to them), refreshed from the list.
-      setPerson((cur) => (cur?.id ? rows.find((r) => r.id === cur.id) ?? cur : startingPerson(rows, readRecents())));
+      setPerson((cur) => (cur?.id ? rows.find((r) => r.id === cur.id) ?? cur : startingPerson(rows, readRecents(), readChosen())));
     }).catch((err: unknown) => {
       log.warn('quickbar', 'people list failed', { error: err instanceof Error ? err.message : String(err), attempt: retry.attempt });
       setPeopleFailed(true);
       // The chip and the send stay one person: the one shown now, else the last one sent to
       // (as the bar would open on), else the CEO, which the chip then says.
-      setPerson((cur) => cur ?? personOfRecent(readRecents()));
+      setPerson((cur) => cur ?? personOfRecent(readRecents(), readChosen()));
       if (!onScreen.current) return;
       retry.timer = setTimeout(() => { retry.timer = null; loadPeople(); }, PEOPLE_RETRY_MS[Math.min(retry.attempt, PEOPLE_RETRY_MS.length - 1)]);
       retry.attempt += 1;
@@ -167,6 +170,15 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
     if (!hit) return { to: person, words };
     return { to: hit.person, words: hit.rest };
   }, [people, person]);
+
+  /**
+   * Who the chip names, as the send will pick: a name typed first, unless the person was chosen by
+   * hand or the address was already read (then the words are only words, as `send` reads them).
+   */
+  const shownFor = useLeanCallback((words: string): QuickPerson | null => {
+    if (pickedByHand.current || addressTaken.current) return person;
+    return addressed(words).to ?? person;
+  }, [addressed, person]);
 
   /**
    * Send the box's words. `taken` is what a take that just ended worked out (its person and the
@@ -315,7 +327,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       stopCount();
       loadPeople();
       setPicking(false);
-      setPerson((cur) => (text.trim() ? cur : startingPerson(people, readRecents()) ?? cur));
+      setPerson((cur) => (text.trim() ? cur : startingPerson(people, readRecents(), readChosen()) ?? cur));
       // An empty box is a new message: its first words may name who gets it again.
       if (!text.trim()) { pickedByHand.current = false; addressTaken.current = false; }
       enterMode(opts.mode ?? 'send');
@@ -350,8 +362,11 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  const pick = useLeanCallback((p: QuickPerson) => {
+  /** A person chosen by hand (the list, a number key, Shift-Tab; null is the CEO when the list did not load): kept for the next open. */
+  const pick = useLeanCallback((p: QuickPerson | null) => {
     pickedByHand.current = true;
+    rememberChoice(p ?? { id: '', title: 'CEO', kind: 'ceo' });
+    setHandPicks((n) => n + 1);
     setPerson(p);
     setPickedBySpeech(false);
     setPicking(false);
@@ -401,6 +416,12 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       stopCount();
       // A keyword typed first ("task tile") switches to its mode; else Tab is who gets the words.
       if (typedMode && !e.shiftKey) { enterMode(typedMode.mode.id, typedMode.rest, true); return; }
+      // Shift-Tab is the quick way to the CEO, and from the CEO back to the one chosen before
+      // (2026-11-22, the user: "there should be a way to quickly select CEO ... like shift tab").
+      if (e.shiftKey) {
+        const to = quickSwitchTarget(shownFor(text), picks, readRecents(), readChosen());
+        if (to !== undefined) { pick(to); return; }
+      }
       setPicking(true);
       return;
     }
@@ -428,7 +449,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
     }
     // Any other key during the count is an edit: the words wait for Enter.
     if (countdownAt !== null && !['Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) stopCount();
-  }, [picks, pick, picking, countdownAt, close, recording, stt, finishTake, send, onCapture, mode, query, typedMode, enterMode, openResult, asking, leave, text, images]);
+  }, [picks, pick, picking, countdownAt, close, recording, stt, finishTake, send, onCapture, mode, query, typedMode, enterMode, openResult, asking, leave, text, images, shownFor]);
 
   // The box grows with the words, up to five lines.
   useEffect(() => {
@@ -438,10 +459,12 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
     el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
   }, [text]);
 
-  const preview = addressed(text);
-  const shown = preview.to ?? person;
+  const shown = shownFor(text);
   const spec = modeSpec(mode);
   const value = mode === 'send' ? text : query;
+  // Who Shift-Tab goes to, named in the foot; read fresh each render, as the key reads it (the other
+  // surface, the Mac panel or the in-app bar, may have chosen since).
+  const switchTo = quickSwitchTarget(shown, picks, readRecents(), readChosen());
   // Idle, the box says Tab is there: what else the bar does is never a hidden key (2026-11-20).
   const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? 'Type a message, or Tab to see what you can do' : 'Speak or type, or Tab to see what you can do';
 
@@ -477,6 +500,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
             className={`qb-to${pickedBySpeech ? ' qb-to-heard' : ''}`}
             onClick={() => { stopCount(); setPicking((v) => !v); }}
             aria-label={`To ${shown?.title ?? 'CEO'}. Change`}
+            title={switchTo === undefined ? 'Change who gets it (Tab)' : `Change who gets it (Tab). Shift-Tab: ${switchTo?.title ?? 'CEO'}`}
             aria-expanded={picking}
           >
             {shown && <PersonAvatar person={shown} size={20} />}
@@ -531,6 +555,7 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
         note={notice ?? stt.error ?? stt.silenceWarning ?? (stt.isRecording ? stt.draftNotice : null) ?? null}
         peopleFailed={peopleFailed}
         onRetryPeople={loadPeople}
+        switchTo={switchTo}
         typedMode={typedMode}
         // The Tab list shows the modes itself: no second row of them under it.
         empty={!text.trim() && !picking}

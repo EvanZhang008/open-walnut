@@ -8,7 +8,7 @@ import { MODES, type ModeMatch, type QuickMode } from './quickbar-modes';
 import { personLine, type QuickPerson } from './quickbar-people';
 
 export function QuickBarFoot({
-  mode, recording, transcribing, micLive, counting, to, note, peopleFailed, onRetryPeople, typedMode, empty, onMode, canCapture,
+  mode, recording, transcribing, micLive, counting, to, note, peopleFailed, onRetryPeople, typedMode, empty, onMode, canCapture, switchTo,
 }: {
   mode: QuickMode;
   recording: boolean;
@@ -23,6 +23,8 @@ export function QuickBarFoot({
   empty: boolean;
   onMode: (mode: QuickMode) => void;
   canCapture: boolean;
+  /** Who Shift-Tab switches to (null: the CEO when the list did not load); undefined: nobody, no key shown. */
+  switchTo?: QuickPerson | null;
 }) {
   const who = to?.title ?? 'CEO';
   const live = recording ? (micLive ? 'Listening' : 'Opening the microphone') : transcribing ? 'Finishing the last words' : null;
@@ -62,7 +64,7 @@ export function QuickBarFoot({
   else if (recording) keys = <><Key k="tab" />more <Key k="esc" />stop listening <Key k="↵" />send</>;
   else if (mode === 'tasks' || mode === 'notes') keys = <><Key k="↑↓" />choose <Key k="↵" />open <Key k="esc" />back</>;
   else if (mode === 'ask') keys = <><Key k="↵" />ask <Key k="esc" />back</>;
-  else keys = <>{!typedMode && <><Key k="tab" />more </>}<Key k="↵" />send{canCapture && <> <Key k="⇧⌘S" />screenshot</>} <Key k="esc" />close</>;
+  else keys = <>{!typedMode && <><Key k="tab" />more </>}{switchTo !== undefined && <span className="qb-switch-key" title={`Shift-Tab: send to ${switchTo?.title ?? 'CEO'}`}><Key k="⇧tab" /><span className="qb-switch-name">{shortName(switchTo)}</span> </span>}<Key k="↵" />send{canCapture && <> <Key k="⇧⌘S" />screenshot</>} <Key k="esc" />close</>;
 
   return (
     <div className="qb-foot">
@@ -70,6 +72,13 @@ export function QuickBarFoot({
       <span className="qb-keys">{keys}</span>
     </div>
   );
+}
+
+/** The name a key hint gives a person: CEO, a VP without its "VP", a task's title (CSS cuts it short). */
+function shortName(p: QuickPerson | null): string {
+  if (!p || p.kind === 'ceo') return 'CEO';
+  if (p.kind === 'vp') return p.title.replace(/\s*\bVP\b\s*/i, ' ').trim() || p.title;
+  return p.title;
 }
 
 export function Key({ k }: { k: string }) {

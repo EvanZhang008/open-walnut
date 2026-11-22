@@ -227,6 +227,9 @@
 }
 
 .qb-keys { flex: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+/* Shift-Tab's hint names who it switches to; a long task title is cut, never the other keys. */
+.qb-switch-key { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.qb-switch-name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
 
 .qb-key {
   display: inline-block;
