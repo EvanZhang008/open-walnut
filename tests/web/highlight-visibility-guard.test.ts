@@ -206,6 +206,8 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/thread-map.css :: .thread-map-item:is(:hover, :focus-within) .thread-map-status': CONTROL,
   'web/src/styles/buttons.css :: .btn-reserve::before': SLOT,
   'web/src/styles/buttons.css :: .btn-reserve::after': SLOT,
+  // The "·" before a search row's word that starts a wrapped line: generated content, no words a painter marks.
+  'web/src/styles/badge.css :: .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > [data-line-start][data-line-start]::before': SLOT,
   'web/src/styles/corner-stack.css :: .corner-stack.is-tucked, .corner-stack.under-drawer': 'the notice corner (toasts, the approval card): a portal of its own that no painter searches or marks',
   'web/src/components/approvals/approvals.css :: .corner-stack.approval-dialog-open': 'the notice corner (toasts, the approval card): a portal of its own that no painter searches or marks',
   'web/src/styles/git-glance.css :: .session-diff-refreshing.is-idle': CONTROL,
