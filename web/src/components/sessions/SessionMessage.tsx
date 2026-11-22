@@ -292,7 +292,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   const [open, setOpen] = useRowDisclosure(disclosureId, false);
   const inStepList = useInStepList();
   // Its step row shows the chevron at rest while its first line is cut (cut-cue.ts).
-  const stepRef = useCutCue<HTMLButtonElement>(`${open}\n${inStepList}\n${thinkingFirstLine(text)}`);
+  const stepRef = useCutCue<HTMLButtonElement>(`${open}\n${inStepList}\n${text}`);
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
