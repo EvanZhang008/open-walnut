@@ -52,9 +52,10 @@ export const Receiver = ws.Receiver;
 export const Sender = ws.Sender;
 `
 
-// 'bun:sqlite' exists only at runtime (src/lib/sqlite.ts loads it); the rest
-// are optional or downloaded components, loaded where they are installed.
-export const BUNDLE_EXTERNAL = ['bun:sqlite', 'sharp', '@anthropic-ai/claude-agent-sdk', 'screencapturekit-audio-capture', '@huggingface/transformers']
+// Bun's own modules ('bun:sqlite', 'bun:ffi', 'bun:jsc') exist only at runtime (src/lib/sqlite.ts,
+// src/core/leader/permit/system-clock.ts load them; tests/scripts/bundle-external-bun.test.ts lists
+// every one src/ names); the rest are optional or downloaded components, loaded where they are installed.
+export const BUNDLE_EXTERNAL = ['bun:sqlite', 'bun:ffi', 'bun:jsc', 'sharp', '@anthropic-ai/claude-agent-sdk', 'screencapturekit-audio-capture', '@huggingface/transformers']
 
 /**
  * Direct dependencies cli-fast loads from node_modules instead of carrying, as
