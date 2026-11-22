@@ -13,7 +13,6 @@ import { SearchField } from '@/components/common/SearchField';
 import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { SettingsIcon } from '../settings-icons';
 import { sparkPaths } from './host-fleet-dashboard-model';
 import {
   ROWS_SHOWN, alarmLine, alarmStatus, failuresText, isToolSort, matchesFind, msText, pageKindParts, pctText, rangeWord,
@@ -195,7 +194,7 @@ function UsageRowView({ row, cols, open, span, range, now, onToggle }: { row: Us
 
 function FindBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <SearchField small fieldClassName="ru-find" icon={<SettingsIcon glyph="magnifier" size={13} />}
+    <SearchField small fieldClassName="ru-find"
       type="search" data-no-draft="search" className="settings-filter" data-testid="real-use-find"
       placeholder="Find a tool" aria-label="Find a tool" autoComplete="off" spellCheck={false}
       value={value} setText={onChange} onClear={() => onChange('')} clearLabel="Clear the search" />
