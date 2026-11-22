@@ -21,7 +21,7 @@ import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from '#ws'
-import { hostCallAllowed } from './host-calls.js'
+import { hostCallAllowed, hostCallArgs } from './host-calls.js'
 import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
 import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
@@ -180,7 +180,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       const lifecycle = o.lifecycle ?? await import('../sessions/session-lifecycle.js')
       const fn = (lifecycle as unknown as Record<string, unknown>)[body.member]
       if (typeof fn !== 'function') return { status: 200, body: { ok: false, error: 'no_such_member' } }
-      return { status: 200, body: { ok: true, value: jsonValue(await (fn as AnyFn)(body.sid, ...args)) } }
+      return { status: 200, body: { ok: true, value: jsonValue(await (fn as AnyFn)(...hostCallArgs('lifecycle', body.sid, args))) } }
     }
     const runner = await o.runner()
     let target: Record<string, unknown> | null
@@ -207,7 +207,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     }
     const fn = target[body.member]
     if (typeof fn !== 'function') return { status: 200, body: { ok: false, error: 'no_such_member' } }
-    const out = await (fn as AnyFn).apply(target, args)
+    // The sid is the body's (host-calls.ts hostCallArgs): a runner member takes it first.
+    const out = await (fn as AnyFn).apply(target, hostCallArgs(body.target, body.sid, args))
     if (body.member === 'markExpectedTeardown') {
       return { status: 200, body: { ok: true, value: typeof out === 'function' ? { undoId: keepUndo(out as () => void) } : null } }
     }

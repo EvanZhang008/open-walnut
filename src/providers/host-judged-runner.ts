@@ -60,10 +60,15 @@ async function leaderSide() {
   return side
 }
 
-/** A runner method of a host-judged session, on its host. */
+/**
+ * A runner method of a host-judged session, on its host. `args` are the method's arguments after
+ * the session id: the sid rides the call's body and the host puts it first (host-calls.ts
+ * hostCallArgs). A callback cannot cross: such a call is refused here, never sent short.
+ */
 function callRunner(sid: string, member: string, args: unknown[]): Promise<unknown> {
   const p = hostJudgedSession(sid)
   if (!p) return Promise.reject(new Error(`session ${sid} is not run by a host`))
+  if (args.some((a) => typeof a === 'function')) return Promise.reject(new Error(`${member} takes a callback, which cannot reach the host that runs session ${sid}`))
   return p.call(member, args, 'runner' as HostCallTarget)
 }
 
@@ -71,11 +76,6 @@ function fire(sid: string, member: string, args: unknown[]): void {
   callRunner(sid, member, args).catch((err: unknown) => {
     log.session.warn('host-run session: a runner call to its host failed', { sessionId: sid, member, error: err instanceof Error ? err.message : String(err) })
   })
-}
-
-/** What crosses: a callback does not (respawnOnCurrentPrompt's stillWanted), JSON values do. */
-function crossing(args: unknown[]): unknown[] {
-  return args.filter((a) => typeof a !== 'function')
 }
 
 /**
@@ -329,10 +329,21 @@ const MIRRORED: Record<string, (p: RemoteJudgedSession, args: unknown[]) => unkn
 /** Forwarded to the host's runner, its answer awaited. */
 const FORWARD_ASYNC = [
   'isBackgroundWorkActive', 'reconcilePendingBackgroundTasks', 'requestTurnCompleteSelfReport', 'changePermissionMode',
-  'reinitialize', 'respawnOnCurrentPrompt', 'recoverCancelledForSession',
+  'reinitialize', 'recoverCancelledForSession',
 ] as const
 /** Forwarded to the host's runner, not awaited (sync methods). */
 const FORWARD_SYNC = ['settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd'] as const
+/**
+ * Refused for a host-judged session, by name: a host runs these for its own sessions itself.
+ * respawnOnCurrentPrompt takes a callback (host-calls.ts) and the host's own prompt refresh runs it.
+ */
+export class HostRunsItError extends Error {
+  readonly why = 'host_runs_it'
+  constructor(member: string, sid: string, host: string) {
+    super(`${member} is not run here for session ${sid}: its host ${host} runs it itself`)
+  }
+}
+const REFUSED = ['respawnOnCurrentPrompt'] as const
 /** The leader's own delivery of a host-judged session: never (the host drains its queue). */
 const GATED: Record<string, () => unknown> = {
   processNext: () => Promise.resolve(),
@@ -342,8 +353,11 @@ const GATED: Record<string, () => unknown> = {
 
 /** Every runner method this module wraps (a test checks each still exists on SessionRunner). */
 export const HOST_JUDGED_RUNNER_METHODS: readonly string[] = [
-  ...Object.keys(SYNC_LOOKUPS), ...Object.keys(ASYNC_LOOKUPS), ...Object.keys(MIRRORED), ...FORWARD_ASYNC, ...FORWARD_SYNC, ...Object.keys(GATED),
+  ...Object.keys(SYNC_LOOKUPS), ...Object.keys(ASYNC_LOOKUPS), ...Object.keys(MIRRORED), ...FORWARD_ASYNC, ...FORWARD_SYNC, ...REFUSED, ...Object.keys(GATED),
 ]
+
+/** The runner methods forwarded to a host-run session's host: each is in HOST_CALL_ALLOWLIST.runner (a test checks). */
+export const HOST_FORWARDED_RUNNER_METHODS: readonly string[] = [...FORWARD_ASYNC, ...FORWARD_SYNC]
 
 const INSTALLED = Symbol.for('walnut.hostJudgedRouting')
 
@@ -376,13 +390,19 @@ export function installHostJudgedRouting(proto: object): void {
   }
   for (const name of FORWARD_ASYNC) {
     wrap(name, (orig) => function (this: unknown, sid: string, ...rest: unknown[]) {
-      return judgingHostOf(sid) ? callRunner(sid, name, crossing(rest)) : orig.call(this, sid, ...rest)
+      return judgingHostOf(sid) ? callRunner(sid, name, rest) : orig.call(this, sid, ...rest)
     })
   }
   for (const name of FORWARD_SYNC) {
     wrap(name, (orig) => function (this: unknown, sid: string, ...rest: unknown[]) {
-      if (judgingHostOf(sid)) { fire(sid, name, crossing(rest)); return undefined }
+      if (judgingHostOf(sid)) { fire(sid, name, rest); return undefined }
       return orig.call(this, sid, ...rest)
+    })
+  }
+  for (const name of REFUSED) {
+    wrap(name, (orig) => function (this: unknown, sid: string, ...rest: unknown[]) {
+      const host = judgingHostOf(sid)
+      return host ? Promise.reject(new HostRunsItError(name, sid, host)) : orig.call(this, sid, ...rest)
     })
   }
   for (const [name, skip] of Object.entries(GATED)) {

@@ -152,7 +152,8 @@ describe('/call', () => {
     expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'nowhere', member: 'getUsage' })).body).toEqual({ ok: false, error: 'not_allowed' })
     expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'session', member: 'getUsage', args: [21] })).body).toEqual({ ok: true, value: { tokens: 42 } })
     expect((await post('/host-api/sessions/call', { sid: 'sid-acp', target: 'acp', member: 'setModel', args: ['opus'] })).body).toEqual({ ok: true, value: { ok: true } })
-    expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'runner', member: 'syncTask', args: ['sid-1', 'task-1'] })).body).toEqual({ ok: true, value: null })
+    // A runner member gets the body's sid first (host-calls.ts hostCallArgs): args never carry it.
+    expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'runner', member: 'syncTask', args: ['task-1'] })).body).toEqual({ ok: true, value: null })
     expect((await post('/host-api/sessions/call', { sid: 'sid-gone', target: 'session', member: 'getUsage' })).body).toEqual({ ok: false, error: 'no_live_session' })
     expect(runnerCalls).toEqual(['acp:opus', 'sync:sid-1:task-1'])
   })

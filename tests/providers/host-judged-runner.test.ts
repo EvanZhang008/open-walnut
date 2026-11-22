@@ -19,7 +19,7 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 
 import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
 import { SessionRunner } from '../../src/providers/claude-code-session.js'
-import { HOST_JUDGED_RUNNER_METHODS, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
+import { HOST_JUDGED_RUNNER_METHODS, HostRunsItError, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
 import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
 import { _resetHostSessionTasksForTesting, startHostSessionTasks } from '../../src/core/session-channel/leader-tasks.js'
@@ -183,16 +183,18 @@ describe('a host-judged session', () => {
     expect(r.isTurnRunning(HOST_SID)).toBe(true)
     expect(r.deliveryWait(HOST_SID)).toEqual({ reason: 'r' })
     await expect(r.isBackgroundWorkActive(HOST_SID)).resolves.toBe(true)
-    await r.respawnOnCurrentPrompt(HOST_SID, () => true, { folder: true })
+    // A callback member is refused by name: the host runs its own prompt refresh.
+    await expect(r.respawnOnCurrentPrompt(HOST_SID, () => true, { folder: true })).rejects.toBeInstanceOf(HostRunsItError)
     r.syncLane(HOST_SID, 'lane-x')
     const undo = r.markExpectedTeardown(HOST_SID, 'restart')
     undo?.()
     await settle(20)
     expect(calls.map((c) => `${c.target}.${c.member}`)).toEqual([
-      'runner.isBackgroundWorkActive', 'runner.respawnOnCurrentPrompt', 'runner.syncLane', 'session.markExpectedTeardown', 'session.undoExpectedTeardown',
+      'runner.isBackgroundWorkActive', 'runner.syncLane', 'session.markExpectedTeardown', 'session.undoExpectedTeardown',
     ])
-    // The callback never crosses.
-    expect(calls[1].args).toEqual([{ folder: true }])
+    // The sid rides the body, never args (host-calls.ts hostCallArgs).
+    expect(calls[0]).toMatchObject({ sid: HOST_SID, args: [] })
+    expect(calls[1]).toMatchObject({ sid: HOST_SID, args: ['lane-x'] })
     // The runner's own session is untouched by any of it.
     expect(isRemoteJudgedSession(r.findSessionByClaudeId(SID))).toBe(false)
     expect(r.findSessionByClaudeId('no-such-session')).toBeUndefined()
