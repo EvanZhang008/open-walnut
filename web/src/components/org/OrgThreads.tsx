@@ -48,7 +48,8 @@
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
 import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, pinnedNow, sharedAnswers, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
@@ -497,7 +498,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   // Another node shown in this same view: its folds start folded (and A, B, A folds A again).
   if (folds.node !== foldNode) setFolds({ node: foldNode, opened: NO_FOLDS });
   const opened = folds.node === foldNode ? folds.opened : NO_FOLDS;
-  const openFold = useCallback((g: ThreadGroup, open: boolean) => setFolds((f) => {
+  const openFold = useLeanCallback((g: ThreadGroup, open: boolean) => setFolds((f) => {
     const was = f.node === foldNode ? f.opened : NO_FOLDS;
     if (f.node === foldNode && was.has(g) === open) return f;
     const next = new Set(was);
