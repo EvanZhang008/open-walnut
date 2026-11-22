@@ -10,6 +10,7 @@
  * tests/scripts/calendar-spec-ratchets.test.ts keeps the fixed 48 out of the specs.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 /** The pixel height of one hour on the time grid inside `scope`. */
 export async function calendarHourPx(scope: Page | Locator): Promise<number> {
@@ -155,7 +156,12 @@ export async function modKey(page: Page): Promise<'Meta' | 'Control'> {
 export async function undo(page: Page) { await page.keyboard.press(`${await modKey(page)}+z`) }
 export async function redo(page: Page) { await page.keyboard.press(`${await modKey(page)}+Shift+z`) }
 
+/**
+ * Open Home with the Calendar side bar. The side bar is kept to this page (isolateUiPrefs): open
+ * on the shared server's UI prefs it would boot open for every spec after it.
+ */
 export async function openPanel(page: Page): Promise<Locator> {
+  await isolateUiPrefs(page)
   await page.goto('/')
   await page.getByTestId('sidebar-toggle-calendar').click()
   const panel = page.getByTestId('cal-side-panel')
