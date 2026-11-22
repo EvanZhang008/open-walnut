@@ -120,10 +120,13 @@ describe('the summary', () => {
 
 describe("a row's detail", () => {
   it('lists every failure code, most first', () => {
-    expect(failuresText({})).toBe('No failures.')
+    // A request's detail says how many of its reads were slow and its p95 (review, 2026-11-22).
     // A request's detail says how many reads were slow beside 'No failures' (review, 2026-11-22).
-    expect(slowText({ calls: 7, slow: 2, msP95: 8_200 })).toBe('2 of 7 reads took 5 s or more; 95% under 8.2 s.')
-    expect(slowText({ calls: 33, slow: 0, msP95: 11 })).toBe('No read took 5 s or more. 95% under 11 ms.')
+    expect(slowText({ calls: 7, slow: 2, msP95: 8_200 })).toBe('Slow: 2 of 7 reads took 5 s or more. 95% answered within 8.2 s.')
+    expect(slowText({ calls: 33, slow: 0, msP95: 11 })).toBe('No read took 5 s or more. 95% answered within 11 ms.')
+    // A request's failures are its error answers: a slow read never sits beside "No failures".
+    expect(failuresText({}, 'error answer')).toBe('No error answers.')
+    expect(failuresText({ http_404: 2, http_500: 1 }, 'error answer')).toBe('All 3 error answers: http_404 2, http_500 1.')
     expect(failuresText({ timeout: 1 })).toBe('1 failure: timeout 1.')
     expect(failuresText({ bad_input: 9, host_unreachable: 25, user_kind: 11, zero: 0, a_tie: 9 }))
       .toBe('All 54 failures: host_unreachable 25, user_kind 11, a_tie 9, bad_input 9.')

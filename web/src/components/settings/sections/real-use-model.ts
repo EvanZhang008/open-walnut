@@ -116,21 +116,24 @@ export function summaryOf(rows: readonly UsageRow[]): RealUseSummary {
 /** A request whose slow reads are a tenth or more of it reads red. */
 export const slowIsHigh = (r: Pick<UsageRow, 'calls' | 'slow'>): boolean => r.calls > 0 && r.slow / r.calls >= 0.1;
 
-/** "All 82 failures: host_unreachable 25, user_kind 11, ...": every code, most first. */
-export function failuresText(codes: Record<string, number>): string {
+/**
+ * "All 82 failures: host_unreachable 25, user_kind 11, ...": every code, most first. A request's
+ * failures are its error answers (4xx, 5xx): a slow read is no failure, so it never says "No failures".
+ */
+export function failuresText(codes: Record<string, number>, what: 'failure' | 'error answer' = 'failure'): string {
   const list = Object.entries(codes).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const total = list.reduce((sum, [, n]) => sum + n, 0);
-  if (!total) return 'No failures.';
+  if (!total) return `No ${what}s.`;
   const words = list.map(([code, n]) => `${code} ${num(n)}`).join(', ');
-  return total === 1 ? `1 failure: ${words}.` : `All ${num(total)} failures: ${words}.`;
+  return total === 1 ? `1 ${what}: ${words}.` : `All ${num(total)} ${what}s: ${words}.`;
 }
 
-/** A request's reads that took 5 s or more, with its p95: "2 of 7 reads took 5 s or more; 95% under 8.2 s." */
+/** A request's reads that took 5 s or more, with its p95: "Slow: 2 of 7 reads took 5 s or more. 95% answered within 8.2 s." */
 export function slowText(r: Pick<UsageRow, 'calls' | 'slow' | 'msP95'>): string | null {
   if (r.calls <= 0) return null;
-  const p95 = r.msP95 === null ? '' : ` 95% under ${msText(r.msP95)}.`;
+  const p95 = r.msP95 === null ? '' : ` 95% answered within ${msText(r.msP95)}.`;
   if (r.slow <= 0) return `No read took 5 s or more.${p95}`;
-  return `${num(r.slow)} of ${num(r.calls)} read${r.calls === 1 ? '' : 's'} took 5 s or more;${p95}`;
+  return `Slow: ${num(r.slow)} of ${num(r.calls)} read${r.calls === 1 ? '' : 's'} took 5 s or more.${p95}`;
 }
 
 export function sizesText(r: Pick<UsageRow, 'sizeP50' | 'sizeP95'>): string | null {

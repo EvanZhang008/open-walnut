@@ -107,15 +107,17 @@ function hiddenNumbers(r: UsageRow): { wide: string | null; small: string | null
 }
 
 function RowDetail({ row, now, range }: { row: UsageRow; now: number; range: UsageRange }) {
-  const sizes = row.kind === 'op' ? sizesText(row) : row.kind === 'http' ? slowText(row) : null;
+  const sizes = row.kind === 'op' ? sizesText(row) : null;
+  const slow = row.kind === 'http' ? slowText(row) : null;
   const spilled = row.kind === 'op' ? spilledText(row.spilled) : null;
   const narrow = hiddenNumbers(row);
   return (
     <div className="health-detail ru-detail" data-testid="real-use-detail">
       <p>{row.kind === 'page' ? <PageKind name={row.name} /> : <code className="ru-mono">{row.name}</code>} · {alarmLine(row.alarm, now)}</p>
+      {slow && <p>{slow}</p>}
       {row.kind === 'page'
         ? <p>{`Seen ${row.calls.toLocaleString('en-US')} time${row.calls === 1 ? '' : 's'} in the last ${rangeWord(range)}.`}</p>
-        : <p>{failuresText(row.codes)}</p>}
+        : <p>{failuresText(row.codes, row.kind === 'http' ? 'error answer' : 'failure')}</p>}
       {sizes && <p>{sizes}</p>}
       {spilled && <p>{spilled}</p>}
       {narrow.wide && <p className="ru-wide-only">{narrow.wide}</p>}
