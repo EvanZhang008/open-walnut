@@ -206,7 +206,7 @@ const BRANCHING_FILES: Record<string, { max: number; why: string }> = {
   'src/core/sessions/session-extras.ts': { max: 1, why: 'wording of a host in a session\'s extras: display' },
   'src/core/transfer/workspace.ts': { max: 1, why: 'host-to-host copy uses scp where both have ssh, else relays through this Mac: both move the workspace' },
   'src/lib/cloud-session-payload.ts': { max: 1, why: 'the cloud relay fallback for a host whose direct link is down: the cloud box is reached through the companion already' },
-  'src/providers/daemon-connection.ts': { max: 33, why: 'the connection: one ssh branch and one link branch (noSsh) per feature, both working' },
+  'src/providers/daemon-connection.ts': { max: 35, why: 'the connection: one ssh branch and one link branch (noSsh) per feature, both working; the service mode of a host network host goes through its own updater (noSsh), and the cloud box is never offered the one-service switch (isCloudTunnel)' },
   'src/providers/demo-remote-host.ts': { max: 1, why: 'the demo\'s own ssh host: demo only' },
   'src/providers/ephemeral-replica-host.ts': { max: 1, why: 'a test server\'s replica check: tests only' },
   'src/providers/remote-isolation.ts': { max: 2, why: 'a test server\'s own daemon needs ssh to place it: tests only' },
