@@ -1108,6 +1108,72 @@ describe('the host\'s mode rides the managed update', () => {
     expect(managedUpdate).toHaveBeenCalledTimes(1)
   })
 
+  // The leader's list (config host_service_offer): with the experiment off, the hosts it names get
+  // the whole offer (the walnut file staged, --serve), the others nothing; out of the list, --no-serve.
+  describe('host_service_offer names the hosts offered while the experiment is off', () => {
+    const configWith = (list: string[] | undefined) => vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      getConfig: async () => ({ experimental: { in_process_daemon: false, service_launcher: true }, ...(list ? { host_service_offer: list } : {}) }),
+    }))
+    beforeEach(() => {
+      delete process.env.WALNUT_HOST_SERVICE_OFFER
+      process.env.WALNUT_SERVICE_LAUNCHER = '1'
+      followerFact.mockReturnValue({ kind: 'replica' })
+    })
+    afterEach(() => {
+      vi.doUnmock('../../src/core/config-manager.js')
+      followerFact.mockReturnValue({ kind: 'unknown' })
+    })
+    const readyHost = (key: string, serves: { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null } = { serves: 'daemon', serviceHome: null }) => {
+      const c = new DaemonConnection(key, TARGET)
+      conns.push(c)
+      stub(c, { probe: MANAGED, version: EXPECTED })
+      vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
+      vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
+      managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: Opts) => ((await opts?.onStaged?.()) === false ? 'held' : 'applied'))
+      state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+      state(c)._servesAs = serves
+      live(c)
+      return { c, source: vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: null, existing: '/slot/walnut' }) }
+    }
+
+    it('a listed host gets --serve with the walnut file staged; a host not in the list gets no update', async () => {
+      const { WALNUT_HOME: home } = await import('../../src/constants.js')
+      configWith(['devbox'])
+      const listed = readyHost('devbox')
+      await priv(listed.c).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(listed.source).toHaveBeenCalledWith(true)
+      expect(optsOf(0).serve).toEqual({ home, on: true })
+
+      const other = readyHost('gpu-box')
+      await expect(priv(other.c).serviceModeWant()).resolves.toEqual({ want: null })
+      await priv(other.c).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+    })
+
+    it('taken out of the list: the host it serves as this Walnut\'s service gets --no-serve at its next update', async () => {
+      const { WALNUT_HOME: home } = await import('../../src/constants.js')
+      configWith([])
+      const { c, source } = readyHost('devbox', { serves: 'walnut-serve', serviceHome: home })
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(source).toHaveBeenCalledWith(false)
+      expect(optsOf(0).serve).toEqual({ home, on: false })
+    })
+
+    it('no list: a host that runs as the daemon is left as it is, and the follower is never asked', async () => {
+      configWith(undefined)
+      followerFact.mockClear()
+      const { c } = readyHost('devbox')
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).not.toHaveBeenCalled()
+      expect(followerFact).not.toHaveBeenCalled()
+    })
+  })
+
   it('a dist build with no walnut file for the host: no offer with this build, and the daemon binary is not marked failed', async () => {
     const c = managedHost(EXPECTED)
     // The real decision, with the follower ready and the experiments on.

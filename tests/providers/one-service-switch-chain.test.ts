@@ -227,3 +227,43 @@ describe('a leader switches a host to its one Walnut service, and back', () => {
     expect(readServiceMode(stateDir)).toEqual({ mode: { v: 1, home: '/home/first/.open-walnut', exe: '/v/next/daemon' } })
   })
 })
+
+// The leader's list (config host_service_offer) with the experiment off: the listed host switches
+// to its service through the whole chain, and back when it is taken out of the list.
+describe('a host named in host_service_offer, with in_process_daemon off', () => {
+  let list: string[] = []
+  beforeEach(() => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    process.env.WALNUT_SERVICE_LAUNCHER = '1'
+    vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      getConfig: async () => ({ experimental: { in_process_daemon: false, service_launcher: true }, host_service_offer: list }),
+    }))
+  })
+  afterEach(() => { vi.doUnmock('../../src/core/config-manager.js') })
+
+  it('listed: --serve, the mode file, a --service start that serves; out of the list: --no-serve and the daemon again', async () => {
+    const { stateDir, launcherEnv } = hostDirs(WALNUT_HOME)
+    const staged = '/home/u/.local/share/open-walnut/daemon/versions/abc/daemon'
+    list = ['devbox']
+    await priv(leaderOf({ serves: 'daemon', serviceHome: null })).recheckPostponedUpgrade()
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(' --launcher --serve ')
+    hostRuns(lines[0]!, stateDir, staged)
+    expect(decideServiceEntry(launcherEnv, staged)).toMatchObject({ kind: 'serve', home: WALNUT_HOME })
+
+    list = []
+    await priv(leaderOf({ serves: 'walnut-serve', serviceHome: WALNUT_HOME })).recheckPostponedUpgrade()
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toContain(' --no-serve ')
+    hostRuns(lines[1]!, stateDir, staged)
+    expect(readServiceMode(stateDir)).toMatchObject({ missing: true })
+    expect(decideServiceEntry(launcherEnv, staged)).toMatchObject({ kind: 'daemon', quiet: true })
+  })
+
+  it('another host\'s name in the list offers this one nothing', async () => {
+    list = ['gpu-box']
+    await priv(leaderOf({ serves: 'daemon', serviceHome: null })).recheckPostponedUpgrade()
+    expect(lines).toEqual([])
+  })
+})

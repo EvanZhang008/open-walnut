@@ -505,16 +505,27 @@ that serves as this Walnut's service, the host-server manager starts no separate
 the hosts page and Settings say "Walnut service" (only for this Walnut's own: `servesThisWalnut`).
 
 The offer is the same `in_process_daemon` experiment that runs the Mac's own sessions in process: one
-choice, read live from the config for the offer (`hostServiceOfferWanted` in
-`src/providers/service-launcher-flag.ts`), never through `inProcessDaemonWanted()`, whose
-`WALNUT_IN_PROCESS_DAEMON` switch is one process's own runtime and must not switch every host
-(`WALNUT_HOST_SERVICE_OFFER=1|0` decides the offer alone for one process). A switch whose update ran
-is recorded per host and build (`daemon-update-mode-asked.json` in `WALNUT_HOME/local/`,
-`daemon-update-store.ts`): a host whose service chose the other mode, or whose update failed after
+choice, read live from the config for the offer, per host (`hostServiceOfferWanted(hostKey)` in
+`src/providers/service-launcher-flag.ts`, the one function every part of the offer reads), never
+through `inProcessDaemonWanted()`, whose `WALNUT_IN_PROCESS_DAEMON` switch is one process's own
+runtime and must not switch every host (`WALNUT_HOST_SERVICE_OFFER=1|0` decides the offer alone for
+one process). A switch whose update ran is recorded per host and build
+(`daemon-update-mode-asked.json` in `WALNUT_HOME/local/`, `daemon-update-store.ts`): a host whose service chose the other mode, or whose update failed after
 its swap, is not asked again with that build, across leader restarts; a try the host held, deferred
 or refused as busy is asked again. A host replica never holds a `__local__` DaemonConnection
 (`assertLocalDialAllowed` in daemon-connection.ts): in the service that would be a full-trust
 client of the runtime with no owner scope, so its reads of its own host stay on the seat.
+
+**Offering chosen hosts only: `host_service_offer`.** A leader config item (not an experiment),
+`host_service_offer: [<host key>, ...]`, the keys of `hosts`, set with `PUT /api/config`. A host in
+the list is offered the service while `in_process_daemon` is off (still with `service_launcher` on),
+and gets all of the offer: the walnut file staged in its slot, `--serve`, and its Walnut Health
+items. Nothing else of the experiment turns on: the Mac's own runtime stays a program, and home-move
+declarations and same-machine aliases stay off (so move the data dir only with the host out of the
+list, or the moved Walnut cannot switch the old home's service back). A host taken out of the list
+gets `--no-serve` at its next update. An absent or empty list changes nothing. An older leader keeps
+the key: config reads and writes carry top-level keys they do not know. The item is temporary, until
+the step that removes the old two-program path on a host.
 
 **Upgrade and rollback.** An update with `--serve` stages the walnut file, proves it boots as a
 service in throwaway dirs (`daemon-boot-proof.ts`), writes the mode file naming that version, and

@@ -187,7 +187,7 @@ describe('PUT /api/config with a map of named entries', () => {
     }
     const objectMaps = replaced.filter((k) => k !== 'hosts' && k in samples)
     // A map section added to the table without a sample here fails, so it gets one.
-    const notObjects = ['version', 'plugin_sources', 'local_capabilities', 'ssh_login_files', 'ssh_login_hint', 'ssh_cert_letter', 'api_keys', 'push_tokens', 'placement_min_disk_gb']
+    const notObjects = ['version', 'plugin_sources', 'local_capabilities', 'ssh_login_files', 'ssh_login_hint', 'ssh_cert_letter', 'host_service_offer', 'api_keys', 'push_tokens', 'placement_min_disk_gb']
     expect(replaced.filter((k) => k !== 'hosts' && !notObjects.includes(k)).sort()).toEqual(Object.keys(samples).sort())
     for (const key of objectMaps) {
       const [both, keep] = samples[key]

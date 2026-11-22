@@ -7,8 +7,9 @@
  * `--no-serve <home>`): a wanted mode that differs from what the hello says is an update due,
  * with the same holds and probation as a new build.
  *
- * Offered only with the experiments in_process_daemon AND service_launcher on (read live, for the
- * offer alone: service-launcher-flag.ts hostServiceOfferWanted), to a host whose
+ * Offered only with the experiment service_launcher on and, for the host, in_process_daemon on or
+ * the host named in the config's `host_service_offer` (read live, per host: service-launcher-flag.ts
+ * hostServiceOfferWanted), to a host whose
  * daemon already runs under the launcher, that runs this Walnut's full follower (`web --replica`,
  * the spec the service starts from), and that can take this build's walnut file (the daemon-only
  * binary holds no server). Otherwise no offer, with the reason for Walnut Health. With the
@@ -26,7 +27,7 @@ export type FollowerFact =
   | { kind: 'unknown' }
 
 export interface ServiceModeFacts {
-  /** in_process_daemon (hostServiceOfferWanted) and service_launcher both on. */
+  /** The offer for this host (hostServiceOfferWanted) and service_launcher both on. */
   experiment: boolean
   /** The hello's `serves` (an older daemon says nothing: 'daemon'). */
   serves: ServesAs
@@ -145,8 +146,8 @@ export interface ServiceModeInputs {
   serveUnfit: { expected: string; why: string } | null
   /** The switch this host was last asked (ServiceModeAsk): read only when the mode is decided. */
   modeAsked(): Promise<ServiceModeAsk | null>
-  /** in_process_daemon as the host offer reads it (service-launcher-flag.ts hostServiceOfferWanted). */
-  inProcessWanted(): Promise<boolean>
+  /** The offer for this host: in_process_daemon or the host in `host_service_offer` (service-launcher-flag.ts hostServiceOfferWanted). */
+  offerWanted(): Promise<boolean>
   launcherWanted(): Promise<boolean>
   follower(): Promise<FollowerFact>
   /** Walnut Health: the host's offer as decided now, only while the experiments are on (one-service-health.ts). */
@@ -160,7 +161,7 @@ export interface ServiceModeInputs {
  * nothing else is read: the answer is "leave it".
  */
 export async function serviceModeWantNow(i: ServiceModeInputs): Promise<ServiceModeWant> {
-  const experiment = (await i.inProcessWanted()) && (await i.launcherWanted())
+  const experiment = (await i.offerWanted()) && (await i.launcherWanted())
   if (!experiment) {
     i.noteOff?.()
     if (i.serves !== 'walnut-serve') return { want: null }

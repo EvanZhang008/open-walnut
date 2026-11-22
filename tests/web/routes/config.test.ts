@@ -245,6 +245,48 @@ describe('PUT /api/config', () => {
     }
   });
 
+  // The hosts a leader offers their one Walnut service to (providers/service-launcher-flag.ts).
+  it('host_service_offer: a PUT stores it, GET shows it, a write of another section keeps it, [] clears it, a bad shape is refused', async () => {
+    const app = createApp();
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: { devbox: { hostname: 'devbox.example' } } }), 'utf-8');
+    const onDisk = async () => yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+
+    expect((await request(app).put('/api/config').send({ host_service_offer: ['devbox'] })).status).toBe(200);
+    expect((await onDisk()).host_service_offer).toEqual(['devbox']);
+    expect((await request(app).get('/api/config')).body.config.host_service_offer).toEqual(['devbox']);
+
+    // A Settings page's whole-section write of something else leaves it alone.
+    const page = { origin: 'http://localhost:3456', 'sec-fetch-mode': 'cors' };
+    expect((await request(app).put('/api/config').set(page).send({ user: { name: 'Pat' } })).status).toBe(200);
+    expect((await onDisk()).host_service_offer).toEqual(['devbox']);
+
+    for (const bad of ['devbox', [''], [7], { devbox: true }]) {
+      const res = await request(app).put('/api/config').send({ host_service_offer: bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(res.body.field).toBe('host_service_offer');
+    }
+    expect((await onDisk()).host_service_offer).toEqual(['devbox']);
+
+    expect((await request(app).put('/api/config').send({ host_service_offer: [] })).status).toBe(200);
+    expect((await onDisk()).host_service_offer).toEqual([]);
+  });
+
+  // An older leader does not know host_service_offer: its reads and writes carry a top-level key
+  // they do not know, as this build does with one a newer build may add (future_section below).
+  it('a top-level key the build does not know is read and kept by reads, saves and partial writes', async () => {
+    const app = createApp();
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, host_service_offer: ['devbox'], future_section: { on: true } }), 'utf-8');
+    const { getConfig, saveConfig } = await import('../../../src/core/config-manager.js');
+    const read = await getConfig() as any;
+    expect(read.host_service_offer).toEqual(['devbox']);
+    expect(read.future_section).toEqual({ on: true });
+    await saveConfig(read);
+    expect((await request(app).put('/api/config').send({ defaults: { priority: 'immediate' } })).status).toBe(200);
+    const onDisk = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(onDisk.host_service_offer).toEqual(['devbox']);
+    expect(onDisk.future_section).toEqual({ on: true });
+  });
+
   it('a real host already saved as companion keeps saving', async () => {
     const app = createApp();
     await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: { companion: { hostname: 'box.example' } } }), 'utf-8');

@@ -116,6 +116,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   net: 'the Mac\'s own host network switch; the companion keeps the member list itself',
   local_capabilities: 'the Mac\'s own capability tags, read where its fleet card is built, on the Mac',
   ssh_login_files: 'ssh files on the Mac',
+  host_service_offer: 'the leader decides which hosts it offers their one Walnut service to',
   ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
   ssh_cert_letter: 'the ssh certificate letter is sent on the Mac',
   health_monitor: 'the health monitor runs on the Mac, which files its fix tasks',

@@ -4020,7 +4020,7 @@ export class DaemonConnection {
     return serviceModeWantNow({
       ...this.servesAs, home: WALNUT_HOME, launcher: !!this._launcher, expected: this.getExpectedDaemonVersion(),
       serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(),
-      inProcessWanted: () => hostServiceOfferWanted(),
+      offerWanted: () => hostServiceOfferWanted(this.hostKey),
       launcherWanted: () => serviceLauncherWanted(),
       follower: async () => (await import('../core/host-server/index.js')).hostFollowerFact(this.hostKey),
       note: (w) => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOffer(this.hostKey, w)).catch(() => {}) },

@@ -72,6 +72,7 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   ssh_login_files: 'replace',
   ssh_login_hint: 'replace',
   ssh_cert_letter: 'replace',
+  host_service_offer: 'replace',
   api_keys: 'replace',
   push_tokens: 'replace',
 

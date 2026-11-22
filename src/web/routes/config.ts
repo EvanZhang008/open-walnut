@@ -615,6 +615,14 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       return
     }
 
+    // The hosts offered their one Walnut service (providers/service-launcher-flag.ts): host keys, or [] / null for none.
+    const offer: unknown = body.host_service_offer
+    if (offer !== undefined && offer !== null && !(Array.isArray(offer) && offer.length <= 200
+      && offer.every((k) => typeof k === 'string' && k.length > 0 && k.length <= 200))) {
+      res.status(400).json({ error: 'host_service_offer must be a list of host keys', field: 'host_service_offer' })
+      return
+    }
+
     if (body.version !== undefined && body.version !== 1) {
       res.status(400).json({ error: 'version must be 1' })
       return

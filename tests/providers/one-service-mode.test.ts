@@ -124,13 +124,13 @@ describe('serviceModeWantNow', () => {
   const inputs = (patch: Partial<Parameters<typeof serviceModeWantNow>[0]> = {}) => ({
     serves: 'daemon' as const, serviceHome: null, home: HOME, launcher: true, expected: 'walnut-daemon-new',
     serveUnfit: null, modeAsked: vi.fn(async () => null),
-    inProcessWanted: vi.fn(async () => true), launcherWanted: vi.fn(async () => true),
+    offerWanted: vi.fn(async () => true), launcherWanted: vi.fn(async () => true),
     follower: vi.fn(async () => ({ kind: 'replica' as const })), note: vi.fn(), noteOff: vi.fn(),
     ...patch,
   })
 
   it('experiments off and a daemon host: nothing else is read, nothing is noted', async () => {
-    const i = inputs({ inProcessWanted: vi.fn(async () => false) })
+    const i = inputs({ offerWanted: vi.fn(async () => false) })
     await expect(serviceModeWantNow(i)).resolves.toEqual({ want: null })
     expect(i.launcherWanted).not.toHaveBeenCalled()
     expect(i.follower).not.toHaveBeenCalled()
@@ -172,23 +172,58 @@ describe('hostServiceOfferWanted', () => {
     vi.doUnmock('../../src/core/config-manager.js')
     vi.resetModules()
   })
-  const withExperiment = async (on: boolean) => {
+  const withConfig = async (config: Record<string, unknown>) => {
     vi.resetModules()
-    vi.doMock('../../src/core/config-manager.js', () => ({ getConfig: async () => ({ experimental: { in_process_daemon: on } }) }))
+    vi.doMock('../../src/core/config-manager.js', () => ({ getConfig: async () => config }))
     return (await import('../../src/providers/service-launcher-flag.js')).hostServiceOfferWanted
   }
+  const withExperiment = (on: boolean) => withConfig({ experimental: { in_process_daemon: on } })
 
   it('this process running its own runtime in process (WALNUT_IN_PROCESS_DAEMON=1) offers no host anything', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     process.env.WALNUT_IN_PROCESS_DAEMON = '1'
-    await expect((await withExperiment(false))()).resolves.toBe(false)
+    await expect((await withExperiment(false))('devbox')).resolves.toBe(false)
   })
 
   it('follows the experiment as it is now; its own switch decides for one process', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     process.env.WALNUT_IN_PROCESS_DAEMON = '0'
-    await expect((await withExperiment(true))()).resolves.toBe(true)
+    await expect((await withExperiment(true))('devbox')).resolves.toBe(true)
     process.env.WALNUT_HOST_SERVICE_OFFER = '0'
-    await expect((await withExperiment(true))()).resolves.toBe(false)
+    await expect((await withExperiment(true))('devbox')).resolves.toBe(false)
+  })
+
+  // The leader's list of hosts (config host_service_offer): the service on those hosts only, with the experiment off.
+  it('with the experiment off, a host in host_service_offer is offered and one not in it is not', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ experimental: { in_process_daemon: false, service_launcher: true }, host_service_offer: ['devbox'] })
+    await expect(offer('devbox')).resolves.toBe(true)
+    await expect(offer('gpu-box')).resolves.toBe(false)
+    // The process's own switch still decides alone.
+    process.env.WALNUT_HOST_SERVICE_OFFER = '0'
+    await expect(offer('devbox')).resolves.toBe(false)
+  })
+
+  it('no list, an empty one or a hand-edited non-list: the experiment alone decides, as before the list', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    for (const list of [undefined, [], 'devbox', { devbox: true }, null]) {
+      const cfg = (on: boolean) => ({ experimental: { in_process_daemon: on }, ...(list === undefined ? {} : { host_service_offer: list }) })
+      await expect((await withConfig(cfg(false)))('devbox'), JSON.stringify(list)).resolves.toBe(false)
+      await expect((await withConfig(cfg(true)))('devbox'), JSON.stringify(list)).resolves.toBe(true)
+    }
+  })
+
+  it('the list switches on nothing else: this computer\'s own runtime stays a program', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    delete process.env.WALNUT_IN_PROCESS_DAEMON
+    await withConfig({ experimental: { in_process_daemon: false }, host_service_offer: ['devbox', '__local__'] })
+    const { inProcessDaemonWanted } = await import('../../src/providers/in-process-daemon.js')
+    await expect(inProcessDaemonWanted()).resolves.toBe(false)
+  })
+
+  it('the experiment on offers every host, listed or not', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ experimental: { in_process_daemon: true }, host_service_offer: ['devbox'] })
+    await expect(offer('gpu-box')).resolves.toBe(true)
   })
 })
