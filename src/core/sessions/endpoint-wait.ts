@@ -25,6 +25,7 @@
  * The wait lives on the session record (`endpointWait`, a field no status write touches), so a
  * server restart (the reboot that usually brings the endpoint back) picks it up again. Primary only.
  */
+import { leaderJudgedOnly, leaderJudgedRecords } from './judge-of.js'
 import os from 'node:os'
 import { bus, EventNames } from '../event-bus.js'
 import type { BusEvent } from '../event-bus.js'
@@ -412,7 +413,7 @@ function defaultDeps(gaveUp: EndpointWaitDeps['gaveUp']): EndpointWaitDeps {
     setTimer: (fn, ms) => { const h = setTimeout(fn, ms); h.unref?.(); return h },
     clearTimer: (h) => clearTimeout(h),
     getSession: async (sid) => (await import('../session-tracker.js')).getSessionByClaudeId(sid),
-    listSessions: async () => (await import('../session-tracker.js')).listSessions(),
+    listSessions: async () => leaderJudgedRecords(await (await import('../session-tracker.js')).listSessions()),
     patchWait: async (sid, fn) => {
       // A compare-and-set on the wait alone, as restartLoss is written (sessions/auto-recover-env.ts).
       const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js')
@@ -493,7 +494,7 @@ export function startEndpointWait(opts: {
   }
   const waiter = new EndpointWaiter({ ...defaultDeps(gaveUp), ...opts.deps }, testTiming ?? {})
   instance = waiter
-  bus.subscribe('session-endpoint-wait', waiter.handleEvent, {
+  bus.subscribe('session-endpoint-wait', leaderJudgedOnly(waiter.handleEvent), {
     global: true,
     interest: ['session:result', 'session:send', 'session:message-queued', 'session:deleted'],
   })

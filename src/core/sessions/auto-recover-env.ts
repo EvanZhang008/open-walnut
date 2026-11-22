@@ -4,6 +4,7 @@
  * scheduler's tests run with no server, daemon or clock.
  */
 
+import { leaderJudgedRecords } from './judge-of.js'
 import os from 'node:os'
 import fs from 'node:fs/promises'
 import { bus, EventNames } from '../event-bus.js'
@@ -196,7 +197,8 @@ export function defaultDeps(): AutoRecoverDeps {
     },
     listSessions: async () => {
       const { listSessions } = await import('../session-tracker.js')
-      return listSessions()
+      // A session its host runs and judges is recovered by its host (sessions/judge-of.ts).
+      return leaderJudgedRecords(await listSessions())
     },
     getTask: async (taskId) => {
       // getTask THROWS on an unknown id: a deleted task reads as "no task".

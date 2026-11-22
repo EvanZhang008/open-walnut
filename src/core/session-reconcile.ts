@@ -57,6 +57,7 @@
  * incident-C shape), and the conditional write re-checks under the write lock.
  */
 
+import { judgeOf } from './sessions/judge-of.js'
 import { foldLine, initialFoldState } from '../providers/daemon-fold.js'
 import { resumesEndedCall } from '../providers/bg-task-resume.js'
 import os from 'node:os'
@@ -844,6 +845,8 @@ export async function reconcileProcessStatus(
 ): Promise<ReconcileOutcome> {
   const sid = record.claudeSessionId
   if (record.archived) return { converged: false, reason: 'archived' }
+  // A session its host runs and judges: the host reconciles its own process (sessions/judge-of.ts).
+  if (judgeOf(sid) === 'host') return { converged: false, reason: 'host-judged' }
   const { sessionRunner } = await import('../providers/claude-code-session.js')
   const observedLive = sessionRunner.findSessionByClaudeId(sid)
   const observedTurn = observedLive?.turnGen

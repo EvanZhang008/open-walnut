@@ -37,6 +37,7 @@
  * that ends before its row went out (a person wrote first, the line failed) takes
  * the row back: a stale `/compact` never runs in front of what they wrote.
  */
+import { leaderJudgedOnly, leaderJudgedRecords } from './judge-of.js';
 import { randomUUID } from 'node:crypto';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
@@ -113,7 +114,7 @@ function defaultDeps(): IdleCompactionDeps {
       return resolveIdleCompactionConfig((await getConfig()).session);
     },
     getSession: async (id) => (await import('../session-tracker.js')).getSessionByClaudeId(id),
-    listSessions: async () => (await import('../session-tracker.js')).listNonTerminalSessions(),
+    listSessions: async () => leaderJudgedRecords(await (await import('../session-tracker.js')).listNonTerminalSessions()),
     // Its own bookkeeping is no activity of the session's: the session keeps its last-active time.
     saveSession: async (id, updates) => (await import('../session-tracker.js')).updateSessionRecordConditionally(id, updates, () => true, { preserveLastActiveAt: true }),
     getTask: async (id) => (await import('../task-manager.js')).getTask(id).catch(() => null),
@@ -513,7 +514,7 @@ export function startIdleCompaction(
   liveRunner = runner;
   const ic = new IdleCompaction(deps);
   onQuietTurnEnd(ic.onQuietEnd);
-  bus.subscribe('idle-compaction', ic.handleEvent, {
+  bus.subscribe('idle-compaction', leaderJudgedOnly(ic.handleEvent), {
     global: true,
     interest: ['session:result', 'session:error', 'session:send', 'session:deleted', 'session:will-reap', 'config:changed'],
   });

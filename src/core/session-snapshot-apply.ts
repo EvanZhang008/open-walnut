@@ -27,6 +27,7 @@
  *                  `adoptWatermark` below). The coarse, restart-surviving floor.
  */
 
+import { judgeOf } from './sessions/judge-of.js'
 import { isWakeupArmed, type SessionSnapshot } from '../providers/daemon-fold.js'
 import type { ProcessStatus, SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
@@ -267,6 +268,8 @@ export async function applySnapshot(
   // Stream offsets cannot order every state change; see docs/decision/task-session-status.md.
   const mode = getSnapshotStatusMode()
   if (mode === 'off') return { outcome: 'disabled' }
+  // A session its host runs and judges: the host applies its own snapshots (sessions/judge-of.ts).
+  if (judgeOf(sessionId) === 'host') return { outcome: 'excluded', reason: 'host-judged' }
   if (!snapshot || typeof snapshot.v !== 'number' || !Number.isFinite(snapshot.v)) {
     return { outcome: 'error', reason: 'malformed-snapshot' }
   }

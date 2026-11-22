@@ -13,6 +13,7 @@
  *      (see docs/decision/no-session-end-gist.md: `session:ended` is per-turn).
  */
 
+import { leaderJudgedRecords } from './sessions/judge-of.js'
 import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
 import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liveness.js'
@@ -401,7 +402,9 @@ export class SessionHealthMonitor {
     // as terminal) was the confirmed cause of the multi-hour event-loop stalls.
     let allSessions: SessionRecord[]
     try {
-      allSessions = HEALTH_V2 ? await listSessionsForHealthScan() : await listSessions()
+      // A session its host runs and judges is its host's to repair (sessions/judge-of.ts): this
+      // tick's process repairs, status writes and phase syncs never touch it.
+      allSessions = leaderJudgedRecords(HEALTH_V2 ? await listSessionsForHealthScan() : await listSessions())
     } catch (err) {
       log.session.warn('health monitor: failed to list sessions', {
         error: err instanceof Error ? err.message : String(err),
@@ -450,7 +453,7 @@ export class SessionHealthMonitor {
       if (HEALTH_V2) {
         try {
           const { listOrphanCandidates } = await import('./session-tracker.js')
-          orphanScan = [...allSessions, ...await listOrphanCandidates()]
+          orphanScan = [...allSessions, ...leaderJudgedRecords(await listOrphanCandidates())]
         } catch { /* fall back to active set only */ }
       }
       this.killOrphanedProcesses(orphanScan)

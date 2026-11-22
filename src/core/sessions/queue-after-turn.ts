@@ -13,6 +13,7 @@
  * reap, a restart). A Stop that came after the row was held sets it aside the way it
  * sets every row aside, so a stopped session never starts its own backlog.
  */
+import { judgeOf, leaderJudgedOnly } from './judge-of.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import { AFTER_TURN_REASON } from '../relay-fates.js';
@@ -176,13 +177,15 @@ const SUBSCRIBER = 'queue-after-turn';
 export async function startQueueAfterTurn(): Promise<void> {
   if (!subscribed) {
     subscribed = true;
-    bus.subscribe(SUBSCRIBER, onTurnEnd, {
+    bus.subscribe(SUBSCRIBER, leaderJudgedOnly(onTurnEnd), {
       global: true,
       interest: [EventNames.SESSION_RESULT, EventNames.SESSION_TURN_SETTLED, EventNames.SESSION_ERROR, EventNames.SESSION_STATUS_CHANGED],
     });
   }
   const { sessionsWithHeld } = await import('../session-queue-park.js');
   for (const sid of await sessionsWithHeld()) {
+    // A session its host runs drains its own queue (sessions/judge-of.ts).
+    if (judgeOf(sid) === 'host') continue;
     watching.add(sid);
     scheduleAfterTurnRelease(sid, 2_000, false);
   }

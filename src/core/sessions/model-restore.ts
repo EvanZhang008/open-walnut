@@ -14,6 +14,7 @@
  * time: after RESTORE_PAUSE_AFTER_SWITCHES safeguard switches in a day it stays on the fallback until
  * the day's count drops. Primary only (server.ts), as the safeguard switch.
  */
+import { leaderJudgedOnly } from './judge-of.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import type { SessionRecord, TemporaryModel } from '../types.js'
@@ -215,7 +216,7 @@ export class ModelRestore {
 /** Start it on the primary. */
 export function startModelRestore(deps: Partial<ModelRestoreDeps> = {}): { stop: () => void; instance: ModelRestore } {
   const r = new ModelRestore(deps)
-  bus.subscribe('model-restore', r.handleEvent, {
+  bus.subscribe('model-restore', leaderJudgedOnly(r.handleEvent), {
     global: true, interest: ['session:result', 'session:messages-delivered', 'session:user-line', 'session:deleted'],
   })
   return {
