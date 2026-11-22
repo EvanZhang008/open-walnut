@@ -79,8 +79,7 @@ class ThreadPushUITestCase: XCTestCase {
 
     func viewport() -> (top: CGFloat, bottom: CGFloat)? {
         guard tabs.exists else { return nil }
-        let jumps = el("org.threads.jumps")
-        let top = max(tabs.frame.maxY, jumps.exists ? jumps.frame.maxY : 0)
+        let top = tabs.frame.maxY
         let bar = app.tabBars.firstMatch
         let bottom = bar.exists && bar.frame.height > 0 ? bar.frame.minY : app.windows.firstMatch.frame.maxY
         return (top, bottom)

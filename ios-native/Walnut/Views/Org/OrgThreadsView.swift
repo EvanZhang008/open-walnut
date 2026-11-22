@@ -49,12 +49,10 @@ struct OrgThreadsView: View {
     @State private var landing: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private func isOpen(_ fold: String) -> Bool {
-        openFolds.contains("\(store.taskId)/\(fold)")
-    }
+    private typealias Fold = OrgThreadRevealModel.Fold
 
-    private func foldBinding(_ fold: String) -> Binding<Bool> {
-        let key = "\(store.taskId)/\(fold)"
+    private func foldBinding(_ fold: Fold) -> Binding<Bool> {
+        let key = "\(store.taskId)/\(fold.rawValue)"
         return Binding(
             get: { openFolds.contains(key) },
             set: { on in
@@ -62,12 +60,6 @@ struct OrgThreadsView: View {
             }
         )
     }
-
-    private var showWorking: Bool { isOpen("working") }
-    private var showWaiting: Bool { isOpen("waiting") }
-    private var showKnown: Bool { isOpen("known") }
-    private var showClosed: Bool { isOpen("closed") }
-    private var showArchived: Bool { isOpen("archived") }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { ctx in
@@ -127,49 +119,21 @@ struct OrgThreadsView: View {
                     } else if sections.open.isEmpty {
                         emptyText(sections)
                     }
-                    // Needs you first, then Done, as the web draws them (each in its own order).
-                    ForEach(OrgThreadModel.needsFirst(sections.open, now: now)) { t in
-                        card(t, shared: shared, now: now, snoozed: false).id(t.id)
+                    // Needs you, then Done: always open, each under its head with its count, as
+                    // the web draws them (each in its own order). No row of tabs or chips.
+                    ForEach(OrgThreadModel.openGroups, id: \.self) { g in
+                        openGroup(g, sections: sections, shared: shared, now: now)
                     }
-                    fold("\(sections.working.count) working", count: sections.working.count, open: foldBinding("working"), id: "working")
-                    if showWorking {
-                        ForEach(sections.working) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                    }
-                    // Waiting / Snoozed: one group, the waiting ones first, then the snoozed ones.
-                    let waitingCount = sections.waiting.count + sections.snoozed.count
-                    fold("\(waitingCount) waiting / snoozed", count: waitingCount, open: foldBinding("waiting"), id: "waiting")
-                    if showWaiting {
-                        ForEach(sections.waiting) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                        ForEach(sections.snoozed) { t in card(t, shared: shared, now: now, snoozed: true, compact: true).id(t.id) }
-                    }
-                    // Acknowledged: he acknowledged it and the AI is deciding where it goes.
-                    fold("\(sections.known.count) acknowledged", count: sections.known.count, open: foldBinding("known"), id: "known")
-                    if showKnown {
-                        ForEach(sections.known) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                    }
-                    fold("\(sections.closed.count) closed", count: sections.closed.count, open: foldBinding("closed"), id: "closed")
-                    if showClosed {
-                        ForEach(sections.closed) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                    }
-                    // Archived: the server's count of every closed one but Closed's; the fold lists the newest the read brought.
-                    let archivedCount = archivedTotal(sections)
-                    // Counted as the jump bar counts it, so a jump to Archived always lands on this row.
-                    fold("\(archivedCount) archived", count: archivedCount, open: foldBinding("archived"), id: "archived")
-                    if showArchived {
-                        ForEach(sections.archived) { t in card(t, shared: shared, now: now, snoozed: false, compact: true).id(t.id) }
-                        if archivedCount > sections.archived.count {
-                            Text("The newest \(sections.archived.count) are here; all \(archivedCount) are on the web.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityIdentifier("org.threads.closed.more")
-                        }
+                    // The rest, each folded to its name and count until he taps its head, and
+                    // folded again next time (`openFolds`).
+                    ForEach(Fold.allCases, id: \.self) { f in
+                        foldGroup(f, sections: sections, shared: shared, now: now, proxy: proxy)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                // Room under the last section, so a jump can bring even the last fold to the top
-                // and nothing ends under the floating tab bar.
+                // Room under the last section, so a fold opened or a thread revealed near the end
+                // can come to the top, and nothing ends under the floating tab bar.
                 .padding(.bottom, 240)
                 .opacity(hides ? 0 : 1)
             }
@@ -180,27 +144,6 @@ struct OrgThreadsView: View {
                     ProgressView()
                         .padding(.top, 40)
                         .accessibilityIdentifier("org.threads.opening")
-                }
-            }
-            // Pinned under the page's switch while it lists threads, so a jump is one tap from
-            // anywhere in the list (r10 review: it scrolled away with the cards), and the page keeps
-            // one header as a snooze or an acknowledge takes a card away (r8 review).
-            .safeAreaInset(edge: .top, spacing: 0) {
-                let bar = OrgThreadRevealModel.jumpBar(
-                    threadsRead: store.threads != nil, sections: sections, broughtNone: broughtNone, hides: hides)
-                if bar != .none {
-                    // Out of sight with the cards while a reveal holds them, but in its place, so
-                    // the page does not move under the thread it just jumped to.
-                    jumps(sections, proxy: proxy)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 4)
-                        .background(.bar)
-                        .overlay(alignment: .bottom) { Divider() }
-                        // The bar's whole band, for the UI tests to measure what it covers.
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("org.threads.jumps")
-                        .opacity(bar == .held ? 0 : 1)
-                        .allowsHitTesting(bar == .shown)
                 }
             }
             .refreshable { await store.refresh() }
@@ -228,7 +171,7 @@ struct OrgThreadsView: View {
         // The last reveal, kept until the next one (`DebugRevealRecord`).
         .overlay(alignment: .topLeading) { DebugRevealRecord.Marker() }
         #endif
-        // A container, so the list's identifier does not replace those inside it (the jump bar's).
+        // A container, so the list's identifier does not replace those inside it (the cards' and folds').
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.threads")
     }
@@ -386,14 +329,7 @@ struct OrgThreadsView: View {
             revealedAt.wrappedValue = focus.at
             missingShown = false
             uncheckedShown = false
-            switch fold {
-            case .working: foldBinding("working").wrappedValue = true
-            case .waiting: foldBinding("waiting").wrappedValue = true
-            case .known: foldBinding("known").wrappedValue = true
-            case .closed: foldBinding("closed").wrappedValue = true
-            case .archived: foldBinding("archived").wrappedValue = true
-            case nil: break
-            }
+            if let fold { foldBinding(fold).wrappedValue = true }
             // Cards not in sight yet: the jump is instant and they show once it has landed.
             let instant = !cardsShown
             if instant { scrolling = true }
@@ -461,61 +397,84 @@ struct OrgThreadsView: View {
         max((store.closedCount ?? 0) - s.closed.count, s.archived.count)
     }
 
-    /// The count of cards for him (Needs you and Done), and one tap to each fold below them, in the
-    /// groups' own words (2026-11-04 review: a dozen screens of cards before them).
-    private func jumps(_ s: OrgThreadModel.Sections, proxy: ScrollViewProxy) -> some View {
-        typealias G = OrgThreadModel.Group
-        let items: [(id: String, label: String, count: Int, open: Binding<Bool>)] = [
-            ("working", G.working.label, s.working.count, foldBinding("working")),
-            ("waiting", G.waiting.label, s.waiting.count + s.snoozed.count, foldBinding("waiting")),
-            ("known", G.known.label, s.known.count, foldBinding("known")),
-            ("closed", G.done.label, s.closed.count, foldBinding("closed")),
-            ("archived", G.archived.label, archivedTotal(s), foldBinding("archived")),
-        ].filter { $0.count > 0 }
-        let needs = s.open.filter { $0.state == "needs" }.count
-        let done = s.open.filter { $0.state == "answered" }.count
-        return HStack(spacing: 8) {
-            Text("\(G.needs.label) \(needs) · \(G.read.label) \(done)")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            ForEach(items, id: \.id) { item in
-                Button {
-                    endLanding()
-                    item.open.wrappedValue = true
-                    // After the section has laid out its rows: scrolled at once, a short section
-                    // (one snoozed thread) stayed where it was, under the tab bar (r9 review).
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(150))
-                        withAnimation { proxy.scrollTo("fold.\(item.id)", anchor: .top) }
-                    }
-                } label: {
-                    Text("\(item.label) \(item.count)")
-                        .font(.footnote)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-                        .frame(minHeight: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("org.threads.jump.\(item.id)")
+    /// A group always open (Needs you, Done): its head, then its cards; nothing when it has none.
+    @ViewBuilder
+    private func openGroup(_ g: OrgThreadModel.Group, sections: OrgThreadModel.Sections, shared: Set<String>, now: Date) -> some View {
+        let list = OrgThreadModel.openCards(g, sections.open, now: now)
+        if !list.isEmpty {
+            groupHead(g, count: list.count)
+            ForEach(list) { t in card(t, shared: shared, now: now, snoozed: false).id(t.id) }
+        }
+    }
+
+    /// A folded group: its head, and its cards while he has it open.
+    @ViewBuilder
+    private func foldGroup(_ f: Fold, sections: OrgThreadModel.Sections, shared: Set<String>, now: Date, proxy: ScrollViewProxy) -> some View {
+        let list = f.threads(in: sections)
+        // Archived: the server's count of every closed one but Closed's; the fold lists the newest the read brought.
+        let count = f == .archived ? archivedTotal(sections) : list.count
+        let open = foldBinding(f)
+        fold(f, count: count, open: open, proxy: proxy)
+        if open.wrappedValue {
+            ForEach(list) { t in
+                card(t, shared: shared, now: now, snoozed: sections.snoozed.contains { $0.id == t.id }, compact: true).id(t.id)
+            }
+            if f == .archived, count > list.count {
+                Text("The newest \(list.count) are here; all \(count) are on the web.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("org.threads.closed.more")
             }
         }
     }
 
+    /// The head of a group always open (Needs you, Done): its name and its count, never a button.
+    private func groupHead(_ g: OrgThreadModel.Group, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(g.label)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text("\(count)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("org.threads.group.\(g.rawValue)")
+    }
+
+    /// A folded group's head: its name and count, a row he taps to open or close it (2026-11-04
+    /// review: not a caption). A group with no thread draws nothing.
     @ViewBuilder
-    private func fold(_ label: String, count: Int, open: Binding<Bool>, id: String) -> some View {
+    private func fold(_ f: Fold, count: Int, open: Binding<Bool>, proxy: ScrollViewProxy) -> some View {
         if count > 0 {
             Button {
+                endLanding()
+                let opening = !open.wrappedValue
                 withAnimation(.snappy) { open.wrappedValue.toggle() }
+                // Opened near the bottom, its cards would start under the tab bar and the tap look
+                // like nothing (the web's 2026-11-21 review): the head goes to the top, its cards
+                // under it, once they have laid out (scrolled at once, a short group stayed put).
+                guard opening else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("fold.\(f.rawValue)", anchor: .top) }
+                }
             } label: {
-                // A row he taps, not a caption (2026-11-04 review).
                 HStack(spacing: 6) {
-                    Text(label)
+                    Text(f.group.label)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                     Spacer(minLength: 0)
+                    Text("\(count)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                     Image(systemName: open.wrappedValue ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -527,8 +486,8 @@ struct OrgThreadsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityValue(open.wrappedValue ? "Shown" : "Hidden")
-            .accessibilityIdentifier("org.threads.fold.\(id)")
-            .id("fold.\(id)")
+            .accessibilityIdentifier("org.threads.fold.\(f.rawValue)")
+            .id("fold.\(f.rawValue)")
         }
     }
 

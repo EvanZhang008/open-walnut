@@ -35,14 +35,6 @@ enum OrgThreadModel {
         var closed: [OrgThread] = []
         /// Closed a day ago or more: put away until he opens them.
         var archived: [OrgThread] = []
-
-        /// The jump bar stays while the page lists any thread, the last card for him gone included
-        /// (r11 review: acknowledging the last one took the bar away with 159 closed below); not on
-        /// a read that could not bring the threads its counts name (`unreadable`).
-        func showsJumps(unreadable: Bool) -> Bool {
-            if open.isEmpty && unreadable { return false }
-            return !open.isEmpty || !working.isEmpty || !waiting.isEmpty || !snoozed.isEmpty || !known.isEmpty || !closed.isEmpty || !archived.isEmpty
-        }
     }
 
     // MARK: - Exchanges
@@ -284,11 +276,20 @@ enum OrgThreadModel {
         return .working
     }
 
-    /// The open cards in the order his Threads draw them: Needs you first, then Done (and one listed
-    /// for another reason), each keeping its own order (the web's FOR_HIM_GROUPS, open above the folds).
-    static func needsFirst(_ open: [OrgThread], now: Date) -> [OrgThread] {
-        let needs = open.filter { group($0, inView: true, now: now) == .needs }
-        return needs + open.filter { group($0, inView: true, now: now) != .needs }
+    /// The groups his Threads always draw open, in order, each under its head with its count (the
+    /// web's FOR_HIM_GROUPS). Every other group folds under them to its name and count until he
+    /// taps it (`OrgThreadRevealModel.Fold`), with no row of tabs or chips (2026-11-21, the user:
+    /// "Needs you first, then Done, and the rest auto collapsed").
+    static let openGroups: [Group] = [.needs, .read]
+
+    /// The open cards drawn under `g`, keeping their own order: Needs you's, then the rest under
+    /// Done (one listed for another reason with them); none under any other group.
+    static func openCards(_ g: Group, _ open: [OrgThread], now: Date) -> [OrgThread] {
+        switch g {
+        case .needs: return open.filter { group($0, inView: true, now: now) == .needs }
+        case .read: return open.filter { group($0, inView: true, now: now) != .needs }
+        default: return []
+        }
     }
 
     /// Where a thread went after an action took it off the cards, said once at the top of the

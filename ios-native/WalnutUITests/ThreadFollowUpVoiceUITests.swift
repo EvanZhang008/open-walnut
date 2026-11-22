@@ -43,8 +43,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         let window = app.windows.firstMatch
         let bar = app.tabBars.firstMatch
         let viewSwitch = el("org.node.tabs")
-        let jumps = el("org.threads.jumps")
-        let top = max(list.frame.minY, max(viewSwitch.frame.maxY, jumps.exists ? jumps.frame.maxY : 0)) + 12
+        let top = max(list.frame.minY, viewSwitch.frame.maxY) + 12
         let bottom = (bar.exists ? bar.frame.minY : window.frame.maxY - 20) - 12
         for _ in 0..<24 {
             let frame = follow.frame

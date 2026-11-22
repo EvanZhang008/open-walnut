@@ -10,7 +10,8 @@
  *    fold through utils/view-memory.ts (an opened fold is plain state, folded again next time);
  *  - a fold head is not the shared DisclosureButton, or a folded group's head no longer sticks to
  *    the pane's bottom (three reviews on his data: under the Done cards the folds were out of sight);
- *  - the phone keeps its folds in @AppStorage, or misses a fold for a folded group.
+ *  - the phone keeps its folds in @AppStorage, misses a fold for a folded group, or brings back its
+ *    row of jump chips over the list.
  * The browser flow is tests/e2e/browser/thread-groups-folds.spec.ts.
  */
 import fs from 'node:fs'
@@ -23,6 +24,8 @@ const read = (p: string) => fs.readFileSync(path.join(root, p), 'utf8')
 const BY_STATE = 'web/src/components/org/OrgThreadsByState.tsx'
 const THREADS = 'web/src/components/org/OrgThreads.tsx'
 const IOS_VIEW = 'ios-native/Walnut/Views/Org/OrgThreadsView.swift'
+const IOS_MODEL = 'ios-native/Walnut/Views/Org/OrgThreadModel.swift'
+const IOS_FOCUS = 'ios-native/Walnut/Views/Org/OrgThreadFocus.swift'
 
 describe('every Threads group has its place: open or folded', () => {
   it('each group is open (Needs you, Done) or folded, once, in the view\'s order', () => {
@@ -58,12 +61,21 @@ describe('every Threads group has its place: open or folded', () => {
     for (const k of keys) expect(k, `kept view choice ${k}`).not.toMatch(/fold|filter|group|open/i)
   })
 
-  it('the phone folds each folded group in view state, never @AppStorage', () => {
+  it('the phone folds each folded group in view state, never @AppStorage, with no jump bar', () => {
     const ios = read(IOS_VIEW)
     expect(ios).not.toMatch(/@AppStorage\([^)]*[Ff]old/)
     expect(ios).toMatch(/@State private var openFolds: Set<String> = \[\]/)
-    // The phone's fold id of a group (Closed is `closed` there, the group id `done`).
+    // Its open groups, then one fold per folded group, in the server's order (Closed is `closed`
+    // there, the group id `done`).
+    const model = read(IOS_MODEL)
+    expect(model).toMatch(/static let openGroups: \[Group\] = \[\.needs, \.read\]/)
     const foldId: Record<string, string> = { done: 'closed' }
-    for (const g of FOLDED_GROUPS) expect(ios, g).toContain(`foldBinding("${foldId[g] ?? g}")`)
+    const folds = /enum Fold: String, CaseIterable, Equatable \{\s*case ([a-z, ]+)\n/.exec(read(IOS_FOCUS))
+    expect(folds, 'OrgThreadRevealModel.Fold').not.toBeNull()
+    expect(folds![1].split(/,\s*/)).toEqual(FOLDED_GROUPS.map((g) => foldId[g] ?? g))
+    expect(ios).toContain('ForEach(OrgThreadModel.openGroups, id: \\.self)')
+    expect(ios).toContain('ForEach(Fold.allCases, id: \\.self)')
+    // No row of jump chips over the list either (the web's filter row's twin).
+    for (const gone of ['org.threads.jumps', 'org.threads.jump.', 'jumpBar']) expect(ios, gone).not.toContain(gone)
   })
 })

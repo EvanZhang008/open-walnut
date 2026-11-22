@@ -78,8 +78,35 @@ enum OrgNodePageCover: Identifiable, Equatable {
 /// its id before the page says it is no longer open: the list brings only the newest closed ones
 /// (2026-11-08 review: a thread closed earlier was called gone).
 enum OrgThreadRevealModel {
-    /// The folds below his cards: Working, Waiting / Snoozed (the snoozed ones too), Acknowledged, Closed, Archived.
-    enum Fold: String, Equatable { case working, waiting, known, closed, archived }
+    /// The folds below his cards, in the order drawn (the server's FOLDED_GROUPS): Working,
+    /// Waiting / Snoozed (the snoozed ones too), Acknowledged, Closed, Archived. Each shows its
+    /// name and count until he taps its head; Needs you and Done above them are always open
+    /// (`OrgThreadModel.openGroups`). The raw value is the page's fold id.
+    enum Fold: String, CaseIterable, Equatable {
+        case working, waiting, known, closed, archived
+
+        /// The group it folds, for its words.
+        var group: OrgThreadModel.Group {
+            switch self {
+            case .working: return .working
+            case .waiting: return .waiting
+            case .known: return .known
+            case .closed: return .done
+            case .archived: return .archived
+            }
+        }
+
+        /// Its threads in the order drawn: Waiting / Snoozed lists the waiting ones, then the snoozed ones.
+        func threads(in s: OrgThreadModel.Sections) -> [OrgThread] {
+            switch self {
+            case .working: return s.working
+            case .waiting: return s.waiting + s.snoozed
+            case .known: return s.known
+            case .closed: return s.closed
+            case .archived: return s.archived
+            }
+        }
+    }
 
     enum Outcome: Equatable {
         /// No read since the request yet (or the last one failed and the thread is not known).
@@ -125,12 +152,7 @@ enum OrgThreadRevealModel {
             if probe.result == .failed { return .unchecked }
         }
         if sections.open.contains(where: { $0.id == id }) { return .show(nil) }
-        if sections.working.contains(where: { $0.id == id }) { return .show(.working) }
-        if sections.snoozed.contains(where: { $0.id == id }) { return .show(.waiting) }
-        if sections.waiting.contains(where: { $0.id == id }) { return .show(.waiting) }
-        if sections.known.contains(where: { $0.id == id }) { return .show(.known) }
-        if sections.closed.contains(where: { $0.id == id }) { return .show(.closed) }
-        if sections.archived.contains(where: { $0.id == id }) { return .show(.archived) }
+        if let fold = Fold.allCases.first(where: { $0.threads(in: sections).contains { $0.id == id } }) { return .show(fold) }
         // A failed read proves nothing about the thread; the page's own error line says so.
         if lastRead.failed || broughtNone { return .wait }
         // Absence from the list is no proof either (it holds the newest closed ones only): only
@@ -167,24 +189,6 @@ enum OrgThreadRevealModel {
         guard !cardsShown, owes || scrolling, !waitedTooLong else { return false }
         if scrolling { return true }
         return (outcome == .wait || outcome == .probe) && !lastReadFailed
-    }
-
-    /// What the pinned jump bar does on this render.
-    enum JumpBar: Equatable {
-        /// Not there: the threads are not read yet, or the read brought none of his (its page says so).
-        case none
-        /// In its place but out of sight, while a reveal holds the cards, so the page does not move
-        /// under the thread it just jumped to.
-        case held
-        case shown
-    }
-
-    /// The bar follows the page's rule (`Sections.showsJumps`: while it lists any thread, the last
-    /// card for him gone included), and fades only while the hold keeps the cards out of sight,
-    /// then comes back where it was.
-    static func jumpBar(threadsRead: Bool, sections: OrgThreadModel.Sections, broughtNone: Bool, hides: Bool) -> JumpBar {
-        guard threadsRead, sections.showsJumps(unreadable: broughtNone) else { return .none }
-        return hides ? .held : .shown
     }
 
     /// The longest the cards stay hidden for a reveal, whatever the read does.

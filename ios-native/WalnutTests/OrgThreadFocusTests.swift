@@ -295,27 +295,40 @@ final class OrgThreadFocusTests: XCTestCase {
         XCTAssertLessThanOrEqual(OrgThreadRevealModel.holdSeconds, 3)
     }
 
-    /// The jump bar keeps the page's rule (it stays while the page lists any thread, the last card
-    /// for him gone included) and fades only during the hold, in its place, then comes back.
-    func testTheJumpBarFadesOnlyDuringTheHoldThenFollowsThePageRule() throws {
-        let closed = try thread("th-000031", state: "answered", extra: #","closed":{"how":"acked","at":"2026-11-04T10:00:00Z","by":"human"}"#)
-        let working = try thread("th-000032", state: "working")
-        let noCards = OrgThreadModel.sections([closed, working], now: Self.now)
-        XCTAssertTrue(noCards.open.isEmpty)
-        // No card for him, but threads below: held during the hold (space kept), shown after it.
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: true, sections: noCards, broughtNone: false, hides: true), .held)
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: true, sections: noCards, broughtNone: false, hides: false), .shown)
-        let cards = OrgThreadModel.sections([try thread("th-000033", state: "needs")], now: Self.now)
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: true, sections: cards, broughtNone: false, hides: true), .held)
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: true, sections: cards, broughtNone: false, hides: false), .shown)
-        // Not read yet, nothing listed, or a read that brought none of his threads: no bar at all.
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: false, sections: cards, broughtNone: false, hides: true), .none)
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: true, sections: OrgThreadModel.Sections(), broughtNone: false, hides: false), .none)
-        XCTAssertEqual(OrgThreadRevealModel.jumpBar(threadsRead: true, sections: noCards, broughtNone: true, hides: false), .none)
-        // The page draws its bar from this rule.
+    /// The page has no row of jump chips (2026-11-21, the user: no need for several tabs on top):
+    /// Needs you and Done are open, each fold under them opens by its own head, and a thread
+    /// asked for opens the fold that lists it, every fold listing what its head counts.
+    func testThePageHasNoJumpBarAndEachFoldListsWhatARevealOpens() throws {
+        let threads = [
+            try thread("th-000031", state: "working"),
+            try thread("th-000032", state: "pending"),
+            try thread("th-000033", state: "answered",
+                       extra: #","snoozed":{"until":"2026-11-06T09:00:00Z","at":"2026-11-04T11:00:00Z"}"#),
+            try thread("th-000034", state: "pending", extra: #","shown":false,"ackedAt":"2026-11-04T11:00:00Z""#),
+            try thread("th-000035", extra: #","closed":{"how":"acked","at":"2026-11-04T11:00:00Z","by":"human"}"#),
+            try thread("th-000036", extra: #","closed":{"how":"acked","at":"2026-11-02T11:00:00Z","by":"human"}"#),
+        ]
+        let sections = OrgThreadModel.sections(threads, now: Self.now)
+        let read = OrgThreadRevealModel.Read(startedAt: t0, failed: false)
+        let listed = OrgThreadRevealModel.Fold.allCases.flatMap { $0.threads(in: sections) }.map(\.id)
+        XCTAssertEqual(Set(listed), Set(threads.map(\.id)), "every thread below the open groups is in one fold")
+        XCTAssertEqual(listed.count, threads.count, "and in only one")
+        XCTAssertEqual(OrgThreadRevealModel.Fold.waiting.threads(in: sections).map(\.id), ["th-000032", "th-000033"],
+                       "Waiting / Snoozed: the waiting ones, then the snoozed ones")
+        for f in OrgThreadRevealModel.Fold.allCases {
+            for t in f.threads(in: sections) {
+                XCTAssertEqual(OrgThreadRevealModel.outcome(.init(threadId: t.id, at: t0), threads: threads, sections: sections, lastRead: read),
+                               .show(f), "\(t.id) opens \(f.rawValue)")
+            }
+        }
+        // The page draws its groups from these rules, with no bar of chips above them.
         let code = try String(contentsOf: iosRoot.appendingPathComponent("Walnut/Views/Org/OrgThreadsView.swift"), encoding: .utf8)
-        XCTAssertTrue(code.contains("OrgThreadRevealModel.jumpBar("), "the view reads the bar from the rule")
-        XCTAssertFalse(code.contains("!sections.open.isEmpty {"), "the bar no longer goes with the last card")
+        XCTAssertTrue(code.contains("ForEach(OrgThreadModel.openGroups, id: \\.self)"), "Needs you and Done, always open")
+        XCTAssertTrue(code.contains("ForEach(Fold.allCases, id: \\.self)"), "every fold, by its own head")
+        XCTAssertTrue(code.contains("@State private var openFolds: Set<String> = []"), "every fold starts folded")
+        for gone in ["org.threads.jumps", "org.threads.jump.", "jumpBar", ".safeAreaInset(edge: .top"] {
+            XCTAssertFalse(code.contains(gone), "no jump bar: \(gone)")
+        }
     }
 
     /// A reveal's jump counts as landed only with the card in the upper part of the viewport, or
@@ -324,7 +337,7 @@ final class OrgThreadFocusTests: XCTestCase {
     func testARevealJumpsAgainUntilTheCardIsInView() throws {
         typealias M = OrgThreadRevealModel
         let at = { (top: CGFloat) in M.CardTop(id: "th-1", top: top) }
-        XCTAssertTrue(M.landed(at(24), threadId: "th-1", viewport: 710), "at the top, under the jump bar")
+        XCTAssertTrue(M.landed(at(24), threadId: "th-1", viewport: 710), "at the top")
         XCTAssertFalse(M.landed(at(3835), threadId: "th-1", viewport: 710), "the list laid out again at its top")
         XCTAssertFalse(M.landed(at(24), threadId: "th-2", viewport: 710), "another card's place says nothing")
         XCTAssertFalse(M.landed(nil, threadId: "th-1", viewport: 710), "no report yet")

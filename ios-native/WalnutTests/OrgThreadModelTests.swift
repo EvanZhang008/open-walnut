@@ -332,20 +332,6 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertFalse(OrgThreadModel.inView(still, shared: [], now: Self.now))
         XCTAssertEqual(OrgThreadModel.sections([still], now: Self.now).snoozed.map(\.id), ["th-000014"])
     }
-    func testTheJumpBarStaysWhenTheLastCardForHimIsGone() throws {
-        let closed = try t("th-000021", extra: #","closed":{"how":"acked","at":"2026-11-04T10:00:00Z","by":"human"}"#)
-        let working = try t("th-000022", state: "working")
-        // Acknowledging his last card leaves in-progress and closed threads: the bar stays.
-        let s = OrgThreadModel.sections([closed, working], now: Self.now)
-        XCTAssertTrue(s.open.isEmpty)
-        XCTAssertTrue(s.showsJumps(unreadable: false))
-        // A read that brought none of the counted threads says so instead.
-        XCTAssertFalse(s.showsJumps(unreadable: true))
-        XCTAssertFalse(OrgThreadModel.Sections().showsJumps(unreadable: false))
-        let open = OrgThreadModel.sections([try t("th-000023", state: "needs")], now: Self.now)
-        XCTAssertTrue(open.showsJumps(unreadable: true))
-    }
-
     // MARK: - The groups (server core/org/thread-groups.ts), in the user's own words
 
     /// The seven groups the server draws by, with the words the web shows: never To read, Known
@@ -353,6 +339,27 @@ final class OrgThreadModelTests: XCTestCase {
     func testTheGroupsAreTheServersSevenInHisWords() {
         XCTAssertEqual(OrgThreadModel.Group.allCases.map(\.rawValue), ["needs", "read", "working", "waiting", "known", "done", "archived"])
         XCTAssertEqual(OrgThreadModel.Group.allCases.map(\.label), ["Needs you", "Done", "Working", "Waiting / Snoozed", "Acknowledged", "Closed", "Archived"])
+    }
+
+    /// The page's default, as the web's (FOR_HIM_GROUPS, FOLDED_GROUPS): Needs you and Done open,
+    /// every other group folded to its name and count, in the server's order, each group in one
+    /// place (2026-11-21, the user: "Needs you first, then Done, and the rest auto collapsed").
+    func testNeedsYouAndDoneAreOpenAndEveryOtherGroupIsFolded() throws {
+        XCTAssertEqual(OrgThreadModel.openGroups, [.needs, .read])
+        let folded = OrgThreadRevealModel.Fold.allCases.map(\.group)
+        XCTAssertEqual(folded, [.working, .waiting, .known, .done, .archived])
+        XCTAssertEqual(OrgThreadModel.openGroups + folded, OrgThreadModel.Group.allCases, "each group open or folded, once, in order")
+        // The open cards go under their head: Needs you first, the rest under Done, each in its own order.
+        let open = OrgThreadModel.sections([
+            try t("th-000041", state: "answered", updated: "2026-11-04T11:00:00Z"),
+            try t("th-000042", state: "needs", updated: "2026-11-04T10:30:00Z"),
+            try t("th-000043", state: "answered", updated: "2026-11-04T10:00:00Z", messages: answeredOnce),
+            try t("th-000044", state: "needs", updated: "2026-11-04T09:30:00Z"),
+        ], now: Self.now).open
+        XCTAssertEqual(OrgThreadModel.openCards(.needs, open, now: Self.now).map(\.id), ["th-000042", "th-000044"])
+        XCTAssertEqual(OrgThreadModel.openCards(.read, open, now: Self.now).map(\.id),
+                       open.map(\.id).filter { !["th-000042", "th-000044"].contains($0) })
+        for g in folded { XCTAssertTrue(OrgThreadModel.openCards(g, open, now: Self.now).isEmpty, "\(g): folded, no open card") }
     }
 
     /// Every shape of thread is in exactly one group, and its card reads that group's word where the
