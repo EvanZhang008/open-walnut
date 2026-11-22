@@ -172,6 +172,12 @@
   font-size: var(--font-size-md);
 }
 
+:is(.settings-group > .empty-state, .settings-group > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-words,
+:is(.settings-card-body > .empty-state, .settings-card-body > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-words {
+  align-items: flex-start;
+  text-align: left;
+}
+
 :is(.settings-group > .empty-state, .settings-group > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-title,
 :is(.settings-card-body > .empty-state, .settings-card-body > :not(.settings-row) > .empty-state:only-child):not([data-size='pane']) .empty-state-title {
   font-size: var(--font-size-md);

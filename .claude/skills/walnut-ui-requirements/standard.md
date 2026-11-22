@@ -408,8 +408,8 @@ Never a `*-empty` / `*-loading` class with its own type, colour or padding, and 
   name, "HTTP 502") goes in `detail`, never in the hint: it shows when it reads as a plain sentence
   and folds behind "Details" otherwise. A failure's icon is the root warning colour everywhere.
 - **One next step** when the place has one: Clear search, Retry, the first create, with no "+"
-  glyph. A `.btn` at `pane` size, `.btn btn-sm` in a section or row (`btn-primary` only when it is
-  the page's main action); a rare second one beside it.
+  glyph. A `.btn` at `pane` size, `.btn btn-sm` in a section or row (`btn-primary` only for a
+  page's first setup, as Mail with no account; a reader's New note stays grey); a rare second one beside it.
 - **Three sizes, one look:** `pane` for a whole pane or reader (centred, 32 px icon, 15 px title,
   13 px hint), `section` for a list, panel or card body (centred, 20 px icon, 13 px title, 12 px hint),
   `row` for a line in a list, menu, picker or form (left, no icon, 12 px). Muted text, no box, no

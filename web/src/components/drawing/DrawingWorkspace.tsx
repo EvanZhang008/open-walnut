@@ -771,7 +771,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           {!source && (
             <EmptyState size="pane" className="drawing-canvas-host" title="No drawing open"
               hint={filesShown ? 'Open a drawing from the list, or start a new one.' : 'Start a new drawing, or show the list to open one.'}
-              action={{ label: 'New drawing', primary: true, disabled: !!busy, onClick: () => { void createNew(); } }} />
+              action={{ label: 'New drawing', disabled: !!busy, onClick: () => { void createNew(); } }} />
           )}
           {source && canvasError && (
             <UnavailableState size="pane" className="drawing-canvas-host" title="Couldn't load the drawing editor" detail={canvasError} onRetry={loadEditor} retryLabel="Try again" />

@@ -58,15 +58,20 @@ export function Spark({ points, state }: { points: Array<number | null>; state: 
   const h = 22;
   const step = points.length > 1 ? w / (points.length - 1) : w;
   let d = '';
+  // A reading with no neighbour is a dot: as a path it is a one-pixel tick at the cell's edge.
+  const dots: Array<[number, number]> = [];
   points.forEach((p, i) => {
     if (p === null) return;
     const x = i * step;
     const y = h - 2 - ((p - min) / (max - min || 1)) * (h - 4);
+    const joined = (i > 0 && points[i - 1] != null) || (i < points.length - 1 && points[i + 1] != null);
+    if (!joined) { dots.push([x, y]); return; }
     d += `${d && points[i - 1] !== null ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `;
   });
   return (
     <svg className={`health-spark health-spark-${state}`} width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
-      <path d={d} fill="none" strokeWidth="1.5" />
+      {d && <path d={d} fill="none" strokeWidth="1.5" />}
+      {dots.map(([x, y]) => <circle key={x} cx={Math.min(w - 2, Math.max(2, x))} cy={y} r="2" />)}
     </svg>
   );
 }

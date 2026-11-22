@@ -19,7 +19,7 @@ export function NoteMissingState({ path, onCreate, onClose, closeLabel = 'Close 
       size="pane"
       title="This note is not here"
       hint={<>“{name}” was deleted, or was never written.</>}
-      action={{ label: 'Write it', onClick: onCreate, primary: true }}
+      action={{ label: 'Write it', onClick: onCreate }}
       testId="notes-missing-state"
     >
       <button type="button" className="btn btn-sm" onClick={onClose}>{closeLabel}</button>

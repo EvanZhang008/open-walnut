@@ -846,7 +846,7 @@ export function AskWalnutSlot({
             <EmptyState
               size="pane"
               title="This quick question has no session yet"
-              action={{ label: 'New quick question', onClick: startNew, primary: true }}
+              action={{ label: 'New quick question', onClick: startNew }}
             />
           </div>
         ))}

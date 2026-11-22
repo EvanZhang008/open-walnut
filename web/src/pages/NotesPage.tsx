@@ -1312,7 +1312,7 @@ function NotesEmptyState({ onNewNote }: { onNewNote: () => void }) {
       icon={ICON_NOTE}
       title="No note open"
       hint={<>Pick one from the list, or press <kbd>⌘K</kbd> to find one.</>}
-      action={{ label: 'New note', onClick: onNewNote, primary: true }}
+      action={{ label: 'New note', onClick: onNewNote }}
       testId="notes-empty-state"
     />
   );

@@ -20,6 +20,12 @@ describe('charts with no data say so', () => {
       expect(doc.querySelector('.health-spark-empty')?.textContent).toBe('No data');
     }
   });
+  it('a Health reading with no neighbour is a dot, never a one-pixel tick', () => {
+    const doc = spark([null, 1, null, null, 2, null], 'ALARM');
+    expect(doc.querySelectorAll('svg circle').length).toBe(2);
+    expect(doc.querySelector('svg path')).toBeNull();
+    expect(spark([5], 'ALARM').querySelector('.health-spark-empty')?.textContent).toBe('One reading');
+  });
   it('a Health alarm with readings draws its line', () => {
     expect(spark([1, 2, 3], 'OK').querySelector('svg path')).not.toBeNull();
     expect(spark([null, null], 'OK').querySelector('.health-spark-empty')?.textContent).toBe('No data');
