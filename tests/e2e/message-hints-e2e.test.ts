@@ -56,7 +56,7 @@ describe('message hints through a real server', () => {
     expect(r.status).toBe(200)
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
     // The reply language is a line of the system prompt; its correction after a drift was removed 2026-11-20.
-    expect(kinds).toEqual(['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'brief', 'threads', 'threads-tidy', 'hand-on', 'team-guidance'])
+    expect(kinds).toEqual(['question', 'rich-output', 'voice-reply', 'object-context', 'user-away', 'user-focus', 'brief', 'threads', 'threads-tidy', 'hand-on', 'team-guidance'])
     expect(r.body.hints.every((h: { built_in: boolean }) => h.built_in)).toBe(true)
     const rich = r.body.hints.find((h: { kind: string }) => h.kind === 'rich-output')
     expect(rich).toMatchObject({ enabled: true, every_turns: 5, placement: 'after', overridden: false })
