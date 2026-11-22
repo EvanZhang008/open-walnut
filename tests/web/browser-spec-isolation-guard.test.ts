@@ -74,8 +74,10 @@ describe('browser specs keep out of each other\'s data', () => {
   })
 
   it('a file that opens a Home side bar keeps it out of the shared UI prefs', () => {
-    // todo-panel-helpers defines both openScratchpad and isolateUiPrefs.
-    const opens = sources.filter((f) => f !== 'todo-panel-helpers.ts'
+    // todo-panel-helpers defines both openScratchpad and isolateUiPrefs. A spec on a server of
+    // its own (the Apps page's useAppsFixture, a throwaway copy per file) shares no prefs at all.
+    const ownServer = /useAppsFixture\(|new MailFixtureServer\(/
+    const opens = sources.filter((f) => f !== 'todo-panel-helpers.ts' && !ownServer.test(read(f))
       && /openScratchpad\(|sidebar-toggle-(scratchpad|calendar|routines)/.test(read(f)))
     expect(opens.length).toBeGreaterThan(10)
     const missing = opens.filter((f) => !/isolateUiPrefs\(|\/api\/ui-prefs/.test(read(f)))

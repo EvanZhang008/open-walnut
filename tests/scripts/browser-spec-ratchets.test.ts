@@ -1675,9 +1675,10 @@ describe('the sidebar on the shared fixture', () => {
   // itself (isolateUiPrefs, isolateUiPrefsContext, isolatePrefs, or its own ui-prefs route),
   // directly or through a helper it imports. Specs with their own config run on their own
   // fixture, and so does a spec that starts its own mail fixture server (MailFixtureServer: its
-  // own data, port and origin, so its prefs never reach the shared one). The specs below did it
+  // own data, port and origin, so its prefs never reach the shared one), and so does one on the
+  // Apps page's own fixture (useAppsFixture: a throwaway copy per file). The specs below did it
   // before this check: the list only shrinks.
-  const ownServer = /new MailFixtureServer\(/
+  const ownServer = /new MailFixtureServer\(|useAppsFixture\(/
   const own = new Set([
     ...fs.readdirSync(DIR).filter((f) => f.endsWith('.config.ts')).flatMap((f) => testMatchNames(fs.readFileSync(path.join(DIR, f), 'utf8'))),
     ...fs.readdirSync(DIR).filter((f) => f.endsWith('.spec.ts') && ownServer.test(fs.readFileSync(path.join(DIR, f), 'utf8'))),
