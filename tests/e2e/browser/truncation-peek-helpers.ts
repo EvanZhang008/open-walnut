@@ -124,7 +124,8 @@ export async function expectStill(others: Locator[], tops: number[], label = 'ne
 }
 
 /**
- * Cut-off text shows its whole text in place on hover, never in a native tooltip (2026-11-12,
+ * Inside a peek zone (`[data-peek-zone]`: Home's task panel), cut-off text shows its whole text in
+ * place on hover, never in a native tooltip; outside one use `expectTooltipNotPeek` (2026-11-12,
  * the user: "make the full line expanded like what we did for side bar"; 2026-11-15: the whole
  * row widens, never grows taller): the element carries no title of its own, hovering it opens
  * its row wider at the placeholder's exact top and height with `text` whole on its line, and
@@ -165,7 +166,47 @@ export async function expectPeeksInPlace(el: Locator, text: string, label: strin
   await expect.soft(page.locator('[data-peek-placeholder]'), `${label}: its placeholder goes with it`).toHaveCount(0)
 }
 
-/** Whether `el` itself shows its whole text on its line (open or never cut). */
+/** Every peek mark on the page: an open text, a widened row, a placeholder holding a row's place. */
+export const peekMarks = (page: Page): Promise<number> => page.evaluate(() =>
+  document.querySelectorAll('[data-peek-open], [data-peek-expanded], [data-peek-placeholder], [data-peek-down]').length)
+
+/**
+ * The native titles on `el`, inside it, and on its nearest ancestors: where the peek puts the full
+ * text of the cut-off element under the pointer (truncation-peek.ts cutTip).
+ */
+const titlesNear = (el: Locator): Promise<string[]> => el.evaluate((node) => {
+  const out: string[] = []
+  for (const n of [node, ...Array.from(node.querySelectorAll('[title]'))]) { const t = n.getAttribute('title'); if (t) out.push(t) }
+  let a = node.parentElement
+  for (let i = 0; a && a !== document.body && i < 6; a = a.parentElement, i++) { const t = a.getAttribute('title'); if (t) out.push(t) }
+  return out
+})
+
+/**
+ * Cut-off text outside a peek zone opens nothing on hover (2026-11-23, the user: only very narrow
+ * places may widen, widening everything is uncomfortable; utils/truncation-peek-find.ts
+ * peekAllowed): with the pointer resting on `el`, no text opens, no row widens and no placeholder
+ * appears, `el` keeps its box to the pixel, and its full `text` is in a native title (on `el` or
+ * the cut-off element under the pointer). Returns the box `el` kept.
+ */
+export async function expectTooltipNotPeek(el: Locator, text: string, label: string, opts: { position?: { x: number; y: number } } = {}): Promise<Box> {
+  const page = el.page()
+  await el.scrollIntoViewIfNeeded()
+  await page.mouse.move(1, 1)
+  await page.waitForTimeout(150)
+  const before = (await el.boundingBox())!
+  await el.hover(opts.position ? { position: opts.position } : undefined)
+  // Past the row's open delay (truncation-peek.ts ROW_OPEN_MS) and its reveal.
+  await page.waitForTimeout(400)
+  expect(await peekMarks(page), `${label}: hovering opens nothing (no open text, widened row or placeholder)`).toBe(0)
+  await expect(peekPill(page), `${label}: no floating text pill`).toHaveCount(0)
+  const after = (await el.boundingBox())!
+  for (const k of ['x', 'y', 'width', 'height'] as const) expect(near(after[k], before[k]), `${label}: ${k} did not move (${after[k]} vs ${before[k]})`).toBe(true)
+  await expect.poll(async () => (await titlesNear(el)).some((t) => t.includes(text)), `${label}: its full text is in a native title`).toBe(true)
+  await page.mouse.move(1, 1)
+  return after
+}
+
 /**
  * No control is laid over text (2026-11-22 review: a card's ⋮ and its fade covered the end of the
  * title's first line on hover). With the pointer on `row`, every shown control of it (▶, ⋮, a

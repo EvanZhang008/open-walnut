@@ -22,7 +22,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { expectPeeksInPlace } from './truncation-peek-helpers'
+import { expectTooltipNotPeek } from './truncation-peek-helpers'
 
 export interface Offender {
   rule: 'R1' | 'R2' | 'R3' | 'R4'
@@ -423,9 +423,10 @@ export async function expectReadablePanel(page: Page, panel: Locator, label = 'p
 }
 
 /**
- * R5: a host name in a notice stays on one line, cut with an ellipsis, and hovering it shows
- * its whole name in place (truncation-peek-helpers.ts), never in a native title. The element
- * is the deepest one whose text holds the host.
+ * R5: a host name in a notice stays on one line, cut with an ellipsis. A session column is no peek
+ * zone, so hovering it opens nothing and moves nothing, and its whole name is in a native title
+ * (truncation-peek-helpers.ts expectTooltipNotPeek). The element is the deepest one whose text
+ * holds the host.
  */
 export async function expectHostNameCut(panel: Locator, host: string, label = 'host name'): Promise<void> {
   const facts = await panel.evaluate((root, name) => {
@@ -460,7 +461,7 @@ export async function expectHostNameCut(panel: Locator, host: string, label = 'h
   expect.soft(facts.lines, `R5 ${label}: the host name in ${where} wraps onto ${facts.lines} lines`).toBe(1)
   expect.soft(facts.textOverflow, `R5 ${label}: ${where} is cut with an ellipsis`).toBe('ellipsis')
   expect.soft(facts.whiteSpace, `R5 ${label}: ${where} never wraps`).toMatch(/nowrap|pre/)
-  await expectPeeksInPlace(panel.locator('[data-r5-host]'), host, `R5 ${label}: ${where}`)
+  await expectTooltipNotPeek(panel.locator('[data-r5-host]'), host, `R5 ${label}: ${where}`)
 }
 
 /** Save a screenshot of the panel under the task's shots folder (per browser project). */

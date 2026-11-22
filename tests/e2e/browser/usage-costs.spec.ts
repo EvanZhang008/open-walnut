@@ -8,7 +8,7 @@
  */
 import { devices, test, expect, type Page } from '@playwright/test'
 import { LONG_TITLE, routeCosts } from './usage-costs-fixture'
-import { expectPeeksInPlace } from './truncation-peek-helpers'
+import { expectTooltipNotPeek } from './truncation-peek-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -130,8 +130,9 @@ test('one picture: dollars first, and every Break down by choice shows its lines
     cut: el.scrollWidth > el.clientWidth }))
   expect(fit.h).toBeLessThan(fit.lh * 1.6)
   expect(fit.cut).toBe(true)
-  // The rest of the cut line shows in place on hover, not in a native tooltip.
-  await expectPeeksInPlace(label, LONG_TITLE, 'the cut task line')
+  // Settings is no peek zone: hovering the cut line opens nothing and moves nothing; its whole
+  // text is in a native tooltip (utils/truncation-peek-find.ts peekAllowed).
+  await expectTooltipNotPeek(label, LONG_TITLE, 'the cut task line')
 
   // Periods: Today is one flat band, All time asks for no bounds.
   await page.getByTestId('usage-period-today').click()

@@ -8091,6 +8091,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   return (
     <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}
       {...{ [FOLD_PANEL_ATTR]: '' }}
+      // The one narrow side list where a cut-off row widens on hover (utils/truncation-peek-find.ts).
+      data-peek-zone=""
       // The person steers the panel from here on: a held locate lets go (locate-hold.ts). React
       // events bubble through portals, so a row menu or a fold menu counts as the panel too.
       onPointerDownCapture={endLocateHold} onKeyDownCapture={endLocateHold}

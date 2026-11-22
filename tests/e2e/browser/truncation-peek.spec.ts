@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, showAllSections } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
-import { expectPeeksInPlace, expectRestored, expectStill, expectToolsClearOfTitle, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
+import { expectPeeksInPlace, expectRestored, expectStill, expectToolsClearOfTitle, expectTooltipNotPeek, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
 
 /**
  * Cut-off text peeks in place (web/src/utils/truncation-peek.ts). A task row widens in place
@@ -11,7 +11,9 @@ import { expectPeeksInPlace, expectRestored, expectStill, expectToolsClearOfTitl
  * beside it; an empty placeholder keeps its place, so no row moves. No native title is left above
  * the pointer, so no dark box opens; it closes when the pointer leaves or the list scrolls; a row
  * that fits shows nothing. Text outside a row that a column clips opens its own container the same
- * way.
+ * way. All of this happens only inside a peek zone (`[data-peek-zone]`, Home's task panel;
+ * 2026-11-23, the user: only very narrow places widen): the page fixtures below are marked as one,
+ * and each has a twin outside any zone that opens nothing and shows its text in a native title.
  */
 
 const SHOTS = '/tmp/truncation-peek'
@@ -279,22 +281,41 @@ test('moving down a list: one row open at a time, no row and no scroll moves, an
   }
 })
 
-test('at the window\'s right edge a row grows to the left, the last row of a scrolled list opens over its clip, and titles are restored', async ({ page, baseURL }) => {
+test('in a zone, at the window\'s right edge a row grows to the left, the last row of a scrolled list opens over its clip, and titles are restored; outside one nothing opens', async ({ page, baseURL }) => {
   await isolateUiPrefs(page)
   await openHome(page, baseURL!)
   await page.mouse.move(600, 700)
   await page.evaluate(() => {
+    const control = '<button type="button" title="Open the long line: Working" style="display:block;width:100%;overflow:hidden;white-space:nowrap;text-align:left"><span class="clip-line">A line the column cuts off at its edge, with every word of it still to read</span></button>'
+    // The same control and list outside any zone.
+    const outside = document.createElement('div')
+    outside.id = 'peek-outside'
+    outside.style.cssText = 'position:fixed;left:40px;top:300px;width:250px;z-index:5000;background:var(--bg);font-size:14px'
+    outside.innerHTML = `${control}<div id="peek-outside-list" style="height:90px;overflow:auto">${Array.from({ length: 6 }, (_, i) => `<div data-peek-row="" class="peek-outside-row" style="height:30px;line-height:30px;padding:0 8px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Outside row ${i}: a list row outside any zone keeps its place and shows its words in a tooltip</span></div>`).join('')}</div>`
+    document.body.appendChild(outside)
     const edge = document.createElement('div')
     edge.id = 'peek-fixture'
+    edge.setAttribute('data-peek-zone', '')
     edge.style.cssText = 'position:fixed;left:1000px;top:300px;width:250px;z-index:5000;background:var(--bg);font-size:14px'
-    edge.innerHTML = '<button type="button" title="Open the long line: Working" style="display:block;width:100%;overflow:hidden;white-space:nowrap;text-align:left"><span class="clip-line">A line the column cuts off at its edge, with every word of it still to read</span></button><div id="peek-following">Following row</div>'
+    edge.innerHTML = `${control}<div id="peek-following">Following row</div>`
     document.body.appendChild(edge)
     const list = document.createElement('div')
     list.id = 'peek-list'
+    list.setAttribute('data-peek-zone', '')
     list.style.cssText = 'position:fixed;left:900px;top:560px;width:300px;height:120px;overflow:auto;z-index:5000;background:var(--bg);font-size:14px'
     list.innerHTML = Array.from({ length: 6 }, (_, i) => `<div data-peek-row="" class="peek-list-row" style="height:30px;line-height:30px;padding:0 8px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">List row ${i}: the last one of a list scrolled to its end opens over the clip of the list</span></div>`).join('')
     document.body.appendChild(list)
   })
+
+  // Outside a zone: the cut control and a cut list row open nothing and keep their boxes; the line
+  // shows its words in a native title, and the control keeps its own.
+  const outsideButton = page.locator('#peek-outside button')
+  await expectTooltipNotPeek(page.locator('#peek-outside .clip-line'), 'every word of it still to read', 'outside control')
+  await expect(outsideButton).toHaveAttribute('title', 'Open the long line: Working')
+  const outsideRow = page.locator('#peek-outside .peek-outside-row').nth(2)
+  const outsideNext = await topsOf([page.locator('#peek-outside .peek-outside-row').nth(3)])
+  await expectTooltipNotPeek(outsideRow.locator('span'), 'shows its words in a tooltip', 'outside list row')
+  await expectStill([page.locator('#peek-outside .peek-outside-row').nth(3)], outsideNext, 'the outside row below')
 
   // At the right edge: it keeps its right edge and grows to the left, inside the window.
   const button = page.locator('#peek-fixture button:not([data-peek-placeholder])')
@@ -340,8 +361,9 @@ test('at the window\'s right edge a row grows to the left, the last row of a scr
 // 2026-11-16 (session-panel-narrow R5): a host name cut inside a sentence opened the sentence's
 // inline span, whose placeholder held one line, so the open box stood 86px taller and 2px lower than
 // its place. Every inline box around a cut text (one span in another, a link) is passed over: the
-// block that holds the sentence is what opens, at its own top and height.
-test('a cut name inside a sentence opens the block that holds the sentence, never an inline span around it', async ({ page, baseURL }) => {
+// block that holds the sentence is what opens, at its own top and height. That is inside a zone; a
+// session panel is none (2026-11-23), so there the cut name opens nothing and shows a native title.
+test('in a zone a cut name inside a sentence opens the block that holds the sentence, never an inline span around it; outside one it opens nothing', async ({ page, baseURL }) => {
   await isolateUiPrefs(page)
   await openHome(page, baseURL!)
   await page.mouse.move(600, 700)
@@ -351,6 +373,12 @@ test('a cut name inside a sentence opens the block that holds the sentence, neve
     const fixture = document.createElement('div')
     fixture.id = 'peek-prose'
     fixture.style.cssText = 'position:fixed;left:300px;top:200px;width:220px;z-index:5000;background:var(--bg);font-size:14px;line-height:20px'
+    const outside = fixture.cloneNode() as HTMLElement
+    outside.id = 'peek-prose-outside'
+    outside.style.left = '700px'
+    outside.innerHTML = `<div class="prose-block"><span class="prose-inline">${token} is reachable, and this session's process is not running. Send a message to resume it.</span></div>`
+    document.body.appendChild(outside)
+    fixture.setAttribute('data-peek-zone', '')
     fixture.innerHTML = [
       `<div class="prose-block" data-case="span"><span class="prose-inline">${token} is reachable, and this session's process is not running. Send a message to resume it.</span></div>`,
       `<div class="prose-block" data-case="nested" style="margin-top:12px"><span><em>${token} is reachable, and the words go on for a few more lines below it.</em></span></div>`,
@@ -358,6 +386,12 @@ test('a cut name inside a sentence opens the block that holds the sentence, neve
     ].join('')
     document.body.appendChild(fixture)
   }, NAME)
+  // Outside a zone: the sentence keeps its place, the name its box, and the name is in a native title.
+  const outsideBlock = page.locator('#peek-prose-outside .prose-block')
+  const outsideBefore = await box(outsideBlock)
+  await expectTooltipNotPeek(outsideBlock.locator('.prose-token'), NAME, 'sentence outside a zone')
+  const outsideAfter = await box(outsideBlock)
+  for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(outsideAfter[k] - outsideBefore[k]), `the outside sentence's ${k} did not move`).toBeLessThanOrEqual(0.5)
   for (const kind of ['span', 'nested', 'link']) {
     const block = page.locator(`#peek-prose .prose-block[data-case="${kind}"]`)
     const token = block.locator('.prose-token')

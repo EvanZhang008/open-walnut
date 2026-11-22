@@ -182,7 +182,7 @@ test.describe('Stop one background task', () => {
     ])
     const errBox = (await head.locator('.bg-task-stop-error').boundingBox())!
     expect(errBox.x + errBox.width).toBeLessThanOrEqual(headBox.x + headBox.width + 0.5)
-    // The full reason is in the row; cut off, it peeks in place on hover (utils/truncation-peek.ts).
+    // The full reason is in the row; cut off, it shows whole in a native title on hover (utils/truncation-peek.ts).
     await expect(head.locator('.bg-task-stop-error')).toHaveText('The CLI did not stop the task: No task found with ID: bash-run')
     await head.screenshot({ path: `${dir}/4-refused.png` })
 

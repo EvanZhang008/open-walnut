@@ -86,6 +86,45 @@ export function findCutText(target: EventTarget | null): HTMLElement | null {
 }
 
 
+/**
+ * Where cut-off text widens on hover: only inside a narrow side list of tasks, marked
+ * `data-peek-zone` (Home's task panel, which the session columns sit beside). Everywhere else it
+ * stays as it is and shows its full text as a native tooltip (truncation-peek.ts), and a click
+ * opens what holds it (2026-11-23, the user: "就是那种非常非常 narrow 的地方，然后可能我们放大可以，
+ * 但所有东西都放大真的是不太舒服"; first on the Org page head: "这个 title 不要，就是放上去之后还要放大").
+ * A new zone is a new entry in tests/web/truncation-peek-zones.test.ts.
+ */
+export const PEEK_ZONE_SELECTOR = '[data-peek-zone]';
+
+/**
+ * A page's or a panel's header (a title row and its tools), inside a zone too, never widens: a row
+ * on the header rule (`data-fit-header`), a `<header>`, a row classed `*-head`, `*-header`,
+ * `*-heading`, `*-toolbar`, `*-titlebar` or `*-topbar` (tests/web/header-fit-scan.ts names them the
+ * same way), or one marked `data-peek-header`. A list row (`data-peek-row`) around it is no header.
+ */
+const HEADER_SELECTOR = '[data-fit-header], header, [data-peek-header]';
+const HEADER_CLASS = /(?:^|\s)[A-Za-z][\w-]*-(?:head|header|heading|toolbar|titlebar|topbar)(?=\s|$)/;
+export function headerOf(el: Element): Element | null {
+  let found: Element | null = null;
+  for (let a: Element | null = el; a && a !== document.body; a = a.parentElement) {
+    if (a.matches(PEEK_ROW_SELECTOR)) return null;
+    // What holds a zone is not its header.
+    if (a.matches(PEEK_ZONE_SELECTOR)) break;
+    if (!found && (a.matches(HEADER_SELECTOR) || HEADER_CLASS.test(a.getAttribute('class') ?? ''))) found = a;
+  }
+  return found;
+}
+
+/**
+ * Whether cut-off text at `el` may widen on hover: inside a zone, not in a header there. A card with
+ * a box to type in inside a zone (Home's ask card) still opens downward in its column, the way the
+ * user designed it there (2026-11-20, truncation-peek-row.ts growsDown); outside a zone it does not
+ * (2026-11-23: a session's question card opened down over the reply box).
+ */
+export function peekAllowed(el: Element): boolean {
+  return !!el.closest(PEEK_ZONE_SELECTOR) && !headerOf(el);
+}
+
 /** A task row (or any list row) that expands as a whole: the pointer anywhere on it shows every cut-off text in it. */
 export const PEEK_ROW_SELECTOR = '[data-peek-row]';
 /** A row's own buttons (its ⋮ menu, Start, Close): over one the row keeps quiet, so the button shows. */
@@ -125,7 +164,7 @@ export function cutTextsIn(row: Element): HTMLElement[] {
  * right under it. `key` is the row, or that text.
  */
 export function peekTargetOf(target: EventTarget | null): { key: Element; hosts: HTMLElement[] } | null {
-  if (!(target instanceof Element) || optedOut(target)) return null;
+  if (!(target instanceof Element) || optedOut(target) || !peekAllowed(target)) return null;
   const row = target.closest(PEEK_ROW_SELECTOR);
   if (row && growsDown(row)) {
     // A card with a box to type in opens from its text only: its box and buttons stay as they are.

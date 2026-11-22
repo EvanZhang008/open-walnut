@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
-import { expectInboxCardWhole, expectRestored, expectStill, expectWidensInPlace, expectWorkerRowWidens, isOpen, openInRow, topsOf } from './truncation-peek-helpers'
+import { expectInboxCardWhole, expectRestored, expectStill, expectTooltipNotPeek, expectWidensInPlace, expectWorkerRowWidens, isOpen, openInRow, peekMarks, topsOf } from './truncation-peek-helpers'
 
-// A whole card widens sideways at its own height (2026-11-15, the user: wider, not taller).
+// A whole card widens sideways at its own height (2026-11-15, the user: wider, not taller), and
+// only inside a peek zone (`[data-peek-zone]`, Home's task panel; 2026-11-23, the user: only very
+// narrow places widen). The page fixture below is marked as one; its twin outside opens nothing.
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
 const SUBJECT = 'A letter with a full-length subject: review the garden schedule, the tool inventory and the next steps before the weekend'
@@ -30,13 +32,14 @@ test('dense inbox cards show their subject and preview whole, keep their actions
   }
 })
 
-test('unmarked components, rows with twelve texts, a line longer than the window and the keyboard all widen the real row', async ({ page }) => {
+test('in a zone, unmarked components, rows with twelve texts, a line longer than the window and the keyboard all widen the real row; outside one nothing opens', async ({ page }) => {
   await home(page)
   await page.mouse.move(1000, 100)
   await page.evaluate(() => {
     const cut = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
     const fixture = document.createElement('section')
     fixture.id = 'peek-class-fixture'
+    fixture.setAttribute('data-peek-zone', '')
     fixture.style.cssText = 'position:fixed;left:40px;top:60px;width:260px;z-index:9999;background:var(--bg)'
     fixture.innerHTML = [
       `<div data-peek-row="" id="many-texts" style="height:216px;overflow:hidden">${Array.from({ length: 12 }, (_, i) => `<div style="${cut};height:18px">Row ${i}: ${'A detailed entry with all of its words shown in this row. '.repeat(2)}</div>`).join('')}</div>`,
@@ -49,6 +52,19 @@ test('unmarked components, rows with twelve texts, a line longer than the window
       `<button id="kbd-before">Before</button><div data-peek-row="" tabindex="0" id="kbd-row" style="${cut}">A row reached with the keyboard opens as wide as the pointer would make it</div><button id="kbd-after">After</button>`,
     ].join('')
     document.body.appendChild(fixture)
+    // The same kinds outside any zone: an unmarked container, a row of cut texts, a row with a
+    // button, and a row the keyboard reaches.
+    const outside = document.createElement('section')
+    outside.id = 'peek-outside-fixture'
+    outside.style.cssText = 'position:fixed;left:700px;top:60px;width:260px;z-index:9999;background:var(--bg)'
+    outside.innerHTML = [
+      `<div id="out-container"><span id="out-text" style="display:block;${cut}">${'An unmarked component outside a zone keeps its place. '.repeat(3)}</span></div>`,
+      `<div data-peek-row="" id="out-row" style="height:54px;overflow:hidden">${Array.from({ length: 3 }, (_, i) => `<div style="${cut};height:18px">Out ${i}: ${'A detailed entry outside a zone shows its words in a tooltip. '.repeat(2)}</div>`).join('')}</div>`,
+      `<div data-peek-row="" id="out-btn-row" style="display:flex;gap:6px;width:240px"><span id="out-btn-text" style="${cut};flex:1;min-width:0">A row with its own button outside a zone keeps that button working</span><button id="out-btn" type="button">More</button></div>`,
+      `<button id="out-kbd-before">Before</button><div data-peek-row="" tabindex="0" id="out-kbd-row" style="${cut}">A row reached with the keyboard outside a zone opens nothing</div>`,
+      '<div id="out-following">Following outside</div>',
+    ].join('')
+    document.body.appendChild(outside)
     // The row's own button, as a menu button: every event of a press lands on it once, and its
     // click opens a menu outside the row.
     const spy = document.getElementById('btn-spy')!
@@ -59,6 +75,24 @@ test('unmarked components, rows with twelve texts, a line longer than the window
   })
   const box = async (sel: string) => (await page.locator(sel).boundingBox())!
   const off = () => page.mouse.move(1278, 790)
+
+  // Outside a zone: each kind keeps its box, nothing below moves, its text is in a native title,
+  // its button still takes the press, and the keyboard opens nothing either.
+  const outBelow = [page.locator('#out-row'), page.locator('#out-btn-row'), page.locator('#out-following')]
+  const outTops = await topsOf(outBelow)
+  await expectTooltipNotPeek(page.locator('#out-text'), 'keeps its place', 'outside container')
+  await expectTooltipNotPeek(page.locator('#out-row > div').nth(1), 'Out 1: A detailed entry', 'outside row of cut texts')
+  await expectTooltipNotPeek(page.locator('#out-btn-text'), 'keeps that button working', 'outside row with a button')
+  await expectStill(outBelow, outTops, 'outside')
+  await page.locator('#out-btn').click()
+  expect(await peekMarks(page), 'a press on the outside row\'s button opens nothing').toBe(0)
+  await page.locator('#out-kbd-before').focus()
+  await page.keyboard.press('Tab')
+  await expect(page.locator('#out-kbd-row')).toBeFocused()
+  await page.waitForTimeout(300)
+  expect(await peekMarks(page), 'Tab onto an outside row opens nothing').toBe(0)
+  await page.locator('#out-kbd-row').blur()
+  await off()
 
   // Twelve cut texts in one row: all open at once, all whole, and nothing below moves.
   const many = page.locator('#many-texts')

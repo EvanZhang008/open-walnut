@@ -123,10 +123,9 @@ test('the pill, the flyout and the Routines row say what each trigger does; the 
     const legacyRow = flyout.locator('.trigger-jobs-row', { hasText: `PW legacy ${stamp}` })
     const text = describedRow.locator('.trigger-jobs-description')
     await expect(text).toHaveText(LONG)
-    // On hover the three clamped lines open into one wider line at the same height
-    // (web/src/utils/truncation-peek.ts; 2026-11-15, the user: wider, not taller), with no native
-    // title left to open a tooltip. The description is longer than the window, so the line may
-    // still end cut; nothing around it moves.
+    // The flyout is no peek zone (utils/truncation-peek-find.ts peekAllowed; 2026-11-23, the user:
+    // only very narrow places widen): on hover the three clamped lines stay as they are, nothing
+    // around them moves, and the whole description is in a native title.
     const lines = async () => Promise.all([
       describedRow.locator('.trigger-jobs-heading').boundingBox(),
       text.boundingBox(),
@@ -134,23 +133,21 @@ test('the pill, the flyout and the Routines row say what each trigger does; the 
     ])
     const [headBefore, textBefore, runBefore] = await lines()
     await text.hover()
-    await expect(text).toHaveAttribute('data-peek-open', '')
+    await page.waitForTimeout(400)
+    await expect(text).not.toHaveAttribute('data-peek-open', '')
+    await expect(page.locator('[data-peek-open], [data-peek-expanded], [data-peek-placeholder]')).toHaveCount(0)
     await expect(page.getByTestId('truncation-peek')).toHaveCount(0)
-    await expect(text).not.toHaveAttribute('title', /./)
-    expect(await text.evaluate((el) => getComputedStyle(el).whiteSpace)).toBe('nowrap')
+    await expect(text).toHaveAttribute('title', LONG)
     const [headBox, textBox, runBox] = await lines()
-    expect(Math.abs(textBox!.height - textBefore!.height), 'the description keeps its own height').toBeLessThanOrEqual(0.5)
-    expect(Math.abs(textBox!.y - textBefore!.y), 'and its own top').toBeLessThanOrEqual(0.5)
-    expect(textBox!.width, 'it is wider').toBeGreaterThan(textBefore!.width + 1)
+    for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(textBox![k] - textBefore![k]), `the description keeps its ${k}`).toBeLessThanOrEqual(0.5)
     expect(Math.abs(headBox!.y - headBefore!.y), 'the heading does not move').toBeLessThanOrEqual(0.5)
     expect(Math.abs(runBox!.y - runBefore!.y), 'the check command does not move').toBeLessThanOrEqual(0.5)
     // Still under the heading (name + cadence), above the check command, inside the window.
     expect(textBox!.y).toBeGreaterThanOrEqual(headBox!.y + headBox!.height - 1)
     expect(runBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height - 1)
     expect(textBox!.x + textBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width - 8 + 0.5)
-    // Back off the description: exactly three 18px lines are shown again.
+    // Under the pointer and off it: exactly three 18px lines are shown.
     await pill.hover()
-    await expect(text).not.toHaveAttribute('data-peek-open', '')
     const clamp = await text.evaluate((el) => ({
       height: el.getBoundingClientRect().height, scroll: el.scrollHeight, client: el.clientHeight,
     }))

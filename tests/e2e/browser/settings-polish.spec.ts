@@ -8,7 +8,7 @@ import { devices, test, expect, type Page, type Request } from '@playwright/test
 import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
 import { dropFakes } from './route-teardown'
-import { expectPeeksInPlace } from './truncation-peek-helpers'
+import { expectTooltipNotPeek } from './truncation-peek-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -195,8 +195,9 @@ test('N08 N26: accuracy chips stay on one line, the list is capped, Refresh sits
     expect(c.h).toBeLessThanOrEqual(20)
     expect(c.field).toBeLessThanOrEqual(17)
   }
-  // A cut-off path shows whole in place on hover, not in a native tooltip.
-  await expectPeeksInPlace(page.locator('.suggest-accuracy-entry .suggest-accuracy-values').first(), 'a-very-long-project-folder-name', 'N08 a cut accuracy chip')
+  // Settings is no peek zone: hovering a cut-off path opens nothing and moves nothing; its whole
+  // text is in a native tooltip (utils/truncation-peek-find.ts peekAllowed).
+  await expectTooltipNotPeek(page.locator('.suggest-accuracy-entry .suggest-accuracy-values').first(), 'a-very-long-project-folder-name', 'N08 a cut accuracy chip')
   await expect(page.locator('.settings-pane-header-trailing').getByRole('button', { name: 'Refresh' })).toBeVisible()
   await page.getByTestId('suggest-accuracy-more').getByRole('button', { name: 'Show more' }).click()
   await expect(page.locator('.suggest-accuracy-record')).toHaveCount(20)

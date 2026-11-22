@@ -1,14 +1,21 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
 import { openSection, openTasksBy, taskRow } from './org-view-helpers'
-import { expectRestored, expectStill, expectWidensInPlace, followingOf, openInRow, topsOf } from './truncation-peek-helpers'
+import { expectStill, expectTooltipNotPeek, followingOf, topsOf } from './truncation-peek-helpers'
 
-// Real list/card components with long team names, at both panel widths and themes: each widens
-// as a whole at its own height (2026-11-15, the user: wider, not taller), and nothing beside moves.
+// Real list/card components with long team names, at both panel widths and themes. The Org page and
+// a Board are no peek zone (2026-11-23, the user: only very narrow places widen; widening everything
+// is uncomfortable): hovering cut-off text there opens nothing, the row or card keeps its box, nothing beside
+// moves, and the full text is in a native title; a click opens the task.
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 test.setTimeout(120_000)
 
-test('Org rows and Board cards widen whole at their own height, at narrow and wide panel widths', async ({ page, request }, info) => {
+type Box = { x: number; y: number; width: number; height: number }
+function expectSameBox(now: Box, before: Box, label: string): void {
+  for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(now[k] - before[k]), `${label}: ${k} did not move (${now[k]} vs ${before[k]})`).toBeLessThanOrEqual(0.5)
+}
+
+test('Org rows and Board cards open nothing on hover and show cut text in a native title, at narrow and wide panel widths', async ({ page, request }, info) => {
   const project = `Peek surfaces ${Date.now().toString(36)}`
   const title = 'Garden org demo Friday: insight end to end with the complete schedule, every tool and all the next steps for the platform rewrite'
   const made: string[] = []
@@ -54,19 +61,19 @@ test('Org rows and Board cards widen whole at their own height, at narrow and wi
         const before = (await row.boundingBox())!
         const next = await followingOf(row, `org-${theme}-${width}`)
         const tops = next ? await topsOf([next]) : []
-        // The title wraps whole; the note is what the row cuts, and it opens whole on its line.
+        // The title wraps whole; the note is what the row cuts: on hover it stays cut, in a tooltip.
         const title = row.locator('.org-task-title')
         expect(await title.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis'), `org ${theme} ${width}: the title is whole`).toBe(true)
         const note = row.getByTestId('org-task-note')
         await expect(note).toContainText('garden supplier')
         expect(await note.evaluate((el) => el.scrollWidth > el.clientWidth + 1), `org ${theme} ${width}: the note is cut`).toBe(true)
-        await row.hover({ position: { x: 16, y: 5 } })
-        await expectWidensInPlace(row, before, { label: `org ${theme} ${width}`, theme })
-        await expect.poll(() => openInRow(note)).toBe(true)
-        if (next) await expectStill([next], tops, `org ${theme} ${width}: the row below`)
+        await expectTooltipNotPeek(note, 'the weekend each step of the rebuild is booked for', `org ${theme} ${width}`)
+        await note.hover()
+        expect(await note.evaluate((el) => el.scrollWidth > el.clientWidth + 1), `org ${theme} ${width}: the note stays cut under the pointer`).toBe(true)
         await page.screenshot({ path: info.outputPath(`org-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)
-        await expectRestored(row, before, `org ${theme} ${width}`)
+        expectSameBox((await row.boundingBox())!, before, `org ${theme} ${width}: the row`)
+        if (next) await expectStill([next], tops, `org ${theme} ${width}: the row below`)
       }
     }
     await openTasksBy(page, 'board')
@@ -81,19 +88,17 @@ test('Org rows and Board cards widen whole at their own height, at narrow and wi
         await card.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%'; }, width)
         await card.scrollIntoViewIfNeeded()
         const before = (await card.boundingBox())!
-        const titleBox = (await card.locator('.kanban-card-title').boundingBox())!
         // The title is a three-line clamp; at both widths this real title must be cut.
         expect(await card.locator('.kanban-card-title').evaluate((el) => el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)).toBe(true)
         const next = await followingOf(card, `board-${theme}-${width}`)
         const tops = next ? await topsOf([next]) : []
-        await card.hover({ position: { x: titleBox.x - before.x + 5, y: titleBox.y - before.y + 5 } })
-        // The clamped title opens on one line in its own box; the card is as tall as it was.
-        await expectWidensInPlace(card, before, { label: `board ${theme} ${width}`, theme })
-        await expect.poll(() => openInRow(card.locator('.kanban-card-title'))).toBe(true)
-        if (next) await expectStill([next], tops, `board ${theme} ${width}: the card below`)
+        // The clamped title stays clamped in its own box, its whole text in a native title.
+        await expectTooltipNotPeek(card.locator('.kanban-card-title'), 'all the next steps for the platform rewrite', `board ${theme} ${width}`, { position: { x: 5, y: 5 } })
+        await card.locator('.kanban-card-title').hover({ position: { x: 5, y: 5 } })
         await page.screenshot({ path: info.outputPath(`board-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)
-        await expectRestored(card, before, `board ${theme} ${width}`)
+        expectSameBox((await card.boundingBox())!, before, `board ${theme} ${width}: the card`)
+        if (next) await expectStill([next], tops, `board ${theme} ${width}: the card below`)
       }
     }
   } finally {

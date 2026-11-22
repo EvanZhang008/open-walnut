@@ -10,9 +10,42 @@
  */
 import '@/styles/truncation-peek.css';
 import { collapseRow, expandRow, growsDown, within, type RowMarks } from './truncation-peek-row';
-import { CONTROL, cutTextsIn, onTextOf, optedOut, PEEK_ROW_SELECTOR, peekTargetOf, rowControl } from './truncation-peek-find';
+import { CONTROL, cutTextsIn, findCutText, onTextOf, optedOut, PEEK_ROW_SELECTOR, peekAllowed, peekTargetOf, rowControl } from './truncation-peek-find';
 
-export { cutTextsIn, findCutText, isCut, PEEK_ROW_SELECTOR, peekTargetOf } from './truncation-peek-find';
+export { cutTextsIn, findCutText, headerOf, isCut, peekAllowed, PEEK_ZONE_SELECTOR, PEEK_ROW_SELECTOR, peekTargetOf } from './truncation-peek-find';
+
+/** Native tooltips this module gave cut-off text, with the text it set, so it takes back only its own. */
+const tipped = new WeakMap<Element, string>();
+/** A tooltip holds a line or a short paragraph; a long clamped block reads its start. */
+const TIP_MAX = 500;
+
+function untip(el: Element): void {
+  if (el.getAttribute('title') === tipped.get(el)) el.removeAttribute('title');
+  tipped.delete(el);
+}
+
+/**
+ * Where nothing widens (outside a zone, or in a header: truncation-peek-find.ts peekAllowed), the
+ * cut-off text under the pointer gets its full text as a native tooltip, which moves nothing, and
+ * loses it once the text fits again. A title the page set itself (on the text, or a fuller one on
+ * its row or button) is left as it is.
+ */
+function cutTip(target: Element): void {
+  const host = findCutText(target);
+  if (host) {
+    const own = host.getAttribute('title');
+    const mine = tipped.get(host);
+    if (own !== null && own !== mine) tipped.delete(host);
+    else {
+      const full = (host.textContent ?? '').trim().replace(/\s+/g, ' ');
+      const text = full.length > TIP_MAX ? `${full.slice(0, TIP_MAX - 1)}\u2026` : full;
+      // A row or button whose own title already says it (and more): the browser shows the nearest title, so leave it.
+      const fuller = host.parentElement?.closest('[title]')?.getAttribute('title')?.includes(full.slice(0, 80));
+      if (text && text !== own && !fuller) { host.setAttribute('title', text); tipped.set(host, text); }
+    }
+  }
+  for (let a: Element | null = target; a && a !== document.body; a = a.parentElement) if (a !== host && tipped.has(a)) untip(a);
+}
 
 /** A row opens once the pointer rests on it this long, so sweeping across rows moves nothing. */
 const ROW_OPEN_MS = 140;
@@ -224,6 +257,12 @@ function onOver(e: PointerEvent): void {
   releaseLostPress();
   pointer = { x: e.clientX, y: e.clientY };
   const target = e.target instanceof Element ? e.target : null;
+  if (target && !openDownHolding(target) && !peekAllowed(target)) {
+    // Off an open row: it closes as when the pointer leaves it (a card being typed in waits).
+    if (active || lingering) hidePeekUnless(false);
+    cutTip(target);
+    return;
+  }
   const up = target ? held.findIndex((h) => h.key.contains(target)) : -1;
   if (up >= 0) {
     // Back up on a card kept open above: it is the open one again; what is below it closes,
