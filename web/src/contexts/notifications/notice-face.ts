@@ -100,9 +100,9 @@ export function feedRowSource(
   hostLabel?: string,
 ): { text: string | null; detail: string | null } {
   const session = n.sessionTitle?.trim() || '';
-  const sender = session
-    ? (MACHINE_LABEL.test(session) ? '' : session)
-    : n.sessionId ? `Session ${shortSessionId(n.sessionId)}` : '';
+  // The same name the avatar reads (a fork's own name, never its machine prefix); a session with no
+  // name of its own reads by its short id.
+  const sender = avatarName(session) || (n.sessionId ? `Session ${shortSessionId(n.sessionId)}` : '');
   const project = n.project?.trim() || '';
   const alias = (n.host ?? '').trim();
   const local = !alias || LOCAL_HOSTS.has(alias.toLowerCase());

@@ -85,7 +85,8 @@ describe('a row in the notification center', () => {
     // A session nobody titled reads by its short id, as the toast names it.
     expect(feedRowSource({ sessionId: 'abc12345-6789-0000' }).text).toBe('Session abc12345\u2026');
     const fork = feedRowSource({ sessionTitle: 'Fork of Session: walnut \u2014 Claude finished the response', host: 'local', sessionId: 'cffc7f02-1111' });
-    expect(fork.text).toBeNull();
+    // A fork reads by its own name, as its avatar does, never by the machine prefix (2026-11-22 review).
+    expect(fork.text).toBe('walnut \u2014 Claude finished the response');
     expect(fork.detail).toContain('Session: Fork of Session');
     expect(fork.detail).toContain('Host: local (this computer)');
     expect(feedRowSource({ sessionTitle: 'cffc7f02-aaaa-bbbb' }).text).toBeNull();

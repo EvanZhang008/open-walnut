@@ -215,6 +215,13 @@ describe('walnut.notifications.notify (reminder + actions)', () => {
     expect((await listNotifications()).feed).toHaveLength(0);
   });
 
+  it('update: true is refused on a notice that is not a reminder; an expiry is whole milliseconds', async () => {
+    const { api } = pluginApi('walnut-rhythm');
+    await expect(api.notifications.notify({ update: true, title: 'x', dedupKey: 'skill-one' })).rejects.toThrow(/reminders only/);
+    await api.notifications.notify({ kind: 'reminder', title: 'Break', dedupKey: 'b', actions: [{ label: 'End break', op: 'break_skip', expiresAt: 1_700_000_000_000.5 }] });
+    expect((await listNotifications()).feed[0].actions?.[0].expiresAt).toBe(1_700_000_000_000);
+  });
+
   it('a skill notice keeps first-write-wins under the same key', async () => {
     const { api } = pluginApi('walnut-rhythm');
     await api.notifications.notify({ title: 'first', dedupKey: 'same' });

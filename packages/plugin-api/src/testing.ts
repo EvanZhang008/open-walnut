@@ -862,6 +862,14 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     },
     notifications: {
       async notify(notice) {
+        // Same revise rule as the host: `update: true` changes the reminder still listed under its
+        // key in place, and does nothing once it is gone (dismissed stays dismissed).
+        if (notice.kind === 'reminder' && notice.update === true) {
+          const at = notices.findIndex((one) => one.dedupKey === notice.dedupKey)
+          if (at >= 0) notices[at] = structuredClone(notice)
+          return
+        }
+        if (notice.update === true) throw new Error('update: true is for reminders only')
         // Same replace rule as the host: a reminder re-fire takes the old one's place.
         if (notice.kind === 'reminder') {
           const at = notices.findIndex((one) => one.dedupKey === notice.dedupKey)

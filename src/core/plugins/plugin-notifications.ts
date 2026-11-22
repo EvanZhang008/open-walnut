@@ -85,7 +85,8 @@ export function pluginNoticeActions(
     const shared = {
       label, pluginId,
       ...(args !== undefined ? { args: structuredClone(args) } : {}),
-      ...(expiresAt !== undefined ? { expiresAt } : {}),
+      // Whole milliseconds: the action's expiry rides a header the server reads as digits only.
+      ...(expiresAt !== undefined ? { expiresAt: Math.floor(expiresAt) } : {}),
     }
     if (hasDialog) {
       // Same local id rule as the web slot API. The caller cannot supply an owner prefix.
@@ -135,6 +136,7 @@ export function createPluginNotifications(options: {
         sessionId: notice.sessionId,
         ...(actions ? { actions } : {}),
       } as const
+      if (notice.update === true && kind !== 'reminder') throw new Error('Plugin notification update: true is for reminders only')
       if (kind === 'reminder' && notice.update === true) {
         const { reviseNotification } = await import('../notifications/store.js')
         const record = await reviseNotification(input)

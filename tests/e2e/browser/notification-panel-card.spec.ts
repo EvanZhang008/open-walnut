@@ -148,9 +148,10 @@ for (const scheme of ['light', 'dark'] as const) {
     expect(geo.cut).toBe(false)
     expect(geo.timeTop).toBeGreaterThanOrEqual(geo.titleBottom - 1)
 
-    // The source: one quiet last line; the fork's machine name, the session id and "local" only in titles.
+    // The source: one quiet last line, the fork by its own name (as its avatar reads it); its machine
+    // prefix, the session id and "local" only in titles.
     const fork = panel.locator('.notification-feed-item', { hasText: 'watering chart' })
-    await expect(fork.locator('.nfc-row-source')).toHaveCount(0)
+    await expect(fork.locator('.nfc-row-source')).toHaveText('garden \u2014 the chart draft')
     await expect(fork).not.toContainText('Fork of Session')
     await expect(fork).not.toContainText('cffc7f02')
     await expect(fork.locator('.notification-feed-item-time')).toHaveAttribute('title', /Fork of Session[\s\S]*Session id: cffc7f02[\s\S]*Host: /)

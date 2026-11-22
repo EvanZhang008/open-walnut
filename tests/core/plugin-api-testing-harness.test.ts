@@ -336,3 +336,19 @@ describe('createFakeWalnut appState', () => {
     expect(fake.appStates.has('t1')).toBe(false)
   })
 })
+
+describe('createFakeWalnut notifications', () => {
+  // The fake follows the host's revise rule, so a plugin's test of `update: true` means what it
+  // means live (2026-11-22 review: a dismissed reminder came back in the fake, never on the host).
+  it('revises a listed reminder in place, brings back none that was dismissed, and refuses update on another kind', async () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+    await fake.api.notifications.notify({ kind: 'reminder', title: 'Break, 5 min', dedupKey: 'brk' })
+    await fake.api.notifications.notify({ kind: 'reminder', title: 'Stand up', dedupKey: 'up' })
+    await fake.api.notifications.notify({ kind: 'reminder', update: true, title: 'Break, 10 min', dedupKey: 'brk' })
+    expect(fake.notices.map((n) => n.title)).toEqual(['Break, 10 min', 'Stand up'])
+    await fake.api.notifications.dismiss('brk')
+    await fake.api.notifications.notify({ kind: 'reminder', update: true, title: 'Break, 15 min', dedupKey: 'brk' })
+    expect(fake.notices.map((n) => n.title)).toEqual(['Stand up'])
+    await expect(fake.api.notifications.notify({ update: true, title: 'x', dedupKey: 'x' })).rejects.toThrow(/reminders only/)
+  })
+})
