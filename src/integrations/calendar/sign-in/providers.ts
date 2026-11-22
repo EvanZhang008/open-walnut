@@ -30,7 +30,7 @@ export const BUILTIN_MICROSOFT_CLIENT_ID = '';
 /** Where a Google account's calendars are found: its CalDAV principal (`{email}` filled in). */
 export function googleCalDavStart(email: string): string {
   const template = process.env.WALNUT_GOOGLE_CALDAV_URL || 'https://apidata.googleusercontent.com/caldav/v2/{email}/user';
-  return template.replace('{email}', encodeURIComponent(email));
+  return template.replace('{email}', () => encodeURIComponent(email));
 }
 
 /** Microsoft Graph, without a trailing slash. */

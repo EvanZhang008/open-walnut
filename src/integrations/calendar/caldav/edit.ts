@@ -138,7 +138,7 @@ function shiftSeries(master: IcsComponent, overrides: IcsComponent[], start: Ics
   const until = rule ? parseRuleParts(rule.value).UNTIL : undefined;
   const untilTime = until ? parseTimeValue(until) : null;
   if (rule && until && untilTime && untilTime.kind !== 'date') {
-    rule.value = rule.value.replace(/UNTIL=[^;]+/i, `UNTIL=${shiftValue(untilTime, deltaMs, series)}`);
+    rule.value = rule.value.replace(/UNTIL=[^;]+/i, () => `UNTIL=${shiftValue(untilTime, deltaMs, series)}`);
     delete rule.raw;
   }
 }
