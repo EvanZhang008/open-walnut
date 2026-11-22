@@ -44,14 +44,14 @@ interface Mac {
 
 /** A fake `walnut tools call <op> @args.json`: answers from scenario.json, logs every call.
  * `listFails`: host_list drops its answer (hub_timeout) this many times first. */
-function fakeWalnut(macs: Mac[], outTgz: string, fleet: { listFails?: number; localIsRemote?: boolean; taskText?: string } = {}): string {
+function fakeWalnut(macs: Mac[], outTgz: string, fleet: { listFails?: number; localIsRemote?: boolean; taskText?: string; cardShape?: boolean } = {}): string {
   const bin = path.join(dir, 'bin')
   fs.mkdirSync(bin, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ macs, outTgz, listFails: fleet.listFails || 0, localIsRemote: !!fleet.localIsRemote, taskText: fleet.taskText }))
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ macs, outTgz, listFails: fleet.listFails || 0, localIsRemote: !!fleet.localIsRemote, taskText: fleet.taskText, cardShape: !!fleet.cardShape }))
   fs.writeFileSync(path.join(bin, 'walnut'), `#!/usr/bin/env node
 const fs = require('fs'), path = require('path')
 const dir = ${JSON.stringify(dir)}
-const { macs, outTgz, listFails, localIsRemote } = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'))
+const { macs, outTgz, listFails, localIsRemote, cardShape } = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'))
 const [, , tools, call, op, argRef] = process.argv
 const args = JSON.parse(fs.readFileSync(argRef.slice(1), 'utf8'))
 fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify({ op, args }) + '\\n')
@@ -59,7 +59,10 @@ const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0) }
 const mac = (h) => macs.find((m) => m.host === h)
 const turn = (name) => { const f = path.join(dir, 'turn-' + name); const n = fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8')) : 0; fs.writeFileSync(f, String(n + 1)); return n }
 if (op === 'host_list' && turn('list') < listFails) { process.stderr.write('walnut: hub_timeout: primary server timed out'); process.exit(1) }
-if (op === 'host_list') out({ hosts: macs.map((m) => ({ host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } })) })
+// host_list answers an agent compact rows (src/ops/transfer.ts fleetRows); cardShape: the whole card.
+if (op === 'host_list') out({ hosts: macs.map((m) => cardShape
+  ? { host: m.host, label: m.label || m.host, capabilities: { tags: m.tags || ['macos', 'ios'] }, connection: { connected: m.connected !== false } }
+  : { host: m.host, label: m.label || m.host, connected: m.connected !== false, tags: m.tags || ['macos', 'ios'] }) })
 const at = (seq, n) => seq[Math.min(n, seq.length - 1)]
 if (op === 'host_load') { const n = turn('load'); out({ hosts: macs.map((m) => { const l = m.loadSeq ? at(m.loadSeq, n) : m.loadPerCpu; const b = m.busySeq ? at(m.busySeq, n) : m.cpuBusy; return { host: m.host, known: l != null, loadPerCpu: l, cpuBusy: b ?? null, cpus: m.cpus, ...(m.ownThreads ? { ownThreads: m.ownThreads } : {}) } }) }) }
 if (op === 'host_copy') {
@@ -233,6 +236,17 @@ describe('ios-fleet-test.sh', () => {
     const clean = r.calls.filter((c) => c.op === 'host_exec' && !c.args.background).at(-1)!
     expect((clean.args.argv as string[])[2]).toMatch(/^rm -rf "\$HOME\/\.local\/state\/open-walnut\/tasks\/task-1\/ios-fleet\/[^"]+"$/)
     expect(r.calls.map((c) => c.op)).not.toContain('task_send')
+  })
+
+  // 2026-11-22: host_list's compact rows (tags, connected) read as "no host tagged ios"; both shapes pick.
+  it('reads host_list in its whole-card shape as well as its compact rows', () => {
+    for (const cardShape of [false, true]) {
+      const bin = fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }, { host: 'laptop', loadPerCpu: 0.1, connected: false }], outTgz(), { cardShape })
+      const r = run(['unit'], bin)
+      expect(r.status, r.stderr).toBe(0)
+      expect(r.stderr).toContain('using mac-mini (mac-mini): load 0.3 per CPU')
+      expect(r.stderr).not.toContain('laptop (laptop)')
+    }
   })
 
   // 2026-11-04, the user: iOS tests go to the other Macs; this Walnut's own Mac only when none can.

@@ -234,12 +234,16 @@ try:
 except ValueError:
     ceiling = 6.0
 cap = float(sys.argv[1]); min_idle = float(sys.argv[4]); hosts = json.load(open(sys.argv[2]))["hosts"]; loads = {h["host"]: h for h in json.load(open(sys.argv[3]))["hosts"]}
+# host_list answers an agent compact rows ({tags, connected}); its whole card nests them under
+# capabilities and connection (2026-11-22: the compact rows read as "no host tagged ios"). Read both.
+def tags(h): return h.get("tags") or (h.get("capabilities") or {}).get("tags") or []
+def connected(h): return h.get("connected") is True or (h.get("connection") or {}).get("connected") is True
 # No host tagged ios at all (an offline one keeps its tags): nothing to wait for.
-if not any("ios" in ((h.get("capabilities") or {}).get("tags") or []) for h in hosts):
+if not any("ios" in tags(h) for h in hosts):
     sys.exit(3)
 rows = []
 for h in hosts:
-    if "ios" not in ((h.get("capabilities") or {}).get("tags") or []) or not (h.get("connection") or {}).get("connected"):
+    if "ios" not in tags(h) or not connected(h):
         continue
     l = loads.get(h["host"], {})
     per = l.get("loadPerCpu")
