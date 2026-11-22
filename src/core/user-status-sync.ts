@@ -1417,6 +1417,9 @@ async function experimentSwitched(): Promise<boolean> {
   oneCardSeen = oneCard;
   setOneCard(oneCard);
   if (oneCardMoved) threadsChanged();
+  // Walnut keeps the Threads (org/threads-kept.ts): read by the prompt, the hints and the status question.
+  const { setThreadsKept } = await import('./org/threads-kept.js');
+  setThreadsKept(experimentalEnabled(flags, 'threads_kept_by_walnut'));
   // Decision letters as threads (human-inbox/letter-threads.ts): a switch moves which letters count.
   const asThreads = experimentalEnabled(flags, 'letters_as_threads');
   const lettersMoved = lettersAsThreadsSeen !== undefined && lettersAsThreadsSeen !== asThreads;

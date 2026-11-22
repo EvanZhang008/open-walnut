@@ -21,6 +21,7 @@ import {
 } from './threads-model.js';
 import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
 import { keepsThreads } from './keeps-threads.js';
+import { threadsKeptNow } from './threads-kept.js';
 import { letterThreadId } from './letter-thread-model.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
 
@@ -281,9 +282,11 @@ export function threadHintText(s: ThreadHintState): string {
   }
   else if (s.created) {
     text = `filed as new thread ${s.threadId}${s.follows ? ` (asks again about closed ${s.follows.id} ${q(s.follows.title)})` : ''}.`;
+    // Walnut keeps the threads (threads-kept.ts): its title comes with the status answer, so only a merge is the node's.
+    const kept = threadsKeptNow();
     text += s.open.length
-      ? ` Open: ${s.open.map((t) => `${t.id} ${q(t.title)}`).join('; ')}. Same subject as one: thread_update merge_into; else give it a short title.`
-      : ' Give it a short title (thread_update).';
+      ? ` Open: ${s.open.map((t) => `${t.id} ${q(t.title)}`).join('; ')}. Same subject as one: thread_update merge_into${kept ? '' : '; else give it a short title'}.`
+      : kept ? '' : ' Give it a short title (thread_update).';
   } else text = `filed under thread ${s.threadId} ${q(s.title)}.`;
   if (s.closed.length) text += ` Closed since: ${s.closed.map((t) => `${t.id}${t.by === 'human' ? ' (by him)' : ''}`).join(', ')}.`;
   return text;

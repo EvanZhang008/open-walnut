@@ -2,7 +2,7 @@
  * A task's own ask lives on its thread (2026-11-20, the user, on a task that keeps Threads: its one
  * thread read "Done" in the Threads pane while the chat above held the task's ask card waiting for
  * his answer, "the same thing shows twice, one says Done and the other waits for him"). For a task
- * the status question asks about its threads (status-threads.ts asksThreads), what the task asks
+ * the status question asks about its threads and that is no Org node (status-threads.ts placesAskOnThread), what the task asks
  * him IS that thread's needs state: one card, one decision.
  *
  * The place is stored, the state is read. When a report asks him something (a real FOR_USER_ASK,
@@ -27,7 +27,7 @@ import { openNotWaiting, snoozedNow, type ThreadHeldAsk } from './thread-view.js
 import type { OrgThread, ThreadsFile } from './threads-model.js';
 import { reportDecision } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
-import { asksThreads } from '../sessions/status-threads.js';
+import { placesAskOnThread } from '../sessions/status-threads.js';
 import { oneCardNow } from './one-card.js';
 
 /** The question kept on the place, for the record. */
@@ -126,7 +126,7 @@ export function repliedSinceAsk(t: Pick<OrgThread, 'messages'>, askedAt: string 
  * again. With threads_one_card off (one-card.ts) every thread reads as stored: the places are kept, unread.
  */
 export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undefined, threads: readonly T[]): Array<T & { heldAsk?: ThreadHeldAsk }> {
-  const ask = oneCardNow() && asksThreads(task) ? taskAskNow(task) : null;
+  const ask = oneCardNow() && placesAskOnThread(task) ? taskAskNow(task) : null;
   if (!ask) return [...threads];
   return threads.map((t) => {
     // Put aside by him (its Snoozed section), it reads as stored: the task's own ask still shows where it lives.
@@ -145,7 +145,7 @@ export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undef
  * Never throws; true when it wrote.
  */
 export async function keepAskOnThread(task: AskingTask, threads?: readonly OrgThread[]): Promise<boolean> {
-  if (!asksThreads(task)) return false;
+  if (!placesAskOnThread(task)) return false;
   const now = taskAskNow(task);
   const reported = reportAskOf(task.status_report);
   // A status a step behind its report never places an older decision; none at all clears the places.

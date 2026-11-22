@@ -97,7 +97,8 @@
 
 import { ownReadbackEnabled } from './own-readback-mark.js'
 import { keepsThreads } from '../org/keeps-threads.js'
-import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KEPT_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
+import { threadsKeptNow } from '../org/threads-kept.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -253,10 +254,20 @@ const threadsLine = (where: string, last: string): string =>
   + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. A new ask about a closed subject is a new thread. '
   + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + last + '\n\n'
 
+/** The Threads rules with threads_kept_by_walnut on (org/threads-kept.ts): the status answer keeps them, not a call each turn. */
+const threadsKeptLine = (where: string, last: string): string =>
+  `Your Threads (${where}) are the user's own requests to you, one thread per subject: Walnut files every message he sends `
+  + 'you, says in it which thread it went to, and puts your chat reply under it. Several asks about the same thing are one thread; '
+  + 'a new ask about a closed subject is a new thread. '
+  + THREADS_KEPT_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_OPEN_RULE + ' ' + last + '\n\n'
+
 /** Main's and every lead's Threads. */
 export const THREADS_LINE = threadsLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
 /** The same with the Brief off: Threads are what the user reads, grouped by state. */
 export const THREADS_OFF_LINE = threadsLine('on the Org page, grouped by state', THREADS_MOVE_RULE)
+/** Both with threads_kept_by_walnut on. */
+export const THREADS_KEPT_LINE = threadsKeptLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
+export const THREADS_KEPT_OFF_LINE = threadsKeptLine('on the Org page, grouped by state', THREADS_MOVE_RULE)
 
 /** What needs him while he is away goes to his inbox in one thread (org/user-away.ts, human-inbox/away-thread.ts). */
 const AWAY_LETTERS_RULE =
@@ -270,15 +281,19 @@ const AWAY_LETTERS_RULE =
  * "we should be able to enable the thread for a leader, default off"): the same rules, and only
  * there, so no other task pays for them. Its threads stay with it: no node above takes them.
  */
-const TASK_THREADS_RULES = threadsLine('the Threads view beside your chat, opened from its ⋮ menu or its Threads chip',
-  'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
+const TASK_THREADS_WHERE = 'the Threads view beside your chat, opened from its ⋮ menu or its Threads chip'
+const TASK_THREADS_LAST = 'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
   + 'lists that task and stays yours. A thread in needs makes your task read Needs you, and his phone buzzes for it when he is away. '
   + 'Routine progress on a subject goes to its thread (Walnut asks where each stands at every turn end), a letter only for what needs him right away. '
-  + AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE).trim()
+  + AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE
 /** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
-const TASK_THREADS_VERSION = `v${createHash('sha1').update(TASK_THREADS_RULES).digest('hex').slice(0, 8)}`
-export const TASK_THREADS_LINE = versionedBlock(`Threads, the user's setting for your task (${TASK_THREADS_VERSION}): he turned Threads on for it, so you keep them.`,
-  TASK_THREADS_VERSION, TASK_THREADS_RULES)
+function taskThreadsBlock(rules: string): string {
+  const version = `v${createHash('sha1').update(rules).digest('hex').slice(0, 8)}`
+  return versionedBlock(`Threads, the user's setting for your task (${version}): he turned Threads on for it, so you keep them.`, version, rules)
+}
+export const TASK_THREADS_LINE = taskThreadsBlock(threadsLine(TASK_THREADS_WHERE, TASK_THREADS_LAST).trim())
+/** The same with threads_kept_by_walnut on: another version, so a running session hears the change. */
+export const TASK_THREADS_KEPT_LINE = taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, TASK_THREADS_LAST).trim())
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '
@@ -438,12 +453,15 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
     return [['org-role', body], ['task-routing', TASK_ROUTING_CONTRACT + '\n\n']]
   }
   // Any other task: its role is its own, plus the Threads rules once the user turned them on.
-  if (keepsThreads(task)) return [['org-role', TASK_THREADS_LINE]]
+  if (keepsThreads(task)) return [['org-role', threadsKeptNow() ? TASK_THREADS_KEPT_LINE : TASK_THREADS_LINE]]
   return []
 }
 
 /** The away, Brief, Threads and walnut-about rules of Main and every lead, in that order. */
-const ORG_MANUALS = (): string => AWAY_INBOX_LINE + (briefOffNow() ? BRIEF_OFF_LINE + THREADS_OFF_LINE : BRIEF_LINE + THREADS_LINE) + MESSAGE_ABOUT_LINE
+const ORG_MANUALS = (): string => {
+  const kept = threadsKeptNow()
+  return AWAY_INBOX_LINE + (briefOffNow() ? BRIEF_OFF_LINE + (kept ? THREADS_KEPT_OFF_LINE : THREADS_OFF_LINE) : BRIEF_LINE + (kept ? THREADS_KEPT_LINE : THREADS_LINE)) + MESSAGE_ABOUT_LINE
+}
 
 /** Main's or a lead's role lines, a task's Threads rules when it keeps them ('' for any other task). */
 export function orgRoleLine(task: OrgRoleTask): string {

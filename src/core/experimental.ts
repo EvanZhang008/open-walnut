@@ -179,6 +179,12 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'threads_kept_by_walnut',
+    name: 'Walnut keeps your Threads',
+    description: 'Main, every VP and lead, and every task with Threads answer you in the chat first and stop writing a thread on each of your messages. At the end of each turn Walnut already asks the agent where its work stands; with this on, the same question asks where each open thread stands, and Walnut writes the answer as the thread\'s state, summary and title, and marks an answer known only when the agent says you reacted to it. The agent writes a thread itself only for a decision you must make, a close you asked for, or a merge, split or move.',
+    default: false,
+  },
+  {
     id: 'ack_means_known',
     name: 'Acknowledge means you know',
     description: 'Acknowledging a card that already holds the result closes it, as before. Acknowledging a thread whose work is still open (a task it went to not done, your reply still on its way, its letter still waiting) no longer closes it: it moves to a Known group that says what it waits on. When that work ends it comes back to To read only if there is something new for you; otherwise it closes (Walnut closes it 10 minutes later if its agent has not). Neither buzzes your phone.',

@@ -16,6 +16,24 @@
  * the answered ones he wrote after, org/thread-summary-stop.ts answeredBeforeHim).
  */
 
+/**
+ * With threads_kept_by_walnut on (threads-kept.ts; 2026-11-22, the user, on a VP that wrote a thread
+ * before each reply: "every thread is being updated, every question has to do this ... that's
+ * unbelievable, and very wasteful"): the node answers in the chat, and the status question at its
+ * turn's end keeps its threads (sessions/status-threads.ts). This replaces the rules above that ask
+ * for a write each turn (the summary, its state, the known mark); what a line cannot do stays a call.
+ */
+export const THREADS_KEPT_RULE =
+  'Walnut keeps your Threads from your chat: answer him in the chat first and write no thread for each message. At the end of '
+  + 'each turn the status question lists your open threads and you answer one line for each: its state (working: you are on it '
+  + 'now; waiting: a team or something outside has it; answered: the result he asked for is in; done: finished) and where it '
+  + 'stands for him, latest first, with the proof\'s path or URL when there is one. Walnut writes that as the thread\'s state and '
+  + 'the summary on his card, gives an untitled thread the title you name, and marks your answer known only where you say he '
+  + 'reacted to it in his own words (a reply about it, an ok or thanks, a follow-up that builds on it; unsure is not seen). His '
+  + 'Threads view shows a thread only when it needs him or its result is in. Call thread_update yourself only for what a line '
+  + 'cannot do: a decision he must make (needs, with its options, user_kind and user_kind_why), a close he asked for in his own '
+  + 'words (close with user_words quoting him), and a merge (merge_into), split or move.';
+
 export const THREADS_KNOWN_RULE =
   'Clean your threads yourself, on every turn that touches one: what he already knows leaves the card, what is still news '
   + 'stays. An answer counts as known only once he reacted to it after you gave it (a reply about it, an ok '

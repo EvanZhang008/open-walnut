@@ -14,6 +14,9 @@
  * answer, and only the node can tell. It checks each against what he said since: marks the read
  * one known, closes the one that is done, and leaves a thread waiting on him with only the
  * question still open. Named once per message of his (thread-checks.ts keeps it across restarts).
+ *
+ * With threads_kept_by_walnut on (threads-kept.ts) neither is asked: the status question at the
+ * turn's end keeps the summaries and the known marks (sessions/status-threads.ts).
  */
 import { hasThreadNews, snoozedNow, summaryAt, summaryBehindHim } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
@@ -96,6 +99,9 @@ export async function staleSummariesAtStop(callerSid: string | undefined, nowMs 
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([taskId]).catch(() => []))[0];
     if (!task || !keepsThreads(task) || task.phase === 'COMPLETE') return null;
+    // Walnut keeps the threads from the status answer at this turn's end (threads-kept.ts): no write is held for.
+    const { threadsKeptOn } = await import('./threads-kept.js');
+    if (await threadsKeptOn()) return null;
     const { readThreads } = await import('./threads-store.js');
     const threads = (await readThreads(taskId)).threads;
     const stale = staleSummaries(threads, nowMs)

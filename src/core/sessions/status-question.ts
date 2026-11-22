@@ -86,7 +86,7 @@ async function saveStatusAnswer(
   const prev = current.status_report;
   const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
   // answered_person is kept beside a state its threads set: the answer is his to read first.
-  const { threads: threadLines, threads_new: threadsNew, ask_thread: askThread, ...settled } = settleStateFromThreads(report);
+  const { threads: threadLines, threads_new: threadsNew, ask_thread: askThread, thread_titles: titles, threads_seen: seen, ...settled } = settleStateFromThreads(report);
   report = settled;
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
@@ -121,9 +121,9 @@ async function saveStatusAnswer(
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });
-  // Only a task asked about its threads places its ask on one (status-threads.ts asksThreads).
-  const { asksThreads } = await import('./status-threads.js');
-  await applyThreadLines(taskId, { threads: threadLines, threads_new: threadsNew, ...(askThread ? { ask_thread: askThread } : {}) }, asksThreads(current) ? report : null);
+  // Only a task that is no Org node places its ask on a thread (status-threads.ts placesAskOnThread).
+  const { placesAskOnThread } = await import('./status-threads.js');
+  await applyThreadLines(taskId, { threads: threadLines, threads_new: threadsNew, ...(askThread ? { ask_thread: askThread } : {}), ...(titles ? { thread_titles: titles } : {}), ...(seen ? { threads_seen: seen } : {}) }, placesAskOnThread(current) ? report : null);
   const { applyReportPhase } = await import('./report-phase.js');
   if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).

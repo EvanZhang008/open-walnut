@@ -233,6 +233,10 @@ export interface StatusReport {
   threads_new?: StatusThreadNew[];
   /** The thread its ask is about (FOR_USER_ASK_THREAD, a thread id): the ask is placed there, never stored here. */
   ask_thread?: string;
+  /** Titles for its untitled threads (FOR_USER_THREAD_TITLE, threads_kept_by_walnut): written to them, never stored here. */
+  thread_titles?: Array<{ id: string; title: string }>;
+  /** Its threads whose answer he reacted to (FOR_USER_THREAD_SEEN, threads_kept_by_walnut): marked known, never stored here. */
+  threads_seen?: string[];
   /** Its state came from its thread lines, not FOR_USER_STATE (status-threads.ts settleStateFromThreads). */
   from_threads?: true;
 }

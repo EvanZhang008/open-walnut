@@ -337,6 +337,9 @@ async function teamGuidanceOf(task: Task | undefined | null, hints: readonly Eff
 async function threadsTidyFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<ThreadsTidyState | null> {
   if (!task || !keepsThreads(task) || !hints.some((h) => h.kind === 'threads-tidy' && h.enabled)) return null;
   try {
+    // Walnut keeps the threads from the status answer (org/threads-kept.ts): nothing here is the node's to write.
+    const { threadsKeptNow } = await import('../org/threads-kept.js');
+    if (threadsKeptNow()) return null;
     const { readThreads } = await import('../org/threads-store.js');
     const { threadsTidyOf } = await import('../org/thread-capture.js');
     return threadsTidyOf(await readThreads(task.id));
