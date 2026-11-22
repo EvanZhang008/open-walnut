@@ -165,11 +165,13 @@ view draws a toast of its own (the Sort view's inverted pill was removed). Ratch
   English at 14 px) wide, centred in a wide panel, with the composer under it at the same width; a
   narrower panel keeps its gutter. Prose, every step and message row, code, tables and the person's
   bubbles stay inside it; a long code line scrolls in its block (`styles/chat-reading.css`).
-- **Chat text is 14 px**, headings 15 px (h1 700, h2 600) and 14 px bold below that; paragraphs and
-  lists 8 px apart, list items 4 px.
+- **Chat text keeps the chat's own size (14 px today, the one size the scale has yet to name)**;
+  h1 and h2 are `--font-size-lg` (h1 700, h2 600), a smaller heading is the chat text in bold;
+  paragraphs and lists 8 px apart, list items 4 px. The reply's time and a failed-send line are
+  `--font-size-sm`.
 - **A row is one line or two** (the user, 2026-11-11); a message card or a thought row whose
   words are cut shows its chevron at rest (`components/sessions/cut-cue.ts`), a row that shows all of them only on hover. The
-  turn's "Worked for" line is 13 px secondary grey with a 16 px chevron in `--fg` and a hover fill,
+  turn's "Worked for" line is `--font-size-md` secondary grey with a 16 px chevron in `--fg` and a hover fill,
   no box and no rule.
 - **One condition is one notice.** When the panel shows a notice with its action (the folder-gone
   notice), a row that failed for the same reason says so in a line and does not repeat the action.

@@ -200,18 +200,18 @@ test('no row starts under a header: scroll stops clear the glass, and the Files 
   await panel.getByRole('button', { name: 'Files', exact: true }).click();
   const chatHist = panel.locator('.session-panel-chat-col .session-history');
   await expect(chatHist).toBeVisible({ timeout: 20_000 });
-  // The timeline holds its bottom and loads earlier turns at its top: scroll up until it stays at 0.
-  await expect.poll(async () => chatHist.evaluate((h) => { h.scrollTop = 0; return h.scrollTop; }), { timeout: 20_000 }).toBe(0);
-  await page.waitForTimeout(300);
-  await expect.poll(async () => chatHist.evaluate((h) => { h.scrollTop = 0; return h.scrollTop; })).toBe(0);
+  // The timeline holds its bottom (it pins back after a scroll), so measure where its content
+  // starts rather than scrolling to it: the scroller clips its rows, so a scroller that starts
+  // under the bar, with its content padded clear of its own top, never draws a row behind it.
   const split = await chatHist.evaluate((h) => {
     const bar = h.closest('.session-panel-chat-col')!.querySelector('.session-chat-bar')!.getBoundingClientRect();
     const box = h.getBoundingClientRect();
-    const first = [...h.children].find((c) => c.getClientRects().length > 0 && (c as HTMLElement).offsetHeight > 0) as HTMLElement;
-    return { barBottom: bar.bottom, histTop: box.top, firstTop: first.getBoundingClientRect().top, pad: parseFloat(getComputedStyle(h).scrollPaddingTop) };
+    const cs = getComputedStyle(h);
+    return { barBottom: bar.bottom, histTop: box.top, contentTop: box.top + parseFloat(cs.paddingTop), pad: parseFloat(cs.scrollPaddingTop), clips: cs.overflowY !== 'visible' };
   });
   expect(split.histTop, 'the chat scroller starts under the Chat bar, not behind it').toBeGreaterThanOrEqual(split.barBottom - 1);
-  expect(split.firstTop, 'the first row sits below the Chat bar').toBeGreaterThanOrEqual(split.barBottom + 4);
-  expect(split.pad).toBeGreaterThanOrEqual(8);
+  expect(split.clips, 'the chat scroller clips its rows').toBe(true);
+  expect(split.contentTop, 'the first row sits below the Chat bar').toBeGreaterThanOrEqual(split.barBottom + 4);
+  expect(split.pad, 'a jump stops clear of the scroller top').toBeGreaterThanOrEqual(8);
   await page.screenshot({ path: `${SHOTS}/files-split.png` }).catch(() => {});
 });

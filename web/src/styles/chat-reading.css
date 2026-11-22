@@ -44,18 +44,18 @@
   margin-left: 8px;
   margin-right: 8px;
 }
-/* A send that did not go out says so in a quiet caption (12 px, the standard's secondary size). */
-:root .session-history .session-msg-failed-badge { font-size: 12px; font-weight: 500; color: var(--error); }
+/* A send that did not go out says so in a quiet caption (--font-size-sm, the standard's secondary size). */
+:root .session-history .session-msg-failed-badge { font-size: var(--font-size-sm); font-weight: 500; color: var(--error); }
 
-/* ── One type scale (the standard's sizes: 15 px titles, 14 px chat text) ── */
+/* ── One type scale: titles are --font-size-lg, a smaller heading is the chat text in bold ── */
 :root .session-history .session-msg-assistant .markdown-body :is(h1, h2, h3, h4, h5, h6) {
   margin: 16px 0 4px;
-  font-size: 14px;
+  font-size: inherit;
   font-weight: 600;
   line-height: 1.4;
   color: var(--fg);
 }
-:root .session-history .session-msg-assistant .markdown-body :is(h1, h2) { font-size: 15px; }
+:root .session-history .session-msg-assistant .markdown-body :is(h1, h2) { font-size: var(--font-size-lg); }
 :root .session-history .session-msg-assistant .markdown-body h1 { font-weight: 700; }
 :root .session-history .session-msg-assistant .markdown-body :is(p, ul, ol, blockquote, dl) {
   margin: 8px 0;
@@ -67,7 +67,7 @@
 :root .session-history .session-msg-assistant .markdown-body > :last-child { margin-bottom: 0; }
 
 /* ── The line under a reply: its time is secondary text ── */
-:root .session-history .session-msg-actions .msg-time { font-size: 12px; }
+:root .session-history .session-msg-actions .msg-time { font-size: var(--font-size-sm); }
 
 /* ── Nothing lands under a header ──
    A jump to a row (find, a reply's quote, a block: 'nearest' scroll) stops where the content

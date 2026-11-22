@@ -97,7 +97,7 @@
 :root .session-history .process-fold > .tool-run-toggle {
   margin-left: -4px;
   padding: 2px 8px 2px 4px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   border-radius: var(--radius-sm);
   transition: background-color .12s, color .12s;
