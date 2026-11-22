@@ -17,7 +17,8 @@
 
 import { redactAiOnly } from '../lib/ai-only-envelope.js';
 import { hookContextText } from '../lib/walnut-added.js';
-import { NATIVE_PEER_TAGS, nonHumanOrigin, opensTurnLine, parseSessionEnvelopes } from '../lib/history-session-envelope.js';
+import { NATIVE_PEER_TAGS, nonHumanOrigin, opensTurnLine } from '../lib/history-session-envelope.js';
+import { drainedSendIsAgent, joinedRun, joinedSendGroups, mergedSendUuidsOf } from './drained-sends.js';
 import type { InPlaceRewindCut } from './types.js';
 import { VALID_SESSION_EFFORT_IDS } from './session-effort.js';
 import { projectUserText } from './sessions/user-text-projection.js';
@@ -42,38 +43,8 @@ import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions
  */
 export const HISTORY_CACHE_SCHEMA = 16;
 
-/** The other sends' uuids on a user line Claude Code merged from several queued sends. */
-function mergedSendUuidsOf(raw: { mergedSendUuids?: unknown }): string[] | undefined {
-  const list = raw.mergedSendUuids;
-  if (!Array.isArray(list)) return undefined;
-  const ids = list.filter((u): u is string => typeof u === 'string' && u.length > 0);
-  return ids.length > 0 ? ids : undefined;
-}
-
 /** One block of a transcript line's content array. */
 type ContentBlock = Extract<NonNullable<NonNullable<RawJsonlLine['message']>['content']>, unknown[]>[number];
-
-/**
- * The sends of a user line of blocks Claude Code merged from several queued sends, one group
- * per send, or undefined. Walnut writes a send with pictures as its images, then ONE text block
- * (providers/user-line-images-core.ts), and a plain send joins a line of blocks as one text
- * block, so every send ends at a text block: the line splits after each one. Only when that
- * count is exactly the line's sends (its own plus `mergedSendUuids`) and nothing but images and
- * text is in it; anything else stays the one row it was.
- */
-function joinedSendGroups(raw: RawJsonlLine): ContentBlock[][] | undefined {
-  const others = mergedSendUuidsOf(raw);
-  const c = raw.message?.content;
-  if (!others || !Array.isArray(c) || c.length === 0) return undefined;
-  if (!c.every((b) => b?.type === 'image' || (b?.type === 'text' && typeof b.text === 'string'))) return undefined;
-  if (c[c.length - 1]?.type !== 'text' || c.filter((b) => b.type === 'text').length !== others.length + 1) return undefined;
-  const groups: ContentBlock[][] = [[]];
-  for (const b of c) {
-    groups[groups.length - 1]!.push(b);
-    if (b.type === 'text' && groups.length <= others.length) groups.push([]);
-  }
-  return groups;
-}
 
 /** The reasoning effort the CLI recorded on an assistant line, when it is a known one. */
 function recordedEffortOf(raw: RawJsonlLine): string | undefined {
@@ -1046,20 +1017,12 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
         e => !skipEnqueueIndices.has(e.index) && e.index < twin.index
           && (twin.sends !== undefined || twin.index - e.index <= PATTERN_A_LOOKAHEAD),
       );
-      let matched = false;
-      for (let s = 0; s < cands.length - 1 && !matched; s++) {
-        let joined = cands[s].content;
-        for (let e = s + 1; e < cands.length; e++) {
-          if (twin.sends !== undefined && e - s + 1 > twin.sends) break;
-          joined += '\n' + cands[e].content;
-          if (joined.trim() === wanted && (twin.sends === undefined || e - s + 1 === twin.sends)) {
-            twin.claimed = true;
-            for (let k = s; k <= e; k++) skipEnqueueIndices.add(cands[k].index);
-            sendsOfJoinedLine.set(twin.index, cands.slice(s, e + 1).map((c) => c.content));
-            matched = true;
-            break;
-          }
-        }
+      const run = joinedRun(cands.map((c) => c.content), wanted, twin.sends);
+      if (run) {
+        const [s, e] = run;
+        twin.claimed = true;
+        for (let k = s; k <= e; k++) skipEnqueueIndices.add(cands[k].index);
+        sendsOfJoinedLine.set(twin.index, cands.slice(s, e + 1).map((c) => c.content));
       }
     }
   }
@@ -1141,7 +1104,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
         timestamp,
         walnutMessageId: raw.walnutMessageId ?? undefined,
         injected: isInjectedLine(raw) || undefined,
-        agentOrigin: (nonHumanOrigin(raw.origin) && parseSessionEnvelopes(words) !== null) || undefined,
+        agentOrigin: drainedSendIsAgent(raw.origin, words) || undefined,
         ...(last ? {} : { lineUuid: lineId }),
         ...(last && !named && others ? { mergedUuids: others } : {}),
         ...(k === 0 && opensTurnLine(raw) ? { startsTurn: true as const } : {}),
@@ -1346,7 +1309,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     const joinedSends = existing || raw.message.role !== 'user' ? undefined
       : typeof raw.message.content === 'string'
         ? sendsOfJoinedLine.get(i)?.map((text) => [{ type: 'text' as const, text }])
-        : joinedSendGroups(raw);
+        : joinedSendGroups<ContentBlock>(raw);
     if (joinedSends) {
       emitJoinedSends(raw, msgId, joinedSends);
       continue;

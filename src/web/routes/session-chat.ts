@@ -333,7 +333,8 @@ export function registerSessionChatRpc(): void {
       // server took it): the bubble still knows it by its own client id, the row by its user line.
       // The same send again is that row, never a second copy (the client resends by itself once the
       // connection is back, hooks/send-auto-retry.ts).
-      const twin = userUuid ? (await getQueue(data.sessionId)).find((m) => m.userUuid === userUuid) : undefined
+      const { withoutWalnutRows } = await import('../../core/sessions/session-extras.js')
+      const twin = userUuid ? (await withoutWalnutRows(await getQueue(data.sessionId))).find((m) => m.userUuid === userUuid) : undefined
       if (twin) {
         log.web.info('session:send retry: the send is already queued under its user line', {
           sessionId: data.sessionId, retryOf: data.retryOf, messageId: twin.id,

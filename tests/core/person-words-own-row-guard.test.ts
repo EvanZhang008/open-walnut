@@ -13,8 +13,10 @@
  * non-person send (enumerated from the envelope parser's own lists below) times
  * every way a line comes to hold two sends.
  *
- * For every member the parse (src/core/history-parse.ts, the one source the web,
- * the Mac app and the phone read) must give exactly one row that `transcriptSentBy`
+ * For every member both parses must give exactly one row of the person's: the primary's
+ * (src/core/history-parse.ts: the web, the Mac app and the phone through the Mac) and the
+ * phone's second reader (src/core/sessions/transcript-from-jsonl.ts: the cloud companion
+ * and a host answering alone). The primary's row is one that `transcriptSentBy`
  * reads as the person's, holding exactly his words, and the web's row rule
  * (SessionMessage: riders off, then no envelope left) must draw it as his bubble.
  * A new envelope kind or native peer tag without a sample here fails the first test.
@@ -23,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseSessionMessages } from '../../src/core/session-history.js';
+import { transcriptFromJsonl } from '../../src/core/sessions/transcript-from-jsonl.js';
 import { transcriptSentBy, personTextOf } from '../../src/core/sessions/transcript-sent-by.js';
 import { NATIVE_PEER_TAGS, parseSessionEnvelopes } from '../../src/lib/history-session-envelope.js';
 import { splitRiders } from '../../src/lib/history-walnut-riders.js';
@@ -137,6 +140,15 @@ describe("the person's words are a row of their own that reads as his", () => {
           const body = splitRiders(row.text)?.body ?? row.text;
           expect(parseSessionEnvelopes(body)).toBeNull();
           // And no other row carries his words.
+          expect(rows.filter((r) => r !== row && r.text.includes(WORDS))).toHaveLength(0);
+        });
+        it(`${shape} · beside a ${kind} · ${source} · the phone's second reader`, () => {
+          const out = transcriptFromJsonl('s', lines.map((l) => JSON.stringify(l)).join('\n'));
+          const rows = (out.messages as Array<{ role: string; text: string; sentBy?: string; personText?: string }>).filter((m) => m.role === 'user');
+          const persons = rows.filter((r) => r.sentBy === 'person');
+          expect(persons, rows.map((r) => `${r.sentBy}: ${r.text.slice(0, 60)}`).join(' | ')).toHaveLength(1);
+          const row = persons[0]!;
+          expect((row.personText ?? row.text).trim()).toBe(mine.words);
           expect(rows.filter((r) => r !== row && r.text.includes(WORDS))).toHaveLength(0);
         });
       }

@@ -15,7 +15,8 @@ import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
 import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
 import { settingChangeNotice, walnutCommandNotice } from './walnut-commands.js'
 import { cliErrorRowText } from './cli-error-reply.js'
-import { transformInjectedUserText } from '../history-parse.js'
+import { queuedCommandText, transformInjectedUserText } from '../history-parse.js'
+import { drainedSendIsAgent, joinedRun, mergedSendUuidsOf } from '../drained-sends.js'
 
 export const TRANSCRIPT_TAIL_ROWS = 200
 // Tail-only read: ~200 rendered rows fit comfortably in the last 512KB even
@@ -76,14 +77,28 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
     messages[hiddenTurnStart].opensTurn = true
     hiddenTurnStart = -1
   }
+  // The texts queued so far and not yet run, in queue order: a line Claude Code drained from
+  // several of them is split back into one row per send (drained-sends.ts), as the primary does.
+  const queued: string[] = []
   for (const [i, parsed] of lines.entries()) {
     stampTurnStart()
+    if (parsed.type === 'queue-operation') {
+      const text = typeof parsed.content === 'string' ? parsed.content : ''
+      if (parsed.operation === 'enqueue' && text) queued.push(text)
+      if (parsed.operation === 'remove' && text) takeQueued(queued, text)
+      continue
+    }
     if (parsed.parent_tool_use_id) continue // subagent lane
     if (typeof parsed.walnutMessageId === 'string' && parsed.subtype === 'walnut-injected'
         && lastMarker.get(parsed.walnutMessageId) !== i) continue
     // A hook's added context, written as an attachment line (the primary's
     // history parser reads it the same way, session-history.ts).
-    const attachment = parsed.attachment as { type?: string; content?: unknown; hookEvent?: unknown } | undefined
+    const attachment = parsed.attachment as { type?: string; content?: unknown; hookEvent?: unknown; prompt?: unknown } | undefined
+    // A queued send the CLI took mid-turn ran on its own: it is queued no more.
+    if (parsed.type === 'attachment' && attachment?.type === 'queued_command') {
+      const prompt = queuedCommandText(attachment.prompt)
+      if (prompt) takeQueued(queued, prompt)
+    }
     if (parsed.type === 'attachment' && attachment?.type === 'hook_additional_context') {
       const text = hookContextText(attachment.content, attachment.hookEvent)
       if (text) injected.take(text, messages)
@@ -145,12 +160,30 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
           continue
         }
         const shown = injected !== undefined && text.startsWith('<command-') ? injected : text
-        if (shown && !isInterruptMarker(shown)) messages.push(withMessageId(userRow(shown, timestamp, nonHumanOrigin(parsed.origin)), parsed))
+        // A walnut-injected marker names one delivery; it is never a drained line, nor a take.
+        const marker = parsed.subtype === 'walnut-injected'
+        const others = mergedSendUuidsOf(parsed)
+        // A CLI older than `mergedSendUuids` names nothing: any run of two or more still queued.
+        const run = marker ? undefined : joinedRun(queued, text, others ? others.length + 1 : undefined)
+        if (run) {
+          // A line drained from several sends: each send is its own row with its own author.
+          for (const words of queued.splice(run[0], run[1] - run[0] + 1)) {
+            const send = words.trim()
+            if (send && !isInterruptMarker(send)) messages.push(userRow(send, timestamp, drainedSendIsAgent(parsed.origin, send)))
+          }
+        } else {
+          if (!marker) takeQueued(queued, text)
+          if (shown && !isInterruptMarker(shown)) messages.push(withMessageId(userRow(shown, timestamp, nonHumanOrigin(parsed.origin)), parsed))
+        }
       } else if (Array.isArray(content)) {
+        // A line of blocks drained from several sends carries one text block per send; the line's
+        // one origin is its last send's, so each send is judged by its own words.
+        const drained = !!mergedSendUuidsOf(parsed)
         for (const block of content) {
           const b = block as { type?: string; text?: string }
           const text = b.type === 'text' ? b.text?.trim() : undefined
-          if (text && !isInterruptMarker(text)) messages.push(withMessageId(userRow(text, timestamp, nonHumanOrigin(parsed.origin)), parsed))
+          const agent = drained ? drainedSendIsAgent(parsed.origin, text ?? '') : nonHumanOrigin(parsed.origin)
+          if (text && !isInterruptMarker(text)) messages.push(withMessageId(userRow(text, timestamp, agent), parsed))
         }
       }
     } else if (type === 'assistant' && Array.isArray(content)) {
@@ -229,6 +262,13 @@ function userRow(text: string, timestamp: string, agentOrigin = false): Transcri
     ...(items.length ? { added: items.map((i) => ({ ...i, text: clipTranscriptText(i.text, 'live') })) } : {}),
     ...(textWithoutContext !== undefined ? { textWithoutContext: clipTranscriptText(textWithoutContext.trim(), 'live') } : {}),
   }
+}
+
+/** A queued text that ran on its own (or was taken back) is queued no more. */
+function takeQueued(queued: string[], text: string): void {
+  const t = text.trim()
+  const at = queued.findIndex((q) => q.trim() === t)
+  if (at >= 0) queued.splice(at, 1)
 }
 
 /** The CLI's abort echo ("[Request interrupted by user( for tool use)]"):
