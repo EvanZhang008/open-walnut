@@ -175,27 +175,12 @@ struct ChatOrgRowView: View {
         HStack(spacing: 10) {
             avatar
             VStack(alignment: .leading, spacing: 2) {
-                // At the accessibility sizes the "+N" goes under the name, so a short name is
-                // never broken mid-word to make room for it.
-                let nameLayout = typeSize.isAccessibilitySize
-                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
-                    : AnyLayout(HStackLayout(spacing: 6))
-                nameLayout {
-                    Text(verbatim: row.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(lines)
-                        .layoutPriority(1)
-                    if !row.ledProjects.isEmpty {
-                        Text(verbatim: "+\(row.ledProjects.count)")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.15), in: Capsule())
-                            .fixedSize()
-                    }
-                }
+                // The projects a VP also leads are no "+N" beside the name (2026-11-22, the user:
+                // "why the fuck is +7 +1, remove"); VoiceOver still reads them (accessibility label).
+                Text(verbatim: row.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(lines)
                 // A watched thread named on the line wears the Threads card's eye.
                 (row.lineWatched ? Text("\(Image(systemName: "eye.fill")) \(Text(verbatim: row.line))") : Text(verbatim: row.line))
                     .font(.caption)

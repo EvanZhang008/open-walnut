@@ -91,7 +91,7 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
       data-testid={row.kind === 'main' ? 'org-channel-main' : 'org-channel'}
       data-key={row.key}
       data-state={row.state}
-      title={`${shownName(row)}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
+      title={`${shownName(row)}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}${row.led?.length ? `\nAlso leads ${row.led.map((l) => l.name).join(', ')}` : ''}`}
       onClick={() => onSelect(row.key)}
       onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     >
@@ -100,11 +100,10 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
         <span className="org-channel-top">
           {/* A VP the user named goes by that name, as on the org chart. */}
           <span className="org-channel-name wn-title">{shownName(row)}</span>
-          {/* +N, the time and the count: one group on the name's first line, under it when narrow. */}
+          {/* The time and the count: one group on the name's first line, under it when narrow. The
+              projects a VP also leads are no "+N" here (2026-11-22, Evan: "why the fuck is +7 +1,
+              remove"): the hover names them, and the VP's page lists them. */}
           <span className="org-channel-tail wn-fixed">
-            {!!row.led?.length && (
-              <span className="badge badge-count org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
-            )}
             {/* The time of the line under it (when that news was written), else of the last move. */}
             <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
             {badge}

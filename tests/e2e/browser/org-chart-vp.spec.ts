@@ -266,11 +266,14 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(page.getByTestId('org-side')).toBeVisible()
   await expect(page).toHaveURL(new RegExp(`open=[^&]*${labelId}`))
 
-  // On the Org page, B is part of A's channel now: no channel of its own, and A's says it leads one more.
+  // On the Org page, B is part of A's channel now: no channel of its own, and A's names it on hover,
+  // never as a "+N" count on the row (2026-11-22, Evan: "why the fuck is +7 +1, remove").
   const channel = (name: string) => page.locator(`[data-testid="org-channel"][data-key="project:${name.toLowerCase()}"]`)
   await expect(channel(A)).toBeVisible()
   await expect(channel(B)).toHaveCount(0)
-  await expect(channel(A).getByTestId('org-channel-led')).toHaveText('+1')
+  await expect(channel(A)).toHaveAttribute('title', new RegExp(`Also leads ${B}`))
+  expect(await page.locator('[data-testid="org-channel"]').evaluateAll((rows) => rows.flatMap((r) =>
+    [...r.querySelectorAll('*')].filter((e) => !e.children.length && /^\+\d+$/.test(e.textContent?.trim() ?? '')).map((e) => `${r.getAttribute('data-key')}: ${e.textContent}`))), 'a "+N" on an Org row').toEqual([])
   // B is under "Archived" at the bottom, folded, saying where it went; it came in live.
   const moved = page.getByTestId('org-moved-toggle')
   await expect(moved).toHaveText(/^.?Archived · \d+$/)

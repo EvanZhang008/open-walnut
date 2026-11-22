@@ -89,7 +89,6 @@
 /* Sized by its words (auto, not a fixed 8em): a short name keeps the tail on its line in a narrow list. */
 .org-channel-top > .org-channel-name { flex: 1 1 auto; overflow-wrap: break-word; }
 .org-channel-tail { display: flex; align-items: center; gap: 6px; height: 20px; margin-left: auto; }
-.org-channel-led { flex-shrink: 0; }
 .org-detail-led { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .org-detail-led::before { content: '· '; }
 .org-channel-name {
