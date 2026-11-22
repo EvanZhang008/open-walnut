@@ -49,7 +49,7 @@ test('Homepage renders the persisted Codex session and blocks unsupported forks'
   // check below is what proves the 2 parity + 2 mobile messages loaded.)
   // Pill shows the engine name ("Codex") for a cold record, or the resolved
   // model label ("GPT Best") once the mock ACP runtime attaches on open.
-  await expect(homePanel.locator('.session-detail-model-pill', { hasText: /Codex|GPT Best/ })).toBeVisible()
+  await expect(homePanel.locator('.composer-model-pill', { hasText: /Codex|GPT Best/ })).toBeVisible()
   await expectTranscript(homePanel)
   const homeFork = homePanel.getByRole('button', { name: /Fork is unavailable/ })
   await expect(homeFork).toBeDisabled()

@@ -25,7 +25,7 @@ export const BADGE_FAMILY = new Set(['badge', 'badge-accent', 'badge-warning', '
  * family itself. The last three are slots inside a key (a compound trigger's value and caret, a
  * label that keeps the key's width), not variants.
  */
-export const FAMILY = new Set(['btn', 'btn-sm', 'btn-primary', 'btn-danger', 'btn-ghost', 'btn-icon', 'btn-link', 'btn-block', 'btn-value', 'btn-caret', 'btn-reserve']);
+export const FAMILY = new Set(['btn', 'btn-sm', 'btn-primary', 'btn-danger', 'btn-ghost', 'btn-icon', 'btn-link', 'btn-block', 'btn-value', 'btn-caret', 'btn-reserve', 'btn-tight']);
 /** The family's own file: it is the one place that draws `.btn`. */
 export const FAMILY_CSS = 'styles/buttons.css';
 

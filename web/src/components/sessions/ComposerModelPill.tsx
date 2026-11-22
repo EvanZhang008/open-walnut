@@ -375,7 +375,7 @@ export function ComposerModelPill({
     </>
   ) : (
     <>
-      {label}
+      <span className="composer-model-pill-label">{label}</span>
       {detail}
     </>
   );
@@ -385,7 +385,7 @@ export function ComposerModelPill({
   const pill = engineUi.isAcp ? (
     <button
       type="button"
-      className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
+      className={`btn btn-sm btn-ghost${fit.condensed ? ' btn-tight' : ''} composer-model-pill`}
       ref={setPillEl}
       title={`Switch ${engineUi.displayName} model${extraTitle}`}
       onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
@@ -408,7 +408,7 @@ export function ComposerModelPill({
     // doesn't show"). Render "Auto" — the picker itself live-pulls the truth.
     <button
       type="button"
-      className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
+      className={`btn btn-sm btn-ghost${fit.condensed ? ' btn-tight' : ''} composer-model-pill`}
       ref={setPillEl}
       title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort${extraTitle}`}
       onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
@@ -517,5 +517,5 @@ export function ComposerModelPill({
 /** The pill opens a menu, so it carries the menu triggers' caret ("Snooze ▾"); a condensed
  *  row has room for the family word alone and leaves it out. */
 function PillCaret() {
-  return <span className="composer-model-pill-caret" aria-hidden>▾</span>;
+  return <span className="btn-caret" aria-hidden>▾</span>;
 }

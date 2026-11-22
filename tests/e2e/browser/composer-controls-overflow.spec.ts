@@ -51,7 +51,8 @@ test('narrow composer condenses the row: Bypass and the short model name with it
   const model = controlOf(panel, 'model').locator('button');
   await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
   await expect(model).toHaveText(/^Fable\s*45%$/);
-  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
+  // The model key is the family's small quiet key, the size of Bypass beside it.
+  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe(await controlOf(panel, 'mode').locator('button').first().evaluate((el) => getComputedStyle(el).fontSize));
   await expect(model).toHaveAttribute('title', /fable-5-1/);
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);

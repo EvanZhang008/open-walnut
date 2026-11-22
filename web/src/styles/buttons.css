@@ -100,6 +100,9 @@
   font-size: var(--font-size-sm);
   line-height: 16px;
 }
+/* A small key in a row that must give up room before a control leaves it (the composer's
+   condensed row: the model key keeps its place beside Bypass): the sides narrow to 4 px. */
+.btn-sm.btn-tight { padding-inline: 4px; }
 
 /* ── Main action: at most one per view or card ── */
 .btn-primary {

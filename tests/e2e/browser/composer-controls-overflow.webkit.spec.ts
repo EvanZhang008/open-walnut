@@ -44,7 +44,8 @@ test('WebKit narrow composer shows Bypass and the short model name with the real
   await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
   await expect(model.locator('.session-detail-context-pct')).toContainText('45%');
   await expect(model).toHaveText(/^Fable\s*45%$/);
-  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
+  // The model key is the family's small quiet key, the size of Bypass beside it.
+  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe(await controlOf(panel, 'mode').locator('button').first().evaluate((el) => getComputedStyle(el).fontSize));
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
   await shootComposer(panel, 'narrow');

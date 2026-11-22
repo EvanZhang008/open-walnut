@@ -547,7 +547,7 @@
    centered ::before (hit testing counts it), so rows do not grow. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
-    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill,
+    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .composer-model-pill,
     .composer-direct-control
   ),
   .phone-topbar .phone-bar-slot .task-action-btn {
@@ -555,7 +555,7 @@
   }
 
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
-    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .session-detail-model-pill,
+    .msg-copy-btn, .chat-plus-btn, .mic-btn, .mode-toggle-pill, .composer-model-pill,
     .composer-direct-control
   )::before,
   .phone-topbar .phone-bar-slot .task-action-btn::before {
@@ -600,7 +600,7 @@
   }
 
   /* The composer box clips anything drawn past it: these are 44 x 44 boxes. */
-  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(.chat-plus-btn, .mic-btn, .session-detail-model-pill) {
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(.chat-plus-btn, .mic-btn, .composer-model-pill) {
     min-width: 44px;
     min-height: 44px;
     justify-content: center;
@@ -634,7 +634,7 @@
   }
 
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
-    .msg-copy-label, .msg-time, .mode-toggle-pill-label, .session-detail-model-pill, .composer-model-pill-short,
+    .msg-copy-label, .msg-time, .mode-toggle-pill-label, .composer-model-pill-short,
     .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-ws-toggle,
     .chat-earlier-label, .chat-earlier-divider span
   ),

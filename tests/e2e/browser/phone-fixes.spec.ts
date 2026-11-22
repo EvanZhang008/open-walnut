@@ -428,7 +428,7 @@ test('N10: Ask Walnut has one bar, a model name (not an id), and finger-sized ch
     const chips = draft.locator('.session-action-chip')
     for (const c of await chips.all()) expect((await c.boundingBox())!.height).toBeGreaterThanOrEqual(44)
   }
-  const model = slot.locator('.composer-model-pill, .session-detail-model-pill').first()
+  const model = slot.locator('.composer-model-pill').first()
   if (await model.count()) expect((await model.innerText()).trim()).not.toMatch(/^(global\.|us\.|anthropic\.)/)
   await shot(page, 'n10-ask-walnut')
   expect(errors).toEqual([])

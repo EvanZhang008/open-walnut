@@ -416,7 +416,8 @@ html.askpop.wide, html.askpop.wide body.sidepanel, html.askpop.wide body.sidepan
    of their own over the bar where it is under 420 px. */
 .look-composer { container-type: inline-size; }
 .look-pickers { display: inline-flex; gap: 4px; min-width: 0; }
-.look-picker { height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg2); color: var(--muted); font-size: 11.5px; font-weight: 600; white-space: nowrap; box-sizing: border-box; }
+/* Both are the button family's small quiet key there (btn btn-sm btn-ghost): 28 px, no fill. */
+.look-picker { height: 28px; display: inline-flex; align-items: center; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--fg2); font-size: 12px; font-weight: 500; white-space: nowrap; box-sizing: border-box; }
 .look-picker.is-blank { width: 54px; }
 @container (max-width: 420px) {
   .look-bar { margin-top: 2px; }

@@ -60,8 +60,11 @@
    for it, the context percentage (ComposerControlsBar decides; the pill renders
    what it is told). The name clips on its own, so a long custom model id cannot
    push the percentage out of the pill's box. */
-.composer-controls-bar.is-condensed [data-control-id='model'] .composer-model-pill {
-  padding-inline: 4px;
+.composer-model-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-model-pill-short {
@@ -193,11 +196,4 @@
 /* A row with an icon keeps a column for it; a plain row is its name alone. */
 .session-control-option:has(.session-control-option-icon) {
   grid-template-columns: 24px minmax(0, 1fr);
-}
-
-/* The model pill opens the model picker: the menu triggers' small caret after its words. */
-.composer-model-pill-caret {
-  margin-left: 4px;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
 }

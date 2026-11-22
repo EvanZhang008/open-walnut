@@ -165,7 +165,7 @@ for (const { id, displayName } of ENGINE_CASES) {
     // the record as THIS engine, where a native record would show "Auto".
     // .first(): ChatInput renders its controls row in more than one mode bar, so
     // the pill can resolve twice (same text) — a bare locator would trip strict mode.
-    await expect(panel.locator('.session-detail-model-pill').first())
+    await expect(panel.locator('.composer-model-pill').first())
       .toHaveText(new RegExp(`GPT Best|${displayName}`), { timeout: 15_000 })
     await audit.assertClean()
   })

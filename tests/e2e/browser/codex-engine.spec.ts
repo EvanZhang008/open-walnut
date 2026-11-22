@@ -190,7 +190,7 @@ test('live Codex session: quick-start streams the mock-acp reply into the sessio
   ).toHaveCount(1, { timeout: 20_000 })
 
   // ACP discovery replaces the generic Codex label with the current short model name.
-  await expect(panel.locator('.session-detail-model-pill', { hasText: 'GPT Best' })).toBeVisible({ timeout: 10_000 })
+  await expect(panel.locator('.composer-model-pill', { hasText: 'GPT Best' })).toBeVisible({ timeout: 10_000 })
   await expect(panel.locator('.session-msg-role')).toHaveCount(0)
   await expect(panel.getByText('Walnut', { exact: true })).toHaveCount(0)
   await expect(panel).toBeInViewport()

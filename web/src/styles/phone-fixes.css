@@ -403,7 +403,7 @@
     padding: 0 10px;
   }
   /* The composer's mode pill ("Bypass") and its other small pills. */
-  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel, .ask-walnut-slot) :is(.mode-toggle-pill, .composer-model-pill, .session-detail-model-pill) {
+  .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel, .ask-walnut-slot) :is(.mode-toggle-pill, .composer-model-pill) {
     min-height: 44px;
     font-size: var(--font-size-md);
   }

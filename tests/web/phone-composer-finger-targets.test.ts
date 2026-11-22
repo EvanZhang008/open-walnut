@@ -49,7 +49,7 @@ describe('phone composer row finger targets', () => {
   });
 
   it('the row\'s other short pills keep theirs', () => {
-    for (const cls of ['chat-plus-btn', 'mic-btn', 'mode-toggle-pill', 'session-detail-model-pill']) {
+    for (const cls of ['chat-plus-btn', 'mic-btn', 'mode-toggle-pill', 'composer-model-pill']) {
       expect(raised.has(cls), cls).toBe(true);
       expect(wide.has(cls), cls).toBe(true);
     }

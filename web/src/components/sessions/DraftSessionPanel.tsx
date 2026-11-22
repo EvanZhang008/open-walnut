@@ -297,7 +297,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
     <>
       <button
         type="button"
-        className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill draft-model-select"
+        className="btn btn-sm btn-ghost composer-model-pill draft-model-select"
         title={fallbackLabel
           ? `${fallbackLabel}: the default engine is out of usage here, so this task starts on the fallback. Pick a model or provider to choose for yourself.`
           : acpModels

@@ -2033,32 +2033,6 @@ textarea::placeholder { max-width: 100%; }
   font-weight: 500;
 }
 
-.session-detail-model-pill {
-  font-weight: 600;
-  font-size: var(--font-size-xs);
-}
-
-/* Clickable variant (a <button>): opens the ModelPicker to switch model/effort.
-   Reset button chrome, keep the pill look, add a hover affordance. */
-.session-detail-model-pill-clickable {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 1px 6px;
-  margin: 0 -6px 0 -6px;
-  font: inherit;
-  font-weight: 600;
-  font-size: var(--font-size-xs);
-  color: inherit;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: background 0.12s ease;
-}
-
-.session-detail-model-pill-clickable:hover {
-  background: var(--bg-hover);
-}
-
 /* Codex mode pill dropdown — ChatGPT-parity approval menu: icon column,
    name + description rows, check on the RIGHT, full-access row in warning
    orange. Opens UPWARD (pill sits in the bottom mode bar; downward would
@@ -19890,14 +19864,6 @@ a.tag-chip:hover .tag-chip-value,
   min-width: 0;
   max-width: 170px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  border-color: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-}
-.draft-actions-bar .draft-model-select:hover {
-  border-color: var(--border);
-  color: var(--fg);
 }
 
 /* "Save as todo": the draft's one exit besides the send arrow, so it sits
@@ -26062,24 +26028,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-top: 42px;
 }
 
-/* ── Composer model pill (moved from the session header, 2026-07-25) ──
-   Ghost/iOS aesthetic: muted text, hover accent, no grey box. Truncates on
-   narrow panels instead of overflowing the controls row. */
+/* ── Composer model pill: the button family's quiet key (btn btn-sm btn-ghost), as the mode
+   trigger beside it. It shrinks on a narrow panel instead of overflowing the controls row; the
+   model's name is what gives way (its label ellipsizes). ── */
 .session-mode-bar .composer-model-pill {
-  margin: 0;
-  padding: 3px 8px;
-  font-weight: 500;
-  color: var(--fg-muted);
   max-width: 180px;
   min-width: 0;
   flex-shrink: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.session-mode-bar .composer-model-pill:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 /* ── The material (gated): milky bg + blur, hairlines, soft shadow ── */
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
