@@ -20,8 +20,19 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** A wire button's expiry, kept only when it is a real moment (an older record has none). */
+function expiryOf(raw: Record<string, unknown>): { expiresAt?: number } {
+  const at = raw.expiresAt;
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? { expiresAt: at } : {};
+}
+
 /** One wire button → a client action, or null for anything malformed or unknown. */
 function wireActionOf(raw: unknown): NotificationAction | null {
+  const action = wireActionBody(raw);
+  return action && isPlainObject(raw) ? { ...action, ...expiryOf(raw) } : action;
+}
+
+function wireActionBody(raw: unknown): NotificationAction | null {
   if (!isPlainObject(raw)) return null;
   const label = typeof raw.label === 'string' ? raw.label.trim() : '';
   if (!label) return null;
@@ -65,10 +76,27 @@ export function wireActionsOf(raw: unknown): NotificationAction[] {
   return out;
 }
 
-/** The buttons a toast or feed card renders, primary first. */
-export function displayActionsOf(n: Pick<Notification, 'action' | 'actions'>): NotificationAction[] {
-  if (n.actions && n.actions.length > 0) return n.actions.slice(0, MAX_NOTIFICATION_ACTIONS);
-  return n.action ? [n.action] : [];
+/** Has this button's moment passed (its `expiresAt`)? A button with no expiry never expires. */
+export function actionExpired(a: Pick<NotificationAction, 'expiresAt'>, now: number = Date.now()): boolean {
+  return typeof a.expiresAt === 'number' && a.expiresAt <= now;
+}
+
+/**
+ * The buttons a toast or feed card renders, primary first. A button whose moment passed is left
+ * out (2026-11-21: a "Focus block done" notice still offered End break and Another block 23 hours
+ * later); when every listed button expired the notice has none, never the older single `action`.
+ */
+export function displayActionsOf(n: Pick<Notification, 'action' | 'actions'>, now: number = Date.now()): NotificationAction[] {
+  if (n.actions && n.actions.length > 0) return n.actions.filter((a) => !actionExpired(a, now)).slice(0, MAX_NOTIFICATION_ACTIONS);
+  return n.action && !actionExpired(n.action, now) ? [n.action] : [];
+}
+
+/** When the next of a notice's buttons expires (a card re-renders then), or null when none will. */
+export function nextActionExpiry(n: Pick<Notification, 'action' | 'actions'>, now: number = Date.now()): number | null {
+  const list = n.actions && n.actions.length > 0 ? n.actions : n.action ? [n.action] : [];
+  let next: number | null = null;
+  for (const a of list) if (typeof a.expiresAt === 'number' && a.expiresAt > now && (next === null || a.expiresAt < next)) next = a.expiresAt;
+  return next;
 }
 
 /** Where an `op` button POSTs. Null when the action is not a runnable op. */

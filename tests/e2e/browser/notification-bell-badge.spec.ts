@@ -72,7 +72,9 @@ test('asks + unread letters badge amber; read state of the ask is irrelevant', a
 
   const badge = page.locator('.sidebar-notification-btn .notification-badge-count')
   await expect(badge).toHaveText('2')
-  await expect(badge).toHaveClass(/notification-badge-attention/)
+  // The one needs-you count, Mail's look (`badge-alert`): no amber flavour of its own (2026-11-21 audit).
+  await expect(badge).not.toHaveClass(/notification-badge-attention/)
+  await expect(badge).toHaveClass(/badge-alert/)
   await page.locator('.sidebar-notification-btn').screenshot({
     path: `${SCREENSHOT_DIR}/1-amber-badge-2.png`,
   })
@@ -84,19 +86,18 @@ test('asks + unread letters badge amber; read state of the ask is irrelevant', a
   await page.getByRole('button', { name: 'Notifications' }).click()
   await expect(page.locator('.notification-panel')).toBeVisible()
 
-  // Rail semantics inside the panel: Errors badge is RED (live failures), and
+  // Rail semantics inside the panel: Errors wears the one label as a red count, and
   // All carries NO badge — the feed's length is history depth, not a signal.
   const railBtn = (label: string) =>
     page.locator('.nfc-rail .nfc-rail-btn', { has: page.locator('.nfc-rail-name', { hasText: label }) })
   const errorsBadge = railBtn('Errors').locator('.nfc-rail-badge')
   await expect(errorsBadge).toHaveText('3')
-  await expect(errorsBadge).toHaveClass(/nfc-danger/)
+  await expect(errorsBadge).toHaveClass(/\bbadge-error\b/)
   await expect(railBtn('All').locator('.nfc-rail-badge')).toHaveCount(0)
 
   await page.keyboard.press('Escape')
   await expect(page.locator('.notification-panel')).toBeHidden()
   await expect(badge).toHaveText('2')
-  await expect(badge).toHaveClass(/notification-badge-attention/)
 })
 
 test('a feed of unread errors alone shows NO count badge', async ({ page }) => {

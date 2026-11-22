@@ -58,7 +58,7 @@ const NOT_A_CARD: Record<string, string> = {
   'web/src/components/sessions/StreamingBlockView.tsx': 'the chat transcript\'s own record of the prompt, under the strip that carries its card',
   'web/src/components/common/NotificationToaster.tsx': 'a passing toast for a live prompt; its card is in the strip and on the task row',
   // Not folded yet: the bell panel's own detail pane for a live prompt (its rail and detail layout).
-  'web/src/components/common/NotificationPanel.tsx': 'the bell panel\'s detail pane of a live prompt; its card is in the strip and on the task row',
+  'web/src/components/common/NotificationFeedCards.tsx': 'the bell panel\'s detail pane of a live prompt (a row of the notification center, a NoticeCard); its card is in the strip and on the task row',
 };
 
 describe('one card for everything that waits on him', () => {

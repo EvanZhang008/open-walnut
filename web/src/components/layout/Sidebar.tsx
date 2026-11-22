@@ -43,7 +43,6 @@ import { hostSettingsHref } from '@/utils/host-settings-nav';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
 import { HOME_CHAT_VISIBLE_DEFAULT, readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import '@/styles/attention-banner.css';
-import '@/styles/bell-dot.css';
 import '@/styles/phone-pages.css';
 import { PhoneNotificationBell } from './PhoneNotificationBell';
 
@@ -488,14 +487,15 @@ export function Sidebar({
           <span className="sidebar-label">Notifications</span>
           {/* The count of what waits on the human (asks + unread letters), the console's one
               needs-you count (`badge-alert`, as on the Org list and the mail icon). Errors never badge
-              a number: they read as a diagnosis inside the panel. */}
+              a number: they read as a diagnosis inside the panel. A reason beside a count is in the
+              bell's name and tooltip, never a second mark on the badge (2026-11-21 audit: a corner
+              dot on top of the count). */}
           {railAttention > 0 && (
-            <span className="badge badge-count badge-alert badge-corner notification-badge-count notification-badge-attention">{railAttention > 99 ? '99+' : railAttention}</span>
+            <span className="badge badge-count badge-alert badge-corner notification-badge-count">{railAttention > 99 ? '99+' : railAttention}</span>
           )}
-          {/* A host or Claude Code reason wears the rail Settings entry's warn look; the older system dot keeps its own.
-              One mark on the bell: beside a count the dot goes (its reason is the bell's tooltip and the panel). */}
-          {railAttention === 0 && (bell.dot || bell.cornerDot) && (
-            <span className={`notification-badge-dot${bell.cornerDot ? ' is-corner' : ''}${bell.dotKind === 'attention' ? ' is-host-warn' : ''}`} />
+          {/* No count: a host or Claude Code reason wears the rail Settings entry's warn look; the older system dot keeps its own. */}
+          {bell.dot && (
+            <span className={`notification-badge-dot${bell.dotKind === 'attention' ? ' is-host-warn' : ''}`} />
           )}
         </button>
       </div>

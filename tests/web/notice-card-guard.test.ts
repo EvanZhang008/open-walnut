@@ -110,6 +110,51 @@ describe('one notification system', () => {
     expect(bad, 'The frame is the NoticeCard\'s (notice-card.css); colour that means something goes in its status dot').toEqual([]);
   });
 
+  // 2026-11-21 audit of the notification center on real data: its rows were a third card of their
+  // own (unread ones a blue fill with a strong border, the Claude Code notice a yellow block with an
+  // orange border), so the center did not look like one family with the toasts.
+  it('every row the notification center draws is a NoticeCard: feed rows, asks, Claude Code, problem hosts', () => {
+    const cards = read('web/src/components/common/NotificationFeedCards.tsx');
+    // FeedItem and PermissionCard each return a NoticeCard, and nothing else there wears a row's class.
+    for (const name of ['FeedItem', 'PermissionCard']) {
+      const body = cards.slice(cards.indexOf(`function ${name}(`));
+      expect(body.slice(0, body.indexOf('\n});')), name).toMatch(/<NoticeCard\b[\s\S]*className=\{`notification-feed-item/);
+    }
+    const rowClasses = [...cards.matchAll(/className=\{?[`'"]([^`'"]*notification-feed-item(?![-\w])[^`'"]*)/g)];
+    expect(rowClasses.length).toBe(2);
+    // The panel itself draws no row: it lays out the lists and hands each item to FeedGroups.
+    const panel = read('web/src/components/common/NotificationPanel.tsx');
+    expect(panel).not.toMatch(/className=\{?[`'"][^`'"]*notification-feed-item(?![-\w])/);
+    expect(panel).not.toMatch(/notification-card(?![-\w])/);
+    const problems = read('web/src/components/common/NotificationProblems.tsx');
+    expect(problems.match(/<NoticeCard\b/g)?.length).toBe(2);
+    expect(problems).not.toMatch(/className="notification-card(?![-\w])/);
+  });
+
+  it('no stylesheet paints a notification-center row: unread is its status dot and word, never a fill or a strong frame', () => {
+    const css = listed([':(glob)web/src/**/*.css']).filter((f) => !f.endsWith('notice-card.css'));
+    const ROW = /\.(?:notification-feed-item|nfc-perm-card|nfc-local-claude|nfc-problem-hosts)(?![-\w])/;
+    const bad: string[] = [];
+    for (const f of css) {
+      const src = read(f).replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+      for (const m of src.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        for (const sel of m[1]!.split(',').map((x) => x.trim().replace(/\s+/g, ' '))) {
+          // Only a rule on the row itself (its last compound), not on something inside it.
+          const last = sel.split(/\s*[>+~]\s*|\s+/).at(-1) ?? '';
+          if (!ROW.test(last)) continue;
+          const body = m[2]!;
+          if (/(^|[;\s])background(?:-color)?\s*:\s*(?!transparent|none)/.test(body)) bad.push(`${f}: ${sel} (a fill)`);
+          if (/border(?:-(?:left|right|top|bottom))?(?:-width)?\s*:/.test(body)) bad.push(`${f}: ${sel} (a frame of its own)`);
+          if (/\.unread\b/.test(sel) && /border-color|box-shadow|color\s*:/.test(body)) bad.push(`${f}: ${sel} (unread drawn as colour)`);
+        }
+      }
+    }
+    expect(bad, 'A row\'s frame is the NoticeCard\'s (notice-card.css); its state is its status dot and word').toEqual([]);
+    // The System pane's blocks share the card's frame too: no warning-tinted block.
+    const globals = read('web/src/styles/globals.css');
+    expect(globals).not.toMatch(/\.notification-card\.warn\s*\{[^}]*background/);
+  });
+
   it('the card keeps the frame: frosted glass, the same hairline on all four sides, a 14px radius', () => {
     const card = read('web/src/components/common/NoticeCard.tsx');
     expect(card).toContain("'wn-notice wn-glass-frost'");

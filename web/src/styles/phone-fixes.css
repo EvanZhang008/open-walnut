@@ -237,31 +237,10 @@
   .app-shell-navigation :is(.ask-walnut-drawer-title, .ask-walnut-agent-item) { min-height: 44px; }
 }
 
-/* N9: a center card's title gets its own line and wraps in full (a title is never
-   cut, standard.md "Text that does not fit"); the tail (chips, count, time) wraps
-   under it, and the dismiss x keeps the top right corner. */
+/* N9: a center card's title gets its own line and wraps in full (a title is never cut,
+   standard.md "Text that does not fit"), the time the line under it (NoticeCard's wrapTitle and
+   meta); the x keeps the top right corner. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  html body .notification-panel.nfc-panel-wide .notification-feed-item-head {
-    position: relative;
-    flex-wrap: wrap;
-    row-gap: 4px;
-    padding-right: 40px;
-  }
-  html body .notification-panel.nfc-panel-wide .notification-feed-item-head > .notification-feed-item-title {
-    flex: 1 1 calc(100% - 24px);
-    min-width: 0;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  html body .notification-panel.nfc-panel-wide .notification-feed-item-head > .notification-feed-item-tail {
-    margin-left: 0;
-    justify-content: flex-start;
-  }
-  html body .notification-panel.nfc-panel-wide .notification-feed-item-head .notification-feed-item-dismiss {
-    position: absolute;
-    top: -12px;
-    right: -10px;
-  }
   html body .notification-panel.nfc-panel-wide :is(.nfc-count-badge, .nfc-rail-subcount, .notification-feed-item-time) {
     font-size: var(--font-size-sm);
   }

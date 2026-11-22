@@ -84,6 +84,28 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A list's card: the title wraps in full and is never cut (.wn-title, text-fit.css), so a long
+   task name always says which task it is (the time sits on the meta line under it, not beside it). */
+.wn-notice-who.is-wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+/* One quiet line under the title: the status, when, where it came from. */
+.wn-notice-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wn-notice-meta > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wn-notice-meta > .wn-notice-status { flex: none; }
 
 /* The status: a dot and a word (the quick bar's "● Delivered"). The word stays muted; colour that
    means something (an error, a warning) is the dot's and the word's both. */

@@ -278,7 +278,7 @@
     scroll-snap-align: start;
   }
   /* N2-26: a card's dismiss reads as a control: full-strength glyph, 16 px. */
-  html body .notification-panel.nfc-panel-wide .notification-feed-item-dismiss {
+  html body .notification-panel.nfc-panel-wide .notification-feed-item .wn-notice-x {
     color: var(--fg-secondary);
     font-size: 16px;
     opacity: 1;

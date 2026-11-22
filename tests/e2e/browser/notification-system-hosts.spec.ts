@@ -268,11 +268,12 @@ test.describe('this machine\'s Claude Code leads the problems (f)', () => {
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'dns')], local: 'sign-in' })
     await openProblems(page)
     const local = panelLocalCard(page)
-    const first = () => local.evaluate((el) => el.closest('.nfc-detail')?.querySelector('.notification-card') === el)
+    const first = () => local.evaluate((el) => el.closest('.nfc-detail')?.querySelector('.wn-notice') === el)
     await expect(local).toBeVisible({ timeout: 20_000 })
     await expect(local.locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
-    await expect(local).toHaveClass(/\bnotification-card\b/)
-    await expect(local.locator('.notification-card-label')).toHaveText('Claude Code')
+    // The notification center's one card (NoticeCard), titled Claude Code.
+    await expect(local).toHaveClass(/\bwn-notice\b/)
+    await expect(local.locator('.wn-notice-who').first()).toHaveText('Claude Code')
     await expect(local).toHaveAttribute('data-kind', 'sign-in')
     await expect(local).toContainText('not signed in')
     expect(await first(), 'the first block of All').toBe(true)
@@ -323,8 +324,8 @@ test.describe('the first view from another page (h)', () => {
     await expect(hostRowsOutsidePanel(page)).toHaveCount(0)
     const hosts = await openProblems(page)
     // The problems lead the section, whole on the first screen: no click to see them.
-    expect(await hosts.evaluate((el) => el.closest('.nfc-detail')?.querySelector('.notification-card') === el), 'the first block of All').toBe(true)
-    await expect(hosts.locator(':scope > .notification-card-row .notification-card-label')).toHaveText('Remote hosts')
+    expect(await hosts.evaluate((el) => el.closest('.nfc-detail')?.querySelector('.wn-notice') === el), 'the first block of All').toBe(true)
+    await expect(hosts.locator('.wn-notice-who').first()).toHaveText('Remote hosts')
     await expect.poll(() => problemRowHosts(page)).toEqual(FIXTURE_ORDER)
     for (const host of FIXTURE_ORDER) {
       const mine = await words(problemRow(page, host))

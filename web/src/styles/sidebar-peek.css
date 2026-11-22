@@ -53,6 +53,7 @@
 .rail-item-pill .notification-badge-dot,
 .rail-item-pill .sidebar-host-dot {
   position: static;
+  transform: none;
   margin-left: 2px;
 }
 

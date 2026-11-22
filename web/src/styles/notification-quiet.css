@@ -1,14 +1,11 @@
 /* Quiet mode: the bell's moon overlay and the panel header toggle. */
 
-/* Header: sits right of "Clear All" (or takes its place when the feed is empty). */
+/* Header: one of the tool buttons, between Clear and Close (NotificationRail.tsx). */
 .nfc-quiet-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  margin-right: 10px;
+  gap: 4px;
 }
-.nfc-header-clear + .nfc-quiet-toggle { margin-left: 0; }
 
 .nfc-quiet-chip {
   font-size: var(--font-size-xs);

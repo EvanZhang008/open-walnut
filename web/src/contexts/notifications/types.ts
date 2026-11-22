@@ -65,6 +65,9 @@ export interface NotificationAction {
   args?: Record<string, unknown>;
   /** kind 'callback', a toast born in this window only: this button's own handler. */
   run?: () => void;
+  /** Epoch ms: the button means something only until then (a break's "End break" at the break's
+   *  end). Past it the notice offers no such button and reads as history (displayActionsOf). */
+  expiresAt?: number;
 }
 
 export interface Notification {

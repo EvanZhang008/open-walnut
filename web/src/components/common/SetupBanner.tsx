@@ -10,8 +10,17 @@
  * It leads the notification panel's problem rows (NotificationProblems): a
  * broken local Claude Code silences Walnut itself, so it sits above the remote
  * hosts. `useLocalClaudeNotice` returns the section without a frame (and its
- * title); `SetupBanner` is the framed standalone (the first-use card).
- * Dismissal is per state and version (host-banner-dismiss.ts), never global.
+ * title, a one-line summary and its x, which the panel's notice card puts at
+ * its top right like every card's); `SetupBanner` is the framed standalone
+ * (the first-use card). Dismissal is per state and version
+ * (host-banner-dismiss.ts), never global.
+ *
+ * In the panel (not first use) a section has one main action (Install Claude
+ * Code), API settings as its second, and the rest (the command to run by hand,
+ * API credentials) folded under "Other ways to set up" (2026-11-21 audit: two
+ * outlined blue buttons of one weight, the command broken at its pipe so it read
+ * as two, and the x at the bottom). Its buttons are the card family's
+ * (`.ask-card-answer .btn`, components/actions/ask-card.css).
  */
 import { CopyButton } from './CopyButton';
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
@@ -30,6 +39,7 @@ import { canOpenClaudeSignIn, openClaudeSignIn } from '@/utils/claude-sign-in';
 import { demoSignInCopy, DEMO_SIGN_IN_UNAVAILABLE } from '@/utils/demo-generation';
 import '@/styles/attention-banner.css';
 import '@/styles/host-status.css';
+import '@/components/actions/ask-card.css';
 
 /** Custom event name dispatched by NotificationPanel to re-show the banner. */
 export const SETUP_SHOW_EVENT = 'setup:show-guide';
@@ -75,8 +85,12 @@ export interface LocalClaudeNotice {
   present: boolean;
   /** The card title: 'Get Walnut talking' / 'Update Claude Code' / 'Sign in to Claude Code'. */
   title: string | null;
-  /** The section, without a card frame. */
+  /** The state in one sentence, for a card that shows only its head. */
+  summary: string | null;
+  /** The section, without a card frame and without its x. */
   node: ReactNode;
+  /** The section's x (named for what it hides); the card that frames it places it. */
+  dismiss: ReactNode;
   /** Which notice renders (null: none). */
   kind: LocalNoticeKind | ClaudeBannerView['kind'] | null;
 }
@@ -87,7 +101,18 @@ const TITLES: Record<ClaudeBannerView['kind'], string> = {
   'sign-in': 'Sign in to Claude Code',
 };
 
-const NONE: LocalClaudeNotice = { present: false, title: null, node: null, kind: null };
+const NONE: LocalClaudeNotice = { present: false, title: null, summary: null, node: null, dismiss: null, kind: null };
+
+/** The state in one sentence (the server's first, when it named one). */
+function summaryOf(kind: LocalNoticeKind | ClaudeBannerView['kind'], view: ClaudeBannerView | null, health: SystemHealth): string {
+  if (kind === 'provider') {
+    const name = providerLabel(health.mainProvider);
+    return health.mainProviderLocal ? `${name} is not answering.` : `${name} has no key or sign-in yet.`;
+  }
+  const message = view?.problem?.message;
+  if (message) return firstSentence(message).trim();
+  return kind === 'sign-in' ? 'Claude Code is not signed in.' : 'Claude Code is not installed on this computer.';
+}
 
 /** The local Claude Code section for the attention banner (no frame of its own). */
 export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSettings, onDismissed, onRepairNavigate }: SetupBannerProps): LocalClaudeNotice {
@@ -142,26 +167,26 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
       <span className="setup-banner-title">{title}</span>
     </div>
   );
-  // LAST in the section (Tab order: the actions, then this x; spec G20), at the end of
-  // the section's last line: never in the card's top-right corner (spec 5.1, C53).
+  // At the card's top right, like every notice's x (2026-11-21 audit; it used to end the
+  // section's last line). The first-use install card has none: it is the page.
   const dismissLabel = kind === 'provider' ? PROVIDER_DISMISS_LABEL : LOCAL_DISMISS_LABEL;
-  const dismiss = (
-    <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x" onClick={onDismiss}
+  const dismiss = firstUse && kind === 'install' ? null : (
+    <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x wn-notice-x" onClick={onDismiss}
       aria-label={dismissLabel} title={dismissLabel}>&times;</button>
   );
+  const summary = summaryOf(kind, view, health);
   if (kind === 'provider') {
     return {
-      present: true, title, kind,
-      node: <ProviderSection header={header} dismiss={dismiss} health={health} onNavigateSettings={onNavigateSettings} />,
+      present: true, title, summary, kind, dismiss,
+      node: <ProviderSection header={header} panel={!firstUse} health={health} onNavigateSettings={onNavigateSettings} />,
     };
   }
   if (kind !== 'install' && view) {
     return {
-      present: true, title, kind,
+      present: true, title, summary, kind, dismiss,
       node: (
         <QuietSection
           header={header}
-          dismiss={dismiss}
           onRepairNavigate={onRepairNavigate}
           firstUse={firstUse}
           view={view}
@@ -174,11 +199,10 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
     };
   }
   return {
-    present: true, title, kind,
+    present: true, title, summary, kind, dismiss,
     node: (
       <InstallSection
         header={header}
-        dismiss={dismiss}
         onRepairNavigate={onRepairNavigate}
         firstUse={firstUse}
         view={view}
@@ -191,26 +215,36 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
   };
 }
 
-/** The framed standalone (tests and any caller that is not the home banner). */
+/** The framed standalone (tests and any caller that is not the home banner): its x at its top right. */
 export function SetupBanner(props: SetupBannerProps) {
   const notice = useLocalClaudeNotice(props);
   if (!notice.present) return null;
-  return <div className="setup-banner">{notice.node}</div>;
+  return <div className="setup-banner">{notice.dismiss && <span className="setup-banner-x">{notice.dismiss}</span>}{notice.node}</div>;
 }
 
+/** The button family's row size; in the panel the fix is the one primary action. */
+const btnClass = (panel: boolean, primary = false) => (panel && primary ? 'btn btn-sm btn-primary' : 'btn btn-sm');
+
 // ── Not ready: Claude Code is missing (that is the only thing a default install needs). ──
-function InstallSection({ header, dismiss, view, pending, error, onFix, onNavigateSettings, onRepairNavigate, firstUse }: {
-  header: ReactNode; dismiss: ReactNode; view: ClaudeBannerView | null; pending: boolean; error: string | null;
+function InstallSection({ header, view, pending, error, onFix, onNavigateSettings, onRepairNavigate, firstUse }: {
+  header: ReactNode; view: ClaudeBannerView | null; pending: boolean; error: string | null;
   onFix: (kind: string) => void; onNavigateSettings: (hash?: string) => void; onRepairNavigate?: (to: string) => void; firstUse?: boolean;
 }) {
   const install = view?.kind === 'install' ? view : null;
   const problem = install?.problem;
   const demo = onDemo();
+  const panel = !firstUse;
   // On the section's action line, never a line of its own (2026-10-31: BP-R4-N3-3).
-  const repair = !firstUse && <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />;
+  const repair = panel && <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />;
   // Kept like a chat row's details (this file is drawn inside chat rows too, AgentWaitNote):
   // outside a session's rows it is plain local state.
   const alternatives = useDetailsDisclosure('setup-first-use-alternatives');
+  const otherWays = useDetailsDisclosure('setup-panel-other-ways');
+  const apiSettings = (
+    <button type="button" tabIndex={0} className={btnClass(panel)} onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
+  );
+  // The command is the way on when Walnut cannot run the install itself; else it is one of the other ways.
+  const manualIsMain = !install?.fixable && !demo && !install?.failed?.command;
   return (
     <section className="ab-local" data-testid="setup-banner-install">
       {header}
@@ -229,8 +263,9 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
           Walnut runs on <strong>Claude Code</strong>. {problem && <><InlineCodeText text={problem.message} />{' '}</>}Install it, run <code>claude</code> once to sign in, then reload this page:
         </p>
       )}
-      {install?.fixable && <FixRow view={install} label="Install Claude Code" pending={pending} error={error}
-        onFix={() => onFix(problem!.kind)} repair={repair} />}
+      {panel && manualIsMain && <div className="setup-alt"><CopyCommand command={CLAUDE_CODE_INSTALL} /></div>}
+      {install?.fixable && <FixRow view={install} label="Install Claude Code" pending={pending} error={error} panel={panel}
+        onFix={() => onFix(problem!.kind)} repair={repair} secondary={panel ? apiSettings : undefined} />}
       {firstUse ? (
         <details className="first-use-alternatives" {...alternatives}>
           <summary>Other ways to connect</summary>
@@ -241,18 +276,17 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
         </details>
       ) : (
         <>
-          {!install?.failed?.command && !demo && (
-            <div className="setup-alt">
-              {install?.fixable && <span className="text-sm text-muted">Or install it yourself:</span>}
-              <CopyCommand command={CLAUDE_CODE_INSTALL} />
-            </div>
-          )}
-          <div className="setup-alt ab-local-alt">
-            <span className="text-sm text-muted">Prefer an API key or Bedrock credentials instead?</span>
-            <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
-            {!install?.fixable && repair}
-            {dismiss}
-          </div>
+          {!install?.fixable && <div className="ask-card-answer setup-actions">{apiSettings}{repair}</div>}
+          <details className="setup-other-ways" {...otherWays}>
+            <summary>Other ways to set up</summary>
+            {!manualIsMain && !install?.failed?.command && !demo && (
+              <div className="setup-alt setup-alt-stack">
+                <span className="text-sm text-muted">Install it yourself in a terminal:</span>
+                <CopyCommand command={CLAUDE_CODE_INSTALL} />
+              </div>
+            )}
+            <p className="text-sm text-muted">Prefer an API key or Bedrock credentials instead? Add them in API settings.</p>
+          </details>
         </>
       )}
     </section>
@@ -260,8 +294,8 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
 }
 
 // ── Not ready, nothing needs Claude Code: the provider Walnut's own calls go to does not answer. ──
-function ProviderSection({ header, dismiss, health, onNavigateSettings }: {
-  header: ReactNode; dismiss: ReactNode; health: SystemHealth; onNavigateSettings: (hash?: string) => void;
+function ProviderSection({ header, panel, health, onNavigateSettings }: {
+  header: ReactNode; panel: boolean; health: SystemHealth; onNavigateSettings: (hash?: string) => void;
 }) {
   const name = providerLabel(health.mainProvider);
   // credentialDetail is the server's address for a provider on the user's own machine.
@@ -279,22 +313,25 @@ function ProviderSection({ header, dismiss, health, onNavigateSettings }: {
           Walnut runs on <strong>{name}</strong>, and it has no key or sign-in it can use yet. Add one in API settings.
         </p>
       )}
-      <div className="setup-alt ab-local-alt">
+      <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt ab-local-alt'}>
         <span className="text-sm text-muted">Use another provider instead?</span>
-        <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>
+        <button type="button" tabIndex={0} className={btnClass(panel)} onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>
-        {dismiss}
       </div>
     </section>
   );
 }
 
 /** The one-click fix: its button, "Installing Claude Code...", or why it failed with the command to run. */
-function FixRow({ view, label, pending, error, onFix, repair }: {
+function FixRow({ view, label, pending, error, onFix, repair, secondary, panel = false }: {
   view: ClaudeBannerView; label: string; pending: boolean; error: string | null; onFix: () => void;
   /** Fix with agent, on the same line as the section's own fix. */
   repair?: ReactNode;
+  /** The section's second way, beside its main action (Open API settings). */
+  secondary?: ReactNode;
+  /** In the panel: the card family's buttons, the fix the one main action. */
+  panel?: boolean;
 }) {
   if (view.running || pending) return <div className="setup-lead" data-testid="setup-banner-fixing"><SetupProgress label={`${view.running ?? 'Starting setup'}...`} /></div>;
   const manual = view.failed?.command && !onDemo() ? view.failed.command : null;
@@ -306,10 +343,11 @@ function FixRow({ view, label, pending, error, onFix, repair }: {
         </p>
       )}
       {manual && <CopyCommand command={manual} />}
-      <div className="setup-alt">
-        <button type="button" tabIndex={0} className="btn btn-sm" disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
+      <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt'}>
+        <button type="button" tabIndex={0} className={btnClass(panel, true)} disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
           {view.failed ? 'Try again' : label}
         </button>
+        {secondary}
         {repair}
         {error && <span className="text-sm text-muted">{error}</span>}
       </div>
@@ -317,14 +355,15 @@ function FixRow({ view, label, pending, error, onFix, repair }: {
   );
 }
 
-function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, onRepairNavigate, firstUse }: {
-  header: ReactNode; dismiss: ReactNode; view: ClaudeBannerView; pending: boolean; error: string | null;
+function QuietSection({ header, view, pending, error, onFix, onCheck, onRepairNavigate, firstUse }: {
+  header: ReactNode; view: ClaudeBannerView; pending: boolean; error: string | null;
   onFix: () => void; onCheck: () => void; onRepairNavigate?: (to: string) => void; firstUse?: boolean;
 }) {
   const problem = view.problem!;
   const signIn = view.kind === 'sign-in';
+  const panel = !firstUse;
   // On the section's action line, never a line of its own (2026-10-31: BP-R4-N3-3).
-  const repair = !firstUse && <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />;
+  const repair = panel && <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />;
   return (
     <section className="ab-local" data-testid={signIn ? 'setup-banner-sign-in' : 'setup-banner-outdated'}>
       {header}
@@ -337,23 +376,21 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, o
       {signIn ? (
         <>
           <ClaudeSignIn command={problem.commands[0] ?? 'claude'} />
-          <div className="setup-alt">
+          <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt'}>
             <span className="text-sm text-muted">Walnut checks again every 15 seconds and hides this once you are signed in.</span>
-            <button type="button" tabIndex={0} className="btn btn-sm" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
+            <button type="button" tabIndex={0} className={btnClass(panel)} disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
             {repair}
             {error && <span className="text-sm text-muted">{error}</span>}
-            {dismiss}
           </div>
         </>
       ) : view.fixable ? (
-        <FixRow view={view} label="Update Claude Code" pending={pending} error={error} onFix={onFix} repair={repair} />
+        <FixRow view={view} label="Update Claude Code" pending={pending} error={error} onFix={onFix} repair={repair} panel={panel} />
       ) : (
         <>
           {problem.commands[0] && !onDemo() && <CopyCommand command={problem.commands[0]} />}
           <div className="setup-alt">{repair}</div>
         </>
       )}
-      {!signIn && dismiss}
     </section>
   );
 }

@@ -142,8 +142,9 @@ test.describe('clicks inside the panel', () => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'dns')], local: 'sign-in' })
     await openProblems(page)
     await problemRow(page, 'netbox').locator('.hft-headline').click()
-    await problemHosts(page).locator(':scope > .notification-card-row .notification-card-label').click()
-    await panelLocalCard(page).locator('.notification-card-label').click()
+    // The problems block's cards are notice cards: their titles are .wn-notice-who.
+    await problemHosts(page).locator('.wn-notice-who').first().click()
+    await panelLocalCard(page).locator('.wn-notice-who').first().click()
     await expect(page.locator('.notification-panel')).toBeVisible()
     await pickRail(page, 'System')
     await systemHostRow(page, 'netbox').locator('.hft-headline').click()

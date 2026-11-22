@@ -12,6 +12,9 @@
  */
 import type { CSSProperties, HTMLAttributes, MouseEventHandler, ReactNode, Ref } from 'react';
 import { PersonAvatar } from '@/components/quickbar/PersonAvatar';
+import type { Notification, NotificationSeverity } from '@/contexts/notifications/types';
+import { noticeTone } from '@/contexts/notifications/notice-face';
+import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
 import '@/styles/notice-card.css';
 
 /** What a status says by its colour: live (on its way), ok (done), warn, error, ask (waits on you), muted. */
@@ -41,11 +44,38 @@ export function NoticeAvatar({ spec, size = 22 }: { spec: NoticeAvatarSpec; size
   );
 }
 
+/** The glyph on a notice's tile when no task or session names it. */
+export const SEVERITY_GLYPH: Record<NotificationSeverity, ReactNode> = {
+  info: ICON_INFO,
+  success: ICON_CHECK,
+  warning: ICON_WARNING,
+  error: ICON_CLOSE,
+};
+
+/**
+ * A notification's avatar, the same on its toast and on its row in the notification center: the
+ * task or session it is about (its letters in their steady colour), else its severity's glyph.
+ */
+export function noticeAvatarOf(
+  n: Pick<Notification, 'kind' | 'severity' | 'resolved' | 'sessionTitle' | 'sessionId' | 'taskId'>,
+  name: string | undefined = n.sessionTitle,
+): NoticeAvatarSpec {
+  const id = n.taskId ?? n.sessionId;
+  if (id && name?.trim()) return { person: { id, title: name.trim(), kind: 'task' } };
+  return { glyph: n.kind === 'permission' ? SEVERITY_GLYPH.warning : SEVERITY_GLYPH[n.severity] ?? SEVERITY_GLYPH.info, tone: noticeTone(n) };
+}
+
 export interface NoticeCardProps {
   avatar?: NoticeAvatarSpec;
   /** The bold title: who it is from, or what it is about. */
   who?: ReactNode;
   status?: { tone: NoticeTone; text?: ReactNode; title?: string };
+  /** The title wraps in full and is never cut (`.wn-title`: a list's card, where the title is what
+   *  tells one row from the next; standard.md "Text that does not fit"), instead of one line. */
+  wrapTitle?: boolean;
+  /** One quiet line under the title: the status, when, where it came from (a list's card puts its
+   *  time here so the title keeps the width). */
+  meta?: ReactNode;
   /** The preview under the title, two lines at most (its own element keeps any refs and classes). */
   line?: ReactNode;
   /** Controls at the end of the title row ("N more ›", –). */
@@ -98,15 +128,16 @@ export function NoticeCard(p: NoticeCardProps) {
       <span className="wn-notice-text">
         {(p.who !== undefined || p.status) && (
           <span className="wn-notice-top">
-            {p.who !== undefined && <span className={cx('wn-notice-who', p.parts?.who)}>{p.who}</span>}
+            {p.who !== undefined && <span className={cx('wn-notice-who', p.wrapTitle && 'is-wrap wn-title', p.parts?.who)}>{p.who}</span>}
             {p.status && <NoticeStatus tone={p.status.tone} title={p.status.title} className={p.parts?.status}>{p.status.text}</NoticeStatus>}
           </span>
         )}
+        {p.meta !== undefined && p.meta !== null && p.meta !== false && <span className="wn-notice-meta">{p.meta}</span>}
         {p.line !== undefined && p.line !== null && p.line !== false && <span ref={p.lineRef} className={cx('wn-notice-line', p.parts?.line)}>{p.line}</span>}
       </span>
     </>
   );
-  const hasHead = !!(p.avatar || p.who !== undefined || p.status || p.line || p.end || p.onClose);
+  const hasHead = !!(p.avatar || p.who !== undefined || p.status || p.meta || p.line || p.end || p.onClose);
   const close = p.onClose && (
     <button type="button" className="btn btn-ghost btn-icon btn-sm wn-notice-close" aria-label={p.closeLabel ?? 'Dismiss'} title={p.closeLabel ?? 'Dismiss'}
       onClick={(e) => { e.stopPropagation(); p.onClose!(); }}>

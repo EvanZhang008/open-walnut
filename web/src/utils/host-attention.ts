@@ -58,10 +58,8 @@ export interface BellPresentationInput {
 export interface BellPresentation {
   ariaLabel: string;
   title: string | undefined;
-  /** The single dot (no count). */
+  /** The single dot (no count). With a count the reason is in the name and title only. */
   dot: boolean;
-  /** The same dot at the count's corner. */
-  cornerDot: boolean;
   /**
    * Which dot: 'attention' is the host / Claude Code reason and wears the rail
    * Settings entry's warn dot (one look for one alert); 'system' is the older
@@ -72,26 +70,26 @@ export interface BellPresentation {
 
 /**
  * The bell's name, tooltip and marks. A count always wins over the dot; a
- * reason next to a count draws the dot at its corner. With no reason the name
+ * reason next to a count is in the name and tooltip only (one mark on the bell:
+ * the count badge, as Mail's; 2026-11-21 audit). With no reason the name
  * stays 'Notifications' even when the older system dot shows, so the user can
  * tell a leftover dot is about something else.
  */
 export function bellPresentation(i: BellPresentationInput): BellPresentation {
   // Quiet (Do Not Disturb): no count, no dot and no count in the name until it ends;
   // the panel still lists everything once opened (quiet-model.ts).
-  if (i.quiet) return { ariaLabel: `Notifications. ${i.quietLabel}`, title: i.quietLabel, dot: false, cornerDot: false, dotKind: null };
+  if (i.quiet) return { ariaLabel: `Notifications. ${i.quietLabel}`, title: i.quietLabel, dot: false, dotKind: null };
   const counted = i.attentionCount > 0;
   const dot = !counted && (i.reason !== null || i.hasIssues);
-  const cornerDot = counted && i.reason !== null;
   const dotKind = i.reason !== null ? 'attention' : dot ? 'system' : null;
   if (i.reason === null) {
     const title = i.quiet ? i.quietLabel : i.collapsed ? 'Notifications' : undefined;
-    return { ariaLabel: 'Notifications', title, dot, cornerDot, dotKind };
+    return { ariaLabel: 'Notifications', title, dot, dotKind };
   }
   const ariaLabel = counted
     ? `Notifications, ${i.attentionCount} waiting; ${REASON_TEXT[i.reason]}`
     : `Notifications: ${REASON_TEXT[i.reason]}`;
-  return { ariaLabel, title: i.quiet ? `${i.quietLabel}; ${ariaLabel}` : ariaLabel, dot, cornerDot, dotKind };
+  return { ariaLabel, title: i.quiet ? `${i.quietLabel}; ${ariaLabel}` : ariaLabel, dot, dotKind };
 }
 
 // ── Host attention off the problem-row model ──

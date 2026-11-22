@@ -27,14 +27,13 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
 import { useNavigate } from 'react-router-dom';
 import '@/styles/undo-toast.css';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
   linkTargetOf, resolvedLabelOf, displayActionsOf,
-  type Notification, type NotificationSeverity,
+  type Notification,
 } from '@/contexts/notifications';
 import {
   isSettledPermission, markAnsweredFromToast, respondToPermissionRequest, usePermissionRequest, wasAnsweredFromToast,
@@ -50,7 +49,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverlayHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
-import { NoticeCard } from './NoticeCard';
+import { NoticeCard, SEVERITY_GLYPH, noticeAvatarOf } from './NoticeCard';
 import { keepInSight, noticeSource, noticeStatus } from '@/contexts/notifications/notice-face';
 import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
@@ -101,12 +100,6 @@ function useSwipeUpDismiss(enabled: boolean, onDismiss: () => void) {
 // Escape-coded so the source bytes are identical across editors/terminals
 // (raw multi-codepoint emoji like ⚠️ can render or copy-paste inconsistently).
 // Severity marks come from Icons.tsx (SVG, currentColor), never emoji.
-const SEVERITY_ICON: Record<NotificationSeverity, ReactNode> = {
-  info: ICON_INFO,
-  success: ICON_CHECK,
-  warning: ICON_WARNING,
-  error: ICON_CLOSE,
-};
 
 /** Toasts in sight at once on a computer; the stack never outgrows the window. */
 const DESKTOP_TOASTS_SHOWN = 2;
@@ -310,7 +303,7 @@ export function NotificationToaster() {
       {foldedAsks.length > 0 && !lineHiddenFor && (
         <NoticeCard
           className="nfc-more-asks-row"
-          avatar={{ glyph: SEVERITY_ICON.warning, tone: 'ask' }}
+          avatar={{ glyph: SEVERITY_GLYPH.warning, tone: 'ask' }}
           who="Asks waiting"
           status={{ tone: 'ask', text: 'Needs you' }}
           line={(
@@ -397,9 +390,7 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
         onDismiss();
       } : undefined}
       title={clickable && !open ? (target ? 'Open it' : 'Open notification center') : undefined}
-      avatar={toast.sessionTitle && (toast.sessionId || toast.taskId)
-        ? { person: { id: toast.taskId ?? toast.sessionId!, title: toast.sessionTitle, kind: 'task' } }
-        : { glyph: SEVERITY_ICON[toast.severity], tone: status.tone }}
+      avatar={noticeAvatarOf(toast)}
       who={noticeSource(toast)}
       status={status.text ? status : undefined}
       lineRef={titleRef}
@@ -636,9 +627,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
         if (window.getSelection()?.toString()) return;
         openSession();
       } : undefined}
-      avatar={(n.sessionId || n.taskId)
-        ? { person: { id: n.taskId ?? n.sessionId!, title: who, kind: 'task' } }
-        : { glyph: SEVERITY_ICON.warning, tone: 'ask' }}
+      avatar={noticeAvatarOf(n, who)}
       who={who}
       status={face}
       // A question reads as the session card titles it, not by its tool's name.

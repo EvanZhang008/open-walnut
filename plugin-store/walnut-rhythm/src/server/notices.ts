@@ -33,9 +33,10 @@ export function nextBlockArgs(focus: { taskId?: string; goal?: string; minutes: 
 export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, breakMinutes: number, breakEndsAt: number): PluginNotifyInput {
   const what = block.title ? ` on ${block.title}` : ''
   const breakText = breakKind === 'long' ? 'long break' : 'break'
+  // Both answer this break only: once it ends the notice is history (break-over asks next).
   const actions: PluginNoticeAction[] = [
-    { label: 'End break', op: 'break_skip' },
-    { label: 'Another block', op: 'focus_start', args: nextBlockArgs(block) },
+    { label: 'End break', op: 'break_skip', expiresAt: breakEndsAt },
+    { label: 'Another block', op: 'focus_start', args: nextBlockArgs(block), expiresAt: breakEndsAt },
   ]
   return {
     kind: 'reminder',

@@ -48,13 +48,13 @@ test.describe('the dots speak on every page', () => {
 
   // One mark on the bell (2026-11-21, the label system, standard.md "Status labels"): beside a count
   // the hosts' dot goes; the bell's name still says both.
-  test('HD-2: a pending ask: the needs-you number alone, no corner dot, on Home and on /notes, and the name says both', async ({ page }) => {
+  test('HD-2: a pending ask: the one needs-you count badge alone (Mail\'s look, no corner dot), on Home and on /notes, and the name says both', async ({ page }) => {
     await bpSetup(page, { feed: [askRecord(1)] })
     const name = 'Notifications, 1 waiting; remote hosts need attention'
     for (const where of ['home', 'notes'] as const) {
       if (where === 'notes') await goRail(page, 'notes')
       await expect(bellCount(page), where).toHaveText('1', { timeout: 20_000 })
-      await expect(bellCount(page), where).toHaveClass(/notification-badge-attention/)
+      await expect(bellCount(page), where).not.toHaveClass(/notification-badge-attention/)
       await expect(bellCount(page), where).toHaveClass(/badge-alert/)
       await expect(bell(page).locator('.notification-badge-dot'), where).toHaveCount(0)
       await expect(bell(page), where).toHaveAttribute('aria-label', name)
@@ -158,7 +158,7 @@ test.describe('the bell names its reason word for word', () => {
     expect(name).not.toContain('remote hosts')
     await openBell(page)
     await toggle.click()
-    await expect(toggle).toHaveText('Quiet 1h', { timeout: 10_000 })
+    await expect(toggle).toHaveText('Quiet for 1 hour', { timeout: 10_000 })
     await closePanel(page, 'escape')
     await expect(bell(page)).not.toHaveAttribute('data-quiet', 'true')
     await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)

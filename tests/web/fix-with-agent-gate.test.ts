@@ -54,7 +54,7 @@ describe('guard: every Fix with agent surface reads the gate', () => {
     const starters = walk(WEB)
       .map((f) => ({ rel: path.relative(WEB, f), text: fs.readFileSync(f, 'utf8') }))
       .filter((f) => !PLUMBING.has(f.rel) && /\b(startNotificationFix|runHostFix)\(/.test(f.text))
-    expect(starters.map((f) => f.rel).sort()).toEqual(['components/common/HostFixButton.tsx', 'components/common/NotificationPanel.tsx', 'components/settings/sections/HealthErrorLog.tsx'])
+    expect(starters.map((f) => f.rel).sort()).toEqual(['components/common/HostFixButton.tsx', 'components/common/NotificationFeedCards.tsx', 'components/settings/sections/HealthErrorLog.tsx'])
     for (const f of starters) expect(f.text, f.rel).toMatch(/useLocalAgentBlocked\(|agentCannotRun\(/)
   })
 

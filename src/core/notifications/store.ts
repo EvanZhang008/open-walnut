@@ -212,11 +212,14 @@ export interface NotificationAction {
   to: string;
 }
 
-/** One entry of `actions`: a console link, a plugin op, or the owner's local dialog slot. */
-export type NotificationButton =
+/** One entry of `actions`: a console link, a plugin op, or the owner's local dialog slot.
+ *  `expiresAt` (epoch ms): the button means something only until then; clients leave it out
+ *  after (the notice reads as history). A record without one keeps its buttons. */
+export type NotificationButton = (
   | { kind: 'navigate'; label: string; to: string }
   | { kind: 'op'; label: string; pluginId: string; op: string; args?: Record<string, unknown> }
-  | { kind: 'dialog'; label: string; pluginId: string; slot: string; args?: Record<string, unknown> };
+  | { kind: 'dialog'; label: string; pluginId: string; slot: string; args?: Record<string, unknown> }
+) & { expiresAt?: number };
 
 interface NotificationsStore {
   version: 1;

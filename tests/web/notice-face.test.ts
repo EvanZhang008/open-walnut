@@ -4,7 +4,7 @@
  * folded away or gone before it is read; a click on a notice opens what it is about).
  */
 import { describe, expect, it } from 'vitest';
-import { KIND_SOURCE, keepInSight, noticeSource, noticeStatus } from '../../web/src/contexts/notifications/notice-face';
+import { KIND_SOURCE, feedRowSource, feedRowStatus, keepInSight, noticeSource, noticeStatus } from '../../web/src/contexts/notifications/notice-face';
 import { linkTargetOf } from '../../web/src/contexts/notifications/notification-model';
 import { ERROR_TOAST_MIN_MS, TOAST_DURATION_MS, toastLifetimeMs, type NotificationKind } from '../../web/src/contexts/notifications/types';
 
@@ -54,5 +54,34 @@ describe('an error is never folded away or gone too soon', () => {
     expect([...keepInSight([a, b], 1)].map((t) => t.id)).toEqual(['b']);
     expect([...keepInSight([err, a], 1)].map((t) => t.id)).toEqual(['err']);
     expect(keepInSight([err, a], 0).size).toBe(0);
+  });
+});
+
+// The notification center's rows are the same card (NotificationFeedCards.tsx): 2026-11-21 audit.
+describe('a row in the notification center', () => {
+  it('unread is the status dot and a word, never a tint: "New", or "New error" / "New warning"', () => {
+    expect(feedRowStatus({ kind: 'letter', severity: 'info', read: false })).toEqual({ tone: 'ask', text: 'New' });
+    expect(feedRowStatus({ kind: 'letter', severity: 'info', read: true })).toEqual({ tone: 'muted' });
+    expect(feedRowStatus({ kind: 'operation-error', severity: 'error', read: false })).toEqual({ tone: 'error', text: 'New error' });
+    expect(feedRowStatus({ kind: 'operation-error', severity: 'error', read: true })).toEqual({ tone: 'error', text: 'Error' });
+    expect(feedRowStatus({ kind: 'cron', severity: 'warning', read: false })).toEqual({ tone: 'warn', text: 'New warning' });
+    expect(feedRowStatus({ kind: 'reminder', severity: 'success', read: false })).toEqual({ tone: 'ok', text: 'New' });
+    // Settled states say how they settled, read or not; an ask keeps its own words.
+    expect(feedRowStatus({ kind: 'operation-error', severity: 'info', resolved: 'recovered', read: false })).toEqual({ tone: 'ok', text: 'Recovered' });
+    expect(feedRowStatus({ kind: 'operation-error', severity: 'error', resolved: 'expired', read: true })).toEqual({ tone: 'muted', text: 'Stale' });
+    expect(feedRowStatus({ kind: 'permission', severity: 'warning', read: false })).toEqual({ tone: 'ask', text: 'Needs you' });
+  });
+
+  it('its last line says who sent it, once; session ids, fork names and the host are only its title', () => {
+    expect(feedRowSource({ sessionTitle: 'Fix the login', project: 'Walnut', host: 'clouddev', sessionId: 'abc12345-0000' }))
+      .toEqual({ text: 'Fix the login \u00b7 Walnut', detail: 'Session id: abc12345-0000\nHost: clouddev' });
+    const fork = feedRowSource({ sessionTitle: 'Fork of Session: walnut \u2014 Claude finished the response', host: 'local', sessionId: 'cffc7f02-1111' });
+    expect(fork.text).toBeNull();
+    expect(fork.detail).toContain('Session: Fork of Session');
+    expect(fork.detail).toContain('Host: local (this computer)');
+    expect(feedRowSource({ sessionTitle: 'cffc7f02-aaaa-bbbb' }).text).toBeNull();
+    expect(feedRowSource({ project: 'Walnut' })).toEqual({ text: 'Walnut', detail: null });
+    expect(feedRowSource({ sessionTitle: 'Walnut', project: 'Walnut' }).text).toBe('Walnut');
+    expect(feedRowSource({})).toEqual({ text: null, detail: null });
   });
 });

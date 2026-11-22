@@ -11,12 +11,12 @@
 .ab-local { flex: none; }
 .ab-local-alt { margin-top: 10px; }
 .ab-local + .hpb { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
-/* The local x is LAST in its section (Tab order: actions, then the x) and ends
-   the section's last line: never in the card's top-right corner (spec 5.1). */
-.ab-local-x { margin-left: auto; }
+/* The local x sits at its card's top right like every notice's (NoticeCard `end`,
+   2026-11-21 audit); on the first-use card, at that card's top right. */
+.setup-banner { position: relative; }
+.setup-banner-x { position: absolute; top: 8px; right: 8px; }
 
-/* Every x: a 20px box with its title; rows tall enough that two x boxes are 24px apart. */
-.ab-local-x,
+/* A host row's x: a 20px box with its title; rows tall enough that two x boxes are 24px apart. */
 .hpb-x.setup-banner-dismiss {
   flex: none;
   width: 20px;
@@ -245,6 +245,26 @@
 .nfc-problem-cards { list-style: none; margin: 2px 0 6px 16px; }
 /* This machine's Claude Code in the panel: the card label says 'Claude Code', so the section's own title goes. */
 .nfc-local-claude .ab-local > .setup-banner-header { display: none; }
+/* Its section inside the notice card: the lead, one action row, then the folded other ways. */
+.nfc-local-claude .ab-local { display: flex; flex-direction: column; gap: 8px; }
+.nfc-local-claude .setup-lead { margin: 0; color: var(--fg-secondary); font-size: var(--font-size-md); }
+.nfc-local-claude .setup-alt { margin-top: 0; }
+.nfc-local-claude .setup-actions { margin-block: 0; }
+/* The command whole on one line, never broken at its pipe (it read as two commands); a narrow
+   card scrolls it sideways. Copy stays beside it. */
+.nfc-local-claude .setup-copy-wrap { min-width: 0; max-width: 100%; }
+.nfc-local-claude .setup-command { white-space: pre; overflow-x: auto; min-width: 0; }
+/* The card's own fill is --bg-tertiary in dark, so the command's chip is a tint of the text colour,
+   visible on the card in both themes. */
+.nfc-local-claude .setup-command { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.nfc-local-claude .setup-command:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.setup-other-ways > summary { cursor: pointer; width: fit-content; font-size: var(--font-size-sm); color: var(--fg-secondary); }
+.setup-other-ways > summary:hover { color: var(--fg); }
+.setup-other-ways > :not(summary) { margin: 6px 0 0; }
+.setup-alt.setup-alt-stack { flex-direction: column; align-items: flex-start; gap: 4px; }
+/* The problems block's cards, one under the other. */
+.nfc-problems { gap: 6px; margin-bottom: 6px; }
+.nfc-problem-hosts .nfc-host-list { display: flex; flex-direction: column; }
 .notification-daemon-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .nfc-daemon-row { flex-direction: column; align-items: flex-start; gap: 2px; }
 .nfc-daemon-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -37,7 +37,7 @@ const SENTENCE: Record<Exclude<BellReason, null>, string> = {
 
 describe('bell dot reason and presentation (C60 full table)', () => {
   const bools = [false, true]
-  it('every cell: reason, single dot, corner dot, name and title', () => {
+  it('every cell: reason, single dot, name and title (a count is the one mark: no corner dot)', () => {
     for (const host of bools) for (const local of bools) for (const count of [0, 1]) for (const hasIssues of bools) for (const quiet of bools) for (const collapsed of bools) {
       const reason = bellDotReason(host, local)
       expect(reason).toBe(host && local ? 'both' : host ? 'hosts' : local ? 'local' : null)
@@ -45,11 +45,11 @@ describe('bell dot reason and presentation (C60 full table)', () => {
       const cell = JSON.stringify({ host, local, count, hasIssues, quiet, collapsed })
       // Quiet (Do Not Disturb): no dot and no count, in the marks or the name, whatever waits.
       if (quiet) {
-        expect(p, cell).toEqual({ ariaLabel: 'Notifications. Quiet until 9:00', title: 'Quiet until 9:00', dot: false, cornerDot: false, dotKind: null })
+        expect(p, cell).toEqual({ ariaLabel: 'Notifications. Quiet until 9:00', title: 'Quiet until 9:00', dot: false, dotKind: null })
         continue
       }
       expect(p.dot, cell).toBe(count === 0 && (reason !== null || hasIssues))
-      expect(p.cornerDot, cell).toBe(count > 0 && reason !== null)
+      expect('cornerDot' in p, cell).toBe(false)
       if (reason === null) {
         expect(p.ariaLabel, cell).toBe('Notifications')
         expect(p.title, cell).toBe(collapsed ? 'Notifications' : undefined)
@@ -65,14 +65,14 @@ describe('bell dot reason and presentation (C60 full table)', () => {
   it('the last host row dismissed while the older system dot is on: dot stays, the name no longer says hosts', () => {
     const p = bellPresentation({ reason: bellDotReason(false, false), attentionCount: 0, hasIssues: true, quiet: false, quietLabel: '', collapsed: false })
     // The dot that stays is the older system one, drawn in its own look (not the host warn look).
-    expect(p).toEqual({ ariaLabel: 'Notifications', title: undefined, dot: true, cornerDot: false, dotKind: 'system' })
+    expect(p).toEqual({ ariaLabel: 'Notifications', title: undefined, dot: true, dotKind: 'system' })
   })
 
-  it('a waiting ask with a host reason: the count plus the corner dot', () => {
+  it('a waiting ask with a host reason: the count alone, the reason in its name and title', () => {
     const p = bellPresentation({ reason: 'hosts', attentionCount: 1, hasIssues: false, quiet: false, quietLabel: '', collapsed: false })
     expect(p).toEqual({
       ariaLabel: 'Notifications, 1 waiting; remote hosts need attention',
-      title: 'Notifications, 1 waiting; remote hosts need attention', dot: false, cornerDot: true, dotKind: 'attention',
+      title: 'Notifications, 1 waiting; remote hosts need attention', dot: false, dotKind: 'attention',
     })
   })
 
@@ -82,7 +82,7 @@ describe('bell dot reason and presentation (C60 full table)', () => {
     expect(bellPresentation({ ...base, reason: 'local', hasIssues: false }).dotKind).toBe('attention')
     expect(bellPresentation({ ...base, reason: null, hasIssues: true }).dotKind).toBe('system')
     expect(bellPresentation({ ...base, reason: null, hasIssues: false }).dotKind).toBe(null)
-    expect(bellPresentation({ ...base, attentionCount: 2, reason: 'hosts', hasIssues: false })).toMatchObject({ cornerDot: true, dotKind: 'attention' })
+    expect(bellPresentation({ ...base, attentionCount: 2, reason: 'hosts', hasIssues: false })).toMatchObject({ dot: false, dotKind: 'attention' })
   })
 })
 

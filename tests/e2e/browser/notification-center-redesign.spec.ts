@@ -352,7 +352,8 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   // server legitimately pushes it higher.
   const badge = page.locator('.notification-badge-count')
   await expect(badge).toBeVisible()
-  await expect(badge).toHaveClass(/notification-badge-attention/)
+  await expect(badge).not.toHaveClass(/notification-badge-attention/)
+  await expect(badge).toHaveClass(/badge-alert/)
   expect(Number((await badge.textContent())?.replace('+', '') ?? 0)).toBeGreaterThanOrEqual(1)
 
   const panel = await openCenter(page)
@@ -368,11 +369,11 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   await expect(bashCard.locator('.notification-feed-item-title')).toHaveText('Bash')
   await expect(bashCard.locator('.nfc-card-cmd')).toHaveText(BASH_COMMAND)
   await expect(bashCard.locator('.nfc-card-sub', { hasText: 'Clean the demo directory' })).toBeVisible()
-  const chips = bashCard.locator('.nfc-card-chips .nfc-chip')
-  await expect(chips).toHaveCount(3)
-  await expect(chips.nth(0)).toHaveText('PW NFC fixture session')
-  await expect(chips.nth(1)).toHaveText('nfc-host')
-  await expect(chips.nth(2)).toHaveText('Walnut')
+  // Who it came from, once, as one quiet last line; the host is a debug detail in its title.
+  const source = bashCard.locator('.nfc-row-source')
+  await expect(source).toHaveText('PW NFC fixture session \u00b7 Walnut')
+  await expect(source).toHaveAttribute('title', /Host: nfc-host/)
+  await expect(bashCard.locator('.nfc-chip')).toHaveCount(0)
   // …and the buttons that answer it, without opening the session.
   await expect(bashCard.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
   await expect(bashCard.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()

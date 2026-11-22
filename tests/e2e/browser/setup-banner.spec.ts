@@ -190,7 +190,8 @@ test('local models: no Claude Code notice while Ollama answers, a provider notic
   await expect(page.getByTestId('setup-banner-install')).toHaveCount(0)
   await screenshot(page, testInfo, 'local-models-ollama-down')
 
-  await card.getByRole('button', { name: 'Dismiss AI provider notice' }).click()
+  // The x is the card's own, at its top right, not inside the provider section.
+  await local.getByRole('button', { name: 'Dismiss AI provider notice' }).click()
   await expect(page.getByTestId('setup-banner-provider')).toHaveCount(0)
   await expect(local).toHaveCount(0)
   expect(errors).toEqual([])

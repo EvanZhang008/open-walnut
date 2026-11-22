@@ -21,7 +21,7 @@
  * (one cron job's runs, one session's permissions) still collapse into an
  * expandable group, and a collapsed group never hides a pending ask.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { takeInboxReturn } from '@/components/inbox/item-drafts';
@@ -30,18 +30,13 @@ import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhonePullToRefresh } from '@/components/tasks/PhonePullToRefresh';
 import {
-  useNotifications, sectionOf, sectionCounts, effectiveTs, personFixesCard,
-  toolNameOf, sessionLabelOf, formatRelative,
-  linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  partitionErrorsByCause, systemIssueCount, errorsBadgeCount, letterIdOf, requestIdOf,
+  useNotifications, sectionOf, sectionCounts, effectiveTs, groupErrorsByCategory,
+  partitionErrorsByCause, systemIssueCount, errorsBadgeCount, requestIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import { getPermissionRequest } from '@/stores/permission-request-store';
-import { AnswerText } from '@/components/sessions/RuleDetail';
-import { PermissionAnswerButtons, PermissionAskDetail, permissionOutcomeLabel, usePermissionAnswer } from './PermissionPromptControls';
-import { NotificationActionButtons } from './NotificationActionButtons';
-import { QuietToggle } from './QuietToggle';
-import { displayActionsOf } from '@/contexts/notifications/notification-actions';
+import { FeedGroups, collapseSameOrigin } from './NotificationFeedCards';
+import { NotificationPanelHeader, RailButton, RailSubButton, type RailSection } from './NotificationRail';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
 import { updateAvailable, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { NotificationProblems, useDisabledHosts, useProblemHosts } from './NotificationProblems';
@@ -50,17 +45,14 @@ import { HealthErrorsLink } from './HealthErrorsLink';
 import { landingSectionFor } from '@/utils/host-attention';
 import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
-import { agentCannotRun, localNoticeIsFailure, localNoticeShows } from '@/utils/local-claude-banner';
+import { localNoticeIsFailure, localNoticeShows } from '@/utils/local-claude-banner';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { navigateToTarget } from '@/utils/open-session';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
-import { startNotificationFix } from '@/api/notifications';
 import { log } from '@/utils/log';
-import { DisclosureButton } from '@/components/controls';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
-import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { useShiftClickGuard } from './useShiftClickGuard';
 import { InboxPane, isInboxLayout, type InboxLayout } from '@/components/inbox/InboxPane';
 import { usePageView } from '@/utils/view-memory';
@@ -74,8 +66,6 @@ import {
   setLetterArchived, setLetterPinned, setLetterRead,
   type LetterEnvelope,
 } from '@/api/human-inbox';
-import { taskPath } from '@/utils/task-path';
-import { badge } from '@/components/common/badge';
 
 interface NotificationPanelProps {
   open: boolean;
@@ -83,8 +73,6 @@ interface NotificationPanelProps {
   sidebarCollapsed: boolean;
 }
 
-/** Rail tabs — the notification sections plus the ambient System zone. */
-type RailSection = NotificationSection | 'system';
 
 /** How long an ask answered in this browser stays in Needs you after it settles. */
 const ANSWERED_HOLD_MS = 3500;
@@ -198,9 +186,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   }, [open]);
   const canFix = selfRepair?.available === true;
   // A repair session runs on Claude Code on this computer: while it is missing or signed
-  // out, Fix with agent is not offered (it would fail like the error it was asked to fix);
-  // the setup card's own install or sign-in step is the way on.
-  const agentBlocked = agentCannotRun(health);
+  // out, each card's Fix with agent reads the shared gate (useLocalAgentBlocked) and is not offered.
   // Available but no checkout yet → the first click clones upstream, which takes
   // minutes. The button says that while it runs instead of looking wedged.
   const fixNeedsClone = canFix && selfRepair?.source === null;
@@ -430,6 +416,18 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       }));
   }, [errorCats, errorCauses, section, activeErrorCategory]);
 
+  // What the header's Clear dismisses: the whole feed on All (null), else exactly what this view
+  // lists, so "Clear errors" never takes the asks with it; nothing in Inbox or System.
+  const clearKeys = useMemo<string[] | null>(() => {
+    if (section === 'all') return null;
+    if (section === 'inbox' || section === 'system') return [];
+    if (section === 'errors') {
+      const list = activeErrorCategory ? errorCats.find(g => g.category === activeErrorCategory)?.items ?? [] : sortedErrors;
+      return list.map(n => n.dedupKey);
+    }
+    return items.map(n => n.dedupKey);
+  }, [section, activeErrorCategory, errorCats, sortedErrors, items]);
+
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
   // intentional: items seen while watching the panel should be marked read too.
@@ -498,6 +496,20 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     return () => { cancelAnimationFrame(raf); timers.forEach(clearTimeout); };
   }, [phone, open, panelEl, section, feed.length]);
 
+  // The scrim starts at the panel's right edge (its width depends on the sidebar and on Split),
+  // so the page beside it reads as behind the panel and the sidebar stays as it is.
+  const [backdropEl, setBackdropEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!panelEl || !backdropEl) return undefined;
+    // Layout box, not the client rect: the slide-in transform must not move the scrim's edge.
+    const place = () => backdropEl.style.setProperty('--nfc-scrim-left', `${panelEl.offsetLeft + panelEl.offsetWidth}px`);
+    place();
+    const ro = new ResizeObserver(place);
+    ro.observe(panelEl);
+    window.addEventListener('resize', place);
+    return () => { ro.disconnect(); window.removeEventListener('resize', place); };
+  }, [panelEl, backdropEl]);
+
   // Escape closes, same idiom as Lightbox/FileViewer: the panel is a portalled
   // overlay, so there is no ancestor to catch the key — it has to be on document.
   useEffect(() => {
@@ -554,7 +566,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
             onDismissKey={key => dismissFeed([key])}
             showCategoryChip
             canFix={canFix}
-            agentBlocked={agentBlocked}
             fixNeedsClone={fixNeedsClone}
           />
         ) : null;
@@ -583,32 +594,21 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // slide animation. Rendering at the body level keeps fixed truly viewport-fixed.
   return createPortal(
     <>
-      {/* Backdrop */}
-      <div className="notification-panel-backdrop" onClick={onClose} />
+      {/* Backdrop: a click outside closes; a light scrim over the page right of the panel. */}
+      <div ref={setBackdropEl} className="notification-panel-backdrop" onClick={onClose} data-testid="notification-panel-backdrop" />
 
       {/* Panel */}
       <div
         ref={setPanelEl}
         className={`notification-panel nfc-panel-wide${sidebarCollapsed ? ' sidebar-collapsed' : ''}${inboxSplit ? ' nfc-panel-inbox-split' : ''}`}
       >
-        <div className="notification-panel-header">
-          <span className="notification-panel-title">Notifications</span>
-          {feed.length > 0 && (
-            <button
-              className="notification-clear-all nfc-header-clear"
-              onClick={() => { dismissFeed(); setExpandedGroups(new Set()); }}
-            >
-              Clear All
-            </button>
-          )}
-          <QuietToggle />
-          <button className="notification-panel-close" onClick={onClose} aria-label="Close">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
+        <NotificationPanelHeader
+          section={section}
+          category={section === 'errors' ? activeErrorCategory : null}
+          canClear={clearKeys !== null ? clearKeys.length > 0 : feed.length > 0}
+          onClear={() => { dismissFeed(clearKeys ?? undefined); setExpandedGroups(new Set()); }}
+          onClose={onClose}
+        />
 
         <PhonePullToRefresh
           enabled={phone && open}
@@ -627,7 +627,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               honest list of buttons does. */}
           <div className="nfc-rail" aria-label="Notification sections">
             <RailButton
-              label="Needs you" count={counts.action + approvals.length} alert
+              label="Needs you" count={counts.action + approvals.length} tone="alert"
               active={section === 'action'} onClick={() => pickSection('action')}
             />
             {/* Inbox shows UNREAD letters (not the list length): a letter is read
@@ -635,21 +635,23 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 means something here. Unread letters wait on the person, as the bell's
                 count says: the same red needs-you count. */}
             <RailButton
-              label="Inbox" count={counts.inbox} alert
+              label="Inbox" count={counts.inbox} tone="alert"
               active={section === 'inbox'} onClick={() => pickSection('inbox')}
             />
             {/* Every LISTING section carries a badge showing what the tab LISTS
                 (not just what is unread): a rail where only Needs Action had a
                 number left the user unable to see that nine errors were sitting
                 one click away, because opening the panel marks everything read.
-                Errors are RED (live failures), pending permissions amber, the
-                rest the calm accent. */}
+                One `.badge-count` for all of them, toned by what it counts: the
+                solid red needs-you count (Needs you, Inbox) as on the bell and
+                Mail, Errors red, an unhealthy System amber, a plain total
+                (Automation's receipts) grey. */}
             {/* Errors counts what the view leads with too: each problem host
                 and this machine's Claude Code, once each. */}
             <RailButton
               label="Errors"
               count={errorsBadgeCount({ feedErrors: counts.errorsTotal, problemHosts: problemHosts.length, localClaude: localClaudeFailing })}
-              danger
+              tone="error"
               active={section === 'errors' && !activeErrorCategory}
               onClick={() => pickSection('errors')}
             />
@@ -674,7 +676,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 pane renders as wrong (git sync, the search index). Zero but
                 still flagged → the old dot. */}
             <RailButton
-              label="System" count={systemIssues} warn={systemUnhealthy} dot={systemUnhealthy || hasUpdate}
+              label="System" count={systemIssues} tone={systemUnhealthy ? 'warning' : 'neutral'} warn={systemUnhealthy} dot={systemUnhealthy || hasUpdate}
               active={section === 'system'} onClick={() => pickSection('system')}
             />
             {/* All is the whole feed — its length is history depth, not a
@@ -748,7 +750,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                       // header can't name the family — each card wears the chip.
                       showCategoryChip
                       canFix={canFix}
-                      agentBlocked={agentBlocked}
                       fixNeedsClone={fixNeedsClone}
                     />
                   </div>
@@ -791,7 +792,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                       onNavigate={onNavigate}
                       onDismissKey={key => dismissFeed([key])}
                       canFix={canFix}
-                      agentBlocked={agentBlocked}
                       fixNeedsClone={fixNeedsClone}
                     />
                   </div>
@@ -809,7 +809,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                   onOpenLetter={openLetter}
                   showCategoryChip={section === 'all'}
                   canFix={canFix}
-                  agentBlocked={agentBlocked}
                   fixNeedsClone={fixNeedsClone}
                 />
               </div>
@@ -825,9 +824,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   );
 }
 
-/** Tool ids a person does not read, as the phone's center names them (N2-12). */
-const PHONE_TOOL_TITLES: Record<string, string> = { AskUserQuestion: 'Question', ExitPlanMode: 'Plan review' };
-
 const EMPTY_TEXT: Record<NotificationSection, string> = {
   action: 'No session is asking you anything',
   inbox: 'No letters yet',
@@ -835,542 +831,3 @@ const EMPTY_TEXT: Record<NotificationSection, string> = {
   automation: 'No automation activity',
   all: 'No notifications yet',
 };
-
-/**
- * A category sub-entry under the Errors section button. Same anatomy as
- * RailButton (name + count, aria-current when active) with the indent and
- * smaller type that read as "child of the entry above" — kept as its own
- * component so RailButton's props don't grow a `variant` flag for one caller.
- */
-function RailSubButton({ label, count, active, onClick }: {
-  label: string;
-  count: number;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`nfc-rail-btn nfc-rail-sub${active ? ' nfc-active' : ''}`}
-      aria-current={active}
-      onClick={onClick}
-    >
-      <span className="nfc-rail-name wn-title">{label}</span>
-      {count > 0 && (
-        <span className="nfc-rail-subcount">{count > 99 ? '99+' : count}</span>
-      )}
-    </button>
-  );
-}
-
-function RailButton({ label, count, active, alert, warn, danger, dot, onClick }: {
-  label: string;
-  count: number;
-  active: boolean;
-  /** The count of what needs the user: the one solid red badge. */
-  alert?: boolean;
-  warn?: boolean;
-  /** Red badge — live errors, one step past warn's amber. */
-  danger?: boolean;
-  /** Countless attention marker (the System zone: health, not a list length). */
-  dot?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`nfc-rail-btn${active ? ' nfc-active' : ''}`}
-      aria-current={active}
-      onClick={onClick}
-    >
-      <span className="nfc-rail-name wn-title">{label}</span>
-      {count > 0 ? (
-        <span className={`${badge(alert ? 'alert' : danger ? 'error' : warn ? 'warning' : 'neutral', { count: true })} nfc-rail-badge${warn ? ' nfc-warn' : ''}${danger ? ' nfc-danger' : ''}`}>{count > 99 ? '99+' : count}</span>
-      ) : dot ? (
-        <span
-          className={`nfc-rail-dot${warn ? ' nfc-warn' : ''}`}
-          aria-label={`${label} needs attention`}
-          role="img"
-        />
-      ) : null}
-    </button>
-  );
-}
-
-/**
- * Same-origin collapse key: a session's permission asks stack together, a cron
- * job's repeated runs stack together. Everything else stands alone.
- */
-function groupKeyOf(n: Notification): string {
-  if (n.kind === 'permission' && n.sessionId) return `perm:${n.sessionId}`;
-  if (n.kind === 'operation-error' && n.sessionId) return `error:session:${n.sessionId}`;
-  if (n.kind === 'operation-error' && n.taskId) return `error:task:${n.taskId}`;
-  if (n.kind === 'cron') return `cron:${n.title}`;
-  return n.dedupKey;
-}
-
-interface FeedGroup { key: string; items: Notification[] }
-
-/** Partition a list into same-origin groups, preserving the caller's order. */
-function collapseSameOrigin(items: Notification[]): FeedGroup[] {
-  const byKey = new Map<string, Notification[]>();
-  for (const n of items) {
-    const key = groupKeyOf(n);
-    const list = byKey.get(key);
-    if (list) list.push(n);
-    else byKey.set(key, [n]);
-  }
-  return [...byKey.entries()].map(([key, list]) => ({ key, items: list }));
-}
-
-/**
- * The card list for one set of same-origin groups.
- *
- * Extracted when Errors gained its category headers: the same list body is now
- * rendered once per category AND once flat for the other sections, and a second
- * copy of the collapse rules (the "a collapsed group must never bury a pending
- * ask" rule especially) would drift.
- */
-function FeedGroups({
-  groups, expandedGroups, onToggleGroup, onNavigate, onDismissKey, onOpenLetter, showCategoryChip,
-  canFix, fixNeedsClone, agentBlocked,
-}: {
-  groups: FeedGroup[];
-  expandedGroups: Set<string>;
-  onToggleGroup: (key: string) => void;
-  onNavigate: (to: string) => void;
-  onDismissKey: (dedupKey: string) => void;
-  /** A letter envelope in the All feed opens the reader, not a session link. */
-  onOpenLetter?: (letterId: string) => void;
-  /** All-section only: name the family on an error card, since there is no header. */
-  showCategoryChip?: boolean;
-  /** Whether an error card may offer "Ask AI to fix" (see the panel's selfRepair).
-   *  Passed as a plain boolean because FeedItem is memo'd — reading it from a
-   *  context inside would not re-render the card when the fetch lands. */
-  canFix?: boolean;
-  /** The first fix has to clone Walnut's source (minutes) — the button says so. */
-  fixNeedsClone?: boolean;
-  /** Claude Code cannot run on this computer: no Fix with agent (agentCannotRun). */
-  agentBlocked?: boolean;
-}) {
-  return (
-    <>
-      {groups.map(({ key, items: groupItems }) => {
-        const expanded = expandedGroups.has(key) || groupItems.length === 1;
-        // A collapsed group must never bury an actionable entry: a newer
-        // resolved permission would otherwise cover an older still-pending
-        // one, hiding its Approve/Deny buttons behind "Show N more".
-        const pending = groupItems.find(i => i.kind === 'permission' && !i.resolved);
-        // `slice(0, 1)` for the fallback, not `[groupItems[0]]`: an empty
-        // group would otherwise render one `undefined` child.
-        const visible = expanded ? groupItems : (pending ? [pending] : groupItems.slice(0, 1));
-        return (
-          <div key={key} className="notification-feed-group">
-            {visible.map((n) => (
-              n.kind === 'permission' ? (
-                <PermissionCard
-                  key={n.id}
-                  n={n}
-                  // Session links open on the HOME page's session columns
-                  // (the primary surface), not the /sessions page.
-                  onNavigate={onNavigate}
-                  onDismiss={() => onDismissKey(n.dedupKey)}
-                />
-              ) : (
-                <FeedItem
-                  key={n.id}
-                  n={n}
-                  onNavigate={onNavigate}
-                  onDismiss={() => onDismissKey(n.dedupKey)}
-                  {...(onOpenLetter ? { onOpenLetter } : {})}
-                  showCategoryChip={showCategoryChip}
-                  canFix={canFix}
-                  agentBlocked={agentBlocked}
-                  fixNeedsClone={fixNeedsClone}
-                />
-              )
-            ))}
-            {groupItems.length > 1 && (
-              <button
-                className="notification-group-toggle"
-                onClick={() => onToggleGroup(key)}
-              >
-                {expanded ? 'Show less' : `Show ${groupItems.length - 1} more`}
-              </button>
-            )}
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-/**
- * Rich permission card — the whole point of the redesign: decide here instead of
- * opening the session. Renders what is being asked from the server's compacted
- * tool input, then the buttons that actually answer it (ACP option list, an
- * AskUserQuestion answer form, or Approve/Deny).
- */
-/** A card's head: its dot and title, then one tail group (the card's own chips and count, its time,
- *  its close). The title wraps and takes the line first; when the card is too narrow for both, the
- *  tail moves under the title as one group, never the close alone on a line of its own (2026-11-22,
- *  the UI audit; standard.md "Text that does not fit"). The close never reaches the card's own
- *  click (navigate, expand). */
-function FeedItemHead({ n, title, onDismiss, children }: {
-  n: Notification; title: ReactNode; onDismiss: () => void; children?: ReactNode;
-}) {
-  return (
-    <div className="notification-feed-item-head">
-      <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-      <span className="notification-feed-item-title wn-title">{title}</span>
-      <span className="notification-feed-item-tail">
-        {children}
-        <span className="notification-feed-item-time wn-fixed">{formatRelative(effectiveTs(n))}</span>
-        <button
-          className="notification-feed-item-dismiss wn-fixed"
-          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-          aria-label="Dismiss notification"
-        >
-          &times;
-        </button>
-      </span>
-    </div>
-  );
-}
-
-const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }: {
-  n: Notification;
-  onNavigate: (to: string) => void;
-  onDismiss: () => void;
-}) {
-  // ONE store per request id, shared with the session timeline card and the toast
-  // (web/src/stores/permission-request-store.ts). It stamps the outcome
-  // optimistically, so answering here settles the OTHER two surfaces in the same
-  // frame instead of after the round-trip plus its WS echo — and 'stale' stays a
-  // third outcome, because claiming 'denied' on a 404 read "Denied" for a request
-  // the user had just APPROVED somewhere else.
-  const answer = usePermissionAnswer(n);
-  const { resolved, failed: respondError } = answer;
-  const target = linkTargetOf(n);
-  // A phone names the ask in words, not by the tool id (N2-12).
-  const phoneTitles = usePhoneLayout();
-  const tool = toolNameOf(n);
-  const title = (phoneTitles && tool ? PHONE_TOOL_TITLES[tool] : undefined) ?? tool ?? n.title;
-
-  return (
-    // A decision card in a narrow panel: its text opens downward, never across the window.
-    <div data-peek-row="" data-peek-grow="down" className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
-      <FeedItemHead n={n} title={title} onDismiss={onDismiss}>
-        {/* Click-through, on EVERY permission card that has a session — pending or
-            settled. The card body stays inert (decision surface, see the class
-            comment), so this small header link is the only way to get from a
-            permission to the session it came from without hunting for the column.
-            stopPropagation so it can never reach an Approve/option handler, and it
-            deliberately does NOT dismiss or resolve the entry: only an actual
-            decision settles a permission. The panel closes so the session column
-            it navigated to is visible. */}
-        {target && (
-          <button
-            className="nfc-open-session wn-fixed"
-            title="Open the session this came from"
-            onClick={(e) => { e.stopPropagation(); onNavigate(target); }}
-          >
-            Open session ↗
-          </button>
-        )}
-      </FeedItemHead>
-
-      <ContextChips n={n} />
-
-      {/* What is being asked, and the answer: one implementation shared with the
-          kanban card's prompt (PermissionPromptControls.tsx). */}
-      <PermissionAskDetail n={n} detail={answer.detail} />
-
-      {resolved && (
-        /* Labels live in resolvedLabelOf (kind-aware: 'expired' on a permission
-           is "Session ended", on an error it is "Stale") so the panel and the
-           toast can't drift apart. Pass the LOCAL resolved, not `n`: right after
-           an inline answer only `sent` knows the outcome (`n.resolved` waits for
-           the server round-trip), and `n` alone rendered an empty label. */
-        <div className={`notification-feed-item-resolved notification-feed-item-resolved--${resolved}`}><AnswerText text={permissionOutcomeLabel(resolved, answer.stored, answer.acpOptions, answer.detail.type === 'question', answer.detail.type === 'question' ? answer.detail.questions.length : 0) ?? resolvedLabelOf({ kind: n.kind, resolved })} /></div>
-      )}
-
-      <PermissionAnswerButtons
-        answer={answer}
-        fallback={target && (
-          <div className="notification-feed-item-actions">
-            <button className="notification-perm-btn" onClick={() => onNavigate(target)}>
-              Go to Session
-            </button>
-          </div>
-        )}
-      />
-      {/* Gated on !resolved: a request that later settled (the user answered it in
-          the session view, and session:permission-resolved stamped this entry) must
-          not keep advertising an earlier failed attempt from this card. An incoming
-          resolution always wins the display — `resolved` reads n.resolved FIRST. */}
-      {!resolved && respondError && !answer.stored?.failReason && (
-        <span className="notification-perm-error" role="alert">{answer.stored?.failReason ?? 'Failed — open the session to respond'}</span>
-      )}
-    </div>
-  );
-});
-
-/** Where the notification came from: session, host, project. */
-function ContextChips({ n }: { n: Notification }) {
-  const label = sessionLabelOf(n);
-  const hostName = useHostDisplayLabel(n.host);
-  if (!label && !n.host && !n.project) return null;
-  return (
-    <div className="nfc-card-chips">
-      {/* The session's label is the long one: it gives up its words first (.wn-meta), so a short
-          host or project beside it stays whole. */}
-      {label && <span className="badge nfc-chip wn-meta"><span>{label}</span></span>}
-      {n.host && <span className="badge nfc-chip"><span>{hostName}</span></span>}
-      {n.project && <span className="badge nfc-chip"><span>{n.project}</span></span>}
-    </div>
-  );
-}
-
-/** dedupKeys with an "Ask AI to fix" launch in flight, across card mounts. */
-const fixesInFlight = new Set<string>();
-
-/** Error / automation card: title, body, ×N fold badge, deep-link chips. */
-const FeedItem = memo(function FeedItem({
-  n, onNavigate, onDismiss, onOpenLetter, showCategoryChip, canFix, fixNeedsClone, agentBlocked,
-}: {
-  n: Notification;
-  onNavigate: (to: string) => void;
-  onDismiss: () => void;
-  onOpenLetter?: (letterId: string) => void;
-  showCategoryChip?: boolean;
-  canFix?: boolean;
-  fixNeedsClone?: boolean;
-  agentBlocked?: boolean;
-}) {
-  // The raw technical block, opened deliberately: the human title and body are
-  // always shown in full (standard.md, "Text that does not fit"), the JSON only
-  // when asked for.
-  const [detailOpen, setDetailOpen] = useState(false);
-  // "Ask AI to fix" in flight / its failure text. Per card: two error cards can
-  // be handed to two repair sessions independently. The in-flight flag seeds
-  // from the module-level set so a card re-mounted mid-launch (panel closed and
-  // reopened during a minutes-long clone) still reads busy instead of offering
-  // a second start.
-  const [fixBusy, setFixBusy] = useState(() => fixesInFlight.has(n.dedupKey));
-  const [fixError, setFixError] = useState<string | null>(null);
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-  const target = linkTargetOf(n);
-  const count = n.count ?? 1;
-  // Human title/body + the raw line for the toggle. `presentError` also repairs a
-  // PRE-humanizer record at display time: its `[subsystem] {json}` body moves
-  // into the Details block instead of being the card's only text.
-  const presented = n.kind === 'operation-error'
-    ? presentError(n)
-    : { title: n.title, body: n.body ?? '', detail: undefined as string | undefined };
-  const category = n.kind === 'operation-error' && showCategoryChip ? categoryOf(n) : null;
-  // The condition this error described is gone (the plugin re-authenticated, the
-  // disk was freed, the commit landed). The severity is already remapped to
-  // 'info' server-side, so the red dot follows automatically — the chip is what
-  // tells the user WHY the row went quiet instead of it just looking stale.
-  const recovered = n.resolved === 'recovered';
-  // 'expired' on an error is the OTHER end of the lifecycle: nothing can ever
-  // recover it (its session died, or it predates recoveryKey), which reads as
-  // "Stale" — deliberately not the green Recovered chip, because nobody fixed it.
-  const stale = n.resolved === 'expired';
-  // A letter envelope in the All feed opens the LETTER, never its origin session:
-  // the envelope is a pointer at a document, and the document is the point.
-  const letterId = n.kind === 'letter' && onOpenLetter ? letterIdOf(n) : null;
-  // A card with neither a letter nor a target has nothing to open: its words are
-  // already whole, so it is not a button.
-  const activate = letterId
-    ? () => onOpenLetter?.(letterId)
-    : target ? () => onNavigate(target) : null;
-
-  // The repair session this error already has (server-owned `fix`). A record can
-  // carry a task without a session id (the launch answered late), so the task
-  // page is the fallback destination rather than a dead link.
-  const fixTarget = n.fix
-    ? (n.fix.sessionId ? `/sessions?id=${n.fix.sessionId}` : taskPath(n.fix.taskId))
-    : null;
-  // An error card is the one kind that can be handed to a coding session, and
-  // only where a source tree exists (canFix) or a session already ran (n.fix) —
-  // on a cloud replica or a git-less install the affordance simply isn't there.
-  const fixKind = (n.kind === 'operation-error'
-    || (n.severity === 'error' && ['cron', 'skill', 'hook'].includes(n.kind))) && !personFixesCard(n);
-  // Not while Claude Code cannot run here: no agent can start without it. A repair
-  // session that already ran still opens.
-  const showFixActions = fixKind && (!agentBlocked || !!fixTarget);
-  // A navigate action the PRODUCER attached (server record `action`), on a card
-  // with no session of its own. A session-bound card already opens its session
-  // on click, and a second button saying the same would be noise; a recovered
-  // card no longer needs anything done.
-  const producerAction = n.kind === 'operation-error' && !n.sessionId && !recovered
-    && n.action?.kind === 'navigate' && n.action.to
-    ? { label: n.action.label, to: n.action.to }
-    : null;
-  // A record's own button LIST (a plugin reminder's Done / Snooze). No read
-  // bookkeeping on success: this card is inside the open panel, whose sweep has
-  // already marked it read, and retiring it is the plugin's call (dismiss).
-  const noticeActions = n.actions && n.actions.length > 0 && !recovered && !stale
-    ? displayActionsOf(n)
-    : [];
-
-  const startFix = async (restart: boolean) => {
-    if (fixBusy || fixesInFlight.has(n.dedupKey)) return;
-    fixesInFlight.add(n.dedupKey);
-    setFixBusy(true);
-    setFixError(null);
-    try {
-      const result = await startNotificationFix(n.dedupKey, restart ? { restart: true } : undefined);
-      log.info('notifications', 'repair session started', {
-        dedupKey: n.dedupKey, taskId: result.taskId, sessionId: result.sessionId, reused: result.reused,
-      });
-      // Only the card the user is still looking at may move them: a launch that
-      // finishes after they closed the panel and went back to work must not yank
-      // the page to the session. The record's `fix` (WS update) shows the way in.
-      if (!mounted.current) return;
-      // Closes the panel on the way (see onNavigate in the panel).
-      onNavigate(result.sessionId ? `/sessions?id=${result.sessionId}` : taskPath(result.taskId));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn('notifications', 'repair session failed to start', { dedupKey: n.dedupKey, error: message });
-      if (mounted.current) setFixError(message);
-    } finally {
-      fixesInFlight.delete(n.dedupKey);
-      if (mounted.current) setFixBusy(false);
-    }
-  };
-
-  return (
-    <div
-      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${activate ? ' clickable' : ''}${recovered || stale ? ' recovered' : ''}`}
-      {...(activate ? {
-        onClick: activate,
-        role: 'button',
-        tabIndex: 0,
-        onKeyDown: (e: ReactKeyboardEvent) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            activate();
-          }
-        },
-      } : {})}
-    >
-      <FeedItemHead n={n} title={presented.title} onDismiss={onDismiss}>
-        {/* All-section only: the Errors rail has category HEADERS, so a chip
-            there would repeat the header on every row. */}
-        {category && <span className="badge nfc-chip nfc-chip-category"><span>{category}</span></span>}
-        {recovered && <span className="badge badge-accent nfc-chip nfc-chip-recovered"><span>{resolvedLabelOf(n)}</span></span>}
-        {stale && <span className="badge nfc-chip"><span>{resolvedLabelOf(n)}</span></span>}
-        {/* Occurrence fold: the server collapses repeats into one record so 36
-            identical failures are one line, with how often it happened. Clamped
-            at 99+ like the rail badge — a 4-digit count would push the row's
-            timestamp and dismiss button out of the card. */}
-        {count >= 2 && <span className="badge badge-count nfc-count-badge wn-fixed">&times;{count > 99 ? '99+' : count}</span>}
-      </FeedItemHead>
-      {presented.body && (
-        <div className="notification-feed-item-body">{presented.body}</div>
-      )}
-      {/* The raw technical line, opt-in. This is where the old JSON-as-body went:
-          a developer still gets every byte, and the user is no longer shown a log
-          line as the card's message. stopPropagation because the card itself is a
-          click target (navigate / expand) — without it, opening Details would
-          also navigate away from the panel. */}
-      {presented.detail && (
-        <div className="nfc-card-detail">
-          <DisclosureButton
-            className="nfc-detail-toggle"
-            expanded={detailOpen}
-            onClick={(e) => { e.stopPropagation(); setDetailOpen(v => !v); }}
-          >
-            Details
-          </DisclosureButton>
-          {detailOpen && (
-            <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>
-          )}
-        </div>
-      )}
-      {/* The producer's own remedy ("Sign in" on a plugin whose credential died),
-          as a labelled button: the row click already goes there, but a card that
-          asks for an action must SHOW the action, not hide it in the row's cursor. */}
-      {producerAction && (
-        <div
-          className="nfc-card-actions"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <button
-            className="nfc-card-action nfc-card-action--primary"
-            data-testid="nfc-producer-action"
-            onClick={(e) => { e.stopPropagation(); onNavigate(producerAction.to); }}
-          >
-            {producerAction.label} ↗
-          </button>
-        </div>
-      )}
-      {noticeActions.length > 0 && (
-        <NotificationActionButtons
-          n={n}
-          actions={noticeActions}
-          variant="card"
-          onNavigate={onNavigate}
-          onDone={() => {}}
-        />
-      )}
-      {/* Hand the error to a coding session in Walnut's own source. Every click in
-          here stops propagation (the row itself is a click target that navigates
-          or expands), including the container's — a click on the row's padding
-          must not expand the card behind the buttons. */}
-      {showFixActions && (
-        <div
-          className="nfc-card-actions"
-          onClick={(e) => e.stopPropagation()}
-          // The row's own onKeyDown activates on Enter/Space and preventDefaults,
-          // which would swallow a focused button's keyboard activation.
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          {fixTarget ? (
-            <>
-              <button
-                className="nfc-card-action nfc-fix-open"
-                data-testid="nfc-fix-open"
-                title="Open the repair session already working on this error"
-                onClick={(e) => { e.stopPropagation(); onNavigate(fixTarget); }}
-              >
-                Open fix session ↗
-              </button>
-              {/* Quiet secondary: the first session may have finished or gone
-                  wrong, and a fresh one is the only way forward from the card. */}
-              {!agentBlocked && <button
-                className="nfc-card-action nfc-fix-restart"
-                data-testid="nfc-fix-restart"
-                title="Start a fresh repair session for this error"
-                disabled={fixBusy}
-                onClick={(e) => { e.stopPropagation(); void startFix(true); }}
-              >
-                {fixBusy ? 'Starting…' : 'Fix again'}
-              </button>}
-            </>
-          ) : (
-            <button
-              className="nfc-card-action nfc-fix-start"
-              data-testid="nfc-fix-start"
-              title={canFix ? "Start a coding session in Walnut's source with this error as the brief" : 'Agent repair is unavailable on this server'}
-              disabled={fixBusy || !canFix}
-              onClick={(e) => { e.stopPropagation(); void startFix(false); }}
-            >
-              {fixBusy
-                ? (fixNeedsClone ? 'Cloning Walnut source… (first time only)' : 'Starting…')
-                : 'Fix with agent'}
-            </button>
-          )}
-          {fixError && <span className="nfc-fix-error">{fixError}</span>}
-        </div>
-      )}
-      <ContextChips n={n} />
-    </div>
-  );
-});

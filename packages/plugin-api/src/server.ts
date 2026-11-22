@@ -470,6 +470,11 @@ export interface PluginNotice {
 export type PluginNoticeAction = {
   label: string
   args?: Record<string, unknown>
+  /**
+   * Epoch milliseconds: the button means something only until then (a break's "End break" at
+   * the break's end). Past it the console leaves the button out and the notice reads as history.
+   */
+  expiresAt?: number
 } & (
   | { op: string; dialog?: never }
   | { dialog: string; op?: never }

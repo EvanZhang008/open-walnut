@@ -40,7 +40,7 @@ describe('a card a person types into opens downward in its own column', () => {
     expect(rows.length).toBeGreaterThan(30);
     const kanban = rows.find((r) => keyOf(r) === 'components/board/kanban/KanbanCard.tsx kanban-card');
     expect(kanban?.fields).toEqual(expect.arrayContaining(['KanbanCardEditor']));
-    const perm = rows.find((r) => r.file === 'components/common/NotificationPanel.tsx');
+    const perm = rows.find((r) => r.file === 'components/common/NotificationFeedCards.tsx');
     expect(perm?.fields).toEqual(expect.arrayContaining(['PermissionAnswerButtons']));
   });
 

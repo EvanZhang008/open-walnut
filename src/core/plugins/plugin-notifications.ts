@@ -37,7 +37,7 @@ export interface PluginNoticeInput {
   /** error() only: the person must act (PluginNotice.needsYou). */
   needsYou?: boolean
   kind?: 'skill' | 'reminder'
-  actions?: Array<{ label: string; args?: Record<string, unknown> } & (
+  actions?: Array<{ label: string; args?: Record<string, unknown>; expiresAt?: number } & (
     | { op: string; dialog?: never }
     | { dialog: string; op?: never }
   )>
@@ -75,7 +75,15 @@ export function pluginNoticeActions(
     if (hasOp === hasDialog) {
       throw new Error('Plugin notification action requires exactly one of op or dialog')
     }
-    const shared = { label, pluginId, ...(args !== undefined ? { args: structuredClone(args) } : {}) }
+    const expiresAt = action.expiresAt
+    if (expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= 0)) {
+      throw new Error('Plugin notification action expiresAt must be epoch milliseconds')
+    }
+    const shared = {
+      label, pluginId,
+      ...(args !== undefined ? { args: structuredClone(args) } : {}),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    }
     if (hasDialog) {
       // Same local id rule as the web slot API. The caller cannot supply an owner prefix.
       if (typeof action.dialog !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(action.dialog)) {

@@ -95,14 +95,32 @@ describe('setup banner for this machine\'s Claude Code', () => {
     expect(render(health)).toBe('');
   });
 
-  it('missing: one-click install, the command to run by hand, and the API-settings way out', () => {
+  it('missing: ONE main action (Install), API settings second, the command folded under Other ways to set up', () => {
     const html = render({ hasReadyProvider: true, claudeCliAvailable: false, localClaude: local({ claude: { found: false }, problems: [MISSING] }) })
     expect(html).toContain('data-testid="setup-banner-install"')
     expect(html).toContain('data-testid="setup-banner-fix"')
     expect(text(html)).toContain('Walnut runs on Claude Code. It is not installed on this computer yet.')
-    expect(text(html)).toContain('Install Claude Code')
-    expect(text(html)).toContain(`Or install it yourself:${INSTALL}`)
-    expect(html).toContain('Open API settings')
+    const doc = parseHTML(html).document
+    // The card family's buttons: one blue main action, then the grey second one, on one row.
+    const row = doc.querySelector('.ask-card-answer')!
+    expect([...row.querySelectorAll('button.btn')].map((b) => `${b.className}|${b.textContent}`))
+      .toEqual(['btn btn-sm btn-primary|Install Claude Code', 'btn btn-sm|Open API settings'])
+    expect(doc.querySelectorAll('button.btn-primary')).toHaveLength(1)
+    // The manual command and the credentials words fold into one disclosure, the command whole.
+    const more = doc.querySelector('details.setup-other-ways')!
+    expect(more.querySelector('summary')!.textContent).toBe('Other ways to set up')
+    expect(more.querySelector('code.setup-command')!.textContent).toBe(INSTALL)
+    expect(text(more.innerHTML)).toContain('Prefer an API key or Bedrock credentials instead?')
+    expect(doc.querySelectorAll('code.setup-command')).toHaveLength(1)
+  })
+
+  it('missing and not one-click (Claude Code does not start): the command is the way on, shown outside the fold', () => {
+    const html = render({ ...ready, localClaude: local({ problems: [{ ...MISSING, kind: 'claude_error', message: 'Claude Code did not start: x' }] }) })
+    const doc = parseHTML(html).document
+    expect(doc.querySelector('[data-testid="setup-banner-fix"]')).toBeNull()
+    expect(doc.querySelector('details.setup-other-ways code.setup-command')).toBeNull()
+    expect(doc.querySelector('code.setup-command')!.textContent).toBe(INSTALL)
+    expect(text(html)).toContain('Open API settings')
   })
 
   it('missing, while the install runs, then after it failed', () => {
@@ -199,17 +217,19 @@ describe('local notice dismissal keys (C38)', () => {
     expect(html).not.toContain('Dismiss setup banner')
   })
 
-  it('Tab order (G20): the actions first, the local x last; every button tabbable in WebKit', () => {
+  it('the x sits at the card\'s top right like every notice\'s (2026-11-21), outside the section; every button tabbable in WebKit', () => {
     const cases = [
       render({ hasReadyProvider: false, claudeCliAvailable: false }),
       render({ ...ready, localClaude: local({ claude: { ...local({}).claude, auth: 'not-logged-in' }, problems: [SIGN_IN] }) }),
     ]
     for (const html of cases) {
+      const doc = parseHTML(html).document
       const buttons = [...html.matchAll(/<button[^>]*>/g)].map((m) => m[0])
       expect(buttons.length).toBeGreaterThan(1)
-      expect(buttons[buttons.length - 1]).toContain('aria-label="Dismiss Claude Code notice"')
       for (const b of buttons) expect(b).toContain('tabindex="0"')
-      // The header holds only the title now; the x is not inside it.
+      const x = doc.querySelector('[aria-label="Dismiss Claude Code notice"]')!
+      expect(x.parentElement!.className).toBe('setup-banner-x')
+      expect(x.closest('section')).toBeNull()
       expect(html.match(/<div class="setup-banner-header">(.*?)<\/div>/)?.[1]).not.toContain('Dismiss')
     }
   })
@@ -278,14 +298,14 @@ describe('the local section mounted', () => {
     expect(recheck.recheckLocalClaudeNow).not.toHaveBeenCalled()
   })
 
-  it('the x: title equals its label, it ends the last line (not the header), and hands the key to the card', async () => {
+  it('the x: title equals its label, it sits at the card\'s top right (not in the section), and hands the key to the card', async () => {
     const got: string[] = []
     await mount(signIn, (k) => got.push(k))
     const x = host.querySelector<HTMLButtonElement>('.ab-local-x')!
     expect(x.getAttribute('title')).toBe(x.getAttribute('aria-label'))
     expect(x.getAttribute('aria-label')).toBe('Dismiss Claude Code notice')
     expect(x.closest('.setup-banner-header')).toBeNull()
-    expect(x.parentElement?.classList.contains('setup-alt')).toBe(true)
+    expect(x.parentElement?.classList.contains('setup-banner-x')).toBe(true)
     await act(async () => { x.dispatchEvent(new win.Event('click', { bubbles: true })) })
     expect(got).toEqual(['sign-in:2.1.281'])
     expect(readLocalDismissed()).toContain('sign-in:2.1.281')

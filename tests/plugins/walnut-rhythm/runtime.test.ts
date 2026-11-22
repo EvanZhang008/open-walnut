@@ -166,7 +166,10 @@ describe('the Start form: lengths and music', () => {
     const { h, runtime } = await boot({ darwin: true, tasks: [task('task-7', 'Draft the plan')] })
     await actions.focusStart(runtime, { taskId: 'task-7', minutes: 30, breakMinutes: 8, spotify: DEEP })
     await h.tick(runtime, 30 * MIN + 1)
-    expect(h.notices('focus-done')[0]!.notice.actions![1]).toEqual({ label: 'Another block', op: 'focus_start', args: { spotify: DEEP, taskId: 'task-7', minutes: 30, breakMinutes: 8 } })
+    // Both buttons answer this break only: they end with it (notice-action-expiry.test.ts).
+    const breakEnds = h.notices('focus-done')[0]!.notice.actions![0]!.expiresAt
+    expect(breakEnds).toBeGreaterThan(0)
+    expect(h.notices('focus-done')[0]!.notice.actions![1]).toEqual({ label: 'Another block', op: 'focus_start', args: { spotify: DEEP, taskId: 'task-7', minutes: 30, breakMinutes: 8 }, expiresAt: breakEnds })
     await h.tick(runtime, 8 * MIN)
     expect(h.notices('break-over')[0]!.notice.actions![0]).toEqual({ label: 'Start next block', op: 'focus_start', args: { spotify: DEEP, taskId: 'task-7', minutes: 30, breakMinutes: 8 } })
   })

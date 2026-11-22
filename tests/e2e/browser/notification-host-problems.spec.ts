@@ -72,7 +72,8 @@ test.describe('the problems block: which hosts, in which order', () => {
     await bpSetup(page, { hosts: six(), local: 'sign-in' })
     const hosts = await openProblems(page)
     const panel = await box(page.locator('.notification-panel'))
-    const first = await box(page.locator('.notification-panel .nfc-detail .notification-card').first())
+    // All's blocks are notice cards (NoticeCard); System's keep their notification-card frame.
+    const first = await box(page.locator('.notification-panel .nfc-detail .wn-notice').first())
     const local = await box(panelLocalCard(page))
     expect(Math.abs(first.y - local.y)).toBeLessThanOrEqual(1)
     const list = await box(hosts)

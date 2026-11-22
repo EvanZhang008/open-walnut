@@ -99,9 +99,10 @@ button.badge:focus-visible, a.badge:focus-visible, .badge[role="button"]:focus-v
 
 /* On a line of words, a badge reads as one more word: no fill and no box, the line's size, grey
    unless its tone carries news; a dashed underline where its box would be dashed. The lines: a
-   status card's meta line ("Marina · Leader · 1 · 2 PRs") and a search result's second line, so
-   one task list reads the same in every tab (2026-11-21: search rows were "a list of tags"). */
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge {
+   status card's meta line ("Marina · Leader · 1 · 2 PRs"), a notice card's meta line (a folded
+   error's "×4", its family) and a search result's second line, so one task list reads the same in
+   every tab (2026-11-21: search rows were "a list of tags"). */
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge {
   height: auto;
   padding: 0;
   border: 0;
@@ -109,12 +110,12 @@ button.badge:focus-visible, a.badge:focus-visible, .badge[role="button"]:focus-v
   font-size: var(--font-size-xs);
   line-height: 16px;
 }
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge:not(.badge-accent, .badge-warning, .badge-error, .badge-alert) { --badge-fg: var(--fg-muted); }
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge-paused > :not(svg),
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge-paused::after { text-decoration: underline dashed; text-underline-offset: 2px; }
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge:not(.badge-accent, .badge-warning, .badge-error, .badge-alert) { --badge-fg: var(--fg-muted); }
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge-paused > :not(svg),
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge-paused::after { text-decoration: underline dashed; text-underline-offset: 2px; }
 
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) button.badge:hover,
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) button.badge[aria-expanded="true"] { background-image: none; text-decoration: underline; text-underline-offset: 2px; }
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) button.badge:hover,
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) button.badge[aria-expanded="true"] { background-image: none; text-decoration: underline; text-underline-offset: 2px; }
 /* A search result's words after its project each start with the line's "·", as the meta line's do. */
 .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)::before,
 .todo-search-results .todo-search-tier-pill + .todo-search-context-pill::before {
@@ -126,6 +127,6 @@ button.badge:focus-visible, a.badge:focus-visible, .badge[role="button"]:focus-v
 /* After every rule above that draws the "·": inside a badge it sits beside the badge's own 4px gap,
    so 2px more makes the 6px every other item of the line has after its dot; and it stays first,
    ahead of a narrow column's letter (the Worker "W" is an `::after` moved to the front). */
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge::before { margin-right: 2px; order: -2; }
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge::before { margin-right: 2px; order: -2; }
 /* A paused badge on a line of words draws its dashes under the text: nothing clips them. */
-:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge-paused { overflow: visible; }
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge-paused { overflow: visible; }

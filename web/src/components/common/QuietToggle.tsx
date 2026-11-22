@@ -4,7 +4,9 @@
  * It only ever touches the `user` hold: a plugin's focus timer holds quiet on its
  * own and ends it on its own, so "End quiet" appears only when the human's hold is
  * what is keeping Walnut quiet. While another source holds quiet, a small "Quiet"
- * chip says so (its title names the holds) and "Quiet 1h" still adds the human's own.
+ * chip says so (its title names the holds) and "Quiet for 1 hour" still adds the human's own.
+ * It is one of the header's tool buttons (NotificationRail.tsx), and reads in full: "Quiet 1h"
+ * said neither what goes quiet nor for how long (2026-11-21 audit).
  */
 import { useState } from 'react';
 import { useNotifications, setUserQuiet, effectiveQuiet, quietLabel } from '@/contexts/notifications';
@@ -38,15 +40,16 @@ export function QuietToggle() {
         <span className="nfc-quiet-chip" title={quietLabel(live)} data-testid="nfc-quiet-chip">☾ Quiet</span>
       )}
       <button
-        className="notification-clear-all"
+        type="button"
+        className="btn"
         data-testid="nfc-quiet-toggle"
         disabled={busy}
         title={userHold
-          ? quietLabel(live)
-          : 'Hold toasts, sounds and push for an hour. The feed still collects everything, and permission asks still show.'}
+          ? `${quietLabel(live)}. End it to get toasts, sounds and phone pushes again.`
+          : 'Mute toasts, sounds and phone pushes for an hour. This list still collects everything, and permission asks still show.'}
         onClick={() => { void toggle(); }}
       >
-        {userHold ? 'End quiet' : 'Quiet 1h'}
+        {userHold ? 'End quiet' : 'Quiet for 1 hour'}
       </button>
     </span>
   );

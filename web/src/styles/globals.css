@@ -519,28 +519,46 @@ textarea::placeholder { max-width: 100%; }
   right: 12px;
 }
 
-/* A count on a rail icon (the bell, an app): a `.badge-count` with `badge-corner`'s ring; red
-   (`badge-alert`) for what needs the user, grey for a plugin's status text. This places it. */
+/* A count on a rail item (the bell, an app): a `.badge-count` with `badge-corner`'s ring; red
+   (`badge-alert`) for what needs the user, grey for a plugin's status text. This places it, the
+   one count badge Mail and the bell share (2026-11-21 audit: the bell's was an amber pill with a
+   dot on its corner beside Mail's red one, on another baseline): centred on the label's line at
+   the row's right. */
 .notification-badge-count {
   position: absolute;
-  top: 1px;
-  right: 3px;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
 }
 
+/* Collapsed: at the icon's top right, growing away from it, so a two-digit count never
+   covers the icon. */
 .sidebar.collapsed .notification-badge-count {
-  top: 1px;
-  right: 7px;
+  top: 3px;
+  right: auto;
+  left: calc(50% + 2px);
+  transform: none;
 }
 
-/* Transparent click-away layer — no dimming. A dark backdrop made the sidebar
-   read as a highlighted dark band next to the light panel; natural style is
-   the panel sliding out with everything else visually unchanged. */
+/* The click-away layer. It leaves the sidebar as it is (a dark layer over it read as a dark
+   band beside the light panel) and lays a light scrim over the page right of the panel, so the
+   session title and draft under the panel's edge read as behind it, not cut (2026-11-21 audit).
+   A click anywhere on it closes the panel. */
 .notification-panel-backdrop {
   position: fixed;
   inset: 0;
   z-index: 9199;
   background: transparent;
 }
+.notification-panel-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 var(--nfc-scrim-left, 760px);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  animation: nfc-scrim-in 0.2s ease-out;
+  pointer-events: none;
+}
+@keyframes nfc-scrim-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* The panel takes focus when it opens (useDialogFocus); the panel itself draws no ring. */
 .notification-panel:focus { outline: none; }
@@ -552,10 +570,11 @@ textarea::placeholder { max-width: 100%; }
   bottom: 0;
   width: 320px;
   z-index: 9200;
-  /* Same surface as the sidebar so panel + sidebar read as one column. */
+  /* Same surface as the sidebar so panel + sidebar read as one column; its right edge is one
+     clear hairline and the shared overlay depth over the scrimmed page. */
   background: var(--bg);
-  border-right: 1px solid var(--border);
-  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: var(--glass-frost-shadow);
   display: flex;
   flex-direction: column;
   animation: notif-slide-in 0.2s ease-out;
@@ -585,9 +604,13 @@ textarea::placeholder { max-width: 100%; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px;
+  gap: 8px;
+  padding: 12px 12px 12px 16px;
   border-bottom: 1px solid var(--border);
 }
+
+/* Clear, Quiet and Close: one group of the card family's tool buttons (.ask-card-tools .btn). */
+.nfc-header-tools { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 
 .notification-panel-title {
   font-size: var(--font-size-lg);
@@ -595,34 +618,16 @@ textarea::placeholder { max-width: 100%; }
   color: var(--fg);
 }
 
-.notification-panel-close {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--fg-muted);
-  padding: 4px;
-  border-radius: var(--radius-sm);
-}
 
-.notification-panel-close:hover {
-  color: var(--fg);
-  background: var(--accent-subtle);
-}
-
+/* A System pane block (git sync, the search index, Remote hosts, the update): the notice card's
+   frame (notice-card.css) so the center reads as one family. Its state is its icon and words,
+   never a tinted block. */
 .notification-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
+  border: 1px solid var(--glass-frost-border);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  padding: 10px 12px;
   margin-bottom: 8px;
-}
-
-.notification-card.warn {
-  border-color: var(--warning);
-  background: rgba(255, 149, 0, 0.05);
-}
-
-.notification-card.ok {
-  border-color: var(--border);
 }
 
 .notification-card-row {
@@ -738,124 +743,35 @@ textarea::placeholder { max-width: 100%; }
   gap: 6px;
 }
 
-.notification-feed-item {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-}
-
-.notification-feed-item.unread {
-  border-color: var(--border-strong);
-  background: color-mix(in srgb, var(--accent) 6%, var(--card-bg));
-}
-
-/* Baseline, not center: a title that wraps keeps its dot, time and close on its
-   first line (text-fit.css). */
-.notification-feed-item-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 6px;
-}
-/* The title takes the line first; the tail (chips, count, time, close: FeedItemHead) keeps the rest
-   of it, and moves under the title as ONE group, right-aligned, when the card is too narrow for both:
-   never the close alone on a line (standard.md "Text that does not fit"). */
-.notification-feed-item-head > .wn-title { flex: 1 1 12em; }
-.notification-feed-item-tail {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: flex-end;
-  gap: 2px 6px;
-  margin-left: auto;
-  max-width: 100%;
-}
-
-.notification-feed-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--fg-muted);
-}
-
-.notification-feed-dot--info { background: var(--accent); }
-.notification-feed-dot--success { background: var(--success); }
-.notification-feed-dot--warning { background: var(--warning); }
-.notification-feed-dot--error { background: var(--error); }
-
-/* .wn-title on the element: the title wraps, never cut (text-fit.css). */
-.notification-feed-item-title {
-  flex: 1;
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.notification-feed-item-time {
-  font-size: var(--font-size-xs);
+/* A row of the feed is the one notice card (NotificationFeedCards.tsx, NoticeCard `solid`):
+   its frame, avatar, title, status and preview are notice-card.css's. Nothing here paints a row:
+   unread is its status dot and word, never a tint (tests/web/notice-card-guard.test.ts). A row
+   with a target or a letter opens it; the others have nothing to open, since their title and
+   text already show in full (standard.md "Text that does not fit"). */
+.notification-feed-item.clickable { cursor: pointer; }
+/* The panel slides in as one; its cards do not each make a toast's entrance. */
+.notification-panel .wn-notice { animation: none; }
+html .notification-feed-item.wn-notice.clickable:hover { border-color: var(--border-strong); }
+html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A row's text in full: the toast's two-line preview is the corner's, the list shows every word. */
+.wn-notice-line.notification-feed-item-body { display: block; -webkit-line-clamp: unset; overflow: visible; white-space: pre-wrap; }
+/* Who it came from: one quiet last line under the words. */
+.nfc-row-source {
+  margin-top: 4px;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
   color: var(--fg-muted);
-  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.notification-feed-item-body {
-  font-size: var(--font-size-md);
-  color: var(--fg-secondary);
-  line-height: 1.45;
-  margin-top: 3px;
-  word-break: break-word;
-}
-
-/* iPhone-style notification center: clickable cards, per-item ×, groups.
-   A card with a target or a letter opens it; the others have nothing to open,
-   since their title and body already show in full. */
-.notification-feed-item.clickable {
-  cursor: pointer;
-}
-
-.notification-feed-item.clickable:hover {
-  border-color: var(--border-strong);
-  background: color-mix(in srgb, var(--accent) 10%, var(--card-bg));
-}
-
-.notification-feed-item-dismiss {
-  flex-shrink: 0;
-  border: none;
-  background: none;
-  color: var(--fg-muted);
-  font-size: 14px;
-  line-height: 1;
-  padding: 0 2px;
-  cursor: pointer;
-  opacity: 0.6;
-}
-
-.notification-feed-item-dismiss:hover {
-  opacity: 1;
-  color: var(--fg);
-}
-
-.notification-clear-all {
-  border: none;
-  background: none;
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
-.notification-clear-all:hover {
-  text-decoration: underline;
-}
+/* A permission card's box for the truncation peek (data-peek-row); the card is inside. */
+.nfc-perm-row { min-width: 0; }
 
 .notification-feed-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .notification-group-toggle {
@@ -28048,28 +27964,32 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .nfc-rail {
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
+/* Home's selected state (.sidebar-link.active): a rounded, inset row in accent text on the
+   subtle accent, never a full-width solid block. */
 .nfc-rail-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 6px 8px;
   text-align: left;
   cursor: pointer;
-  background: none;
-  border: none;
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-md);
-  color: var(--fg-secondary);
+  color: var(--fg-muted);
 }
 
-.nfc-rail-btn:hover { background: var(--bg-secondary); color: var(--fg); }
+.nfc-rail-btn:hover { background: var(--accent-subtle); color: var(--fg); }
 
 .nfc-rail-btn.nfc-active {
   background: var(--accent-subtle);
-  color: var(--fg);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -28101,7 +28021,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    badge — the parent's badge already carries the section total, and a column of
    pills would out-shout the sections themselves. */
 .nfc-rail-btn.nfc-rail-sub {
-  padding: 4px 10px 4px 22px;
+  padding: 4px 8px 4px 16px;
   font-size: var(--font-size-sm);
 }
 
@@ -28120,8 +28040,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   min-width: 0;
 }
 
-/* Clear All moved into the header row (the rail owns the section labels now). */
-.nfc-header-clear { margin-left: auto; margin-right: 10px; }
 
 /* Narrow viewports: the panel goes full-width, so the rail becomes a horizontal
    tab strip on top — 150px of vertical rail would eat a third of a phone screen.
@@ -28142,6 +28060,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   }
   .nfc-rail {
     display: flex;
+    flex-direction: row;
     border-right: none;
     border-bottom: 1px solid var(--border);
     overflow-x: auto;
@@ -28154,10 +28073,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
     flex: 0 0 auto;
     border-left: none;
     border-bottom: 2px solid transparent;
+    border-radius: 0;
     padding: 9px 10px;
     white-space: nowrap;
   }
+  /* A tab strip: the selected tab is its accent words over an underline. */
   .nfc-rail-btn.nfc-active {
+    background: none;
     border-left-color: transparent;
     border-bottom-color: var(--accent);
   }
@@ -28170,27 +28092,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 /* ── Card context + detail blocks (shared by permission + error cards) ── */
 
-/* Where it came from, on one line: the session label is .wn-meta and gives up
-   its words first; the host and project chips shrink only past that (their
-   words show on hover, truncation-peek.ts). */
-.nfc-card-chips {
-  display: flex;
-  gap: 4px;
-  margin-top: 5px;
-  min-width: 0;
-}
-.nfc-card-chips > .nfc-chip { min-width: 0; }
-
-/* A card's context (kind, host, project) is a `.badge`. */
 .nfc-chip {
   max-width: 100%;
 }
 
-/* The error's condition recovered (the plugin re-authenticated, the disk was
-   freed): `.badge-accent`, so the settled row does not read as another context tag. */
-.nfc-chip-recovered {
-  flex-shrink: 0;
-}
 
 /* ── Error categories ─────────────────────────────────────────────────────────
    The Errors rail groups by FAMILY ('Sessions', 'API', a plugin's name), so the
@@ -28260,9 +28165,9 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .nfc-cat-showall:hover { text-decoration: underline; }
 
-/* In the All list there are no category headers, so an error card names its own
-   family inline. Muted, like the context chips — it is a label, not a status. */
-.nfc-chip-category { flex-shrink: 0; }
+/* In the All list there are no category headers, so an error card names its family on its
+   meta line, as plain quiet text: a label, not a status. */
+.nfc-chip-category { flex-shrink: 1; }
 
 /* The raw technical line, behind a toggle. It used to BE the card body ("[web]
    {\"holders\":[{\"pid\":22198…"), which is a log file with a red dot. */
@@ -28362,7 +28267,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   word-break: break-word;
 }
 
-/* Occurrence fold: 36 identical failures are one row plus how often. */
+/* Occurrence fold: 36 identical failures are one row plus how often, as words on its meta line. */
 .nfc-count-badge {
   flex-shrink: 0;
 }

@@ -21,6 +21,9 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { WarningTriangleIcon } from './PhoneIcons';
+import { NoticeCard, type NoticeTone } from './NoticeCard';
+import { agentCannotRun, localNoticeIsFailure, type LocalNoticeKind } from '@/utils/local-claude-banner';
+import { useRowDisclosure } from '@/components/sessions/row-disclosure';
 import { useNavigate } from 'react-router-dom';
 import type { DaemonHealth, SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus } from '@/hooks/useHostStatus';
@@ -100,6 +103,44 @@ export interface NotificationProblemsProps {
   onNavigate: (to: string) => void;
 }
 
+/** The word beside the dot on the Claude Code card. */
+const LOCAL_STATUS: Record<string, string> = {
+  install: 'Not installed', 'sign-in': 'Not signed in', outdated: 'Update needed', provider: 'Not answering',
+};
+
+/**
+ * This machine's Claude Code (or AI provider) as one notice card: severity by its dot and a short
+ * title, the x at its top right (2026-11-21 audit: a light yellow block with an orange border, its
+ * own icon and spacing, the x at the bottom). It is the first screen's big block only while no
+ * agent can run here at all (agentCannotRun); otherwise it is its head, opened by a click.
+ */
+function LocalClaudeCard({ local, health }: { local: ReturnType<typeof useLocalClaudeNotice>; health: SystemHealth }) {
+  const blocking = agentCannotRun(health);
+  const [open, setOpen] = useRowDisclosure('nfc-local-claude-open', false);
+  const expanded = blocking || open;
+  const kind = local.kind ?? 'install';
+  const failing = kind === 'install' || kind === 'sign-in' || kind === 'provider' ? localNoticeIsFailure(health, kind as LocalNoticeKind) : false;
+  const tone: NoticeTone = failing ? 'error' : 'warn';
+  const who = kind === 'provider' ? 'AI provider' : 'Claude Code';
+  return (
+    <NoticeCard
+      solid
+      className="nfc-local-claude"
+      testId="nfc-local-claude"
+      data={{ kind: local.kind ?? '', compact: expanded ? undefined : 'true' }}
+      avatar={{ glyph: <WarningTriangleIcon size={13} />, tone }}
+      who={who}
+      status={{ tone, text: LOCAL_STATUS[kind] ?? 'Needs setup' }}
+      line={expanded ? undefined : local.summary}
+      {...(blocking ? {} : { onOpen: () => setOpen(!open), expanded, openTitle: expanded ? 'Show less' : 'Show how to set it up' })}
+      end={local.dismiss}
+      bodyFlush
+    >
+      {expanded ? local.node : undefined}
+    </NoticeCard>
+  );
+}
+
 /** A row's x: "I know". The host leaves this list until its problem changes; System's Remote hosts list still shows it. */
 function dismissRow(row: BannerRow): void {
   dismissHostKeys(row.dismissKeys);
@@ -120,21 +161,17 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
   if (!local.present && hosts.length === 0) return null;
   return (
     <div className="nfc-problems" data-testid="nfc-problems">
-      {local.present && (
-        <div className="notification-card warn nfc-local-claude" data-testid="nfc-local-claude" data-kind={local.kind ?? ''}>
-          <div className="notification-card-row">
-            <span className="notification-card-icon warn"><WarningTriangleIcon size={14} /></span>
-            <span className="notification-card-label">Claude Code</span>
-          </div>
-          {local.node}
-        </div>
-      )}
+      {local.present && <LocalClaudeCard local={local} health={health} />}
       {hosts.length > 0 && (
-        <div className="notification-card warn" data-testid="nfc-problem-hosts">
-          <div className="notification-card-row">
-            <span className="notification-card-icon warn"><WarningTriangleIcon size={14} /></span>
-            <span className="notification-card-label">Remote hosts</span>
-          </div>
+        <NoticeCard
+          solid
+          className="nfc-problem-hosts"
+          testId="nfc-problem-hosts"
+          avatar={{ glyph: <WarningTriangleIcon size={13} />, tone: 'warn' }}
+          who="Remote hosts"
+          status={{ tone: 'warn', text: hosts.length === 1 ? '1 needs you' : `${hosts.length} need you` }}
+          bodyFlush
+        >
           <ul className="notification-card-details nfc-host-list">
             {hosts.map(({ alias, row }) => {
               const cards = renderHostCards(alias);
@@ -144,7 +181,7 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
               ];
             })}
           </ul>
-        </div>
+        </NoticeCard>
       )}
     </div>
   );
