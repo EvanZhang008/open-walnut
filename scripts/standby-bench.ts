@@ -116,12 +116,14 @@ function slowLink(connect: () => Promise<DaemonLink>, mbit: number, downMbit: nu
   let upFree = 0
   let downFree = 0
   const take = async (bytes: number, rate: number, dir: 'up' | 'down') => {
+    wire[dir] += bytes
+    // Unslowed bytes never queue on the slowed wire (a fast first batch left the next batch
+    // waiting out its 6.7 GB at 20 Mbit/s).
+    if (!slow.on) return
     const now = performance.now()
     const free = dir === 'up' ? upFree : downFree
     const end = Math.max(now, free) + (bytes * 8) / (rate * 1e6) * 1000
     if (dir === 'up') upFree = end; else downFree = end
-    wire[dir] += bytes
-    if (!slow.on) return
     await sleep(end - now)
   }
   return {
