@@ -13,7 +13,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { decideServiceEntry, nextServiceMode, readServiceMode, writeServiceMode, SERVICE_MODE_FILE } from '../../src/binary/service-entry.js'
+import { decideServiceEntry, nextServiceMode, pinRuntimePlace, readServiceMode, writeServiceMode, SERVICE_MODE_FILE } from '../../src/binary/service-entry.js'
+import { RUNTIME_PLACE_ENV, runtimeRootsFor } from '../../src/binary/runtime-tree.js'
 import { defaultReadStartTime } from '../../src/providers/daemon-core.js'
 import { acquireDaemonInstanceLock } from '../../src/providers/daemon-instance-lock.js'
 import { guardedPath } from '../setup/exec-guard.js'
@@ -178,4 +179,28 @@ describe('runHostService while a daemon still holds the runtime dir', () => {
       if (lock.kind === 'owner') await lock.release()
     }
   }, 90_000)
+})
+
+// 2026-11-22, a real host: the service unpacked its tree under the launcher's env, then took the
+// follower's OPEN_WALNUT_HOME; the search embed worker it started from its own file looked for its
+// script under the follower's data dir and the file answered "Unknown command".
+describe('a program the service starts from its own file finds the tree the service runs from', () => {
+  const ID = '0.0.0-abc123'
+  const launcherEnv = { HOME: '/home/u' } as NodeJS.ProcessEnv
+  const root = runtimeRootsFor(launcherEnv, ID)[0]!
+  const follower = { OPEN_WALNUT_HOME: '/home/u/.open-walnut-host/walnuts/0123/data', WALNUT_ROLE: 'replica' }
+
+  it('without the pin the follower env looks elsewhere (the bug)', () => {
+    expect(runtimeRootsFor(follower, ID)[0]).not.toBe(root)
+  })
+
+  it('pinned, the follower env resolves the same tree, whatever it says of every key that moves the tree', () => {
+    expect(runtimeRootsFor(pinRuntimePlace(follower, root), ID)[0]).toBe(root)
+    // Every key runtime-tree.ts reads, set to another place by the follower's spec, still loses to the pin.
+    for (const key of RUNTIME_PLACE_ENV) {
+      const pinned = pinRuntimePlace({ ...follower, [key]: '/elsewhere' }, root)
+      expect(runtimeRootsFor(pinned, ID)[0], key).toBe(root)
+    }
+    expect(pinRuntimePlace(follower, root)).toMatchObject(follower)
+  })
 })

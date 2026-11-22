@@ -163,15 +163,29 @@ function standInIs(runtimeDir: string, pid: number): boolean {
 }
 
 /**
+ * The follower's env with the runtime tree this process already unpacked (main.ts unpacks it before
+ * anything else, under the launcher's env). A program this service starts from its own file (the
+ * search embed worker, an ACP adapter shipped as a file) finds its script in its own tree: with the
+ * follower's OPEN_WALNUT_HOME alone it looked under the follower's data dir, the script the service
+ * named was outside it, and the file answered "Unknown command" (2026-11-22 on a real host: the
+ * search replica's semantic lane was turned off). WALNUT_RUNTIME_DIR decides the place alone
+ * (runtime-tree.ts runtimeRootsFor).
+ */
+export function pinRuntimePlace(serverEnv: Record<string, string>, runtimeRoot: string): Record<string, string> {
+  return { ...serverEnv, WALNUT_RUNTIME_DIR: path.dirname(runtimeRoot) }
+}
+
+/**
  * Runs the host's one Walnut service (main.ts, after decideServiceEntry said `serve`): the follower
  * server `walnut web --replica` runs (runWeb, one entry for both), holding the daemon runtime in this
  * process (in-process-daemon.ts, its door open for every leader and walnut-net). `loadRuntime` is the
  * runtime module the compiled file carries (main.ts imports it; tsc never follows it from here).
  */
-export async function runHostService(d: ServeDecision, loadRuntime: () => Promise<unknown>): Promise<void> {
+export async function runHostService(d: ServeDecision, loadRuntime: () => Promise<unknown>, runtimeRoot?: string): Promise<void> {
   // The server's modules read their env once, at import: the follower's env first, then them.
-  for (const key of Object.keys(process.env)) if (!(key in d.serverEnv)) delete process.env[key]
-  Object.assign(process.env, d.serverEnv)
+  const serverEnv = runtimeRoot ? pinRuntimePlace(d.serverEnv, runtimeRoot) : d.serverEnv
+  for (const key of Object.keys(process.env)) if (!(key in serverEnv)) delete process.env[key]
+  Object.assign(process.env, serverEnv)
   fs.mkdirSync(d.cwd, { recursive: true, mode: 0o700 })
   process.chdir(d.cwd)
   // A trial (daemon-boot-proof.ts) ends by itself, as the daemon program's does (runDaemonProcess):

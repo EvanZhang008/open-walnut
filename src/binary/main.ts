@@ -75,7 +75,7 @@ if (first === '__selftest') {
   // (service-entry.ts reads its mode file and spec before anything else loads), else the daemon.
   const service = process.argv[2] === '--service' ? (await import('./service-entry.js')).decideServiceEntry(process.env, process.execPath) : null
   if (service?.kind === 'daemon' && !service.quiet) process.stderr.write(`walnut --service: running as the session daemon (${service.why})\n`)
-  if (service?.kind === 'serve') await (await import('./service-entry.js')).runHostService(service, () => import('../providers/daemon-standalone.js'))
+  if (service?.kind === 'serve') await (await import('./service-entry.js')).runHostService(service, () => import('../providers/daemon-standalone.js'), runtimeRoot)
   else await (await import('../providers/daemon-standalone.js')).runDaemonProcess()
 } else if (first === 'walnut' || first === 'wn') {
   // The daemon copies this file as its shim core and its PATH shim runs `<copy> walnut <args>`.
