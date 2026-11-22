@@ -195,6 +195,8 @@ export interface ReplicaCluster {
   browserCode(): Promise<string>
   sleepMac(): SignalWindow
   wakeMac(): SignalWindow
+  /** SIGTERM to the replica; its daemon starts it again (after its 5 s backoff). Resolves with the new pid once it answers. */
+  restartReplica(timeoutMs?: number): Promise<number>
   asleep(): boolean
   /** `linkProxy` only: close the Mac's link to the host daemon (every connection) and hold its redials silent. */
   cutLink(): void
@@ -265,14 +267,15 @@ export function writeStubBin(bin: string): void {
  * <app>/dist is this tree's real build (a link to ROOT/dist; bun runs it from
  * there, so it finds its own web/static), and the command line still names <app>.
  */
-function writeAppDir(app: string, mode: ClusterApp): void {
+function writeAppDir(app: string, mode: ClusterApp, cli?: string): void {
   if (mode === 'built') {
+    if (cli !== undefined) throw new Error('replica-cluster: appCli replaces the source app\'s dist/cli.js; a built app runs its own')
     fs.mkdirSync(app, { recursive: true })
     fs.symlinkSync(path.join(ROOT, 'dist'), path.join(app, 'dist'))
     return
   }
   fs.mkdirSync(path.join(app, 'dist'), { recursive: true })
-  fs.writeFileSync(path.join(app, 'dist', 'cli.js'), [
+  fs.writeFileSync(path.join(app, 'dist', 'cli.js'), cli ?? [
     `await import(${JSON.stringify('file://' + path.join(ROOT, 'src', 'cli.ts'))})`,
     '',
   ].join('\n'))
@@ -508,7 +511,7 @@ dcm.DaemonConnection.prototype.uploadFile = async function (remotePath, data, op
 }
 
 /** The Mac's boot script: its own data or nothing (REFUSING), the seed, the test transport to the host daemon. */
-export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean }): string {
+export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean; extra?: string }): string {
   const src = (f: string) => JSON.stringify(path.join(ROOT, f))
   return `
 const c = await import(${src('src/constants.ts')})
@@ -568,6 +571,7 @@ if (clockFacts && clockFacts.startsWith(${JSON.stringify(path.dirname(o.macData)
 // keepalive); a link dialled straight to the URL never does, so the test
 // transport redials it here, once a second, the same way.
 setInterval(() => { void direct().catch(() => {}) }, 1000).unref()
+${o.extra ?? ''}
 const addr = server.address()
 process.stdout.write(JSON.stringify({ ids: { board: board.id, other: other.id }, pid: process.pid }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
@@ -614,7 +618,12 @@ async function bootMac(script: string, file: string, env: Record<string, string>
  */
 export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
 
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean }): Promise<ReplicaCluster> {
+/**
+ * `appCli`: the text of the source app's dist/cli.js in place of the plain import of src/cli.ts
+ * (a test's own boot of the replica, e.g. tests/helpers/host-judge-cluster.ts). `macBootExtra`: code
+ * the Mac's boot script runs after its server started, before it reports its port.
+ */
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean; appCli?: string; macBootExtra?: string }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -636,7 +645,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const appCli = path.join(d.app, 'dist', 'cli.js')
   const mockCli = path.join(d.bin, MOCK_CLI_NAME)
   writeStubBin(d.bin)
-  writeAppDir(d.app, app)
+  writeAppDir(d.app, app, opts.appCli)
   fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin, opts.macConfigExtra))
   if (opts.plugin) {
     for (const [rel, text] of Object.entries(opts.plugin.files)) {
@@ -749,7 +758,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
-    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin }), macBootFile, macEnv, macLog)
+    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)
@@ -871,6 +880,15 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
         await sleep(o.gapMs)
       }
       return steps
+    },
+    async restartReplica(timeoutMs = 120_000) {
+      const before = replicaPins()
+      if (before.length === 0) throw new Error('replica-cluster: no replica runs to restart')
+      for (const p of before) signalPinned(p, 'SIGTERM')
+      await waitFor(() => before.every((p) => !stillPinned(p)), 30_000, 'the replica to stop')
+      const next = await waitFor(() => replicaPins().find((p) => !before.some((b) => b.pid === p.pid)) ?? null, timeoutMs, 'its daemon to start the replica again')
+      await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, timeoutMs, 'the restarted replica to answer')
+      return next.pid
     },
     async waitAway(token, timeoutMs = WINDOWS.quietMs + 30_000) {
       const t0 = Date.now()
