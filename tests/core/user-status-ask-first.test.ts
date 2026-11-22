@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { deriveUserStatus, type StatusReport, type UserStatusInput } from '../../src/core/user-status.js'
+import { deriveUserStatus, PROGRAM_RUN_WAIT, type StatusReport, type UserStatusInput } from '../../src/core/user-status.js'
 import { PHASE_ORDER, TERMINAL_PHASES } from '../../src/core/phase.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -121,6 +121,12 @@ describe('an open ask of the user is Needs you, whatever else wakes the task', (
       for (const [waitName, wait] of Object.entries({ none: {}, ...WAIT_SOURCES })) {
         if (waitName === 'reportPending') continue
         const s = deriveUserStatus({ phase, hasSession: true, processStatus: 'idle', ...wait, report: rep({ state: 'needs' }) }, NOW)
+        // A program's run nobody asked for has no one's question to answer: it waits on its program
+        // (tests/core/user-status-program-run.test.ts), never on a watch or a clock.
+        if (waitName === 'programRun') {
+          if (s.state !== 'waiting' || s.waitingOn !== PROGRAM_RUN_WAIT) wrong.push(`${phase} + programRun: ${s.state} (${s.waitingOn ?? s.toRead ?? ''})`)
+          continue
+        }
         if (s.state === 'waiting') wrong.push(`${phase} + ${waitName}: waiting (${s.waitingOn})`)
       }
     }

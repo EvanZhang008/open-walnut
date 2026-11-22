@@ -1333,8 +1333,11 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // Not a task parked on its own wait, though (2026-11-20 and 11-22, the user, of a check its wait
   // clock woke that found nothing new: "it is basically a waiting status right", "this seems like
   // should be wait but why it is need me"): its park says what it waits on, read below.
+  // Nor a program's run nobody asked for: it has no one's question to answer, so words with no ask
+  // are its program's to take (2026-11-22: a ticket run reported needs-you with "nothing for you to
+  // decide" and read "It answered your question"); its real ask was read above.
   if (report?.state === 'needs' && none(report.ask) && !report.kindless_ask && !report.answered_person && !input.isMain && !input.isLead && input.phase !== 'WAITING') {
-    return toRead('answer', ANSWER_TO_READ, w);
+    return input.programRun ? programRunWait(w) : toRead('answer', ANSWER_TO_READ, w);
   }
   const own = ownWork(input, report, w, nowMs);
   // Its start waits for room on a host (sessions/start-queue.ts; a start clears it), whatever its

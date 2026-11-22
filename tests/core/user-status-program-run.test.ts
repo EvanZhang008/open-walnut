@@ -7,6 +7,8 @@
  * user's To read, where every imported run reads Waiting. Walnut asks each turn of its own sessions
  * for a report, that session said done, and a done report was read before the program-run rule,
  * which until then only a run with no report at all (an imported one) ever reached.
+ * 2026-11-22: the third real run reported needs-you with no ask and read "It answered your question":
+ * that report was listed here as the one exception, which real data showed to be the same class.
  *
  * The class: every report a session can leave that asks the user nothing, in every open phase. A new
  * report state, or a new kind of wait, fails the enumeration until it is listed here with what a
@@ -29,15 +31,16 @@ const NOW = Date.parse('2026-11-21T21:30:00Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
 const rep = (r: Partial<StatusReport>): StatusReport => ({ state: 'working', at: ago(60_000), ...r } as StatusReport)
 
-/** What a report in each state, asking nothing, may read for a program's run. */
-const ASKS_NOTHING: Record<UserState, { report: StatusReport; mayRead?: string }> = {
+/** A report in each state that asks nothing: none of them is the user's to read for a program's run. */
+const ASKS_NOTHING: Record<UserState, { report: StatusReport }> = {
   done: { report: rep({ state: 'done', now: 'The report is on the ticket.' }) },
   working: { report: rep({ state: 'working', now: 'Reading the alarm history.' }) },
   waiting: { report: rep({ state: 'waiting', waiting_kind: 'outside', waiting_on: 'The on-call engineer, to close the ticket' }) },
   read: { report: rep({ state: 'read', now: 'Nothing new.' }) },
-  // The one report that still reads To read: the session itself said it needs the user and named
-  // no ask, which is theirs to read in every phase (tests/core/user-status-ask-first.test.ts).
-  needs: { report: rep({ state: 'needs' }), mayRead: 'the session said it needs the user' },
+  // 2026-11-22, the third real ticket run: its session reported needs-you with no ask ("nothing for
+  // you to decide") and read "It answered your question". For a regular task those words are the
+  // user's to read (tests/core/user-status-ask-first.test.ts); nobody asked a program's run anything.
+  needs: { report: rep({ state: 'needs', now: 'The report is on the ticket.', next: 'Nothing for you to decide.' }) },
 }
 
 /** A waiting report of each kind, on words that name no one: whose it is for a program's run. */
@@ -65,18 +68,16 @@ describe('a program\'s run that asks nothing is never the user\'s to read', () =
   it('whatever its session reported, in every open phase, it reads neither To read nor Needs you', () => {
     expect(open.length).toBeGreaterThan(2)
     const wrong: string[] = []
-    const reports: Array<[string, StatusReport | undefined, string | undefined]> = [
-      ['no report', undefined, undefined],
-      ['a kindless ask', KINDLESS, undefined],
-      ...Object.entries(ASKS_NOTHING).map(([state, c]) => [`report ${state}`, c.report, c.mayRead] as [string, StatusReport, string | undefined]),
+    const reports: Array<[string, StatusReport | undefined]> = [
+      ['no report', undefined],
+      ['a kindless ask', KINDLESS],
+      ...Object.entries(ASKS_NOTHING).map(([state, c]) => [`report ${state}`, c.report] as [string, StatusReport]),
     ]
     for (const phase of open) {
       for (const processStatus of ['idle', 'stopped'] as const) {
-        for (const [name, report, mayRead] of reports) {
+        for (const [name, report] of reports) {
           const s = deriveUserStatus(run({ phase, processStatus, ...(report ? { report } : {}) }), NOW)
-          // The stated exception reads as an answer to read, and as nothing else.
-          const excepted = !!mayRead && s.state === 'read' && s.toRead === 'answer'
-          if (s.state === 'needs' || (s.state === 'read' && !excepted)) {
+          if (s.state === 'needs' || s.state === 'read') {
             wrong.push(`${phase} + ${processStatus} + ${name}: ${s.state} (${s.toRead ?? ''} ${s.waitingOn ?? s.ask ?? ''})`)
           }
         }
@@ -116,6 +117,14 @@ describe('a program\'s run that asks nothing is never the user\'s to read', () =
     const s = deriveUserStatus(run({ report: ASKS_NOTHING.done.report }), NOW)
     expect(s).toMatchObject({ state: 'waiting', kind: 'outside', waitingOn: PROGRAM_RUN_WAIT, now: 'The report is on the ticket.' })
     expect(s.toRead).toBeUndefined()
+  })
+
+  it('the second case: its session reported needs-you and asked nothing', () => {
+    const s = deriveUserStatus(run({ report: ASKS_NOTHING.needs.report }), NOW)
+    expect(s).toMatchObject({ state: 'waiting', kind: 'outside', waitingOn: PROGRAM_RUN_WAIT, now: 'The report is on the ticket.' })
+    expect(s.toRead).toBeUndefined()
+    // A regular task's same report is still the user's answer to read.
+    expect(deriveUserStatus(run({ programRun: false, report: ASKS_NOTHING.needs.report }), NOW)).toMatchObject({ state: 'read', toRead: 'answer' })
   })
 
   it('an ask with no kind of the user\'s own is the program\'s to take too', () => {
