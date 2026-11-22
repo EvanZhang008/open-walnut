@@ -117,7 +117,7 @@ export function SidebarStatusItems({ onOpenChange }: { onOpenChange?: (open: boo
       return;
     }
     notify({
-      kind: 'operation-error', severity: 'error', persistent: false,
+      kind: 'operation-error', toastReason: 'failure', severity: 'error', persistent: false,
       title: `"${action.label}" did not run`, body: result.message,
       dedupKey: `status-item-action-error:${item.key}`,
     });

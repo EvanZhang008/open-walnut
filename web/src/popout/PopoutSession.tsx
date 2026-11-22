@@ -77,7 +77,7 @@ function PopoutSessionPanel() {
       setFork(null);
       return true;
     } catch (error) {
-      notify({ kind: 'operation-error', severity: 'error', title: 'Could not fork session', body: error instanceof Error ? error.message : 'Try again.', persistent: false, dedupKey: 'popout-fork-error' });
+      notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', title: 'Could not fork session', body: error instanceof Error ? error.message : 'Try again.', persistent: false, dedupKey: 'popout-fork-error' });
       return false;
     } finally { setForking(false); }
   }, [fork, forking, navigate, notify]);

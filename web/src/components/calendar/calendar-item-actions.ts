@@ -12,7 +12,7 @@
 import { useMemo, useRef } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTaskStoreActions } from '@/contexts/TasksContext';
-import { useTaskUndo } from '@/undo/TaskUndoContext';
+import { useTaskUndo, type UndoablePush } from '@/undo/TaskUndoContext';
 import { useNotifications } from '@/contexts/notifications';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
@@ -24,6 +24,9 @@ import {
 } from '@/stores/calendar-events-store';
 import { useCalendarWriteConfirmation } from './calendar-event-actions';
 import type { CalendarItem } from './calendar-items';
+
+/** Whether a change takes its item off the grid (an unschedule): only that one shows an Undo toast. */
+type UndoResult = UndoablePush['result'];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** Tz-less local ISO of a date ("2026-11-20T16:00:00"). */
@@ -124,7 +127,7 @@ export function useCalendarItemActions(): CalendarItemActions {
       return !!cur && (Object.keys(want) as (keyof TaskWhen)[]).every((k) => whenOf(cur, k) === want[k]);
     };
 
-    const writeTask = (id: string, patch: TaskWhen, title: string) => {
+    const writeTask = (id: string, patch: TaskWhen, title: string, result: UndoResult = 'visible') => {
       const task = row(id);
       const keys = Object.keys(patch) as (keyof TaskWhen)[];
       const before: TaskWhen = {};
@@ -135,6 +138,7 @@ export function useCalendarItemActions(): CalendarItemActions {
       if (!stack || !task || keys.every((k) => before[k] === patch[k])) return;
       const withdraw = stack.push({
         key,
+        result,
         title,
         body: task.title,
         // Only while it is still where this put it: a later change elsewhere is not taken back.
@@ -145,7 +149,7 @@ export function useCalendarItemActions(): CalendarItemActions {
           });
         },
         // Only while it is still where the Undo put it.
-        redo: () => serial(key, () => { if (taskAt(id, before)) writeTask(id, patch, title); }),
+        redo: () => serial(key, () => { if (taskAt(id, before)) writeTask(id, patch, title, result); }),
       });
       void write.then((ok) => { if (ok === false) withdraw(); }, withdraw);
     };
@@ -167,8 +171,10 @@ export function useCalendarItemActions(): CalendarItemActions {
         const write = moveCalendarEvent(id, { ...next, human_confirm: calendarEventNeedsApproval(ev) });
         const stack = latest.current.undo;
         if (stack) {
+          // The block moved under the pointer: no toast; mod+z takes it back.
           const withdraw = stack.push({
             key,
+            result: 'visible',
             title,
             body: ev.title,
             undo: () => {
@@ -201,8 +207,10 @@ export function useCalendarItemActions(): CalendarItemActions {
     const createUndoable = (input: NewEvent, key: string, title: string, sayFailure: boolean, replaces?: Promise<CalendarEvent>): Promise<CalendarEvent> => {
       const created = createCalendarEventOptimistic(input);
       if (replaces) void Promise.all([replaces, created]).then(([old, now]) => { alias.set(old.id, now.id); }, () => {});
+      // The new block is on the grid where it was made: no toast; mod+z takes it back.
       const withdraw = latest.current.undo?.push({
         key,
+        result: 'visible',
         title,
         body: input.title,
         // An Undo before the event is written waits for it, then removes it.
@@ -214,7 +222,7 @@ export function useCalendarItemActions(): CalendarItemActions {
         withdraw?.();
         if (!sayFailure) return;
         latest.current.notify({
-          kind: 'operation-error', severity: 'error', persistent: false, dedupKey: `calendar-create:${key}`,
+          kind: 'operation-error', toastReason: 'failure', severity: 'error', persistent: false, dedupKey: `calendar-create:${key}`,
           title: 'Could not create event', body: String((err as Error)?.message ?? err).slice(0, 400),
         });
       });
@@ -253,8 +261,8 @@ export function useCalendarItemActions(): CalendarItemActions {
       unscheduleTask: (item) => {
         if (item.kind === 'event') return;
         // Unscheduling the start also clears end_date: a dangling end without a start means nothing.
-        if (item.kind === 'task-due') writeTask(item.task.id, { due_date: '' }, 'Deadline cleared');
-        else writeTask(item.task.id, { start_date: '', ...(item.task.end_date ? { end_date: '' } : {}) }, 'Task unscheduled');
+        if (item.kind === 'task-due') writeTask(item.task.id, { due_date: '' }, 'Deadline cleared', 'hidden');
+        else writeTask(item.task.id, { start_date: '', ...(item.task.end_date ? { end_date: '' } : {}) }, 'Task unscheduled', 'hidden');
       },
       saveTaskWhen: (item, newWhen, newEnd) => {
         if (item.kind === 'event') return;

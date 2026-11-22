@@ -54,7 +54,7 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
       const message = err instanceof Error ? err.message : String(err);
       log.warn('tasks', `private tasks: ${what} failed`, { taskId: task.id, error: message });
       if (onError) onError(message);
-      else notify?.({ kind: 'operation-error', severity: 'warning', title: 'Sync not changed', body: message, persistent: false, dedupKey: `private-task-${task.id}` });
+      else notify?.({ kind: 'operation-error', toastReason: 'failure', severity: 'warning', title: 'Sync not changed', body: message, persistent: false, dedupKey: `private-task-${task.id}` });
     });
     afterAction();
   };

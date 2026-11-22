@@ -26,7 +26,7 @@ export function ContentActionsHost() {
   useEffect(() => setContentActionsRuntime({
     navigate: (to) => navigate(to),
     toast: (t) => notify({
-      kind: 'hint', severity: t.severity, title: t.title, ...(t.body ? { body: t.body } : {}),
+      kind: 'hint', severity: t.severity, toastReason: t.toastReason, title: t.title, ...(t.body ? { body: t.body } : {}),
       dedupKey: t.dedupKey, persistent: false,
       ...(t.action ? { action: { label: t.action.label, kind: 'callback' as const }, onAction: t.action.run } : {}),
     }),

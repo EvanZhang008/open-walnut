@@ -10,6 +10,7 @@ import type { BoardKanbanSeen, BoardKanbanSeenCard } from '../board-model';
 import type { DeletePreview } from '../../../../../src/core/boards/board-lanes';
 import type { KanbanCardVM } from './kanban-card-model';
 import type { KanbanBoardVM, KanbanLaneVM, KanbanLeaderVM } from './kanban-model';
+import type { ToastReason } from '@/contexts/notifications/types';
 
 /** Wide = lanes side by side; narrow = lanes as foldable sections (pane < 600px, back at >= 624px). */
 export type KanbanMode = 'wide' | 'narrow';
@@ -40,6 +41,9 @@ export interface KanbanToastAction {
 export interface KanbanToast {
   id?: string;
   text: string;
+  /** Why it may show at all (the UI standard's toast rule): a failure, the Undo of a card that
+   *  left its place, or what a move did to its task out of sight. */
+  toastReason: ToastReason;
   tone?: 'info' | 'error';
   actions?: KanbanToastAction[];
   /** Default 8000. */

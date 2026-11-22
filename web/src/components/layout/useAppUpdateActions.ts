@@ -31,7 +31,7 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
   const toastError = useCallback((title: string, body: string, auto = false) => {
     if (auto) { log.warn('app-update', 'automatic update step failed', { title, body }); return; }
     if (!lent) setError(body || title);
-    else notify({ kind: 'operation-error', severity: 'error', persistent: false, title, body, dedupKey: `app-update:${title}` });
+    else notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', persistent: false, title, body, dedupKey: `app-update:${title}` });
   }, []);
 
   /** `checked`: the update notice already looked at every window and asked (StaleBuildPill), so the
@@ -52,7 +52,7 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
         } else if (result.completed) {
           const version = getAppUpdateDownloadedVersion(result.state);
           notify({
-            kind: 'hint', severity: 'success', persistent: false,
+            kind: 'hint', toastReason: 'out-of-sight', severity: 'success', persistent: false,
             title: 'Update downloaded',
             body: 'Use Restart in the update notice to install it.',
             dedupKey: `app-update-downloaded:${version ?? ''}`,

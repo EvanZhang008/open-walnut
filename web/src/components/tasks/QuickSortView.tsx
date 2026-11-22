@@ -8,6 +8,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
+import { useNotifications } from '@/contexts/notifications';
+import { undoKeyLabel } from '@/undo/undo-key';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { FocusTier } from '@/api/focus';
 import { usePageView } from '@/utils/view-memory';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
@@ -54,7 +57,28 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   const [view, setView] = usePageView<SortView>('home-board', 'sortView', 'tasks', isView);
   const [filter, setFilterRaw] = usePageView<SortFilter>('home-board', 'sortFilter', DEFAULT_SORT_FILTER, isSortFilter);
   const [replying, setReplying] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ label: string; undo: boolean } | null>(null);
+  // The card a decision took leaves the queue (out of sight), so its Undo is on the app's one toast;
+  // a reply cannot be taken back and the tally counts it, so it gets none (standard.md "Toasts").
+  const { notify, dismissToast } = useNotifications();
+  const toastRef = useRef<{ id: string; key: string } | null>(null);
+  const toastSeq = useRef(0);
+  const undoLastRef = useRef<() => void>(() => {});
+  const clearToast = useLeanCallback((key?: string) => {
+    const cur = toastRef.current;
+    if (!cur || (key !== undefined && cur.key !== key)) return;
+    dismissToast(cur.id);
+    toastRef.current = null;
+  }, [dismissToast]);
+  const sayDecision = (decision: Decision) => {
+    clearToast();
+    if (!decision.revert) return;
+    const id = `quick-sort:${++toastSeq.current}`;
+    toastRef.current = { id, key: decision.key };
+    notify({ id, dedupKey: id, kind: 'hint', severity: 'info', toastReason: 'undo-of-hidden', title: decision.label, persistent: false,
+      action: { label: 'Undo', kind: 'callback' }, actionKeyHint: undoKeyLabel(), onAction: () => undoLastRef.current() });
+  };
+  const sayDecisionRef = useRef(sayDecision);
+  sayDecisionRef.current = sayDecision;
   const [taken, setTaken] = useState<ReadonlySet<string>>(() => new Set());
   const [decided, setDecided] = useState(0);
   const [tally, setTally] = useState<Record<string, number>>({});
@@ -94,13 +118,12 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
       const gone = list[i];
       const rest = [...list.slice(0, i), ...list.slice(i + 1)];
       setUndos(rest);
-      const now = rest.at(-1);
-      setToast(t => t?.label === gone.label ? (now ? { label: now.label, undo: true } : null) : t);
+      clearToast(gone.key);
       if (gone.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
       setTally(t => ({ ...t, [gone.outcome]: Math.max(0, (t[gone.outcome] ?? 0) - 1) }));
     }
     setTaken(s => { const next = new Set(s); next.delete(key); return next; });
-  }, []);
+  }, [clearToast]);
   /** Takes the card out at once; `keep` says from the ids that landed whether it stays decided. */
   const record = (decision: Decision, keep: (landed: string[]) => boolean = landed => landed.length > 0) => {
     setTaken(s => new Set(s).add(decision.key));
@@ -108,7 +131,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     setTally(t => ({ ...t, [decision.outcome]: (t[decision.outcome] ?? 0) + 1 }));
     // A reply cannot be taken back: it is counted and named, never offered to Undo.
     if (decision.revert) setUndos(u => [...u.slice(-19), decision]);
-    setToast({ label: decision.label, undo: !!decision.revert });
+    sayDecision(decision);
     setConfirming(null);
     void decision.write.then(landed => { if (!keep(landed)) unrecord(decision.key); });
   };
@@ -119,8 +142,10 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     // Taken off the ref at once too: a second key press before the next render undoes the one before.
     undosRef.current = undosRef.current.slice(0, -1);
     setUndos(u => u.slice(0, -1));
+    // The card is back in the queue (on screen); the decision before it, still out of sight, gets
+    // its Undo back on the toast, as the line under the view used to fall back to it.
     const before = undosRef.current.at(-1);
-    setToast(before ? { label: before.label, undo: true } : null);
+    if (before) sayDecisionRef.current(before); else clearToast();
     setTaken(s => { const next = new Set(s); next.delete(last.key); return next; });
     if (last.outcome !== 'skip') setDecided(n => Math.max(0, n - 1));
     setTally(t => ({ ...t, [last.outcome]: Math.max(0, (t[last.outcome] ?? 0) - 1) }));
@@ -128,7 +153,10 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
     void last.write.then(async landed => {
       if (landed.length && !(await revert(landed))) setError(`Could not undo: ${last.label}`);
     });
-  }, []);
+  }, [clearToast]);
+  undoLastRef.current = undoLast;
+  // Its Undo belongs to this view: the toast goes with it.
+  useEffect(() => () => clearToast(), [clearToast]);
 
   /** A tier write; resolves to the ids the server took. */
   const writeTier = useCallback(async (ids: string[], tier: string): Promise<string[]> => {
@@ -337,7 +365,6 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
           })}
     </div>}
     <div className="quick-sort-foot">
-      {toast && <div className="quick-sort-toast" role="status"><span>{toast.label}</span>{toast.undo && <><button type="button" onClick={undoLast}>Undo</button><kbd>⌘Z</kbd></>}</div>}
       {tallyRows.length > 0 && <div className="quick-sort-tally" data-testid="quick-sort-tally"><span>This round:</span>{tallyRows.map(([k, n]) => <span key={k}>{k === 'snoozed' ? 'Snoozed' : k === 'done' ? 'Done' : k === 'replied' ? 'Replied' : label(k)} {n}</span>)}</div>}
     </div>
     {active && snooze.state && <SnoozeFlyout point={snooze.state.point} anchorRef={snooze.noTrigger}

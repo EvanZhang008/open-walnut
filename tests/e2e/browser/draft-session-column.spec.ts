@@ -334,14 +334,9 @@ test('Save as todo turns the draft into a task: first line = title, rest = descr
   // The column goes immediately (the close is optimistic, ahead of the POST).
   await expect(draftPanels(page)).toHaveCount(0, { timeout: 10_000 })
 
-  // Toast FIRST, and as ONE locator: the 'sort' kind auto-dismisses after 3s, so
-  // the API round-trips below would outlive it, and two sequential expects could
-  // straddle the dismissal. Undo is what makes a no-dialog capture safe to
-  // mis-click, so it is part of the thing being waited for, not a follow-up.
-  const toast = page
-    .locator('.notification-toast--success', { hasText: 'Task created' })
-    .filter({ has: page.locator('.notification-toast-action', { hasText: 'Undo' }) })
-  await expect(toast).toBeVisible({ timeout: 20_000 })
+  // No toast: the new row is on screen and marked, and mod+z takes the create back (the UI
+  // standard's toast rule, tests/web/toast-reason-ratchet.test.ts).
+  await expect(page.locator('.notification-toast', { hasText: 'Task created' })).toHaveCount(0)
 
   // The task exists with the split applied: the first line became the title (not
   // the whole blob), and the remainder became the description.

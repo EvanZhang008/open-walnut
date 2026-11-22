@@ -9,6 +9,7 @@ import type { SessionPinsApi } from '@/contexts/SessionPinsContext';
 import type { SessionViewMode } from '@/hooks/useSessionThreads';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
 import type { ThreadCounts, ThreadLiveState, ThreadMetaIndex, ThreadViewStatus } from '@/utils/thread-meta';
+import type { ToastReason } from '@/contexts/notifications/types';
 
 export type { ThreadCounts, ThreadLiveState, ThreadMetaIndex, ThreadViewStatus };
 
@@ -65,6 +66,9 @@ export interface ThreadToastAction {
 
 export interface ThreadToastInput {
   text: string;
+  /** Why it may show at all (the UI standard's toast rule): a failure, or the Undo of a change
+   *  that takes its question out of sight (archive, remove). */
+  toastReason: Exclude<ToastReason, 'out-of-sight'>;
   action?: ThreadToastAction;
   /** Visible time; hover pauses it. */
   ms: number;

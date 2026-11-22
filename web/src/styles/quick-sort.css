@@ -66,10 +66,6 @@ button.quick-sort-card-title:hover { color: var(--accent); }
 .quick-sort-empty h2 { margin: 0 0 6px; color: var(--fg); font-size: var(--font-size-xl); }
 .quick-sort-empty button { margin-top: 10px; padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-md); }
 .quick-sort-foot { display: flex; flex-direction: column; gap: 8px; }
-.quick-sort-toast { display: flex; align-items: center; gap: 12px; width: max-content; max-width: 100%; padding: 7px 12px; border-radius: var(--radius-sm); background: var(--fg); color: var(--bg); font-size: var(--font-size-md); }
-.quick-sort-toast span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.quick-sort-toast button { flex: none; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
-.quick-sort-toast kbd { flex: none; font: var(--font-size-xs) ui-monospace, monospace; opacity: .6; }
 .quick-sort-tally { display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .quick-sort-tally span + span { padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); }
 .home-board-snoozed { color: var(--fg-muted); }

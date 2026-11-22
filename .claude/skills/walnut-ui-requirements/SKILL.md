@@ -52,16 +52,19 @@ detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../..
 12. **Menus and overlays follow the hard rules in [web/src/AGENTS.md](../../../web/src/AGENTS.md#menus--overlays--hard-rules), and a page's view choice is kept with `usePageView`.**
     Example (2026-10): menus that overflowed the viewport and tabs that reset on reload; each rule there is a shipped incident.
 
+13. **No toast for what the user can already see: a toast is only for a failure he cannot see, news from out of sight, or the Undo of a change that takes its object out of view.**
+    Example (2026-11-21): creating a calendar event popped an "Event created" card with an Undo in the far corner while the new block sat on the grid under his pointer; the user complained. Rules: [standard.md](standard.md#toasts).
+
 ## Proof and shipping
 
-13. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
+14. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
     Example (2026-11-20): a demo on toy fixtures looked good while the real product with real data looked bad.
-14. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
+15. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
     Example (2026-11-20): one task carried the Needs you card's new look, one-decision paging and the full-window expand fix at once, so each slipped behind the others.
-15. **Report to the user briefly, with pictures or GIFs instead of long text.**
+16. **Report to the user briefly, with pictures or GIFs instead of long text.**
     Example (2026-11-20): the user's standing rule after long reports: pictures or GIFs over long text, his exact question answered first.
 
 ## Before you land
 
 Go through this list for the change: every item of rule 1 checked, the core flows of rule 2 walked,
-the video of rule 13 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).
+the video of rule 14 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).

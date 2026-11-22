@@ -272,6 +272,7 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
       const saved: SavedColumnDone = { taskId: entry.taskId, from: entry.from, before: entry.before, slot: entry.slot, index: entry.index, ...(opened ? { opened } : {}) };
       latest.current.undo?.push({
         key: entry.undoKey,
+        result: 'hidden',
         title: 'Task completed',
         ...(body ? { body } : {}),
         undo,

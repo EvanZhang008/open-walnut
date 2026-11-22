@@ -203,7 +203,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
       el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - visibleTopOf(el);
       row.classList.add('user-messages-highlight');
       setTimeout(() => row.classList.remove('user-messages-highlight'), 1500);
-      a.toast.show({ text: PASSAGE_GONE_TEXT, ms: 4000 });
+      a.toast.show({ text: PASSAGE_GONE_TEXT, toastReason: 'failure', ms: 4000 });
       log.info('threads', 'pop landing: passage not found, landed on the answer', { sessionId: a.sessionId, msgId: passage.msgId });
       return;
     }

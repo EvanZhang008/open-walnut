@@ -2,6 +2,7 @@ import { Children, createContext, isValidElement, useContext, useEffect, useMemo
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useNotifications } from '@/contexts/notifications';
 import { TASK_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
+import { useTaskUndo } from '@/undo/TaskUndoContext';
 
 import { orderedNavigationIds, moveNavigationId } from './navigation-order';
 
@@ -15,6 +16,7 @@ const NavigationOrder = createContext<OrderContext | null>(null);
 export function NavigationSections({ storageKey, children }: { storageKey: string; children: ReactNode }) {
   const nodes = Children.toArray(children).filter(isValidElement<{ navId: string }>);
   const { notify } = useNotifications();
+  const undo = useTaskUndo();
   const [saved, setSaved] = useState<unknown>(() => {
     try { return JSON.parse(localStorage.getItem(storageKey) ?? 'null'); } catch { return null; }
   });
@@ -32,21 +34,21 @@ export function NavigationSections({ storageKey, children }: { storageKey: strin
     try {
       localStorage.setItem(storageKey, JSON.stringify(next));
       setSaved(next);
-      notify({ kind: 'sort', severity: 'info', title: 'Navigation reordered', persistent: false, dedupKey: `navigation-order:${storageKey}`,
-        action: { label: 'Undo', kind: 'callback' }, onAction: () => {
-          try {
-            const current = localStorage.getItem(storageKey);
-            if (current !== JSON.stringify(next)) return;
-            localStorage.setItem(storageKey, JSON.stringify(ids));
-            setSaved(ids);
-          } catch {
-            notify({ kind: 'operation-error', severity: 'error', title: 'Could not restore navigation order', persistent: false, dedupKey: `navigation-order-error:${storageKey}` });
-          }
-        } });
+      // The rows moved under the pointer: no toast (the UI standard's toast rule); mod+z takes it back.
+      undo?.push({ key: `navigation-order:${storageKey}`, result: 'visible', title: 'Navigation reordered', undo: () => {
+        try {
+          const current = localStorage.getItem(storageKey);
+          if (current !== JSON.stringify(next)) return false;
+          localStorage.setItem(storageKey, JSON.stringify(ids));
+          setSaved(ids);
+        } catch {
+          notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', title: 'Could not restore navigation order', persistent: false, dedupKey: `navigation-order-error:${storageKey}` });
+        }
+      } });
     } catch {
-      notify({ kind: 'operation-error', severity: 'error', title: 'Could not save navigation order', persistent: false, dedupKey: `navigation-order-error:${storageKey}` });
+      notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', title: 'Could not save navigation order', persistent: false, dedupKey: `navigation-order-error:${storageKey}` });
     }
-  } }), [ids.join('\0'), storageKey, notify]);
+  } }), [ids.join('\0'), storageKey, notify, undo]);
   const byId = new Map(nodes.map(node => [node.props.navId, node]));
   return <NavigationOrder.Provider value={value}>{ids.map(id => byId.get(id))}</NavigationOrder.Provider>;
 }

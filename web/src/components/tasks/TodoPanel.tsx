@@ -2416,7 +2416,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // (kind:'sort', non-persistent, 3s lifetime) — no local toast state needed.
   const { notify } = useNotifications();
   const showSortToast = useLeanCallback((msg: string) => {
-    notify({ kind: 'sort', severity: 'info', title: 'Sort', body: msg, persistent: false, dedupKey: 'sort' });
+    notify({ kind: 'sort', toastReason: 'out-of-sight', severity: 'info', title: 'Sort', body: msg, persistent: false, dedupKey: 'sort' });
   }, [notify]);
   const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
   const sortForProject = useLeanCallback((project: string): SortBy =>
@@ -6820,7 +6820,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (rejected.length > 0) {
       notify({
         kind: 'sort',
-        severity: 'warning',
+        toastReason: 'failure', severity: 'warning',
         title: `Could not ${verb} ${rejected.length} task${rejected.length === 1 ? '' : 's'}`,
         body: rejected[0].error ?? undefined,
         persistent: false,
@@ -6830,7 +6830,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (syncOnly.length > 0) {
       notify({
         kind: 'sort',
-        severity: 'warning',
+        toastReason: 'failure', severity: 'warning',
         title: `${syncOnly.length} task${syncOnly.length === 1 ? '' : 's'} not synced externally`,
         body: syncOnly[0].error ?? undefined,
         persistent: false,

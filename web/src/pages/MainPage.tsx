@@ -33,7 +33,6 @@ import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { HomeBoardSheet } from '@/components/tasks/HomeBoardSheet';
 import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
-import { createdToastId } from '@/components/tasks/filter-bar-persist';
 import { revealViewOption } from '@/components/tasks/view-dropdown-reveal';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
@@ -59,7 +58,6 @@ import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/S
 import { SessionSearchPanel, warmSessionSearch } from '@/components/sessions/SessionSearchPanel';
 import {
   DEFAULT_META, LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
-  tierLabelOf,
 } from '@/components/sessions/task-meta-constants';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession, QuickStartGateError } from '@/api/sessions';
@@ -76,7 +74,7 @@ import { getAgentsSnapshot, loadAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { beginSessionOpen } from '@/utils/session-open-latency';
 import { primeSessionOpenHistory } from '@/api/session-open-prime';
-import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
+import { projectGroupKey } from '@/utils/project-display';
 import { discardDraft } from '@/utils/drafts';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -401,25 +399,12 @@ function quickStartFailedNotification(host: string | null | undefined, cwd: stri
   return {
     kind: 'operation-error' as const,
     severity: 'error' as const,
+    toastReason: 'failure' as const,
     title: 'Quick Start Failed',
     body: errMsg,
     persistent: true,
     dedupKey: `quick-start:${host ?? '__local__'}:${cwd}:${errMsg}`,
   };
-}
-
-function formatQuickTaskDate(iso: string): string {
-  const dateOnly = !iso.includes('T');
-  const [year, month, day] = dateOnly ? iso.split('-').map(Number) : [];
-  const date = dateOnly ? new Date(year, month - 1, day) : new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const dueDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const days = Math.round((dueDay.getTime() - today.getTime()) / 86_400_000);
-  const dayLabel = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${date.getMonth() + 1}-${date.getDate()}`;
-  if (dateOnly) return dayLabel;
-  return `${dayLabel} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 /** A task may own several session ids (plan / exec / legacy / the list): true when any passes `has`. */
@@ -486,7 +471,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return map;
   }, [focusBar.customTierIds]);
   // Display label for a tier value (a built-in's board label, custom id → its label).
-  const tierLabel = useLeanCallback((tier: string): string => tierLabelOf(tier, focusBar.customTiers), [focusBar.customTiers]);
   const projectRegistry = useProjectRegistry();
   // config.defaults.engine, for a draft launch's "names Claude Code" rule (utils/launch-source.ts).
   const globalEngine = useGlobalDefaultEngine();
@@ -1811,7 +1795,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // x to y, and a button to see your setting").
       notify({
         kind: 'hint',
-        severity: 'info',
+        toastReason: 'out-of-sight', severity: 'info',
         title: `Panels auto-increased from ${before} to ${newCount}`,
         body: `All ${count} were pinned, so the new session needed its own.`,
         dedupKey: 'session-panels-grant',
@@ -2958,7 +2942,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const body = [task.title, advanced ? nextLine(advanced) : ''].filter(Boolean).join('  \u00b7  ');
     if (taskUndo) {
       const withdraw = taskUndo.push({
-        key: `phase:${task.id}`, title: 'Task completed', body, undo,
+        key: `phase:${task.id}`, result: 'hidden', title: 'Task completed', body, undo,
         revive: { kind: 'phase', data: { id: task.id, nowDone: true, before } },
       });
       // Refused: no Undo is left, and the advance made for it goes too, unless the person moved
@@ -2984,7 +2968,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     completeColumn: completeColumnTask,
     completeSelected: completeSelectedTask,
     columnTaskDone: (columnId) => { const t = columnTaskOf(columnId)?.task; return !!t && (t.status === 'done' || t.phase === 'COMPLETE'); },
-    hint: (message, ms = 3000) => notify({ kind: 'hint', severity: 'info', title: message, dedupKey: `keyboard-hint:${message}`, persistent: false, durationMs: ms }),
+    hint: (message, ms = 3000) => notify({ kind: 'hint', severity: 'info', toastReason: 'failure', title: message, dedupKey: `keyboard-hint:${message}`, persistent: false, durationMs: ms }),
     // One current task: the list follows the column the keys went to. Quietly: no detail, no
     // column moved, and no locate (focusNonce unchanged), so a fold the person closed stays
     // closed and the list scrolls only to a row it already draws.
@@ -3025,8 +3009,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     update(id, updates);
   }, [update]);
 
-  // The draft column's "Save as todo" (a task with no session):
-  // create → locate the new row → success toast w/ Undo.
+  // The draft column's "Save as todo" (a task with no session): create, then locate the new
+  // row. No toast: the row is on screen and marked (the UI standard's toast rule); mod+z takes
+  // the create back.
   const handleQuickTaskCreate = useLeanCallback(async (input: Parameters<typeof handleCreate>[0]) => {
     const created = await handleCreate(input);
     // LOCATE the new task: open the todo panel if hidden and select+scroll
@@ -3042,29 +3027,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // A create here, not a locate: the panel marks it if the filters hide it (5.11).
       setFocusScope('created');
     }
-    const summary = [
-      input.pinnedTier ? tierLabel(input.pinnedTier) : undefined,
-      input.due_date ? `Due ${formatQuickTaskDate(input.due_date)}` : undefined,
-      input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
-      input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
-      // No project = Inbox; say so rather than leaving the summary silent about placement.
-      projectDisplayName(input.project?.trim()),
-    ].filter((value): value is string => !!value);
-    notify({
-      kind: 'sort',
-      severity: 'success',
-      id: createdToastId(created.id),
-      title: `Task created: ${created.title}`,
-      ...(summary.length > 0 ? { body: summary.join(', ') } : {}),
-      dedupKey: created.id,
-      persistent: false,
-      action: { label: 'Undo', kind: 'callback' },
+    taskUndo?.push({
+      key: `create:${created.id}`, result: 'visible', title: 'Task created', body: created.title,
       // Through the store, so the row, the dock card and every task-ref pill drop
       // the task in the same frame instead of waiting for the task:deleted echo.
-      onAction: () => { void deleteTask(created.id); },
+      // Only while it is still the task just made: one that got a session since is kept.
+      undo: () => {
+        const cur = taskMapRef.current.get(created.id);
+        if (cur?.session_id) return false;
+        void deleteTask(created.id);
+        return true;
+      },
     });
     return created;
-  }, [handleCreate, handleFocusTask, notify, tierLabel, deleteTask]);
+  }, [handleCreate, handleFocusTask, taskUndo, deleteTask]);
 
   /**
    * The server refused a draft's Start and created nothing: the host (409 host_not_ready /

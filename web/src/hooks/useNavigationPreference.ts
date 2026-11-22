@@ -32,7 +32,7 @@ function useStoredValue(key: string) {
       localStorage.setItem(key, next);
       window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: key }));
     } catch {
-      notify({ kind: 'operation-error', severity: 'error', title: 'Could not save navigation preference', persistent: false, dedupKey: `navigation-preference-error:${key}` });
+      notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', title: 'Could not save navigation preference', persistent: false, dedupKey: `navigation-preference-error:${key}` });
     }
   }, [key, notify]);
   return [value, write] as const;

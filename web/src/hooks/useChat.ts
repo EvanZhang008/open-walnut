@@ -1014,7 +1014,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
         rpcInFlightRef.current = false;
         notify({
           kind: 'operation-error',
-          severity: 'error',
+          toastReason: 'failure', severity: 'error',
           title: 'Chat Error',
           body: e.message,
           persistent: true,

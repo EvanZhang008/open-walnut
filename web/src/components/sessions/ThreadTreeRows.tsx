@@ -219,7 +219,7 @@ export const ThreadTreeRows = forwardRef<ThreadTreeRowsHandle, ThreadTreeRowsPro
     setRemovedPins((l) => [...l, { pinKey, threadKey: row.key, at: at < 0 ? undefined : at }]);
     timers.current.set(`p:${pinKey}`, setTimeout(() => dropPinPlaceholder(pinKey), PLACEHOLDER_MS));
     toast.show({
-      text: 'Removed pin', ms: PLACEHOLDER_MS,
+      text: 'Removed pin', toastReason: 'undo-of-hidden', ms: PLACEHOLDER_MS,
       action: { label: 'Undo', run: () => { api.restorePin(removed); dropPinPlaceholder(pinKey); } },
     });
   }, [p.pinsApi, p.sessionId, focusRow, toast, dropPinPlaceholder]);

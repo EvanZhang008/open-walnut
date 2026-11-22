@@ -54,7 +54,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
     setTimeout(() => {
       if (!pane.isConnected || !pane.querySelector('[data-testid="kanban-lane-head"]')) return;
       if (pane.querySelector(`[data-testid="kanban-lane-head"][data-lane-id="${CSS.escape(s.id)}"]`)) return;
-      emitKanbanToast(pane, { text: `"${s.name}" was deleted while you were renaming it.` });
+      emitKanbanToast(pane, { text: `"${s.name}" was deleted while you were renaming it.`, toastReason: 'failure' });
     }, 0);
   }, []);
 

@@ -76,9 +76,13 @@ test('three cards at a time; a tier tap, Undo, a snooze, done, skip and keys eac
   await sortCard(page, ids.lead).locator('[data-sort-tier="focus"]').click();
   await expect(sortCard(page, ids.lead)).toHaveCount(0);
   for (const id of [ids.lead, ids.child]) await expect.poll(async () => tierOf(await read(request, id))).toBe('focus');
-  await expect(sort.locator('.quick-sort-toast')).toContainText('Moved "Sort leader" to Focus');
+  // The card left the queue, so its Undo is on the app's one notice (no toast of the view's own).
+  const undoToast = page.locator('.notification-toast', { hasText: 'Moved "Sort leader" to Focus' });
+  await expect(undoToast).toBeVisible();
+  await expect(sort.locator('.quick-sort-toast')).toHaveCount(0);
   await expect(sort).toContainText('1 sorted this round');
-  await sort.getByRole('button', { name: 'Undo', exact: true }).click();
+  await undoToast.locator('.notification-toast-action', { hasText: 'Undo' }).click();
+  await expect(undoToast).toHaveCount(0);
   for (const id of [ids.lead, ids.child]) await expect.poll(async () => tierOf(await read(request, id))).toBe('unpinned');
   await expect(sortCard(page, ids.lead)).toBeVisible();
   await expect(sort).toContainText('0 sorted this round');
@@ -155,8 +159,9 @@ test('projects: a whole project to one tier, its own queue, and the view is kept
   await expect(card.locator('[data-sort-tier="wait"]')).toHaveCount(0);
   await card.locator('[data-sort-tier="focus"]').click();
   for (const id of [ids.b1, ids.b2]) await expect.poll(async () => tierOf(await read(request, id))).toBe('focus');
-  // Undo puts each task back in the tier it had, which differ (the first test moved one).
-  await sort.getByRole('button', { name: 'Undo', exact: true }).click();
+  // Undo (on the app's notice: the project's cards left the queue) puts each task back in the
+  // tier it had, which differ (the first test moved one).
+  await page.locator('.notification-toast-action', { hasText: 'Undo' }).first().click();
   await expect.poll(async () => tierOf(await read(request, ids.b1))).toBe(before.b1);
   await expect.poll(async () => tierOf(await read(request, ids.b2))).toBe(before.b2);
   await card.locator('[data-sort-action="tasks"]').click();
@@ -204,7 +209,7 @@ test('a refused tier write brings the card back with the error, and nothing coun
   await expect(sort.getByRole('alert')).toBeVisible();
   await expect(sortCard(page, id)).toBeVisible();
   await expect(sort).toContainText('0 sorted this round');
-  await expect(sort.locator('.quick-sort-toast')).toHaveCount(0);
+  await expect(page.locator('.notification-toast', { hasText: 'Sort refused write task' })).toHaveCount(0);
   await page.unroute('**/api/focus/batch');
   expect(tierOf(await read(request, id))).toBe('unpinned');
   await sortCard(page, id).locator('[data-sort-tier="focus"]').click();
@@ -225,7 +230,7 @@ test('Undo while the snooze write is still out lands after it: the task ends uns
   });
   await sortCard(page, id).locator('[data-sort-action="snooze"]').click();
   await page.getByRole('dialog', { name: 'Snooze until', exact: true }).locator('[data-snooze="tomorrow"]').click();
-  await page.getByTestId('quick-sort').getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.locator('.notification-toast-action', { hasText: 'Undo' }).first().click();
   release();
   await expect.poll(async () => (await read(request, id)).start_date ?? '', { timeout: 15_000 }).toBe('');
   await expect(sortCard(page, id)).toBeVisible();
@@ -246,7 +251,7 @@ test('a refused snooze or done brings the card back and counts nothing', async (
   await sortCard(page, id).locator('[data-sort-action="done"]').click();
   await expect(sortCard(page, id)).toBeVisible();
   await expect(sort).toContainText('0 sorted this round');
-  await expect(sort.locator('.quick-sort-toast')).toHaveCount(0);
+  await expect(page.locator('.notification-toast-action', { hasText: 'Undo' })).toHaveCount(0);
   const task = await read(request, id);
   expect([task.start_date ?? '', task.phase]).toEqual(['', 'TODO']);
 });
@@ -268,7 +273,7 @@ test('a tier write refused for a subtask keeps the leader sorted, and Undo moves
   const sort = page.getByTestId('quick-sort');
   await expect(sort).toContainText('1 sorted this round');
   await expect(sortCard(page, child)).toBeVisible();
-  await sort.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.locator('.notification-toast-action', { hasText: 'Undo' }).first().click();
   await expect.poll(async () => tierOf(await read(request, lead))).toBe('unpinned');
   expect(tierOf(await read(request, child))).toBe('unpinned');
 });
@@ -392,8 +397,8 @@ test('Reply sends his words to the task\'s session and the card leaves; a task w
   await box.fill(words);
   await page.keyboard.press('Enter');
   await expect(sortCard(page, withSession)).toHaveCount(0);
-  await expect(sort.locator('.quick-sort-toast')).toContainText('Sent your reply to "Sort reply live task"');
-  await expect(sort.locator('.quick-sort-toast').getByRole('button', { name: 'Undo' })).toHaveCount(0);
+  // A reply cannot be taken back and the tally counts it: no toast.
+  await expect(page.locator('.notification-toast', { hasText: 'Sent your reply' })).toHaveCount(0);
   await expect(sort.getByTestId('quick-sort-tally')).toContainText('Replied 1');
   await expect.poll(async () => JSON.stringify(await (await request.get(`/api/sessions/${sessionId}/history`)).json()), { timeout: 30_000 }).toContain(words);
 

@@ -2387,7 +2387,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const handleOpenVscodeError = useCallback((error: unknown) => {
     notify({
       kind: 'operation-error',
-      severity: 'error',
+      toastReason: 'failure', severity: 'error',
       title: 'Could not open VS Code',
       body: error instanceof Error ? error.message : String(error),
       persistent: false,

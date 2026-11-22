@@ -48,13 +48,12 @@ export const THREAD_ACTION_TEXT = {
   undo: 'Undo',
 } as const;
 
-export const TOAST_MS = { done: 6000, remove: 8000, info: 4000, failure: 6000 } as const;
+export const TOAST_MS = { done: 6000, remove: 8000, failure: 6000 } as const;
 /** A second click on the same action for the same question inside this window is ignored. */
 export const DOUBLE_FIRE_MS = 400;
 
 export const doneToastText = (title: string, above = 0): string =>
   (above > 0 ? `Archived: ${title} and ${above} above` : `Archived: ${title}`);
-export const reopenToastText = (title: string): string => `Unarchived “${title}”`;
 export const removeToastText = (title: string, descendants = 0): string =>
   (descendants > 0
     ? `Removed “${title}” and ${pluralFollowUps(descendants)}. The messages stay in the transcript.`
@@ -135,7 +134,7 @@ export function useThreadActions(args: UseThreadActionsArgs): ThreadActions {
       if (ok) return;
       const r = ref.current;
       if (repush && r.nav.currentKey === repushKey) r.nav.popTo(landedOn, 'undo');
-      r.toast.show({ text: THREAD_ACTION_TEXT.undoFailed, ms: TOAST_MS.failure });
+      r.toast.show({ text: THREAD_ACTION_TEXT.undoFailed, toastReason: 'failure', ms: TOAST_MS.failure });
     });
   }, [send]);
 
@@ -147,10 +146,10 @@ export function useThreadActions(args: UseThreadActionsArgs): ThreadActions {
     const write = send(p.patches, 'done');
     if (landing !== null) nav.popTo(landing, 'done');
     log.info('threads', 'question done', { sessionId, headId: tree.byKey.get(key)?.headId, count: p.keys.length });
-    toast.show({ text, ms: TOAST_MS.done, action: { label: THREAD_ACTION_TEXT.undo, run: () => undoDone(p, repushKey, landing ?? nav.currentKey) } });
+    toast.show({ text, toastReason: 'undo-of-hidden', ms: TOAST_MS.done, action: { label: THREAD_ACTION_TEXT.undo, run: () => undoDone(p, repushKey, landing ?? nav.currentKey) } });
     const ok = await write;
     if (!ok) {
-      ref.current.toast.show({ text: THREAD_ACTION_TEXT.doneFailed, ms: TOAST_MS.failure, action: { label: THREAD_ACTION_TEXT.retry, run: retry } });
+      ref.current.toast.show({ text: THREAD_ACTION_TEXT.doneFailed, toastReason: 'failure', ms: TOAST_MS.failure, action: { label: THREAD_ACTION_TEXT.retry, run: retry } });
     }
     return ok;
   }, [send, undoDone]);
@@ -186,29 +185,28 @@ export function useThreadActions(args: UseThreadActionsArgs): ThreadActions {
     if (p.keys.length === 0) return false;
     const write = send(p.patches, 'older done');
     toast.show({
-      text: olderDoneToastText(p.keys.length), ms: TOAST_MS.done,
+      text: olderDoneToastText(p.keys.length), toastReason: 'undo-of-hidden', ms: TOAST_MS.done,
       action: { label: THREAD_ACTION_TEXT.undo, run: () => undoDone(p, null, ROOT_THREAD_KEY) },
     });
     const ok = await write;
-    if (!ok) ref.current.toast.show({ text: THREAD_ACTION_TEXT.doneFailed, ms: TOAST_MS.failure, action: { label: THREAD_ACTION_TEXT.retry, run: () => { void markOlderDone(keys); } } });
+    if (!ok) ref.current.toast.show({ text: THREAD_ACTION_TEXT.doneFailed, toastReason: 'failure', ms: TOAST_MS.failure, action: { label: THREAD_ACTION_TEXT.retry, run: () => { void markOlderDone(keys); } } });
     return ok;
   }, [guard, doneInput, send, undoDone]);
 
-  /** A one-shot write with a failure toast and no Undo. */
-  const simple = useCallback(async (p: MetaPlan, what: string, failText: string, okText?: string): Promise<boolean> => {
+  /** A one-shot write with a failure toast and no Undo. What it did shows where it was done (a
+   *  reopened question is back in the list), so success says nothing (the UI standard's toast rule). */
+  const simple = useCallback(async (p: MetaPlan, what: string, failText: string): Promise<boolean> => {
     if (p.keys.length === 0) return false;
-    const write = send(p.patches, what);
-    if (okText) ref.current.toast.show({ text: okText, ms: TOAST_MS.info });
-    const ok = await write;
-    if (!ok) ref.current.toast.show({ text: failText, ms: TOAST_MS.failure });
+    const ok = await send(p.patches, what);
+    if (!ok) ref.current.toast.show({ text: failText, toastReason: 'failure', ms: TOAST_MS.failure });
     return ok;
   }, [send]);
 
   const reopen = useCallback<ThreadActions['reopen']>(async (key) => {
     if (guard('reopen', key)) return false;
     const { tree, meta } = ref.current;
-    return simple(planReopen(tree, meta.index, key), 'reopen', THREAD_ACTION_TEXT.reopenFailed, reopenToastText(titleOf(key)));
-  }, [guard, simple, titleOf]);
+    return simple(planReopen(tree, meta.index, key), 'reopen', THREAD_ACTION_TEXT.reopenFailed);
+  }, [guard, simple]);
 
   const notYet = useCallback<ThreadActions['notYet']>(async (key) => {
     if (guard('notYet', key)) return false;
@@ -254,12 +252,12 @@ export function useThreadActions(args: UseThreadActionsArgs): ThreadActions {
       void back.then((ok) => {
         if (ok) return;
         if (repush && ref.current.nav.currentKey === pageBefore) ref.current.nav.popToVisibleAncestor(key);
-        ref.current.toast.show({ text: THREAD_ACTION_TEXT.undoFailed, ms: TOAST_MS.failure });
+        ref.current.toast.show({ text: THREAD_ACTION_TEXT.undoFailed, toastReason: 'failure', ms: TOAST_MS.failure });
       });
     };
-    toast.show({ text: removeToastText(title, p.descendants), ms: TOAST_MS.remove, action: { label: THREAD_ACTION_TEXT.undo, run: undo } });
+    toast.show({ text: removeToastText(title, p.descendants), toastReason: 'undo-of-hidden', ms: TOAST_MS.remove, action: { label: THREAD_ACTION_TEXT.undo, run: undo } });
     const ok = await write;
-    if (!ok) ref.current.toast.show({ text: THREAD_ACTION_TEXT.removeFailed, ms: TOAST_MS.failure });
+    if (!ok) ref.current.toast.show({ text: THREAD_ACTION_TEXT.removeFailed, toastReason: 'failure', ms: TOAST_MS.failure });
     return ok;
   }, [guard, send, titleOf]);
 

@@ -100,6 +100,8 @@ export function HostProblemNotices() {
       if (quietAllowsToast(q, 'host')) {
         push({
           kind: 'host', severity: rows.some((r) => r.group === 'connect') ? 'error' : 'warning',
+          // A host the person must clear (a sign-in) or that answers their Retry: out of sight.
+          toastReason: 'out-of-sight',
           ...hostToastText(rows),
           dedupKey: `host-problem:${rows.map(problemKeyOf).join(',')}`,
           needsYou: mine[0]!.needsYou,

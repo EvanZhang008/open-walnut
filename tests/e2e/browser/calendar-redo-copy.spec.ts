@@ -152,7 +152,8 @@ test('a move is undone and redone, several steps each way, and the server follow
     await expect.poll(async () => (await eventById(ev.id))?.start).toBe(`${today}T20:00:00`)
     expect((await eventById(ev.id))?.end).toBe(`${today}T20:30:00`)
     expect(await titled(title)).toHaveLength(1)
-    await expect(page.getByText('Event moved').first()).toBeVisible()
+    // The block moved under the pointer: no toast says so (the UI standard's toast rule).
+    await expect(page.locator('.notification-toast', { hasText: 'Event moved' })).toHaveCount(0)
 
     // Step 2: a resize, 20:00-20:30 -> 20:00-21:00.
     await chip.scrollIntoViewIfNeeded()
@@ -169,11 +170,11 @@ test('a move is undone and redone, several steps each way, and the server follow
     await blurFocus(page)
     await undo(page)
     await expect.poll(async () => (await eventById(ev.id))?.end).toBe(`${today}T20:30:00`)
-    await expect(page.getByText('Undone').first()).toBeVisible()
+    // What came back is on screen: no "Undone" line.
+    await expect(page.locator('.notification-toast', { hasText: 'Undone' })).toHaveCount(0)
     await undo(page)
     await expect.poll(async () => (await eventById(ev.id))?.start).toBe(`${today}T19:00:00`)
     expect((await eventById(ev.id))?.end).toBe(`${today}T19:30:00`)
-    await expect(page.getByRole('button', { name: 'Redo' }).first()).toBeVisible()
     await shot(page, 'after-two-undos', panel)
 
     // Two redos: the move again, then the resize again.
@@ -187,8 +188,7 @@ test('a move is undone and redone, several steps each way, and the server follow
     await expect(page.getByText('Nothing to redo').first()).toBeVisible()
     await undo(page)
     await expect.poll(async () => (await eventById(ev.id))?.end).toBe(`${today}T20:30:00`)
-    // The toast's own Redo button does it again too.
-    await page.getByRole('button', { name: 'Redo' }).first().click()
+    await redo(page)
     await expect.poll(async () => (await eventById(ev.id))?.end).toBe(`${today}T21:00:00`)
     expect(await titled(title)).toHaveLength(1)
   } finally {
@@ -218,7 +218,7 @@ test('Alt-drag copies an event: the original stays, the copy can be undone and r
     expect(orig).toMatchObject({ start: `${today}T19:00:00`, end: `${today}T20:00:00` })
     expect(copy).toMatchObject({ start: `${today}T21:00:00`, end: `${today}T22:00:00`, calendarId: 'cal-home' })
     await expect(panel.locator(`[data-item-id="event:${copy.id}"]`)).toBeVisible()
-    await expect(page.getByText('Event copied').first()).toBeVisible()
+    await expect(page.locator('.notification-toast', { hasText: 'Event copied' })).toHaveCount(0)
 
     await blurFocus(page)
     await undo(page)
@@ -341,9 +341,9 @@ test('drag-to-create is drawn in the new event\'s own colour from the first fram
 
 test('the calendar page: a drag to another day moves, Alt-drag there copies, both undo', async ({ page }) => {
   const title = `Week copy ${Date.now()}`
-  // A day beside today inside the same week, so both show in the week view.
-  const dow = new Date().getDay()
-  const other = localDay(dow === 6 ? -1 : 1)
+  // A day beside today inside the same week, so both show in the week view. Which side depends
+  // on the week's first day (a Sunday in a Monday week has no tomorrow on screen): picked below.
+  let other = localDay(1)
   const ev = await createEvent(title, `${today}T19:00:00`, `${today}T19:30:00`)
   try {
     await page.goto('/')
@@ -353,6 +353,7 @@ test('the calendar page: a drag to another day moves, Alt-drag there copies, bot
     const grid = page.locator('.cal-view')
     const chip = grid.locator(`[data-item-id="event:${ev.id}"]`)
     await expect(chip).toBeVisible()
+    if (!(await grid.locator(`.cal-day-col[data-day="${other}"]`).count())) other = localDay(-1)
 
     await dragChip(page, grid, chip, { hours: 0, day: other })
     await drop(page)

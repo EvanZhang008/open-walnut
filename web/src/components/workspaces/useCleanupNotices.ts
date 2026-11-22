@@ -31,7 +31,7 @@ export function useCleanupNotices(tasks: readonly Task[]): void {
       // How a setup or a cleanup ended stays in the bell's list too (this page only): a toast
       // shown while the person looked elsewhere is gone in seconds.
       const ended = n.key.startsWith('setup-ended:') || n.key.startsWith('cleanup-removed:') || n.key.startsWith('cleanup-kept:');
-      notify({ id, kind: 'hint', severity: n.severity, title: n.title, body: n.body, persistent: ended, dedupKey: id });
+      notify({ id, kind: 'hint', severity: n.severity, toastReason: 'out-of-sight', title: n.title, body: n.body, persistent: ended, dedupKey: id });
     }
   }, [tasks, notify, dismissToast]);
 }

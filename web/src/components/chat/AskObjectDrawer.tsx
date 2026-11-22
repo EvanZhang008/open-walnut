@@ -468,7 +468,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       log.info('ask-object', 'task for later created', { objectKey: scope.key, taskId: task.id });
       notify({
         kind: 'sort',
-        severity: 'success',
+        toastReason: 'out-of-sight', severity: 'success',
         title: `Task created: ${task.title}`,
         body: projectDisplayName(input.project?.trim()),
         dedupKey: task.id,

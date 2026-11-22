@@ -1,10 +1,12 @@
 /**
  * Undoable task actions: complete / reopen, snooze, pin / unpin / tier, delete. Each one
  * writes through the shared stores as before (optimistic, the same frame on every
- * surface) and pushes an entry on the app's undo stack (undo-stack.ts) with a 5 second
- * toast. mod+z takes back the newest one from anywhere in the app, except while the caret
- * is in a field with text of its own to undo (see `historyKeyApplies`); mod+shift+z (ctrl+y
- * off the Mac), or the Redo on the "Undone" toast, does it again (undo-stack.ts).
+ * surface) and pushes an entry on the app's undo stack (undo-stack.ts). Only a change that takes
+ * its task out of sight (`result: 'hidden'`: a delete, a completion, a snooze) shows a 5 second
+ * Undo toast; one the person sees where they made it (a pin, a tier, a reopen) shows none (the UI
+ * standard's toast rule, standard.md "Toasts"). mod+z takes back the newest one from anywhere in
+ * the app, except while the caret is in a field with text of its own to undo (see
+ * `historyKeyApplies`); mod+shift+z (ctrl+y off the Mac) does it again (undo-stack.ts).
  *
  * A delete is a hard delete on the server, so it is held: the row is hidden at once and
  * the DELETE goes out when the window closes (or at once when the page goes, as one batch
@@ -23,7 +25,7 @@ import { useNotifications, type NotificationInput } from '@/contexts/notificatio
 import type { FocusTier } from '@/api/focus';
 import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { createUndoStack, UNDO_WINDOW_MS, type Settled, type UndoStack } from './undo-stack';
-import { historyKeyApplies, redoKeyLabel, undoKeyLabel } from './undo-key';
+import { historyKeyApplies, undoKeyLabel } from './undo-key';
 import { formatSnoozeDate } from './undo-labels';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { hasOpenOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -32,6 +34,10 @@ import { MIN_REVIVE_LEFT_MS, RETURN_WITHIN_MS, saveUndos, takeUndos, type Persis
 
 export interface UndoablePush {
   key: string;
+  /** What the change does to what the person sees. 'hidden': it takes its object out of sight
+   *  (a delete, a completion), so its Undo is offered on a toast. 'visible': the person sees the
+   *  change where they made it (a pin, a move), so no toast: mod+z still takes it back. */
+  result: 'hidden' | 'visible';
   title: string;
   body?: string;
   /** False when it no longer applies (changed elsewhere since): nothing is taken back. */
@@ -59,7 +65,8 @@ export const phaseSnapshot = (t: Task): PhaseSnapshot => ({ phase: t.phase, wait
 export type UndoReviver = (data: unknown) => Pick<UndoablePush, 'undo' | 'commit' | 'onExpired'> | null;
 
 export interface TaskUndo {
-  /** Push any undoable action with its toast (the column completion uses this). Returns what
+  /** Push any undoable action (with its toast when its result is hidden; the column completion
+   *  uses this). Returns what
    *  takes this one entry away again (its write was refused), and no newer one with its key. */
   push: (entry: UndoablePush) => () => void;
   /** Take a key's entry and toast away without undoing it (the server refused the action). */
@@ -103,8 +110,9 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   const stackRef = useRef<UndoStack | null>(null);
   if (!stackRef.current) stackRef.current = createUndoStack();
   const stack = stackRef.current;
-  /** What an Undo took back, said in a line with its Redo while it can be redone; or that it
-   *  took nothing back, its target having changed elsewhere since. */
+  /** That an Undo took nothing back, its target having changed elsewhere since. What an Undo did
+   *  take back is on screen (the row comes back, the pin goes), so that gets no line; its redo is
+   *  mod+shift+z. */
   // One line at a time: each replaces the one before (a toast's dedup would drop a second one
   // while the first is up, so each has its own id).
   const undoneToast = useRef('');
@@ -115,22 +123,11 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     undoneToast.current = id;
     notify({ ...line, id, dedupKey: id });
   }, [notify, dismissToast]);
-  const showUndone = useLeanCallback((undone: Pick<UndoablePush, 'title' | 'body' | 'redo'>, how: Settled | undefined) => {
+  const showUndone = useLeanCallback((undone: Pick<UndoablePush, 'title' | 'body'>, how: Settled | undefined) => {
+    if (how !== 'stale') { if (undoneToast.current) dismissToast(undoneToast.current); return; }
     const body = undone.body ? `${undone.title}  \u00b7  ${undone.body}` : undone.title;
-    if (how === 'stale') {
-      sayUndoneLine({ kind: 'hint', severity: 'info', title: 'Not undone: it changed since', body, persistent: false, durationMs: 3000 });
-      return;
-    }
-    // Only the entry just undone is offered again, never an older one still on the list.
-    const canRedo = !!undone.redo && stack.hasRedo();
-    sayUndoneLine({ kind: 'hint', severity: 'info', title: 'Undone',
-      body, persistent: false, durationMs: canRedo ? UNDO_WINDOW_MS : 2000,
-      ...(canRedo ? {
-        action: { label: 'Redo', kind: 'callback' as const },
-        actionKeyHint: redoKeyLabel(),
-        onAction: () => { stack.redoLatest(); },
-      } : {}) });
-  }, [stack, sayUndoneLine]);
+    sayUndoneLine({ kind: 'hint', severity: 'info', toastReason: 'failure', title: 'Not undone: it changed since', body, persistent: false, durationMs: 3000 });
+  }, [sayUndoneLine, dismissToast]);
   const latest = useRef({ store, focusBar, notify, dismissToast, showUndone });
   latest.current = { store, focusBar, notify, dismissToast, showUndone };
 
@@ -162,9 +159,12 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       },
     }, windowMs);
     live.current.set(handle, { entry, pushedAt: performance.now() });
+    // A change the person sees where they made it gets no toast: mod+z is its Undo.
+    if (entry.result === 'visible') return () => { stack.discard(handle); };
     latest.current.notify({
       kind: 'hint',
       severity: 'success',
+      toastReason: 'undo-of-hidden',
       id: toastId,
       dedupKey: toastId,
       title: entry.title,
@@ -214,6 +214,8 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     const before = phaseSnapshot(t);
     withdrawIfRefused(write, push({
       key: `phase:${t.id}`,
+      // A completed task leaves the list; a reopened one is on screen where it was clicked.
+      result: nowDone ? 'hidden' : 'visible',
       title: nowDone ? 'Task completed' : 'Task reopened',
       body: t.title,
       undo: phaseUndo(t.id, nowDone, before),
@@ -289,6 +291,8 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     if (!t || before === next) return;
     withdrawIfRefused(write, push({
       key: `snooze:${id}`,
+      // A snoozed task leaves the list; one woken is back on screen.
+      result: next ? 'hidden' : 'visible',
       title: next ? `Snoozed until ${formatSnoozeDate(next)}` : 'Snooze cleared',
       body: t.title,
       undo: () => {
@@ -337,7 +341,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     const done = latest.current.focusBar.pin(id);
     if (!snap.pinned && t && !isDone(t)) {
       freshPins.current.set(id, { until: Date.now() + PIN_THEN_TIER_MS, snap });
-      withdrawIfRefused(done, push({ key: `pin:${id}`, title: 'Pinned', body: t.title, undo: () => restorePin(id, snap), redo: () => { void again.current?.pin(id); }, revive: { kind: 'pin', data: { id, snap } } }));
+      withdrawIfRefused(done, push({ key: `pin:${id}`, result: 'visible', title: 'Pinned', body: t.title, undo: () => restorePin(id, snap), redo: () => { void again.current?.pin(id); }, revive: { kind: 'pin', data: { id, snap } } }));
     }
     await done;
     // The tier pick follows the pin's answer: its moment starts now, however slow that was.
@@ -355,7 +359,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     let undone = false;
     let settleUndo = () => {};
     const withdraw = push({
-      key: `pin:${id}`, title: `${snap.pinned ? 'Moved to' : 'Pinned to'} ${tierName(tier)}`,
+      key: `pin:${id}`, result: 'visible', title: `${snap.pinned ? 'Moved to' : 'Pinned to'} ${tierName(tier)}`,
       ...(t ? { body: t.title } : {}), undo: () => {
         if (pending) {
           undone = true;
@@ -368,7 +372,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     try {
       await latest.current.focusBar.setTierBulk([id], tier, (message) => {
         withdraw();
-        latest.current.notify({ title: 'Action failed', body: message, kind: 'operation-error', severity: 'error', persistent: false, dedupKey: `pin-failed:${id}` });
+        latest.current.notify({ title: 'Action failed', body: message, kind: 'operation-error', severity: 'error', toastReason: 'failure', persistent: false, dedupKey: `pin-failed:${id}` });
       });
     } catch { withdraw(); }
     finally {
@@ -386,7 +390,8 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     const done = latest.current.focusBar.unpin(id);
     freshPins.current.delete(id);
     if (snap.pinned) {
-      withdrawIfRefused(done, push({ key: `pin:${id}`, title: 'Unpinned', ...(t ? { body: t.title } : {}), undo: () => restorePin(id, snap), redo: () => { void again.current?.unpin(id); }, revive: { kind: 'pin', data: { id, snap } } }));
+      // An unpinned task leaves the pinned list and the Focus views it sat in: its Undo stays on a toast.
+      withdrawIfRefused(done, push({ key: `pin:${id}`, result: 'hidden', title: 'Unpinned', ...(t ? { body: t.title } : {}), undo: () => restorePin(id, snap), redo: () => { void again.current?.unpin(id); }, revive: { kind: 'pin', data: { id, snap } } }));
     }
     await done;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -403,6 +408,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       freshPins.current.delete(id);
       withdrawIfRefused(done, push({
         key: `pin:${id}`,
+        result: 'visible',
         // Picking the group of a task just pinned is one gesture with the pin (TaskKebabMenu).
         merge: fresh,
         title: `${!snap.pinned || fresh ? 'Pinned to' : 'Moved to'} ${tierName(tier)}`,
@@ -431,7 +437,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       try { await cancelScheduledDeletes([id], heldAt); if (takingBack.current.get(id) === heldAt) takingBack.current.delete(id); return; } catch { /* try again */ }
     }
     if (takingBack.current.get(id) === heldAt) takingBack.current.delete(id);
-    latest.current.notify({ kind: 'operation-error', severity: 'error', persistent: false, dedupKey: `undo-delete-failed:${id}`,
+    latest.current.notify({ kind: 'operation-error', severity: 'error', toastReason: 'failure', persistent: false, dedupKey: `undo-delete-failed:${id}`,
       title: 'Could not undo the delete', body: 'The server could not be reached, so it will still delete this task.' });
   };
 
@@ -461,6 +467,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     const putBack = [...deleteHooks.current].map((hook) => hook(id)).filter((f): f is (why: 'undo' | 'refused') => void => typeof f === 'function');
     push({
       key: `delete:${id}`,
+      result: 'hidden',
       title: 'Task deleted',
       body: t.title,
       // A reload keeps it held: the page hands it to the server as it goes (onLeave).
@@ -501,7 +508,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       if (!reviver) return now - saved.savedAt < RETURN_WITHIN_MS;
       const rebuilt = reviver(saved.data);
       if (rebuilt) {
-        push({ key: saved.key, title: saved.title, ...(saved.body ? { body: saved.body } : {}), ...rebuilt, revive: { kind: saved.kind, data: saved.data }, windowMs: saved.leftMs });
+        push({ key: saved.key, result: saved.result ?? 'hidden', title: saved.title, ...(saved.body ? { body: saved.body } : {}), ...rebuilt, revive: { kind: saved.kind, data: saved.data }, windowMs: saved.leftMs });
       }
       return false;
     });
@@ -565,7 +572,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
       if (chord === 'redo') {
         if (!stack.hasRedo()) {
           const inText = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
-          if (!inText) latest.current.notify({ kind: 'hint', severity: 'info', title: 'Nothing to redo', dedupKey: 'undo:nothing', persistent: false, durationMs: 1800 });
+          if (!inText) latest.current.notify({ kind: 'hint', severity: 'info', toastReason: 'failure', title: 'Nothing to redo', dedupKey: 'undo:nothing', persistent: false, durationMs: 1800 });
           return;
         }
         e.preventDefault();
@@ -578,13 +585,13 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
         // Outside any text box the key would do nothing at all: say so.
         const inText = !!active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
         if (!inText) {
-          latest.current.notify({ kind: 'hint', severity: 'info', title: 'Nothing to undo', dedupKey: 'undo:nothing', persistent: false, durationMs: 1800 });
+          latest.current.notify({ kind: 'hint', severity: 'info', toastReason: 'failure', title: 'Nothing to undo', dedupKey: 'undo:nothing', persistent: false, durationMs: 1800 });
         }
         return;
       }
       e.preventDefault();
       e.stopPropagation();
-      // The key has no button to watch go: a line says what it took back.
+      // What it took back is on screen; only an Undo that found its target changed says so.
       const newest = Math.max(...[...live.current.keys()]);
       const undone = live.current.get(newest)?.entry;
       if (stack.undoLatest() && undone) latest.current.showUndone(undone, lastUndo.current);
@@ -596,7 +603,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
         .filter(({ v, left }) => v.entry.revive && left > 0)
         .map(({ v, left }): PersistedUndo => ({
           kind: v.entry.revive!.kind, data: v.entry.revive!.data, key: v.entry.key, title: v.entry.title,
-          ...(v.entry.body ? { body: v.entry.body } : {}), leftMs: left, savedAt: now,
+          result: v.entry.result, ...(v.entry.body ? { body: v.entry.body } : {}), leftMs: left, savedAt: now,
         })));
     };
     const revive = () => {

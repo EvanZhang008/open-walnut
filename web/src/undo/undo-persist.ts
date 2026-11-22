@@ -17,6 +17,8 @@ export interface PersistedUndo {
   key: string;
   title: string;
   body?: string;
+  /** Whether it shows a toast (UndoablePush.result); absent in a page saved before it: 'hidden'. */
+  result?: 'hidden' | 'visible';
   /** What was left of its window when the page went (ms). */
   leftMs: number;
   /** When the page went (epoch ms). */

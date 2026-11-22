@@ -164,7 +164,7 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
     dropClearToast();
     const id = `filters-cleared-${Date.now()}`;
     notify({
-      id, kind: 'sort', severity: 'info', title: 'Filters cleared', persistent: false, dedupKey: id,
+      id, kind: 'sort', toastReason: 'undo-of-hidden', severity: 'info', title: 'Filters cleared', persistent: false, dedupKey: id,
       action: { label: 'Undo', kind: 'callback' },
       onAction: () => { clearToastRef.current = null; apply(snapshot, 'undo'); },
     });
@@ -300,7 +300,7 @@ export function useArchiveFetch(want: boolean, store: ArchiveStore | null | unde
     if (error) {
       setPhase('failed');
       log.warn('filter-bar', 'completed archive failed to load', { error, hidden });
-      notify({ kind: 'operation-error', severity: 'error', title: ARCHIVE_FAILED_TEXT, persistent: false, dedupKey: 'filter-archive-failed' });
+      notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', title: ARCHIVE_FAILED_TEXT, persistent: false, dedupKey: 'filter-archive-failed' });
     } else {
       setPhase('idle');
     }
@@ -327,7 +327,7 @@ export function useCreatedOutsideToast(
     dismissToast(createdToastId(task.id));
     const id = `filter-outside-${task.id}`;
     notify({
-      id, kind: 'sort', severity: 'info', persistent: false, dedupKey: id,
+      id, kind: 'sort', toastReason: 'out-of-sight', severity: 'info', persistent: false, dedupKey: id,
       title: `Saved to ${projectLabel(projectGroupKey(task.project))}. ${hiddenByText(reasons)}`,
       action: { label: 'Show', kind: 'callback' },
       onAction: () => showTask(task, reasons.map((r) => r.dim), 'toast'),

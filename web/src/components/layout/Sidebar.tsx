@@ -128,7 +128,7 @@ export function Sidebar({
   useEffect(() => {
     if (!audio.lastError) return;
     notify({
-      kind: 'audio-error', severity: 'error', title: 'Recording error',
+      kind: 'audio-error', toastReason: 'failure', severity: 'error', title: 'Recording error',
       body: audio.lastError, persistent: false,
       dedupKey: `audio:${audio.lastError}`,
     });

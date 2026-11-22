@@ -29,6 +29,19 @@ export type NotificationKind =
   | 'host';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
+/**
+ * Why a notice may pop up at all (`toastReason` on every toast): the only three reasons (the UI standard, "Toasts",
+ * .claude/skills/walnut-ui-requirements/standard.md). A change the person just made and can see
+ * (a create, move, resize, pin, reorder, sort, copy) has none, so it gets no toast: mod+z takes it
+ * back. tests/web/toast-reason-ratchet.test.ts lists every call and the allowed ones by name.
+ * - failure: something the person asked for did not happen, or happened only in part.
+ * - out-of-sight: news from somewhere the person is not looking: background work that finished or
+ *   waits on them, a change the app made on its own, their result landing out of view.
+ * - undo-of-hidden: the Undo of a change that takes its object out of sight (delete, complete,
+ *   archive, snooze, unschedule).
+ */
+export type ToastReason = 'failure' | 'out-of-sight' | 'undo-of-hidden';
+
 /** One option an ACP provider offered for a permission request. */
 export interface NotificationAcpOption {
   optionId?: string;
@@ -161,6 +174,8 @@ export interface Notification {
   /** operation-error only: why the person must see it. Absent on an error = Walnut Health only.
    *  An error raised in this window for the person's own action gets 'own-action' in notify(). */
   needsYou?: string;
+  /** Why it may toast at all (ToastReason). Absent on a record loaded from the feed. */
+  toastReason?: ToastReason;
 }
 
 /**
@@ -169,8 +184,8 @@ export interface Notification {
  * a per-call override existed with zero callers and only invited one source to
  * quietly disagree with the policy.
  */
-export type NotificationInput = Omit<Notification, 'id' | 'timestamp' | 'read'> &
-  Partial<Pick<Notification, 'id' | 'timestamp'>>;
+export type NotificationInput = Omit<Notification, 'id' | 'timestamp' | 'read' | 'toastReason'> &
+  Partial<Pick<Notification, 'id' | 'timestamp'>> & { toastReason: ToastReason };
 
 /** Per-kind toast auto-dismiss duration (ms). Mirrors the legacy per-toast values. */
 export const TOAST_DURATION_MS: Record<NotificationKind, number> = {

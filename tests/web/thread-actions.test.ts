@@ -11,7 +11,7 @@ import {
 } from '@/utils/thread-meta';
 import {
   DOUBLE_FIRE_MS, THREAD_ACTION_TEXT, doneToastText, isDoubleFire, isOnPath, olderDoneToastText, removeToastText,
-  reopenToastText, visibleLandingOf,
+  visibleLandingOf,
 } from '@/hooks/useThreadActions';
 import type { SessionThreadMeta } from '@/types/session';
 import { buildDenseSession, DENSE_PREAMBLE_QUESTION, DENSE_PREAMBLE_TAKEAWAY } from '../e2e/browser/threads-fixture';
@@ -149,7 +149,6 @@ describe('useThreadActions pure parts', () => {
   it('toast and failure copy is verbatim (spec 10)', () => {
     expect(doneToastText('Buffer flush order')).toBe('Archived: Buffer flush order');
     expect(doneToastText('Buffer flush order', 2)).toBe('Archived: Buffer flush order and 2 above');
-    expect(reopenToastText('Late flush risk')).toBe('Unarchived “Late flush risk”');
     expect(removeToastText('X')).toBe('Removed “X”. The messages stay in the transcript.');
     expect(removeToastText('X', 1)).toBe('Removed “X” and 1 follow-up. The messages stay in the transcript.');
     expect(removeToastText('X', 3)).toBe('Removed “X” and 3 follow-ups. The messages stay in the transcript.');

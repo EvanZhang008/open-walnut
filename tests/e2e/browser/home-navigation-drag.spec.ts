@@ -95,7 +95,10 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await heading('satellite').locator('.navigation-heading-open').dragTo(heading('focus'));
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-tier-order') ?? '[]')[0])).toBe('satellite');
   await expect(heading('satellite').locator('.navigation-heading-open')).toHaveAttribute('aria-expanded', 'true');
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  // The headings moved under the pointer: no toast; mod+z takes the reorder back.
+  await expect(page.locator('.notification-toast', { hasText: 'Navigation reordered' })).toHaveCount(0);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-tier-order') ?? '[]')[0])).toBe('focus');
   const card = () => root.locator(`.todo-pinned-section [data-task-id="${ids[0]}"]`);
   const satellite = heading('satellite');

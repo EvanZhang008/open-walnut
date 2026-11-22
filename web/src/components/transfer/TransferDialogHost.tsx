@@ -65,7 +65,7 @@ export function TransferDialogHost() {
       const cur = stateRef.current;
       if (cur && cur.taskId !== taskId && cur.busy) {
         // One transfer at a time: the running one keeps its dialog.
-        notify({ kind: 'hint', severity: 'info', title: 'A transfer is still running', body: 'Wait for it to finish, then try again.', dedupKey: 'transfer:busy', persistent: false });
+        notify({ kind: 'hint', toastReason: 'failure', severity: 'info', title: 'A transfer is still running', body: 'Wait for it to finish, then try again.', dedupKey: 'transfer:busy', persistent: false });
       }
       setState((s) => {
         if (s && (s.taskId === taskId || s.busy)) return { ...s, visible: true };
@@ -101,14 +101,7 @@ export function TransferDialogHost() {
     transferTask(taskId, body).then((res) => {
       log.info('transfer', 'done', { taskId, newTaskId: res.taskId, sessionId: res.sessionId, history: res.history });
       setState((cur) => (cur && cur.taskId === taskId ? null : cur));
-      notify({
-        kind: 'hint',
-        severity: 'success',
-        title: `Moved to ${res.title}`,
-        ...(res.sourceCompleted ? { body: 'The original task is complete.' } : {}),
-        dedupKey: `transfer:${res.taskId}`,
-        persistent: false,
-      });
+      // The new task opens: that is the result, so no toast says it (the UI standard's toast rule).
       if (res.sessionId) openSessionOnHome(res.sessionId, navigate);
       else locateTaskOnHome(res.taskId, navigate);
     }).catch((err) => {

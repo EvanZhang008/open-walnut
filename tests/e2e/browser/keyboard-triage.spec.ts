@@ -3,7 +3,8 @@
  * web/src/undo/): mod+1..9 and mod+shift+[ / ] move the caret between the columns, mod+i puts
  * it in the current one, holding the modifier shows each column's number, mod+shift+D
  * completes the current task and goes on to the next one that needs the person, and every
- * complete, snooze, pin and delete has an Undo for 5 seconds, on its toast and on mod+z.
+ * complete, snooze, pin and delete has an Undo for 5 seconds on mod+z, and on a toast when it takes
+ * its task out of sight (a complete, a snooze, a delete; a pin shows where it was made, so no toast).
  *
  * The page runs as the Mac app does (a Mac platform and the app's message handlers), so the
  * keys are the app's: Cmd for everything. One test runs as a browser elsewhere (Alt).
@@ -390,19 +391,18 @@ async function columnKebab(page: Page, k: Key, row: string) {
   await menu.getByText(row, { exact: true }).click()
 }
 
-test('pin to a group and snooze each take one Undo, on the toast and on Cmd+Z', async ({ page }) => {
+test('pin to a group takes one Undo on Cmd+Z with no toast; a snooze has its Undo on the toast and on Cmd+Z', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
   await page.request.delete(`/api/focus/tasks/${TID('d')}`).catch(() => {})
   await openColumns(page, ['d'])
 
-  // Pin to Focus is a pin and then a group: one toast, and one Undo unpins.
+  // Pin to Focus is a pin and then a group: no toast (the pin shows where it was made, the UI
+  // standard's toast rule), and one Cmd+Z unpins.
   await columnKebab(page, 'd', 'Pin to')
   await page.getByTestId('kebab-pin-focus').click()
-  const pinned = toast(page, 'Pinned to Focus')
-  await expect(pinned).toContainText(TITLE('d'))
-  await expect(page.locator('.notification-toast', { hasText: 'Pinned' })).toHaveCount(1)
   await expect.poll(async () => (await taskRow(page, 'd')).pinned).toBe(true)
+  await expect(page.locator('.notification-toast', { hasText: 'Pinned' })).toHaveCount(0)
   // A menu open over the page owns the key: nothing is undone behind it.
   await col(page, 'd').locator('.session-panel-header .task-kebab-btn').click()
   await expect(page.locator('.task-kebab-menu')).toBeVisible()
@@ -413,15 +413,8 @@ test('pin to a group and snooze each take one Undo, on the toast and on Cmd+Z', 
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Meta+z')
-  await expect(pinned).toHaveCount(0)
   await expect.poll(async () => (await taskRow(page, 'd')).pinned ?? false).toBe(false)
-  // The key has no button to watch go: a short line says what it took back, with its Redo and
-  // key while it can be done again. It lasts the redo window, which openColumns stretched, so
-  // it is closed here by hand.
-  await expect(toast(page, 'Undone')).toContainText(TITLE('d'))
-  await expect(toast(page, 'Undone').locator('.notification-toast-action', { hasText: 'Redo' })).toBeVisible()
-  await expect(toast(page, 'Undone')).toContainText('\u21e7\u2318Z') // Shift Cmd Z
-  await toast(page, 'Undone').getByRole('button', { name: 'Dismiss' }).click()
+  // What came back is on screen: no "Undone" line (its redo is Cmd+Shift+Z).
   await expect(toast(page, 'Undone')).toHaveCount(0)
 
   // Pinned to Focus, then moved to Satellite: the Undo of the move puts it back in Focus, pinned.
@@ -431,7 +424,7 @@ test('pin to a group and snooze each take one Undo, on the toast and on Cmd+Z', 
   await page.waitForTimeout(2_000)
   await columnKebab(page, 'd', 'Pin to')
   await page.getByTestId('kebab-pin-satellite').click()
-  await expect(toast(page, 'Moved to Satellite')).toBeVisible()
+  await expect(toast(page, 'Moved to Satellite')).toHaveCount(0)
   // Satellite is the default group: stored as no focus_tier on a pinned task.
   await expect.poll(async () => { const t = await taskRow(page, 'd'); return t.pinned ? (t.focus_tier ?? 'satellite') : 'unpinned' }).toBe('satellite')
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
@@ -1377,7 +1370,7 @@ test('two actions on the same task stack: each Cmd+Z steps back one', async ({ p
     await expect.poll(async () => (await taskRow(page, 'd')).focus_tier).toBe('focus')
     await columnKebab(page, 'd', 'Pin to')
     await page.getByTestId('kebab-pin-satellite').click()
-    await expect(toast(page, 'Moved to Satellite')).toBeVisible()
+    await expect(toast(page, 'Moved to Satellite')).toHaveCount(0)
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
     await page.keyboard.press('Meta+z')
     await expect.poll(async () => (await taskRow(page, 'd')).focus_tier).toBe('focus')
@@ -1453,9 +1446,10 @@ test('an Undo toast out of sight behind a newer one keeps its time, and comes ba
   await page.setViewportSize({ width: 1600, height: 700 })
   await openColumns(page, ['a', 'b'], { undoWindow: 'real' })
   try {
-    await columnKebab(page, 'a', 'Pin to')
-    await page.getByTestId('kebab-pin-focus').click()
-    const first = toast(page, 'Pinned to Focus').filter({ hasText: TITLE('a') })
+    // A snooze, whose task leaves the list, so its Undo is on a toast (a pin has none).
+    await columnKebab(page, 'a', 'Snooze until')
+    await page.locator('.dp-pill', { hasText: '2h' }).first().click()
+    const first = toast(page, 'Snoozed until').filter({ hasText: TITLE('a') })
     await expect(first).toBeVisible()
     const firstAt = Date.now()
     // The second Undo from the keyboard, so a slow menu does not eat A's time first.
@@ -1477,9 +1471,10 @@ test('an Undo toast out of sight behind a newer one keeps its time, and comes ba
     await expect(first).toBeVisible()
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
     await page.keyboard.press('Meta+z')
-    await expect.poll(async () => (await taskRow(page, 'a')).pinned ?? false).toBe(false)
+    await expect.poll(async () => (await taskRow(page, 'a')).start_date ?? '').toBe('')
   } finally {
     for (const k of ['a', 'b'] as const) await page.request.delete(`/api/focus/tasks/${TID(k)}`).catch(() => {})
+    await page.request.patch(`/api/tasks/${TID('a')}`, { data: { start_date: '' } }).catch(() => {})
   }
 })
 

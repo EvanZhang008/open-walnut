@@ -174,7 +174,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
   const laneNameOf = (laneId: string) => d.current.getVM()?.lanes.find((l) => l.lane.id === laneId)?.lane.name ?? laneId;
 
   const toastError = (text: string, actions?: KanbanToastAction[]) => {
-    d.current.toasts.push({ text, tone: 'error', ...(actions ? { actions } : {}) });
+    d.current.toasts.push({ text, tone: 'error', toastReason: 'failure', ...(actions ? { actions } : {}) });
   };
 
   const moveCard = useCallback(async (taskId: string, laneId: string, opts: KanbanMoveOptions = {}): Promise<boolean> => {
@@ -281,6 +281,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
     d.current.onHumanPhase?.(taskId);
     d.current.toasts.push({
       text: `Completed ${quote(title)}`,
+      toastReason: 'undo-of-hidden',
       actions: [
         { label: 'Undo', testId: 'kanban-toast-undo', run: async () => {
           if (!(await setPhase(taskId, before, 'undo'))) return;
@@ -372,8 +373,10 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
       : [];
     if (m.doneLane && !m.isComplete) {
       if (m.completeOnDrop) { void completeTask(m.taskId); return; }
+      // The task did not complete with its card: the card's lane is in sight, the task is not.
       t.push({
         text: `Moved to ${m.laneName}. The task is still open.`,
+        toastReason: 'out-of-sight',
         actions: [
           { label: 'Complete task', testId: 'kanban-toast-complete', run: () => { void completeTask(m.taskId); } },
           { label: 'Always do this', testId: 'kanban-toast-always', run: async () => {
@@ -388,14 +391,18 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
     if (m.fromDone && m.isComplete) {
       t.push({
         text: `Moved to ${m.laneName}. The task stays complete.`,
+        toastReason: 'out-of-sight',
         actions: [{ label: 'Reopen task', testId: 'kanban-toast-reopen', run: () => { void reopenTask(m.taskId); } }, ...clearWaiting],
       });
       return;
     }
     if (m.reason === 'drag' && clearWaiting.length === 0) return;
     const undo = m.undo;
+    // A move from a menu or the keys sends the card to a lane that may be out of sight (Show finds
+    // it); a drag, which the person watched land, gets this only to offer Clear waiting on.
     t.push({
       text: `Moved ${quote(m.title)} to ${m.laneName}`,
+      toastReason: m.reason === 'drag' ? 'out-of-sight' : 'undo-of-hidden',
       actions: [
         { label: 'Undo', testId: 'kanban-toast-undo', run: async () => {
           if (undo.source === 'auto') await setCard(m.taskId, { lane: '' });

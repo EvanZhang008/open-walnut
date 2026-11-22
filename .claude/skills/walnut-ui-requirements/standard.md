@@ -135,6 +135,30 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
   solid, side comment card 12 px, notice 14 px, ask card 18 px); a change that touches one of them
   moves it to the ask card's look, never to a new one.
 
+## Toasts
+
+A toast (a notice that pops up and goes by itself) is allowed for only three reasons, and every
+call names its reason in `toastReason` (`ToastReason` in `web/src/contexts/notifications/types.ts`;
+the thread panel's, the board's and the content actions' toasts take the same field):
+
+1. `failure`: something the person asked for did not happen, or only in part (a write refused, a
+   key that did nothing). Error severity stays at least 15 s.
+2. `out-of-sight`: news from where the person is not looking: background work that finished or
+   waits on them (an ask, a reminder, a download), a change the app made on its own (a sort mode
+   switched to Manual by a drag), or their own result landing out of view (a task saved where the
+   filters hide it).
+3. `undo-of-hidden`: the Undo of a change that takes its object out of sight: delete, complete,
+   archive, remove, unpin, snooze, unschedule, clear the filters, hide a bar, a board card sent to another
+   lane from a menu or the keys.
+
+Never a toast for a create, move, resize, schedule, pin, tier change, reorder, sort, copy,
+reopen or rename the person just made and can see where they made it, nor an "Undone" after an
+Undo (what came back is on screen). Its Undo stays on mod+z: push it on the undo stack with
+`result: 'visible'` (`web/src/undo/TaskUndoContext.tsx`), which shows no toast. A failure never
+has the success severity. All toasts render as the one `NoticeCard` stack; no
+view draws a toast of its own (the Sort view's inverted pill was removed). Ratchet:
+`tests/web/toast-reason-ratchet.test.ts` lists every allowed non-failure toast by name.
+
 ## Status labels
 
 - A state is a dot and a word (`NoticeStatus`), or a `.badge` for a count or a tag. Never a new

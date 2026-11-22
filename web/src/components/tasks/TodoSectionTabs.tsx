@@ -102,7 +102,9 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
     const display = menu?.origin.closest('.todo-panel')?.querySelector<HTMLElement>('.todo-panel-toolbar button[aria-label="Display"]');
     setBarShown(false);
     requestAnimationFrame(() => display?.focus({ preventScroll: true }));
-    notify({ kind: 'sort', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden' });
+    // The bar is gone from sight: the line says where it comes back, and its Undo brings it now.
+    notify({ kind: 'sort', toastReason: 'undo-of-hidden', severity: 'info', title: 'Tab bar hidden. Turn it back on in Display', persistent: false, dedupKey: 'tab-bar-hidden',
+      action: { label: 'Undo', kind: 'callback' }, onAction: () => setBarShown(true) });
   };
   const tabItem = (tab: TabBarTab): ContextMenuItem => ({
     key: `tab-${tab.id}`, label: tab.label, toggle: true, keepOpen: true, checked: !hidden.includes(tab.id),

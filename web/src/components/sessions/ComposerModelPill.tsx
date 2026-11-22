@@ -288,7 +288,7 @@ export function ComposerModelPill({
       });
       notify({
         kind: 'operation-error',
-        severity: 'error',
+        toastReason: 'failure', severity: 'error',
         title: `${engineUi.displayName} model switch failed`,
         body: error instanceof Error ? error.message : String(error),
         persistent: false,

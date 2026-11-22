@@ -571,7 +571,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     if (!pathGone) return;
     log.warn('threads', 'page head is gone from the transcript, back to the root', { sessionId });
     navigate([ROOT_THREAD_KEY], 'head-gone');
-    argsRef.current.toast.show({ text: HEAD_GONE_TEXT, ms: 4000 });
+    argsRef.current.toast.show({ text: HEAD_GONE_TEXT, toastReason: 'failure', ms: 4000 });
   }, [pathGone, navigate, sessionId]);
 
   // ── Drawer state (P4's ThreadTreeDrawer is controlled from here) ──

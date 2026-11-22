@@ -1,5 +1,7 @@
 /**
- * One browser, one task store — the "Task created" toast's Undo.
+ * One browser, one task store: the Undo (mod+z) of a task just created from the draft column.
+ * The create shows no toast (its row is on screen; the UI standard's toast rule), so mod+z is
+ * its Undo.
  *
  * Undo used to call the DELETE endpoint directly, bypassing the store's
  * optimistic removal, so the board row, the Focus Dock card and every task-ref
@@ -26,7 +28,13 @@ async function findTaskId(request: APIRequestContext, title: string): Promise<st
   return id!
 }
 
-test('Undo on the "Task created" toast drops the board row before the DELETE is answered', async ({ page, request }) => {
+test('mod+z after "Save as todo" drops the board row before the DELETE is answered', async ({ page, request }) => {
+  // The 5 s Undo window, stretched: this test is about how fast the row goes, not the window.
+  await page.addInitScript(() => {
+    const original = window.setTimeout.bind(window)
+    window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) =>
+      original(fn, delay === 5000 ? 120_000 : delay, ...args)) as typeof window.setTimeout
+  })
   const title = `Quick capture ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   // Deterministic parse: the draft's AI back-fill is not what this spec is about.
   await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
@@ -39,22 +47,16 @@ test('Undo on the "Task created" toast drops the board row before the DELETE is 
   await page.waitForLoadState('networkidle')
 
   // The draft column is the one place a task is created; "Save as todo"
-  // is its no-session path and the toast under test is its receipt.
+  // is its no-session path.
   const panel = await openDraft(page)
   await draftComposer(page).fill(title)
   await panel.locator('.draft-later-btn').click()
   await expect(draftPanels(page)).toHaveCount(0, { timeout: 10_000 })
 
-  // ONE locator for the toast: the 'sort' kind auto-dismisses, so two sequential
-  // expects could straddle the dismissal.
-  const toast = page
-    .locator('.notification-toast--success', { hasText: 'Task created' })
-    .filter({ has: page.locator('.notification-toast-action', { hasText: 'Undo' }) })
-  await expect(toast).toBeVisible({ timeout: 20_000 })
-
   const taskId = await findTaskId(request, title)
-  const row = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
-  await expect(row).toBeVisible({ timeout: 10_000 })
+  // A new task is born pinned, so its row may be in the Pinned section: any row of it.
+  const row = page.locator(`#home-task-navigation [data-task-id="${taskId}"]`)
+  await expect(row.first()).toBeVisible({ timeout: 30_000 })
 
   // Hold the DELETE: the server does not see it until the hold ends.
   let deletesAnswered = 0
@@ -65,7 +67,10 @@ test('Undo on the "Task created" toast drops the board row before the DELETE is 
     await route.continue()
   })
 
-  await toast.locator('.notification-toast-action', { hasText: 'Undo' }).click()
+  await expect(page.locator('.notification-toast', { hasText: 'Task created' })).toHaveCount(0)
+  // Outside any text box, so the key is the app's Undo and not the composer's.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('ControlOrMeta+z')
   await expect(row).toHaveCount(0, { timeout: INSTANT_MS })
   expect(deletesAnswered).toBe(0)
 

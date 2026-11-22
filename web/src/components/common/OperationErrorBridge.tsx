@@ -23,7 +23,7 @@ export function OperationErrorBridge() {
     // every card; it is applied here too so the dedup key is the words, not the raw text.
     const body = operationErrorWords(operationError);
     notify({
-      kind: 'operation-error', severity: 'error', title: 'Action failed',
+      kind: 'operation-error', toastReason: 'failure', severity: 'error', title: 'Action failed',
       body, persistent: true,
       // Dedup on the message so a repeated identical error doesn't stack toasts.
       dedupKey: `operr:${body}`,

@@ -88,7 +88,7 @@ export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
     const name = failure.title ? `"${failure.title}"` : 'The event';
     notify({
       kind: 'operation-error',
-      severity: 'error',
+      toastReason: 'failure', severity: 'error',
       title: failure.hidden ? 'Could not hide event' : 'Could not show event',
       body: `${name} is ${failure.hidden ? 'visible' : 'hidden'} again: ${failure.message}`,
       persistent: false,
@@ -97,7 +97,7 @@ export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
   }), [notify]);
 
   useEffect(() => subscribeCalendarWriteFailures((failure) => {
-    notify({ kind: 'operation-error', severity: 'error', title: `Could not ${failure.action} event`,
+    notify({ kind: 'operation-error', toastReason: 'failure', severity: 'error', title: `Could not ${failure.action} event`,
       body: failure.message, persistent: false, dedupKey: `calendar-write:${failure.id}` });
   }), [notify]);
 

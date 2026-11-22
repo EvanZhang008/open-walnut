@@ -72,7 +72,7 @@ export function NotificationActionButtons({
         dedupKey: n.dedupKey, pluginId: a.pluginId, op: a.op, error: result.message,
       });
       notify({
-        kind: 'operation-error', severity: 'error', persistent: false,
+        kind: 'operation-error', toastReason: 'failure', severity: 'error', persistent: false,
         title: `"${a.label}" did not run`,
         body: n.persistent ? `${result.message}. The notice is still in the notifications panel.` : result.message,
         dedupKey: `notice-action-error:${n.dedupKey}`,

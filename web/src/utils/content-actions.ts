@@ -26,6 +26,7 @@ import { apiGet, apiPost } from '@/api/client';
 import type { ImageAttachment } from '@/api/chat';
 import { openSessionOnHome } from '@/utils/open-session';
 import { log } from '@/utils/log';
+import type { ToastReason } from '@/contexts/notifications/types';
 
 export type { ContentItem };
 
@@ -52,6 +53,8 @@ export const CONTENT_ACTION_WORDS: Record<ContentActionId, { label: string; desc
 
 export interface ContentToast {
   severity: 'success' | 'warning' | 'error';
+  /** A failure, or a send that landed in a chat out of sight (the UI standard's toast rule). */
+  toastReason: ToastReason;
   title: string;
   body?: string;
   action?: { label: string; run(): void };
@@ -249,18 +252,18 @@ export async function sendToCeo(raw: ContentItem, note: string, images: readonly
     answer = await apiPost<CeoAnswer>('/api/v1/content/ceo', { item, note: words, ...(pictures.length > 0 ? { images: pictures } : {}), ...(target.kind !== 'ceo' ? { to: target.id } : {}) }, { timeoutMs: 30_000 });
   } catch (err) {
     log.warn('content-actions', 'talk to ceo failed', { source: item.source, to: target.id, error: errorWords(err) });
-    runtime?.toast({ severity: 'error', title: `Not sent to ${who}`, body: errorWords(err), dedupKey: `content-ceo-error:${item.title}` });
+    runtime?.toast({ severity: 'error', toastReason: 'failure', title: `Not sent to ${who}`, body: errorWords(err), dedupKey: `content-ceo-error:${item.title}` });
     throw err;
   }
   log.info('content-actions', 'talk to ceo sent', { source: item.source, to: answer.to?.id ?? 'main', images: images.length, taskId: answer.taskId, sessionId: answer.sessionId, held: !!answer.held, testRun: !!answer.testRun });
   runtime?.toast(answer.held
     ? {
-      severity: 'warning', title: `Not sent: ${who} is waiting on your answer`,
+      severity: 'warning', toastReason: 'failure', title: `Not sent: ${who} is waiting on your answer`,
       body: 'Answer it in that chat, then send this again.',
       action: { label: 'Open chat', run: () => openCeoChat(answer) }, dedupKey: `content-ceo:${item.title}`,
     }
     : {
-      severity: 'success', title: answer.testRun ? `Sent to the stand-in for ${who} (test run)` : `Sent to ${who}`, body: item.title,
+      severity: 'success', toastReason: 'out-of-sight', title: answer.testRun ? `Sent to the stand-in for ${who} (test run)` : `Sent to ${who}`, body: item.title,
       action: { label: 'Open chat', run: () => openCeoChat(answer) }, dedupKey: `content-ceo:${item.title}`,
     });
   if (answer.held) throw new Error(`${who === 'the CEO' ? 'The CEO' : who} is waiting on your answer`);

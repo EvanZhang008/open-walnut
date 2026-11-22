@@ -119,7 +119,7 @@ export function useSessionControls(sessionId: string | undefined, engine: string
       });
       notify({
         kind: 'operation-error',
-        severity: 'error',
+        toastReason: 'failure', severity: 'error',
         title: 'Session setting could not be applied',
         body: error instanceof Error ? error.message : String(error),
         persistent: false,

@@ -1,6 +1,6 @@
 export { NotificationProvider, useNotifications } from './NotificationProvider';
 export type {
-  Notification, NotificationInput, NotificationKind, NotificationSeverity, NotificationAction,
+  Notification, NotificationInput, NotificationKind, NotificationSeverity, NotificationAction, ToastReason,
 } from './types';
 export {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,

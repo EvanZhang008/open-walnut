@@ -10,7 +10,7 @@
  *
  * Covered: the blocked pair is disabled with its reason; "nothing would change"
  * disables Transfer with a hint; another host + instruction + keep-source sends
- * the right body, the dialog closes, the toast names the new task and its session
+ * the right body, the dialog closes, no toast (the new task opening is the result), and its session
  * opens in the Home columns with a "Moved from" line; a 409 shows the server's
  * words inline and keeps every choice; the Model pill starts on the source's model
  * and effort, the picker changes them, Permissions starts on the source's mode, and
@@ -181,10 +181,11 @@ test('transfer from the session menu: blocked pair, nothing-changes guard, submi
   await expect.poll(() => sent).not.toBeNull()
   expect(sent).toEqual({ engine: 'claude', host: 'devbox', cwd: 'auto', mode: 'carry', keep_source: true, message: 'Run the tests first', wait_ms: 8000 })
 
-  await expect(page.locator('.notification-toast--success', { hasText: `Moved to ${NEW_TASK_TITLE}` })).toBeVisible({ timeout: 20_000 })
-  expect(polls).toBeGreaterThanOrEqual(2)
   const newPanel = panelOf(page, NEW_SESSION_ID)
   await expect(newPanel).toBeVisible({ timeout: 30_000 })
+  expect(polls).toBeGreaterThanOrEqual(2)
+  // The new task opening is the result; no toast says so (the UI standard's toast rule).
+  await expect(page.locator('.notification-toast', { hasText: `Moved to ${NEW_TASK_TITLE}` })).toHaveCount(0)
   const links = newPanel.getByTestId('session-transfer-links')
   await expect(links).toContainText('Moved from')
   await expect(links.locator('a.task-link')).toHaveText(TASK_TITLE)

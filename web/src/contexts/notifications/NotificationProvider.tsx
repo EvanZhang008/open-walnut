@@ -475,7 +475,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const { sessionId, taskId } = extractFirstRefIds(text ?? '');
     const body = stripEntityRefsToText(text ?? '');
     notify({
-      kind: 'cron', severity: 'info', title: jobName,
+      kind: 'cron', severity: 'info', toastReason: 'out-of-sight', title: jobName,
       body: body.length > MAX_FEED_BODY_CHARS ? `${body.slice(0, MAX_FEED_BODY_CHARS)}…` : body,
       dedupKey: `cron:${jobName}:${timestamp}`,
       persistent: true,
@@ -509,6 +509,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     notify({
       kind: 'operation-error',
       severity: 'error',
+      toastReason: 'failure',
       needsYou: 'sign-in',
       title: 'Agent auth failed — every turn will fail',
       body: error.length > MAX_FEED_BODY_CHARS ? `${error.slice(0, MAX_FEED_BODY_CHARS)}…` : error,
@@ -527,7 +528,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     };
     if (!name) return;
     notify({
-      kind: 'skill', severity: 'success', title: title ?? `New skill: ${name}`, body,
+      kind: 'skill', severity: 'success', toastReason: 'out-of-sight', title: title ?? `New skill: ${name}`, body,
       dedupKey: `skill:${name}:${timestamp ?? 0}`,
       persistent: true,
       ...(timestamp ? { timestamp } : {}),
@@ -551,6 +552,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     notify({
       kind,
       severity: r.severity ?? 'error',
+      // The server's record: a failure, or news from work out of sight (an ask, a cron, a reminder).
+      toastReason: kind === 'operation-error' ? 'failure' : 'out-of-sight',
       title: r.title,
       body: r.body,
       dedupKey: r.dedupKey,
