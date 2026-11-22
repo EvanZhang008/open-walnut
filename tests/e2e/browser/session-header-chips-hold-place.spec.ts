@@ -164,10 +164,16 @@ async function openFromTaskRow(page: Page): Promise<Locator> {
 
 /** Open a session as a home column through the finder (Cmd/Ctrl+Shift+O, type, click). */
 async function openViaFinder(page: Page, query: string, sid: string): Promise<Locator> {
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
-  await page.keyboard.press('ControlOrMeta+Shift+O')
   const finder = page.locator('.session-search-panel')
-  await expect(finder).toBeVisible()
+  // Right after the page loads the Home listener can still be on its way (a loaded box): press again
+  // only while the finder is not shown, since the shortcut toggles it.
+  await expect(async () => {
+    if (!(await finder.isVisible())) {
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await page.keyboard.press('ControlOrMeta+Shift+O')
+    }
+    await expect(finder).toBeVisible({ timeout: 3_000 })
+  }).toPass({ timeout: 20_000 })
   // The finder keeps the last query while closed and clears it in an effect once it is shown;
   // text typed before that effect is wiped with it (seen on the second open of the same query).
   // The same effect focuses the box a frame later, so a focused box has been cleared.
@@ -265,6 +271,14 @@ async function checkFoldedRows(page: Page, panel: Locator, ready: boolean) {
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
 }
+
+/**
+ * The narrowest column of the narrow ladder (260 to 420) where Files stays on the row while Fork,
+ * Watch and Locate are drawn (waiting, or as spacers): the tests that aim at Files use it. Since the
+ * header keys joined the button family (2026-11-22, wider keys) a 340 px row with Fork folds Files
+ * into "...", which is intended; at 420 Fork, Changed and Files are on the row.
+ */
+const AIM_PX = 420
 
 /** Draw every session column at `px` wide from here on (the next column opens at that width). */
 async function clampColumns(page: Page, px: number) {
@@ -480,7 +494,9 @@ async function aimAtFilesAcrossNoTask(page: Page, panel: Locator, panelSel: stri
   await page.mouse.move(0, 0)
   const before = await rowBoxes(panel)
   if (shot) await shootHeader(page, panel, `${shot}-held`)
-  const box = (await panel.locator('button[data-header-id="files"]').boundingBox())!
+  const files = panel.locator('button[data-header-id="files"]')
+  await expect(files, `${when}: Files is on the row to aim at (not folded into "...")`).toHaveAttribute('data-hidden', 'false')
+  const box = (await files.boundingBox())!
   const aim = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   const stop = await traceFiles(page, panelSel)
 
@@ -925,14 +941,14 @@ test('after a reload nothing names the session yet: its column waits with the ta
   // With a task, a lead's (so Board is one of them): nothing moves, the task controls just start to act.
   // The open subtask rides the task list the reload below loads (page-local).
   await leadForPage(page, TASK_ID)
-  await clampColumns(page, 340)
+  await clampColumns(page, AIM_PX)
   await openViaFinder(page, SESSION_TITLE, SESSION_ID)
   let hold = await holdRecord(page, SESSION_ID)
   let reading = 'with task: no reading'
   try {
     // The column comes back from sessionStorage before any list has named its session.
     await page.reload()
-    await clampColumns(page, 340)
+    await clampColumns(page, AIM_PX)
     const panel = column(page, SESSION_ID)
     await expect(panel).toBeVisible({ timeout: 20_000 })
     await expect.poll(() => hold.held(), { message: 'the record is on its way' }).toBeGreaterThan(0)
@@ -947,7 +963,7 @@ test('after a reload nothing names the session yet: its column waits with the ta
     await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
     await settle(page)
     const after = await rowBoxes(panel)
-    reading = `with task 340px: ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))}`
+    reading = `with task ${AIM_PX}px: ${shown(before)} -> ${shown(after)} moved ${JSON.stringify(moved(before, after))}`
     expect(moved(before, after), 'a session with a task: nothing moves when its record lands').toEqual([])
     await expect(panel.locator(SPACERS)).toHaveCount(0)
     await closeAllColumns(page)
@@ -962,10 +978,10 @@ test('after a reload nothing names the session yet: its column waits with the ta
   reading = 'no task: no reading'
   try {
     await page.reload()
-    await clampColumns(page, 340)
+    await clampColumns(page, AIM_PX)
     const panel = column(page, TASKLESS.id)
     await expect(panel).toBeVisible({ timeout: 20_000 })
-    reading = `no task 340px: ${await aimAtFilesAcrossNoTask(page, panel, `.main-page-session-column .session-panel[data-session-id="${TASKLESS.id}"]`, hold, 'reload, no task', '7-reload-taskless')}`
+    reading = `no task ${AIM_PX}px: ${await aimAtFilesAcrossNoTask(page, panel, `.main-page-session-column .session-panel[data-session-id="${TASKLESS.id}"]`, hold, 'reload, no task', '7-reload-taskless')}`
   } finally {
     console.log(`RELOAD ${test.info().project.name} ${reading}`)
     await hold.dispose()
@@ -986,8 +1002,8 @@ test('a deep link to a session with no task keeps the row still, by its full id 
       const panelSel = `.main-page-session-column .session-panel[data-session-id^="${ref}"]`
       const panel = page.locator(panelSel)
       await expect(panel).toBeVisible({ timeout: 20_000 })
-      await clampColumns(page, 340)
-      reading = `${label} 340px: ${await aimAtFilesAcrossNoTask(page, panel, panelSel, hold, `deep link (${label})`, ref === TASKLESS.id ? '8-deeplink-taskless' : undefined, ref !== TASKLESS.id)}`
+      await clampColumns(page, AIM_PX)
+      reading = `${label} ${AIM_PX}px: ${await aimAtFilesAcrossNoTask(page, panel, panelSel, hold, `deep link (${label})`, ref === TASKLESS.id ? '8-deeplink-taskless' : undefined, ref !== TASKLESS.id)}`
       if (ref !== TASKLESS.id) await expect(panel, 'the column took the full id').toHaveAttribute('data-session-id', TASKLESS.id)
       await closeAllColumns(page)
     } finally {
@@ -1011,7 +1027,7 @@ test('the first chat reference to a session with no task keeps the row still', a
       await route.fulfill({ response: resp, json: JSON.parse(body) })
     } catch { /* the page is gone */ }
   })
-  await clampColumns(page, 340)
+  await clampColumns(page, AIM_PX)
   const host = await openFromTaskRow(page)
   const ref = host.locator(`a.session-link[data-session-id="${TASKLESS.id}"]`).first()
   await expect(ref).toBeVisible({ timeout: 20_000 })
@@ -1024,7 +1040,7 @@ test('the first chat reference to a session with no task keeps the row still', a
     await expect(panel).toBeVisible({ timeout: 20_000 })
     reading = await aimAtFilesAcrossNoTask(page, panel, panelSel, hold, 'chat reference, no task', '9-chatref-taskless')
   } finally {
-    console.log(`CHATREF ${test.info().project.name} 340px: ${reading}`)
+    console.log(`CHATREF ${test.info().project.name} ${AIM_PX}px: ${reading}`)
     await hold.dispose()
   }
 })
@@ -1114,8 +1130,8 @@ test('a prefix chat reference to a session already open folds into its column an
 
 test('a task deleted while its session is open: Fork and Board stop acting and keep their places', async ({ page }) => {
   test.setTimeout(150_000)
-  // 340 px is a narrow row; 760 px keeps both on the row, where each spacer must sit where its control was.
-  for (const px of [340, 760]) {
+  // AIM_PX is a narrow row (Files still on it); 760 px keeps both on the row, where each spacer must sit where its control was.
+  for (const px of [AIM_PX, 760]) {
     const seeded = await seedTaskSession(page, `open ${px}`)
     // A lead's task, so Board is one of the task controls.
     const dropSubtask = await realSubtask(page, seeded.taskId)
@@ -1127,7 +1143,9 @@ test('a task deleted while its session is open: Fork and Board stop acting and k
       await settle(page)
       await page.mouse.move(0, 0)
       const before = await rowBoxes(panel)
-      const box = (await panel.locator('button[data-header-id="files"]').boundingBox())!
+      const files = panel.locator('button[data-header-id="files"]')
+      await expect(files, `${px}px: Files is on the row to aim at (not folded into "...")`).toHaveAttribute('data-hidden', 'false')
+      const box = (await files.boundingBox())!
       const revision = ((await (await page.request.get(`/api/sessions/${seeded.sid}`)).json()) as { session: { statusRevision: number } }).session.statusRevision
       const stop = await traceFiles(page, `.main-page-session-column .session-panel[data-session-id="${seeded.sid}"]`)
 
@@ -1151,7 +1169,7 @@ test('a task deleted while its session is open: Fork and Board stop acting and k
       // At 760 px both were on the row: each spacer has its control's box (moved() compares them).
       if (px === 760) expect(Object.keys(before), 'Fork and Board on the row').toEqual(expect.arrayContaining(['fork', 'board']))
       await expectSpacers(page, panel, `task deleted, ${px}px`)
-      await shootHeader(page, panel, px === 340 ? '10-task-deleted' : '10-task-deleted-760')
+      await shootHeader(page, panel, px === AIM_PX ? '10-task-deleted' : '10-task-deleted-760')
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
       await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveText(['Files'])
       // A click in the panel marks its task read: never the deleted one (until 2026-10-11 the panel kept

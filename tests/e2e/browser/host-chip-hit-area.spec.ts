@@ -144,7 +144,7 @@ async function clickMisses(page: Page, between?: () => Promise<void>): Promise<s
       if (!box) { out.push(`${i} no box`); continue }
       const p = chipPoints(box).find((q) => q.name === name)!
       await page.mouse.click(p.x, p.y)
-      const ok = await target.evaluate((el) => el.classList.contains('active'))
+      const ok = (await target.getAttribute('aria-pressed')) === 'true'
       if (!ok) out.push(`${await target.textContent()} ${name}`)
     }
   }

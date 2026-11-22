@@ -163,6 +163,9 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
     <TabList ref={barRef} className="pc-tabs" aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
       {tabs.map((t, i) => (
         // Each tab is its own pane at its own hash: picked, the address is replaced, as a nav click does.
+        // Always, even for the tab this bar calls current: a router navigation renders in a transition,
+        // so right after a press on another tab this bar can still be the old pane's, and a press on
+        // its "current" tab must still win (the last press is the tab that opens, as with the links).
         <Tab
           key={t.id}
           selected={t.id === current}
@@ -170,7 +173,7 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
           className="pc-tab"
           aria-current={t.id === current ? 'page' : undefined}
           data-testid={`pc-tab-${t.id}`}
-          onClick={() => { if (t.id !== current) navigate({ hash: `#${t.id}` }, { replace: true }); }}
+          onClick={() => navigate({ hash: `#${t.id}` }, { replace: true })}
           detail={<span className="pc-tab-hint">{TAB_HINT[t.id]}</span>}
         >
           {t.dot && <span className="devices-way-dot" data-dot={t.dot} aria-hidden="true" />}
