@@ -76,11 +76,11 @@ function leaderStore() {
   return store
 }
 
-function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[] } = {}) {
+function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean } } = {}) {
   return createLeaderSide({
     walnutId: async () => 'w1',
     permitNumber: () => 1,
-    flagOn: async () => true,
+    flagOn: async () => opts.flag?.on ?? true,
     openStream: async (_host, purpose) => { opts.opened?.push(purpose); return net.connect(port, '127.0.0.1') },
     applyBatch: async (b) => { store.batches.push(b); store.cursor = b.cursor; return { written: b.rows.map((r) => r.sid), skipped: [] } },
     loadCursor: async () => store.cursor,
@@ -118,6 +118,25 @@ describe('the leader side of a host that runs its sessions', () => {
     await side.noteHost('devbox', { connected: false, judges: true })
     expect(side.linked('devbox')).toBe(false)
     expect(side.hostJudges('devbox')).toBe(false)
+  })
+
+  it('the switch going off keeps the link for the sessions the host already runs; only the next start stays here', async () => {
+    const { channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    const flag = { on: true }
+    side = makeSide(port, store, { flag })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => side!.linked('devbox'))
+    expect(side.hostJudges('devbox')).toBe(true)
+    flag.on = false
+    await side.refreshFlag()
+    expect(side.hostJudges('devbox')).toBe(false)
+    await tick(60)
+    expect(side.linked('devbox')).toBe(true)
+    flag.on = true
+    await side.refreshFlag()
+    expect(side.hostJudges('devbox')).toBe(true)
   })
 
   it('applies every record once, in order, across a drop and a dial again; rows, renames, live and facts each go their way', async () => {

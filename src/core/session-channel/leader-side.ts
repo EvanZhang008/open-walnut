@@ -84,7 +84,12 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     }
     return s
   }
-  const wanted = (s: HostState): boolean => !stopped && flag && s.connected && s.judges
+  /**
+   * The channel is kept while the host is linked and runs its sessions, whatever the switch says
+   * now: a session the leader handed it before the switch went off still reports through it. The
+   * switch decides only where a new start goes (hostJudges).
+   */
+  const wanted = (s: HostState): boolean => !stopped && s.connected && s.judges
 
   async function applyRecs(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void> {
     const rows: HostChannelBatch['rows'][number][] = []
@@ -236,16 +241,22 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     async noteHost(hostKey: string, o: { connected: boolean; judges: boolean }): Promise<void> {
       if (stopped) return
       flag = await deps.flagOn().catch(() => false)
+      if (stopped) return
       const s = stateOf(hostKey)
       s.connected = o.connected
       s.judges = o.judges
       if (!wanted(s)) s.attempt = 0
       ensure(hostKey)
     },
+    /** The switch may have changed (a config write): read it again for the next start. */
+    async refreshFlag(): Promise<void> {
+      if (stopped) return
+      flag = await deps.flagOn().catch(() => false)
+    },
     /** judge-of.ts's start probe: would a start on `hostKey` go to its service now? */
     hostJudges(hostKey: string): boolean {
       const s = hosts.get(hostKey)
-      return !!s && wanted(s)
+      return flag && !!s && wanted(s)
     },
     /** Is the channel to `hostKey` linked now? */
     linked(hostKey: string): boolean { return !!hosts.get(hostKey)?.socket },

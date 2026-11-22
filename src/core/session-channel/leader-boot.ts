@@ -4,12 +4,13 @@
  * the leader when the switch is on; with it off nothing here runs and every judge is 'legacy'.
  */
 import { log } from '../../logging/index.js'
-import { bus } from '../event-bus.js'
+import { bus, EventNames } from '../event-bus.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from './leader-side.js'
 import { hostRunsSessionsNow } from './switch.js'
 import { noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 
 let active: LeaderSide | null = null
+const CONFIG_SUBSCRIBER = 'host-session-switch'
 
 /** The running leader side, or null (switch off, a follower, not started yet). */
 export function activeLeaderSide(): LeaderSide | null {
@@ -61,10 +62,13 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const { startHostSessionTasks } = await import('./leader-tasks.js')
   const stopTasks = startHostSessionTasks()
   const unlisten = hostServer.onHostServerView(look)
+  // The switch is read again at every config write, so a start after it went off stays here.
+  bus.subscribe(CONFIG_SUBSCRIBER, () => { void side.refreshFlag() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
   for (const view of hostServer.peekHostServerViews()) look(view)
   log.session.info('session channels: the leader side is on (hosts that name session-judge-v1 run their sessions)')
   return () => {
     unlisten()
+    bus.unsubscribe(CONFIG_SUBSCRIBER)
     stopTasks()
     side.stop()
     setHostJudgeProbe(null)
