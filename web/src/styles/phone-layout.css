@@ -184,6 +184,7 @@
   .app-shell-navigation .notes-split-view > .notes-tree-pane {
     flex: 1 1 auto !important;
     width: 100% !important;
+    max-width: none;
     min-width: 0;
     border-right: 0;
   }

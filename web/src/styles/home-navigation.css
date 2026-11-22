@@ -411,7 +411,7 @@
 @media (max-width: 1100px) {
   .home-companion { position: absolute; top: 0; left: var(--home-companion-left, 0); bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); max-width: calc(100% - var(--home-companion-left, 0px)); }
   /* Two side bars over a narrow window share what is left of it rather than run past its edge. */
-  .home-companion .side-bar-pane, .page-side-bar .side-bar-pane { flex-shrink: 1; }
+  .home-companion .side-bar-pane { flex-shrink: 1; }
 }
 /* A phone stacks the task panel above the rest, so the overlay starts at the left edge. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
@@ -428,10 +428,13 @@
 .side-bar-pane-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: -2px; width: 3px; background: var(--accent); opacity: 0; transition: opacity .15s; pointer-events: none; }
 .side-bar-pane-resize:hover::after, .side-bar-pane-resize.resizing::after, .side-bar-pane-resize:focus-visible::after { opacity: .5; }
 .side-bar-pane-resize:focus-visible { outline: none; }
-/* A narrow window lays the side bar over the page from its left edge, as Home does its column. */
-@media (max-width: 1100px) {
-  .page-side-bar { position: absolute; top: 0; left: 0; bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }
-}
+/* The side bar is a column at every width, never laid over the page: over it, it hid the page's
+   own first column (2026-11-22 review: at 1024 the Scratchpad covered the Notes tree and its search;
+   CI 2026-11-09: it took every click on the Org channel list). A narrow window shrinks the side bars
+   first: the page keeps at least half the row, 420 px at most. */
+.page-side-bar { flex-shrink: 1; min-width: 0; }
+.page-side-bar .side-bar-pane { flex-shrink: 1; }
+.main-content-row > .page-side-bar ~ .app-content-area { min-width: min(420px, 50%); }
 @media (hover: none) {
   .navigation-more { opacity: .65; pointer-events: auto; }
   .home-navigation-scroll .focus-inline-add-trigger { opacity: .65; }

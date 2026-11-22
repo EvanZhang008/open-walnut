@@ -381,3 +381,21 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .board-kanban * {
   overflow-anchor: none;
 }
+
+/* A card's own session, opened in place in the card's detail: the card right above shows the
+   task's title whole, so the session header's title row stays ONE line, its copy of the title cut,
+   and the chat keeps its room (520px, R3-05: the title on a line of its own and the labels on a
+   third one left the chat no height under the 280px floor). The title keeps a readable start; the
+   labels give their room back first (the Worker pill cuts its leader's name, `.wn-meta`). Also in
+   the narrow (`tight`) header, which would put the labels on a line of their own. */
+.kanban-card-detail > .kanban-detail-session .session-panel-header-top { flex-wrap: nowrap; }
+.kanban-card-detail > .kanban-detail-session .session-panel-header-top[data-header-fit]:has(> .session-panel-title-meta)::after { content: none; }
+.kanban-card-detail > .kanban-detail-session .session-panel-header-top .session-panel-title-area { flex: 1 1 0; min-width: min(12em, 40%); }
+.kanban-card-detail > .kanban-detail-session .session-panel-header-top .session-panel-title-meta { display: flex; flex: 0 1 auto; min-width: 0; }
+.kanban-card-detail > .kanban-detail-session .session-panel-header-top[data-header-fit] .session-panel-title-meta > * { order: 0; }
+.kanban-card-detail > .kanban-detail-session .session-panel-title-area > .session-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis; /* meta: a copy of the title the card above shows whole */
+}

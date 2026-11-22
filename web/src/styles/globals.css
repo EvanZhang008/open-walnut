@@ -19952,6 +19952,9 @@ a.tag-chip:hover .tag-chip-value,
 
 .notes-tree-pane {
   flex: 0 0 280px;
+  /* The width is a stored px value (inline); beside a side bar or in a narrow window it yields to
+     the reader: never more than 45% of the page (2026-11-22: a 497 px tree filled a 456 px page). */
+  max-width: 45%;
   overflow-y: auto;
   border-right: 1px solid var(--border);
   background: var(--bg);

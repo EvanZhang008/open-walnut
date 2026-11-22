@@ -868,7 +868,8 @@ export function NotesPage() {
   const { onPointerDown: treeResizePointerDown } = useDragGesture({
     cursor: 'col-resize',
     onStart: () => {
-      startWidthRef.current = listWidthRef.current;
+      // From the width on screen: the CSS cap may hold the tree below the stored one.
+      startWidthRef.current = Math.min(listWidthRef.current, listPaneRef.current?.getBoundingClientRect().width || listWidthRef.current);
       listPaneRef.current?.classList.add('resizing');
     },
     onMove: ({ dx }) => {

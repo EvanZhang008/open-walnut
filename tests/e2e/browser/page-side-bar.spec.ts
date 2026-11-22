@@ -502,7 +502,7 @@ test('the two side bars each keep their own width, handle and scrolling', async 
   await scratchToggle(page).click()
 })
 
-test('a full screen sheet lies beside the side bar, and a narrow window overlays the page', async ({ page }) => {
+test('a full screen sheet lies beside the side bar, and a narrow window keeps it a column', async ({ page }) => {
   await openOrg(page)
   await agendaToggle(page).click()
   await expect(agendaPane(page)).toBeVisible()
@@ -514,7 +514,7 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
   await expect.poll(gap).toBe(0)
 
   // The node on screen may have no side bar of its own: pick one that has, while the window is
-  // wide (CI, 2026-11-09: in the narrow window the overlay lies over the channel list and took
+  // wide (CI, 2026-11-09: the narrow window's old overlay lay over the channel list and took
   // every click on it, until the test timed out).
   const full = page.getByTestId('org-rail-fullscreen')
   // No wait for the node to settle: the page picks its default node once the tasks are in and
@@ -527,12 +527,16 @@ test('a full screen sheet lies beside the side bar, and a narrow window overlays
   }
   await expect(full).toBeVisible()
 
+  // A narrow window keeps the side bar a column beside the page, never over it (2026-11-22: over
+  // the Notes page at 1024 it hid the tree and its search box); the page keeps half the row.
   await page.setViewportSize({ width: 1000, height: 800 })
-  await expect.poll(async () => page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="page-side-bar"]')!).position)).toBe('absolute')
+  await expect.poll(async () => { const e = await edges(page); return e.areaLeft - e.barRight }).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('[data-testid="page-side-bar"]')!).position)).toBe('static')
   const e = await edges(page)
-  expect(e.areaLeft, 'the page keeps its width under the overlay').toBe(e.barLeft)
+  const area = (await page.locator('.main-content-row > .app-content-area').boundingBox())!
+  expect(area.width, `the page keeps room beside the side bar (${JSON.stringify(e)})`).toBeGreaterThanOrEqual(Math.min(420, (1000 - e.barLeft) / 2) - 1)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await expect.poll(gap, 'the full screen area starts at the overlay\'s right edge').toBe(0)
+  await expect.poll(gap, 'the full screen area starts at the side bar\'s right edge').toBe(0)
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-org-narrow.png` })
 
   // A real full screen sheet (the Org node's side bar) leaves the side bar usable.

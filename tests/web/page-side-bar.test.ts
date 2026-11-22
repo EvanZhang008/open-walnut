@@ -3,6 +3,8 @@
  * page-side-bar.ts): which page a route's view belongs to, which kept views this build reads,
  * and the width it draws. The real column runs in tests/e2e/browser/page-side-bar.spec.ts.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   SIDE_BAR_WIDTH_DEFAULT, SIDE_BAR_WIDTH_MAX, SIDE_BAR_WIDTH_MIN,
@@ -89,5 +91,31 @@ describe('two side bars side by side', () => {
     expect(sideBarWidth(700, 1440, false)).toBe(700)
     expect(sideBarWidth(undefined, 1440, true)).toBe(SIDE_BAR_WIDTH_DEFAULT)
     expect(sideBarWidth(400, 800, true)).toBe(SIDE_BAR_WIDTH_MIN)
+  })
+})
+
+/**
+ * The side bar is a column at every width: laid over the page it hid the page's first column (2026-11-22
+ * review: the Scratchpad over the Notes tree and its search at 1024). Every stylesheet is read, so a
+ * new rule that floats it again fails here.
+ */
+describe('the page side bar never lies over the page', () => {
+  const dir = path.resolve(__dirname, '../../web/src/styles')
+  const sheets = fs.readdirSync(dir).filter((f) => f.endsWith('.css'))
+  it('no stylesheet positions .page-side-bar absolute or fixed', () => {
+    const hits: string[] = []
+    for (const f of sheets) {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+      for (const m of text.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+        const selectors = m[1].split(',').map((x) => x.trim())
+        if (selectors.some((x) => /\.page-side-bar$/.test(x)) && /position:\s*(absolute|fixed)/.test(m[2])) hits.push(`${f}: ${m[1].trim()}`)
+      }
+    }
+    expect(hits).toEqual([])
+  })
+  it('lets the side bar give way while the page keeps half the row', () => {
+    const css = fs.readFileSync(path.join(dir, 'home-navigation.css'), 'utf8')
+    expect(css).toMatch(/\.page-side-bar \{ flex-shrink: 1; min-width: 0; \}/)
+    expect(css).toMatch(/\.main-content-row > \.page-side-bar ~ \.app-content-area \{ min-width: min\(420px, 50%\); \}/)
   })
 })

@@ -44,7 +44,7 @@ export const SIDE_BAR_LAYOUT_EVENT = 'page-side-bar:layout';
 /**
  * Where a full screen sheet's area starts (--fullscreen-left): the shell's page column (`main`,
  * 0 on a phone, whatever its safe-area padding), or the side bar's right edge while it shows, beside
- * the page or over it (a narrow window).
+ * the page.
  */
 export function pageAreaLeft(main: Element): number {
   let left = main.getBoundingClientRect().left;

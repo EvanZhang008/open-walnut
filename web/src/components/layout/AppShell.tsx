@@ -105,8 +105,7 @@ function AppShellInner({ children }: AppShellProps) {
   // Where the page area starts: a full screen panel fills the tab beside the
   // sidebar, and beside the page's Agenda and Scratchpad side bar when it is open,
   // which stays usable like the rail (fullscreen-tab.css reads --fullscreen-left;
-  // 0 on a phone). It is the side bar's right edge while it shows, beside the page
-  // (a wide window) or over it (a narrow one).
+  // 0 on a phone). It is the side bar's right edge while it shows, beside the page.
   const mainRef = useRef<HTMLElement>(null);
   // The window's one scratchpad editor (ScratchpadHost) mounts with the first wide layout and then
   // stays, through a switch to the phone layout too: unmounting it there ended a save under way and

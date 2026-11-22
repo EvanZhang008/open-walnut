@@ -375,8 +375,9 @@ test('a cut name inside a sentence opens the block that holds the sentence, neve
 test('a task row widens as a whole: the pointer anywhere on a status row opens it; on its ⋮ it stays open, and the ⋮ still opens its menu', async ({ page, baseURL, request }) => {
   const { presetPanelDesign, setStatusSectionOpen } = await import('./status-section-helpers')
   // A task title is never cut any more (`.wn-title` wraps), so the fixture's rows may have nothing
-  // cut: this row's project name is long enough that its metadata line cuts it.
-  const res = await request.post('/api/tasks', { data: { title: `${WORD} theta: Check the status row`, source: 'local', project: `Peek Spec ${WORD} with a project name long enough that the row's metadata line cuts it off` } })
+  // cut: this row's project name is long enough that its metadata line cuts it, even in a task panel
+  // alone in the row (up to 880 px wide since 2026-11-22, columnSizing.todoPanelAloneWidth).
+  const res = await request.post('/api/tasks', { data: { title: `${WORD} theta: Check the status row`, source: 'local', project: `Peek Spec ${WORD} with a project name long enough that the row's metadata line cuts it off, even in a task panel that has the whole row to itself with no session open beside it` } })
   expect(res.status()).toBe(201)
   const cutId = ((await res.json()) as { task: { id: string } }).task.id
   try {

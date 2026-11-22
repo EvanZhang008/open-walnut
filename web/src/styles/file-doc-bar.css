@@ -267,6 +267,16 @@
 .session-file-explorer-tree:has(> .sfe-tree-head) .sfe-root-header { top: var(--split-bar-h); }
 
 /* ── Explorer: nothing open ───────────────────────────────────────────────── */
+/* Beside a shown tree the tree takes the room and the preview shrinks to its hint (standard.md
+   "Panes": an empty pane never sits at full width beside a cut list; 2026-11-22 review, a 210 px
+   tree beside a 255 px "No file open" at 1024). The tree's inline width returns with a file. */
+/* Basis 0, not the inline width: a wide dragged width would otherwise squeeze the hint. */
+.session-file-explorer-body.is-no-file > .session-file-explorer-tree { flex: 1 1 0; max-width: none; }
+.session-file-explorer-body.is-no-file > .session-file-explorer-preview {
+  flex: 0 1 clamp(184px, 26%, 288px);
+  border-left: 1px solid var(--border);
+}
+.session-file-explorer-body.is-no-file .sfe-preview-empty-wrap .sfe-preview-empty { padding-left: 16px; padding-right: 16px; }
 .sfe-preview-empty-wrap {
   height: 100%;
   display: flex;

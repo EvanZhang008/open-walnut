@@ -394,8 +394,8 @@ show inline after the open ones, other completed hits that show the query fold i
   page"). Home keeps its own column (`HomeCompanionPanel`, right of the task panel, its own
   `open-walnut-home-*-visible` flags); every other page gets `PageSideBar` on its left edge inside
   `.main-content-row` (AppShell), the same `CompanionColumn`. What is open and the width are kept per
-  page in view memory (`page-side-bar.ts`, `side-bar.view` per `sideBarPageOf`), a narrow window
-  (<=1100px) lays it over the page, and `--fullscreen-left` is the side bar's right edge while it
+  page in view memory (`page-side-bar.ts`, `side-bar.view` per `sideBarPageOf`), it is a column at
+  every width (a narrow window shrinks it first, the page keeps half the row; never laid over the page), and `--fullscreen-left` is the side bar's right edge while it
   shows (`pageAreaLeft`), so a full screen sheet lies beside it and it stays usable like the rail. The
   window has ONE scratchpad editor (`ScratchpadHost`, one `useGlobalNotes`), moved as a DOM box into the
   slot of the column that shows it: two editors meant two savers, and a line typed on Home whose save

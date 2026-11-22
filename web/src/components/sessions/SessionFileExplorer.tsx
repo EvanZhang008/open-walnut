@@ -1709,9 +1709,14 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   // The deep link's file: `cwd` itself, or what the host resolved it to (`~/x:5` opens `/home/u/x`).
   const deepLinked = selectedFile !== null && (selectedFile === cwd || selectedFile === deepLinkFile);
 
+  // Nothing open beside a shown tree (desktop): the tree takes the room and the preview shrinks
+  // to its hint, with no divider to drag; the tree's own width (auto or dragged) returns with a file.
+  const noFileBeside = !phone && !selectedFile && !treeCollapsed;
+  const bodyMode = phone ? (selectedFile ? ' is-phone-file' : ' is-phone-tree') : noFileBeside ? ' is-no-file' : '';
+
   return (
     <div className="session-file-explorer" ref={explorerRef}>
-      <div className={`session-file-explorer-body${phone ? (selectedFile ? ' is-phone-file' : ' is-phone-tree') : ''}`}>
+      <div className={`session-file-explorer-body${bodyMode}`}>
         {!treeCollapsed && (
         <div
           className="session-file-explorer-tree"
@@ -1880,7 +1885,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         </div>
         )}
 
-        {!treeCollapsed && (
+        {!treeCollapsed && !noFileBeside && (
         <div
           className="sfe-divider"
           onPointerDown={onDividerPointerDown}

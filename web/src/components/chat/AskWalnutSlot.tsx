@@ -66,6 +66,7 @@ import {
   type AskAgent,
 } from './ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 
 // Which task the slot shows (`askSelected`) and which agent the drawer is on (`askAgent`)
 // are layout record fields: they survive a relaunch. Two windows each keep their own
@@ -435,7 +436,7 @@ export function AskWalnutSlot({
   // What the slot shows has anything to read: the session panel says so for its own history
   // (per session, so a switch waits for the new one's answer); the composers have nothing yet.
   const [history, setHistory] = useState<{ sessionId: string; has: boolean } | null>(null);
-  const onHistoryShown = useCallback((has: boolean) => {
+  const onHistoryShown = useLeanCallback((has: boolean) => {
     if (sessionId) setHistory((h) => (h?.sessionId === sessionId && h.has === has ? h : { sessionId, has }));
   }, [sessionId]);
   const hasContent: boolean | null = setup ? true
