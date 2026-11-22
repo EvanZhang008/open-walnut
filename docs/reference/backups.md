@@ -246,14 +246,19 @@ It restores the backup into a new folder under the OS temp dir (never the data f
   copy that does not boot within 3 minutes, exits during its start, or comes up as anything but
   the drill's trial fails it, with the last lines of the server's log; it is "not run" (`ok: null`)
   only when there was no copy to boot (the restore failed) or `--no-boot` asked so. A drill killed
-  while its server runs leaves no server: the server stops once its parent is gone.
+  while its server runs leaves no server: the server stops once its parent is gone. The server it
+  starts is the program on disk at that moment (the checkout's `src/cli.ts`, the installed bundle, or
+  the compiled file itself): after an update installed in place and not yet restarted into, that is
+  the new version, which is also the one the next start would run.
 
   Nothing but the drill enters the trial (`src/core/trial-start/ticket.ts`): the server must be
   started with the hidden `walnut web --_trial-start` flag (argv, which no child inherits), find in
   the home it boots on a ticket the drill wrote a moment before (`local/trial-start.json`, used up as
   it is read) naming the drill's pid as its parent and a nonce its environment carries, and that
   home must be a drill's copy (`<tmp>/walnut-restore-drill-XXXXXX/home`), never the user's data
-  folder. Without the flag none of this is read, so an environment variable alone never moves a
+  folder (`~/.open-walnut`, or the data folder the drill names in the ticket), and the ephemeral
+  identity (`--_ephemeral-child`, which keeps it off the write permission, a standby and backups)
+  must come with it. Without the flag none of this is read, so an environment variable alone never moves a
   server into the trial; with it, any part missing refuses the start, so a drill's server never
   boots as a normal one on a restored copy.
 
