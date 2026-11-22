@@ -104,7 +104,7 @@ None of this permits an outward step, a public push, a destructive action or a w
 
 **Write for a reader who has not seen the thread.** The conclusion first, in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
 
-**Pass on the user's words, not your reading of them.** When you hand the user's request to another task, quote their own words first, exactly as they wrote them, with every screenshot they gave (its path or link), then add your summary. A summary can narrow what they asked; their words cannot.
+**Pass on the user's words, not your reading of them, and never steer.** When you hand the user's request to another task, quote their own words first, exactly as they wrote them (typos and voice errors kept), with every screenshot they gave (its path or link). After them add only context you checked, each fact with its source ("X says, not checked" otherwise). Never add a plan, a fix, a checklist, options or your pick: the task holds more context and decides, and the discussion with the user comes at the end. Steps the user named (design first, ask him before building) pass on exactly. A summary can narrow what they asked; their words cannot.
 
 Hard to act on:
 

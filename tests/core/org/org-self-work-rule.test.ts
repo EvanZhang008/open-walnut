@@ -107,7 +107,7 @@ describe('Main and a VP never do the work themselves', () => {
       }
       expect(orgWorkReminder(role)).toMatch(/task_create/)
       // The hint is one short line; the ops it names are in the prompt (orgSelfWorkRule).
-      expect(orgHandOnHint(role)).toBe('at most 3 commands of your own a turn, only to look; hand the rest to your team. Tell the user as fact only what you checked; else say whose word it is.')
+      expect(orgHandOnHint(role)).toBe('at most 3 commands of your own a turn, only to look; hand the rest to your team. Tell the user as fact only what you checked; else say whose word it is. Hand on the user\'s exact words, then only context you checked; never steer the task\'s decision.')
       // Short: they ride a tool result or a message.
       expect(orgWorkReminder(role).length).toBeLessThan(300)
       expect(orgHandOnHint(role).length).toBeLessThan(300)

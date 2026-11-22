@@ -53,7 +53,7 @@ describe('the charter itself', () => {
       /the conclusion first in plain, full sentences, then the decision needed or the next owner/,
       /long evidence in a file and give its path/,
       /what needs their action or changes their picture of the work, the important point first/,
-      /When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave \(its path or link\), then your summary\./,
+      /When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave \(its path or link\)\. After them add only context you checked/,
     ]) expect(TEAM_CHARTER).toMatch(re)
   })
 
@@ -64,7 +64,7 @@ describe('the charter itself', () => {
     expect(MESSAGE_TEXT_HINT).toMatch(/always send an answer someone is waiting for/)
     expect(MESSAGE_TEXT_HINT).toMatch(/Only the user's own decisions go to them \(outward steps and anything in their name or involving other people, spending, credentials, permissions, cloud deletes, a hard-to-reverse choice no rule covers, a fact only they have\)/)
     expect(MESSAGE_TEXT_HINT).toMatch(/undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs: decide it and say what you chose/)
-    expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, your summary after\./)
+    expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, then only context you checked, with its source; never steer it/)
     expect(TEAM_CHARTER).toMatch(/None of this permits an outward step, a public push, a destructive action or a way around a safety limit/)
     expect(TEAM_CHARTER).toMatch(/Before you report done or complete a task, re-read its description and every request you hold and check each item; anything not done goes in not_done, each phase or part left by name, never only in the text of your report\./)
     // 2026-11-16: a look that found a bill handed the payment decision to its lead and closed.
@@ -149,7 +149,7 @@ describe('skills', () => {
     expect(skill).toContain('409 `user_kind`')
     expect(skill).toMatch(/Hard to act on:[\s\S]*Clear:/)
     expect(skill).not.toContain('Keep messages short and factual')
-    expect(skill).toContain("**Pass on the user's words, not your reading of them.**")
+    expect(skill).toContain("**Pass on the user's words, not your reading of them, and never steer.**")
   })
 
   it('the walnut skill points at it', () => {

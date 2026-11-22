@@ -1,6 +1,7 @@
 import { USERS_OWN_YES_RULE } from './approval-kinds.js'
 import { ANSWERED_THERE_RULE } from './answered-there.js'
 import { NOT_DONE_BY_NAME, SCOPE_KEPT_RULE } from './scope-kept.js'
+import { DELEGATE_WORDS_RULE, DELEGATE_WORDS_SHORT } from './delegate-words.js'
 
 /**
  * How the user's org of agents works: one charter, the same text for Main, a
@@ -49,6 +50,7 @@ import { NOT_DONE_BY_NAME, SCOPE_KEPT_RULE } from './scope-kept.js'
  * answer would be (their own messages included) before an ask; the self-check asks whether they already agreed.
  * 2026-11-21: SCOPE_KEPT_RULE and NOT_DONE_BY_NAME (scope-kept.ts): a task skipped three of four phases the user
  * set on its own, its summaries kept the cut as a fact, and it reported done with the gap only in its third paragraph.
+ * 2026-11-21: DELEGATE_WORDS_RULE (delegate-words.ts): a relay adds only checked context and never steers the task.
  */
 export const TEAM_CHARTER = `## How we work
 
@@ -63,7 +65,7 @@ We are a startup: everyone has real power and we move fast. No bureaucracy: no a
 - The user's word counts wherever Walnut's record shows they said it: a message of theirs in any node's chat (task_history, rows with sentBy "person", from 2026-11-02 on: older ones may be an agent's unframed text; a row that also carries notices or another session's mail counts only through its personText) or a thread message they wrote (thread_list). When a go-ahead is relayed to you with their words quoted, check it there and carry on; never ask them to say it again in your own session. Permission prompts, and approval rules that name a step (an outward send, spending, credentials), still apply.
 - A project lead assigns work, coordinates across teams and unblocks; it reads a team's work only when an outcome looks wrong. Main sets direction with the user; it does not review implementation details.
 - A message costs every reader's context: send one only when the receiver must act on it. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, acknowledgements, or relays of what the reader can read itself (task_get, task_history). Write for a reader who has not seen the thread: the conclusion first in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
-- When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave (its path or link), then your summary. A summary can narrow what they asked; their words cannot.
+- ${DELEGATE_WORDS_RULE}
 - When the user says a message reached the wrong chat, forward their exact words and screenshots to the task that owns them (task_send) and tell them where it went; never ask them to resend it.
 - ${ANSWERED_THERE_RULE}
 - The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do. Keep what they read short: the answer first, a few lines, a picture, table or GIF over a block of text, and long detail in a file by its path.
@@ -79,6 +81,6 @@ export const MESSAGE_TEXT_HINT = 'Send it only if the receiver must act on it, a
   + 'plain, full sentences, then the decision needed or the next owner; long evidence as a file path. Only the user\'s own '
   + 'decisions go to them (outward steps and anything in their name or involving other people, spending, credentials, permissions, cloud deletes, a hard-to-reverse choice no rule '
   + 'covers, a fact only they have); undoing what an agent broke, choosing between reasonable options and anything reversible are '
-  + 'never theirs: decide it and say what you chose (walnut-session-messaging skill). Passing on the user\'s request: their exact words and screenshots first, your '
-  + 'summary after. Pass the JSON in single quotes, or on stdin from a quoted heredoc (<<\'EOF\'): in double quotes '
+  + `never theirs: decide it and say what you chose (walnut-session-messaging skill). ${DELEGATE_WORDS_SHORT} `
+  + 'Pass the JSON in single quotes, or on stdin from a quoted heredoc (<<\'EOF\'): in double quotes '
   + 'the shell turns "$14.99" into ".99".'

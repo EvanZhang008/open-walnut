@@ -109,8 +109,9 @@ describe('every block of a composed prompt is within its cap, every prompt withi
     const [main, ask] = await Promise.all([composeRolePrompt('main'), composeRolePrompt('ask')])
     // +3,000: the charter grew by its rules (2026-11-17 the user's own yes, 2026-11-20 ask once and
     // read where the answer would be, 2026-11-21 the scope rule); the per-role budgets (PROMPT_BUDGETS) stay the ceiling.
-    expect(main.chars).toBeLessThan(90_745 / 2 + 4_500)
-    expect(ask.chars).toBeLessThan(66_030 / 2)
+    expect(main.chars).toBeLessThan(90_745 / 2 + 4_800)
+    // +300 (2026-11-21): the charter's relay rule, the same in every role (delegate-words.ts).
+    expect(ask.chars).toBeLessThan(66_030 / 2 + 300)
   })
 })
 

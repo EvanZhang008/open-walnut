@@ -1,3 +1,4 @@
+import { DELEGATE_WORDS_SHORT } from '../core/delegate-words.js'
 import { z } from 'zod'
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
 import { SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js'
@@ -19,7 +20,7 @@ export const THREAD_HANDOFF_ARG = z.string().regex(/^th-[a-f0-9]{6,32}$/).option
   + 'and closes on yours, so the user hears the result from the one doing the work; in your own team it lists the task. Name it whenever you hand one of his asks on')
 
 export const TASK_START_INPUT = {
-  message: z.string().trim().min(1).optional().describe('Instruction for the task; defaults to its description or title'),
+  message: z.string().trim().min(1).optional().describe(`Instruction for the task; defaults to its description or title. ${DELEGATE_WORDS_SHORT}`),
   cwd: z.string().startsWith('/').optional().describe('Absolute working directory; omit to inherit task/project defaults'),
   host: z.string().optional().describe('Execution host alias; omit to inherit task/project defaults. Or ask for what a host has: "@ios", "@browser" (the user\'s own signed-in browser), "@mcp:<server>", "@always-on", "@ios+always-on" for both: Walnut picks a connected host that has it (host_list shows each host\'s capabilities.tags) or refuses, saying which hosts have it'),
   model: z.string().optional().describe('Model id or provider model value; omit for the project\'s default model (with its default engine), else the engine\'s own'),

@@ -13,6 +13,7 @@
  * Pure and shared: the web imports it through `@open-walnut/org-tree`; iOS reads it from
  * GET /api/v1/org/settings (`defaultInstructions`).
  */
+import { DELEGATE_WORDS_HAND_ON } from '../delegate-words.js';
 
 export type CoreInstructionRole = 'main' | 'lead';
 
@@ -49,8 +50,10 @@ export function orgHandOn(role: CoreInstructionRole): string {
  */
 export function orgHandOnHint(role: CoreInstructionRole): string {
   // 2026-11-19: the source-check rule rides here too, so it is in front of the node when it writes to the user.
+  // 2026-11-21: and how a hand-over passes the user's words on (delegate-words.ts), in front of the node when it hands on.
   return `at most ${ORG_SELF_COMMAND_LIMIT} commands of your own a turn, only to look; hand the rest to your team. `
-    + 'Tell the user as fact only what you checked; else say whose word it is.';
+    + 'Tell the user as fact only what you checked; else say whose word it is. '
+    + DELEGATE_WORDS_HAND_ON;
 }
 
 export function orgSelfWorkRule(role: CoreInstructionRole): string {
