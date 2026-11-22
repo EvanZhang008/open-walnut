@@ -51,10 +51,15 @@ export function SparkRow({ s }: { s: Spark }) {
   return (
     <div className="hf-lane" data-testid="host-fleet-spark" data-spark={s.key} title={s.title}>
       <span className="hf-lane-label">{s.label}</span>
-      <svg className="hf-spark" viewBox={`0 0 100 ${SPARK_H}`} preserveAspectRatio="none" aria-hidden="true">
-        <path className="hf-spark-area" d={area} />
-        <path className="hf-spark-line" d={line} vectorEffect="non-scaling-stroke" />
-      </svg>
+      {/* A lane with no reading at all is hatched like the online lane's gap, never a blank row. */}
+      {s.values.every((v) => v === null)
+        ? <span className="hf-spark-none" aria-hidden="true" />
+        : (
+          <svg className="hf-spark" viewBox={`0 0 100 ${SPARK_H}`} preserveAspectRatio="none" aria-hidden="true">
+            <path className="hf-spark-area" d={area} />
+            <path className="hf-spark-line" d={line} vectorEffect="non-scaling-stroke" />
+          </svg>
+        )}
       <span className="hf-lane-value">{s.value}</span>
     </div>
   );

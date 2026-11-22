@@ -145,7 +145,7 @@ export function timeline(h: FleetHost, now: number): Segment[] {
     .map((o) => ({ from: Math.max(o.from, cov), to: Math.min(o.to, end), kind: o.kind }))
     .sort((a, b) => a.from - b.from);
   const out: Segment[] = [];
-  if (cov > start) out.push({ from: 0, to: at(cov), tone: 'none', title: cov === listed ? `Too many drops to show before ${clock(cov)}` : `No record before ${clock(cov)}`, note: `Since ${clock(cov)}` });
+  if (cov > start) out.push({ from: 0, to: at(cov), tone: 'none', title: cov === listed ? `Too many drops to show before ${clock(cov)}` : `No record before ${clock(cov)}`, note: cov === listed ? `Shown since ${clock(cov)}` : `Recording since ${clock(cov)}` });
   let cursor = cov;
   for (const m of marks) {
     const from = Math.max(m.from, cursor);
@@ -261,7 +261,7 @@ export function sparks(h: FleetHost): Spark[] {
   // The rings say now; a chart's number says the most of its 12 hours, so the two never read as one value.
   const peak = (list: Array<number | null>) => list.reduce<number>((m, v) => (v !== null && v > m ? v : m), 0);
   const share = (key: Spark['key'], label: string, list: Array<number | null>): Spark => ({
-    key, label, values: list, max: 1, value: list.some((v) => v !== null) ? `max ${pct(peak(list))}` : 'no data',
+    key, label, values: list, max: 1, value: list.some((v) => v !== null) ? `max ${pct(peak(list))}` : 'No data',
     title: list.some((v) => v !== null) ? `${label} over the last 12 hours, in ${r.stepMinutes} minute steps: peak ${pct(peak(list))}` : `${label}: no reading in the last 12 hours`,
   });
   const out = [share('cpu', 'CPU', r.cpu), share('mem', 'Memory', r.mem)];
@@ -269,7 +269,7 @@ export function sparks(h: FleetHost): Spark[] {
   // Sessions read null where the host was down, so the line breaks there as the others do.
   const sessions = r.sessions.map((v, i) => (r.up[i] > 0 ? v : null));
   const most = peak(sessions);
-  out.push({ key: 'sessions', label: 'Sessions', values: sessions, max: Math.max(1, most), value: `max ${most}`, title: `Most sessions open at once in each ${r.stepMinutes} minutes of the last 12 hours: up to ${most}` });
+  out.push({ key: 'sessions', label: 'Sessions', values: sessions, max: Math.max(1, most), value: sessions.some((v) => v !== null) ? `max ${most}` : 'No data', title: `Most sessions open at once in each ${r.stepMinutes} minutes of the last 12 hours: up to ${most}` });
   return out;
 }
 

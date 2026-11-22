@@ -59,7 +59,7 @@
 .health-spark path { stroke: var(--fg-muted); }
 .health-spark-ALARM path { stroke: var(--error); }
 .health-spark-OK path { stroke: var(--success); }
-.health-spark-empty { color: var(--fg-muted); font-size: var(--font-size-xs); }
+.health-spark-empty { color: var(--fg-secondary); font-size: var(--font-size-sm); }
 .health-detail-row td { padding: 8px 12px 14px; border-bottom: 1px solid var(--border); background: var(--accent-subtle); }
 .health-detail { display: flex; flex-direction: column; gap: 6px; color: var(--fg-secondary); }
 .health-detail p { margin: 0; }

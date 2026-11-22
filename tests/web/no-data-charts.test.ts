@@ -7,7 +7,7 @@ import { parseHTML } from 'linkedom';
 import { createElement } from '../../web/node_modules/react/index.js';
 import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.node.js';
 import { Spark } from '../../web/src/components/settings/sections/HealthMonitorSection';
-import { timeline, TIMELINE_MS } from '../../web/src/components/settings/sections/host-fleet-dashboard-model';
+import { sparks, timeline, TIMELINE_MS } from '../../web/src/components/settings/sections/host-fleet-dashboard-model';
 
 const spark = (points: Array<number | null>, state: 'ALARM' | 'OK' | 'INSUFFICIENT_DATA') =>
   parseHTML(`<div>${renderToStaticMarkup(createElement(Spark, { points, state }))}</div>`).document;
@@ -28,9 +28,14 @@ describe('charts with no data say so', () => {
     const NOW = Date.UTC(2026, 10, 22, 12);
     const hist = (coverageFrom: number | null) => ({ host: { now: { at: NOW }, history: coverageFrom === null ? null : { coverageFrom, outages: [] } } as never });
     const partial = timeline(hist(NOW - TIMELINE_MS / 4).host, NOW);
-    expect(partial[0]).toMatchObject({ tone: 'none', note: expect.stringMatching(/^Since /) });
+    expect(partial[0]).toMatchObject({ tone: 'none', note: expect.stringMatching(/^Recording since /) });
     const none = timeline(hist(null).host, NOW);
     expect(none).toEqual([expect.objectContaining({ tone: 'none', note: 'No record yet' })]);
     for (const segs of [partial, none]) for (const s of segs) if (s.tone === 'none') expect(s.note).toBeTruthy();
+  });
+  it('a host chart lane with no reading says No data, never a bare "max 0"', () => {
+    const recent = { stepMinutes: 15, cpu: [null, null], mem: [null, null], sessions: [0, 0], up: [0, 0] };
+    const lanes = sparks({ history: { recent } } as never);
+    expect(lanes.map((l) => [l.key, l.value])).toEqual([['cpu', 'No data'], ['mem', 'No data'], ['sessions', 'No data']]);
   });
 });
