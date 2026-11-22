@@ -71,6 +71,44 @@ export function cleanupOldSources(): void {
   for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true })
 }
 
+/** The 1fe1fd194 tree (src, package.json, tsconfig.json), unpacked once per test file; see oldNodeModules. */
+let oldTreeRoot = ''
+export function oldBuildTree(): string {
+  if (oldTreeRoot) return oldTreeRoot
+  ensureOldBuild()
+  const tree = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-old-tree-'))
+  // Two steps, not `git archive | tar`: a pipe's status is tar's, so an archive that failed (a
+  // shallow CI clone without the commit) extracted nothing and the file died with no message.
+  const archive = execFileSync('git', ['-C', ROOT, 'archive', OLD_BUILD_SHA, 'src', 'package.json', 'tsconfig.json'], { maxBuffer: 512 * 1024 * 1024 })
+  execFileSync('tar', ['-x', '-C', tree], { input: archive })
+  oldNodeModules(tree)
+  oldTreeRoot = tree
+  return tree
+}
+
+export function removeOldBuildTree(): void {
+  if (oldTreeRoot) fs.rmSync(oldTreeRoot, { recursive: true, force: true })
+  oldTreeRoot = ''
+}
+
+/**
+ * The old build's node_modules: this tree's packages, except better-sqlite3. That
+ * build opens SQLite with better-sqlite3, which cannot load on bun at all (it calls
+ * V8's C++ API); on bun it gets this tree's src/lib/sqlite.ts instead, the
+ * better-sqlite3 API over bun:sqlite. Everything else of it runs as it is.
+ */
+function oldNodeModules(tree: string): void {
+  const nm = path.join(tree, 'node_modules')
+  fs.mkdirSync(nm)
+  for (const name of fs.readdirSync(path.join(ROOT, 'node_modules'))) {
+    if (name !== 'better-sqlite3') fs.symlinkSync(path.join(ROOT, 'node_modules', name), path.join(nm, name))
+  }
+  const shim = path.join(nm, 'better-sqlite3')
+  fs.mkdirSync(shim)
+  fs.writeFileSync(path.join(shim, 'package.json'), JSON.stringify({ name: 'better-sqlite3', main: 'index.js' }))
+  fs.writeFileSync(path.join(shim, 'index.js'), `module.exports = require(${JSON.stringify(path.join(ROOT, 'src', 'lib', 'sqlite.ts'))}).default\n`)
+}
+
 /** The 1fe1fd194 `createOfflineHost` (its imports are type-only, so the file stands alone). */
 export async function oldOfflineHost(): Promise<(deps: Record<string, unknown>) => Record<string, any>> {
   const src = oldSource('src/providers/offline-host-core.ts')

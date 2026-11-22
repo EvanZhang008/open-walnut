@@ -30,7 +30,7 @@
  * when bun is on this machine).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -39,42 +39,10 @@ import Database from '../../src/lib/sqlite.js'
 import {
   BUN, HOST_KEY, ROOT, WINDOWS, _signalSafetyForTesting as guard, sleep, startHostDaemon, waitFor, writeStubBin, type Twin,
 } from '../helpers/replica-cluster.js'
-import { OLD_BUILD_SHA, OLD_BUILD_FETCH_MS, ensureOldBuild } from '../helpers/v1-daemon-sources.js'
+import { OLD_BUILD_FETCH_MS, ensureOldBuild, oldBuildTree, removeOldBuildTree } from '../helpers/v1-daemon-sources.js'
 
 const TWINS = (process.env.REPLICA_CLUSTER_TWINS ?? (BUN ? 'source,standalone' : 'source')).split(',').map((t) => t.trim()).filter((t): t is Twin => t === 'source' || t === 'standalone')
 type Pinned = NonNullable<ReturnType<typeof guard.pin>>
-
-/** The 1fe1fd194 sources, unpacked once for the file (its node_modules: oldNodeModules). */
-let oldRoot = ''
-function oldTree(): string {
-  if (oldRoot) return oldRoot
-  const tree = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-old-mac-'))
-  // Two steps, not `git archive | tar`: a pipe's status is tar's, so an archive that failed (a
-  // shallow CI clone without the commit) extracted nothing and the file died with no message.
-  const archive = execFileSync('git', ['-C', ROOT, 'archive', OLD_BUILD_SHA, 'src', 'package.json', 'tsconfig.json'], { maxBuffer: 512 * 1024 * 1024 })
-  execFileSync('tar', ['-x', '-C', tree], { input: archive })
-  oldNodeModules(tree)
-  oldRoot = tree
-  return tree
-}
-
-/**
- * The old build's node_modules: this tree's packages, except better-sqlite3. That
- * build opens SQLite with better-sqlite3, which cannot load on bun at all (it calls
- * V8's C++ API); on bun it gets this tree's src/lib/sqlite.ts instead, the
- * better-sqlite3 API over bun:sqlite. Everything else of it runs as it is.
- */
-function oldNodeModules(tree: string): void {
-  const nm = path.join(tree, 'node_modules')
-  fs.mkdirSync(nm)
-  for (const name of fs.readdirSync(path.join(ROOT, 'node_modules'))) {
-    if (name !== 'better-sqlite3') fs.symlinkSync(path.join(ROOT, 'node_modules', name), path.join(nm, name))
-  }
-  const shim = path.join(nm, 'better-sqlite3')
-  fs.mkdirSync(shim)
-  fs.writeFileSync(path.join(shim, 'package.json'), JSON.stringify({ name: 'better-sqlite3', main: 'index.js' }))
-  fs.writeFileSync(path.join(shim, 'index.js'), `module.exports = require(${JSON.stringify(path.join(ROOT, 'src', 'lib', 'sqlite.ts'))}).default\n`)
-}
 
 function macConfig(): string {
   return [
@@ -147,7 +115,7 @@ interface Cluster { base: string; bin: string; macHome: string; macData: string;
 
 /** Boots a Mac of `build` on the cluster's data (its own local daemon dir per boot); resolves once it reports its port. */
 async function bootMac(c: Cluster, build: 'old' | 'new', phase: string, seed: boolean): Promise<Mac> {
-  const root = build === 'old' ? oldTree() : ROOT
+  const root = build === 'old' ? oldBuildTree() : ROOT
   const daemonDir = path.join(c.base, `md-${phase}`)
   fs.mkdirSync(daemonDir, { recursive: true, mode: 0o700 })
   const file = path.join(c.base, `mac-boot-${phase}.mts`)
@@ -318,7 +286,7 @@ function hostStream(c: Cluster, sid: string): Array<Record<string, any>> {
 beforeAll(() => ensureOldBuild(), OLD_BUILD_FETCH_MS)
 
 afterAll(() => {
-  if (oldRoot && !process.env.KEEP_REPLICA_CLUSTER) fs.rmSync(oldRoot, { recursive: true, force: true })
+  if (!process.env.KEEP_REPLICA_CLUSTER) removeOldBuildTree()
 })
 
 describe.each(TWINS)('an old Mac in front of a new host daemon (%s twin)', (twin) => {
@@ -360,7 +328,7 @@ describe.each(TWINS)('an old Mac in front of a new host daemon (%s twin)', (twin
     for (const d of [macData, hostHome, path.join(hostHome, 'work')]) fs.mkdirSync(d, { recursive: true, mode: 0o700 })
     writeStubBin(bin)
     fs.writeFileSync(path.join(macData, 'config.yaml'), macConfig())
-    oldTree()
+    oldBuildTree()
     const hostDaemon = await startHostDaemon(twin, hostDir, hostHome, bin)
     c = { base, bin, macHome, macData, hostDir, hostCwd: fs.realpathSync(path.join(hostHome, 'work')), hostDaemon }
     process.stdout.write(`replica-old-mac-e2e: ${twin} at ${base}\n`)
