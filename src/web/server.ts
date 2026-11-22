@@ -698,6 +698,9 @@ let leaderLoopHandle: { stop: () => void } | null = null
 let searchCopyHandle: { stop: () => Promise<void> } | null = null
 /** A host replica's leader door (replica/leader-door.ts), null elsewhere. */
 let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = null
+/** A host replica that runs its sessions: its routes and capabilities (core/session-channel/host-boot.ts). */
+let hostSessionsRoutes: (() => import('../core/session-channel/host-routes.js').HostSessionRoutes | null) | null = null
+let hostSessionsCaps: (() => string[]) | null = null
 /** A host replica's front (replica/front.ts): follower link, presence, dispatcher. Null elsewhere. */
 let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
 /** The away writes of a host replica (WP10): its overlay timer, copy watcher and RPC answer, stopped with the server. */
@@ -1356,6 +1359,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       localCalls: hasCapability('host-local-calls'),
       // A host's one Walnut service holds the daemon runtime in this process: its link calls it directly.
       ...(serviceRuntime() ? { seat: () => inProcessDaemonRuntime()?.follower ?? null } : {}),
+      // A host that runs and judges its sessions says so (core/session-channel/host-boot.ts).
+      capabilities: () => hostSessionsCaps?.() ?? [],
     })
     const front = hostReplicaFront
     if (hasCapability('host-local-calls')) {
@@ -1391,6 +1396,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     hostReplicaDoor = createLeaderDoor({
       devices: replicaDeviceCopy(),
       status: () => front.status(),
+      sessions: () => hostSessionsRoutes?.() ?? null,
       log: (level, msg, data) => log.web[level](msg, data),
     })
     ws.setUpgradeInterceptor((request, socket, head, own) => { front.upgrade(request, socket, head, own); return true })
@@ -4714,6 +4720,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })()
   }
 
+  // A host replica that runs and judges its sessions (switch on, a runtime of its own): its port,
+  // fact log, channel and routes, before the runner starts anything (core/session-channel/host-boot.ts).
+  if (isHostReplica()) {
+    const [sw, boot] = await Promise.all([import('../core/session-channel/switch.js'), import('../core/session-channel/host-boot.js')])
+    if (sw.hostRunsSessions(await (await import('../core/config-manager.js')).getConfig().catch(() => null)) && boot.hostCanRunSessions()) {
+      hostSessionsRoutes = boot.hostSessionRoutes
+      hostSessionsCaps = boot.hostSessionCapabilities
+      await boot.startHostSessions({
+        walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(),
+        hostKey: (process.env.WALNUT_HOST_KEY ?? '').trim(),
+        stateDir: WALNUT_HOME,
+        log: (level, msg, data) => log.session[level](msg, data),
+      }).catch((err: unknown) => {
+        log.session.warn('host sessions: not started; the leader runs this host\'s sessions as before', { error: err instanceof Error ? err.message : String(err) })
+      })
+    }
+  }
+
   // -- Init SubagentRunner + SessionRunner --
   subagentRunner.init()
   sessionRunner.init(reconnectable)
@@ -7666,6 +7690,11 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   const searchCopy = searchCopyHandle
   await shutdownStep('search copy', () => searchCopy?.stop())
   searchCopyHandle = null
+  if (hostSessionsRoutes) {
+    hostSessionsRoutes = null
+    hostSessionsCaps = null
+    await shutdownStep('host sessions', async () => (await import('../core/session-channel/host-boot.js')).stopHostSessions())
+  }
   const replicaDoor = hostReplicaDoor
   await shutdownStep('host replica door', () => replicaDoor?.close())
   hostReplicaDoor = null

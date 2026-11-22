@@ -129,6 +129,12 @@ export interface ReplicaFrontOptions {
    * `gateway-request` events (answerLocalCalls) and answers its in-process calls here.
    */
   localCalls?: boolean
+  /**
+   * What this host's service can do beyond the replica's own report, named in `capabilities` of
+   * the report the Mac reads (a host that runs and judges its sessions names session-judge-v1,
+   * core/session-channel/host-boot.ts). Absent or empty: the report has no such field.
+   */
+  capabilities?: () => readonly string[]
 }
 
 export interface ReplicaFront {
@@ -385,7 +391,13 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       // This host's call entry: the daemon reads the socket from here too (a change of the experiment).
       ...(opts.localCalls ? { answersOnline: callEntryOn } : {}),
       ...(opts.localCalls ? { callSocket: callSocket(), offlineAnswers: view?.view.offlineAnswers ?? null } : {}),
+      ...capabilitiesField(),
     }
+  }
+
+  function capabilitiesField(): { capabilities?: string[] } {
+    const caps = opts.capabilities?.() ?? []
+    return caps.length ? { capabilities: [...caps] } : {}
   }
 
   refreshCallEntry()
