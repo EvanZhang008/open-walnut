@@ -924,4 +924,9 @@ const SCHEMA_SQL = `
     seq INTEGER NOT NULL,
     PRIMARY KEY(host_id)
   );
+  CREATE TABLE IF NOT EXISTS session_leader_drops (
+    claude_session_id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
 `;

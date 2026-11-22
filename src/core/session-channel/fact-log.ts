@@ -26,6 +26,7 @@
  *   - compaction (when the file passes `compactBytes`) drops what the leader confirmed, and in
  *     what it has not, stands one `turn-summary` record for the tool facts of each finished turn
  *     and one merged `row` record for its row patches; facts of a turn still running are kept;
+ *     a session's `drop` record (the leader deleted it) stands for all of that session before it;
  *   - a torn last line (a crash in a write) is cut at open.
  */
 import fsp from 'node:fs/promises'
@@ -369,6 +370,10 @@ export function compactRecords(records: readonly FactRecord[]): FactRecord[] {
   const newestLive = new Map<string, number>()
   for (const r of records) if (r.name === 'live') newestLive.set(r.sid, r.seq)
   for (const r of records) if (r.name === 'live' && newestLive.get(r.sid) !== r.seq) replace.set(r.seq, null)
+  // A session the leader deleted (its `drop` record): nothing of it before the drop is sent any more.
+  const droppedAt = new Map<string, number>()
+  for (const r of records) if (r.name === 'drop') droppedAt.set(r.sid, r.seq)
+  for (const r of records) { const at = droppedAt.get(r.sid); if (at !== undefined && r.seq < at) replace.set(r.seq, null) }
   const out: FactRecord[] = []
   for (const r of records) {
     if (!replace.has(r.seq)) { out.push(r); continue }

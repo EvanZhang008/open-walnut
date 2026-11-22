@@ -76,7 +76,7 @@ function leaderStore() {
   return store
 }
 
-function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[] } = {}) {
+function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[]; gone?: string[]; drops?: string[] } = {}) {
   return createLeaderSide({
     walnutId: async () => 'w1',
     permitNumber: () => 1,
@@ -86,8 +86,13 @@ function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { o
       store.batches.push(b)
       store.cursor = b.cursor
       const refused = new Set(opts.refuse ?? [])
-      return { written: b.rows.map((r) => r.sid).filter((s) => !refused.has(s)), skipped: b.rows.map((r) => r.sid).filter((s) => refused.has(s)) }
+      const gone = new Set(opts.gone ?? [])
+      return {
+        written: b.rows.map((r) => r.sid).filter((s) => !refused.has(s) && !gone.has(s)), skipped: b.rows.map((r) => r.sid).filter((s) => refused.has(s)),
+        gone: [...new Set([...b.rows.map((r) => r.sid), ...(b.check ?? [])])].filter((s) => gone.has(s)),
+      }
     },
+    ...(opts.drops ? { leaderDrops: async () => [...opts.drops!] } : {}),
     loadCursor: async () => store.cursor,
     emit: (name, data, o) => { store.emitted.push({ name, late: o.late, i: (data as { i?: number })?.i, data }) },
     noteLive: (sid, state) => { store.live.push({ sid, turnGen: state.turnGen }) },
@@ -228,6 +233,39 @@ describe('the leader side of a host that runs its sessions', () => {
     expect(store.emitted.filter((e) => (e.data as { sessionId?: string })?.sessionId === 's2').map((e) => e.name)).toEqual(['session:started', 'session:tool-use'])
     // The rows frame of the first link (s1, a resync) said no start.
     expect(store.emitted.some((e) => e.name === 'session:started' && (e.data as { sessionId?: string }).sessionId === 's1')).toBe(false)
+  })
+
+  it('a delete this leader made goes to the host at each link until its drop record answers; nothing of the deleted session is said meanwhile', async () => {
+    const { log, channel } = await hostOf()
+    const calls: Array<{ route: string; body: unknown }> = []
+    const port = await hostDoor(channel, calls)
+    const store = leaderStore()
+    const drops = ['gone-1']
+    side = makeSide(port, store, { gone: ['gone-1'], drops })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => calls.some((c) => c.route === '/host-api/sessions/drop'))
+    expect(calls.find((c) => c.route === '/host-api/sessions/drop')!.body).toEqual({ sids: ['gone-1'] })
+    // What the host wrote of it before it heard: neither its facts nor its live state are said.
+    log.append('gone-1', 'session:tool-use', { sessionId: 'gone-1', i: 1 })
+    log.append('gone-1', 'live', { state: { turnGen: 4 } })
+    log.append('gone-1', 'drop', { sid: 'gone-1' })
+    log.append('s1', 'session:tool-use', { sessionId: 's1', i: 2 })
+    await log.flush()
+    await until(() => factIs(store).length === 1)
+    await side.idle('devbox')
+    expect(factIs(store)).toEqual([2])
+    expect(store.live).toEqual([])
+    // The drop record went to the batch: its mark is cleared there.
+    expect(store.batches.flatMap((b) => b.drops ?? [])).toEqual(['gone-1'])
+    expect(store.batches.flatMap((b) => b.check ?? [])).toContain('gone-1')
+    // A new delete goes at once while linked; and again at the next link.
+    const before = calls.filter((c) => c.route === '/host-api/sessions/drop').length
+    drops.push('gone-2')
+    await side.dropOnHost('devbox')
+    expect(calls.filter((c) => c.route === '/host-api/sessions/drop')).toHaveLength(before + 1)
+    for (const sock of sockets) sock.destroy()
+    await until(() => calls.filter((c) => c.route === '/host-api/sessions/drop').length === before + 2)
+    expect(calls.filter((c) => c.route === '/host-api/sessions/drop').at(-1)!.body).toEqual({ sids: ['gone-1', 'gone-2'] })
   })
 
   it('reads the capability from a host\'s report', () => {

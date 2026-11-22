@@ -65,7 +65,12 @@ export interface HostEmitter {
   /** The tracker replaced `from` by `to` (resume, fork): the port calls this. */
   noteRename(from: string, to: string): void
   /** The tracker removed these rows: the port calls this. */
-  noteDrop(sids: Iterable<string>): void
+  /**
+   * Own rows this host deleted: one `drop` record each. `answer`: the leader asked for these
+   * (leader-drops.ts), so a session that is not (or no longer) this host's gets its `drop` record
+   * too: it is the leader's proof that nothing of it is left here.
+   */
+  noteDrop(sids: Iterable<string>, opts?: { answer?: boolean }): void
   /** Is `sid` one of this host's own sessions? */
   owns(sid: string): boolean
   /** This host's own session of `taskId` (the newest row seen), or null. */
@@ -261,9 +266,9 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       lastLive.delete(from)
       if (l) lastLive.set(to, l)
     },
-    noteDrop(sids) {
+    noteDrop(sids, opts) {
       for (const sid of sids) {
-        if (!own.has(sid)) continue
+        if (!own.has(sid) && !opts?.answer) continue
         append(sid, 'drop', { sid })
         own.delete(sid)
         lastRows.delete(sid)

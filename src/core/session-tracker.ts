@@ -44,7 +44,8 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
-import { judgedByHost, mergeHostFacts, ownedPartOf, writingAsHost } from './sessions/session-row-owner.js';
+import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
+import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { OrgError } from './org/org-store.js';
 import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
@@ -3384,6 +3385,8 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
           removedIds.push(id);
           if (row) {
             const rec = rowToSession(row);
+            // A host's own row (it runs and judges the session): the host drops its row too (leader-drops.ts).
+            if (judgedByHost(rec) && !rowOwnedHere(rec, thisHostKey())) noteLeaderDrop(handle, id, rec.host!);
             removedSnapshots.push({
               sessionId: id, taskId: rec.taskId, title: rec.title, host: rec.host,
               process_status: rec.process_status, startedAt: rec.startedAt,
@@ -3434,6 +3437,10 @@ export interface HostChannelBatch {
   renames: readonly HostRename[];
   /** The channel's new position: kept in the same transaction as the rows. */
   cursor: { logId: string; seq: number };
+  /** Sessions the host dropped (its `drop` records): the leader's marks of them go (leader-drops.ts). */
+  drops?: readonly string[];
+  /** Sessions of the batch's other records: answered in `gone` when the leader deleted them. */
+  check?: readonly string[];
 }
 
 /**
@@ -3444,7 +3451,7 @@ export interface HostChannelBatch {
  * and logged: a host writes only its own rows. After the commit, the status and content events a
  * normal write announces are emitted for the rows whose status or searchable text moved.
  */
-export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[] }> {
+export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[]; gone: string[] }> {
   await ensureSessionInit();
   const hostId = batch.hostId;
   const steps: Array<{ seq: number; i: number; row?: HostRowChange; rename?: HostRename }> = [
@@ -3453,6 +3460,8 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
   ].sort((a, b) => a.seq - b.seq || a.i - b.i);
   const written: string[] = [];
   const skipped: string[] = [];
+  // Deleted on the leader, its host not done yet: none of its rows comes back, none of its facts is said.
+  const gone = new Set<string>();
   const announce: Array<{ record: SessionRecord; status: boolean; content: boolean }> = [];
   await withWriteLock(async () => {
     const db = getDb();
@@ -3463,9 +3472,13 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
         const raw = sel.get(id) as Record<string, any> | undefined;
         return raw ? rowToSession(raw) : null;
       };
+      for (const sid of new Set([...batch.rows.map((r) => r.sid), ...batch.renames.map((r) => r.to), ...(batch.check ?? [])])) {
+        if (leaderDroppedIn(handle, sid)) gone.add(sid);
+      }
       for (const step of steps) {
         if (step.rename) {
           const { from, to } = step.rename;
+          if (gone.has(to)) continue;
           const old = read(from);
           if (!old || old.host !== hostId || !judgedByHost(old)) { skipped.push(from); continue; }
           const historyBefore = storedHistoryFields(handle, from);
@@ -3475,6 +3488,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
           continue;
         }
         const change = step.row!;
+        if (gone.has(change.sid)) continue;
         const before = read(change.sid);
         if (before && (before.host !== hostId || !judgedByHost(before))) { skipped.push(change.sid); continue; }
         if (!before && !change.born) { skipped.push(change.sid); continue; }
@@ -3497,6 +3511,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
           content: !before || searchContentProjection(before) !== searchContentProjection(next),
         });
       }
+      if (batch.drops?.length) clearLeaderDrops(handle, hostId, batch.drops);
       writeChannelCursor(handle, hostId, batch.cursor);
     }));
     if (lockWait instanceof Promise) await lockWait;
@@ -3506,7 +3521,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
     if (a.status) emitSessionStatusChanged(a.record, {}, ['*'], { source: 'host-channel' });
     if (a.content) bus.emit(EventNames.SESSION_CONTENT_UPDATED, { sessionId: a.record.claudeSessionId }, ['*'], { source: 'host-channel' });
   }
-  return { written, skipped };
+  return { written, skipped, gone: [...gone] };
 }
 
 export { loadChannelCursor } from './session-db.js';

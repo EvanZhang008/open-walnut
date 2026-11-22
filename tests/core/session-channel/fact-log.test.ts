@@ -125,6 +125,14 @@ describe('compaction', () => {
     expect(out.map((r) => [r.seq, r.sid, r.name])).toEqual([[2, 's2', 'live'], [3, 's1', 'live'], [4, 's1', 'session:tool-use']])
   })
 
+  it('a session the leader deleted keeps only its drop record; other sessions stay as they were', () => {
+    const out = compactRecords([
+      rec(1, 's1', 'row', { born: true, patch: {} }), rec(2, 's1', 'session:tool-use', {}), rec(3, 's2', 'session:tool-use', {}),
+      rec(4, 's1', 'live', { state: {} }), rec(5, 's1', 'drop', { sid: 's1' }), rec(6, 's2', 'session:result', {}),
+    ])
+    expect(out.map((r) => [r.seq, r.sid, r.name])).toEqual([[3, 's2', 'session:tool-use'], [5, 's1', 'drop'], [6, 's2', 'session:result']])
+  })
+
   it('acked records go at compaction, and a reader below the floor learns it', async () => {
     const log = await open()
     for (let i = 0; i < 10; i++) log.append('s1', i % 2 ? 'session:result' : 'session:user-line', { i })

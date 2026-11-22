@@ -12,11 +12,12 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apply-host-batch'))
 
 import {
-  _resetSessionTrackerForTesting, applyHostChannelBatch, batchUpdateSessionRecords, createSessionRecord, getSessionByClaudeId,
+  _resetSessionTrackerForTesting, applyHostChannelBatch, batchUpdateSessionRecords, createSessionRecord, deleteSessionRecords, getSessionByClaudeId,
   importSessionRecord, loadChannelCursor, renameSessionId, updateSessionRecord,
 } from '../../../src/core/session-tracker.js'
 import { closeDb, getDb } from '../../../src/core/session-db.js'
 import { setOwnRowListener } from '../../../src/core/session-channel/row-hook.js'
+import { leaderDropHosts, leaderDropsOf } from '../../../src/core/session-channel/leader-drops.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import type { SessionRecord } from '../../../src/core/types.js'
@@ -126,6 +127,47 @@ describe('applyHostChannelBatch', () => {
       hostId: HOST, rows: [{ sid: 's1', patch: { process_status: 'idle' }, seq: 2 }], renames: [], cursor: { logId: 'L1', seq: 2 },
     })).rejects.toThrow()
     expect((await getSessionByClaudeId('s1'))!.process_status).toBe('running')
+  })
+})
+
+describe('a delete the leader makes of a host\'s session (leader-drops.ts)', () => {
+  it('marks a host\'s row it deletes, and no other row', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', born: true, patch: born('h1'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    await createSessionRecord('legacy-1', '', 'p', '/tmp', { host: HOST } as never)
+    expect(await deleteSessionRecords(new Set(['h1', 'legacy-1']), 'test')).toBe(2)
+    expect(leaderDropsOf(HOST)).toEqual(['h1'])
+    expect([...leaderDropHosts(['h1', 'legacy-1'])]).toEqual([[HOST, ['h1']]])
+  })
+
+  it('while marked, the host\'s rows of it do not come back and its other records are answered gone; its drop clears the mark', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', born: true, patch: born('h1'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    await deleteSessionRecords(new Set(['h1']), 'test')
+    // Records the host wrote before it heard of the delete.
+    const r = await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', patch: { process_status: 'idle' }, seq: 2 }], renames: [{ from: 'h0', to: 'h1', seq: 3 }], cursor: { logId: 'L1', seq: 3 }, check: ['h1', 'other'] })
+    expect(r.gone).toEqual(['h1'])
+    expect(r.written).toEqual([])
+    expect(await getSessionByClaudeId('h1')).toBeNull()
+    expect(loadChannelCursor(HOST)).toEqual({ logId: 'L1', seq: 3 })
+    // A born row of it (a rows frame) does not come back either.
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h1', born: true, patch: born('h1') }], renames: [], cursor: { logId: 'L1', seq: 4 } })
+    expect(await getSessionByClaudeId('h1')).toBeNull()
+    // Its drop record: the mark goes, in the same transaction as the position.
+    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 5 }, drops: ['h1'] })
+    expect(leaderDropsOf(HOST)).toEqual([])
+    expect(loadChannelCursor(HOST)).toEqual({ logId: 'L1', seq: 5 })
+  })
+
+  it('a host\'s own drop with no mark changes nothing here: a host never deletes a row the leader has', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h2', born: true, patch: born('h2'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L1', seq: 2 }, drops: ['h2'] })
+    expect(await getSessionByClaudeId('h2')).toMatchObject({ judge: 'host', host: HOST })
+  })
+
+  it('another host\'s drop does not clear this host\'s mark', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'h3', born: true, patch: born('h3'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    await deleteSessionRecords(new Set(['h3']), 'test')
+    await applyHostChannelBatch({ hostId: 'otherbox', rows: [], renames: [], cursor: { logId: 'L9', seq: 1 }, drops: ['h3'] })
+    expect(leaderDropsOf(HOST)).toEqual(['h3'])
   })
 })
 

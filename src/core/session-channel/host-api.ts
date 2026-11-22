@@ -8,6 +8,8 @@
  *   POST /host-api/sessions/send    SESSION_SEND payload -> {ok:true} once queued on the host
  *   POST /host-api/sessions/interrupt SESSION_INTERRUPT payload -> {ok:true}
  *   POST /host-api/sessions/call    CallBody -> {ok:true, value} | {ok:false, error}
+ *   POST /host-api/sessions/drop    DropBody -> {ok:true, dropped} once each is a `drop` record
+ *                                   (sessions the leader deleted: leader-drops.ts)
  *   GET  /host-api/session-channel  WebSocket upgrade; frames are channel.ts ChannelFrame JSON
  *
  * Every route of a host whose switch is off answers `{ok:false, error:'host_runs_sessions_off'}`.
@@ -73,6 +75,9 @@ export interface CallBody {
 }
 
 export type CallAnswer = { ok: true; value: unknown } | { ok: false; error: string }
+
+/** Sessions of this host the leader deleted: the host drops its rows of them (leader-drops.ts). */
+export interface DropBody { sids: string[] }
 
 /**
  * What the leader reads of a running session at once (the proxy's sync getters), mirrored by the

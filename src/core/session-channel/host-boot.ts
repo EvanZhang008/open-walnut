@@ -106,13 +106,14 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset,
     onLog: say,
   })
-  installSessionPort(createHostSessionPort({
+  const port = createHostSessionPort({
     hostKey: o.hostKey, bundles, api: selfOwnApi,
     sessionOfTask: (taskId) => emitter.ownSessionOfTask(taskId),
     onRename: (from, to) => emitter.noteRename(from, to),
     onDrop: (sids) => emitter.noteDrop(sids),
     log: say,
-  }))
+  })
+  installSessionPort(port)
   await emitter.start()
   const [{ hostRunsSessionsNow }, { bus }] = await Promise.all([import('./switch.js'), import('../event-bus.js')])
   const routes = createHostSessionRoutes({
@@ -133,6 +134,18 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
           ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
         })
       }
+    },
+    // The leader deleted these (leader-drops.ts): this host's own rows of them go, and each gets its
+    // `drop` record, also one this host no longer has (the leader's proof that nothing is left here).
+    drop: async (sids) => {
+      const { getSessionByClaudeId } = await import('../session-tracker.js')
+      const own: string[] = []
+      for (const sid of sids) if (rowOwnedHere(await getSessionByClaudeId(sid), o.hostKey)) own.push(sid)
+      const removed = own.length ? await port.records.tracker.deleteSessionRecords(new Set(own), 'leader-deleted') : 0
+      const told = new Set(removed > 0 ? own : [])
+      emitter.noteDrop(sids.filter((sid) => !told.has(sid)), { answer: true })
+      say('info', 'host sessions: dropped the sessions the leader deleted', { count: sids.length, removed })
+      return sids.length
     },
     spillDir: path.join(dir, 'prompts'),
     log: say,

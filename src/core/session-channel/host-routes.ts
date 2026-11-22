@@ -9,6 +9,7 @@
  *              or the ACP session; a member that returns an undo (markExpectedTeardown) gives back an
  *              id the leader undoes with `undoExpectedTeardown`; `bashCallMatchingOp` is
  *              bashCallMatching with the op and file the leader's predicate would test
+ *   drop       the sessions the leader deleted: this host drops its rows of them (leader-drops.ts)
  *   channel    a WebSocket whose frames are the channel's (channel.ts HostChannel.attach)
  *
  * The switch is asked on every start: off, a start answers `host_runs_sessions_off`; the sessions
@@ -54,6 +55,8 @@ export interface HostRoutesOptions {
    * runner drains the queue. `source`: the send's bus source (who a line with no sender is from).
    */
   enqueue(sid: string, lines: QueuedLine[], source: string): Promise<void>
+  /** The leader deleted these sessions: drop this host's rows of them; answered once each is a `drop` record. */
+  drop?(sids: string[]): Promise<number>
   /** Where a start's large prompt is spilled (0700, files 0600). */
   spillDir: string
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
@@ -231,6 +234,11 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (op === 'call') {
         const r = await call(body as CallBody)
         return sendJson(res, r.status, r.body)
+      }
+      if (op === 'drop') {
+        const sids = Array.isArray((body as { sids?: unknown })?.sids) ? ((body as { sids: unknown[] }).sids).filter((x): x is string => typeof x === 'string' && x !== '') : null
+        if (!sids || !o.drop) return sendJson(res, 400, { ok: false, error: 'sids are required' })
+        return sendJson(res, 200, { ok: true, dropped: await o.drop(sids) })
       }
       sendJson(res, 404, { ok: false, error: 'not_found' })
     } catch (err) {

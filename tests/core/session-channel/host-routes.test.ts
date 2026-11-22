@@ -32,6 +32,7 @@ const emitted: Array<{ name: string; data: unknown; source: string }> = []
 const runnerCalls: string[] = []
 let seenAtStart: { bundle: StartBundle | null; data: Record<string, unknown> } | null = null
 let undone = 0
+const dropped: string[][] = []
 
 const session = {
   getUsage: async (n: number) => ({ tokens: n * 2 }),
@@ -65,6 +66,7 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     enqueue: async (sid, lines, source) => { emitted.push({ name: 'enqueue', data: { sid, lines }, source }) },
     spillDir: path.join(dir, 'prompts'),
     commandRunsOp: (c, op) => c.includes(op),
+    drop: async (sids) => { dropped.push(sids); return sids.length },
   }) : null
   door = createLeaderDoor({ devices: {} as never, sessions: () => routes })
   server = net.createServer((sock) => door.accept(sock))
@@ -79,6 +81,7 @@ beforeEach(async () => {
   runnerCalls.length = 0
   seenAtStart = null
   undone = 0
+  dropped.length = 0
   bundles = new StartBundles()
   log = await FactLog.open({ dir: path.join(dir, 'log'), walnutId: 'w1', flushMs: 1, durable: false })
   channel = new HostChannel({ log, walnutId: 'w1', hostId: 'marina-box', ownRows: async () => [] })
@@ -164,6 +167,17 @@ describe('/call', () => {
     expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'session', member: 'bashCallMatchingOp', args: [{ op: 'task_update', taken: [] }] })).body).toEqual({ ok: true, value: 'tu-1' })
     expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'session', member: 'bashCallMatchingOp', args: [{ op: 'task_update', taken: ['tu-1'] }] })).body).toEqual({ ok: true, value: null })
     expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'session', member: 'prepareOutbound', args: ['hello'] })).body).toEqual({ ok: true, value: 'hello [prepared]' })
+  })
+})
+
+describe('drop', () => {
+  beforeEach(async () => { await startDoor(true) })
+
+  it('drop hands the leader\'s deletes to this host, also with the switch off', async () => {
+    enabled = false
+    expect(await post('/host-api/sessions/drop', { sids: ['a', 'b', 7] })).toEqual({ status: 200, body: { ok: true, dropped: 2 } })
+    expect(dropped).toEqual([['a', 'b']])
+    expect((await post('/host-api/sessions/drop', {})).status).toBe(400)
   })
 })
 

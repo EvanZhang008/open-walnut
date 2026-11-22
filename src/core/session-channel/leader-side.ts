@@ -13,6 +13,8 @@
  *     A dropped link dials again with a backoff.
  *   - the commands: start, send, interrupt and the allowlisted calls (host-calls.ts), each one
  *     HTTP request on a stream of its own (`openStream('follower', 'session-call')`).
+ *   - the deletes this leader made of the host's sessions (leader-drops.ts): sent when one is made
+ *     and again each time the channel links, until the host's `drop` record answers each one.
  */
 import type { Duplex } from 'node:stream'
 import { attachLeaderChannel, isChannelFrame, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from './channel.js'
@@ -45,7 +47,9 @@ export interface LeaderSideDeps {
   dial?(hostKey: string): Promise<ChannelSocket>
   /** One HTTP request to the host's server (default: requestOver on openStream). */
   request?(hostKey: string, route: string, body: unknown, timeoutMs: number): Promise<HostCallAnswer>
-  applyBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[] }>
+  applyBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[]; gone?: string[] }>
+  /** The deletes of `hostId`'s sessions it has not answered yet (leader-drops.ts leaderDropsOf). */
+  leaderDrops?(hostId: string): Promise<string[]>
   loadCursor(hostId: string): Promise<ChannelCursor | null>
   /** Re-emit one host fact or flow event on this server's bus; `to`: the destinations the host's emit named. */
   emit(name: string, data: unknown, opts: { late: boolean; to?: string[] }): void
@@ -101,16 +105,24 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   async function applyRecs(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void> {
     const rows: HostChannelBatch['rows'][number][] = []
     const renames: HostChannelBatch['renames'][number][] = []
+    const drops: string[] = []
+    const check = new Set<string>()
     for (const r of recs) {
       const d = (r.data ?? {}) as Record<string, unknown>
       if (r.name === 'row') rows.push({ sid: r.sid, born: d.born === true, patch: (d.patch ?? {}) as Record<string, unknown>, seq: r.seq })
       else if (r.name === 'rename' && typeof d.from === 'string' && typeof d.to === 'string') renames.push({ from: d.from, to: d.to, seq: r.seq })
+      else if (r.name === 'drop') drops.push(r.sid)
+      else check.add(r.sid)
     }
-    const { written } = await deps.applyBatch({ hostId, rows, renames, cursor: next })
+    const applied = await deps.applyBatch({ hostId, rows, renames, cursor: next, ...(drops.length ? { drops } : {}), ...(check.size ? { check: [...check] } : {}) })
+    const { written } = applied
     for (const sid of written) deps.noteHostJudged(sid, hostId)
     const wrote = new Set(written)
+    // Deleted here, its host not done yet: nothing of it is said (leader-drops.ts).
+    const gone = new Set(applied.gone ?? [])
     // After the commit, in log order: the rows a fact's subscribers read are already there.
     for (const r of recs) {
+      if (gone.has(r.sid)) continue
       if (r.name === 'row') {
         // A session born on the host: said as started here, at its row's place. A start the host
         // began itself says none the leader hears (a native one has no id yet), so this is its
@@ -199,7 +211,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         let frame: unknown
         try { frame = JSON.parse(text) } catch { return }
         if (!isChannelFrame(frame)) return
-        if (frame.op === 'hello') s.attempt = 0
+        if (frame.op === 'hello') { s.attempt = 0; void flushDrops(hostKey) }
         channel.onFrame(frame)
       })
       sock.onClose(() => {
@@ -258,6 +270,21 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   const request = (hostKey: string, op: string, body: unknown, timeoutMs: number): Promise<HostCallAnswer> =>
     (deps.request ?? defaultRequest)(hostKey, `${HOST_SESSIONS_PATH}/${op}`, body, timeoutMs)
 
+  /** Every delete `hostKey` has not answered yet, sent again (its `drop` records clear them). */
+  async function flushDrops(hostKey: string): Promise<void> {
+    if (stopped || !deps.leaderDrops) return
+    try {
+      const sids = await deps.leaderDrops(hostKey)
+      if (sids.length === 0) return
+      const a = await request(hostKey, 'drop', { sids }, deps.callTimeoutMs ?? 60_000)
+      if (a.ok !== true) throw new Error(a.error ?? 'refused')
+      deps.log('info', 'session channel: the host was asked to drop the sessions this leader deleted', { host: hostKey, count: sids.length })
+    } catch (err) {
+      // Asked again at the next link.
+      deps.log('warn', 'session channel: the host did not take the deletes; they go again at the next link', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   return {
     /** A host's state changed: connected, and whether its service names SESSION_JUDGE_CAP. */
     async noteHost(hostKey: string, o: { connected: boolean; judges: boolean }): Promise<void> {
@@ -296,6 +323,10 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     },
     async interruptOnHost(hostKey: string, payload: unknown): Promise<HostCallAnswer> {
       return request(hostKey, 'interrupt', payload, deps.callTimeoutMs ?? 60_000)
+    },
+    /** A delete this leader just made of `hostKey`'s sessions: sent now when the host is linked, else at its next link. */
+    async dropOnHost(hostKey: string): Promise<void> {
+      if (hosts.get(hostKey)?.socket) await flushDrops(hostKey)
     },
     /** Tests: the current link's apply chain. */
     idle(hostKey: string): Promise<void> { return hosts.get(hostKey)?.channel?.idle() ?? Promise.resolve() },

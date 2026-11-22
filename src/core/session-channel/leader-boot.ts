@@ -9,10 +9,12 @@ import { bus, EventNames } from '../event-bus.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from './leader-side.js'
 import { hostRunsSessionsNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
-import { noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
+import { forgetHostJudged, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
+import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
 
 let active: LeaderSide | null = null
 const CONFIG_SUBSCRIBER = 'host-session-switch'
+const DELETE_SUBSCRIBER = 'host-session-deletes'
 
 /** The running leader side, or null (a follower, not started yet). */
 export function activeLeaderSide(): LeaderSide | null {
@@ -44,6 +46,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       return link.openStream('follower', purpose)
     },
     applyBatch: applyHostChannelBatch,
+    leaderDrops: async (hostId) => leaderDropsOf(hostId),
     loadCursor: async (hostId) => loadChannelCursor(hostId),
     emit: (name, data, opts) => {
       if (saidHereAlready(name, data)) return
@@ -71,11 +74,22 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const unlisten = hostServer.onHostServerView(look)
   // The switch is read again at every config write, so a start after it went off stays here.
   bus.subscribe(CONFIG_SUBSCRIBER, () => { void side.refreshFlag() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+  // A delete of a host's session: its host drops its row too (leader-drops.ts), now when linked, else at its next link.
+  bus.subscribe(DELETE_SUBSCRIBER, (event) => {
+    const ids = (event.data as { sessionIds?: unknown } | null)?.sessionIds
+    if (!Array.isArray(ids)) return
+    const sids = ids.filter((x): x is string => typeof x === 'string' && x !== '')
+    for (const [host, mine] of leaderDropHosts(sids)) {
+      for (const sid of mine) forgetHostJudged(sid)
+      void side.dropOnHost(host)
+    }
+  }, { global: true, interest: [EventNames.SESSION_DELETED] })
   for (const view of hostServer.peekHostServerViews()) look(view)
   log.session.info('session channels: the leader side is on (hosts that name session-judge-v1 run their sessions)')
   return () => {
     unlisten()
     bus.unsubscribe(CONFIG_SUBSCRIBER)
+    bus.unsubscribe(DELETE_SUBSCRIBER)
     stopTasks()
     side.stop()
     setHostJudgeProbe(null)

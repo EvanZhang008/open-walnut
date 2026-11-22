@@ -189,4 +189,13 @@ describe('the emitter', () => {
     ])
     expect(emitter.ownSessionOfTask('task-marina-1')).toBeNull()
   })
+
+  it('a drop the leader asked for is answered with a drop record, also for a session this host no longer has', async () => {
+    await make({ own: [row(OWN)] })
+    emitter.noteDrop(['sid-never-here'])
+    emitter.noteDrop([OWN, 'sid-never-here'], { answer: true })
+    await sleep(250)
+    expect((await records()).map((r) => [r.sid, r.name])).toEqual([[OWN, 'drop'], ['sid-never-here', 'drop']])
+    expect(emitter.owns(OWN)).toBe(false)
+  })
 })
