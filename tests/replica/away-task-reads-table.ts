@@ -73,6 +73,7 @@ export const AWAY_TASK_READS: Readonly<Record<string, AwayTaskReadDecision>> = {
   'GET /api/sessions/live-activity': { answer: 'unchanged', why: 'this replica\'s own live activity registry, as before' },
   'GET /api/sessions/working-dirs': { answer: 'unchanged', why: 'working folders from the copy\'s sessions, as before' },
   'GET /api/sessions/git-status': { answer: 'unchanged', why: 'git glances through each session\'s host, as before' },
+  'GET /api/sessions/claude-default-efforts': { answer: 'unchanged', why: 'Claude Code\'s own effort per model, as this replica\'s copy of the recent session records shows it' },
   'GET /api/sessions/host-model-catalogs': { answer: 'unchanged', why: 'model catalogs from the config copy, as before' },
   'GET /api/sessions/ask-walnut-launch': { answer: 'unchanged', why: 'the Ask Walnut launch picks from the copies, as before' },
   'GET /api/v1/sessions/launch-options': { answer: 'unchanged', why: 'launch options from the config copy, as before' },
