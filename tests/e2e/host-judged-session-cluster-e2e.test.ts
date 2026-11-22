@@ -17,6 +17,8 @@
  *                after the wake its facts arrive once, in order, late when older than lateMs
  *   S5 restart   the host's service restarted in the middle of a turn: the Mac resumes from its
  *                cursor, nothing lost, nothing twice
+ *   S5b after    a message the Mac lines up for after a running turn goes to the host with its
+ *                hold, and the host sends it when its turn ends, the Mac stopped meanwhile
  *   S6 off       the switch off on the Mac: a new start on the same host takes the legacy path
  *   S7 tasks     through all of the above the host tried no task write of a session it runs (the
  *                Mac does their task side from the facts): no refused or failed write in its log
@@ -154,7 +156,7 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND latency'), 60_000, 'the latency turn on the Mac')
     const pairs = await factsAfter(sid, before)
     expect(pairs.length).toBeGreaterThan(2)
-    const gaps = pairs.map(({ r, e }) => ({ name: r.name, ms: e.at - r.at }))
+    const gaps = pairs.map(({ r, e }) => ({ name: r.name, ms: e.seenAt - r.at }))
     process.stdout.write(`host-judged S3 gaps (ms): ${JSON.stringify(gaps)}\n`)
     for (const g of gaps) expect(g.ms, `${g.name} took ${g.ms} ms`).toBeLessThan(1000)
   }, 120_000)
@@ -182,11 +184,13 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     // Once each, in the host's order (the whole session: the turns before the stop too).
     const pairs = await factsAfter(sid, before)
     // The away turn's facts came after the wake; late exactly when older than lateMs at their apply.
-    const away = pairs.filter(({ e }) => e.at >= woke - 50)
+    const away = pairs.filter(({ e }) => e.seenAt >= woke - 50)
     expect(away.some(({ r }) => r.name === 'session:result')).toBe(true)
-    const marks = away.map(({ r, e }) => ({ name: r.name, ageMs: e.at - r.at, late: e.late }))
+    const marks = away.map(({ r, e }) => ({ name: r.name, ageMs: e.seenAt - r.at, late: e.late, keptTime: e.at }))
     process.stdout.write(`host-judged S4 marks: ${JSON.stringify(marks)}\n`)
     for (const m of marks) expect(m.late, `${m.name} applied ${m.ageMs} ms after it happened`).toBe(m.ageMs > LATE_MS)
+    // A late fact keeps when it happened as its event's time (one machine here: the same clock, give or take the link).
+    for (const { r, e } of away) if (e.late) expect(Math.abs(e.at - r.at), r.name).toBeLessThan(5_000)
     expect((await h.mac(`/parses?sid=${sid}`)).parses).toBe(0)
   }, 400_000)
 
@@ -206,6 +210,38 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     const pairs = await factsAfter(sid, before)
     expect(pairs.some(({ r }) => r.name === 'session:result' && String(r.data?.result ?? '').includes('released'))).toBe(true)
   }, 600_000)
+
+  it('S5b: a message lined up on the Mac for after the running turn waits on the host and goes out when the host\'s turn ends, the Mac stopped', async () => {
+    const gate = path.join(h.c.base, 'gate-s5b')
+    const before = (await hostFacts(0)).head
+    const held = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: `please hold until ${gate}` })
+    expect(held.status, JSON.stringify(held.json)).toBeLessThan(300)
+    // The turn runs on the host, and the Mac reads it running (its row, as the channel applied it).
+    await waitFor(async () => factsOf((await hostFacts(before)).recs, sid).some((r) => r.name === 'session:messages-delivered'), 60_000, 'the held turn to start on the host')
+    await waitFor(async () => ((await h.c.mac('GET', `/api/sessions/${sid}`)).json.session ?? {}).process_status === 'running', 30_000, 'the Mac to read the turn running')
+    const after = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND after turn', afterTurn: true })
+    expect(after.status, JSON.stringify(after.json)).toBeLessThan(300)
+    expect(after.json.afterTurn, JSON.stringify(after.json)).toBe(true)
+    const messageId = after.json.messageId as string
+    // Handed with its hold: held on the host, gone from the Mac's queue.
+    const onHost = await waitFor(async () => ((await h.host(`/queue?sid=${sid}`)) as Array<{ id: string; status: string; parkedReason: string | null }>).find((m) => m.id === messageId) ?? null, 30_000, 'the held row on the host').catch((err) => { throw new Error(say(String(err))) })
+    expect(onHost.status).toBe('parked')
+    expect(onHost.parkedReason).toMatch(/running turn/i)
+    const macQueue = await h.c.mac('GET', `/api/sessions/${sid}/queue`)
+    expect(JSON.stringify(macQueue.json)).not.toContain(messageId)
+    h.c.sleepMac()
+    try {
+      await h.c.waitAway(token)
+      fs.writeFileSync(gate, 'go')
+      // The held turn ends on the host, and the host's own queue-after-turn sends the held line.
+      await waitFor(async () => resultOn((await h.host(`/events?sid=${sid}`)) as ProbeEvent[], 'echo: ROUND after turn'), 90_000, 'the line held for after the turn to be answered on the host').catch((err) => { throw new Error(say(String(err))) })
+      expect(h.c.asleep()).toBe(true)
+    } finally {
+      if (h.c.asleep()) h.c.wakeMac()
+    }
+    await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND after turn'), 120_000, 'the after-turn answer on the Mac after the wake').catch((err) => { throw new Error(say(String(err))) })
+    await factsAfter(sid, before)
+  }, 400_000)
 
   it('S6: the switch off on the Mac: a new start on the same host takes the legacy path; the session the host already runs still reports', async () => {
     const off = await h.c.mac('PUT', '/api/config', { experimental: { host_runs_sessions: false } })

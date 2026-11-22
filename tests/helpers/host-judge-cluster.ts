@@ -32,6 +32,7 @@
  *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit and records
  *         GET /row?sid=      the host's own row of a session (null: none)
  *         GET /events?sid=   the host's own bus events of a session (as above)
+ *         GET /queue?sid=    the host's queue rows of a session (id, status, parkedReason, message)
  *         GET /live          is a leader linked and caught up
  */
 import fs from 'node:fs'
@@ -51,7 +52,7 @@ busMod.bus.subscribe('cluster-probe-recorder', (e) => {
   const sid = d && typeof d === 'object' ? (d.sessionId ?? d.claudeSessionId) : undefined
   if (typeof sid !== 'string' || !sid) return
   const text = JSON.stringify(d ?? null) ?? 'null'
-  recorded.push({ name: e.name, sid, at: e.timestamp, source: e.source, late: e.late === true, hash: crypto.createHash('sha256').update(text).digest('hex'), ...(text.length <= 4000 ? { data: d } : {}) })
+  recorded.push({ name: e.name, sid, at: e.timestamp, seenAt: Date.now(), source: e.source, late: e.late === true, hash: crypto.createHash('sha256').update(text).digest('hex'), ...(text.length <= 4000 ? { data: d } : {}) })
   if (recorded.length > 50000) recorded.splice(0, 10000)
 }, { global: true })
 const eventsOf = (sid) => recorded.filter((r) => r.sid === sid)
@@ -159,12 +160,14 @@ if (!(argv[0] === 'web' && argv.includes('--replica'))) {
     '/events': (q) => eventsOf(q.get('sid')),
     '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
     '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
+    '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
   }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 }
 `
 }
 
-export interface ProbeEvent { name: string; sid: string; at: number; source: string; late: boolean; hash: string; data?: any }
+/** `at`: the event's timestamp (a late host fact keeps when it happened); `seenAt`: when this process's bus delivered it. */
+export interface ProbeEvent { name: string; sid: string; at: number; seenAt: number; source: string; late: boolean; hash: string; data?: any }
 export interface HostFactRecord { seq: number; opId: string; at: number; sid: string; sseq: number; name: string; data: any; refs?: Record<string, unknown> }
 
 function getJson(port: number, p: string, method = 'GET', body?: unknown): Promise<{ status: number; json: any }> {
