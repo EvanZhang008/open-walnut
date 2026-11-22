@@ -32,7 +32,7 @@ async function pasteFile(page: Page, name: string, type: string, base64: string)
 }
 
 const composer = (page: Page) => page.locator('.session-panel-input .chat-input-container').last()
-const fileInput = (page: Page) => composer(page).locator('input[type="file"]')
+const fileInput = (page: Page) => composer(page).getByTestId('composer-file-input')
 const card = (page: Page, name: string) => composer(page).locator('.file-card').filter({ hasText: name })
 
 function shot(page: Page, name: string) {

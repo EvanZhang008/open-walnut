@@ -111,7 +111,7 @@ test('a 6.6 MB scan attached while the daemon is replaced uploads by itself, wit
   })
 
   const scan = crypto.randomBytes(6_881_046)
-  await composer.locator('input[type="file"]').setInputFiles([{ name: 'scan.tiff', mimeType: 'image/tiff', buffer: scan }])
+  await composer.getByTestId('composer-file-input').setInputFiles([{ name: 'scan.tiff', mimeType: 'image/tiff', buffer: scan }])
   await expect(composer.locator('.file-card-progress')).toHaveCount(1, { timeout: 15_000 })
   await page.screenshot({ path: path.join(shots, `${browserName}-1-uploading-through-swap.png`) })
 

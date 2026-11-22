@@ -128,7 +128,7 @@ const sessionColumn = (page: Page) => page.locator('.main-page-session-column [d
 
 async function attach(page: Page, names: string[]) {
   const box = sessionColumn(page).locator('.session-panel-input')
-  await box.locator('input[type="file"]').setInputFiles(names.map(name => ({ name, mimeType: 'image/png', buffer: PNG })))
+  await box.getByTestId('composer-file-input').setInputFiles(names.map(name => ({ name, mimeType: 'image/png', buffer: PNG })))
   await expect(box.locator('.chat-image-preview')).toHaveCount(names.length)
 }
 

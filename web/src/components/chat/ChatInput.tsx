@@ -2412,6 +2412,8 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
         <input
           ref={fileInputRef}
           type="file"
+          // The composer holds a second file input, the camera's capture input: pick this one by its id.
+          data-testid="composer-file-input"
           {...(acceptsFiles ? {} : { accept: IMAGE_ACCEPT })}
           multiple
           style={{ display: 'none' }}

@@ -183,7 +183,7 @@ test('an Org thread\'s Follow up takes a pasted and an attached screenshot, and 
   await pasteScreenshot(box, `Org header ${NONCE}`)
   // The box's file picker takes a file too (the chat composer's own input).
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
-  await card.locator('[data-testid="org-thread-follow"] input[type="file"]').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: png })
+  await card.locator('[data-testid="org-thread-follow"]').getByTestId('composer-file-input').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: png })
   const strip = card.locator('[data-testid="org-thread-follow"] .chat-image-previews')
   await expect(strip.locator('img')).toHaveCount(2)
   await beat(page, 1500)

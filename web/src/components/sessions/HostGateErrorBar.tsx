@@ -146,7 +146,8 @@ export function useRestoreImages(rootRef: RefObject<HTMLElement | null>, images:
   const done = useRef(false);
   useEffect(() => {
     if (done.current || !images?.length || typeof DataTransfer === 'undefined') return;
-    const input = rootRef.current?.querySelector<HTMLInputElement>('input[type="file"]');
+    // The attach input by its id: the camera's capture input comes first and takes one file only.
+    const input = rootRef.current?.querySelector<HTMLInputElement>('[data-testid="composer-file-input"]');
     if (!input) return;
     done.current = true;
     try {

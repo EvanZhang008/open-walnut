@@ -527,7 +527,7 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
       await see(reader.getByTestId('letter-reply-input')).toHaveValue('')
       await see(reader.locator('.hib-error, [role="alert"]')).toHaveCount(0)
       // A picture attached in the composer and sent with words: on the turn at once, no error.
-      await reader.locator('.hib-composer input[type="file"]').setInputFiles({ name: 'red.png', mimeType: 'image/png', buffer: VIDEO_PICTURE })
+      await reader.locator('.hib-composer').getByTestId('composer-file-input').setInputFiles({ name: 'red.png', mimeType: 'image/png', buffer: VIDEO_PICTURE })
       await see(reader.locator('.hib-composer img')).toHaveCount(1, { timeout: 10_000 })
       await reader.getByTestId('letter-reply-input').pressSequentially(VIDEO_PICTURE_REPLY, { delay: 40 })
       await reader.getByTestId('letter-reply-send').click()

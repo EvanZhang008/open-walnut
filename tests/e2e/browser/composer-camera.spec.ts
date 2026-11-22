@@ -309,7 +309,7 @@ test('a video the box cannot take (its files are full) stays in the panel to add
   await watchStreams(page)
   await answerSpeech(page)
   const h = await open(page)
-  await composer(page).locator('input[type="file"]:not([capture])').first().setInputFiles(
+  await composer(page).getByTestId('composer-file-input').setInputFiles(
     Array.from({ length: 10 }, (_, i) => ({ name: `notes-${i}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`note ${i}`) })),
   )
   await expect(composer(page).locator('.file-card')).toHaveCount(10)
