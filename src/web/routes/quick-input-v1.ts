@@ -278,14 +278,15 @@ async function quickSend(req: Request, res: Response, taskId: string | null, bad
   }
   if (line) {
     // The same send again (the bar resends by itself once Walnut answers) is that send, run once.
+    // The key names the target too: the same uuid to another task is never answered as the first.
     const first = send
     const { sendOnce } = await import('../../core/sessions/send-once.js')
+    const source = quickSource(req)
     // A held answer sent nothing (a permission prompt stands in the way): never kept, so the same
     // line again tries again instead of being told "held" for eleven minutes.
-    // Known gap: a send that STARTED the task's session carries the session's own first line uuid,
-    // not this one, so if Walnut restarts before it answers, a resend finds neither a queued row
-    // nor a ran line under this uuid and goes in a second time (start, then restart, then resend).
-    send = () => sendOnce(`quick\n${line.userUuid}`, first, { again: wentInSince, keep: (a) => !a.held })
+    send = () => sendOnce(`quick\n${taskId ?? 'main'}\n${line.userUuid}`, first, {
+      again: (answer) => wentInSince(answer, line, text, source), keep: (a) => !a.held,
+    })
   }
   if (req.body?.follow === true) {
     await sendAndFollow(send, res, { kept: opts.kept })
@@ -393,11 +394,20 @@ export interface QuickMainResult {
 /**
  * The first answer of a send asked again: its queued row may have gone in since, and then the
  * reply to follow is over or under way; the client hears it was delivered (the reply is in its chat).
+ * A row still queued is asked to go now, as the chat's resend does (send-once.ts sameSendSettled):
+ * a person's Send again also releases it from a park, the bar's own resend never does.
  */
-async function wentInSince(answer: QuickMainResult): Promise<QuickMainResult> {
+async function wentInSince(answer: QuickMainResult, line: QuickLine, text: string, source: string): Promise<QuickMainResult> {
   if (!answer.messageId || answer.held || answer.alreadyDelivered) return answer
   const { findQueuedMessage } = await import('../../core/session-message-queue.js')
-  return (await findQueuedMessage(answer.messageId)) ? answer : { ...answer, alreadyDelivered: true }
+  if (!(await findQueuedMessage(answer.messageId))) return { ...answer, alreadyDelivered: true }
+  if (line.resend && answer.sessionId) {
+    const { sendQueuedNow } = await import('../../core/sessions/send-now.js')
+    await sendQueuedNow({
+      sessionId: answer.sessionId, messageId: answer.messageId, taskId: answer.taskId, message: text, source, unpark: line.resend === 'person',
+    })
+  }
+  return answer
 }
 
 /** A quick send's own user line (`userUuid`) and whether this is it sent again. */
@@ -512,7 +522,12 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
   const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
   let started
   try {
-    started = await startSessionForTask({ taskIdPrefix: task.id, message: cliText, source: firstSource === 'ui' ? 'api-v1' : firstSource, callerSid })
+    // The first line goes out under the send's own uuid, so the same send again after a restart
+    // finds the line it started the session with (send-once.ts sameSendSettled) and is not sent twice.
+    started = await startSessionForTask({
+      taskIdPrefix: task.id, message: cliText, source: firstSource === 'ui' ? 'api-v1' : firstSource, callerSid,
+      ...(line ? { firstLineUuid: line.userUuid } : {}),
+    })
   } catch (err) {
     // A session the task row did not name (a start that won the race): the message goes to it.
     if (err instanceof SessionExistsError && err.existingSessionId && !startedOnce) {

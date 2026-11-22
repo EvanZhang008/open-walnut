@@ -210,16 +210,22 @@ describe('a send that waited too long goes out by itself no more (AUTO_RETRY_MAX
   });
 });
 
-describe("the quick bar's HTTP send: a fetch that never reached Walnut is a connection failure", () => {
-  it('by its code (api/quick.ts postNdjson), never by a refusal the server answered', () => {
+describe("the quick bar's HTTP send: every answer Walnut never confirmed is one class", () => {
+  it('by its code (api/quick.ts postNdjson): the fetch threw, the answer broke off or ended; never a refusal the server answered', () => {
     const src = read('web/src/api/quick.ts');
-    // The one code postNdjson gives a fetch that threw.
+    // The codes postNdjson gives a fetch that threw and a stream that broke; the receipt gives one
+    // that ended before its sent line (useQuickReceipts.ts endStream).
     expect(src).toMatch(/fail\('network', opts\.unreachable\)/);
-    expect(isConnectionFailure({ code: 'network', message: 'Walnut could not be reached. Nothing was sent.' })).toBe(true);
-    for (const code of ['http_400', 'http_404', 'http_409', 'http_500', 'send_failed', 'follow_lost']) {
+    expect(src).toMatch(/fail\('follow_lost', opts\.lost\)/);
+    expect(read('web/src/components/quickbar/useQuickReceipts.ts')).toMatch(/code: 'no_answer'/);
+    for (const code of ['network', 'follow_lost', 'no_answer']) {
+      expect(isConnectionFailure({ code, message: 'Walnut could not be reached.' }), code).toBe(true);
+    }
+    for (const code of ['http_400', 'http_404', 'http_409', 'http_500', 'send_failed']) {
       expect(isConnectionFailure({ code, message: 'Not sent (500).' }), code).toBe(false);
     }
     expect(waitsForConnectionAfter({ code: 'network', message: 'x' }, { userUuid: 'u1', timestamp: Date.now() })).toBe(true);
+    expect(waitsForConnectionAfter({ code: 'follow_lost', message: 'x' }, { userUuid: 'u1', timestamp: Date.now() })).toBe(true);
     expect(waitsForConnectionAfter({ code: 'network', message: 'x' }, {})).toBe(false);
   });
 });

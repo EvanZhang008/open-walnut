@@ -5,6 +5,10 @@
  * `bar` (centered, takes the keyboard), `receipts` (the cards in the bottom left corner, which
  * never take the keyboard, so the person keeps typing where they were), `hidden`.
  * The panel draws the macOS glass behind the page, so the page itself paints no background.
+ * A panel hidden for ten minutes lets its page go (releaseAfter): while a card closed with its ×
+ * still has a send on its way, the page says `hidden` again every minute, which starts that clock
+ * again, so the words are never let go with the page; and once such a send fails for good its card
+ * shows again (the panel back to `receipts`).
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
@@ -18,12 +22,15 @@ import type { QuickImage } from '@/api/quick';
 
 type Mode = 'bar' | 'receipts' | 'hidden';
 
+/** How often a hidden panel with a send on its way says so again: well inside the app's ten minutes. */
+const KEEP_PAGE_EVERY_MS = 60_000;
+
 export function QuickBarPanelPage() {
   // Opened in a plain browser tab (no app around it), the page shows the bar at once.
   const [mode, setMode] = useState<Mode>(() => (hasNativeQuickBar() ? 'hidden' : 'bar'));
   const barRef = useRef<QuickBarHandle | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const { receipts, send, resend, dismiss, withdraw, toggleOpen, pin } = useQuickReceipts();
+  const { receipts, hiddenOnItsWay, send, resend, dismiss, withdraw, toggleOpen, pin } = useQuickReceipts();
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('qb-panel-doc');
@@ -52,8 +59,12 @@ export function QuickBarPanelPage() {
 
   useEffect(() => { if (!hasNativeQuickBar()) barRef.current?.opened(); }, []);
 
-  // The last receipt left: nothing is left to show.
-  useEffect(() => { if (mode === 'receipts' && receipts.length === 0) setMode('hidden'); }, [mode, receipts.length]);
+  // The last receipt left: nothing is left to show. A card back (a hidden send that failed for
+  // good, one a reload kept): the receipts show again.
+  useEffect(() => {
+    if (mode === 'receipts' && receipts.length === 0) setMode('hidden');
+    else if (mode === 'hidden' && receipts.length > 0) setMode('receipts');
+  }, [mode, receipts.length]);
 
   // The app sizes the panel to the page.
   useEffect(() => {
@@ -66,8 +77,10 @@ export function QuickBarPanelPage() {
     report();
     const ro = new ResizeObserver(report);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [mode]);
+    // Hidden with a send still on its way: said again, so the app keeps the page that sends it.
+    const keep = mode === 'hidden' && hiddenOnItsWay ? setInterval(report, KEEP_PAGE_EVERY_MS) : undefined;
+    return () => { ro.disconnect(); if (keep) clearInterval(keep); };
+  }, [mode, hiddenOnItsWay]);
 
   const onSend = useLeanCallback((person: QuickPerson, text: string, images: QuickImage[]) => {
     if (person.id) rememberSend(person);

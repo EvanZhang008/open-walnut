@@ -35,7 +35,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
-import { getQueue } from '../../src/core/session-message-queue.js'
+import { getQueue, parkMessages } from '../../src/core/session-message-queue.js'
 import { setAiDirectOverride, type DirectCall } from '../../src/core/ai/ai-direct.js'
 import { QUICK_SYSTEM } from '../../src/web/routes/quick-input-v1.js'
 
@@ -402,6 +402,9 @@ describe('the same quick send again (userUuid) is that send, never a second copy
     expect(ja).toMatchObject({ taskId, started: true })
     expect(jb).toEqual(ja)
     expect(starts).toHaveLength(1)
+    // The new session's first line goes out under the send's own uuid: after a restart, the same
+    // send again finds the line it started the session with (send-once.ts) and is not sent twice.
+    expect(starts[0]).toMatchObject({ firstLineUuid: START })
 
     // A live session: the row carries the send's own user line; the same send again is that row.
     const sid = '44444444-5555-4666-8777-888888888888'
@@ -424,6 +427,40 @@ describe('the same quick send again (userUuid) is that send, never a second copy
     expect(lines(afterRestart)[0]).toMatchObject({ type: 'sent', taskId, sessionId: sid, messageId: first.messageId })
     expect(await rows()).toHaveLength(1)
     expect(starts).toHaveLength(0)
+  })
+
+  it("the kept answer names its target, and a person's Send again releases a row set aside since", async () => {
+    const live = async (title: string, sid: string) => {
+      const made = (await (await post('/tasks', { title, project: 'Life' })).json()) as { task: { id: string } }
+      await createSessionRecord(sid, made.task.id, 'Life', WALNUT_HOME)
+      await updateTaskRaw(made.task.id, { session_id: sid } as never)
+      await updateSessionRecord(sid, { process_status: 'idle' } as never)
+      return made.task.id
+    }
+    const sidA = '66666666-7777-4888-9999-aaaaaaaaaaaa'
+    const sidB = '77777777-8888-4999-aaaa-bbbbbbbbbbbb'
+    const [taskA, taskB] = [await live('Pack the tent', sidA), await live('Pack the stove', sidB)]
+    const LINE = '5a3b2c1d-6e7f-4a8b-9c0d-1e2f3a4b5c6d'
+    const a = await (await post('/quick/send', { to: taskA, text: 'Bring the map', userUuid: LINE })).json() as Record<string, unknown>
+    // The same uuid to another task is that task's own send, never the first one's answer.
+    const b = await (await post('/quick/send', { to: taskB, text: 'Bring the map', userUuid: LINE })).json() as Record<string, unknown>
+    expect(b).toMatchObject({ taskId: taskB, sessionId: sidB })
+    expect(b.messageId).not.toBe(a.messageId)
+    expect((await getQueue(sidB)).some((m) => m.id === b.messageId)).toBe(true)
+
+    // Set aside (a stop, a refusal): the bar's own resend leaves it there, a person's releases it.
+    // The runner may already hold it (no CLI runs here): parked wherever it stands.
+    const rowA = async () => (await getQueue(sidA)).find((m) => m.id === a.messageId)
+    await parkMessages([(await rowA())!], 'Stopped by the person')
+    const statusA = async () => (await rowA())?.status
+    expect(await statusA()).toBe('parked')
+    const auto = await (await post('/quick/send', { to: taskA, text: 'Bring the map', userUuid: LINE, resend: 'auto' })).json()
+    expect(auto).toEqual(a)
+    expect(await statusA()).toBe('parked')
+    const person = await (await post('/quick/send', { to: taskA, text: 'Bring the map', userUuid: LINE, resend: 'person' })).json()
+    expect(person).toEqual(a)
+    expect(await statusA()).not.toBe('parked')
+    expect((await getQueue(sidA)).filter((m) => m.message.startsWith('Bring the map'))).toHaveLength(1)
   })
 
   it('without a uuid every send is its own, as before; a malformed uuid is refused before anything is sent', async () => {

@@ -70,6 +70,17 @@ describe('the first message of a started session', () => {
     expect(String(mocks.startSession.mock.calls[0]?.[0]?.message ?? '')).not.toContain('rubric');
   });
 
+  it("the first line goes out under the client's own send id, so a resend after a restart finds it", async () => {
+    mocks.startSession.mockImplementation(async (data) => ({ claudeSessionId: data.preassignedSessionId }));
+    const LINE = '3e1f0a9b-4c5d-4e6f-8a0b-1c2d3e4f5a6b';
+    await startSessionForTask({ ...params, firstLineUuid: LINE });
+    expect(mocks.startSession.mock.calls[0][0].firstLineUuid).toBe(LINE);
+    // A start with no message runs no turn: there is no first line to name.
+    mocks.startSession.mockClear();
+    await startSessionForTask({ ...params, message: '', idle: true, firstLineUuid: LINE });
+    expect(mocks.startSession.mock.calls[0]?.[0]?.firstLineUuid).toBeUndefined();
+  });
+
   it('nothing to carry leaves the message as it was', async () => {
     mocks.pendingAppState.mockResolvedValue(null);
     mocks.startSession.mockImplementation(async (data) => ({ claudeSessionId: data.preassignedSessionId }));

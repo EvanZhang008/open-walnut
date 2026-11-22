@@ -17,6 +17,9 @@
  *    with the place it sits in, so the notice can take the user there.
  *  - A voice take still recording or still being heard is lost too: its audio is
  *    only in this page (dictation-live.ts).
+ *  - Work only a module's memory holds, which no element marks (a quick bar message
+ *    waiting to go out: quickbar/useQuickReceipts.ts), is reported by its holder
+ *    through holdUnsavedWork, for the scopes that lose it.
  */
 import { log } from '@/utils/log';
 import { liveTakeCount } from '@/utils/dictation-live';
@@ -64,6 +67,18 @@ export interface UnsavedItem {
   /** The session whose panel holds it, so a hidden column can be opened. */
   sessionId?: string;
   element: Element | null;
+}
+
+/** What a holder of unsaved work in memory reports, and which scope loses it (`leave`: kept over a reload). */
+export interface HeldWork { what: string; where: string; lostOn: UnsavedScope | 'both' }
+
+const heldWork = new Map<symbol, () => HeldWork | null>();
+
+/** Report work this page holds only in memory; `read` answers what it is now (null: nothing). Returns the release. */
+export function holdUnsavedWork(read: () => HeldWork | null): () => void {
+  const id = Symbol('held');
+  heldWork.set(id, read);
+  return () => { heldWork.delete(id); };
 }
 
 /** Text-bearing input types only: a checked checkbox is not unsaved typing. */
@@ -132,6 +147,12 @@ export function listUnsavedWork(doc: Document = document, active: Element | null
   const items: UnsavedItem[] = [];
   const takes = liveTakeCount();
   if (takes > 0) items.push({ kind: 'recording', what: takes === 1 ? 'A voice recording in progress' : `${takes} voice recordings in progress`, where: '', element: null });
+  for (const read of heldWork.values()) {
+    let held: HeldWork | null;
+    // A holder that cannot say counts as holding something: a wrong yes costs a minute, a wrong no the work.
+    try { held = read(); } catch { held = { what: 'Unsaved work', where: '', lostOn: 'both' }; }
+    if (held && (held.lostOn === 'both' || held.lostOn === scope)) items.push({ kind: 'message', what: held.what, where: held.where, element: null });
+  }
   for (const el of Array.from(doc.querySelectorAll('textarea'))) {
     const value = (el as HTMLTextAreaElement).value ?? '';
     if (value.trim() && !saved.has(el)) items.push(item('message', 'Unsent text', el));

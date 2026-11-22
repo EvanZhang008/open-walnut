@@ -7,7 +7,7 @@
 import { CORNER_ORDER, CornerSlot } from '@/components/common/corner-stack';
 import { NoticeCard, type NoticeTone } from '@/components/common/NoticeCard';
 import { AgentText } from '@/components/common/AgentText';
-import { staysUntilDismissed, type Receipt } from './useQuickReceipts';
+import { mayHaveGoneOut, staysUntilDismissed, type Receipt } from './useQuickReceipts';
 
 interface ReceiptsProps {
   receipts: Receipt[];
@@ -32,7 +32,8 @@ export function receiptStatus(r: Receipt): string {
     case 'thinking': return r.reply ? 'Replying…' : r.activity ? `Working · ${r.activity}` : 'Thinking…';
     case 'replied': return r.unfinished ? 'Still working · the rest is in its chat' : 'Replied';
     case 'held': return 'Not sent · it waits on your answer in its chat';
-    case 'failed': return `Not sent · ${r.error ?? 'try again'}`;
+    // Walnut may have taken it without saying so: never claimed as not sent (Send again is the same send).
+    case 'failed': return `${mayHaveGoneOut(r) ? 'Not confirmed' : 'Not sent'} · ${r.error ?? 'try again'}`;
     case 'lost': return `Sent · ${r.error ?? 'the reply is in its chat'}`;
   }
 }

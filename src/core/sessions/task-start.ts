@@ -27,6 +27,9 @@ export interface SessionStartParams {
   /** Original human action time, preserved across workspace replay. */
   requestedAt?: string;
   message?: string;
+  /** The uuid the first message's user line goes out under (a client's own send id, v4): the same
+   *  send again after a restart finds the line under it (send-once.ts) and is never sent twice. */
+  firstLineUuid?: string;
   /** Start with no first message and run no turn (an engine switch with nothing to say): never the
    *  task's description or a "Working on task" line, which would start its work again. */
   idle?: boolean;
@@ -755,7 +758,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         const { pendingAppState } = await import('./app-state.js');
         const appState = !area && firstMessage.trim() ? await pendingAppState(runtimeId, firstMessage, Date.now(), { taskId: task.id }) : null;
         if (appState) firstMessage = `${appState.text}\n\n${firstMessage}`;
-        const starting = spawnStill = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, attributionSource: params.source, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
+        const starting = spawnStill = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, attributionSource: params.source, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true, ...(params.firstLineUuid && firstMessage.trim() ? { firstLineUuid: params.firstLineUuid } : {}) }).then(async (ready) => {
           appState?.markTold(ready.claudeSessionId);
           await settle({ state: 'started', session_id: ready.claudeSessionId });
           return { ...result, sessionId: ready.claudeSessionId, started: true };

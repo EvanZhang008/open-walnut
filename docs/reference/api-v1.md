@@ -1840,13 +1840,15 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
   `to` names (Main when absent, `ceo` or `main`), answered as `/quick/main`.
 - `userUuid`, `resend` (additive, 2026-11-22, on `/quick/main`, `/quick/task-message` and
   `/quick/send`): `userUuid` is a v4 uuid the client made for this send (anything else answers
-  `400 bad_request`); the message's line in its session carries it. The same `userUuid` again is
-  that send, never a second copy: it gets the first send's answer, or, when the server lost it (a
+  `400 bad_request`); the message's line in its session carries it (a send that starts the
+  task's session starts it with that line). The same `userUuid` again to the same target is that
+  send, never a second copy: it gets the first send's answer, or, when the server lost it (a
   restart), `sent` with the queued row's `messageId`, or `delivered` when its line already ran
   (the JSON answer then carries `alreadyDelivered: true`). `resend` is `auto` (the client sends it
-  again by itself after a send that never reached the server) or `person` (its Send again); a
-  `resend: "auto"` never puts back a message that was set aside (parked). Without `userUuid`
-  everything works as before.
+  again by itself after a send the server never confirmed: no answer, or one that broke off or
+  ended before its `sent` line) or `person` (its Send again); a `resend: "auto"` never puts back a
+  message that was set aside (parked), a `resend: "person"` does. Without `userUuid` everything
+  works as before.
 - `GET /quick/tasks?q=&limit=6&recent=`: `{tasks: [{id, title, project, state, stateLabel}]}`, open
   tasks first; `state` is the user status (`needs`, `working`, `waiting`, `done`). With no `q`,
   nothing, unless `recent=1`: then the open board tasks, the ones needing the user first. Open one with the

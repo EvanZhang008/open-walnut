@@ -73,7 +73,7 @@ export async function quickSendFollow(
   };
   return postNdjson<QuickFollowLine>('/api/v1/quick/send', body, onLine, {
     signal,
-    unreachable: 'Walnut could not be reached. Nothing was sent.',
+    unreachable: 'Walnut could not be reached.',
     refused: (status) => `Not sent (${status}).`,
     lost: 'Lost the reply on the way. It is in the chat.',
   });
@@ -142,11 +142,13 @@ async function postNdjson<L>(
     if (!signal?.aborted) fail('network', opts.unreachable);
     return;
   }
-  if (!res.ok || !res.body) {
+  if (!res.ok) {
     const answer = await res.json().catch(() => null) as { error?: string } | null;
     fail(`http_${res.status}`, answer?.error || opts.refused(res.status));
     return;
   }
+  // An answer with nothing in it ended before its first line: the caller's end says what that means.
+  if (!res.body) return;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -164,7 +166,8 @@ async function postNdjson<L>(
       }
     }
   } catch {
-    // The stream broke after it began (for a send: the reply is still in its chat).
+    // The stream broke after it began: after a send's `sent` line its reply is still in its chat;
+    // before it, the send is not confirmed (useQuickReceipts.ts sends it again under its line).
     if (!signal?.aborted) fail('follow_lost', opts.lost);
   }
 }

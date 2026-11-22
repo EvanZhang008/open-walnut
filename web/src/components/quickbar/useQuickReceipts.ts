@@ -2,19 +2,23 @@
  * What the quick bar shows after a send: one receipt per message, following its NDJSON answer
  * (api/quick.ts) from "Sending" through "Sent" (in its queue), "Delivered" (its session took it)
  * and "Thinking" to the reply's first line.
- * A send that never reached Walnut (it was down, a restart) waits for it and goes out by itself
- * once it answers again, under the same user line, so the server keeps one copy
- * (hooks/send-auto-retry.ts, the chat's rule; src/core/sessions/send-once.ts). Any other send that
- * never went out says so, stays, and can be sent again or put back into the bar; a reply lost on
- * the way says it is in the chat. Any other finished receipt leaves by itself after a while unless
- * it is open.
+ * A send Walnut never confirmed (it could not be reached, or its answer broke off or ended before
+ * the line that says it was sent) waits for Walnut and goes out by itself once it answers again,
+ * under the same user line, so the server keeps one copy (hooks/send-auto-retry.ts, the chat's
+ * rule; src/core/sessions/send-once.ts). Any other send that never went out says so, stays, and can
+ * be sent again (always under its own line) or put back into the bar; a reply lost on the way says
+ * it is in the chat. Any other finished receipt leaves by itself after a while unless it is open.
+ * Words that have not gone out survive a reload of the page (sessionStorage), and count as unsaved
+ * work for a page that goes away (utils/unsaved-work.ts).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { quickSendFollow, walnutAnswers, type QuickFollowLine, type QuickImage, type QuickSendLine } from '@/api/quick';
 import { wsClient } from '@/api/ws';
-import { isConnectionFailure, pastAutoRetryAge, waitsForConnectionAfter } from '@/hooks/send-auto-retry';
+import { pastAutoRetryAge, waitsForConnectionAfter } from '@/hooks/send-auto-retry';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { newUserUuid } from '@/utils/thread-tree';
+import { holdUnsavedWork } from '@/utils/unsaved-work';
+import { log } from '@/utils/log';
 import type { QuickPerson } from './quickbar-people';
 
 export type ReceiptState = 'sending' | 'waiting' | 'sent' | 'delivered' | 'thinking' | 'replied' | 'held' | 'failed' | 'lost';
@@ -60,6 +64,33 @@ const MAX_RECEIPTS = 4;
 
 const FINAL: ReadonlySet<ReceiptState> = new Set(['replied', 'held', 'failed', 'lost']);
 
+/**
+ * Failure codes of a send Walnut may have taken without saying so (api/quick.ts), in the words a
+ * receipt shows: it is not known to have gone out, so it is never "Not sent".
+ */
+const UNCONFIRMED = new Map<string, string>([
+  ['follow_lost', 'its answer broke off before Walnut said it was sent'],
+  ['no_answer', 'Walnut ended its answer before saying it was sent'],
+]);
+
+/** A failed send that may have reached Walnut all the same: its status says "Not confirmed". */
+export function mayHaveGoneOut(r: Pick<Receipt, 'state' | 'failCode'>): boolean {
+  return r.state === 'failed' && !!r.failCode && UNCONFIRMED.has(r.failCode);
+}
+
+/**
+ * A send that ended before its `sent` line. One Walnut never confirmed waits for it and goes out
+ * by itself once it answers (the same user line, so never twice), within the rule's limits; one
+ * Walnut answered with a failure (a refusal, a send that failed) is an ordinary failure.
+ */
+export function endedUnsent(r: Receipt, failure: { code: string; message: string }, now = Date.now()): Receipt {
+  const error = failure.message || UNCONFIRMED.get(failure.code);
+  if (waitsForConnectionAfter(failure, { userUuid: r.userUuid, timestamp: r.sentAt }, r.autoTries ?? 0, now)) {
+    return { ...r, state: 'waiting', error, failCode: failure.code };
+  }
+  return { ...r, state: 'failed', error, failCode: failure.code, endedAt: now };
+}
+
 /** One answer line applied to its receipt (pure: tests/web/quickbar-receipts.test.ts). */
 export function applyLine(r: Receipt, line: QuickFollowLine, now = Date.now()): Receipt {
   // A waiting receipt has no answer open: only its next try's lines move it, after resentNow.
@@ -78,21 +109,18 @@ export function applyLine(r: Receipt, line: QuickFollowLine, now = Date.now()): 
       return { ...r, state: 'replied', reply, unfinished: line.unfinished, activity: undefined, endedAt: now };
     }
     case 'error':
+      // After the `sent` line a broken answer only lost the reply.
       if (r.state !== 'sending') return { ...r, state: 'lost', error: line.message, endedAt: now };
-      // Before the send answered nothing went out. Walnut could not be reached: it goes out by
-      // itself once Walnut answers (the same user line, so never twice), within the rule's limits.
-      if (waitsForConnectionAfter(line, { userUuid: r.userUuid, timestamp: r.sentAt }, r.autoTries ?? 0, now)) {
-        return { ...r, state: 'waiting', error: line.message, failCode: line.code };
-      }
-      return { ...r, state: 'failed', error: line.message, failCode: line.code, endedAt: now };
+      // Before it, the words of a broken answer are about the reply: say what is known instead.
+      return endedUnsent(r, { code: line.code, message: UNCONFIRMED.get(line.code) ?? line.message }, now);
   }
 }
 
-/** The answer ended: a receipt still waiting on its reply has it only in the chat. */
+/** The answer ended: one with no `sent` line is not confirmed; one waiting on its reply has it only in the chat. */
 export function endStream(r: Receipt, now = Date.now()): Receipt {
   if (FINAL.has(r.state) || r.state === 'waiting') return r;
   return r.state === 'sending'
-    ? { ...r, state: 'failed', error: 'Walnut did not answer. Nothing was sent.', endedAt: now }
+    ? endedUnsent(r, { code: 'no_answer', message: UNCONFIRMED.get('no_answer')! }, now)
     : { ...r, state: 'lost', error: 'The reply is in the chat.', endedAt: now };
 }
 
@@ -133,9 +161,75 @@ export function settleReceipts(all: readonly Receipt[]): Receipt[] {
   return out;
 }
 
-/** Send again (the person's key): under the same user line when the first may have reached Walnut. */
-export function sameLineOnSendAgain(r: Receipt): boolean {
-  return !!r.userUuid && (r.state === 'waiting' || (r.state === 'failed' && isConnectionFailure({ message: r.error ?? '', code: r.failCode })));
+/** sessionStorage (this tab only, so no other tab sends them too): the receipts a reload keeps. */
+export const KEPT_RECEIPTS_KEY = 'walnut:quick-receipts';
+
+/** Words a reload would lose: a send not known to have gone out (on its way, waiting, failed, held). */
+export function keptOverReload(r: Pick<Receipt, 'state'>): boolean {
+  return r.state === 'sending' || staysUntilDismissed(r);
+}
+
+/** What a reload would lose, in one string: the kept list is written again only when it changes. */
+export function keptSignature(all: readonly Receipt[]): string {
+  return all.filter(keptOverReload).map((r) => `${r.id}:${r.state}:${r.hidden ? 1 : 0}:${r.autoTries ?? 0}`).join('|');
+}
+
+type KeptReceipt = Receipt & { picturesDropped?: true };
+
+/** Keep the receipts a reload would lose; over the storage quota their words at least, never nothing. */
+export function writeKeptReceipts(all: readonly Receipt[], storage: Pick<Storage, 'setItem' | 'removeItem'> = sessionStorage): void {
+  const kept = all.filter(keptOverReload).map(({ open: _open, activity: _activity, ...r }): KeptReceipt => r);
+  try {
+    if (kept.length === 0) { storage.removeItem(KEPT_RECEIPTS_KEY); return; }
+    try {
+      storage.setItem(KEPT_RECEIPTS_KEY, JSON.stringify(kept));
+    } catch {
+      storage.setItem(KEPT_RECEIPTS_KEY, JSON.stringify(kept.map((r) => (r.images.length ? { ...r, images: [], picturesDropped: true } : r))));
+    }
+  } catch (error) {
+    log.warn('quickbar', 'receipts not kept for a reload', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** This page loaded again in place (a reload, back or forward), not a new tab that got a copy of the storage. */
+function loadedAgain(): boolean {
+  try {
+    const nav = performance.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming | undefined;
+    return !nav || nav.type === 'reload' || nav.type === 'back_forward';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The receipts the last load of this tab kept, as they come back. A send the reload cut off was
+ * never confirmed, so it waits and goes out under its own line; a waiting one keeps its line, its
+ * tries and its first try's time (the ten minutes count from then); one whose pictures did not fit
+ * the storage never goes out by itself, and says so.
+ */
+export function restoreKeptReceipts(raw: string | null, now = Date.now()): Receipt[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const out: Receipt[] = [];
+  for (const k of parsed as KeptReceipt[]) {
+    if (!k || typeof k.id !== 'string' || typeof k.text !== 'string' || !k.person || !keptOverReload(k)) continue;
+    const { picturesDropped, ...r } = k;
+    const back: Receipt = { ...r, images: Array.isArray(r.images) ? r.images : [], reply: '' };
+    if (picturesDropped) out.push({ ...back, state: 'failed', hidden: false, error: 'its pictures were not kept over the reload', failCode: undefined, endedAt: now });
+    else if (back.state === 'sending') out.push(endedUnsent(back, { code: 'no_answer', message: 'the page reloaded before Walnut said it was sent' }, now));
+    else out.push(back);
+  }
+  return settleReceipts(out);
+}
+
+function readKeptReceipts(): Receipt[] {
+  try {
+    return loadedAgain() ? restoreKeptReceipts(sessionStorage.getItem(KEPT_RECEIPTS_KEY)) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** How long the bar waits before it asks whether Walnut answers again: 2 s, 4 s, 8 s, then every 15 s. */
@@ -144,7 +238,8 @@ export function nextCheckDelay(misses: number): number {
 }
 
 export function useQuickReceipts() {
-  const [all, setAll] = useState<Receipt[]>([]);
+  // A reload of this tab brings back the words that had not gone out (readKeptReceipts).
+  const [all, setAll] = useState<Receipt[]>(() => readKeptReceipts());
   const allRef = useRef(all);
   allRef.current = all;
   const pinned = useRef(new Set<string>());
@@ -204,13 +299,17 @@ export function useQuickReceipts() {
     withdraw(id);
   }, [update, withdraw]);
 
-  /** Words that never went out, sent again as they were, to the same person. */
+  /**
+   * Words that never went out, sent again as they were, to the same person, always under their own
+   * user line: whatever became of the first try, the server keeps one send (send-once.ts), and a
+   * person's resend releases a row set aside since.
+   */
   const resend = useLeanCallback((id: string) => {
     const r = allRef.current.find((x) => x.id === id);
     if (!r || !staysUntilDismissed(r)) return;
     if (r.state === 'waiting') { sendWaitingNow(r, false); return; }
     withdraw(id);
-    send(r.person, r.text, r.images, sameLineOnSendAgain(r) && r.userUuid ? { userUuid: r.userUuid } : undefined);
+    send(r.person, r.text, r.images, r.userUuid ? { userUuid: r.userUuid } : undefined);
   }, [withdraw, send, sendWaitingNow]);
 
   const toggleOpen = useLeanCallback((id: string) => update(id, (r) => ({ ...r, open: !r.open })), [update]);
@@ -276,6 +375,20 @@ export function useQuickReceipts() {
 
   useEffect(() => () => { for (const c of aborts.current.values()) c.abort(); }, []);
 
+  // Kept over a reload of this tab: written when what a reload would lose changes, not on every
+  // word of a reply.
+  const kept = keptSignature(all);
+  useEffect(() => { writeKeptReceipts(allRef.current); }, [kept]);
+
+  // A page that goes away (an app restart, a window closing) loses them: unsaved work until they went out.
+  useEffect(() => holdUnsavedWork(() => {
+    const n = allRef.current.filter(keptOverReload).length;
+    if (n === 0) return null;
+    return { what: n === 1 ? 'A quick bar message that has not gone out' : `${n} quick bar messages that have not gone out`, where: 'the quick bar', lostOn: 'leave' };
+  }), []);
+
   const receipts = useMemo(() => all.filter((r) => !r.hidden), [all]);
-  return { receipts, send, resend, dismiss, withdraw, toggleOpen, pin };
+  /** A card closed with its × whose send is still on its way: the page must stay to send it. */
+  const hiddenOnItsWay = all.some((r) => r.hidden);
+  return { receipts, hiddenOnItsWay, send, resend, dismiss, withdraw, toggleOpen, pin };
 }

@@ -7,6 +7,8 @@
  *                                              registers Control-Option-Command-Space only while on
  *   { type: 'layout', mode, width, height }    the panel page's size: `bar` (centered, takes keys),
  *                                              `receipts` (top right, never takes keys), `hidden`
+ *                                              (said again every minute while a hidden send is on
+ *                                              its way: each one restarts the app's release clock)
  *   { type: 'open', taskId } | { type: 'open', to } open that task's chat, or an app path (a note:
  *                                              `/notes?path=...`), in the Walnut window
  *   { type: 'capture' }                        take a screenshot of an area, then call attach()

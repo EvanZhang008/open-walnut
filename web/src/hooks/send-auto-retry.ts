@@ -32,12 +32,20 @@ export const AUTO_RETRY_MAX_AGE_MS = 10 * 60_000;
 /** Error words of a send that never got through (api/ws.ts, api/session-send.ts withDeadline). */
 const CONNECTION_FAILURE = /^(?:WebSocket not connected|WebSocket disconnected|no answer in \d+s$)/;
 
-/** Codes of an HTTP send that never reached Walnut: the quick bar's fetch threw (api/quick.ts postNdjson). */
-const CONNECTION_CODES: ReadonlySet<string> = new Set(['network']);
+/**
+ * Codes of an HTTP send Walnut never confirmed (api/quick.ts postNdjson): the fetch threw
+ * (`network`), the answer broke off (`follow_lost`) or ended (`no_answer`) before the line that
+ * says it was sent. All three may or may not have reached Walnut, so all three go one way: the
+ * same send again under its own user line, which the server keeps as one (send-once.ts). Only a
+ * send still waiting on that line asks (the quick bar's receipt in `sending`): after it, a broken
+ * answer only lost the reply.
+ */
+const CONNECTION_CODES: ReadonlySet<string> = new Set(['network', 'follow_lost', 'no_answer']);
 
 /** A failure by its words (a socket send) or by its code (an HTTP send's `{code, message}` line). */
 export type SendFailure = string | { message: string; code?: string } | undefined;
 
+/** A send that failed this way may have reached the server: only the same user line may follow it. */
 export function isConnectionFailure(failure: SendFailure): boolean {
   if (!failure) return false;
   if (typeof failure === 'string') return CONNECTION_FAILURE.test(failure);

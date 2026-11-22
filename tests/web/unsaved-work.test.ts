@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { parseHTML } from 'linkedom';
-import { DRAFT_FLUSH_EVENT, listUnsavedWork, type DraftFlushDetail } from '../../web/src/utils/unsaved-work';
+import { DRAFT_FLUSH_EVENT, holdUnsavedWork, listUnsavedWork, type DraftFlushDetail } from '../../web/src/utils/unsaved-work';
 import { holdLiveTake } from '../../web/src/utils/dictation-live';
 
 function page(html: string) {
@@ -162,3 +162,28 @@ describe('a voice take this page still holds', () => {
   });
 });
 
+
+describe('work only a module holds in memory (holdUnsavedWork)', () => {
+  // 2026-11-22: a quick bar message waiting for Walnut lived only in React state; a page that went
+  // away dropped it unseen. A reload brings it back (sessionStorage), so only `leave` loses it.
+  it('counts for the scope that loses it, while its holder says so, and never after the release', () => {
+    const { document } = page('<div></div>');
+    let waiting = 1;
+    const release = holdUnsavedWork(() => (waiting ? { what: 'A quick bar message that has not gone out', where: 'the quick bar', lostOn: 'leave' } : null));
+    expect(listUnsavedWork(document, null, 'reload')).toEqual([]);
+    const items = listUnsavedWork(document, null, 'leave');
+    expect(items.map((i) => [i.kind, i.what, i.where])).toEqual([['message', 'A quick bar message that has not gone out', 'the quick bar']]);
+    waiting = 0;
+    expect(listUnsavedWork(document, null, 'leave')).toEqual([]);
+    waiting = 1;
+    release();
+    expect(listUnsavedWork(document, null, 'leave')).toEqual([]);
+  });
+
+  it('a holder that cannot answer counts as holding work', () => {
+    const { document } = page('<div></div>');
+    const release = holdUnsavedWork(() => { throw new Error('broken'); });
+    expect(listUnsavedWork(document, null, 'reload')).toHaveLength(1);
+    release();
+  });
+});

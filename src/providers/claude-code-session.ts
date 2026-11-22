@@ -13302,6 +13302,8 @@ export class SessionRunner {
     /** `message` is already attributed (see SessionStartEvent.attributed). */
     attributed?: true
     attributionSource?: string
+    /** The uuid the first message's user line goes out under (task-start.ts firstLineUuid). */
+    firstLineUuid?: string
   }, framedBy?: string): Promise<{ claudeSessionId: string; title: string }> {
     // Text no caller attributed is framed as Walnut's before any engine reads it (sessions/send-frame.ts).
     data = frameStartData(data, framedBy)
@@ -14324,6 +14326,8 @@ export class SessionRunner {
      *  reader configuration where they expect their own request. Absent means
      *  the message IS the words. */
     namingMessage?: string
+    /** The uuid the first message's user line goes out under (the start envelope's `uuid`). */
+    firstLineUuid?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
     const { taskId, project, mode, model } = data
     let cwd = data.cwd
@@ -14622,6 +14626,8 @@ export class SessionRunner {
       ...(data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : {}),
       ...(resolvedProfile ? { profile: resolvedProfile } : {}),
       ...(data.lane ? { lane: data.lane } : {}),
+      // A client's own send id for the first line (never on a fork: its first line is not that send).
+      ...(data.firstLineUuid && !isFork ? { uuid: data.firstLineUuid } : {}),
       // Rewind rides the fork spawn; send() only emits the flag when both are set.
       ...(isFork && data.resumeSessionAtMessageUuid
         ? { resumeSessionAt: data.resumeSessionAtMessageUuid }
