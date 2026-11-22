@@ -31,7 +31,7 @@ afterEach(async () => {
 const settle = () => new Promise((r) => setTimeout(r, 30))
 
 /** Where every target here keeps its spool, and a quick poll of its apply. */
-const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 20 })
+const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 20, applyLateMs: 300 })
 const spoolFiles = () => walkFiles(path.join(sb.root, 'spool'))
 function walkFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return []
@@ -177,29 +177,38 @@ describe('a standby target on another host', () => {
     expect((await standbyStatus(sb.target)).batch).toBe(1)
   })
 
-  it('an apply job that ended without an answer fails the batch, and the target keeps the batch before', async () => {
-    sb = await sandbox('remote-apply-gone')
-    dbs.push(...seedHome(sb.home).dbs)
-    await settle()
-    const l = fakeStandbyHost(sb.root)
-    const t = remote(l)
-    expect((await batch(t)).ok).toBe(true)
-    write(sb.home, 'memory/MEMORY.md', '# second version\n')
-    await settle()
-    // The job starts, then ends at once as a kill there would end it: no status, no answer.
-    l.state.fault = (cmd, params) => {
-      if (cmd !== 'exec.run' || (params.argv as string[])[3] !== 'apply') return undefined
-      l.jobs.set(String(params.jobId), { running: false, exitCode: 137, output: 'Killed' })
-      return { ok: true, jobId: params.jobId, running: true }
-    }
-    const out = await batch(t)
-    expect(out.ok).toBe(false)
-    expect(!out.ok && out.reason).toMatch(/ended without an answer \(exit 137: Killed\)/)
-    expect((await standbyStatus(sb.target)).batch).toBe(1)
-    l.state.fault = null
-    expect((await batch(t)).ok).toBe(true)
-    await expectCopyIsHome()
-  })
+  for (const [how, left, said] of [
+    ['never started (no status at all)', false, /the apply there never started \(no status after \d+ s\)/],
+    ['was killed (its status says running, its process is gone)', true, /the apply there ended without an answer \(its process 2147483646 is gone/],
+  ] as const) {
+    it(`an apply job that ${how} fails the batch, and the target keeps the batch before`, async () => {
+      sb = await sandbox(`remote-apply-gone-${left}`)
+      dbs.push(...seedHome(sb.home).dbs)
+      await settle()
+      const l = fakeStandbyHost(sb.root)
+      const t = remote(l)
+      expect((await batch(t)).ok).toBe(true)
+      write(sb.home, 'memory/MEMORY.md', '# second version\n')
+      await settle()
+      // The daemon takes the job, and nothing of it runs on: as a kill there would leave it.
+      l.state.fault = (cmd, params) => {
+        if (cmd !== 'exec.run' || (params.argv as string[])[3] !== 'apply') return undefined
+        const argv = params.argv as string[]
+        const status = argv[argv.indexOf('--status') + 1]
+        // 2147483646 is past any pid_max: no process has it.
+        if (left) fs.writeFileSync(status, JSON.stringify({ state: 'running', pid: 2147483646, startedAt: new Date().toISOString(), at: new Date().toISOString(), batch: 2 }))
+        return { ok: true, jobId: params.jobId, running: true }
+      }
+      const out = await batch(t)
+      expect(out.ok).toBe(false)
+      expect(!out.ok && out.reason).toMatch(said)
+      expect((await standbyStatus(sb.target)).batch).toBe(1)
+      // The dead apply does not hold the target: the next batch goes through.
+      l.state.fault = null
+      expect((await batch(t)).ok).toBe(true)
+      await expectCopyIsHome()
+    })
+  }
 
   it('while an apply runs there the other ops say the target is busy, and a second leader goes on from the batch it made', async () => {
     sb = await sandbox('remote-busy')

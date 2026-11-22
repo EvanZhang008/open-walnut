@@ -66,14 +66,25 @@ export async function withStatus<T>(file: string, work: (setBatch: (n: number) =
   }
 }
 
-/** A running apply in `incoming` whose process lives (on this machine) and whose heartbeat is fresh, or null. */
+/** Running: its process lives on this machine and its heartbeat is fresh by this machine's clock. */
+function isRunning(s: ApplyStatus | null, now: number): s is Extract<ApplyStatus, { state: 'running' }> {
+  return s?.state === 'running' && now - Date.parse(s.at) < HEARTBEAT_STALE_MS && pidAlive(s.pid)
+}
+
+/** A running apply in `incoming`, or null. */
 export async function runningApply(incoming: string, now = Date.now()): Promise<Extract<ApplyStatus, { state: 'running' }> | null> {
   for (const name of await fs.readdir(incoming).catch(() => [] as string[])) {
     if (!STATUS_FILE.test(name)) continue
     const s = parseStatus(await fs.readFile(path.join(incoming, name), 'utf8').catch(() => ''))
-    if (s?.state === 'running' && now - Date.parse(s.at) < HEARTBEAT_STALE_MS && pidAlive(s.pid)) return s
+    if (isRunning(s, now)) return s
   }
   return null
+}
+
+/** One job's status file, and whether it still runs (`walnut standby receive job`). */
+export async function probeJob(file: string, now = Date.now()): Promise<{ status: ApplyStatus | null; running: boolean }> {
+  const status = parseStatus(await fs.readFile(file, 'utf8').catch(() => ''))
+  return { status, running: isRunning(status, now) }
 }
 
 /** Refuse an op while an apply runs there (it would wait on the target's lock for the whole apply). */

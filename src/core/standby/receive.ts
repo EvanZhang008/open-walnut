@@ -14,6 +14,7 @@
  *             and while it runs the other ops say the target is busy
  *   verify    find, save and repair direct edits of the copy (verify.ts)
  *   reported  mark one drift report as handed to Walnut Health
+ *   job       an apply job's status, and whether its process still lives here (remote-apply.ts)
  *
  * Each op prints one line, RECEIVE_MARK and its JSON answer, and nothing in the answer is the
  * copy's content. It reads and writes only `dir`: never this machine's own Walnut home.
@@ -22,7 +23,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { promisify } from 'node:util'
-import { refuseWhileApplying, withStatus } from './apply-status.js'
+import { probeJob, refuseWhileApplying, withStatus } from './apply-status.js'
 import { CHUNK_ID, sha256 } from './chunks.js'
 import { reportPendingDrift, type DriftReport } from './drift.js'
 import { StandbyTarget, type CommitHooks } from './target.js'
@@ -208,6 +209,10 @@ export interface ReceiveOptions {
 export async function runReceiveOp(op: string, dir: string, o: ReceiveOptions, home?: string): Promise<unknown> {
   await checkTargetPlace(home ?? (await import('../../constants.js')).WALNUT_HOME, dir)
   // An apply running there holds the target's lock for as long as it runs: say so at once.
+  if (op === 'job') {
+    if (!o.status) throw new Error('--status <file> is required')
+    return probeJob(incomingFile(new StandbyTarget(dir).t, o.status))
+  }
   if (op !== 'apply') await refuseWhileApplying(path.join(path.resolve(dir), INCOMING))
   if (op === 'init') {
     return receiveInit(dir, { exportTo: o.export, chunks: o.chunks, files: o.files, haveManifest: o.haveManifest ? JSON.parse(o.haveManifest) as ManifestRef : null })
@@ -221,5 +226,5 @@ export async function runReceiveOp(op: string, dir: string, o: ReceiveOptions, h
     if (!o.at) throw new Error('--at <time> is required')
     return receiveReported(dir, o.at)
   }
-  throw new Error(`unknown receive op ${op} (init, apply, verify, reported)`)
+  throw new Error(`unknown receive op ${op} (init, apply, verify, reported, job)`)
 }

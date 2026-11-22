@@ -33,7 +33,7 @@ import { HOST_EXEC_DETACH_CAPABILITY, workSurvives } from '../hosts/work-survive
 import { statusFileName } from './apply-status.js'
 import { sha256 } from './chunks.js'
 import { INCOMING, RECEIVE_MARK, type ApplyAnswer, type InitAnswer, type ManifestRef, type TargetExport, type VerifyAnswer } from './receive.js'
-import { runApplyJob, type ApplyJobLink } from './remote-apply.js'
+import { runApplyJob, type ApplyJobLink, type JobProbe } from './remote-apply.js'
 import { ChunkSpool } from './remote-spool.js'
 import { chunkIds, type BatchFile, type BatchManifest, type BatchUpload, type CommitResult, type StandbyState, type StandbyTransport } from './types.js'
 
@@ -65,6 +65,8 @@ export interface RemoteTargetOptions {
   statfs?(dir: string): Promise<{ free: number; total: number }>
   /** How often a running apply's status is read (default 2 s, then 5 s). */
   applyPollMs?: number
+  /** How long a running apply may go without a new heartbeat before the host is asked about it (default 20 s). */
+  applyLateMs?: number
   /** Variables for the receive runs there (tests: a kill point). */
   env?: Record<string, string>
 }
@@ -240,6 +242,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
           throw err
         }
       },
+      probe: (file) => this.receiveAgain<JobProbe>('job', ['--status', file]),
       hasCapability: (name) => this.link?.hasCapability?.(name) ?? false,
       detach: async () => workSurvives(await this.conn(), HOST_EXEC_DETACH_CAPABILITY),
     }
@@ -359,7 +362,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
     try {
       this.open()
       answer = await runApplyJob<ApplyAnswer>(this.jobLink(), {
-        jobId, statusFile, pollMs: this.o.applyPollMs,
+        jobId, statusFile, pollMs: this.o.applyPollMs, lateMs: this.o.applyLateMs,
         argv: this.receiveArgv('apply', ['--upload', file, '--verify', '--status', statusFile]),
       })
       this.stats.lastApplyMs = performance.now() - applyStarted

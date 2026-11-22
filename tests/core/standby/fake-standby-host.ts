@@ -1,7 +1,7 @@
 /**
  * A standby host's daemon link, in process (remote-transport tests): fs.writePart is the
  * daemons' own transfer core, fs.readRange reads the file, exec.script runs the receive op as
- * the walnut CLI would, and exec.run (background) / exec.read run it as a job and read the job.
+ * the walnut CLI would, and exec.run (background) runs it as a job.
  * `state.down` takes the link away; `state.fault` answers or drops one command; `log` records
  * each command and its payload bytes; `state.applyPoint` runs at each commit point of an apply
  * job (a gate, a delay); `state.applyRuns` counts the apply jobs that ran.
@@ -71,11 +71,6 @@ export function fakeStandbyHost(root: string) {
       if (argv[3] === 'apply') state.applyRuns++
       void receive(argv).then((r) => { job.output = r.stdout + r.stderr; job.exitCode = r.code; job.running = false })
       return { ok: true, jobId: id, running: true }
-    }
-    if (cmd === 'exec.read') {
-      const j = jobs.get(String(params.jobId))
-      if (!j) return { ok: false, code: 'unknown_job', error: `exec.read failed: no job ${String(params.jobId)} on this host` }
-      return { ok: true, jobId: params.jobId, running: j.running, exitCode: j.exitCode, signal: null, output: j.output }
     }
     return { ok: false, error: `unknown command ${cmd}` }
   }
