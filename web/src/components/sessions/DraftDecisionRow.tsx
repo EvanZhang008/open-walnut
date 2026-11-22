@@ -296,7 +296,7 @@ export function DraftMoreButton({ menu, moreRef, priorityVisible, withProject = 
     <button
       ref={moreRef}
       type="button"
-      className={`btn btn-sm btn-ghost draft-more-btn${active ? ' draft-more-btn-active' : ''}`}
+      className={`btn btn-sm draft-more-btn${active ? ' draft-more-btn-active' : ''}`}
       {...{ [OWNER_ATTR]: menu.ownerId }}
       aria-label="Task settings"
       aria-haspopup="dialog"

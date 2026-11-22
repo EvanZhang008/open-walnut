@@ -3869,7 +3869,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             const chatBarSlot = chatCollapsed && activeView === 'board' ? (
               <button
                 type="button"
-                className="btn btn-sm sfe-btn session-chat-collapse-btn kanban-show-chat"
+                className="btn btn-sm btn-ghost sfe-btn session-chat-collapse-btn kanban-show-chat"
                 data-testid="kanban-show-chat"
                 onClick={revealChatForBoard}
                 title="Show the chat beside the board"
@@ -3878,7 +3878,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             ) : chatCollapsed && activeView === 'changed' && autoCollapsed.current && !phoneBar.phone ? (
               <button
                 type="button"
-                className="btn btn-sm sfe-btn session-chat-collapse-btn session-diff-show-chat"
+                className="btn btn-sm btn-ghost sfe-btn session-chat-collapse-btn session-diff-show-chat"
                 onClick={() => { changedChatRevealed.current = true; collapseChat(false); }}
                 title="Show the chat beside the changes"
                 aria-expanded={false}
