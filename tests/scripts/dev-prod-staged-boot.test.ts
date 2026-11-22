@@ -55,10 +55,16 @@ describe('dev-prod staged boot', () => {
     expect(stageAbort).toBeLessThan(killStep)
   })
 
-  it('old stages are swept only after every prior server is dead', () => {
+  it('old stages are swept only where no process runs from them, and before the stop (2026-11-22)', () => {
+    // Swept after the stop, the delete of the old 2 GB stage held the port dark; before it, the
+    // old server's stage is kept by the liveness guard and goes once the new server serves
+    // (tests/scripts/dev-prod-lkg-stages.test.ts holds the order).
     const sweep = script.indexOf('open-walnut-stage.*')
     const killStep = script.indexOf('kill -15 $existing_pids')
-    expect(sweep).toBeGreaterThan(killStep)
+    expect(sweep).toBeLessThan(killStep)
+    const body = script.slice(script.indexOf('sweep_old_stages() {'), script.indexOf('\n}\n', script.indexOf('sweep_old_stages() {')))
+    expect(body.indexOf('stage_has_live_process')).toBeGreaterThan(-1)
+    expect(body.indexOf('stage_has_live_process')).toBeLessThan(body.indexOf('rm -rf'))
   })
 
   it('judges a zero-output candidate in seconds, not the whole readiness window', () => {

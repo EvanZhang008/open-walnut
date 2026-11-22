@@ -510,6 +510,23 @@ describe('the stage sweep at the end of a deploy', () => {
     expect(calls[0]).toBeLessThan(script.indexOf('rollback_to_lkg() {'))
   })
 
+  it('deletes no stage while :$PORT is dark: the first pass runs before the stop, nothing between the stop and the launch removes a tree', () => {
+    // 2026-11-21: the first pass ran right after the stop, and deleting the old 2 GB stage held the
+    // port dark for 10 to 47 s in 7 of 15 deploys (the stop and the bind took about 4 s together).
+    const calls = [...script.matchAll(/^sweep_old_stages$/gm)].map((m) => m.index!)
+    const stop = script.indexOf('\nSTOP_STARTED=1\n')
+    const launch = script.indexOf('\nlaunch_server "$SERVER_FILE"\n')
+    expect(stop).toBeGreaterThan(-1)
+    expect(launch).toBeGreaterThan(stop)
+    // Before the drain too: a delete after it lets new turns start that the stop then cuts.
+    expect(calls[0]).toBeLessThan(script.indexOf('\ndrain_active_turns\n'))
+    expect(script.indexOf('\ndrain_active_turns\n')).toBeLessThan(stop)
+    expect(calls.filter((c) => c > stop && c < launch)).toEqual([])
+    // Top-level code on that path (function bodies are indented and run elsewhere) removes no tree.
+    const dark = script.slice(stop, launch).split('\n').filter((l) => /^(rm -[a-zA-Z]*[rR]|find\b.*-delete|sweep_)/.test(l))
+    expect(dark).toEqual([])
+  })
+
   it('removes every earlier stage nothing runs from, and keeps the LKG, this deploy\'s stage and one a process runs from', async () => {
     const root = tmp()
     const tag = `t${process.pid}x${Date.now()}`

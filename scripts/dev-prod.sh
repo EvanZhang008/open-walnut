@@ -1574,6 +1574,144 @@ restore_serving_dist() {
   fi
 }
 
+# Stages of earlier deploys go before the drain and the stop, while the old server still serves: the
+# liveness guard below keeps its stage (and any other a process runs from), and the pass after the new
+# server serves removes it. Run after the stop, the delete of a 2 GB stage held :$PORT dark for 10 to
+# 47 s in 7 of 15 deploys on 2026-11-21 (the stop and the new server's bind took about 4 s together);
+# after the drain, it would let new turns start that the stop then cuts. A full temp volume is still
+# found before the kill. Failed deploys leave old stages alone.
+#
+# "Dead" (no process runs from it) is a conclusion drawn from pgrep. On 2026-09-02 that
+# conclusion was wrong and this loop deleted the stage of the LIVE :3456 server:
+# node had cli.js in memory, so the API kept answering while every web asset
+# 404ed (`ENOENT … /dist/web/static/index.html`) for four hours, which reached
+# the user as "the Mac app is laggy". The static root is per-request state, so
+# nothing recovers it — the only fix is to never delete a directory a running
+# process is executing from. Ask the process table directly, per stage.
+# Matched on the stage's BASENAME, never its full path: TMPDIR here ends in a
+# slash, so a server's own command line reads `…/T//open-walnut-stage.X/dist/cli.js`
+# (double slash) and `/private/var/…` vs `/var/…` differ by a symlink too — a
+# full-path substring test looked correct and matched NOTHING, which is how this
+# guard would have failed silently exactly when it was needed. The basename
+# (`open-walnut-stage.<epoch>.<pid>`) is unique per deploy.
+#
+# Fails CLOSED. `pgrep`/`ps` can be missing or unusable (a launchd or `env -i`
+# shell with a minimal PATH), and `|| true` on the probe would then read as "no
+# process is alive" and delete every stage — the guard turning into the bug it
+# exists to prevent. When the process table cannot be READ, keep the directory.
+stage_has_live_process() {
+  local stage="$1" spid cmd base pids
+  base="$(basename "$stage")"
+  if ! command -v pgrep >/dev/null 2>&1 || ! command -v ps >/dev/null 2>&1; then
+    echo "unknown"
+    return 0
+  fi
+  local rc=0
+  pids="$(pgrep -f 'dist/cli\.js|dist-bin/walnut-' 2>/dev/null)" || rc=$?
+  # pgrep exit 1 means "matched nothing", which is a real answer. Anything else
+  # (usage error, no permission, killed) means the probe failed and we know nothing.
+  if (( rc > 1 )); then
+    echo "unknown"
+    return 0
+  fi
+  # A Node server of an older deploy runs <stage>/dist/cli.js; the compiled file's server AND its
+  # local daemon run <stage>/dist-bin/walnut-<target>, and both read the
+  # runtime tree in <stage>/runtime for as long as they live.
+  for spid in $pids; do
+    [[ -n "$spid" ]] || continue
+    cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
+    if [[ "$cmd" == *"$base/dist/cli.js"* || "$cmd" == *"$base/dist-bin/walnut-"* ]]; then
+      echo "$spid"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# stage_has_live_process for one exact directory whose basename is not unique
+# (the LKG: a rehearsal's is named the same). Matched on the full path, in both
+# spellings (/var and /private/var), with runs of slashes squeezed (TMPDIR ends
+# in one). Fails closed like the stage check.
+dir_has_live_process() {
+  local dir phys spid cmd pids rc=0
+  dir="$(printf '%s' "${1%/}" | tr -s /)"
+  phys="$(cd "$1" 2>/dev/null && pwd -P || printf '%s' "$dir")"
+  if ! command -v pgrep >/dev/null 2>&1 || ! command -v ps >/dev/null 2>&1; then
+    echo "unknown"
+    return 0
+  fi
+  pids="$(pgrep -f 'dist/cli\.js|dist-bin/walnut-' 2>/dev/null)" || rc=$?
+  if (( rc > 1 )); then
+    echo "unknown"
+    return 0
+  fi
+  for spid in $pids; do
+    [[ -n "$spid" ]] || continue
+    cmd="$(ps -o command= -p "$spid" 2>/dev/null | tr -s / || true)"
+    if [[ "$cmd" == *"$dir/"* || "$cmd" == *"$phys/"* ]]; then
+      echo "$spid"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Whether a server (`... web`) runs from a stage, as opposed to only its daemon or
+# a session's MCP child. True when the process table cannot be read.
+stage_serves_web() {
+  local base spid cmd pids rc=0
+  base="$(basename "$1")"
+  pids="$(pgrep -f 'dist/cli\.js web|dist-bin/walnut-[a-z0-9-]+ web' 2>/dev/null)" || rc=$?
+  if (( rc > 1 )) || ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  for spid in $pids; do
+    [[ -n "$spid" ]] || continue
+    cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
+    if [[ "$cmd" == *"$base/dist/cli.js web"* || "$cmd" == *"$base/dist-bin/walnut-"*" web"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Removes every stage of an earlier deploy that no process runs from (a server, its local daemon, a
+# session's child). It runs before the launch and again once the new server serves: the local daemon
+# the new server replaces at its start still ran from the old stage the first time, and so did session
+# children that ended since, and without the second pass those stages stayed until the next deploy
+# (2026-11-07: nine stages of 708 MB in one day on the Mac).
+sweep_old_stages() {
+  local old_stage live_pid sibling
+  for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
+    # The LKG lives off the temp dir, but keep it by name too: a rehearsal or a WALNUT_DEVPROD_LKG_DIR
+    # may put it beside the stages.
+    if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" || "${old_stage%/}" == "${LKG_DIR%/}" ]]; then
+      continue
+    fi
+    live_pid="$(stage_has_live_process "$old_stage" || true)"
+    if [[ "$live_pid" == "unknown" ]]; then
+      echo "Keeping stage $old_stage: the process table could not be read, so nothing here is provably dead." >&2
+      continue
+    fi
+    if [[ -n "$live_pid" ]]; then
+      echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
+      # Only a serving server reads its stage's other files (host servers take them
+      # from beside its own file, src/core/host-server/host-file.ts); a stage kept
+      # for a daemon or a session's MCP child needs only this machine's, and the
+      # four Linux files are most of its size.
+      if ! stage_serves_web "$old_stage"; then
+        for sibling in "$old_stage"/dist-bin/walnut-*; do
+          [[ -f "$sibling" && "$sibling" != "$old_stage/dist-bin/walnut-$MACHINE_TARGET" ]] || continue
+          rm -f "$sibling" 2>/dev/null || true
+        done
+      fi
+      continue
+    fi
+    rm -rf "$old_stage" 2>/dev/null || true
+  done
+}
+sweep_old_stages
+
 # LAST thing before the outgoing server is stopped. Deliberately after the build
 # and the smoke boot (those take minutes — draining first would just let new turns
 # start), and before `launchctl remove`, which is itself a kill.
@@ -1813,142 +1951,6 @@ for spid in $stray_pids; do
     kill -9 "$spid" 2>/dev/null || true
   fi
 done
-
-# Every prior server is dead at this point, so no process is serving web assets
-# out of an older stage — safe to reap them all. (Reaping earlier would yank
-# static files out from under the still-running prod server; failed deploys
-# exit before reaching here and leave old stages alone.)
-#
-# "Dead" above is a conclusion drawn from lsof/ss and pgrep. On 2026-09-02 that
-# conclusion was wrong and this loop deleted the stage of the LIVE :3456 server:
-# node had cli.js in memory, so the API kept answering while every web asset
-# 404ed (`ENOENT … /dist/web/static/index.html`) for four hours, which reached
-# the user as "the Mac app is laggy". The static root is per-request state, so
-# nothing recovers it — the only fix is to never delete a directory a running
-# process is executing from. Ask the process table directly, per stage.
-# Matched on the stage's BASENAME, never its full path: TMPDIR here ends in a
-# slash, so a server's own command line reads `…/T//open-walnut-stage.X/dist/cli.js`
-# (double slash) and `/private/var/…` vs `/var/…` differ by a symlink too — a
-# full-path substring test looked correct and matched NOTHING, which is how this
-# guard would have failed silently exactly when it was needed. The basename
-# (`open-walnut-stage.<epoch>.<pid>`) is unique per deploy.
-#
-# Fails CLOSED. `pgrep`/`ps` can be missing or unusable (a launchd or `env -i`
-# shell with a minimal PATH), and `|| true` on the probe would then read as "no
-# process is alive" and delete every stage — the guard turning into the bug it
-# exists to prevent. When the process table cannot be READ, keep the directory.
-stage_has_live_process() {
-  local stage="$1" spid cmd base pids
-  base="$(basename "$stage")"
-  if ! command -v pgrep >/dev/null 2>&1 || ! command -v ps >/dev/null 2>&1; then
-    echo "unknown"
-    return 0
-  fi
-  local rc=0
-  pids="$(pgrep -f 'dist/cli\.js|dist-bin/walnut-' 2>/dev/null)" || rc=$?
-  # pgrep exit 1 means "matched nothing", which is a real answer. Anything else
-  # (usage error, no permission, killed) means the probe failed and we know nothing.
-  if (( rc > 1 )); then
-    echo "unknown"
-    return 0
-  fi
-  # A Node server of an older deploy runs <stage>/dist/cli.js; the compiled file's server AND its
-  # local daemon run <stage>/dist-bin/walnut-<target>, and both read the
-  # runtime tree in <stage>/runtime for as long as they live.
-  for spid in $pids; do
-    [[ -n "$spid" ]] || continue
-    cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
-    if [[ "$cmd" == *"$base/dist/cli.js"* || "$cmd" == *"$base/dist-bin/walnut-"* ]]; then
-      echo "$spid"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# stage_has_live_process for one exact directory whose basename is not unique
-# (the LKG: a rehearsal's is named the same). Matched on the full path, in both
-# spellings (/var and /private/var), with runs of slashes squeezed (TMPDIR ends
-# in one). Fails closed like the stage check.
-dir_has_live_process() {
-  local dir phys spid cmd pids rc=0
-  dir="$(printf '%s' "${1%/}" | tr -s /)"
-  phys="$(cd "$1" 2>/dev/null && pwd -P || printf '%s' "$dir")"
-  if ! command -v pgrep >/dev/null 2>&1 || ! command -v ps >/dev/null 2>&1; then
-    echo "unknown"
-    return 0
-  fi
-  pids="$(pgrep -f 'dist/cli\.js|dist-bin/walnut-' 2>/dev/null)" || rc=$?
-  if (( rc > 1 )); then
-    echo "unknown"
-    return 0
-  fi
-  for spid in $pids; do
-    [[ -n "$spid" ]] || continue
-    cmd="$(ps -o command= -p "$spid" 2>/dev/null | tr -s / || true)"
-    if [[ "$cmd" == *"$dir/"* || "$cmd" == *"$phys/"* ]]; then
-      echo "$spid"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# Whether a server (`... web`) runs from a stage, as opposed to only its daemon or
-# a session's MCP child. True when the process table cannot be read.
-stage_serves_web() {
-  local base spid cmd pids rc=0
-  base="$(basename "$1")"
-  pids="$(pgrep -f 'dist/cli\.js web|dist-bin/walnut-[a-z0-9-]+ web' 2>/dev/null)" || rc=$?
-  if (( rc > 1 )) || ! command -v ps >/dev/null 2>&1; then
-    return 0
-  fi
-  for spid in $pids; do
-    [[ -n "$spid" ]] || continue
-    cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
-    if [[ "$cmd" == *"$base/dist/cli.js web"* || "$cmd" == *"$base/dist-bin/walnut-"*" web"* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-# Removes every stage of an earlier deploy that no process runs from (a server, its local daemon, a
-# session's child). It runs before the launch and again once the new server serves: the local daemon
-# the new server replaces at its start still ran from the old stage the first time, and so did session
-# children that ended since, and without the second pass those stages stayed until the next deploy
-# (2026-11-07: nine stages of 708 MB in one day on the Mac).
-sweep_old_stages() {
-  local old_stage live_pid sibling
-  for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
-    # The LKG lives off the temp dir, but keep it by name too: a rehearsal or a WALNUT_DEVPROD_LKG_DIR
-    # may put it beside the stages.
-    if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" || "${old_stage%/}" == "${LKG_DIR%/}" ]]; then
-      continue
-    fi
-    live_pid="$(stage_has_live_process "$old_stage" || true)"
-    if [[ "$live_pid" == "unknown" ]]; then
-      echo "Keeping stage $old_stage: the process table could not be read, so nothing here is provably dead." >&2
-      continue
-    fi
-    if [[ -n "$live_pid" ]]; then
-      echo "Keeping stage $old_stage: PID $live_pid is still running from it." >&2
-      # Only a serving server reads its stage's other files (host servers take them
-      # from beside its own file, src/core/host-server/host-file.ts); a stage kept
-      # for a daemon or a session's MCP child needs only this machine's, and the
-      # four Linux files are most of its size.
-      if ! stage_serves_web "$old_stage"; then
-        for sibling in "$old_stage"/dist-bin/walnut-*; do
-          [[ -f "$sibling" && "$sibling" != "$old_stage/dist-bin/walnut-$MACHINE_TARGET" ]] || continue
-          rm -f "$sibling" 2>/dev/null || true
-        done
-      fi
-      continue
-    fi
-    rm -rf "$old_stage" 2>/dev/null || true
-  done
-}
-sweep_old_stages
 
 # One launchd job for the given cli.js. launchd gives jobs a minimal PATH
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
