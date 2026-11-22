@@ -5,19 +5,22 @@
  *
  *   the Mac      config `experimental.host_runs_sessions: true` (a config value, not the variable, so a
  *                test can turn it off while the Mac runs), and a probe in its process
- *   the replica  its app's dist/cli.js boots it as `web --replica` with WALNUT_HOST_RUNS_SESSIONS=1
- *                and WALNUT_IN_PROCESS_DAEMON=1, then hands its runner the in-process runtime
- *                (setTestDaemonUrl), the seam tests/e2e/host-runs-sessions-e2e.test.ts uses until
- *                the one-service host does that itself; and a probe in its process
+ *   the host     a launcher's host (replica-cluster.ts hostService) switched to its one Walnut
+ *                service, as `walnut daemon update --serve` switches it: the follower server and the
+ *                daemon runtime in one process, started by the real entry (src/binary/service-entry.ts)
+ *                with the host's switch on (WALNUT_HOST_RUNS_SESSIONS=1). Its session runner reaches
+ *                the runtime through the own-sessions link, the production path; and a probe in its
+ *                process (the module the entry imports once its server answers)
  *
  * The probes only read, but for the Mac's /delete (and the host's door port is the leader door
  * itself, for a send made on the host while the Mac is away).
  *
- * The replica's ACP engines run the scripted adapter (tests/providers/mock-acp-agent.mjs) through an
- * ACP worker built from this checkout (acp-worker-bundle.ts), and Codex runs on its direct
- * app-server path against tests/providers/mock-codex-app-server.mjs (CODEX_PATH): the
- * setTestAcpArtifacts seam, as the server's ACP e2e tests use it. Each listens on 127.0.0.1:0 and names its port in a file of the
- * cluster's own base: `<base>/mh/mac-probe.json`, `<replica data>/cluster-probe.json`.
+ * The host's ACP engines run the scripted adapter (tests/providers/mock-acp-agent.mjs) through an
+ * ACP worker built from this checkout (acp-worker-bundle.ts): the setTestAcpArtifacts seam, as the
+ * server's ACP e2e tests use it (no scripted adapter exists outside a test). Codex runs on its direct
+ * app-server path against tests/providers/mock-codex-app-server.mjs (CODEX_PATH in the launcher's
+ * env, which the runtime reads at its start). Each probe listens on 127.0.0.1:0 and names its port
+ * in a file of the cluster's own base: `<base>/mh/mac-probe.json`, `<replica data>/cluster-probe.json`.
  *
  *   Mac   GET /events?sid=   the bus events of a session this process saw: name, when, source,
  *                            late, and a hash of the data (its data too when small)
@@ -38,7 +41,7 @@
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ROOT, startReplicaCluster, waitFor, type ReplicaCluster, type Twin } from './replica-cluster.js'
+import { ROOT, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
 
 const url = (f: string) => JSON.stringify('file://' + path.join(ROOT, f))
 
@@ -110,60 +113,51 @@ await serveProbe({
 `
 
 /**
- * The replica's dist/cli.js: anything but `web --replica` runs this tree's CLI as before. The
- * replica boots with the switch and the in-process runtime on, then its runtime (its own streams
- * dir, spawn journal and no legacy streams dir: nothing outside its run dir; its sessions kept
- * across a restart, as a production runtime keeps them) and its probe.
+ * What the host's service imports once its server answers (replica-cluster.ts hostService `after`):
+ * the ACP stand-in, a loopback port for the leader door, the bus recorder and the probe.
  */
-export function hostJudgeAppCli(): string {
+export function hostJudgeServiceProbe(): string {
   return `
-const argv = process.argv.slice(2)
-if (!(argv[0] === 'web' && argv.includes('--replica'))) {
-  await import(${url('src/cli.ts')})
-} else {
-  process.env.WALNUT_HOST_RUNS_SESSIONS = '1'
-  process.env.WALNUT_IN_PROCESS_DAEMON = '1'
-  const { runWeb } = await import(${url('src/commands/web.ts')})
-  await runWeb({ replica: true })
-  const rt = process.env.WALNUT_DAEMON_DIR
-  // Codex on its direct app-server path, against the scripted app-server (the runtime's env is read at its start).
-  process.env.WALNUT_CODEX_TRANSPORT = 'app-server'
-  process.env.CODEX_PATH = ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-codex-app-server.mjs'))}
-  process.env.CODEX_HOME = rt + '/codex-home'
-  ;(await import('node:fs')).mkdirSync(process.env.CODEX_HOME, { recursive: true })
-  if (process.env.REPLICA_CLUSTER_LOG_DIR) process.env.MOCK_CODEX_LOG = process.env.REPLICA_CLUSTER_LOG_DIR + '/codex-requests.jsonl'
-  const ipd = await import(${url('src/providers/in-process-daemon.ts')})
-  await ipd.startInProcessDaemon({ dir: rt, env: { ...process.env, WALNUT_STREAMS_DIR: rt + '/streams', WALNUT_LEGACY_STREAMS_DIR: rt + '/no-legacy', WALNUT_SPAWN_JOURNAL: rt + '/spawn-journal.jsonl', WALNUT_DAEMON_KEEP_SESSIONS: '1' } })
-  const { sessionRunner } = await import(${url('src/providers/claude-code-session.ts')})
-  sessionRunner.setTestDaemonUrl(ipd.IN_PROCESS_DAEMON_URL)
-  const { acpWorkerBundle } = await import(${url('tests/helpers/acp-worker-bundle.ts')})
-  sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-acp-agent.mjs'))}] })
-  const { getHostReplicaLeaderDoor } = await import(${url('src/web/server.ts')})
-  const door = getHostReplicaLeaderDoor()
-  const boot = await import(${url('src/core/session-channel/host-boot.ts')})
-  ${RECORDER}
-  const net = await import('node:net')
-  const doorPort = await new Promise((resolve) => {
-    const s = net.createServer((sock) => door && door.accept(sock))
-    s.listen(0, '127.0.0.1', () => resolve(s.address().port))
-    s.unref()
-  })
-  const probeFile = process.env.OPEN_WALNUT_HOME + '/cluster-probe.json'
-  ${SERVE('probeFile')}
-  await serveProbe({
-    '/facts': async (q) => {
-      const h = boot.hostSessionsRunning()
-      if (!h) return { running: false }
-      const recs = await h.log.read(Number(q.get('after') || 0))
-      return { running: true, logId: h.log.logId, head: h.log.head, floor: h.log.floor, acked: h.log.acked, permit: h.log.permit, recs }
-    },
-    '/events': (q) => eventsOf(q.get('sid')),
-    '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
-    '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
-    '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
-  }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
-}
+const { sessionRunner } = await import(${url('src/providers/claude-code-session.ts')})
+const { acpWorkerBundle } = await import(${url('tests/helpers/acp-worker-bundle.ts')})
+sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-acp-agent.mjs'))}] })
+;(await import('node:fs')).mkdirSync(process.env.CODEX_HOME, { recursive: true })
+const { getHostReplicaLeaderDoor } = await import(${url('src/web/server.ts')})
+const door = getHostReplicaLeaderDoor()
+const boot = await import(${url('src/core/session-channel/host-boot.ts')})
+${RECORDER}
+const net = await import('node:net')
+const doorPort = await new Promise((resolve) => {
+  const s = net.createServer((sock) => door && door.accept(sock))
+  s.listen(0, '127.0.0.1', () => resolve(s.address().port))
+  s.unref()
+})
+const probeFile = process.env.OPEN_WALNUT_HOME + '/cluster-probe.json'
+${SERVE('probeFile')}
+await serveProbe({
+  '/facts': async (q) => {
+    const h = boot.hostSessionsRunning()
+    if (!h) return { running: false }
+    const recs = await h.log.read(Number(q.get('after') || 0))
+    return { running: true, logId: h.log.logId, head: h.log.head, floor: h.log.floor, acked: h.log.acked, permit: h.log.permit, recs }
+  },
+  '/events': (q) => eventsOf(q.get('sid')),
+  '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
+  '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
+  '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
+}, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 `
+}
+
+/** The launcher's env for the host: its switch on, and Codex on its direct app-server path against the scripted one. */
+function hostJudgeServiceEnv(d: { hostDaemon: string }): Record<string, string> {
+  return {
+    WALNUT_HOST_RUNS_SESSIONS: '1',
+    WALNUT_CODEX_TRANSPORT: 'app-server',
+    CODEX_PATH: path.join(ROOT, 'tests/providers/mock-codex-app-server.mjs'),
+    CODEX_HOME: path.join(d.hostDaemon, 'codex-home'),
+    ...(process.env.REPLICA_CLUSTER_LOG_DIR ? { MOCK_CODEX_LOG: path.join(process.env.REPLICA_CLUSTER_LOG_DIR, 'codex-requests.jsonl') } : {}),
+  }
 }
 
 /** `at`: the event's timestamp (a late host fact keeps when it happened); `seenAt`: when this process's bus delivered it. */
@@ -202,10 +196,10 @@ export interface HostJudgeCluster {
   stop(): Promise<void>
 }
 
-export async function startHostJudgeCluster(o: { twin: Twin }): Promise<HostJudgeCluster> {
+export async function startHostJudgeCluster(): Promise<HostJudgeCluster> {
   const c = await startReplicaCluster({
-    twin: o.twin,
-    appCli: hostJudgeAppCli(),
+    twin: 'standalone',
+    hostService: { env: hostJudgeServiceEnv, after: hostJudgeServiceProbe() },
     macBootExtra: MAC_PROBE,
     macConfigExtra: ['experimental:', '  host_runs_sessions: true'],
   })

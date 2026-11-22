@@ -1,9 +1,10 @@
 /**
  * A host runs and judges its own sessions, every piece a real process
  * (docs/plan/one-service-every-host.md, phase 2): the cluster of tests/helpers/replica-cluster.ts
- * (a Mac server with its daemon, the host daemon twin, the replica that daemon supervises) with the
- * switch on at both ends (tests/helpers/host-judge-cluster.ts). The CLI is the cluster's mock
- * (tests/helpers/replica-mock-cli.cjs), run on the host by the replica's in-process runtime.
+ * (a Mac server with its daemon; the host under its launcher, switched to its one Walnut service:
+ * the follower server and the daemon runtime in one process, booted by the real service entry)
+ * with the switch on at both ends (tests/helpers/host-judge-cluster.ts). The CLI is the cluster's
+ * mock (tests/helpers/replica-mock-cli.cjs), run on the host by the service's runtime.
  *
  * In order, on one cluster:
  *   S1 start     a start on the Mac for a task on devbox goes to the host's service, which runs
@@ -87,7 +88,7 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
   }
 
   beforeAll(async () => {
-    h = await startHostJudgeCluster({ twin: 'source' })
+    h = await startHostJudgeCluster()
     process.stdout.write(`host-judged-session-cluster-e2e: cluster at ${h.c.base}\n`)
     hostCwd = fs.realpathSync(path.join(h.c.base, 'hh', 'work'))
     token = await h.c.pairDevice('marina-phone')
@@ -132,8 +133,8 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
       return JSON.stringify(tk).includes(sid) && tk.phase !== 'TODO' ? tk : null
     }, 30_000, 'the task to be linked and moved on')
     expect(JSON.stringify(task)).toContain(sid)
-    // Run on the host: its stream is in the replica's runtime, never in the host daemon's dir.
-    expect(hostStream(h.c, sid)).toEqual([])
+    // Run on the host: the host has one runtime, the service's (its daemon dir), and the turn's stream is there.
+    expect(hostStream(h.c, sid).some((l) => l.type === 'result' && String(l.result).includes('echo: ROUND one'))).toBe(true)
     // Parsed on the host only.
     expect((await h.mac(`/parses?sid=${sid}`)).parses).toBe(0)
   }, 300_000)

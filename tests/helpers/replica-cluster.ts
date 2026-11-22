@@ -57,6 +57,16 @@
  *
  * HOST_SID ran one turn on the host: its stream file (HOST_TURN) is seeded in
  * the host daemon's streams dir, where a turn there leaves it.
+ *
+ * `hostService`: the host is a launcher's host (src/binary/service-entry.ts). Its daemon is the
+ * launcher's `--service` entry (tests/providers/fixtures/one-service-runner.ts, what main.ts runs
+ * for it; the standalone twin), and this harness is the launcher: it starts the entry again each
+ * time it ends. The entry runs as the session daemon until a mode file names this Walnut. Once the
+ * Mac's manager set its follower up (the spec the daemon keeps), the harness switches the host as
+ * `walnut daemon update --serve` does: it writes the mode file and ends the daemon; the launcher
+ * starts the entry again, and from then on the host's one Walnut service is the replica, the
+ * follower server and the daemon runtime in one process. The Mac offers that mode for the host
+ * (WALNUT_SERVICE_LAUNCHER, WALNUT_HOST_SERVICE_OFFER), so it asks for no switch back.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -195,7 +205,7 @@ export interface ReplicaCluster {
   browserCode(): Promise<string>
   sleepMac(): SignalWindow
   wakeMac(): SignalWindow
-  /** SIGTERM to the replica; its daemon starts it again (after its 5 s backoff). Resolves with the new pid once it answers. */
+  /** SIGTERM to the replica; its daemon (a launcher's host: its launcher) starts it again. Resolves with the new pid once it answers. */
   restartReplica(timeoutMs?: number): Promise<number>
   asleep(): boolean
   /** `linkProxy` only: close the Mac's link to the host daemon (every connection) and hold its redials silent. */
@@ -267,15 +277,14 @@ export function writeStubBin(bin: string): void {
  * <app>/dist is this tree's real build (a link to ROOT/dist; bun runs it from
  * there, so it finds its own web/static), and the command line still names <app>.
  */
-function writeAppDir(app: string, mode: ClusterApp, cli?: string): void {
+function writeAppDir(app: string, mode: ClusterApp): void {
   if (mode === 'built') {
-    if (cli !== undefined) throw new Error('replica-cluster: appCli replaces the source app\'s dist/cli.js; a built app runs its own')
     fs.mkdirSync(app, { recursive: true })
     fs.symlinkSync(path.join(ROOT, 'dist'), path.join(app, 'dist'))
     return
   }
   fs.mkdirSync(path.join(app, 'dist'), { recursive: true })
-  fs.writeFileSync(path.join(app, 'dist', 'cli.js'), cli ?? [
+  fs.writeFileSync(path.join(app, 'dist', 'cli.js'), [
     `await import(${JSON.stringify('file://' + path.join(ROOT, 'src', 'cli.ts'))})`,
     '',
   ].join('\n'))
@@ -444,6 +453,71 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
   return { proc, pid: proc.pid!, port: Number(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8')) }
 }
 
+/** The launcher's `--service` entry, run from source (main.ts's own dispatch). */
+export const SERVICE_RUNNER = path.join(ROOT, 'tests', 'providers', 'fixtures', 'one-service-runner.ts')
+
+/** What a test adds to the host's launcher-run entry (see the header, `hostService`). */
+export interface HostServiceOptions {
+  /** More of the launcher's env (the daemon's and, in the service, the server's): the host's switches, an engine's stand-in. */
+  env?: (d: { hostDaemon: string }) => Record<string, string>
+  /** A module the service imports once its server answers (one-service-runner.ts WALNUT_TEST_SERVICE_AFTER). */
+  after?: string
+}
+
+/** The host's launcher, as this harness plays it: the entry, started again whenever it ends. */
+export interface HostLauncher {
+  /** The entry running now (the daemon, then the service); its pid file names it once it serves. */
+  readonly proc: ChildProcess
+  /** Waits for an entry other than `not` whose door is up, and returns it. */
+  next(not: ChildProcess | null, timeoutMs: number): Promise<ChildProcess>
+  /** No new start from now on (the cluster stops). */
+  stop(): void
+}
+
+/**
+ * The host's entry under its launcher: `<bun> one-service-runner.ts --service` with the launcher's
+ * env (its daemon dir, its state dir, its marks dir), the same minimal env as startHostDaemon's.
+ * The runtime keeps its sessions when it stops (WALNUT_DAEMON_KEEP_SESSIONS), as the production
+ * dir's do, so a restart and the switch adopt them.
+ */
+async function startHostLauncher(o: { dir: string; state: string; home: string; bin: string; host: HostServiceOptions; afterFile: string | null }): Promise<HostLauncher> {
+  if (!BUN) throw new Error('the host\'s launcher-run entry needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
+  const launcherDir = path.join(o.state, 'launcher')
+  for (const x of [o.dir, path.join(o.state, 'host-server'), launcherDir]) fs.mkdirSync(x, { recursive: true, mode: 0o700 })
+  const env: Record<string, string> = {
+    PATH: `${o.bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: o.home, TMPDIR: os.tmpdir(),
+    ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
+    ...(process.env.BUN_INSTALL ? { BUN_INSTALL: process.env.BUN_INSTALL } : {}),
+    WALNUT_DAEMON_DIR: o.dir, WALNUT_STREAMS_DIR: path.join(o.dir, 'streams'), WALNUT_SPAWN_JOURNAL: path.join(o.dir, 'spawn-journal.jsonl'),
+    WALNUT_LEGACY_STREAMS_DIR: path.join(o.dir, 'no-legacy'), WALNUT_DAEMON_KEEP_SESSIONS: '1',
+    WALNUT_DAEMON_STATE_DIR: o.state, WALNUT_DAEMON_SUPERVISOR: 'launcher', WALNUT_LAUNCHER_DIR: launcherDir,
+    WALNUT_TEST_SERVICE_DAEMON: '1', ...(o.afterFile ? { WALNUT_TEST_SERVICE_AFTER: o.afterFile } : {}),
+    ...windowEnv(), ...(o.host.env?.({ hostDaemon: o.dir }) ?? {}),
+  }
+  let stopped = false
+  let proc: ChildProcess
+  const start = (): ChildProcess => {
+    const child = spawn(BUN!, [SERVICE_RUNNER, '--service'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+    if (process.env.DEBUG_CLUSTER) child.stderr?.on('data', (b) => process.stderr.write(`[host-entry] ${b}`))
+    else child.stderr?.resume()
+    // The launcher starts it again after a second (its backoff for an entry that ended).
+    child.once('exit', () => { if (!stopped) setTimeout(() => { if (!stopped) proc = start() }, 1_000).unref() })
+    return child
+  }
+  proc = start()
+  const up = (child: ChildProcess): boolean => {
+    if (proc !== child || child.exitCode !== null || child.signalCode !== null) return false
+    return readPid(path.join(o.dir, 'daemon.pid')) === child.pid && fs.existsSync(path.join(o.dir, 'daemon.port'))
+  }
+  const launcher: HostLauncher = {
+    get proc() { return proc },
+    next: (not, timeoutMs) => waitFor(() => (proc !== not && up(proc) ? proc : null), timeoutMs, 'the host\'s entry to serve'),
+    stop: () => { stopped = true },
+  }
+  await launcher.next(null, 90_000)
+  return launcher
+}
+
 /**
  * A plugin of the Mac whose jobs run on the host (`plugin_jobs.<id>.run_on`): its files go
  * into the Mac's plugins dir before it boots, its settings into its config, and the Mac runs
@@ -511,8 +585,12 @@ dcm.DaemonConnection.prototype.uploadFile = async function (remotePath, data, op
 }
 
 /** The Mac's boot script: its own data or nothing (REFUSING), the seed, the test transport to the host daemon. */
-export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean; extra?: string }): string {
+export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean; extra?: string; doorPortFile?: string }): string {
   const src = (f: string) => JSON.stringify(path.join(ROOT, f))
+  // A launcher's host changes its door's port at each start (the daemon, then the service): read where it is now, as an ssh dial does.
+  const doorUrl = o.doorPortFile
+    ? `'ws://127.0.0.1:' + String((await import('node:fs')).readFileSync(${JSON.stringify(o.doorPortFile)}, 'utf8')).trim()`
+    : JSON.stringify(`ws://127.0.0.1:${o.daemonPort}`)
   return `
 const c = await import(${src('src/constants.ts')})
 if (c.WALNUT_HOME !== ${JSON.stringify(o.macData)} || c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
@@ -557,8 +635,12 @@ await inbox.sendLetter({ subject: ${JSON.stringify(MAC_LETTER.subject)}, type: '
 // session's host, the server manager) gets it, as an ssh link would be pooled.
 // Otherwise the host status read devbox as unreachable over ssh and the console
 // showed a host problem card.
+let directConn = null
 const direct = async () => {
-  const conn = await dcm.getDirectDaemonConnection(${JSON.stringify(HOST_KEY)}, 'ws://127.0.0.1:${o.daemonPort}')
+  const conn = await dcm.getDirectDaemonConnection(${JSON.stringify(HOST_KEY)}, ${doorUrl})
+  // A door that moved: the link to the old port is let go, as a tunnel to it would close.
+  if (directConn && directConn !== conn) directConn.disconnect()
+  directConn = conn
   dcm.setPooledConnectionForTest(${JSON.stringify(HOST_KEY)}, conn)
   return conn
 }
@@ -619,12 +701,13 @@ async function bootMac(script: string, file: string, env: Record<string, string>
 export type SeedMac = (o: { base: string; macData: string; env: Record<string, string> }) => void | Promise<void>
 
 /**
- * `appCli`: the text of the source app's dist/cli.js in place of the plain import of src/cli.ts
- * (a test's own boot of the replica, e.g. tests/helpers/host-judge-cluster.ts). `macBootExtra`: code
+ * `hostService`: the host runs under its launcher and is switched to its one Walnut service (see
+ * the header); the twin is the standalone one, the only one a service holds. `macBootExtra`: code
  * the Mac's boot script runs after its server started, before it reports its port.
  */
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean; appCli?: string; macBootExtra?: string }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
+  if (opts.hostService && (opts.twin !== 'standalone' || opts.daemonBuilt)) throw new Error('replica-cluster: a host service runs the standalone twin from source')
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
     const missing = builtAppMissing()
@@ -634,7 +717,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rcl-'))
   const d = {
     bin: path.join(base, 'bin'), macHome: path.join(base, 'mh'), macData: path.join(base, 'mh', 'data'), macDaemon: path.join(base, 'md'),
-    hostHome: path.join(base, 'hh'), hostDaemon: path.join(base, 'hd'), hostRoot: path.join(base, 'hr'), app: path.join(base, 'app'),
+    hostHome: path.join(base, 'hh'), hostDaemon: path.join(base, 'hd'), hostState: path.join(base, 'hs'), hostRoot: path.join(base, 'hr'), app: path.join(base, 'app'),
     macCwd: path.join(base, 'mh', 'work'), hostCwd: path.join(base, 'hh', 'work'),
   }
   for (const x of [d.macData, d.macDaemon, d.hostHome, d.hostRoot, d.macCwd, d.hostCwd]) fs.mkdirSync(x, { recursive: true, mode: 0o700 })
@@ -645,7 +728,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const appCli = path.join(d.app, 'dist', 'cli.js')
   const mockCli = path.join(d.bin, MOCK_CLI_NAME)
   writeStubBin(d.bin)
-  writeAppDir(d.app, app, opts.appCli)
+  writeAppDir(d.app, app)
   fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin, opts.macConfigExtra))
   if (opts.plugin) {
     for (const [rel, text] of Object.entries(opts.plugin.files)) {
@@ -661,6 +744,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   let paused = false
   let stopped = false
   let hostDaemon: Awaited<ReturnType<typeof startHostDaemon>> | null = null
+  let launcher: HostLauncher | null = null
+  /** Where the host's daemon keeps the follower specs and pid files: a launcher's host keeps them in its state dir. */
+  const hostServerDir = path.join(opts.hostService ? d.hostState : d.hostDaemon, 'host-server')
+  /** The host's daemon process now (a launcher's host: its entry running now). */
+  const hostProc = (): ChildProcess | null | undefined => launcher?.proc ?? hostDaemon?.proc
   let mac: Awaited<ReturnType<typeof bootMac>> | null = null
   /** The Mac's link to the host daemon, when the test cuts it (`linkProxy`). */
   let link: SilentLinkProxy | null = null
@@ -678,7 +766,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
    */
   const replicaPins = (): Pinned[] => {
     const out = new Map<number, Pinned>()
-    const dir = path.join(d.hostDaemon, 'host-server')
+    const dir = hostServerDir
     let names: string[] = []
     try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.pid')) } catch { /* none yet */ }
     for (const n of names) {
@@ -710,14 +798,17 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
    * signalChild); a SIGKILL only for what outlived its SIGTERM.
    */
   const reap = async (): Promise<void> => {
+    // A launcher's host is not started again from here on.
+    launcher?.stop()
     const replicas = replicaPins()
     for (const p of [macPin, macDaemonPin, ...replicas]) signalPinned(p, 'SIGCONT')
-    signalChild(hostDaemon?.proc, 'SIGCONT')
+    signalChild(hostProc(), 'SIGCONT')
     paused = false
     signalPinned(macPin, 'SIGTERM')
     signalPinned(macDaemonPin, 'SIGTERM')
-    signalChild(hostDaemon?.proc, 'SIGTERM')
-    const frontDone = () => (!macPin || !stillPinned(macPin)) && (!macDaemonPin || !stillPinned(macDaemonPin)) && (!hostDaemon || hostDaemon.proc.exitCode !== null || hostDaemon.proc.signalCode !== null)
+    signalChild(hostProc(), 'SIGTERM')
+    const host = hostProc()
+    const frontDone = () => (!macPin || !stillPinned(macPin)) && (!macDaemonPin || !stillPinned(macDaemonPin)) && (!host || host.exitCode !== null || host.signalCode !== null)
     await waitFor(frontDone, 20_000, 'the Mac and the daemons to stop').catch(() => undefined)
     // The replica, and the mock CLIs (a CLI a daemon started outlives it by design).
     const left = [...new Map([...replicas, ...replicaPins(), ...mockPins()].map((p) => [p.pid, p])).values()]
@@ -725,23 +816,31 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     await waitFor(() => left.every((p) => !stillPinned(p)), 15_000, 'the replica to stop').catch(() => undefined)
     for (const p of [macPin, macDaemonPin, ...left]) signalPinned(p, 'SIGKILL')
     if (mac?.proc) signalChild(mac.proc, 'SIGKILL')
-    if (hostDaemon) signalChild(hostDaemon.proc, 'SIGKILL')
+    signalChild(hostProc(), 'SIGKILL')
     await link?.close().catch(() => undefined)
   }
   // A runner that exits without stop(): nothing it started may stay behind (a
   // stopped Mac would hold a pending SIGTERM forever, a replica would run on).
   const onExit = () => {
+    launcher?.stop()
     const pins = [macPin, macDaemonPin, ...replicaPins()]
     for (const p of pins) signalPinned(p, 'SIGCONT')
     for (const p of pins) signalPinned(p, 'SIGTERM')
     signalChild(mac?.proc, 'SIGTERM')
-    signalChild(hostDaemon?.proc, 'SIGCONT')
-    signalChild(hostDaemon?.proc, 'SIGTERM')
+    signalChild(hostProc(), 'SIGCONT')
+    signalChild(hostProc(), 'SIGTERM')
   }
   process.once('exit', onExit)
 
   try {
-    hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true)
+    if (opts.hostService) {
+      let afterFile: string | null = null
+      if (opts.hostService.after) { afterFile = path.join(base, 'service-after.mts'); fs.writeFileSync(afterFile, opts.hostService.after) }
+      launcher = await startHostLauncher({ dir: d.hostDaemon, state: d.hostState, home: d.hostHome, bin: d.bin, host: opts.hostService, afterFile })
+      hostDaemon = { proc: launcher.proc, pid: launcher.proc.pid!, port: Number(fs.readFileSync(path.join(d.hostDaemon, 'daemon.port'), 'utf8')) }
+    } else {
+      hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true)
+    }
     if (opts.linkProxy) link = await startSilentLinkProxy(hostDaemon.port)
     seedHostStream(path.join(d.hostDaemon, 'streams'))
     seedHostTranscript(d.hostHome, d.hostCwd)
@@ -756,9 +855,11 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       ...(app === 'built' ? { WALNUT_WEB_STATIC_DIR: path.join(ROOT, 'dist', 'web', 'static') } : {}),
       ...windowEnv(), NODE_ENV: 'production',
       ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
+      // The Mac offers the host its one Walnut service (service-launcher-flag.ts), so the service is the mode it wants there.
+      ...(opts.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
-    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra }), macBootFile, macEnv, macLog)
+    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra, ...(launcher ? { doorPortFile: path.join(d.hostDaemon, 'daemon.port') } : {}) }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)
@@ -801,10 +902,30 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     }, 180_000, 'the Mac to set up the replica')
     // Up: it answers on its port (forwarded to the Mac while the Mac answers).
     await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, 240_000, 'the replica to answer')
+    if (launcher) {
+      // The switch, as `walnut daemon update --serve <home>` makes it: the mode file names this
+      // Walnut (the home its follower spec names) and this executable, and the daemon ends; the
+      // launcher starts the entry again, which is now the service, and ends the follower the daemon left.
+      const spec = await waitFor(() => {
+        for (const n of fs.readdirSync(hostServerDir).filter((x) => /^server-[A-Za-z0-9_-]+\.json$/.test(x))) {
+          const saved = JSON.parse(fs.readFileSync(path.join(hostServerDir, n), 'utf8')) as { spec?: { home?: string }; token?: string }
+          if (saved.spec?.home && typeof saved.token === 'string') return saved.spec
+        }
+        return null
+      }, 60_000, 'the follower spec the host keeps')
+      fs.writeFileSync(path.join(d.hostState, 'service-mode.json'), JSON.stringify({ v: 1, home: spec.home, exe: BUN }), { mode: 0o600 })
+      const daemonEntry = launcher.proc
+      signalChild(daemonEntry, 'SIGTERM')
+      const service = await launcher.next(daemonEntry, 180_000)
+      hostDaemon = { proc: service, pid: service.pid!, port: Number(fs.readFileSync(path.join(d.hostDaemon, 'daemon.port'), 'utf8')) }
+      // The replica is the service now: it answers on the same port, from the same spec.
+      await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, 240_000, 'the host\'s service to answer')
+    }
     // The first copy rounds landed (tasks, sessions, boards).
     await waitFor(() => copyState('task-replica.json') && copyState('replica/sessions.json') && copyState('replica/boards.json'), 180_000, 'the first copy rounds')
     // The note's copy on the host (the daemon's), the letter's on the replica.
-    await waitFor(() => treeHolds(path.join(d.hostDaemon, 'host-replica'), MAC_NOTE.text), 180_000, 'the note to reach the host')
+    // A launcher's daemon keeps its copies in its state dir (daemon-standalone.ts, service mode).
+    await waitFor(() => treeHolds(path.join(opts.hostService ? d.hostState : d.hostDaemon, 'host-replica'), MAC_NOTE.text), 180_000, 'the note to reach the host')
     await waitFor(() => treeHolds(path.join(replicaDataNow(), 'human-inbox'), MAC_LETTER.subject), 180_000, 'the letter to reach the replica')
     // The WP5 copies: the routines, the config, and the prefs (the favorites and the theme).
     const holds = (rel: string, ...needles: string[]) => { try { const t = fs.readFileSync(path.join(replicaDataNow(), rel), 'utf8'); return needles.every((x) => t.includes(x)) } catch { return false } }
@@ -884,6 +1005,15 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       return steps
     },
     async restartReplica(timeoutMs = 120_000) {
+      if (launcher) {
+        // The replica is the host's service: it ends, and its launcher starts it again.
+        const before = launcher.proc
+        signalChild(before, 'SIGTERM')
+        await waitFor(() => before.exitCode !== null || before.signalCode !== null, 30_000, 'the host\'s service to stop')
+        const next = await launcher.next(before, timeoutMs)
+        await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, timeoutMs, 'the restarted service to answer')
+        return next.pid!
+      }
       const before = replicaPins()
       if (before.length === 0) throw new Error('replica-cluster: no replica runs to restart')
       for (const p of before) signalPinned(p, 'SIGTERM')
@@ -934,7 +1064,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       process.removeListener('exit', onExit)
       await reap()
       signalChild(mac?.proc, 'SIGTERM')
-      signalChild(hostDaemon?.proc, 'SIGTERM')
+      signalChild(hostProc(), 'SIGTERM')
       // Nothing of this cluster may outlive it (a replica once did).
       const left = await waitFor(() => (running().length === 0 ? true : null), 15_000, 'every process of this cluster to stop').then(() => [], () => running())
       if (!process.env.KEEP_REPLICA_CLUSTER) fs.rmSync(base, { recursive: true, force: true })

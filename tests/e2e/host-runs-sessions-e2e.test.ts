@@ -1,22 +1,23 @@
 /**
  * A host replica runs and judges a session itself (docs/plan/one-service-every-host.md, phase 2;
- * src/core/session-channel/host-boot.ts): a real child process boots `walnut web --replica` with
- * the switch on (WALNUT_HOST_RUNS_SESSIONS=1) and the session runtime in its own process
- * (WALNUT_IN_PROCESS_DAEMON=1), a session is started through its leader door's
+ * src/core/session-channel/host-boot.ts): a real child process is the host's one Walnut service,
+ * started as the launcher starts it (`--service` with a mode file naming this executable and the
+ * follower spec a daemon kept: src/binary/service-entry.ts, through the test's runner of that entry,
+ * tests/providers/fixtures/one-service-runner.ts), with the switch on (WALNUT_HOST_RUNS_SESSIONS=1).
+ * Its session runner reaches the runtime in its own process through the own-sessions link
+ * (daemon-connection.ts assertLocalDialAllowed). A session is started through its leader door's
  * `/host-api/sessions/start`, and a reader on `/host-api/session-channel` (standing in for the
  * leader) gets that session's records in order: its row born as this host's (`judge: 'host'`),
  * then its facts, each with its sequence number. The reader parses no CLI line: it gets bus
  * events, never the session's output.
  *
  * The test stands in for the follower link only (sockets of one loopback port go to the leader
- * door, as the link does with the streams the daemon relays from the Mac) and for the runtime
- * hand-over the one-service host does itself: the boot script starts the in-process runtime and
- * gives the runner its address (setTestDaemonUrl). The CLI is a shell script answering every
- * stdin user line with one assistant line and one result line.
+ * door, as the link does with the streams the daemon relays from the Mac). The CLI is a shell
+ * script answering every stdin user line with one assistant line and one result line.
  *
- * Isolation: one temp base for HOME, data dir, run dir and host daemon dir; PATH leads with the
- * fake `claude`, then the test run's exec guard (guardedPath, childExecGuardEnv), then the system
- * dirs. The child is stopped by the pid this test spawned.
+ * Isolation: one temp base for HOME, data dir, run dir, the runtime's daemon and state dirs;
+ * PATH leads with the fake `claude`, then the test run's exec guard (guardedPath,
+ * childExecGuardEnv), then the system dirs. The child is stopped by the pid this test spawned.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -71,19 +72,15 @@ const FAKE_CLI = [
   '',
 ].join('\n')
 
-const BOOT = (data: string) => `
+const RUNNER = path.join(REPO_ROOT, 'tests/providers/fixtures/one-service-runner.ts')
+
+/** What the service imports once its server answers (WALNUT_TEST_SERVICE_AFTER): checks, and the door on a loopback port. */
+const AFTER = (data: string) => `
 const c = await import(${JSON.stringify(path.join(SRC, 'constants.ts'))})
 if (c.WALNUT_HOME !== ${JSON.stringify(data)}) { process.stderr.write('REFUSING: wrong data dir ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
-const { runWeb } = await import(${JSON.stringify(path.join(SRC, 'commands/web.ts'))})
-await runWeb({ replica: true, dev: true, port: process.env.WALNUT_HOST_SERVER_PORT })
 const { getHostReplicaLeaderDoor } = await import(${JSON.stringify(path.join(SRC, 'web/server.ts'))})
 const door = getHostReplicaLeaderDoor()
 if (!door) { process.stderr.write('NO DOOR\\n'); process.exit(4) }
-// The one-service host's runtime hand-over, until it does it itself: the runtime in this process.
-const ipd = await import(${JSON.stringify(path.join(SRC, 'providers/in-process-daemon.ts'))})
-await ipd.startInProcessDaemon({ dir: process.env.WALNUT_DAEMON_DIR, env: { ...process.env } })
-const { sessionRunner } = await import(${JSON.stringify(path.join(SRC, 'providers/claude-code-session.ts'))})
-sessionRunner.setTestDaemonUrl(ipd.IN_PROCESS_DAEMON_URL)
 const boot = await import(${JSON.stringify(path.join(SRC, 'core/session-channel/host-boot.ts'))})
 if (!boot.hostSessionsRunning()) { process.stderr.write('NO HOST SESSIONS\\n'); process.exit(5) }
 const net = await import('node:net')
@@ -93,26 +90,40 @@ s.listen(0, '127.0.0.1', () => process.stdout.write('DOOR_PORT=' + s.address().p
 
 beforeAll(async () => {
   base = await fsp.mkdtemp(path.join(os.tmpdir(), 'host-runs-sessions-'))
-  const d = { home: path.join(base, 'home'), data: path.join(base, 'home', '.open-walnut-host', 'data'), run: path.join(base, 'home', '.open-walnut-host', 'run'), hostd: path.join(base, 'hostd') }
+  const d = {
+    home: path.join(base, 'home'), data: path.join(base, 'home', '.open-walnut-host', 'data'), run: path.join(base, 'home', '.open-walnut-host', 'run'),
+    // The runtime's own dirs, as the launcher names them: its daemon dir, its state dir (the install root) and the launcher's marks.
+    hostd: path.join(base, 'hostd'), state: path.join(base, 'state'), launcher: path.join(base, 'state', 'launcher'),
+  }
   const fakeBin = path.join(base, 'fakebin')
-  for (const x of [d.data, d.run, d.hostd, fakeBin, work()]) await fsp.mkdir(x, { recursive: true, mode: 0o700 })
+  for (const x of [d.data, d.run, d.hostd, path.join(d.state, 'host-server'), d.launcher, fakeBin, work()]) await fsp.mkdir(x, { recursive: true, mode: 0o700 })
   await fsp.writeFile(path.join(fakeBin, 'claude'), FAKE_CLI, { mode: 0o755 })
-  const script = path.join(base, 'boot.mts')
-  await fsp.writeFile(script, BOOT(d.data))
+  const after = path.join(base, 'after.mts')
+  await fsp.writeFile(after, AFTER(d.data))
   const port = await freePort()
+  const leaderHome = '/Users/marina/.open-walnut'
+  // The follower spec a daemon keeps for this Walnut (host-server-core.ts), and the mode file
+  // `walnut daemon update --serve` writes: the service runs this Walnut's follower from them.
+  const spec = {
+    v: 1, home: leaderHome, walnutId: WALNUT_ID, command: process.execPath, args: [], cwd: d.data, log: path.join(base, 'follower.log'), port, settings: {},
+    env: {
+      OPEN_WALNUT_HOME: d.data, WALNUT_DAEMON_DIR: d.run, WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(port),
+      WALNUT_LEADER_HOME: leaderHome, WALNUT_WALNUT_ID: WALNUT_ID, WALNUT_HOST_LABEL: HOST_KEY, WALNUT_HOST_KEY: HOST_KEY,
+      WALNUT_NO_AUTO_UPDATE: '1', WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', NODE_ENV: 'production',
+    },
+  }
+  await fsp.writeFile(path.join(d.state, 'host-server', 'server-00112233aabbccdd.json'), JSON.stringify({ spec, token: crypto.randomBytes(32).toString('hex') }), { mode: 0o600 })
+  await fsp.writeFile(path.join(d.state, 'service-mode.json'), JSON.stringify({ v: 1, home: leaderHome, exe: process.execPath }), { mode: 0o600 })
+  // The launcher's env for `--service`: the host's switch on, and the runtime's own files in the base.
   const env: NodeJS.ProcessEnv = {
     PATH: guardedPath([fakeBin], [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(path.delimiter)),
     HOME: d.home, USERPROFILE: d.home, SHELL: '/bin/sh', TMPDIR: os.tmpdir(),
     ...childExecGuardEnv(),
-    WALNUT_HOST_DAEMON_DIR: d.hostd,
-    OPEN_WALNUT_HOME: d.data, WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(port),
-    WALNUT_LEADER_HOME: '/Users/marina/.open-walnut', WALNUT_WALNUT_ID: WALNUT_ID, WALNUT_HOST_LABEL: HOST_KEY, WALNUT_HOST_KEY: HOST_KEY,
-    WALNUT_NO_AUTO_UPDATE: '1', WALNUT_FOLLOWER_TOKEN: 'follower-token-e2e',
-    WALNUT_DAEMON_DIR: d.run, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host',
-    WALNUT_HOST_RUNS_SESSIONS: '1', WALNUT_IN_PROCESS_DAEMON: '1',
-    NODE_ENV: 'production',
+    WALNUT_DAEMON_DIR: d.hostd, WALNUT_DAEMON_STATE_DIR: d.state, WALNUT_DAEMON_SUPERVISOR: 'launcher', WALNUT_LAUNCHER_DIR: d.launcher,
+    WALNUT_STREAMS_DIR: path.join(d.hostd, 'streams'), WALNUT_LEGACY_STREAMS_DIR: path.join(d.hostd, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(d.hostd, 'spawn-journal.jsonl'),
+    WALNUT_HOST_RUNS_SESSIONS: '1', WALNUT_TEST_SERVICE_AFTER: after,
   }
-  child = spawn(process.execPath, [script], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  child = spawn(process.execPath, [RUNNER, '--service'], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   child.stderr!.on('data', (x: Buffer) => { stderr = (stderr + x.toString()).slice(-200_000) })
   if (process.env.DEBUG_LIVE) child.stderr!.on('data', (x: Buffer) => process.stderr.write(x))
   doorPort = await new Promise<number>((resolve, reject) => {

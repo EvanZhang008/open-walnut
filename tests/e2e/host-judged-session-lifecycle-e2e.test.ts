@@ -3,7 +3,7 @@
  * (docs/plan/one-service-every-host.md, phase 2): the cluster of tests/helpers/host-judge-cluster.ts
  * with the switch on at both ends. The CLI is the cluster's mock; ACP engines run the scripted ACP
  * adapter through a worker built from this checkout, and Codex its direct app-server path against
- * the scripted app-server (both on the host, through the replica's in-process runtime).
+ * the scripted app-server (both on the host, through the runtime of the host's one Walnut service).
  *
  * In order, on one cluster:
  *   L1 legacy    a session started with the switch off stays the leader's after it goes on: its
@@ -66,7 +66,7 @@ describe.skipIf(!RUN)('a host-run session\'s whole life, every piece a real proc
   }
 
   beforeAll(async () => {
-    h = await startHostJudgeCluster({ twin: 'source' })
+    h = await startHostJudgeCluster()
     process.stdout.write(`host-judged-session-lifecycle-e2e: cluster at ${h.c.base}\n`)
     hostCwd = fs.realpathSync(path.join(h.c.base, 'hh', 'work'))
     await waitFor(linked, 120_000, 'the Mac to link the host\'s session channel')
