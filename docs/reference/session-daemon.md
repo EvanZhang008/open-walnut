@@ -526,7 +526,13 @@ one process). A switch whose update ran is recorded per host and build
 its swap, is not asked again with that build, across leader restarts; a try the host held, deferred
 or refused as busy is asked again. A host replica never holds a `__local__` DaemonConnection
 (`assertLocalDialAllowed` in daemon-connection.ts): in the service that would be a full-trust
-client of the runtime with no owner scope, so its reads of its own host stay on the seat.
+client of the runtime with no owner scope, so its reads of its own host stay on the seat. The one
+exception is the own-sessions link: while a service runs and judges its own sessions
+(`src/core/session-channel/host-boot.ts`, behind the host-runs-sessions switch), its session runner
+reaches the runtime in its own process, at the in-process address only. That link does no leader
+work: its hello names no Walnut, and no command in `LEADER_ONLY_COMMANDS` (leader.configure, the
+host copy, triggers, hooks, bridge, skills, servers, jobs, secrets, the network, task-dir sweeps)
+leaves it (`tests/providers/replica-own-sessions-link.test.ts`).
 
 **Offering chosen hosts only: `host_service_offer`.** A leader config item (not an experiment),
 `host_service_offer: [<host key>, ...]`, the keys of `hosts`, set with `PUT /api/config`. A host in

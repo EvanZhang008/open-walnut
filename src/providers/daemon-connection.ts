@@ -147,7 +147,7 @@ import { DRAIN_SWAP_WINDOW_MS, daemonSwapExpected, resendThroughSwap, waitHostLi
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
 import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
-import { isHostReplica, isHostReplicaProgram } from '../core/server-role.js'
+import { isHostReplica, isHostReplicaProgram, serviceRuntime } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
@@ -186,10 +186,11 @@ const SERVER_RUN_ID = crypto.randomUUID()
  * marks read-only, so a relayed read cut off by this server's restart may go to
  * the next run (gateway-core.ts helloReadOps). A plugin's op says itself whether
  * it is read-only, so it is not listed; a read-only mount of a remote (a test
- * server) lists none, since it answers no relay. No list before the registry loads.
+ * server) lists none, since it answers no relay, and neither does a host replica's own-sessions
+ * link, which never binds (`bindsNone` for both). No list before the registry loads.
  */
-export function serverHello(readOnlyRemote: boolean): Record<string, unknown> {
-  if (readOnlyRemote) return { run: SERVER_RUN_ID }
+export function serverHello(bindsNone: boolean): Record<string, unknown> {
+  if (bindsNone) return { run: SERVER_RUN_ID }
   const readOps = opNames({ readonly: true }).filter((name) => getOpOwner(name) === 'core')
   // `binds`: this server names its Walnut on this host (leader.configure) after the hello, so
   // until it does the daemon gives none of another Walnut's calls to it (gateway-identity-core.ts).
@@ -199,6 +200,22 @@ export function serverHello(readOnlyRemote: boolean): Record<string, unknown> {
  *  the rest over fresh connections (deployDaemon). */
 const SOURCE_DEPLOY_ATTEMPTS = 3
 const SOURCE_DEPLOY_RETRY_MS = 2_000
+
+/**
+ * What a leader's link tells a host about its Walnut, or pushes into it, or sweeps on it (its
+ * copies, triggers, hooks, bridge, skills, servers, jobs, secrets, settings, network, task dirs,
+ * leadership): never sent on a host replica's own-sessions link (DaemonConnection ownSessionsOnly),
+ * whose server is not the Walnut those name. Every such push in src/ is listed, but for the two
+ * settings the sessions the link starts run under (`workspace.configure` before a workspace
+ * command, `turns.configure`), keyed by the home those sessions are started with
+ * (tests/providers/replica-own-sessions-link.test.ts).
+ */
+export const LEADER_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+  'leader.configure', 'leader.claim', 'host.slice', 'triggers.configure', 'triggers.claim', 'hooks.configure', 'bridge.configure',
+  'skills.sync', 'server.configure', 'jobs.configure', 'net.configure',
+  'replica.put', 'replica.sync', 'replica.drop', 'attachments.put', 'attachments.sync', 'attachments.drop',
+  'secrets.put', 'secrets.remove', 'taskdir.remove',
+])
 
 // ── Types ──
 
@@ -1432,6 +1449,22 @@ export class DaemonConnection {
     return IS_EPHEMERAL && this.hostKey !== '__local__' && this.isolation.mode !== 'isolated'
   }
 
+  /**
+   * A host replica's own-sessions link (assertLocalDialAllowed): the one '__local__' connection a
+   * replica may hold, its session runner's, to the runtime in its own process. It runs this host's
+   * sessions and nothing else: it names no Walnut on the runtime (no leader.configure, no binding
+   * hello), and pushes no host copy, trigger, hook, skill or bridge, as a leader's link does on
+   * every connect. Guard: tests/providers/replica-own-sessions-link.test.ts.
+   */
+  private get ownSessionsOnly(): boolean {
+    return this.hostKey === '__local__' && isHostReplica()
+  }
+
+  /** This link pushes none of a leader's state: a test server's read-only view, or a replica's own-sessions link. */
+  private get pushesNoLeaderState(): boolean {
+    return this.isReadOnlyRemote || this.ownSessionsOnly
+  }
+
   /** This connection runs the Demo's own isolated daemon on its host (remote-isolation.ts), never a shared one. */
   get demoLifted(): boolean { return IS_DEMO && this.isolation.mode === 'isolated' }
 
@@ -1937,7 +1970,7 @@ export class DaemonConnection {
    * take phone traffic meant for the real Walnut.
    */
   pushBridgeConfig(): void {
-    if (IS_EPHEMERAL) return
+    if (IS_EPHEMERAL || this.ownSessionsOnly) return
     // In-flight guard: a slow configure RPC + the 5-min re-push tick must not
     // stack overlapping pushes against the same daemon. One asked for meanwhile
     // runs after it, since the one out may have read the config before it changed.
@@ -2018,7 +2051,7 @@ export class DaemonConnection {
    * favorites, ordering — and each would otherwise cost an RPC per host).
    */
   pushDaemonHooks(): void {
-    if (this.isReadOnlyRemote) return
+    if (this.pushesNoLeaderState) return
     if (this._capabilities && !this.hasCapability('hooks-v1')) return
     if (this.hooksPushInFlight) { this.hooksPushRerun = true; return }
     this.hooksPushInFlight = true
@@ -2070,7 +2103,7 @@ export class DaemonConnection {
   private skillSyncInFlight = false
 
   pushSkillSync(): void {
-    if (this.isReadOnlyRemote) return
+    if (this.pushesNoLeaderState) return
     if (this._capabilities && !this.hasCapability('skill-sync-v2')) return
     if (this.skillSyncInFlight) return
     this.skillSyncInFlight = true
@@ -2156,7 +2189,7 @@ export class DaemonConnection {
    * Never rejects.
    */
   pushTriggersNow(): Promise<void> {
-    if (this.isReadOnlyRemote) return Promise.resolve()
+    if (this.pushesNoLeaderState) return Promise.resolve()
     if (this._capabilities && !this.hasCapability('triggers-v1')) return Promise.resolve()
     if (this.triggersPushInFlight && this.triggersPushDone) { this.triggersPushRerun = true; return this.triggersPushDone }
     this.triggersPushInFlight = true
@@ -2372,7 +2405,7 @@ export class DaemonConnection {
    * per push was a round trip per change to every host.
    */
   pushHostSlice(): void {
-    if (this.isReadOnlyRemote) return
+    if (this.pushesNoLeaderState) return
     // Only on a daemon that said it has it (hello runs before any push): a copy
     // pushed to anything else is a command it answers "unknown".
     if (!this.hasCapability('offline-host-v1')) return
@@ -2537,7 +2570,7 @@ export class DaemonConnection {
    */
   private declareHomeMoveFirst(): Promise<void> | null {
     // Nothing to declare (known after the process's first connect), or a link that describes no Walnut.
-    if (settledHomeMove() === null || this.isReadOnlyRemote || !this.hasCapability('leader-epoch-v1')) return null
+    if (settledHomeMove() === null || this.pushesNoLeaderState || !this.hasCapability('leader-epoch-v1')) return null
     const gate: Promise<void> = import('../core/leader/primary-leader.js')
       .then((m) => m.declareHomeMove(this.leaderLink()))
       .catch((err: unknown) => {
@@ -2558,7 +2591,7 @@ export class DaemonConnection {
 
   private async configureLeaderOnce(): Promise<boolean> {
     if (this.leaderConfigured) return true
-    if (!this.hasCapability('leader-epoch-v1')) return false
+    if (this.ownSessionsOnly || !this.hasCapability('leader-epoch-v1')) return false
     const { configureHostLeader } = await import('../core/leader/primary-leader.js')
     if (await configureHostLeader(this.leaderLink())) {
       this.leaderConfigured = true
@@ -2631,7 +2664,7 @@ export class DaemonConnection {
    * Mac's own daemon shares the vault's disk, and nothing there reads a copy.
    */
   pushHostReplica(): void {
-    if (this.isReadOnlyRemote || !this._connected || !this.hasCapability('host-replica-v1')) return
+    if (this.pushesNoLeaderState || !this._connected || !this.hasCapability('host-replica-v1')) return
     const attachments = this.hostKey !== '__local__' && this.hasCapability('attachment-copy-v1')
     // 'host-replica-moves-v1': the copy takes the files that moved as moves (core/replication/manifest-moves.ts).
     const moves = this.hasCapability('host-replica-moves-v1')
@@ -2653,7 +2686,7 @@ export class DaemonConnection {
    */
   private startBridgeRepush(): void {
     if (this.bridgeRepushTimer) clearInterval(this.bridgeRepushTimer)
-    if (this.isReadOnlyRemote) return
+    if (this.pushesNoLeaderState) return
     this.bridgeRepushTimer = setInterval(() => {
       if (this._destroyed || !this._connected) return
       this.pushBridgeConfig()
@@ -2957,6 +2990,9 @@ export class DaemonConnection {
     params: Record<string, unknown> = {},
     timeoutMs: number = DaemonConnection.COMMAND_TIMEOUT_MS,
   ): Promise<DaemonCommandResult> {
+    // A replica's own-sessions link does no leader work (ownSessionsOnly): a leader's command on it
+    // is refused before it leaves, whichever path asked for it.
+    if (this.ownSessionsOnly && LEADER_ONLY_COMMANDS.has(cmd)) throw new Error(`${cmd}: a host replica's own-sessions link sends no leader command`)
     // The connect's declared home move goes first: the host then keys what follows by the Walnut's first home.
     if (this.homeMoveGate && cmd !== 'leader.configure' && cmd !== 'ping') await this.homeMoveGate
     const traced = typeof params.traceId === 'string' && params.traceId ? params : { ...params, traceId: crypto.randomBytes(4).toString('hex') }
@@ -6066,7 +6102,7 @@ export class DaemonConnection {
     this._helloConfirmed = false
     try {
       const helloAt = Date.now()
-      const res = await this._sendHandshake('hello', serverHello(this.isReadOnlyRemote))
+      const res = await this._sendHandshake('hello', serverHello(this.isReadOnlyRemote || this.ownSessionsOnly))
       this.recordRoundTrip(Date.now() - helloAt)
       if (!res.ok) {
         log.session.warn('DaemonConnection: hello returned !ok', {
@@ -8001,10 +8037,10 @@ export class DaemonConnection {
       describeRefusal?: (status: number, refusal: string | undefined, body: string) => string
     } = {},
   ): Promise<void> {
-    // Every socket of a connection opens here: a host replica's '__local__' one never does (assertLocalDialAllowed).
-    try { assertLocalDialAllowed(this.hostKey) } catch (err) { return Promise.reject(err) }
+    const url = typeof urlOrPort === 'string' ? urlOrPort : `ws://127.0.0.1:${urlOrPort}`
+    // Every socket of a connection opens here: a host replica's '__local__' one only as its own-sessions link (assertLocalDialAllowed).
+    try { assertLocalDialAllowed(this.hostKey, url) } catch (err) { return Promise.reject(err) }
     return new Promise((resolve, reject) => {
-      const url = typeof urlOrPort === 'string' ? urlOrPort : `ws://127.0.0.1:${urlOrPort}`
       this._lastWsUrl = url
       this._lastWsHeaders = opts.headers ?? null
       const timeoutMs = opts.timeoutMs ?? 10_000
@@ -8580,7 +8616,7 @@ export class DaemonConnection {
           reject(new Error('bulk hello timeout'))
         }, 10_000)
         this.pendingCommands.set(id, { resolve, reject, timer, cmd: 'hello', socket: ws })
-        ws.send(JSON.stringify({ id, cmd: 'hello', ...serverHello(this.isReadOnlyRemote) }))
+        ws.send(JSON.stringify({ id, cmd: 'hello', ...serverHello(this.isReadOnlyRemote || this.ownSessionsOnly) }))
       })
       hello.then((res) => {
         if (!isCurrent()) { try { ws.terminate() } catch {}; return }
@@ -10641,7 +10677,7 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
  * at the call site (remote-session-manager.ts).
  */
 export async function getDirectDaemonConnection(hostKey: string, wsUrl: string): Promise<DaemonConnection> {
-  assertLocalDialAllowed(hostKey)
+  assertLocalDialAllowed(hostKey, wsUrl)
   const poolKey = `direct:${wsUrl}`
   const existing = connectionPool.get(poolKey)
   if (existing?.connected) return existing
@@ -10680,10 +10716,24 @@ export async function getDirectDaemonConnection(hostKey: string, wsUrl: string):
  * local reconnect all go through it), so no caller of getLocalDaemonConnection, and no new path to
  * a '__local__' socket, reaches the runtime from a replica.
  * Guard: tests/providers/replica-no-local-connection.test.ts (a3b land 2 review H1).
+ *
+ * One exception, the own-sessions link: a host's one Walnut service that runs and judges its own
+ * sessions (core/session-channel/host-boot.ts opens it while they run) gives its session runner a
+ * '__local__' connection to the runtime in its own process, and only there (`url` the in-process
+ * address). That connection does none of a leader's work (ownSessionsOnly below): it never names
+ * a Walnut on the runtime, pushes no copy, trigger, hook or bridge, and takes no gateway call.
  */
-export function assertLocalDialAllowed(hostKey: string): void {
-  if (hostKey === '__local__' && isHostReplica()) throw markLinkFailure(new NeedsLeaderError('no_local_daemon_in_replica'), 'no-link')
+export function assertLocalDialAllowed(hostKey: string, url?: string): void {
+  if (hostKey !== '__local__' || !isHostReplica()) return
+  if (url === IN_PROCESS_DAEMON_URL && ownSessionsLinkOpen()) return
+  throw markLinkFailure(new NeedsLeaderError('no_local_daemon_in_replica'), 'no-link')
 }
+
+let ownSessionsLink = false
+/** host-boot.ts: this host's own sessions run here now (true) or no longer (false). */
+export function setOwnSessionsLink(open: boolean): void { ownSessionsLink = open }
+/** The own-sessions link may open: a host's one Walnut service (its runtime in this process) that runs its own sessions. */
+export function ownSessionsLinkOpen(): boolean { return ownSessionsLink && isHostReplica() && serviceRuntime() !== null }
 
 /**
  * A connection that never came up failed to connect: its host's link was down from the moment

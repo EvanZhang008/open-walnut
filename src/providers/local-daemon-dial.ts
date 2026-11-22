@@ -15,15 +15,18 @@
 import { log } from '../logging/index.js'
 import { role } from '../core/server-role.js'
 import { assertLocalDialAllowed, getDirectDaemonConnection, type DaemonConnection } from './daemon-connection.js'
+import { IN_PROCESS_DAEMON_URL } from './in-process-daemon-socket.js'
 
 const refused = (err: unknown): boolean => /ECONNREFUSED/.test(err instanceof Error ? err.message : String(err))
 
 /** Runs `dial` with the local daemon's current address; once more after a refusal. */
 export async function dialLocalDaemon<T>(dial: (wsUrl: string) => Promise<T>): Promise<T> {
   // A host replica, the host's one Walnut service included, dials no local daemon (and starts none
-  // for a caller): refused before ensureRunning (daemon-connection.ts assertLocalDialAllowed). A
-  // leader is never one, so its dial asks nothing more than its role: the path keeps its timing.
-  if (role() !== 'leader') assertLocalDialAllowed('__local__')
+  // for a caller): refused before ensureRunning (daemon-connection.ts assertLocalDialAllowed), but
+  // for the service's own-sessions link, which reaches only the runtime in its own process (the
+  // dial below checks the address again). A leader is never one, so its dial asks nothing more
+  // than its role: the path keeps its timing.
+  if (role() !== 'leader') assertLocalDialAllowed('__local__', IN_PROCESS_DAEMON_URL)
   const { localDaemon } = await import('./local-daemon.js')
   // A daemon starting again (another caller found the old one gone) has its address once up.
   await localDaemon.starting?.catch(() => {})

@@ -12,10 +12,11 @@
  *   the routes      on the leader door (host-routes.ts), and SESSION_JUDGE_CAP in the report the
  *                   leader reads of this host's service (replica/front.ts status)
  *
- * "Can run sessions": the host service holds the session runtime itself (server-role.ts
- * hasLocalDaemon, true once the one-service host keeps the in-process runtime), or this process
- * was started with the runtime in process (WALNUT_IN_PROCESS_DAEMON=1): the seam a test harness
- * uses until then, giving the runner its daemon itself.
+ * "Can run sessions": this is a host's one Walnut service (src/binary/service-entry.ts), which holds
+ * the host's session runtime in its own process (server-role.ts hasLocalDaemon). While its sessions
+ * run here, its session runner reaches that runtime through the own-sessions link (daemon-connection.ts
+ * assertLocalDialAllowed), the one '__local__' connection a replica may hold; a plain host server
+ * (a daemon program beside it) runs none and the leader runs this host's sessions as before.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -70,8 +71,8 @@ export function hostRanSessions(walnutId: string, stateDir: string = WALNUT_HOME
 }
 
 /** Can this host replica run sessions itself (see the header)? */
-export function hostCanRunSessions(env: NodeJS.ProcessEnv = process.env): boolean {
-  return isHostReplica() && (hasLocalDaemon() || env.WALNUT_IN_PROCESS_DAEMON === '1')
+export function hostCanRunSessions(): boolean {
+  return isHostReplica() && hasLocalDaemon()
 }
 
 export interface StartHostSessionsOptions {
@@ -172,6 +173,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log: say,
   })
   current = { log, gone, channel, emitter, routes, bundles, resend }
+  // The session runner may reach the runtime in this process from now on (the own-sessions link).
+  ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
   return current
 }
@@ -180,6 +183,7 @@ export async function stopHostSessions(): Promise<void> {
   const c = current
   current = null
   if (!c) return
+  ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
   c.emitter.stop()
   c.resend.stop()
   c.routes.close()
