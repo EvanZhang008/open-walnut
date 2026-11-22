@@ -221,7 +221,7 @@ describe('the emitter', () => {
     await make({ own: [row(OWN)] })
     emitter.noteDrop(['sid-never-here'])
     emitter.noteDrop([OWN, 'sid-never-here'], { answer: true })
-    await sleep(250)
+    // A drop is appended at once: records() flushes it.
     expect((await records()).map((r) => [r.sid, r.name])).toEqual([[OWN, 'drop'], ['sid-never-here', 'drop']])
     expect(emitter.owns(OWN)).toBe(false)
   })

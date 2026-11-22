@@ -23,7 +23,7 @@ import path from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
 import { StreamLane, _setLaneForwardForTesting, laneUploadSummary } from '../../src/providers/stream-lane.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
-import { PACED_STREAM_PURPOSES } from '../../src/providers/ssh-upload-budget.js'
+import { IMMEDIATE_STREAM_PURPOSES, PACED_STREAM_PURPOSES } from '../../src/providers/ssh-upload-budget.js'
 import { resetUploadPacesForTest, uploadPaceFor } from '../../src/providers/upload-pace.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
@@ -249,8 +249,8 @@ describe('DaemonConnection.openStream keeps a background stream off the session 
 })
 
 describe('every stream purpose is classified', () => {
-  // A person's purposes: a browser's page or a door it reaches; they go at once.
-  const PERSON = new Set(['web'])
+  // The purposes that go at once (ssh-upload-budget.ts IMMEDIATE_STREAM_PURPOSES).
+  const PERSON = IMMEDIATE_STREAM_PURPOSES
   it('each openStream purpose in src/ is background (paced) or a person\'s', () => {
     const root = path.resolve(__dirname, '../../src')
     const found = new Set<string>()

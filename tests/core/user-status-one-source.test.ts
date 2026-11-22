@@ -27,7 +27,6 @@ import { deriveUserStatuses, settleUserStatusSync, startUserStatusSync, stopUser
 import { _resetServerRoleForTesting } from '../../src/core/server-role.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 beforeEach(async () => {
   stopUserStatusSync()
@@ -84,8 +83,7 @@ describe('the late lane', () => {
     // session:started is a fast-lane event (sessionMovesNow): derived in a few ms when fresh.
     bus.emit(EventNames.SESSION_STARTED, { sessionId: 'sess-fresh', taskId: fresh }, ['web-ui'], { source: 'host-channel' })
     for (let i = 0; i < 3; i++) bus.emit(EventNames.SESSION_STARTED, { sessionId: 'sess-late', taskId: late }, ['web-ui'], { source: 'host-channel', late: true })
-    await sleep(800)
-    expect((await getTask(fresh)).user_status?.state).toBe('needs')
+    await vi.waitFor(async () => expect((await getTask(fresh)).user_status?.state).toBe('needs'), { timeout: 3_000 })
     // The late ones gather (late-gather.ts), then take the ordinary lane: not derived yet.
     expect((await getTask(late)).user_status?.state).toBe(before)
     await settleUserStatusSync()

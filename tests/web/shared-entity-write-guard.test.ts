@@ -267,7 +267,8 @@ describe('a hand\'s change is derived on the fast lane', () => {
   })
 
   it('a session event that moves its task now is marked on the fast lane', () => {
-    expect(sync).toMatch(/const lane = sessionMovesNow\(event\.name, d\) \? markNow : mark;\s+if \(d\.taskId\) lane\(d\.taskId\); else markSession\(d\.sessionId, lane\)/)
+    // A late host fact (read back after the leader was away) takes the late gather instead (session-channel/late-gather.ts).
+    expect(sync).toMatch(/const lane = event\.late \? markLate : sessionMovesNow\(event\.name, d\) \? markNow : mark;\s+if \(d\.taskId\) lane\(d\.taskId\); else markSession\(d\.sessionId, lane\)/)
   })
 
   it('the fast lane does not wait the debounce', () => {
