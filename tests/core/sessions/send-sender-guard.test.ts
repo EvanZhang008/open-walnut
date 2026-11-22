@@ -127,6 +127,7 @@ const CALL_SITES: Record<string, number> = {
   // A topic's wake: a `topic` envelope (source topic), an agent's row, never the user's own.
   'src/core/topics/topic-delivery.ts': 1,
   'src/core/transfer/transfer.ts': 1,
+  'src/core/usage-watch/runtime.ts': 1,              // a real-use alarm's note to the task that shipped the change (walnut message, source health-alarm)
   'src/core/workspaces/manager.ts': 3,              // workspace launch and its folder fallback keep the start's original source
   // an ACP session's first line (framed by its start); a textless kick for rows a late init put back;
   // a refused start's first line kept for Retry (Claude Code not installed), as its start framed it

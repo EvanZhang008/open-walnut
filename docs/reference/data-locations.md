@@ -203,6 +203,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/focus-active.json` | machine | no | The focus space the person is in now, and until when |
 | `~/.open-walnut/local/stt-learned-corrections.json` | leader-data | no | Voice input corrections learned from sends |
 | `~/.open-walnut/local/page-visits.json` | leader-data | no | When the user last opened each page |
+| `~/.open-walnut/local/usage-watch.sqlite` | leader-data | no | Real use on this server: hourly counts of tool calls, requests and page errors, the watches of shipped changes and the notes sent (names, sizes, times and codes only) |
 | `~/.open-walnut/local/preview-storage/` | leader-data | no | Saved state of rich previews |
 | `~/.open-walnut/local/quiet-held-push.json` | leader-data | no | Phone pushes held during quiet hours |
 | `~/.open-walnut/local/machine-id` | machine | no | This machine's id for daemon updates |

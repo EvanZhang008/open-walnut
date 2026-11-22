@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import { setUsageWatchFile, readHours, readEvents, closeUsageWatchStore, markAlive } from '../../../src/core/usage-watch/store.js'
 import { usageReport } from '../../../src/core/usage-watch/report.js'
@@ -81,7 +81,8 @@ describe('what is kept', () => {
     try {
       const port = (server.address() as { port: number }).port
       for (const u of ['/api/v1/tasks/c17c6e79-7681-5286-a134-23cacdb988eb', '/api/plugins/acme-sync/items/mwr1najx-c816', '/api/nothing']) await fetch(`http://127.0.0.1:${port}${u}`)
-      await new Promise((r) => setTimeout(r, 50))
+      // `finish` can come just after the client has its answer: wait for the three, not a clock.
+      await vi.waitFor(() => expect(seen).toHaveLength(3))
     } finally { await new Promise((r) => server.close(r)) }
     expect(seen).toEqual(['/api/v1/tasks/:id', '/api/plugins/acme-sync/items/:id', 'unmatched'])
   })
@@ -304,10 +305,12 @@ describe('where an alarm goes', () => {
     const { deps, sent, clock } = fakeDeps({ tasks: { vp: { title: 'Walnut VP' } } })
     // The delivery waits: the minute tick and the Health route reach the same row meanwhile.
     let release!: () => void
+    let entered!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    const slow = { ...deps, deliver: async (...a: Parameters<typeof deps.deliver>) => { await gate; return deps.deliver(...a) } }
+    const inDeliver = new Promise<void>((r) => { entered = r })
+    const slow = { ...deps, deliver: async (...a: Parameters<typeof deps.deliver>) => { entered(); await gate; return deps.deliver(...a) } }
     const first = routeUsageAlarm(cutAlarm(), slow)
-    await new Promise((r) => setTimeout(r, 10))
+    await inDeliver
     await sendDueNotes(slow)
     const during = await routeUsageAlarm({ ...cutAlarm(clock.now), alarmId: 'usage.errors{op=y}', name: 'y', title: 'A tool keeps failing' }, slow)
     expect(during).toMatchObject({ handled: true, delivered: false })

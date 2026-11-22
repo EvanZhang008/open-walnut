@@ -88,6 +88,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   mach('local.focus-active', 'local/focus-active.json', 'file', 'The focus space the person is in now, and until when'),
   lead('local.stt-learned', 'local/stt-learned-corrections.json', 'file', 'Voice input corrections learned from sends'),
   lead('local.page-visits', 'local/page-visits.json', 'file', 'When the user last opened each page'),
+  lead('local.usage-watch', 'local/usage-watch.sqlite', 'sqlite', 'Real use on this server: hourly counts of tool calls, requests and page errors, the watches of shipped changes and the notes sent (names, sizes, times and codes only)'),
   lead('local.preview-storage', 'local/preview-storage', 'dir', 'Saved state of rich previews'),
   lead('local.quiet-held-push', 'local/quiet-held-push.json', 'file', 'Phone pushes held during quiet hours'),
   mach('local.machine-id', 'local/machine-id', 'file', 'This machine\'s id for daemon updates'),
