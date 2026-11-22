@@ -131,9 +131,10 @@ const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   // STOP_SCRIPT's `kill -TERM -"$pgid"` (then -KILL) on a detached run a newer Walnut here listed, only while
   // `ps -o lstart` shows the pid still started when the listed one did (a reused pid is left alone)
   'src/providers/detached-registry.ts': 1,
-  // Names the session member `kill` a leader may call on a session its host runs; the host's
-  // session ends its CLI through its own process manager, as on the leader today
-  'src/core/session-channel/host-calls.ts': 1,
+  // Names the member `kill` a leader may call on a session its host runs, once for a native session
+  // and once for an ACP one; the host's session ends its CLI through its own process manager, as on
+  // the leader today
+  'src/core/session-channel/host-calls.ts': 2,
   // The leader's stand-in for a session its host runs forwards the member `kill` to that host by name
   // (the call host-calls.ts allows); the host's session ends its own CLI there, so nothing signals here
   'src/providers/remote-judged-session.ts': 1,

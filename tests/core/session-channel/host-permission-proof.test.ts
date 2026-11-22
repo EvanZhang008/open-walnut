@@ -98,7 +98,8 @@ describe('an ACP session\'s prompt through the call route', () => {
 describe('the kernel\'s word on a local caller stays where it is read', () => {
   it('the daemon reads the gateway socket\'s peer for an approval, and the host\'s call entry still sends one there', () => {
     expect([...CALLER_PROOF_OPS].sort()).toEqual(['approval_consume', 'approval_request'])
-    expect(src('src/providers/daemon-standalone.ts')).toContain('gatewayCallerProof(socketPeerPid(fd), callerSid, openedAt)')
+    // The peer of the socket the line came on, read while the caller still holds it.
+    expect(src('src/providers/daemon-standalone.ts')).toMatch(/gatewayCallerProof\(socketPeerPid\([\w?.]*fd\), callerSid, /)
     const entry = src('src/replica/host-call-entry.ts')
     expect(entry).toMatch(/if \(wantsCallerProof\(parsed\.request\.op, parsed\.request\.args\)\) \{\s*return unavailable\(res, 503, 'caller_proof_on_socket'/)
   })
