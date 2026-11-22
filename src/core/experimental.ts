@@ -1,4 +1,8 @@
-/** Browser-safe registry. An experiment changes no default until it graduates. */
+/**
+ * Browser-safe registry. An experiment changes no default until it graduates. One that graduates
+ * by its default (`default: true`) keeps its switch, so a person can still turn it off; a stored
+ * choice (true or false) always wins, and an older release reads the unset switch as off.
+ */
 export const EXPERIMENTAL_FEATURES = [
   {
     id: 'leader_status_follows_workers',
@@ -88,7 +92,7 @@ export const EXPERIMENTAL_FEATURES = [
     id: 'follower_on_every_host',
     name: 'Walnut on every host',
     description: 'Every host you connect runs its own copy of Walnut, which keeps working there while this computer is away, unless you turn it off for that host. Walnut skips a host without enough memory or disk, or one its program cannot run on, and says why in that host\'s settings.',
-    default: false,
+    default: true,
   },
   {
     id: 'host_call_entry',

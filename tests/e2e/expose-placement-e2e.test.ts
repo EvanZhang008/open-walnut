@@ -75,6 +75,9 @@ beforeAll(async () => {
   pidFile = path.join(WALNUT_HOME, 'fake-tunnel.pid')
   await fs.writeFile(fakeTunnel, FAKE_TUNNEL)
   await updateConfig({
+    // The follower-on-every-host default (on) turned off: this file is about the tunnel turning a
+    // host's opt-in switch on (host-servers-default-e2e.test.ts covers the default).
+    experimental: { follower_on_every_host: false },
     hosts: {
       // Its server already on.
       devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone', server: { enabled: true } },

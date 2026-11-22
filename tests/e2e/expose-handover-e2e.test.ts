@@ -312,7 +312,12 @@ beforeAll(async () => {
   hostPublicPort = (hostPublic.address() as net.AddressInfo).port
   process.env.WALNUT_HOST_SERVER_APP_DIR = '/work/walnut-tree'
   // No server set up there yet: following the provider turns one on.
-  await updateConfig({ hosts: { devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone' } } as never })
+  // The follower-on-every-host default (on) turned off: this file is about the tunnel turning the
+  // host's opt-in switch on (host-servers-default-e2e.test.ts covers the default).
+  await updateConfig({
+    experimental: { follower_on_every_host: false },
+    hosts: { devbox: { label: 'Dev box', hostname: 'always-on-devbox.invalid', user: 'someone' } } as never,
+  })
   await boot()
 }, 60_000)
 

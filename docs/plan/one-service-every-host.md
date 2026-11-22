@@ -331,15 +331,18 @@ permission prompts still name Walnut.
 - **A call handed over after a wait is never answered "may have run".** The daemon sends how long it will
   wait; when that is too short for the op (a start needs ten seconds), the follower refuses before anything
   runs and the caller retries.
-- **Every host gets a follower by default, once the experiment is switched on** (`follower_on_every_host` in
-  `src/core/experimental.ts`, off by default; `src/core/host-server/follower-default.ts`). With it on, a host
-  Walnut manages (in config.yaml, not turned off as a host, not the cloud box, not a found host waiting for
-  a yes) runs one unless the person turned its switch off. The switch (`hosts.<key>.server.enabled`) is
-  written only when the person flips it, so a stored `false` is theirs and stays off across upgrades; a host
-  with nothing stored follows the experiment, and nothing is written for it. With it off, the switch is
-  opt-in as before: nothing new is installed, probed or reported. After an upgrade with the experiment on, a
-  host gets its follower on its next connect; an older release reads the same file and reads an unset switch
-  as off.
+- **Every host gets a follower by default** (`follower_on_every_host` in `src/core/experimental.ts`, on by
+  default since 2026-11-22, its switch kept so a person can turn it off; `src/core/host-server/follower-default.ts`).
+  With it on, a host Walnut manages (in config.yaml, not turned off as a host, not the cloud box, not a found
+  host waiting for a yes) runs one unless the person turned its switch off. The switch
+  (`hosts.<key>.server.enabled`) is written only when the person flips it, so a stored `false` is theirs and
+  stays off across upgrades; a host with nothing stored follows the experiment, and nothing is written for it.
+  The experiment's own switch works the same way: a stored `false` (Settings, Experimental) keeps it off
+  across the change of default, and then the host switch is opt-in as before: nothing new is installed,
+  probed or reported. After an upgrade, a user who never set it gets a follower on each eligible host at its
+  next connect (the gates below, one host at a time, a failure to Walnut Health); an older release reads the
+  same file, reads the unset experiment and an unset host switch as off, and stops the followers it did not
+  ask for.
 - **Conditions decide, never a host name** (`src/core/host-server/eligibility.ts`). Before the first follower
   of this Walnut on a host that is on only by default (not one the person turned on, nor the one carrying
   this Walnut's tunnel), one probe over its link reads its platform, its memory and its disk. No build that
@@ -434,7 +437,7 @@ answer.
 
 | # | Phase | Done when | Where it stands (2026-11-21) |
 |---|---|---|---|
-| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing | Built behind experiments (`follower_on_every_host`, `host_call_entry`), proven on two real machines with the leader away twice: no call fell back to the daemon's offline code and everything arrived once. The follower now answers a send that asks for a reply, `agent_memory_write`, `human_inbox_send`, the trigger ops and the delivery of a fire; new sessions call their host's own door (a 0600 unix socket and a per-session token). Open: the default is still off, `trigger_update` with the leader away, a real disconnect in the middle of a hand-off, and a caller identity the daemon takes from the session's own word. |
+| 1 | **A host's own calls are answered by its service.** The follower answers a session's and a plugin job's calls while the leader is away, with the real task logic and the journal; the daemon only passes the call on. Then every host gets a follower by default. | with the Mac's service stopped, a plugin job on a host creates a task, starts a session and tags it; after the Mac returns the board shows them once, and a second drain changes nothing | Built behind experiments (`follower_on_every_host`, `host_call_entry`), proven on two real machines with the leader away twice: no call fell back to the daemon's offline code and everything arrived once. The follower now answers a send that asks for a reply, `agent_memory_write`, `human_inbox_send`, the trigger ops and the delivery of a fire; new sessions call their host's own door (a 0600 unix socket and a per-session token). On by default since 2026-11-22 (`follower_on_every_host`). Open: `trigger_update` with the leader away, a real disconnect in the middle of a hand-off, and a caller identity the daemon takes from the session's own word. |
 | 2 | **Between machines, service to service.** The leader asks a host's service to start, stop and message its sessions; a session is run and judged by its host's service; local callers use the API on a local door, whatever the leader's state. | the leader sends no command to another machine's process manager; the Mac's main thread parses no line of a session on another host | Not built. The cut is scouted: the session class moves to the host, the session's rows belong to its host, and a live channel with a sequence and an acknowledgement per session carries them to the leader. |
 | 3 | **The boot start keeps the service**, on hosts and on the Mac; one version per host. | a service ended by hand is back within seconds with its agents; a build that cannot stay up is rolled back without a person; the Mac's Walnut is back after a reboot | Partly built, behind experiments. `walnut serve` exists and can run the process manager as modules in its own process (`in_process_daemon`): no daemon program, direct calls, each line parsed once, running sessions picked up when the mode changes either way. Work on a host outlives a restart (`work_survives_restart`). A launcher keeps a host's daemon up, tries a new version and puts the last good one back (`service_launcher`), proven under systemd, cron and launchd. Open: on a host the launcher still keeps a daemon that keeps the follower (not one service yet), the in-process mode has no WebSocket door for other machines, the Mac's production does not run it, and the Mac's Walnut does not come back after a reboot. |
 | 4 | **Clean up inside.** Delete the source twin, the daemon's own offline answers and its small copy, and the checks for a daemon older than its server; move process manager modules into the service where it pays. | no task logic outside the service; one copy of the daemon's code | Not built. |

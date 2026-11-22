@@ -1,6 +1,7 @@
 /**
- * GET /api/host-servers with the experiment follower_on_every_host on (src/core/experimental.ts,
- * src/core/host-server/follower-default.ts), on a real server: `settings.enabled` reads true
+ * GET /api/host-servers with the experiment follower_on_every_host never set, so at its registry
+ * default, on (src/core/experimental.ts, src/core/host-server/follower-default.ts): what a user who
+ * upgrades without touching it gets, on a real server: `settings.enabled` reads true
  * for a host the person never set, `settings.chosenBy` says whose the value is, the person's
  * off is stored as theirs and stays off, the experiment off turns every unset host off,
  * and the shape older clients read (`view.phase`, `knownAs`, `settings.carriesTunnel`) keeps
@@ -41,9 +42,8 @@ beforeAll(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as net.AddressInfo).port
-  // The experiment on, in this test run's own config (its own WALNUT_HOME).
+  // The experiment never set (its default is on), in this test run's own config (its own WALNUT_HOME).
   await updateConfig({
-    experimental: { follower_on_every_host: true },
     hosts: {
       // Never set: on by default.
       devbox: { hostname: 'devbox.invalid', label: 'Dev box' },
@@ -81,6 +81,7 @@ describe('a host\'s follower, on by default', () => {
     }
     // Nothing is written for the default: the stored rows are as the person left them.
     const stored = (await getConfig()).hosts!
+    expect((await getConfig()).experimental?.follower_on_every_host).toBeUndefined()
     expect(stored.devbox!.server).toBeUndefined()
     expect(stored.quietbox!.server).toEqual({ enabled: false })
   })
@@ -100,7 +101,7 @@ describe('a host\'s follower, on by default', () => {
     expect(((await on.json()) as { host: Entry }).host.settings).toMatchObject({ enabled: true, chosenBy: 'user' })
   })
 
-  it('the experiment off turns every host never set off, and keeps the person\'s own on', async () => {
+  it('the experiment turned off (a stored false) turns every host never set off, and keeps the person\'s own on', async () => {
     await updateConfig({ experimental: { follower_on_every_host: false } })
     // A new host, never set.
     const hosts = { ...(await getConfig()).hosts, newbox: { hostname: 'newbox.invalid' } }

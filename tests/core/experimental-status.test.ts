@@ -22,10 +22,12 @@ function facts(tasks: Task[], enabled: boolean): StatusFacts {
 }
 
 describe('experimental choices', () => {
-  it('every registered experiment starts off and only a boolean overrides it', () => {
+  it('every registered experiment starts as its registry default and only a boolean overrides it', () => {
+    // An experiment that graduated by its default keeps its switch: a stored false still turns it off.
+    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id)).toEqual(['follower_on_every_host']);
     for (const feature of EXPERIMENTAL_FEATURES) {
-      expect(feature.default).toBe(false);
-      expect(experimentalEnabled(undefined, feature.id)).toBe(false);
+      expect(experimentalEnabled(undefined, feature.id)).toBe(feature.default);
+      expect(experimentalEnabled({}, feature.id)).toBe(feature.default);
       expect(experimentalEnabled({ [feature.id]: true }, feature.id)).toBe(true);
       expect(experimentalEnabled({ [feature.id]: false }, feature.id)).toBe(false);
     }
@@ -64,7 +66,7 @@ describe('experimental choices', () => {
     expect(out.chat_reading_split).toBe(false);
     for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(out[feature.id]).toBe(!keepsOwnSwitch(feature.id));
     const none = effectiveExperimentalFlags(undefined);
-    for (const feature of EXPERIMENTAL_FEATURES) expect(none[feature.id]).toBe(false);
+    for (const feature of EXPERIMENTAL_FEATURES) expect(none[feature.id]).toBe(feature.default);
     for (const id of GRADUATED_EXPERIMENTS) expect(none[id]).toBe(true);
   });
 });

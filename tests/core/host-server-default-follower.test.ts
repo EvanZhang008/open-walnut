@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostServerManager } from '../../src/core/host-server/manager.js'
-import { followerChosenBy, followerOnByDefault } from '../../src/core/host-server/follower-default.js'
+import { followerChosenBy, followerOnByDefault, followerOnEveryHost } from '../../src/core/host-server/follower-default.js'
 import { FOLLOWER_FLOORS, judgeFollowerRoom, parseHostRoom, roomProbeScript } from '../../src/core/host-server/eligibility.js'
 import { hostServerSettingsFrom, withThisWalnutTunnel } from '../../src/core/host-server/index.js'
 import { NoHostFile } from '../../src/core/host-server/host-file.js'
@@ -43,10 +43,19 @@ describe('follower by default: what the stored switch means', () => {
     expect(followerChosenBy({ enabled: true })).toBe('user')
   })
 
-  it('the experiment off (its default) keeps the switch opt-in, in one place', () => {
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, {})).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { follower_on_every_host: false } })).toBe(false)
-    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { other_flag: true } })).toBe(false)
+  it('the experiment is on by default: a config that never set it runs a follower on a managed host', () => {
+    expect(followerOnEveryHost({})).toBe(true)
+    expect(followerOnEveryHost({ experimental: {} })).toBe(true)
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, {})).toBe(true)
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { other_flag: true } })).toBe(true)
+  })
+
+  it('the experiment turned off (a stored false) keeps the switch opt-in, in one place', () => {
+    const off = { experimental: { follower_on_every_host: false } }
+    expect(followerOnEveryHost(off)).toBe(false)
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, off)).toBe(false)
+    // "Every experiment on" cannot override the person's own false either.
+    expect(followerOnByDefault({ hostname: 'devbox.example.test' }, { experimental: { every_experiment: true, follower_on_every_host: false } })).toBe(false)
     expect(hostServerSettingsFrom(undefined, undefined, false).enabled).toBe(false)
   })
 

@@ -157,11 +157,12 @@ The security rules every capability keeps:
   (`BRIDGE_ALLOWED_COMMANDS`), never its full command set; a capability that needs more adds the one
   command to that list on purpose, with a test.
 
-## Every host runs a follower server by default (experiment)
+## Every host runs a follower server by default
 
 The leader runs a follower Walnut server (`walnut web --replica`) on a host through that host's daemon
 (`src/core/host-server/`). The host's switch (`hosts.<key>.server.enabled`) turns it on. With the experiment
-`follower_on_every_host` on (`src/core/experimental.ts`, Settings, Experimental; off by default), it is on by
+`follower_on_every_host` on (`src/core/experimental.ts`, Settings, Experimental; on by default since
+2026-11-22, a stored `false` keeps it off, and an older release reads it unset as off), it is on by
 default on each host the leader manages, and the switch is the opt-out (`follower-default.ts`). With the
 experiment off, nothing below the first rule applies: the switch is opt-in, nothing is probed, a failed start
 waits for Retry, and nothing goes to Walnut Health (a Health item raised before is still cleared). Turning

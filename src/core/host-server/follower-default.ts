@@ -1,8 +1,8 @@
 /**
  * With the experiment `follower_on_every_host` on (src/core/experimental.ts), every host Walnut
  * manages runs a follower Walnut server, unless the person turned it off for that host
- * (docs/plan/one-service-every-host.md, "Phase 1 as built"). With it off, the switch is opt-in, as
- * it always was.
+ * (docs/plan/one-service-every-host.md, "Phase 1 as built"). The experiment is on by default; with it
+ * turned off (a stored false), the switch is opt-in, as it always was.
  *
  * The switch is `hosts.<key>.server.enabled`. Walnut writes it only when the person flips it
  * (PUT /api/host-servers/:hostKey; the config write keeps it as it is), so a stored value is the
