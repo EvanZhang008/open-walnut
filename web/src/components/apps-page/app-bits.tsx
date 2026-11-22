@@ -18,13 +18,15 @@ import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
  * unnamed on/off of the same thing (UI audit, 2026-11-22).
  */
 export function SidebarSwitch({ name, shown, onChange, testId, labelled = false }: { name: string; shown: boolean; onChange: (next: boolean) => void; testId: string; labelled?: boolean }) {
-  const toggle = <ToggleSwitch checked={shown} onChange={onChange} aria-label={`Show ${name} on the sidebar`} data-testid={testId} />
-  if (!labelled) return toggle
   return (
-    <span className="apps-card-switch" title={`Show ${name} on the sidebar`}>
-      <span className="apps-card-switch-label" aria-hidden="true">Sidebar</span>
-      {toggle}
-    </span>
+    <ToggleSwitch
+      checked={shown}
+      onChange={onChange}
+      aria-label={`Show ${name} on the sidebar`}
+      title={labelled ? `Show ${name} on the sidebar` : undefined}
+      label={labelled ? 'Sidebar' : undefined}
+      data-testid={testId}
+    />
   )
 }
 

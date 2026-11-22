@@ -464,6 +464,18 @@
 }
 
 /* ── Switch: on or off, takes effect at once. 38x22, or 28x16 in a menu or a dense row. ── */
+/* A switch with its name in words beside it (ToggleSwitch `label`): a footer where the status next
+   to it speaks of something else, as an Apps card's "Sidebar" beside its plugin's On. */
+.toggle-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.toggle-switch-label > .toggle-text {
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+}
 .toggle-switch.settings-switch {
   position: relative;
   box-sizing: border-box;
