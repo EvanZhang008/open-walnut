@@ -11,6 +11,8 @@ import { useSyncExternalStore } from 'react'
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '@/api/client'
 import { wsClient } from '@/api/ws'
 import { testRunLabel } from '@/api/test-run'
+import { fetchConfig, fetchFreshConfig } from '@/api/config'
+import { experimentalEnabled, type ExperimentalFlags } from '@open-walnut/core'
 import { log } from '@/utils/log'
 import type { ActiveFocus, FocusAppMode, FocusBy, FocusScope, FocusSpace } from '@open-walnut/focus-scope'
 
@@ -53,9 +55,26 @@ function live(active: ActiveFocus | null | undefined): ActiveFocus | null {
   return active && (active.until === undefined || active.until > Date.now()) ? active : null
 }
 
-/** Read the server's state; the newest read wins. A 404 (experiment off) reads as none. */
-export async function loadFocus(): Promise<void> {
+const NONE: Omit<FocusSnapshot, 'loaded'> = { spaces: [], active: null, apps: [] }
+
+/** Whether the experiment is on, by the page's config (null: unknown, so ask the route). */
+async function experimentOn(fresh: boolean): Promise<boolean | null> {
+  try {
+    const cfg = await (fresh ? fetchFreshConfig() : fetchConfig())
+    return experimentalEnabled((cfg as { experimental?: ExperimentalFlags }).experimental ?? {}, 'focus_workspace')
+  } catch { return null }
+}
+
+/**
+ * Read the server's state; the newest read wins. With the experiment off nothing is asked:
+ * the route's 404 would be a failed request in every page's console (2026-11-22: it failed
+ * every browser spec that checks the console). A 404 still reads as none.
+ */
+export async function loadFocus(opts: { freshConfig?: boolean } = {}): Promise<void> {
   const seq = ++reads
+  const on = await experimentOn(!!opts.freshConfig)
+  if (seq !== reads) return
+  if (on === false) { emit({ loaded: true, ...NONE }); return }
   try {
     const body = await apiGet<{ spaces?: FocusSpace[]; active?: ActiveFocus | null; apps?: FocusApp[] }>(BASE, undefined, { quietStatuses: [404], timeoutMs: 10_000 })
     if (seq !== reads) return
@@ -78,10 +97,10 @@ function bind(): void {
     const active = (data as { active?: ActiveFocus | null } | null)?.active ?? null
     emit({ ...state, active: live(active) })
   })
-  wsClient.onEvent('_ws:reconnected', () => { void loadFocus() })
+  wsClient.onEvent('_ws:reconnected', () => { void loadFocus({ freshConfig: true }) })
   wsClient.onEvent('config:changed', (data: unknown) => {
     const { key } = (data ?? {}) as { key?: string }
-    if (!key || key === 'experimental') void loadFocus()
+    if (!key || key === 'experimental') void loadFocus({ freshConfig: true })
   })
   void loadFocus()
 }
