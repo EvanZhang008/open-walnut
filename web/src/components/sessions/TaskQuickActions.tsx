@@ -26,6 +26,7 @@ import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
+import { MenuHeading } from '@/components/common/MenuHeading';
 import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
 import { KebabIcon } from '@/components/tasks/KebabIcon';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
@@ -74,10 +75,10 @@ interface TaskQuickActionsProps {
   /** The surface shows Watch itself (the session header's eye among its window buttons): the menu leaves its row out. */
   watchOutside?: boolean;
   /**
-   * Extra content appended to the bottom of the kebab dropdown, below a divider
-   * (e.g. session-panel's "Session" actions). Receives `close` so items can
-   * dismiss the dropdown. When provided, the kebab renders even for a task-less
-   * session so those actions stay reachable.
+   * The session's own group (session-panel's "Info & tools"), at the foot of the menu's Session
+   * section, right after `leadingSection` and above the task's rows. Receives `close` so items
+   * can dismiss the dropdown. When provided, the kebab renders even for a task-less session so
+   * those actions stay reachable.
    */
   extraSection?: (close: () => void) => ReactNode;
   /**
@@ -450,18 +451,25 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           style={menuPlacementStyle(kebabPos)}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {/* The surface's own controls first (the panel count), then the task. */}
-          {leadingSection && (
-            <>
-              {leadingSection(closeKebab)}
-              {(task || extraSection) && <div className="task-kebab-divider" />}
-            </>
-          )}
-          {/* The task's rows: one definition for every task menu (TaskMenuRows). Only the
-              surface's own controls (above) and the Session group (below) are this menu's. */}
+          {/* A big menu (standard.md, Big menus): the session's own section first (Open, Window and
+              Columns lead it, the user's pick of the menu redesign; then the Session group), then
+              the task's under its name, its Delete task last. A menu that holds only one of the two
+              (a phone's short menu, a task-less session) carries no headings. */}
+          {(() => {
+            const both = !!task && !!extraSection;
+            return (<>
+              {both && <MenuHeading testId="session-menu-heading">Session</MenuHeading>}
+              {leadingSection?.(closeKebab)}
+              {extraSection?.(closeKebab)}
+              {/* The phone's short menu: its own rows, a rule, then the task's. */}
+              {!both && leadingSection && task && <div className="task-kebab-divider" />}
+            </>);
+          })()}
+          {/* The task's rows: one definition for every task menu (TaskMenuRows). */}
           {task && (
             <TaskMenuRows
               task={task}
+              heading={extraSection ? 'Task' : undefined}
               isPinned={Boolean(isPinned)}
               pinnedTier={pinnedTier}
               isDone={isDone}
@@ -481,15 +489,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               onOpenMemory={() => setMemoryOpen(true)}
               onDelete={() => handleDelete(task.id)}
             />
-          )}
-
-          {/* Session section — appended below the task actions, or shown alone
-              for a task-less session. */}
-          {extraSection && (
-            <>
-              {task && <div className="task-kebab-divider" />}
-              {extraSection(closeKebab)}
-            </>
           )}
         </div>,
         document.body,

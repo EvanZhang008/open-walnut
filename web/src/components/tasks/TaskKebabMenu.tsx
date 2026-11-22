@@ -197,7 +197,7 @@ function WalnutPickRow({ pick, afterAction }: {
       className="task-kebab-item task-kebab-walnut-pick"
       onClick={(e) => { e.stopPropagation(); pick.onPick(); afterAction(); }}
     >
-      <span className="task-kebab-icon" aria-hidden="true">✦</span>
+      <span className="task-kebab-icon" aria-hidden="true">{ICONS.ICON_SPARKLE}</span>
       <span>Use Walnut's pick: {pick.label}</span>
     </button>
   );
@@ -310,7 +310,8 @@ export function TaskActionMenuItems({
       {/* Pin / Tier */}
       {part !== 'dates' && part !== 'priority' && (batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
         <>
-          <div className="task-kebab-divider" />
+          {/* A first-level Pin row sits among the everyday rows, with no rule of its own. */}
+          {!firstLevelPin && <div className="task-kebab-divider" />}
           {firstLevelPin ? (
             <PinShortcutChoices choices={tierOptions} current={currentTier} onChoose={chooseTier} />
           ) : (
@@ -335,7 +336,8 @@ export function TaskActionMenuItems({
       {/* Priority (hidden unless Settings → Tasks → Show task priority) */}
       {part !== 'dates' && !firstLevelPin && onSetPriority && showPriority && (
         <>
-          <div className="task-kebab-divider" />
+          {/* Asked for alone (the task menu's groups), it is one row among them: no rule. */}
+          {part !== 'priority' && <div className="task-kebab-divider" />}
           <div className="task-kebab-priority">
             <span className="task-kebab-priority-label">Priority</span>
             <div className="task-kebab-priority-options">
@@ -513,6 +515,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
     <>
       <div className="task-kebab-divider" />
       <div className="task-kebab-project">
+        <span className="task-kebab-icon" aria-hidden="true">{ICONS.ICON_FOLDER_SOLID}</span>
         <span className="task-kebab-project-label">Project</span>
         <button
           ref={btnRef}
@@ -522,7 +525,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
           <span className="task-kebab-project-current-name">
             {current === null ? 'Move to…' : projectDisplayName(current)}
           </span>
-          <span className="task-kebab-project-caret">▾</span>
+          <DisclosureChevron open={open} className="task-kebab-project-caret" />
         </button>
       </div>
       <ProjectPickerFlyout

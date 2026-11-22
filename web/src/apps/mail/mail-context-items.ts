@@ -353,10 +353,8 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       label: unread ? 'Mark as read' : 'Mark as unread',
       onSelect: () => actions.onSetRead(message, unread),
     },
-    // Tied to the toggle, not left to `normalizeContextMenuItems`: it only collapses a divider that
-    // ended up FIRST, and the title above is a row, so a dropped toggle would leave a rule sitting
-    // directly under the title with nothing above it to separate.
-    { divider: true, when: offerRead },
+    // No rule between the read toggle and Open: both are about reading this mail, one section
+    // (standard.md, Big menus: at most three bare rules between sections).
     {
       key: 'open',
       // Dropped on the row the reader already holds: clicking it there opened nothing, and a draft is

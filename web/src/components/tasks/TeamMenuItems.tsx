@@ -12,6 +12,7 @@ import { directorEntry, teamRowSummary } from './team-menu-model';
 import { useExperimental } from '@/hooks/useExperimental';
 import { directorWrite, orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/subtask-pill.css';
+import { ICON_LEAVE, ICON_MINUS, ICON_PLUS, ICON_STAR_EMPTY, ICON_STAR_FILLED, ICON_STOP } from '@/components/common/Icons';
 
 const NO_INDEX: ReadonlyMap<string, Task> = new Map();
 
@@ -85,7 +86,7 @@ export function TeamMenuItems({ task, afterAction }: {
   const toggle = (which: 'adopt' | 'release') => setPicker((p) => (p === which ? null : which));
   return (
     <>
-      <div className="task-kebab-divider" />
+      {/* No rule above it: Team is one of the menu's collapsed groups, beside Move & transfer. */}
       <div className={`task-kebab-team${expanded ? ' open' : ''}`} data-testid="kebab-team">
         <button
           type="button"
@@ -117,7 +118,7 @@ export function TeamMenuItems({ task, afterAction }: {
               aria-expanded={picker === 'adopt'}
               onClick={(e) => { e.stopPropagation(); toggle('adopt'); }}
             >
-              <span className="task-kebab-icon" aria-hidden="true">+</span>
+              <span className="task-kebab-icon" aria-hidden="true">{ICON_PLUS}</span>
               <span>Adopt a worker…</span>
             </button>
             {hasWorkers && (
@@ -130,7 +131,7 @@ export function TeamMenuItems({ task, afterAction }: {
                 aria-expanded={picker === 'release'}
                 onClick={(e) => { e.stopPropagation(); toggle('release'); }}
               >
-                <span className="task-kebab-icon" aria-hidden="true">−</span>
+                <span className="task-kebab-icon" aria-hidden="true">{ICON_MINUS}</span>
                 <span>Release a worker…</span>
               </button>
             )}
@@ -142,7 +143,7 @@ export function TeamMenuItems({ task, afterAction }: {
                 title="Stop this task and every open task under it: their sessions, triggers and wake clocks"
                 onClick={(e) => { e.stopPropagation(); teamAction('team-stop'); }}
               >
-                <span className="task-kebab-icon" aria-hidden="true">■</span>
+                <span className="task-kebab-icon" aria-hidden="true">{ICON_STOP}</span>
                 <span>Stop the team</span>
               </button>
             )}
@@ -170,7 +171,7 @@ export function TeamMenuItems({ task, afterAction }: {
                   : 'Listed under its VP on the Org page, with or without subtasks'}
                 onClick={(e) => { e.stopPropagation(); setDirector(!director.isDirector); }}
               >
-                <span className="task-kebab-icon" aria-hidden="true">{director.isDirector ? '☆' : '★'}</span>
+                <span className="task-kebab-icon" aria-hidden="true">{director.isDirector ? ICON_STAR_EMPTY : ICON_STAR_FILLED}</span>
                 <span>{director.isDirector ? 'Remove from Directors' : 'Make it a Director'}</span>
               </button>
             )}
@@ -186,7 +187,7 @@ export function TeamMenuItems({ task, afterAction }: {
                   afterAction();
                 }}
               >
-                <span className="task-kebab-icon" aria-hidden="true">↰</span>
+                <span className="task-kebab-icon" aria-hidden="true">{ICON_LEAVE}</span>
                 <span className="task-kebab-team-leave">Leave leader &ldquo;{leader?.title ?? 'its leader'}&rdquo;</span>
               </button>
             )}

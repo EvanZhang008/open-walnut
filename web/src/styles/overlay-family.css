@@ -76,6 +76,23 @@ html .wn-menu {
   padding: 4px;
 }
 
+/* A big menu's sections (standard.md "Big menus", MenuHeading.tsx): a heading names each section
+   after the first; a bare rule only sets the danger section (Delete) apart. */
+/* Sentence case, as the Display menu's section names (F31); --fg-secondary, which clears AA at
+   this size (--fg-muted measured 3.62:1 on white). */
+html .wn-menu-heading {
+  padding: 8px 12px 2px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+html .wn-menu > .wn-menu-heading:first-child {
+  padding-top: 4px;
+}
+
 /* More below the fold (useMoreBelow sets data-more on the scroll box while rows are past its foot and it
    is not scrolled down there): the foot fades, so a list cut by its height cap reads as one that goes
    on. On the box itself, the scroll container: a child would scroll away with the rows. */

@@ -122,8 +122,11 @@ export function FileTreeContextMenu({
   // group's whole content is conditional, which every group here is.
   const groups: ReactNode[][] = [];
 
+  // Sections (standard.md, Big menus: at most three bare rules, the danger row last): open and
+  // reveal; create, rename and duplicate; copy; then Delete alone.
+  const openGroup: ReactNode[] = [];
   if (isFile) {
-    groups.push([
+    openGroup.push(...[
       onOpen && <button key="open" role="menuitem" onClick={run(() => onOpen(target.path))}>Open</button>,
       target.notePath && onOpenInNotes && (
         <button key="notes" role="menuitem" onClick={run(() => onOpenInNotes(target.notePath!))}>
@@ -138,15 +141,14 @@ export function FileTreeContextMenu({
     ].filter(Boolean) as ReactNode[]);
   }
 
-  const revealGroup: ReactNode[] = [];
   if (canReveal && onReveal) {
-    revealGroup.push(
+    openGroup.push(
       <button key="finder" role="menuitem" onClick={run(() => onReveal(target.path, 'finder'))}>
         Reveal in Finder
       </button>,
     );
     if (isFile) {
-      revealGroup.push(
+      openGroup.push(
         <button key="defaultapp" role="menuitem" onClick={run(() => onReveal(target.path, 'app'))}>
           Open in default app
         </button>,
@@ -166,33 +168,30 @@ export function FileTreeContextMenu({
     );
   }
 
-  // Directories lead with creation (that's what a folder's menu is mostly for);
-  // a file leads with its open actions and gets creation lower down.
-  if (!isFile) groups.push(createGroup);
-  groups.push(revealGroup);
-  if (isFile) groups.push(createGroup);
-
-  const mutateGroup: ReactNode[] = [];
+  const deleteGroup: ReactNode[] = [];
   if (canMutate) {
     if (onRename) {
-      mutateGroup.push(
+      createGroup.push(
         <button key="rename" role="menuitem" onClick={run(() => onRename(target.path))}>Rename…</button>,
       );
     }
     if (onDuplicate) {
-      mutateGroup.push(
+      createGroup.push(
         <button key="duplicate" role="menuitem" onClick={run(() => onDuplicate(target.path))}>Duplicate</button>,
       );
     }
     if (onDelete) {
-      mutateGroup.push(
+      deleteGroup.push(
         <button key="delete" role="menuitem" className="danger" onClick={run(() => onDelete(target.path, target.type))}>
           Delete
         </button>,
       );
     }
   }
-  groups.push(mutateGroup);
+  // Directories lead with creation (that's what a folder's menu is mostly for);
+  // a file leads with its open actions and gets creation lower down.
+  if (isFile) groups.push(openGroup, createGroup);
+  else groups.push(createGroup, openGroup);
 
   groups.push([
     <button key="copypath" role="menuitem" onClick={() => copy(target.path, 'path')}>
@@ -208,6 +207,7 @@ export function FileTreeContextMenu({
     ),
   ].filter(Boolean) as ReactNode[]);
 
+  groups.push(deleteGroup);
   const rendered = groups.filter((g) => g.length > 0);
 
   // No backdrop: the overlay layer closes it on a press outside. A right-click

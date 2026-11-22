@@ -25,14 +25,6 @@
 }
 .task-kebab-status-value b { font-weight: 500; color: var(--fg-secondary); }
 .task-kebab-status-until { color: var(--fg-muted); }
-.task-kebab-status-caret {
-  display: inline-block;
-  flex-shrink: 0;
-  font-size: 9px;
-  color: var(--fg-muted);
-  transition: transform 0.12s ease;
-}
-.task-kebab-status-caret.open { transform: rotate(90deg); }
 
 .task-kebab-status {
   display: flex;

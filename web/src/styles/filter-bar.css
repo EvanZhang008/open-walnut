@@ -66,23 +66,20 @@
 .fb-item-icon svg { width: 14px; height: 14px; }
 .fb-item-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .fb-item-chevron { display: inline-flex; flex: none; color: var(--fg-muted); }
-.fb-item-chevron svg { width: 12px; height: 12px; }
 .fb-item-check { display: inline-flex; flex: none; width: 12px; justify-content: center; color: var(--accent-text); }
 .fb-item-check svg { width: 12px; height: 12px; }
 
 /* Group title on page one: small, muted, sentence case; its action (Clear) at the right. */
 .fb-group { display: flex; flex-direction: column; }
+/* A section name: the shared .wn-menu-heading (overlay-family.css) draws its words; here only
+   its line (Filter carries a Clear button at its right) and the panel's own 8 px inset. */
 .fb-group-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: 22px;
-  padding: 4px 8px 2px;
-  color: var(--tp-muted);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  letter-spacing: 0.01em;
 }
+html :is(.fb-group-title, .fb-layout-title).wn-menu-heading { padding: 4px 8px 2px; }
 .fb-group-action { height: 20px; padding: 0 6px; font-size: var(--font-size-xs); color: var(--accent-text); }
 .fb-group-action:hover { color: var(--accent-text); }
 
@@ -101,9 +98,6 @@
 
 /* More filters fold: the chevron turns, the rows appear under it. */
 .fb-more-toggle .fb-item-text { color: var(--fg-secondary); }
-.fb-more-chevron { transition: transform 120ms ease-out; }
-.fb-more-chevron svg { width: 12px; height: 12px; }
-.fb-more-toggle[aria-expanded='true'] .fb-more-chevron { transform: rotate(90deg); }
 /* Open, the folded names are the rows under it: the preview goes. */
 .fb-more-toggle[aria-expanded='true'] .fb-prop-summary { display: none; }
 .fb-more-body { display: flex; flex-direction: column; }
@@ -299,6 +293,5 @@
   .fb-overflow-menu,
   .fb-chip { animation-duration: 0ms; }
   .fb-row,
-  .fb-more-chevron,
   .fb-check-box { transition-duration: 0ms; }
 }

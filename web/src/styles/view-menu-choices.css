@@ -16,11 +16,5 @@
 /* The tab bar's own menu button (TodoSectionTabs): the shared chevron at the old 10px. */
 .todo-section-tabs-menu-icon { display: inline-flex; align-items: center; }
 .todo-section-tabs-menu-icon svg { width: 10px; height: 10px; }
-/* The tab bar menu's section names use the Display menu's heading style (F31):
-   sentence case, not the app-wide uppercase eyebrow. */
-.wn-context-menu.todo-section-tabs-ctx .wn-context-menu-section {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
-}
+/* The tab bar menu's section names are the shared .wn-menu-heading (overlay-family.css), which
+   took the Display menu's sentence case (F31) for every menu. */

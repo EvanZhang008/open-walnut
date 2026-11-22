@@ -360,6 +360,37 @@ and closes through one hook. Its own CSS keeps only its size, padding and conten
   `tests/e2e/browser/overlay-family.spec.ts` opens a list of them on the page and checks the window
   edges, the corner, the layer, Escape and an outside press.
 
+### Big menus
+
+A menu of eight or more rows of different kinds (the task and session ⋮ menus, the composer +
+menu, a long right-click menu) has one shape (`web/src/utils/menu-shape.ts`):
+
+1. **Everyday rows first**, with no rule between them (snooze, details, Status, Pin to).
+2. **The rest is named**: collapsed groups (`KebabGroup`: icon, name, a short hint of what it holds,
+   the chevron) or a section under a heading (`MenuHeading`, `.wn-menu-heading`: sentence case,
+   11 px weight 600, `--fg-secondary`, the one heading look of every menu; a ContextMenu `section`
+   row draws it too). A heading names its section, so there is no rule right above it. A menu that
+   acts on two objects heads each one's section with its name (the session menu: Session, Task).
+3. **Rare rows sink** into the group they belong to (Move to Background and Add to topic in Move &
+   transfer), and the group's hint names them in two to four words, since it sets the menu's width.
+4. **Danger rows last**, alone under one rule, named for what they delete ("Delete task").
+5. **At most three bare rules** between sections (the danger section's not counted), **at most 16
+   first-level rows** with every group closed.
+6. **Every row that opens more** (an inline group, a flyout, a picker) ends with the one
+   `DisclosureChevron` at its right edge; no drawn arrow glyph (▶︎, ▸, ▾, ›). A setting row's value
+   chip (`ContextMenuItem.value`) keeps its caret.
+7. Rows are the one menu row (6 px 12 px, icon and words 8 px apart, 12 px words, the accent tint on
+   hover). **Every row is one drawn icon and one line of words** (the user, 2026-11-23, on the +
+   menu's boxed @, / and ···: one icon, one text, no box): the icon slot holds an icon from
+   `Icons.tsx` ("Menu row icons"), never a typed character (@, /, arrows, quote marks, #) and never
+   an outlined cap. The Display panel (Filter, Layout) uses the same heading and chevron.
+
+ContextMenu has 2 and 4 by construction (`normalizeContextMenuItems`). `tests/web/menu-shape.test.ts`
+checks the rules, finds every menu surface from the source (a new one must be classified), and the
+long item builders run the check in their own tests; `tests/web/menu-row-icons.test.ts` finds every
+menu row icon slot from the source and fails on a typed character; `tests/e2e/browser/big-menu-shape.spec.ts`
+measures the hand-built big menus as drawn, icons included.
+
 ## Status labels
 
 Why (2026-11-21, the user, of the pill-shaped controls): "什么鬼东西都要是圆形的呀？所有东西都应该统一啊"

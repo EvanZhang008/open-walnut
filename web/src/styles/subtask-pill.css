@@ -215,8 +215,6 @@
   font-weight: 500;
   color: var(--fg-secondary);
 }
-.task-kebab-team-rows { padding-bottom: 2px; }
-.task-kebab-team-rows > .task-kebab-item { padding-left: 24px; }
 .task-kebab-team-leave {
   min-width: 0;
   white-space: nowrap;

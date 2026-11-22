@@ -73,3 +73,11 @@ describe('buildFolderMenuItems', () => {
     ])
   })
 })
+
+// The big-menu shape (standard.md, Big menus; tests/web/menu-shape.test.ts).
+import { contextMenuShape, menuShapeProblems } from '@/utils/menu-shape'
+describe('the folder menu has the big-menu shape', () => {
+  it('Delete folder last under its own rule', () => {
+    expect(menuShapeProblems(contextMenuShape(items({ groupId: 'g1', label: 'Triage', project: 'Marina' }, full())))).toEqual([])
+  })
+})

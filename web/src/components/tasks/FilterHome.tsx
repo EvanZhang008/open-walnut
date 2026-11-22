@@ -8,7 +8,8 @@
  * listed is frozen at open (G5).
  */
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { ICON_CHEVRON_RIGHT } from '../common/Icons';
+import { ICON_MORE } from '../common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { dimLabel } from './filter-bar-model';
 import { dimSummary, homeRows } from './filter-home-model';
 import { dimIcon } from './filter-dim-icons';
@@ -46,7 +47,7 @@ function PropRow({ c, dim, onOpen }: { c: FilterBarController; dim: FilterDim; o
       <span className="fb-item-icon" aria-hidden="true">{dimIcon(dim)}</span>
       <span className="fb-item-text">{dimLabel(dim)}</span>
       <span className={`fb-prop-summary${summary.isDefault ? ' is-default' : ''}`}>{loading ? 'Loading' : summary.text}</span>
-      <span className="fb-item-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
+      <DisclosureChevron className="fb-item-chevron" />
     </Item>
   );
 }
@@ -64,7 +65,7 @@ export interface FilterHomeProps {
 export function FilterHome({ controller: c, snap, moreOpen, onMoreOpenChange, onOpenDim, onClear }: FilterHomeProps) {
   return (
     <div className="fb-home fb-group" data-section="filters">
-      <div className="fb-group-title">
+      <div className="fb-group-title wn-menu-heading">
         <span>Filter</span>
         {c.chips.length > 0 && (
           <button type="button" className="fb-text-btn fb-group-action" onClick={onClear}>
@@ -81,9 +82,11 @@ export function FilterHome({ controller: c, snap, moreOpen, onMoreOpenChange, on
             aria-controls="fb-more-body"
             onClick={() => onMoreOpenChange(!moreOpen)}
           >
-            <span className="fb-item-icon fb-more-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
+            {/* The one chevron, at the right edge like every row that opens more (standard.md, Big menus). */}
+            <span className="fb-item-icon" aria-hidden="true">{ICON_MORE}</span>
             <span className="fb-item-text">More filters</span>
             <span className="fb-prop-summary is-default">{snap.folded.map((d) => dimLabel(d)).join(', ')}</span>
+            <DisclosureChevron open={moreOpen} className="fb-item-chevron" />
           </Item>
           <div id="fb-more-body" className="fb-more-body" hidden={!moreOpen}>
             {snap.folded.map((dim) => <PropRow key={dim} c={c} dim={dim} onOpen={onOpenDim} />)}

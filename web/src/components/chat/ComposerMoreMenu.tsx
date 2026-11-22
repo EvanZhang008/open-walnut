@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { DisclosureChevron } from '@/components/controls';
+import { ICON_MORE } from '@/components/common/Icons';
 import '@/styles/composer-more.css';
 
 /** A separate flyout: opening rare actions never grows the add menu. */
@@ -39,13 +41,13 @@ export function ComposerMoreMenu({ children }: { children: ReactNode }) {
   // A flyout opened from the side thread's own composer belongs to that drawer.
   const scope = open && buttonRef.current?.closest('.side-question-popover') ? 'side-question' : undefined;
   return <>
-    <div className="chat-plus-menu-divider" role="separator" />
     <button ref={buttonRef} type="button" role="menuitem" className="chat-plus-menu-item"
       aria-haspopup="menu" aria-expanded={open}
       onClick={(event) => { byKeyRef.current = event.detail === 0; setOpen((value) => !value); }}>
-      <span className="chat-plus-menu-key" aria-hidden="true">···</span>
+      <span className="chat-plus-menu-key" aria-hidden="true">{ICON_MORE}</span>
       <span>More actions</span>
-      <span className="chat-plus-menu-control-value" aria-hidden="true">›</span>
+      {/* The one chevron every row that opens more ends with (standard.md, Big menus). */}
+      <DisclosureChevron className="chat-plus-menu-chevron" />
     </button>
     {open && createPortal(<div ref={menuRef} role="menu" aria-label="More composer actions"
       className="chat-plus-menu chat-plus-more-flyout wn-overlay wn-menu" style={menuPlacementStyle(placement)}

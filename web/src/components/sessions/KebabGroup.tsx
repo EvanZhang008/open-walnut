@@ -8,7 +8,7 @@
  * the menu's own placement scrolls it when the window is short.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { CHEVRON_GLYPH } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import '@/styles/session-kebab-groups.css';
 
 /** A self-opening group the user closed (localStorage, per group test id). */
@@ -63,7 +63,9 @@ export function KebabGroup({ label, hint, icon, badge, testId, openWhen, childre
         {!open && hint && <span className="task-kebab-group-hint" aria-hidden="true">{hint}</span>}
         {/* Open, the row inside carries the same count. */}
         {!open && badge}
-        <span className={`task-kebab-status-caret${open ? ' open' : ''}`} aria-hidden="true">{CHEVRON_GLYPH}</span>
+        {/* The one chevron of every menu row that opens more (standard.md, Big menus): the Status,
+            Snooze and Team rows draw the same. */}
+        <DisclosureChevron open={open} />
       </button>
       {open && <div ref={bodyRef} className="task-kebab-group-body" role="group" aria-label={label}>{children}</div>}
     </div>

@@ -300,7 +300,8 @@ test.describe('todo panel section tabs', () => {
           : el.querySelector('.wn-context-menu-label')?.textContent?.trim() ?? ''))
     const moreAt = rows.indexOf('#More views')
     expect(moreAt).toBeGreaterThan(0)
-    expect(rows.slice(0, moreAt)).toEqual(['#Tabs', 'All', 'Pinned', 'Recent', '---'])
+    // A heading names its section, so no rule above it (standard.md, Big menus).
+    expect(rows.slice(0, moreAt)).toEqual(['#Tabs', 'All', 'Pinned', 'Recent'])
     const tiers = rows.slice(moreAt + 1, rows.indexOf('---', moreAt))
     expect(tiers.slice(0, 2)).toEqual(['Focus', 'Satellite'])
     // The retired Parked tier is offered nowhere in the menu.

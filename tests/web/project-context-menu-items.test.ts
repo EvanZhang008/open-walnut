@@ -301,3 +301,14 @@ describe('buildProjectMenuItems: the settings group', () => {
   })
 })
 
+
+// The big-menu shape (standard.md, Big menus; tests/web/menu-shape.test.ts): its fullest case.
+import { contextMenuShape, menuShapeProblems } from '@/utils/menu-shape'
+describe('the project menu has the big-menu shape', () => {
+  it('everyday rows first, at most three bare rules, Delete project last under its own rule', () => {
+    for (const actions of [tierActions(), listActions()]) {
+      const rows = normalizeContextMenuItems(buildProjectMenuItems({ project: 'Marina' }, actions, dialogs()))
+      expect(menuShapeProblems(contextMenuShape(rows))).toEqual([])
+    }
+  })
+})

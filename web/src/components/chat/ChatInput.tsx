@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
 import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
-import { ICON_READ_SPLIT, ICON_SEND } from '@/components/common/Icons';
+import { ICON_AT, ICON_CHAT, ICON_HISTORY, ICON_NOTE, ICON_READ_SPLIT, ICON_SEND, ICON_SKILL, ICON_SLIDERS } from '@/components/common/Icons';
 import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { searchCommands, getCommand } from '@/commands/index';
@@ -35,6 +35,7 @@ import { claimFailedDraft, discardedSince, draftSaveMark, isSentDraftCopy, markD
 import { ComposerDirectControl } from './ComposerDirectControl';
 import { ComposerMoreMenu } from './ComposerMoreMenu';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
+import { MenuHeading } from '@/components/common/MenuHeading';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
@@ -50,7 +51,7 @@ import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 import { composerDrawing, type DrawingPlace } from './drawing-place';
-import { ToggleSwitch } from '@/components/controls';
+import { DisclosureChevron, ToggleSwitch } from '@/components/controls';
 import { SESSION_NOTE_LABEL, SIDE_CHAT_LABEL } from './composer-words';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
@@ -1918,6 +1919,8 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     closeMenu: () => setPlusOpen(false),
     focusBox: () => textareaRef.current?.focus(),
   });
+  // The More actions row (a flyout of the rare actions) shows when it has a row to hold.
+  const moreShown = camera.enabled || !!promptRecallKey || !!moreActions.length;
 
   // setRangeText updates the caret before the input event detects the inserted shortcut.
   const insertShortcut = (trigger: string, opts?: { skills?: boolean }) => {
@@ -2240,12 +2243,11 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   commands (each row inserts its trigger and opens its picker). */}
               {(enableEntityMention || mentionCwd || showCommands || isSessionMode) && (
                 <>
-                  <div className="chat-plus-menu-divider" role="separator" />
-                  <div className="chat-plus-menu-label">Shortcuts</div>
+                  <MenuHeading>Shortcuts</MenuHeading>
                   {(enableEntityMention || mentionCwd) && (
                     <button className="chat-plus-menu-item" onClick={() => insertShortcut('@')}
                       type="button" role="menuitem" title={mentionCwd ? (enableEntityMention ? 'Mention a task, file or folder with @' : 'Mention a file or folder with @') : 'Mention a task with @'}>
-                      <span className="chat-plus-menu-key">@</span>
+                      <span className="chat-plus-menu-key" aria-hidden="true">{ICON_AT}</span>
                       <span>{mentionCwd ? (enableEntityMention ? 'Mention a task or file' : 'Mention a file') : 'Mention a task'}</span>
                     </button>
                   )}
@@ -2257,7 +2259,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                       role="menuitem"
                       title="Pick a skill to run"
                     >
-                      <span className="chat-plus-menu-key">/</span>
+                      <span className="chat-plus-menu-key" aria-hidden="true">{ICON_SKILL}</span>
                       <span>Run a skill</span>
                     </button>
                   )}
@@ -2267,8 +2269,9 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   stands behind the composer, else Snooze and Add a trigger. */}
               {(scheduleRow || !!menuActions.length) && (
                 <>
-                  {/* PlusMenuActionRows brings its own separator. */}
-                  {scheduleRow && <div className="chat-plus-menu-divider" role="separator" />}
+                  {/* A named section (standard.md, Big menus): what acts on the task behind the
+                      composer, or the schedule shortcut where there is none. */}
+                  <MenuHeading>{scheduleRow && !menuActions.length ? 'Schedule' : 'This task'}</MenuHeading>
                   {scheduleRow && (
                     <button
                       className="chat-plus-menu-item"
@@ -2287,6 +2290,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                     </button>
                   )}
                   <PlusMenuActionRows
+                    lead="none"
                     actions={menuActions}
                     onSelect={(action) => selectPlusMenuAction(
                       action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
@@ -2294,7 +2298,64 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   />
                 </>
               )}
-              {(camera.enabled || promptRecallKey || !!moreActions.length) && (
+              {/* This chat: the session's own controls folded off the bar (Reply style, Side chat,
+                  Session note), its on/off rows, then More's rare actions, so the menu ends with what opens more. */}
+              {(!!addMenuRowIds.length || !!plusMenuToggles?.length || moreShown) && <MenuHeading>This chat</MenuHeading>}
+              {!!addMenuRowIds.length && (
+                <>
+                  {addMenuRowIds.map((id) => {
+                    const raw = addMenuControls!.handleRef.current?.state(id) ?? '';
+                    // A folded side chat button reads its name plus its unread count: the row names it, so only the count stays.
+                    const label = id === 'btw' && raw.startsWith(SIDE_CHAT_LABEL) ? raw.slice(SIDE_CHAT_LABEL.length).trim() : raw;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        className="chat-plus-menu-item"
+                        role="menuitem"
+                        data-add-control={id}
+                        onClick={() => {
+                          setPlusOpen(false);
+                          addMenuControls!.handleRef.current?.activate(id);
+                        }}
+                      >
+                        {/* Its icon in the 16 px column, so its words start where every other row's do. */}
+                        <span className="chat-plus-menu-key" aria-hidden="true">{id === 'output' ? ICON_SLIDERS : id === 'note' ? ICON_NOTE : ICON_CHAT}</span>
+                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? SIDE_CHAT_LABEL : id === 'note' ? SESSION_NOTE_LABEL : id}</span>
+                        {label && (id !== 'note' || label !== SESSION_NOTE_LABEL) && <span className="chat-plus-menu-control-value">{label}</span>}
+                        {/* It opens its picker: the one chevron of a row that opens more. */}
+                        {id === 'output' && <DisclosureChevron className="chat-plus-menu-chevron" />}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+              {/* On/off rows. `menuitemcheckbox` + aria-checked is the role a
+                  toggle has in a menu; a native checkbox is banned here (its
+                  macOS popup swallows pointerup — see web/src/AGENTS.md). The
+                  menu stays OPEN on toggle: this is a setting the user may want
+                  to flip and immediately see, not a command that dismisses. They sit
+                  in This chat, above More, so the menu ends with what opens more. */}
+              {!!plusMenuToggles?.length && (
+                <>
+                  {plusMenuToggles.map((t) => (
+                    <button
+                      key={t.id}
+                      className="chat-plus-menu-item chat-plus-menu-toggle"
+                      onClick={() => t.onToggle(!t.on)}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={t.on}
+                      title={t.title}
+                      data-toggle-id={t.id}
+                    >
+                      <ToggleSwitch decorative size="sm" checked={t.on} className="chat-plus-menu-switch" />
+                      <span>{t.label}</span>
+                    </button>
+                  ))}
+                </>
+              )}
+              {moreShown && (
                 <ComposerMoreMenu>
                   {/* The camera lives in More (Evan, 2026-11-20: "put in more under +"). */}
                   <CameraMenuRow camera={camera} disabled={atAttachLimit || !!disabled} />
@@ -2320,7 +2381,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                             : empty ? 'Bring back your last message here. In an empty box, \u2191 and \u2193 step through your earlier ones'
                               : 'Empty the box first: your draft is never replaced'}
                       >
-                        <span className="chat-plus-menu-key">{'\u2191'}</span>
+                        <span className="chat-plus-menu-key" aria-hidden="true">{ICON_HISTORY}</span>
                         <span>{!any ? 'Recall: nothing sent yet' : oldest ? 'Recall: this is the first one'
                           : untouched ? 'Recall the one before' : empty ? 'Recall your last message' : 'Recall: empty the box first'}</span>
                       </button>
@@ -2333,57 +2394,6 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                     )}
                   />
                 </ComposerMoreMenu>
-              )}
-              {!!addMenuRowIds.length && (
-                <>
-                  <div className="chat-plus-menu-divider" role="separator" />
-                  {addMenuRowIds.map((id) => {
-                    const raw = addMenuControls!.handleRef.current?.state(id) ?? '';
-                    // A folded side chat button reads its name plus its unread count: the row names it, so only the count stays.
-                    const label = id === 'btw' && raw.startsWith(SIDE_CHAT_LABEL) ? raw.slice(SIDE_CHAT_LABEL.length).trim() : raw;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        className="chat-plus-menu-item"
-                        role="menuitem"
-                        data-add-control={id}
-                        onClick={() => {
-                          setPlusOpen(false);
-                          addMenuControls!.handleRef.current?.activate(id);
-                        }}
-                      >
-                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? SIDE_CHAT_LABEL : id === 'note' ? SESSION_NOTE_LABEL : id}</span>
-                        {label && (id !== 'note' || label !== SESSION_NOTE_LABEL) && <span className="chat-plus-menu-control-value">{label}</span>}
-                      </button>
-                    );
-                  })}
-                </>
-              )}
-              {/* On/off rows. `menuitemcheckbox` + aria-checked is the role a
-                  toggle has in a menu; a native checkbox is banned here (its
-                  macOS popup swallows pointerup — see web/src/AGENTS.md). The
-                  menu stays OPEN on toggle: this is a setting the user may want
-                  to flip and immediately see, not a command that dismisses. */}
-              {!!plusMenuToggles?.length && (
-                <>
-                  <div className="chat-plus-menu-divider" role="separator" />
-                  {plusMenuToggles.map((t) => (
-                    <button
-                      key={t.id}
-                      className="chat-plus-menu-item chat-plus-menu-toggle"
-                      onClick={() => t.onToggle(!t.on)}
-                      type="button"
-                      role="menuitemcheckbox"
-                      aria-checked={t.on}
-                      title={t.title}
-                      data-toggle-id={t.id}
-                    >
-                      <ToggleSwitch decorative size="sm" checked={t.on} className="chat-plus-menu-switch" />
-                      <span>{t.label}</span>
-                    </button>
-                  ))}
-                </>
               )}
             </div>
           )}

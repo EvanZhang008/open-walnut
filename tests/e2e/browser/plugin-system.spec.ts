@@ -77,7 +77,7 @@ test.describe('1. App loads with plugin system', () => {
 
     // A seeded plugin task's menu names its source with the badge.
     const sourceRow = await openSourceRow(page, 'PluginA synced task')
-    await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
+    await expect(sourceRow.locator('.task-source-icon')).toBeVisible()
   })
 })
 
@@ -109,7 +109,7 @@ test.describe('2. Create task — source auto-assigned', () => {
 
     const sourceRow = await openSourceRow(page, title)
     await page.screenshot({ path: 'playwright-report/plugin-02-badge-visible.png' })
-    await expect(sourceRow.locator('.task-source-badge')).toHaveText('L')
+    await expect(sourceRow.locator('.task-source-icon')).toHaveAttribute('data-source-mark', 'L')
   })
 })
 
@@ -295,7 +295,7 @@ test.describe('8. Task menu source row', () => {
   test('synced plugin-a task: badge, no sync warning', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
     const sourceRow = await openSourceRow(page, 'PluginA synced task')
-    await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
+    await expect(sourceRow.locator('.task-source-icon')).toBeVisible()
     await expect(sourceRow).not.toContainText('(unsynced)')
     await expect(sourceRow).not.toContainText('(sync error)')
     await expect(taskSyncWarning(page.locator('.task-kebab-menu:visible'))).toHaveCount(0)
@@ -311,7 +311,7 @@ test.describe('8. Task menu source row', () => {
   test('sync error task: "!" and says sync error', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
     const sourceRow = await syncWarningRow(page, 'Sync error task')
-    await expect(sourceRow.locator('.task-source-badge')).toHaveText('!')
+    await expect(sourceRow.locator('.task-source-icon')).toHaveAttribute('data-source-mark', '!')
     await expect(sourceRow).toContainText('(sync error)')
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-sync-error.png' })
   })
@@ -319,20 +319,20 @@ test.describe('8. Task menu source row', () => {
   test('local task: "L"', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
     const sourceRow = await openSourceRow(page, 'Local only task')
-    await expect(sourceRow.locator('.task-source-badge')).toHaveText('L')
+    await expect(sourceRow.locator('.task-source-icon')).toHaveAttribute('data-source-mark', 'L')
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-local.png' })
   })
 
   test('MS To-Do synced task: "M"', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
     const sourceRow = await openSourceRow(page, 'MS To-Do synced task')
-    await expect(sourceRow.locator('.task-source-badge')).toHaveText('M')
+    await expect(sourceRow.locator('.task-source-icon')).toHaveAttribute('data-source-mark', 'M')
   })
 
   test('PluginB synced task: badge, no sync warning', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
     const sourceRow = await openSourceRow(page, 'PluginB synced task')
-    await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
+    await expect(sourceRow.locator('.task-source-icon')).toBeVisible()
     await expect(sourceRow).not.toContainText('(unsynced)')
     await expect(taskSyncWarning(page.locator('.task-kebab-menu:visible'))).toHaveCount(0)
   })

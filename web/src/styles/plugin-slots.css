@@ -15,9 +15,8 @@
   white-space: nowrap;
   color: var(--fg);
 }
+/* The Header toggle is the shared Chip (.wn-chip, its on state from aria-pressed); here only its place. */
 .task-kebab-fact-pin {
   flex: none;
   margin-left: auto;
-  color: var(--fg-secondary);
 }
-.task-kebab-fact-pin.active { color: var(--accent); }

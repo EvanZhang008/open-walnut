@@ -29,6 +29,8 @@ import { knownHomeOf, tildePath } from '@/utils/home-folder';
 import type { TaskWorkspace } from './workspace-text';
 import { hostName, isWorkspaceUsable, keptText, setupTone, setupWaitsForYou, workspaceOf, workspaceStateLabel } from './workspace-text';
 import '@/styles/workspaces.css';
+import { ICON_CODE, ICON_REFRESH, ICON_TRASH } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 
 /** The widest the flyout gets (workspaces.css .workspace-flyout max-width) plus a margin. */
 const FLYOUT_ROOM = 372;
@@ -228,12 +230,12 @@ function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, 
       {busy && <div className="workspace-flyout-note">{busy}</div>}
       {(ws.state === 'failed' || ws.launch_error) && (
         <button className="task-kebab-item" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void retry(); }} data-testid="workspace-retry">
-          <span className="task-kebab-icon">↻</span><span>Retry</span>
+          <span className="task-kebab-icon" aria-hidden="true">{ICON_REFRESH}</span><span>Retry</span>
         </button>
       )}
       {isWorkspaceUsable(ws) && (
         <button className="task-kebab-item task-kebab-item-danger" disabled={!!busy} onClick={(e) => { e.stopPropagation(); void remove(); }} data-testid="workspace-remove">
-          <span className="task-kebab-icon">✕</span><span>Remove workspace…</span>
+          <span className="task-kebab-icon" aria-hidden="true">{ICON_TRASH}</span><span>Remove workspace…</span>
         </button>
       )}
     </div>,
@@ -254,6 +256,7 @@ export function WorkspaceMenuSection({ task, afterAction }: {
   return (
     <>
       <div className="task-kebab-project">
+        <span className="task-kebab-icon" aria-hidden="true">{ICON_CODE}</span>
         <span className="task-kebab-project-label">Workspace</span>
         <button
           ref={btnRef}
@@ -274,7 +277,7 @@ export function WorkspaceMenuSection({ task, afterAction }: {
           }}
         >
           <span className={`task-kebab-project-current-name${setupTone(ws) ? ` tone-${setupTone(ws)}` : ''}`}>{workspaceStateLabel(ws)}</span>
-          <span className="task-kebab-project-caret">▾</span>
+          <DisclosureChevron open={open} className="task-kebab-project-caret" />
         </button>
       </div>
       <WorkspaceFlyout

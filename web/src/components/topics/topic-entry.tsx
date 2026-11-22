@@ -5,7 +5,7 @@
  * on the Org page. Never in a Threads view: a topic is not a thread (2026-11-23).
  * With the experiment off every one of them renders nothing.
  */
-import { ICON_PLUS } from '@/components/common/Icons';
+import { ICON_HASH, ICON_PLUS } from '@/components/common/Icons';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
@@ -42,7 +42,7 @@ export function AddToTopicMenuItem({ task, afterAction }: { task: Pick<Task, 'id
       data-testid="kebab-add-to-topic"
       onClick={(e) => { e.stopPropagation(); afterAction(); openAddToTopic([taskMember(task)]); }}
     >
-      <span className="task-kebab-icon" aria-hidden="true">#</span>
+      <span className="task-kebab-icon" aria-hidden="true">{ICON_HASH}</span>
       <span>Add to topic…</span>
     </button>
   );

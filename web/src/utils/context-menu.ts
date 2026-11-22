@@ -147,17 +147,33 @@ export interface ContextMenuItem {
   when?: boolean;
 }
 
-/** Drop hidden items, then collapse dividers that ended up leading/trailing/doubled. */
+/**
+ * Drop hidden items, put the danger rows last, then tidy the rules and headings.
+ *
+ * The big-menu shape (standard.md, "Big menus"; `utils/menu-shape.ts` checks it), kept here so
+ * every ContextMenu has it by construction, whatever order its caller listed: the danger rows
+ * (Delete, Remove…) form the last section, alone under one rule; a heading names its section, so
+ * a rule right above a heading is dropped; a heading left with no row under it goes; and no rule
+ * leads, trails or doubles.
+ */
 export function normalizeContextMenuItems(items: ContextMenuItem[]): ContextMenuItem[] {
   const visible = items.filter((item) => item.when !== false);
+  const isDanger = (item: ContextMenuItem) => !!item.danger && !item.divider && !item.section && !item.info;
+  const danger = visible.filter(isDanger);
+  const ordered = danger.length > 0 && danger.length < visible.length
+    ? [...visible.filter((item) => !isDanger(item)), { divider: true }, ...danger]
+    : visible;
   const out: ContextMenuItem[] = [];
-  for (const item of visible) {
-    if (item.divider) {
-      if (out.length === 0) continue;
-      if (out[out.length - 1]?.divider) continue;
-    }
+  const isRule = (item?: ContextMenuItem) => !!item?.divider;
+  for (const item of ordered) {
+    if (item.divider && (out.length === 0 || isRule(out[out.length - 1]))) continue;
+    // A heading names its section: no rule above it, and a heading with no row under it goes.
+    if (item.section && isRule(out[out.length - 1])) out.pop();
+    if ((item.section || item.divider) && out[out.length - 1]?.section) out.pop();
+    // Popping an empty heading can leave the list empty again: still no leading rule.
+    if (item.divider && out.length === 0) continue;
     out.push(item);
   }
-  while (out.length && out[out.length - 1]?.divider) out.pop();
+  while (out.length && (isRule(out[out.length - 1]) || out[out.length - 1]?.section)) out.pop();
   return out;
 }

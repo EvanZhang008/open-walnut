@@ -269,7 +269,7 @@ test('Main\'s quick actions sit in its composer\'s "+" -> More, not in a bar of 
   await expect(page.getByTestId('org-detail').getByText('Ask the CEO to')).toHaveCount(0)
   await expectChatShown(page)
   const menu = await openMainMore(page)
-  await expect(menu.locator('.chat-plus-menu-label').filter({ hasText: 'Quick actions' })).toBeVisible()
+  await expect(menu.locator('.wn-menu-heading').filter({ hasText: 'Quick actions' })).toBeVisible()
   await expect(quickRows(menu)).toHaveText(['Tidy projects', 'Put tasks in place', 'Triage'])
   await expect(quickRows(menu).first()).toHaveAttribute('title', /Nothing changes until you pick what to apply\./)
   await expect(quickRows(menu).first()).not.toHaveAttribute('aria-disabled', 'true')

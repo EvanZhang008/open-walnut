@@ -137,7 +137,9 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
           buttons, the eye on the label row); Open in new tab lives only in the Window group below. */}
       <KebabGroup
         label="Open panel"
-        hint={`changed · files${p.board !== 'none' ? ' · board' : ''}${p.threads ? ' · threads' : ''}${appsRow ? ' · apps' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
+        // Four names, not every row: the hint's length sets the menu's width, and a wide menu
+        // covers the chat it opens over (the UI audit, 2026-11-22). The group says the rest.
+        hint={`changed · files · ${p.threads ? 'threads' : 'code'} · web${hintCount ? ` (${hintCount})` : ''}`}
         icon={OPEN_ICON}
         testId="session-kebab-open"
         openWhen={summary !== null}

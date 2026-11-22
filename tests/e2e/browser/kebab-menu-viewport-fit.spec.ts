@@ -115,7 +115,7 @@ async function assertFitsViewport(page: Page, menu: Locator, label: string) {
   }))
 }
 
-/** The session menu's groups (KebabGroup), top to bottom; each starts closed. */
+/** The session menu's groups (KebabGroup); openKebabGroup leaves one already open as it is. */
 const SESSION_MENU_GROUPS: KebabGroupId[] = ['session-kebab-open', 'session-kebab-window', 'kebab-group-pin', 'kebab-group-dates', 'kebab-group-move', 'session-kebab-copy-open', 'session-kebab-debug', 'session-kebab-details']
 
 async function openAllGroups(menu: Locator) {

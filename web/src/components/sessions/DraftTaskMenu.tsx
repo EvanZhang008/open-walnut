@@ -41,6 +41,8 @@ import { projectDisplayName } from '@/utils/project-display';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 import type { DraftTaskField, DraftTaskFieldPatch } from './draft-column';
 import { formatDraftDate } from './draft-decisions';
+import { ICON_DOT, ICON_FOLDER_SOLID } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 
 /** Why the menu closed: DraftDecisionRow picks where focus goes from it. */
 export type DraftMenuCloseReason =
@@ -229,7 +231,7 @@ export function DraftTaskMenuPopover({
             // The row goes away with the value, so the menu goes too.
             onClick={(e) => { e.stopPropagation(); onChange({ unread: false }); onClose('select'); }}
           >
-            <span className="task-kebab-icon">●</span>
+            <span className="task-kebab-icon" aria-hidden="true">{ICON_DOT}</span>
             <span>Start unread</span>
           </button>
         </>
@@ -263,6 +265,7 @@ function ProjectSection({ project, onDone }: { project: DraftMenuProject; onDone
   return (
     <>
       <div className="task-kebab-project draft-task-menu-project" data-testid="draft-menu-project">
+        <span className="task-kebab-icon" aria-hidden="true">{ICON_FOLDER_SOLID}</span>
         <span className="task-kebab-project-label">Project</span>
         <button
           ref={btnRef}
@@ -274,7 +277,7 @@ function ProjectSection({ project, onDone }: { project: DraftMenuProject; onDone
         >
           <span className="task-kebab-project-current-name">{projectDisplayName(project.value)}</span>
           {project.isNew && <span className="badge qtc-confirm-new">new</span>}
-          <span className="task-kebab-project-caret">▾</span>
+          <DisclosureChevron open={open} className="task-kebab-project-caret" />
         </button>
         {project.why && <div className="draft-task-menu-project-why">{project.why}</div>}
       </div>

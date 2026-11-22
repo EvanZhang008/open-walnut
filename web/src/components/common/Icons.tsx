@@ -46,11 +46,6 @@ export function folderOutlineIcon(size: number = 12): ReactNode {
   );
 }
 export const ICON_FOLDER_OUTLINE = folderOutlineIcon();
-/** collapse chevron: ONE glyph for every `.collapse-chevron` button (CSS
- *  rotates it when expanded). Shared so the tier chip and the list rows can
- *  never drift apart; it lives here rather than in TodoPanel because
- *  FocusSatelliteCards importing TodoPanel would be a cycle. */
-export const CHEVRON_GLYPH = '▶︎';
 /** folder FILLED: PROJECT labels. Solid vs outline is the at-a-glance
  *  project/folder distinction: project = solid, folder = hollow. */
 export const ICON_FOLDER_SOLID = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4a1 1 0 011-1h3.6l1.6 1.8h5.8a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>;
@@ -260,3 +255,31 @@ export const ICON_READ_SIDE = (
     <path d="M8 2.5v11" />
   </svg>
 );
+
+// ── Menu row icons ─────────────────────────────────────────────────────────
+// Every menu row is one drawn icon and one line of words (2026-11-23, the user on the composer
+// + menu, in his words: one icon, one text; why do some rows have a box around them?): never a
+// typed character (@, /, arrows, quote marks, #, a pencil glyph) in the icon slot.
+// tests/web/menu-row-icons.test.ts guards it.
+const rowIcon = (children: ReactNode) => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
+);
+/** Mention (the composer's @). */
+export const ICON_AT = rowIcon(<><circle cx="8" cy="8" r="2.6" /><path d="M10.6 5.6v3.1a1.9 1.9 0 0 0 3.8 0V8a6.4 6.4 0 1 0-2.5 5.1" /></>);
+/** Run a skill (the composer's /): a wand with a spark. */
+export const ICON_SKILL = rowIcon(<><path d="M2.5 13.5l7.5-7.5" /><path d="M9 5l2 2" /><path d="M12.5 1.8v2.4M11.3 3h2.4M13.8 6.8v1.6M13 7.6h1.6M6.2 1.8v1.6M5.4 2.6H7" /></>);
+/** Quote a task into a session. */
+export const ICON_QUOTE = rowIcon(<><path d="M3 11.5c1.6-.5 2.5-1.6 2.5-3.5V5H2.5v3h3" /><path d="M9.5 11.5c1.6-.5 2.5-1.6 2.5-3.5V5H9v3h3" /></>);
+/** A topic (a group chat). */
+export const ICON_HASH = rowIcon(<><path d="M6 2.5L4.8 13.5M11.2 2.5L10 13.5M2.8 6h11M2.2 10h11" /></>);
+export const ICON_ARROW_LEFT = rowIcon(<path d="M13 8H3.5M7.5 4l-4 4 4 4" />);
+export const ICON_ARROW_RIGHT = rowIcon(<path d="M3 8h9.5M8.5 4l4 4-4 4" />);
+export const ICON_ARROW_DOWN = rowIcon(<path d="M8 3v9.5M4 8.5l4 4 4-4" />);
+/** Leave (back up to where it came from). */
+export const ICON_LEAVE = rowIcon(<><path d="M6 4.5L2.5 8 6 11.5" /><path d="M2.5 8h7a4 4 0 0 1 4 4v1" /></>);
+export const ICON_MINUS = rowIcon(<path d="M3 8h10" />);
+export const ICON_PENCIL = rowIcon(<><path d="M10.5 2.5l3 3-8 8h-3v-3l8-8z" /><path d="M9 4l3 3" /></>);
+/** Walnut's own pick: a spark. */
+export const ICON_SPARKLE = rowIcon(<path d="M8 2l1.4 3.9L13.5 7.3 9.4 8.7 8 12.8 6.6 8.7 2.5 7.3l4.1-1.4L8 2z" />);
+/** A filled dot (marked unread). */
+export const ICON_DOT = rowIcon(<circle cx="8" cy="8" r="3" fill="currentColor" stroke="none" />);

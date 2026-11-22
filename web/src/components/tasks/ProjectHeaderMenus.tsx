@@ -324,7 +324,7 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
             </button>
           )}
           <button className="task-kebab-item" onClick={(e) => { e.stopPropagation(); handleRename(); }}>
-            <span className="task-kebab-icon">✎</span>
+            <span className="task-kebab-icon">{ICONS.ICON_PENCIL}</span>
             <span>Rename…</span>
           </button>
           <button className="task-kebab-item" data-menu-item="scripts" title="The project's scripts: setup for new workspaces, one-click runs in its sessions"
@@ -350,7 +350,7 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
             className="task-kebab-item task-kebab-item-danger"
             onClick={(e) => { e.stopPropagation(); handleDelete(); }}
           >
-            <span className="task-kebab-icon">🗑</span>
+            <span className="task-kebab-icon">{ICONS.ICON_TRASH}</span>
             <span>Delete…</span>
           </button>
         </div>,

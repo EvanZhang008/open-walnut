@@ -5,7 +5,8 @@
  * Presentational; PanelMenu (FilterMenu.tsx) wires them to DisplayMenuProps.
  */
 import { useRef, type KeyboardEvent, type ReactNode } from 'react';
-import { ICON_CHECK, ICON_CHEVRON_RIGHT } from '../common/Icons';
+import { ICON_CHECK } from '../common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { TAB_BAR_HIDDEN_TABS_KEY, useNavigationList } from '@/hooks/useNavigationPreference';
 import type { DisplayMenuProps } from './filter-bar-types';
 import type { GroupBy, ViewChoiceRow } from './ViewDropdown';
@@ -75,6 +76,9 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
           Recent by when each task was opened, and the rows say so instead of
           offering a dead control. */}
       <div className="dm-section dm-order">
+        {/* The second section's name, as Filter names the first (the UI audit, 2026-11-22: filters
+            and layout read as one list): Sort, Group, View, the switches and Session columns. */}
+        <div className="fb-layout-title wn-menu-heading" data-view-option="layout-title"><span>Layout</span></div>
         {o.note ? (
           <>
             <DisplayRow option="sort" label="Sort" title={o.note}><span className="dm-row-note">{o.note}</span></DisplayRow>
@@ -118,7 +122,7 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
           <span className="fb-item-icon" aria-hidden="true">{ICON_VIEW}</span>
           <span className="fb-item-text">View</span>
           <span className="fb-prop-summary">{viewLabel}</span>
-          <span className="fb-item-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
+          <DisclosureChevron className="fb-item-chevron" />
         </button>
         <SwitchRow option="quick-views" label="Show tab bar" title={TAB_BAR_SWITCH_TITLE}
           checked={p.quickViews} onChange={p.onQuickViewsChange} />

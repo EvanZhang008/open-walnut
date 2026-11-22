@@ -8,6 +8,8 @@
 
 /* Each section sits under a hairline: the filter rows come first on the page. */
 .dm-section { display: flex; flex-direction: column; margin-top: 4px; padding: 6px 0 2px; border-top: 1px solid var(--border); }
+/* The Layout section is named by its heading: no rule above it (standard.md, Big menus). */
+.dm-section.dm-order { border-top: 0; margin-top: 0; padding-top: 0; }
 
 /* View rows on the View page: the check slot, then the name (the same rhythm as .fb-opt-body). */
 .dm-view {

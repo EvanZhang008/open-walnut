@@ -7,6 +7,7 @@
  * placed by useMenuPlacement, pointer downs stopped (no drag starts under it),
  * arrows move, Escape (useOverlayLayer, wherever focus is) closes and gives the focus back to the kebab.
  */
+import { MenuHeading } from '@/components/common/MenuHeading';
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ICON_CHECK } from '@/components/common/Icons';
@@ -118,8 +119,8 @@ export function KanbanLaneMenu(p: KanbanLaneMenuProps) {
       <Row testId="kanban-lane-menu-rename" label="Rename" blocked={ro} onPick={pick(p.onRename)} />
       <Row testId="kanban-lane-menu-left" label="Move left" blocked={ro || (index === 0 ? 'Already the first lane' : '')} onPick={pick(() => p.onMove(-1))} />
       <Row testId="kanban-lane-menu-right" label="Move right" blocked={ro || (index >= lanes.length - 1 ? 'Already the last lane' : '')} onPick={pick(() => p.onMove(1))} />
-      <div className="kanban-menu-sep" role="separator" />
-      <div className="kanban-menu-group" role="presentation">Kind</div>
+      {/* A named section (standard.md, Big menus): the heading, no rule above it. */}
+      <MenuHeading className="kanban-menu-group">Kind</MenuHeading>
       {LANE_KINDS.map((kind) => (
         <Row
           key={kind}

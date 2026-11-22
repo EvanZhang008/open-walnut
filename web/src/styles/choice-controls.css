@@ -771,7 +771,9 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   transition: transform 160ms ease-out;
 }
 
-[aria-expanded='true'] > .wn-disclosure-chevron,
+/* A row that opens its rows in place turns its chevron down; a row that opens a menu or panel
+   beside it (aria-haspopup) keeps it pointing at that menu. */
+[aria-expanded='true']:not([aria-haspopup]) > .wn-disclosure-chevron,
 .wn-disclosure-chevron.is-open {
   transform: rotate(90deg);
 }

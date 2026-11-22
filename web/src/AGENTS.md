@@ -976,6 +976,12 @@ show inline after the open ones, other completed hits that show the query fold i
   is not inside `menuRef`, so naive "outside" checks close the parent when the user clicks
   its own submenu. Check `.closest('.task-kebab-project-flyout')` (and future flyout classes)
   before dismissing.
+- **A big menu has one shape** (standard.md "Big menus", `utils/menu-shape.ts`): everyday rows
+  first, the rest in named groups or under a `MenuHeading`, rare rows inside their group, Delete
+  last alone under one rule, at most three bare rules, every row that opens more ending with the one
+  `DisclosureChevron`. ContextMenu orders danger rows and headings itself; a new menu box must be
+  classified in `tests/web/menu-shape.test.ts`, and a big hand-built one measured by
+  `tests/e2e/browser/big-menu-shape.spec.ts`.
 - **There are no submenus.** The core `ContextMenu` has none, so the Mail message menu groups its
   AI entries under a `Walnut` info row instead, with the ✦ inline in the LABEL rather than in
   `row.icon`: Mail has never drawn that icon column, and filling it for one group indents only

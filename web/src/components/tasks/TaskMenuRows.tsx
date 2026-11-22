@@ -11,13 +11,19 @@
  * Select… and the list moves (only a list has a selection and an order), Quote in
  * session (pointless into the task's own session).
  *
+ * The list is a big menu (standard.md, "Big menus"): the everyday rows first (snooze, watch,
+ * details, Status, Pin to) with no rule between them, then ONE rule and the collapsed groups
+ * (Dates, More fields, Move & transfer, Team), then the danger section (Delete task) under its
+ * own rule, last. A host that holds more than the task (the session menu) heads this list with
+ * the task's name for it (`heading`). tests/web/menu-shape.test.ts and
+ * tests/e2e/browser/big-menu-shape.spec.ts keep it so.
+ *
  * Every move of the task's work sits under ONE row, Move & transfer (the user: "transfer
  * host or task don't matter all under same top tab"): its project, its host, a transfer
  * to another engine or host, its place in the list, and the service it syncs to. Team
  * (leading and adopting) is not a move and keeps its own row.
  */
 import type { ReactNode } from 'react';
-import { badge } from '@/components/common/badge';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
@@ -39,6 +45,12 @@ import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
 import { projectGroupKey } from '@/utils/project-display';
+import { MenuHeading } from '@/components/common/MenuHeading';
+
+/** Start Session's play mark, drawn (a ▶︎ glyph reads as a menu arrow). */
+const START_ICON = (
+  <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z" /></svg>
+);
 
 /** The list half: what only a task LIST can do with its row. */
 export interface TaskMenuListActions {
@@ -80,6 +92,8 @@ export interface TaskMenuRowsProps {
   phoneMenu?: boolean;
   /** Watch is on the surface itself (the session header's eye among its window buttons): no row for it here. */
   watchOutside?: boolean;
+  /** The section's name, where the menu holds more than the task (the session menu's "Task"). */
+  heading?: string;
 }
 
 function Item({ icon, children, onClick, className, testId }: {
@@ -109,13 +123,14 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
 
   return (
     <>
+      {p.heading && <MenuHeading testId="task-menu-heading">{p.heading}</MenuHeading>}
       {p.onSetStartDate && <TaskSnoozeRow task={task} onSetStartDate={p.onSetStartDate} afterAction={close} />}
       {!p.watchOutside && <WatchMenuItem task={task} afterAction={close} />}
-      {/* Background: long-running work held at the foot of the list whatever its state. */}
-      <BackgroundMenuItem task={task} afterAction={close} />
+      {/* The phone's short menu has no Move & transfer group, so Background keeps its row there. */}
+      {p.phoneMenu && <BackgroundMenuItem task={task} afterAction={close} />}
       {/* A session menu's task already has its session: the row would launch a second one. */}
       {p.onStartSession && !isDone && !ownSession && (
-        <Item icon="▶︎" onClick={act(p.onStartSession)}>Start Session</Item>
+        <Item icon={START_ICON} onClick={act(p.onStartSession)}>Start Session</Item>
       )}
       {p.detail && (
         <Item icon={ICONS.ICON_INFO} onClick={act(p.detail.onToggle)} className={p.detail.open ? 'task-kebab-item-active' : undefined}>
@@ -129,7 +144,7 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
       {!p.phoneMenu && !(activeSessionId && activeSessionId === ownSession) && <QuoteInSessionItem task={task} onDone={close} />}
       {/* Only a list has a selection to start. */}
       {!p.phoneMenu && list?.onStartSelect && (
-        <Item icon="☑" onClick={act(() => list.onStartSelect!(task.id))}>Select…</Item>
+        <Item icon={ICONS.ICON_CHECK} onClick={act(() => list.onStartSelect!(task.id))}>Select…</Item>
       )}
 
       <TaskStatusMenuSection task={task} onSetPhase={p.onSetPhase} onSetWaitUntil={p.onSetWaitUntil} afterAction={close} />
@@ -148,7 +163,8 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
       />
 
       {!p.phoneMenu && (<>
-        {/* Dates and plugin fields keep their own groups. Pin choices are directly above. */}
+        {/* The collapsed groups, after the one rule: Dates and plugin fields keep their own
+            groups (the user: "pin is pin, not mix with date ... the sprint is other"). */}
         <div className="task-kebab-divider" />
         {(p.onSetStartDate || p.onSetDate) && (
           <KebabGroup label="Dates" hint={datesHint(task)} icon={ICONS.ICON_CALENDAR} testId="kebab-group-dates">
@@ -177,31 +193,38 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
         {/* Priority (only with Settings → Tasks → Show task priority) is its own setting too. */}
         <TaskActionMenuItems task={task} part="priority" isPinned={p.isPinned} isDone={isDone} onSetPriority={p.onSetPriority} afterAction={close} />
 
-        <KebabGroup label="Move & transfer" hint="project · host · engine · source" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
+        {/* Its hint names the rare rows it took in (Background, Add to topic), so they are found (the UI review, 2026-11-22). */}
+        <KebabGroup label="Move & transfer" hint="project · host · background · topic" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
+          {/* Background: long-running work held at the foot of the list whatever its state, a
+              place in the list like the moves below (a rare row: the UI audit, 2026-11-22). */}
+          <BackgroundMenuItem task={task} afterAction={close} />
           {p.onMoveToProject && <MoveToProjectSection current={projectGroupKey(task.project)} onMove={p.onMoveToProject} afterAction={close} />}
           <MoveHostMenuItems task={task} afterAction={close} />
           <TransferMenuItem task={task} afterAction={close} />
+          {/* A topic (a group chat) is one more place the task shows. */}
+          <AddToTopicMenuItem task={task} afterAction={close} />
           <ListMoves task={task} list={list} close={close} />
+          {/* Where the task shows in Focus is a place in the list too. */}
+          {list?.onUnhideGroup && task.group_id && list.isGroupHidden && (
+            <Item icon={ICONS.ICON_EYE} onClick={act(() => list.onUnhideGroup!(task.group_id!))}>Unhide folder in Focus</Item>
+          )}
           <TaskSyncMenuRows task={task} afterAction={close} />
           <TaskSourceRow task={task} integrations={integrations} afterAction={close} />
         </KebabGroup>
 
+        {/* Who works on it. */}
         <TeamMenuItems task={task} afterAction={close} />
-        <AddToTopicMenuItem task={task} afterAction={close} />
 
         {/* A sync that failed or has not happened yet needs to be seen, outside the group. */}
         <TaskSyncWarning task={task} integrations={integrations} />
 
-        {list?.onUnhideGroup && task.group_id && list.isGroupHidden && (
-          <Item icon="⊙" onClick={act(() => list.onUnhideGroup!(task.group_id!))}>Unhide folder in Focus</Item>
-        )}
-
         {/* The task's isolated workspace: details, Retry, Remove workspace… */}
         <WorkspaceMenuSection task={task} afterAction={close} />
 
+        {/* The danger section: last, alone under its own rule, and named for what it deletes. */}
         {p.onDelete && (<>
           <div className="task-kebab-divider" />
-          <Item icon={ICONS.ICON_TRASH} onClick={act(p.onDelete)} className="task-kebab-item-danger">Delete</Item>
+          <Item icon={ICONS.ICON_TRASH} onClick={act(p.onDelete)} className="task-kebab-item-danger" testId="task-menu-delete">Delete task</Item>
         </>)}
       </>)}
     </>
@@ -211,15 +234,15 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
 /** The list's own moves (only a list has an order and folders): left out of a parent, up, down, out of a folder. */
 function ListMoves({ task, list, close }: { task: Task; list?: TaskMenuListActions; close: () => void }) {
   if (!list) return null;
-  const row = (icon: string, label: string, fn: (id: string) => void) => (
+  const row = (icon: ReactNode, label: string, fn: (id: string) => void) => (
     <Item key={label} icon={icon} onClick={() => { fn(task.id); close(); }}>{label}</Item>
   );
   return (
     <>
-      {list.onUnparent && task.parent_task_id && row('←', 'Move left', list.onUnparent)}
-      {list.onMoveUp && row('↑', 'Move up', list.onMoveUp)}
-      {list.onMoveDown && row('↓', 'Move down', list.onMoveDown)}
-      {list.onUngroup && task.group_id && row('⑂', 'Remove from folder', list.onUngroup)}
+      {list.onUnparent && task.parent_task_id && row(ICONS.ICON_ARROW_LEFT, 'Move left', list.onUnparent)}
+      {list.onMoveUp && row(ICONS.ICON_ARROW_UP, 'Move up', list.onMoveUp)}
+      {list.onMoveDown && row(ICONS.ICON_ARROW_DOWN, 'Move down', list.onMoveDown)}
+      {list.onUngroup && task.group_id && row(ICONS.ICON_FOLD_TAKE_OUT, 'Remove from folder', list.onUngroup)}
     </>
   );
 }
@@ -242,9 +265,15 @@ function sourceFacts(task: SourceTask, integrations: IntegrationList) {
   };
 }
 
-/** The source's one-letter mark is the one `.badge` (a count's square); a sync error reads red. */
-function sourceBadgeClass(task: Task): string {
-  return `${badge(task.sync_error ? 'error' : 'neutral', { count: true })} task-source-badge`;
+/** A source row's icon: one drawn icon like every menu row (the user, 2026-11-23: one icon and one
+ *  text, no box), red on a sync error. The row's words name the source; its one-letter mark (L, M,
+ *  or ! on an error) stays on `data-source-mark` for whoever reads which integration it is. */
+function SourceIcon({ task, mark, icon }: { task: Pick<Task, 'sync_error'>; mark?: string; icon: ReactNode }) {
+  return (
+    <span className={`task-kebab-icon task-source-icon${task.sync_error ? ' is-error' : ''}`} data-source-mark={task.sync_error ? '!' : mark} aria-hidden="true">
+      {task.sync_error ? ICONS.ICON_WARNING : icon}
+    </span>
+  );
 }
 
 /** Where the task comes from, inside Move & transfer (its sync trouble is TaskSyncWarning's): "Open in <service> ↗" when it mirrors
@@ -255,7 +284,7 @@ function TaskSourceRow({ task, integrations, afterAction }: { task: SourceTask; 
   if (!task.external_url) {
     return (
       <div className="task-kebab-item task-kebab-info" data-testid="kebab-source-row">
-        <span className={sourceBadgeClass(task)}>{task.sync_error ? '!' : f.badge}</span>
+        <SourceIcon task={task} mark={f.badge} icon={ICONS.ICON_FILE} />
         {/* A broken or pending sync says so on its own first-level row (TaskSyncWarning). */}
         <span>{f.name}</span>
       </div>
@@ -270,9 +299,8 @@ function TaskSourceRow({ task, integrations, afterAction }: { task: SourceTask; 
       data-testid="kebab-source-link"
       onClick={(e) => { e.stopPropagation(); afterAction(); }}
     >
-      {task.source && <span className={sourceBadgeClass(task)}>{f.badge}</span>}
+      <SourceIcon task={task} mark={f.badge} icon={ICONS.ICON_NEW_TAB} />
       <span>Open in {f.name}</span>
-      <span className="task-kebab-external-arrow">↗</span>
     </a>
   );
 }
@@ -283,7 +311,7 @@ function TaskSyncWarning({ task, integrations }: { task: SourceTask; integration
   if (!f.status) return null;
   return (
     <div className="task-kebab-item task-kebab-info" data-testid="kebab-sync-warning">
-      <span className={sourceBadgeClass(task)}>{task.sync_error ? '!' : f.badge}</span>
+      <SourceIcon task={task} mark={f.badge} icon={ICONS.ICON_WARNING} />
       <span>{f.name} ({f.status})</span>
     </div>
   );

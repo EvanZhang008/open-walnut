@@ -7,6 +7,7 @@
  */
 import { test, expect, type Page } from './shortcut-test-fixture'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 import { presetPanelDesign, setStatusSectionOpen, statusSection, statusSectionCard, type PanelDesign } from './status-section-helpers'
 
 const made: string[] = []
@@ -17,6 +18,8 @@ test.afterEach(async ({ request }) => {
 async function menuRow(page: Page, card: ReturnType<typeof statusSectionCard>, testId: string) {
   await card.hover()
   await card.locator('.task-kebab-btn').first().click()
+  // Move to Background sits in the Move & transfer group (standard.md, Big menus: rare rows sink).
+  if (testId === 'task-kebab-background') await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'kebab-group-move')
   const row = page.getByTestId(testId).first()
   await expect(row).toBeVisible()
   return row

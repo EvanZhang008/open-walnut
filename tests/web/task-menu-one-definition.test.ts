@@ -16,11 +16,12 @@ const ROOT = path.resolve(import.meta.dirname, '../../web/src');
 const ROWS_FILE = 'components/tasks/TaskMenuRows.tsx';
 
 /** The rows of a task's menu: every component TaskMenuRows imports and renders (so a row added
- *  there is guarded at once), less KebabGroup, the group shell the session half uses too. */
+ *  there is guarded at once), less KebabGroup and MenuHeading, the group shell and the section
+ *  name every big menu uses (standard.md, Big menus). */
 const ROWS_SRC = fs.readFileSync(path.join(ROOT, ROWS_FILE), 'utf8');
 const ROW_COMPONENTS = [...ROWS_SRC.matchAll(/^import \{([^}]+)\} from '[^']+';$/gm)]
   .flatMap((m) => m[1].split(',').map((n) => n.trim()))
-  .filter((n) => /^[A-Z]/.test(n) && n !== 'KebabGroup' && new RegExp(`<${n}[\\s/>]`).test(ROWS_SRC));
+  .filter((n) => /^[A-Z]/.test(n) && n !== 'KebabGroup' && n !== 'MenuHeading' && new RegExp(`<${n}[\\s/>]`).test(ROWS_SRC));
 
 /** Files that may render a row component outside TaskMenuRows, and why. */
 const ALLOWED: Record<string, { components: string[]; why: string }> = {

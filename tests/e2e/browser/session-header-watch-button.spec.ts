@@ -171,7 +171,8 @@ test('A-C: Watch is the header\'s eye; a click watches the task (at the top of t
   // The ⋮ menu: the task's rows are drawn (Background, Watch's old neighbour), no Watch and no
   // Locate among them; Window holds Open in new tab.
   const menu = await openSessionKebab(panel)
-  await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+  // The task's half is drawn: its Move & transfer group (Background sits in it since 2026-11-22; a phone keeps the row).
+  await expect(menu.getByTestId('kebab-group-move').or(menu.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
   await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
   await expect(menu.getByTestId('session-menu-locate')).toHaveCount(0)
   await expect(menu.locator('.task-kebab-item').filter({ hasText: /^(Watch|Stop watching|Locate task|Find on Home)$/ })).toHaveCount(0)

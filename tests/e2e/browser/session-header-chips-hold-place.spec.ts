@@ -742,7 +742,8 @@ test('Fork, Board and Locate wait disabled in their places, then work once the r
     await expect(panel.getByTestId('session-locate-btn')).toHaveAttribute('aria-label', 'Locate task')
     await expect(panel.getByTestId('session-watch-btn')).toHaveAttribute('aria-pressed', /^(true|false)$/)
     const menu = await openSessionKebab(panel)
-    await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+    // The task's half is drawn: its Move & transfer group (Background sits in it since 2026-11-22; a phone keeps the row).
+    await expect(menu.getByTestId('kebab-group-move').or(menu.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
     await expect(menu.getByTestId('session-menu-locate')).toHaveCount(0)
     await closeSessionKebab(panel)
 

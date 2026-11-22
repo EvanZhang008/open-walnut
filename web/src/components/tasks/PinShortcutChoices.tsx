@@ -27,6 +27,7 @@ import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { usePageView } from '@/utils/view-memory';
+import { DisclosureChevron } from '@/components/controls';
 import {
   DEFAULT_PIN_SHORTCUTS, firstLevelPinChoices, isPinShortcutList, normalizePinShortcuts,
   pinMoreEntries, pinShortcutEntries, togglePinShortcut,
@@ -52,13 +53,13 @@ export function PinTierButton({ choice, isCurrent, testId, onClick }: {
     <button
       type="button"
       data-testid={testId}
-      className={`task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
-      style={{ color: choice.color }}
+      // The shared Chip (choice-controls.css); the tier's colour stays on its icon only.
+      className={`wn-chip task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
       title={isCurrent ? `Unpin from ${choice.label}` : choice.label}
       aria-pressed={isCurrent || undefined}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
-      <span className="task-kebab-tier-btn-icon">{choice.icon}</span>
+      <span className="task-kebab-tier-btn-icon" style={{ color: choice.color }}>{choice.icon}</span>
       <span className="task-kebab-tier-btn-label">{choice.label}</span>
     </button>
   );
@@ -123,8 +124,10 @@ export function PinShortcutChoices({ choices, current, onChoose }: {
         {/* The dot's slot is always there, so the button keeps one width. */}
         <span className="task-pin-more-dot" aria-hidden="true" style={hiddenCurrent ? { background: hiddenCurrent.color } : undefined} />
         {/* A phone draws the caret alone, so Focus and Satellite both fit whole beside it. */}
-        <span className="task-pin-more-text">More</span>
-        <span className="task-pin-more-caret" aria-hidden="true">▾</span>
+        {/* Says where it goes: the other pin places (the UI audit: a bare "More" did not say what it held). */}
+        <span className="task-pin-more-text">Others</span>
+        {/* The one chevron of every menu row that opens more (standard.md, Big menus). */}
+        <DisclosureChevron className="task-pin-more-caret" />
       </button>
       <PinMoreFlyout
         open={open}

@@ -12,6 +12,7 @@ import { apiGet, apiPost } from '@/api/client';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import '@/styles/transfer.css';
+import { ICON_ARROW_RIGHT } from '@/components/common/Icons';
 
 export interface HostLoadRow {
   host: string;
@@ -120,7 +121,7 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
               title={`${h.note ? `${h.note} ` : ''}${h.reasons.length ? h.reasons.join('; ') : `Has room: load ${h.loadPerCpu ?? '?'} per CPU${h.ownLoadPerCpu != null ? ` (ours ${h.ownLoadPerCpu})` : ''} on ${h.cpus ?? '?'} CPUs, ${h.running} of ${h.runningLimit} sessions in a turn`}`}
               onClick={(e) => { e.stopPropagation(); move(h.host); }}
             >
-              <span className="task-kebab-icon" aria-hidden="true">→</span>
+              <span className="task-kebab-icon" aria-hidden="true">{ICON_ARROW_RIGHT}</span>
               <span className="task-kebab-move-host-text">
                 <span>{asking === h.host ? `Moving to ${h.label}…` : `Move to ${h.label}`}</span>
                 {h.note && <span className="task-kebab-move-host-note" data-testid={`kebab-move-host-note-${h.host}`}>{h.note}</span>}

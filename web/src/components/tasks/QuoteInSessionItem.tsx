@@ -16,6 +16,7 @@ import { lookupSessionTitle } from '@/stores/entity-label-store';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { taskRefTag } from '@/utils/entity-ref-tags';
 import { insertIntoSessionComposer } from '@/utils/composer-insert';
+import { ICON_QUOTE } from '@/components/common/Icons';
 
 const TITLE_MAX = 28;
 
@@ -43,7 +44,7 @@ export function QuoteInSessionItem({ task, onDone }: { task: Task; onDone: () =>
         onDone();
       }}
     >
-      <span className="task-kebab-icon">❝</span>
+      <span className="task-kebab-icon" aria-hidden="true">{ICON_QUOTE}</span>
       <span>{target ? <>Quote in <b>{target}</b></> : 'Quote in session'}</span>
     </button>
   );

@@ -139,8 +139,8 @@ test('the menu ends with Host, Created and Updated from the session record', asy
   await closeMenu(page)
   await panel.locator('.session-panel-header').click({ button: 'right', position: { x: 40, y: 12 } })
   const ctxMenu = page.locator('.task-kebab-menu')
-  // Closed by default (inside the Session group), the Session info row says what it holds;
-  // open, the rows are there.
+  // Session info leads the Info & tools group, closed like every group (an open one made the menu
+  // taller than a 1280 x 800 window, the UI review 2026-11-22); closed, its row says what it holds.
   await openKebabGroup(ctxMenu, 'session-kebab-session')
   await expect(ctxMenu.getByTestId('session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('folder · host · time · dates')
   await expect(ctxMenu.getByTestId('session-kebab-meta')).toHaveCount(0)
@@ -165,13 +165,13 @@ test('a remote session shows its host alias, the full hostname on hover', async 
   await expect(host).toHaveAttribute('title', 'devbox.example.test')
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 
-  // Inside the Session group: one divider after the last action, then Session info, then nothing.
-  const tail = await menu.locator('[data-testid="session-kebab-session"] > .task-kebab-group-body').evaluate((el) =>
-    Array.from(el.children).slice(-3).map((c) =>
+  // Inside the Info & tools group: Session info leads, then a divider, then the actions.
+  const head = await menu.locator('[data-testid="session-kebab-session"] > .task-kebab-group-body').evaluate((el) =>
+    Array.from(el.children).slice(0, 2).map((c) =>
       c.classList.contains('task-kebab-divider') ? 'divider'
         : c.getAttribute('data-testid') === 'session-kebab-details' ? 'details'
           : (c.textContent ?? '').trim()))
-  expect(tail).toEqual(['Terminate', 'divider', 'details'])
+  expect(head).toEqual(['details', 'divider'])
   await host.evaluate((el) => el.scrollIntoView({ block: 'end' }))
   await expect(host).toBeInViewport()
   await menu.screenshot({ path: shot('03-remote') })

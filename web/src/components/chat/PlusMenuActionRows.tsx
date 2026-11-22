@@ -12,11 +12,14 @@
  */
 import { Fragment } from 'react';
 import type { PlusMenuAction } from './plus-menu-actions';
+import { MenuHeading } from '@/components/common/MenuHeading';
 
 interface PlusMenuActionRowsProps {
   actions: PlusMenuAction[];
   /** Called for ENABLED rows only; ChatInput closes the menu and hands the anchor on. */
   onSelect: (action: PlusMenuAction) => void;
+  /** What sets the ungrouped rows apart: a rule (default), or nothing when the host heads them. */
+  lead?: 'divider' | 'none';
 }
 
 /** Default row icon, same 16px stroke=currentColor box as the menu's other SVGs. */
@@ -29,10 +32,11 @@ function GearIcon() {
   );
 }
 
-export function PlusMenuActionRows({ actions, onSelect }: PlusMenuActionRowsProps) {
+export function PlusMenuActionRows({ actions, onSelect, lead = 'divider' }: PlusMenuActionRowsProps) {
   if (actions.length === 0) return null;
-  // The rows with no group first, under one separator; then each group under its own separator
-  // and heading, in the order the groups first appear.
+  // The rows with no group first, under one separator (or the host's heading); then each group
+  // under its own heading, in the order the groups first appear (standard.md, Big menus: a heading
+  // names a section, so no rule above it).
   const groups: { name?: string; rows: PlusMenuAction[] }[] = [{ rows: [] }];
   for (const action of actions) {
     let g = groups.find((x) => x.name === action.group);
@@ -43,8 +47,7 @@ export function PlusMenuActionRows({ actions, onSelect }: PlusMenuActionRowsProp
     <>
       {groups.filter((g) => g.rows.length > 0).map((g) => (
         <Fragment key={g.name ?? ''}>
-          <div className="chat-plus-menu-divider" role="separator" />
-          {g.name && <div className="chat-plus-menu-label">{g.name}</div>}
+          {g.name ? <MenuHeading>{g.name}</MenuHeading> : lead === 'divider' && <div className="chat-plus-menu-divider" role="separator" />}
           {g.rows.map((action) => actionRow(action, onSelect))}
         </Fragment>
       ))}

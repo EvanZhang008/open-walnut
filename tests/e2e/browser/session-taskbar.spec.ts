@@ -353,7 +353,8 @@ test('Watch and Locate are the header\'s window buttons, first in the row; the s
   expect(ids.slice(-3)).toEqual(['lock', 'expand', 'close'])
   const menu = await openSessionKebab(panel)
   // The task's half of the menu is drawn (Background, Watch's old neighbour), and it has no Watch row.
-  await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+  // The task's half is drawn: its Move & transfer group (Background sits in it since 2026-11-22; a phone keeps the row).
+    await expect(menu.getByTestId('kebab-group-move').or(menu.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
   await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
   await expect(menu.getByTestId('session-menu-locate')).toHaveCount(0)
   await closeSessionKebab(panel)

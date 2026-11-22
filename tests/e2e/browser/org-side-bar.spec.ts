@@ -220,7 +220,8 @@ test('Watch in the node\'s header is the eye, pressed while the node\'s task is 
   // Its menu leaves Watch to the eye: the task's rows are there (Background, Watch's old
   // neighbour), no Watch among them.
   await openSessionKebab(tools)
-  await expect(menu.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+  // The task's half is drawn: its Move & transfer group (Background sits in it since 2026-11-22; a phone keeps the row).
+    await expect(menu.getByTestId('kebab-group-move').or(menu.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
   await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
   await tools.locator('.task-kebab-btn').click()
   await expect(menu).toHaveCount(0)

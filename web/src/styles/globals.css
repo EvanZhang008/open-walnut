@@ -6722,25 +6722,27 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   padding: 4px;
   animation: contextBarSlideIn 0.12s ease;
 }
+/* A row of the composer's menus: the one menu row of every menu (the task menu's .task-kebab-item,
+   ContextMenu's .wn-context-menu-item): 6 px 12 px, icon and words 8 px apart, 12 px words, the
+   accent tint on hover (standard.md, Big menus). */
 .chat-plus-menu-item,
 .chat-send-menu-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 6px 12px;
   background: transparent;
   border: none;
-  border-radius: calc(var(--radius-sm) - 2px);
   color: var(--fg);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: background 0.1s;
 }
 .chat-plus-menu-item:hover:not(:disabled),
 .chat-send-menu-item:hover:not(:disabled) {
-  background: var(--bg-secondary);
+  background: var(--accent-subtle);
 }
 .chat-plus-menu-item:disabled,
 .chat-send-menu-item:disabled {
@@ -6788,26 +6790,17 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   margin: 4px 6px;
   background: var(--border);
 }
-.chat-plus-menu-label {
-  padding: 4px 10px 2px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
+/* A row's icon slot: one drawn icon, 16 px like Attach and Draw, in the rows' icon colour (the
+   user, 2026-11-23: one icon and one text on every row, no box; never a typed @, / or arrow). */
 .chat-plus-menu-key {
   flex-shrink: 0;
-  min-width: 22px;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
   color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  text-align: center;
 }
+.chat-plus-menu-key > svg { width: 16px; height: 16px; }
 
 /* ── Unified "@" mention palette: ONE panel, Tasks + Files ── */
 .mention-palette {
@@ -13063,9 +13056,9 @@ body.walnut-dragging {
 
 /* ===== Task Source Badge ===== */
 
-/* A `.badge.badge-count` (TaskMenuRows.tsx sourceBadgeClass); this only places it. */
-.task-source-badge {
-  flex-shrink: 0;
+/* A source row's icon (TaskMenuRows.tsx SourceIcon), a drawn icon in the row's icon slot; red on a sync error. */
+.task-source-icon.is-error {
+  color: var(--error);
 }
 
 /* ===== Task Subgroup (TaskList page) ===== */
@@ -13379,11 +13372,6 @@ a.task-kebab-info:hover {
   background: var(--accent-subtle);
 }
 
-.task-kebab-external-arrow {
-  margin-left: auto;
-  opacity: 0.5;
-  font-size: var(--font-size-xs);
-}
 
 .task-kebab-icon {
   display: inline-flex;
@@ -13458,19 +13446,7 @@ a.task-kebab-info:hover {
   gap: 4px;
 }
 
-.task-kebab-tier-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: none;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.1s;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
+/* A tier is the shared Chip (.wn-chip, choice-controls.css); only its icon carries the tier colour. */
 
 .task-kebab-tier-btn-icon {
   display: inline-flex;
@@ -13482,15 +13458,6 @@ a.task-kebab-info:hover {
   display: block;
 }
 
-.task-kebab-tier-btn:hover {
-  background: var(--accent-subtle);
-}
-
-.task-kebab-tier-btn.active {
-  border-color: currentColor;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  font-weight: 600;
-}
 
 /* ── Kebab menu: Project section (custom in-menu picker, no native select) ── */
 .task-kebab-project {
@@ -13501,38 +13468,35 @@ a.task-kebab-info:hover {
 }
 .task-kebab-project-label {
   font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
+  color: var(--fg);
   white-space: nowrap;
 }
+/* The value is the row's words, not a field in a box (the user, 2026-11-23: one icon and one
+   text on every row, no box): flat, at the row's right like a hint, then the one chevron. */
 .task-kebab-project-current {
   flex: 1;
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 4px;
   font-size: var(--font-size-sm);
-  font-weight: 500;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
+  padding: 2px 0 2px 6px;
+  border: 0;
   border-radius: var(--radius-sm); /* shape: a menu row */
   background: none;
-  color: var(--fg);
+  color: var(--fg-secondary);
   cursor: pointer;
   transition: background 0.1s;
 }
-.task-kebab-project-current:hover { background: var(--accent-subtle); }
-.task-kebab-project-current.open {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
+.task-kebab-project-current:hover,
+.task-kebab-project-current.open { background: var(--accent-subtle); }
 .task-kebab-project-current-name {
   overflow: hidden;
   text-overflow: ellipsis; /* meta: the current value on a one-line picker button, like a select's */
   white-space: nowrap;
 }
 .task-kebab-project-caret {
-  font-size: 9px;
   color: var(--fg-muted);
   flex: none;
 }
@@ -29195,14 +29159,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   margin: 4px 0;
 }
 
-.wn-context-menu-section {
-  padding: 6px 12px 2px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
+/* .wn-context-menu-section draws the shared .wn-menu-heading (overlay-family.css). */
 
 /* The heading that names what the menu acts on. LOAD BEARING, not decoration: while the menu is open the
    backdrop freezes the row's hover tone, so this line is the only text on screen saying which row is

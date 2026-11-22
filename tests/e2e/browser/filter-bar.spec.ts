@@ -343,7 +343,7 @@ test.describe('Mia: menu layout and words', () => {
       }
       return [
         d('.fb-menu', 'animationDuration'), d('.fb-chip', 'animationDuration'), d('.fb-row', 'transitionDuration'),
-        d('.fb-more-chevron', 'transitionDuration'), d('.fb-check-box', 'transitionDuration'),
+        d('.fb-more-toggle .wn-disclosure-chevron', 'transitionDuration'), d('.fb-check-box', 'transitionDuration'),
       ]
     })
     expect((await motion()).slice(0, 4)).toEqual(['0s', '0s', '0s', '0s'])

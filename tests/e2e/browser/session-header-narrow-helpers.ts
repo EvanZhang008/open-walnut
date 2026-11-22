@@ -374,7 +374,8 @@ export function headerNarrowTests(): void {
     await expect(kebab).toBeVisible()
     await expect(kebab.locator('[data-testid^="session-header-kebab-pill-"]')).toHaveCount(0)
     await expect(kebab.getByText(/Lock panel|Open in new tab/)).toHaveCount(0)
-    await expect(kebab.getByTestId('task-kebab-background')).toBeVisible({ timeout: 30_000 })
+    // The task's half is drawn: its Move & transfer group (Background sits in it since 2026-11-22; a phone keeps the row).
+    await expect(kebab.getByTestId('kebab-group-move').or(kebab.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
     await expect(kebab.getByTestId('session-menu-locate')).toHaveCount(0)
     await expect(kebab.getByTestId('task-kebab-watch')).toHaveCount(0)
     await expect(panel.getByTestId('session-locate-btn')).toBeVisible()

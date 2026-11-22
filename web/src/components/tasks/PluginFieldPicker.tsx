@@ -23,6 +23,8 @@ import { setPluginFieldValue } from '@/api/tasks';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { DisclosureChevron } from '@/components/controls';
+import { ICON_NOTE } from '@/components/common/Icons';
 
 // ── Types + declared-fields cache (module-level, same pattern as useIntegrations) ──
 
@@ -223,6 +225,7 @@ function PluginFieldRow({ task, field, afterAction }: {
   return (
     <>
       <div className="task-kebab-project">
+        <span className="task-kebab-icon" aria-hidden="true">{ICON_NOTE}</span>
         <span className="task-kebab-project-label">{field.label}</span>
         <button
           ref={btnRef}
@@ -230,7 +233,7 @@ function PluginFieldRow({ task, field, afterAction }: {
           onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
         >
           <span className="task-kebab-project-current-name">{current ?? 'Set…'}</span>
-          <span className="task-kebab-project-caret">▾</span>
+          <DisclosureChevron open={open} className="task-kebab-project-caret" />
         </button>
       </div>
       <PluginFieldFlyout

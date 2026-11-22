@@ -330,7 +330,9 @@ describe('TaskActionMenuItems with the draft props', () => {
       walnutPick: { pinTier: { label: 'Satellite', onPick: onTier }, dueDate: { label: 'Fri', onPick: onDue } },
     });
     const rows = [...host.querySelectorAll('.task-kebab-walnut-pick')];
-    expect(rows.map((r) => r.textContent)).toEqual(["✦Use Walnut's pick: Satellite", "✦Use Walnut's pick: Fri"]);
+    expect(rows.map((r) => r.textContent)).toEqual(["Use Walnut's pick: Satellite", "Use Walnut's pick: Fri"]);
+    // Its icon is a drawn spark, never a typed character (tests/web/menu-row-icons.test.ts).
+    expect(rows.every((r) => !!r.querySelector('.task-kebab-icon svg'))).toBe(true);
     await click(rows[0]);
     expect(onTier).toHaveBeenCalledTimes(1);
     expect(s.afterAction).toHaveBeenCalledTimes(1);

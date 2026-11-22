@@ -1,9 +1,10 @@
 /**
- * Every task ⋮ menu groups its rows (KebabGroup): Pin to, Dates, More fields and Move &
- * transfer on the task half (TaskMenuRows); Open and Window at the top of a session's menu
- * (SessionMenuOpen) and one Session group at its foot holding Copy & open, Debug and Session
- * info. Every group starts closed each time the menu opens, so a spec reaching a row inside
- * one opens its group first; a group nested in Session opens Session on the way.
+ * Every task ⋮ menu groups its rows (KebabGroup): Dates, More fields, Move & transfer and Team
+ * on the task half (TaskMenuRows); a session's menu leads with its Session section, Open and
+ * Window (SessionMenuOpen) and one Info & tools group holding Session info, Copy & open and
+ * Debug. Every group starts closed each time the menu opens, so a spec reaching a row inside
+ * one opens its group first (opening an open group is a no-op); a group nested in Info & tools
+ * opens it on the way.
  */
 import { expect, type Locator } from '@playwright/test'
 

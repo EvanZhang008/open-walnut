@@ -1,16 +1,16 @@
 /**
  * SessionKebabSection — the "Session" half of the session-panel kebab dropdown.
  *
- * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">, below a
- * divider, so a single dropdown holds the surface's rows (top: Open, Window, Columns),
- * the task's rows, then this: ONE Session group (KebabGroup) holding Copy & open, Debug,
- * Restart / Terminate and Session info (Folder, Host, the time it took, Created, Updated).
+ * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">: the menu's Session
+ * section holds the surface's rows (Open, Window, Columns), then this: ONE group (KebabGroup,
+ * "Info & tools") holding Session info (Folder, Host, the time it took, Created, Updated; it
+ * opens with the group), Copy & open, Debug and Restart / Terminate. The Task section follows.
  * `SessionViewItems` is the Open group's second half (Inbox, Code, Web, Notes, Msgs,
  * Usage, Background). Presentational only: the session panel owns the handlers.
  */
 import { useState, useRef, useEffect } from 'react';
 import { copyTextRobust } from '@/utils/clipboard';
-import { ICON_CHAT, ICON_COPY, ICON_NOTE, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
+import { ICON_CHAT, ICON_COPY, ICON_INFO, ICON_NOTE, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
 import { openSessionInVscode } from './openSessionInVscode';
 import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { inboxChipTitle } from '@/components/inbox/session-letters';
@@ -396,8 +396,31 @@ export function SessionKebabSection({
   return (
     <div className="task-kebab-section">
       {/* One row for the session process itself (the user's pick of the menu redesign,
-          2026-11-02): what opens beside the chat lives in Open at the top of the menu. */}
-      <KebabGroup label="Session" hint="copy · debug · restart · session info" icon={ICON_CHAT} testId="session-kebab-session">
+          2026-11-02): what opens beside the chat lives in Open at the top of the menu. It sits
+          in the menu's Session section under Columns (TaskQuickActions), so its label names
+          what it holds rather than repeating the heading. */}
+      <KebabGroup label="Info & tools" hint="info · copy · debug · restart" icon={ICON_INFO} testId="session-kebab-session">
+      {/* Session info: where the session works (its folder, whole and selectable, and its
+          host) and its times, read-only. It leads the group (the UI audit, 2026-11-22: at the group's
+          foot it took three clicks to read the folder) and starts closed like every group (open,
+          it made the menu taller than a 1280 x 800 window). Copying or opening the folder stays
+          in Copy & open. */}
+      <KebabGroup label="Session info" hint="folder · host · time · dates" icon={DETAILS_ICON} testId="session-kebab-details">
+        {/* Plugin facts about the session (the time it took), with their Header toggle. */}
+        <SessionMetaFacts sessionId={sessionId} taskId={taskId} onAfterAction={onAfterAction} />
+        <div className="task-kebab-meta" data-testid="session-kebab-meta">
+          {metaRows.map((row) => (
+            <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} data-gone={row.gone ? 'true' : undefined} title={row.title}>
+              <span className="task-kebab-meta-label">{row.label}</span>
+              <span className="task-kebab-meta-value">
+                {row.key === 'folder' ? <PathSegments path={row.value} /> : row.value}
+                {row.gone && <span className="task-kebab-meta-gone"> (gone)</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      </KebabGroup>
+      <div className="task-kebab-divider" />
 
       {/* Copy & open: take the session somewhere else (an editor, a terminal, the
           clipboard), and the facts that go with it. */}
@@ -499,25 +522,6 @@ export function SessionKebabSection({
         </>
       )}
 
-      {/* Session info: where the session works (its folder, whole and selectable, and its
-          host) and its times, read-only, at the foot of the menu; closed, the row says what
-          it holds. Copying or opening the folder stays in Copy & open. */}
-      <div className="task-kebab-divider" />
-      <KebabGroup label="Session info" hint="folder · host · time · dates" icon={DETAILS_ICON} testId="session-kebab-details">
-        {/* Plugin facts about the session (the time it took), with their Header toggle. */}
-        <SessionMetaFacts sessionId={sessionId} taskId={taskId} onAfterAction={onAfterAction} />
-        <div className="task-kebab-meta" data-testid="session-kebab-meta">
-          {metaRows.map((row) => (
-            <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} data-gone={row.gone ? 'true' : undefined} title={row.title}>
-              <span className="task-kebab-meta-label">{row.label}</span>
-              <span className="task-kebab-meta-value">
-                {row.key === 'folder' ? <PathSegments path={row.value} /> : row.value}
-                {row.gone && <span className="task-kebab-meta-gone"> (gone)</span>}
-              </span>
-            </div>
-          ))}
-        </div>
-      </KebabGroup>
       </KebabGroup>
     </div>
   );

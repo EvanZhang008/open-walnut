@@ -202,3 +202,11 @@
 .session-control-option:has(.session-control-option-icon) {
   grid-template-columns: 24px minmax(0, 1fr);
 }
+
+/* A row that opens more (More actions) ends with the shared chevron at the right edge. */
+.chat-plus-menu-chevron {
+  margin-left: auto;
+  color: var(--fg-muted);
+}
+/* After a value (Reply style's "Rich"), the chevron follows it at the edge. */
+.chat-plus-menu-control-value + .chat-plus-menu-chevron { margin-left: 4px; }

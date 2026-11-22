@@ -1136,7 +1136,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                   {favoriteNotes.includes(fn.path) ? 'Remove bookmark' : 'Bookmark'}
                 </button>
                 <button onClick={() => handleStartRename(fn)}>Rename note</button>
-                <button className="danger" onClick={() => void handleDeleteNode(fn)}>Delete note</button>
+                {/* Its Delete note waits in the danger section at the foot (standard.md, Big menus). */}
                 <div className="notes-context-menu-divider" />
               </>
             );
@@ -1186,8 +1186,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           <button onClick={() => handleReveal(contextMenu.node.path, 'finder')}>Reveal in Finder</button>
           <button onClick={() => handleCopyPath(contextMenu.node.path)}>Copy path</button>
           <button onClick={() => handleReveal(contextMenu.node.path, 'vscode')}>Open in VS Code</button>
-          {/* Delete — every node type. Notes/attachments get a plain confirm; folders a
-              recursive-delete confirm with the contained note/attachment count. */}
+          {/* The danger section, last and alone under one rule (standard.md, Big menus): the folder
+              note's Delete note, then Delete for every node type. Notes/attachments get a plain
+              confirm; folders a recursive-delete confirm with the contained note/attachment count. */}
+          <div className="notes-context-menu-divider" />
+          {contextMenu.folderNote && (
+            <button className="danger" onClick={() => void handleDeleteNode(contextMenu.folderNote!)}>Delete note</button>
+          )}
           <button className="danger" onClick={() => void handleDeleteNode(contextMenu.node)}>
             {contextMenu.node.type === 'folder' ? 'Delete folder' : 'Delete'}
           </button>

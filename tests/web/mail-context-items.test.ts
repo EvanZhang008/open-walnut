@@ -169,7 +169,6 @@ describe('the ordinary inbox row', () => {
     expect(labels(items)).toEqual([
       'Harbour Office · Pontoon works next week',
       'Mark as read',
-      '-',
       'Open message',
       '-',
       'Reply',
@@ -424,7 +423,6 @@ describe('mail this person wrote is a different menu', () => {
     expect(labels(items)).toEqual([
       'To Writer · Pontoon works next week',
       'Mark as unread',
-      '-',
       'Open message',
       '-',
       'Forward',
@@ -533,5 +531,16 @@ describe('the Walnut link survives its own parse', () => {
     expect(link).toBe(
       'http://127.0.0.1:3456/mail?account=fixture%3Awriter%40example.invalid&message=INBOX%3A1%3A31',
     );
+  });
+});
+
+// The big-menu shape (standard.md, Big menus; tests/web/menu-shape.test.ts), on its fullest cases.
+import { contextMenuShape, menuShapeProblems } from '../../web/src/utils/menu-shape';
+import { normalizeContextMenuItems } from '../../web/src/utils/context-menu';
+describe('the message menu has the big-menu shape', () => {
+  it('inbound, outbound and a draft: at most three bare rules, at most sixteen rows', () => {
+    for (const over of [{}, { outbound: true }, { draftsView: true }, { readerOpen: false }]) {
+      expect(menuShapeProblems(contextMenuShape(normalizeContextMenuItems(build(over)))), JSON.stringify(over)).toEqual([]);
+    }
   });
 });

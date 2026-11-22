@@ -600,7 +600,7 @@ export function ContextMenu({
           if (row.divider) return <div key={row.key ?? `div-${index}`} className="wn-context-menu-divider" />;
           if (row.section) {
             return (
-              <div key={row.key ?? `sec-${index}`} className="wn-context-menu-section">{row.label}</div>
+              <div key={row.key ?? `sec-${index}`} className="wn-context-menu-section wn-menu-heading" role="presentation">{row.label}</div>
             );
           }
           if (row.info) {

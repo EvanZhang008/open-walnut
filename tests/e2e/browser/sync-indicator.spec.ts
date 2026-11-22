@@ -105,7 +105,7 @@ test.describe('TodoPanel source badge', () => {
     await showAllTasks(page)
 
     const sourceRow = await openSourceRow(page, 'PluginA synced task')
-    const badge = sourceRow.locator('.task-source-badge')
+    const badge = sourceRow.locator('.task-source-icon')
     await expect(badge).toBeVisible()
     await expect(sourceRow).not.toContainText('(unsynced)')
     await expect(taskSyncWarning(page.locator('.task-kebab-menu:visible'))).toHaveCount(0)
@@ -115,7 +115,7 @@ test.describe('TodoPanel source badge', () => {
     await showAllTasks(page)
 
     const sourceRow = await openSyncWarning(page, 'PluginA unsynced task')
-    const badge = sourceRow.locator('.task-source-badge')
+    const badge = sourceRow.locator('.task-source-icon')
     await expect(badge).toBeVisible()
     await expect(sourceRow).toContainText('(unsynced)')
   })

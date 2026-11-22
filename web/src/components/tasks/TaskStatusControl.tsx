@@ -262,8 +262,8 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
   const until = task.phase === 'WAITING' ? formatWaitUntil(task.wait_until) : '';
   return (
     <>
-      <div className="task-kebab-divider" />
-      {/* The date rows' shape under its own classes: `.task-kebab-date*` means a date. */}
+      {/* The date rows' shape under its own classes: `.task-kebab-date*` means a date. No rule above
+          it: Status is one of the menu's everyday rows (standard.md, Big menus). */}
       <div className={`task-kebab-status-row${open ? ' open' : ''}`} data-testid="task-status-row">
         <button
           type="button"

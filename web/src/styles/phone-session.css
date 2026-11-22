@@ -637,8 +637,7 @@
     .msg-copy-label, .msg-time, .mode-toggle-pill-label, .composer-model-pill-short,
     .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-ws-toggle,
     .chat-earlier-label, .chat-earlier-divider span
-  ),
-  html body .task-kebab-menu :is(.task-kebab-project-caret, .task-kebab-status-caret) {
+  ) {
     font-size: var(--font-size-sm);
   }
 }

@@ -45,7 +45,7 @@ function PinButton({ pinned, title, onToggle }: { pinned: boolean; title: string
   return (
     <button
       type="button"
-      className={`task-kebab-tier-btn task-kebab-fact-pin${pinned ? ' active' : ''}`}
+      className={`wn-chip task-kebab-fact-pin${pinned ? ' active' : ''}`}
       aria-pressed={pinned}
       data-testid="session-fact-pin"
       title={pinned

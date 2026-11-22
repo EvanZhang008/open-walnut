@@ -86,14 +86,14 @@ describe('PlusMenuActionRows markup contract', () => {
     expect(custom).not.toContain('data-icon="gear"')
   })
 
-  it('puts grouped rows under their own separator and heading, after the rows with none', () => {
+  it('puts grouped rows under their own heading (no rule above it), after the rows with none', () => {
     const html = render([
       { id: 'qa-1', label: 'Tidy projects', group: 'Quick actions', onSelect: noop },
       { id: 'plain', label: 'Plain row', onSelect: noop },
       { id: 'qa-2', label: 'Triage', group: 'Quick actions', onSelect: noop },
     ])
-    expect(count(html, /role="separator"/g)).toBe(2)
-    expect(count(html, /class="chat-plus-menu-label"/g)).toBe(1)
+    expect(count(html, /role="separator"/g)).toBe(1)
+    expect(count(html, /class="wn-menu-heading"/g)).toBe(1)
     const at = ['data-action-id="plain"', '>Quick actions<', 'data-action-id="qa-1"', 'data-action-id="qa-2"'].map((s) => html.indexOf(s))
     expect(at.every((v) => v > -1)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
@@ -101,7 +101,12 @@ describe('PlusMenuActionRows markup contract', () => {
 
   it('a list of grouped rows only has no empty ungrouped separator', () => {
     const html = render([{ id: 'qa-1', label: 'Tidy projects', group: 'Quick actions', onSelect: noop }])
-    expect(count(html, /role="separator"/g)).toBe(1)
-    expect(html).toMatch(/^<div class="chat-plus-menu-divider" role="separator"><\/div><div class="chat-plus-menu-label">Quick actions<\/div><button/)
+    expect(count(html, /role="separator"/g)).toBe(0)
+    expect(html).toMatch(/^<div class="wn-menu-heading" role="presentation">Quick actions<\/div><button/)
+  })
+
+  it('lead="none" leaves the ungrouped rows to the host heading above them', () => {
+    const html = renderToStaticMarkup(createElement(PlusMenuActionRows, { actions: [{ id: 'plain', label: 'Plain row', onSelect: noop }], onSelect: noop, lead: 'none' }))
+    expect(count(html, /role="separator"/g)).toBe(0)
   })
 })

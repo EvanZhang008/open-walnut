@@ -171,7 +171,8 @@
 .kanban-menu-row.is-danger:not([aria-disabled="true"]) { color: var(--kc-red); }
 .kanban-menu-check { display: inline-flex; width: 14px; flex: 0 0 auto; color: var(--accent); }
 .kanban-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
-.kanban-menu-group { padding: 4px 8px 2px 28px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.02em; }
+/* The shared .wn-menu-heading, its words over the rows' words (past the check column). */
+html .kanban-menu-group.wn-menu-heading { padding-left: 28px; }
 .kanban-changes-row { font-variant-numeric: tabular-nums; line-height: 1.35; overflow-wrap: anywhere; }
 .kanban-changes-empty { padding: 8px; color: var(--fg-muted); }
 
