@@ -8,7 +8,7 @@
  * is still in the inbox. Fetching is gated on the panel being open; every letter WS event
  * refreshes it (D8).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { takeInboxReturn } from '@/components/inbox/item-drafts';
 import { isInboxLayout, type InboxLayout } from '@/components/inbox/InboxPane';
@@ -79,7 +79,7 @@ export function useNotificationLetters(open: boolean, section: RailSection) {
   const [keptReadIds, setKeptReadIds] = useState<ReadonlySet<string>>(() => new Set());
   const unreadOnlyRef = useRef(unreadOnly);
   unreadOnlyRef.current = unreadOnly;
-  const toggleUnreadOnly = useCallback(() => {
+  const toggleUnreadOnly = useLeanCallback(() => {
     const next = !unreadOnlyRef.current;
     writeUnreadOnlyPref(next);
     setUnreadOnly(next);
@@ -96,7 +96,7 @@ export function useNotificationLetters(open: boolean, section: RailSection) {
   // Letter mutations: patch locally (the panel must feel instant), call the
   // route, resync on failure. Read state ALSO mirrors onto the feed envelope so
   // the bell badge drops without waiting for the WS round-trip.
-  const markLetterRead = useCallback((id: string, read = true) => {
+  const markLetterRead = useLeanCallback((id: string, read = true) => {
     const current = inboxRef.current.byId.get(id);
     if (current && current.read === read) return;
     markLocalRead([`letter:${id}`], read);
@@ -108,7 +108,7 @@ export function useNotificationLetters(open: boolean, section: RailSection) {
     void inboxRef.current.applyChange(id, { read }, () => setLetterRead(id, read), 'read');
   }, [markLocalRead]);
 
-  const toggleLetterPin = useCallback((letter: LetterEnvelope) => {
+  const toggleLetterPin = useLeanCallback((letter: LetterEnvelope) => {
     const pinned = !letter.pinned;
     void inboxRef.current.applyChange(letter.id, { pinned }, () => setLetterPinned(letter.id, pinned), 'pin');
   }, []);
@@ -116,14 +116,14 @@ export function useNotificationLetters(open: boolean, section: RailSection) {
   // Archiving moves the letter between the live feed and the Archived view, so
   // the list is re-read once the route settles rather than left showing a row
   // that no longer belongs to the current filter.
-  const toggleLetterArchive = useCallback((letter: LetterEnvelope) => {
+  const toggleLetterArchive = useLeanCallback((letter: LetterEnvelope) => {
     const archived = !letter.archived;
     void inboxRef.current
       .applyChange(letter.id, { archived }, () => setLetterArchived(letter.id, archived), 'archive')
       .then(() => inboxRef.current.refresh());
   }, []);
 
-  const openLetter = useCallback((id: string) => {
+  const openLetter = useLeanCallback((id: string) => {
     linkOpened.current = false;
     setOpenLetterId(id);
     log.info('inbox', 'letter reader opened', { letterId: id });
