@@ -52,8 +52,11 @@ const REPLY = [
 
 const HISTORY = [
   { role: 'user', text: 'CR_ASK how did the voice check go?', timestamp: at(0) },
-  { role: 'assistant', text: '', msgId: 'cr-a0', timestamp: at(1), tools: [{ name: 'Bash', toolUseId: 'cr-t1', input: { command: 'ls -la', description: 'List the bench folder' }, result: 'ok' }] },
   { role: 'assistant', text: REPLY, msgId: 'cr-a1', timestamp: at(90) },
+  // The last turn ran a tool: its "Worked for" line sits near the bottom, on screen.
+  { role: 'user', text: 'CR_ASK2 and the folder?', timestamp: at(100) },
+  { role: 'assistant', text: '', msgId: 'cr-a2', timestamp: at(101), tools: [{ name: 'Bash', toolUseId: 'cr-t1', input: { command: 'ls -la', description: 'List the bench folder' }, result: 'ok' }] },
+  { role: 'assistant', text: 'CR_DONE The folder holds the report.', msgId: 'cr-a3', timestamp: at(150) },
 ];
 
 async function proseReport(hist: Locator) {
@@ -103,7 +106,7 @@ async function mount(page: Page, width: number, record: Record<string, unknown> 
   await mockSession(page, HISTORY, 'idle', undefined, { cwd: '/home/someone/projects/voice', ...record }, rpcs);
   const hist = await open(page);
   await page.setViewportSize({ width, height: 900 });
-  await expect(hist).toContainText('Report:', { timeout: 60_000 });
+  await expect(hist).toContainText('CR_DONE', { timeout: 60_000 });
   await page.waitForTimeout(500);
   return { hist, panel: page.locator(`.session-panel[data-session-id="${SID}"]`) };
 }
@@ -131,17 +134,24 @@ for (const width of [1280, 1512]) {
     expect(r.h3!.size).toBeGreaterThanOrEqual(r.p!.size);
     expect(r.h2!.weight).toBe(600);
     expect(r.h3!.weight).toBe(600);
-    // Every row and the person's bubble stay inside the same column.
-    const rows = await hist.evaluate((h) => [...h.querySelectorAll('.tool-run-row, .provenance-card, .session-msg-user, .session-show-earlier-btn')]
-      .filter((e) => e.getClientRects().length > 0)
-      .map((e) => ({ cls: String((e as HTMLElement).className).slice(0, 40), left: e.getBoundingClientRect().left, right: e.getBoundingClientRect().right })));
-    expect(rows.length).toBeGreaterThan(1);
-    for (const row of rows) {
-      expect(row.right, `${row.cls} runs past the reading column`).toBeLessThanOrEqual(r.colRight + 2);
-      expect(row.left, `${row.cls} starts left of the reading column`).toBeGreaterThanOrEqual(r.colLeft - 6);
+    // Every row and the person's bubble stay inside the same column (the history's content box).
+    const rows = await hist.evaluate((h) => {
+      const cs = getComputedStyle(h); const box = h.getBoundingClientRect();
+      const left = box.left + parseFloat(cs.paddingLeft);
+      const right = box.left + h.clientWidth - parseFloat(cs.paddingRight);
+      return { left, right, rows: [...h.querySelectorAll('.tool-run-row, .provenance-card, .session-msg-user, .session-show-earlier-btn')]
+        .filter((e) => e.getClientRects().length > 0)
+        .map((e) => ({ what: `${String((e as HTMLElement).className).slice(0, 40)} in ${String(e.parentElement?.className).slice(0, 40)} mr=${getComputedStyle(e).marginRight}`, left: e.getBoundingClientRect().left, right: e.getBoundingClientRect().right })) };
+    });
+    expect(Math.abs(rows.left - r.colLeft), 'the prose fills the content box').toBeLessThanOrEqual(1);
+    expect(rows.rows.length).toBeGreaterThan(2);
+    for (const row of rows.rows) {
+      expect(row.right, `${row.what} runs past the reading column (${rows.right})`).toBeLessThanOrEqual(rows.right + 1);
+      expect(row.left, `${row.what} starts left of the reading column (${rows.left})`).toBeGreaterThanOrEqual(rows.left - 6);
     }
 
-    const fold = hist.locator('[data-testid="turn-fold"] > .tool-run-toggle').first();
+    const fold = hist.locator('[data-testid="turn-fold"] > .tool-run-toggle').last();
+    await fold.scrollIntoViewIfNeeded();
     await expect(fold).toBeVisible();
     const look = await fold.evaluate((b) => {
       const probe = document.createElement('span');
@@ -190,8 +200,10 @@ test('no row starts under a header: scroll stops clear the glass, and the Files 
   await panel.getByRole('button', { name: 'Files', exact: true }).click();
   const chatHist = panel.locator('.session-panel-chat-col .session-history');
   await expect(chatHist).toBeVisible({ timeout: 20_000 });
-  await chatHist.evaluate((h) => { h.scrollTop = 0; });
+  // The timeline holds its bottom and loads earlier turns at its top: scroll up until it stays at 0.
+  await expect.poll(async () => chatHist.evaluate((h) => { h.scrollTop = 0; return h.scrollTop; }), { timeout: 20_000 }).toBe(0);
   await page.waitForTimeout(300);
+  await expect.poll(async () => chatHist.evaluate((h) => { h.scrollTop = 0; return h.scrollTop; })).toBe(0);
   const split = await chatHist.evaluate((h) => {
     const bar = h.closest('.session-panel-chat-col')!.querySelector('.session-chat-bar')!.getBoundingClientRect();
     const box = h.getBoundingClientRect();

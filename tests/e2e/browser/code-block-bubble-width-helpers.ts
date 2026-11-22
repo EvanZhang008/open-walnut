@@ -177,15 +177,16 @@ export async function expectPaddingTrimStillWorks(page: Page) {
     const code = pre.querySelector('code')!;
     const pad = parseFloat(getComputedStyle(pre).paddingRight);
     const left = parseFloat(getComputedStyle(pre).paddingLeft);
-    // One line as wide as the box minus half its right padding: it reaches
-    // into the padding but not past it.
+    // One line that reaches a quarter of the way into the right padding: into it,
+    // never past it. An exact width, not a count of characters: a whole number of
+    // characters lands anywhere within one character's width, which at some column
+    // widths stops short of the padding (2026-11-22, the 496 px reading column).
     const probe = document.createElement('span');
-    probe.textContent = 'm'.repeat(10);
+    probe.style.display = 'inline-block';
+    probe.style.width = `${pre.clientWidth - left - pad + pad / 4}px`;
+    probe.textContent = '\u00a0';
     code.textContent = '';
     code.appendChild(probe);
-    const charW = probe.getBoundingClientRect().width / 10;
-    const room = pre.clientWidth - left - pad / 2;
-    code.textContent = 'm'.repeat(Math.max(1, Math.floor(room / charW)));
   });
   // A change of the block's own width makes it measure itself again.
   await frame.evaluate(async (f) => {
