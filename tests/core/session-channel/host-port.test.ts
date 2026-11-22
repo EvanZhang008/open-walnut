@@ -20,7 +20,8 @@ function fakeBase() {
     getSessionByClaudeId: async (sid: string) => rows.get(sid) ?? null,
     createSessionRecord: async (sid: string, taskId: string, project: string, cwd?: string, extra?: Record<string, unknown>) => {
       calls.push(`create:${sid}`)
-      const r = rows.get(sid) ?? ({ claudeSessionId: sid, taskId, project, ...(cwd ? { cwd } : {}), ...(extra?.host ? { host: extra.host } : {}) } as SessionRecord)
+      // As the store does (session-tracker.ts createSessionRecord): a row made with this host's own key is born judge 'host'.
+      const r = rows.get(sid) ?? ({ claudeSessionId: sid, taskId, project, ...(cwd ? { cwd } : {}), ...(extra?.host ? { host: extra.host } : {}), ...(extra?.host === HOST || extra?.judge === 'host' ? { judge: 'host' } : {}) } as SessionRecord)
       rows.set(sid, r)
       return r
     },
