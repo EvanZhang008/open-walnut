@@ -159,7 +159,7 @@ describe('one classifier: only an FYI waits', () => {
     const peerSenders = new Set<string>();
     for (const p of srcFiles(path.join(ROOT, 'src'))) {
       const s = fs.readFileSync(p, 'utf8');
-      if (/source: [^,\n]*'peer'|const source = [^\n]*'peer'/.test(s)) peerSenders.add(path.relative(ROOT, p));
+      if (/source: [^,\n]*'peer'|const \w*[sS]ource = [^\n]*'peer'/.test(s)) peerSenders.add(path.relative(ROOT, p));
     }
     expect([...peerSenders].sort()).toEqual(Object.keys(PEER_SENDERS).sort());
   });

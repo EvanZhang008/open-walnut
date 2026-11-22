@@ -286,7 +286,10 @@ describe('through the real queue', () => {
 
   it('every source found in the code is classified here', () => {
     expect(literals.filter((x) => !(x in SOURCE_SENDER)), 'a source the guard does not know: add it to SOURCE_SENDER').toEqual([]);
-    expect(literals).toEqual(expect.arrayContaining(['ui', 'mobile', 'peer', 'walnut-notify', 'routine-trigger', 'transfer']));
+    expect(literals).toEqual(expect.arrayContaining(['ui', 'mobile', 'walnut-notify', 'routine-trigger', 'transfer']));
+    // `peer` is no call-site literal: a session's send and its answer pick it beside the program's
+    // own source (session-send-core.ts, programSendSource), so it is classified by name.
+    expect(SOURCE_SENDER.peer).toBe('agent');
   });
 
   it.each(Object.keys(SOURCE_SENDER))('a line sent as "%s" is stored as the sender the table says', async (source) => {
