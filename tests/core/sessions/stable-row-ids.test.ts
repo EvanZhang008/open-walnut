@@ -173,13 +173,16 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
-/** The text of a call's argument list, from its `(`, skipping strings. */
+/** The text of a call's argument list, from its `(`, skipping strings and comments (an
+ *  apostrophe in a comment is no quote: "the send's own line" once ran the slice past the call). */
 function callArgs(src: string, open: number): string {
   let depth = 0
   let quote: string | null = null
   for (let j = open; j < src.length; j++) {
     const c = src[j]
     if (quote) { if (c === '\\') j++; else if (c === quote) quote = null; continue }
+    if (c === '/' && src[j + 1] === '/') { const end = src.indexOf('\n', j); j = end < 0 ? src.length : end; continue }
+    if (c === '/' && src[j + 1] === '*') { const end = src.indexOf('*/', j + 2); j = end < 0 ? src.length : end + 1; continue }
     if (c === '"' || c === "'" || c === '`') { quote = c; continue }
     if (c === '(') depth++
     else if (c === ')' && --depth === 0) return src.slice(open, j + 1)
