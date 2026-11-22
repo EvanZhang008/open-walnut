@@ -813,13 +813,16 @@ describe('performSessionSend — in_reply_to', () => {
     expect(row?.outcome).toBe('timeout');
   });
 
-  it('a late reply after a turn-end notice leaves that notice\'s verdict alone', async () => {
+  it('a late reply after a turn-end notice settles it replied, the notice\'s outcome kept as history', async () => {
+    // 2026-11-22: it stayed notified, so the asker's side read an answered request as ended without a reply.
     const rq = await armRequest();
     await settleNotified(rq.id, 'completed');
     await performSessionSend({ text: 'here it is', inReplyTo: rq.id, callerSid: TARGET });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
     const row = await getSessionRequest(rq.id);
-    expect(row?.status).toBe('notified');
-    expect(row?.lateFrom).toBeUndefined();
+    expect(row?.status).toBe('replied');
+    expect(row?.lateFrom).toBe('notified');
+    expect(row?.outcome).toBe('completed');
   });
 
   it('the task a request was handed on to answers it directly; a bystander still may not', async () => {
@@ -980,8 +983,8 @@ describe('performSessionSend — in_reply_to', () => {
       const again = await performSessionSend({ text: ANSWER, inReplyTo: a.id, callerSid: TARGET });
       expect(again.sameAnswerAs).toBe(a.id);
       expect(sendMessageToSession).toHaveBeenCalledTimes(1);
-      // The turn end's verdict stays on the row.
-      expect((await getSessionRequest(a.id))?.status).toBe('notified');
+      // The first late answer settled it; the repeat changed nothing.
+      expect(await getSessionRequest(a.id)).toMatchObject({ status: 'replied', lateFrom: 'notified' });
     });
 
     it('the same words to another asker are its own answer', async () => {

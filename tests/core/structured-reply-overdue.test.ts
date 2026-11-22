@@ -15,7 +15,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-structured-reply'));
 
 import {
-  REQUESTS_FILE, buildOverdueReminder, claimReminder, overdueOpenRequests, reminderDueAt, settleLateReply,
+  REQUESTS_FILE, buildOverdueReminder, claimReminder, overdueOpenRequests, reminderDueAt, settleReplied,
   type SessionRequest,
 } from '../../src/core/session-requests.js';
 import { composeReplyText, isPartial, partialLine, readStructuredReply } from '../../src/core/peers/structured-reply.js';
@@ -64,11 +64,11 @@ describe('an overdue request stays open', () => {
   it('lists expired requests still unanswered, and a late reply closes one exactly once', async () => {
     seed([row('rq-a', 'expired', 3), row('rq-b', 'pending', 0.2), row('rq-c', 'replied', 3), row('rq-old', 'expired', 8 * 24)]);
     expect((await overdueOpenRequests(NOW)).map((r) => r.id)).toEqual(['rq-a']);
-    const late = await settleLateReply('rq-a', { not_done: ['docs'] });
+    const late = await settleReplied('rq-a', { not_done: ['docs'] });
     expect(late).toMatchObject({ status: 'replied', lateFrom: 'expired', reply: { not_done: ['docs'] } });
-    expect(await settleLateReply('rq-a')).toBeNull();
-    // A pending one is not "late": its own settle answers it.
-    expect(await settleLateReply('rq-b')).toBeNull();
+    expect(await settleReplied('rq-a')).toBeNull();
+    // A pending one is not "late": the same settle answers it, with no lateFrom.
+    expect((await settleReplied('rq-b'))?.lateFrom).toBeUndefined();
     expect(await overdueOpenRequests(NOW)).toEqual([]);
   });
 

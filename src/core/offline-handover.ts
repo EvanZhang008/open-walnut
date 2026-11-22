@@ -988,10 +988,10 @@ async function applyRecord(
       return;
     }
     case 'settle': {
-      const { settleReplied, settleLateReply } = await import('./session-requests.js');
-      // The host answered a copy row this server had settled without an answer meanwhile (a turn
-      // end's notice, overdue): the answer still settles it as replied (answersLate).
-      if (await settleReplied(record.requestId) ?? await settleLateReply(record.requestId)) result.settled++;
+      const { settleReplied } = await import('./session-requests.js');
+      // Also when this server settled the copy row without an answer meanwhile (a turn end's
+      // notice, overdue): the host's answer still settles it as replied (settleReplied).
+      if (await settleReplied(record.requestId)) result.settled++;
       if (record.score) await keepOfflineScore(record.score, record.requestId);
       return;
     }

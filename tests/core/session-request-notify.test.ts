@@ -102,7 +102,6 @@ import {
   getSessionRequest,
   settleNotified,
   settleReplied,
-  settleLateReply,
   type SessionRequest,
 } from '../../src/core/session-requests.js';
 import { sessionRequestWatchHook } from '../../src/core/session-hooks/builtins.js';
@@ -526,7 +525,7 @@ describe('a deadline notice never starts a turn of its own (held-notices.ts)', (
     await notifyRequesterFallback(rq, 'timeout');
     // The deadline left it open (expired); the late reply settles it.
     expect((await getSessionRequest(rq.id))?.status).toBe('expired');
-    await settleLateReply(rq.id);
+    await settleReplied(rq.id);
     expect(await pendingHeldNotices(ASKER)).toBeNull();
   });
 

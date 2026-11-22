@@ -103,12 +103,12 @@ export interface SessionRequest {
   /**
    * An expired request is OVERDUE, STILL OPEN (2026-10-28, the tracking research: 34 lead
    * timeouts in 3 days, 19 never answered later, and each read as closed): it stays on
-   * open_items and the Brief until a reply settles it (`lateFrom: 'expired'`), its asker's or
+   * open_items and the Brief until a reply settles it (settleReplied, `lateFrom: 'expired'`), its asker's or
    * target's task completes, or it ages out with the settled rows. `remindedAt`: the one
    * reminder its asker got at twice the deadline.
    */
   remindedAt?: string;
-  /** The no-answer status a late reply settled it from (settleLateReply). 'notified' and 'withdrawn' since 2026-11-22. */
+  /** The no-answer status a late reply settled it from (settleReplied). 'notified' and 'withdrawn' since 2026-11-22. */
   lateFrom?: LateAnswerFrom;
   /** When this server's deadline sweep made it overdue (ISO). Only such a row is reminded:
    *  rows an older Walnut expired never are, so an upgrade does not send a burst of them. */
@@ -416,9 +416,20 @@ export async function listAllSessionRequests(): Promise<SessionRequest[]> {
   return [...((await readRequestStore({ readErrors: 'throw' })).requests ?? [])];
 }
 
+/**
+ * A row whose answer reached its asker (noteAnswerDelivered stamped it) reads replied, whatever
+ * settled it before: one left in a no-answer status (answersLate) by a Walnut before 2026-11-22,
+ * where a late answer after a turn end's notice stayed notified, or by a write that raced the
+ * answer. Every pruning write applies it, so the rows an older Walnut left are mended by the next.
+ */
+function answeredReadsReplied(r: SessionRequest): SessionRequest {
+  if (!r.answerDigest || !r.answeredAt || !answersLate(r.status)) return r;
+  return { ...r, status: 'replied', settledAt: r.answeredAt, lateFrom: r.status };
+}
+
 function prune(requests: SessionRequest[]): SessionRequest[] {
   const cutoff = Date.now() - SETTLED_RETENTION_MS;
-  const kept = requests.filter(
+  const kept = requests.map(answeredReadsReplied).filter(
     (r) => r.status === 'pending' || new Date(r.settledAt ?? r.createdAt).getTime() >= cutoff,
   );
   // Bound the file: evict the OLDEST settled rows first, never a pending one.
@@ -564,16 +575,50 @@ export async function noteAnswerDelivered(id: string, stamp: Pick<AnswerStamp, '
     // The row keeps the first answer that reached its asker: a second, different late answer is
     // delivered too, but the request was settled by the first (its reply stays the first's).
     if (idx === -1 || requests[idx].answerDigest) return undefined;
-    requests[idx] = { ...requests[idx], answerDigest: stamp.digest, deliveredTo: stamp.deliveredTo, answeredAt: new Date(now).toISOString() };
+    const at = new Date(now).toISOString();
+    const row: SessionRequest = { ...requests[idx], answerDigest: stamp.digest, deliveredTo: stamp.deliveredTo, answeredAt: at };
+    // Its answer is out, so it is answered: a row a racing write left open (a restore) or settled
+    // without an answer since the settle read it reads replied now, not "ended without a reply".
+    requests[idx] = row.status === 'pending' ? { ...row, status: 'replied', settledAt: at } : answeredReadsReplied(row);
+    if (row.status === 'pending' && row.carries?.length) pullInBack(requests, id);
     return { requests };
   });
 }
 
+/**
+ * An answer settles its request, exactly once, in one write: an open one (pending), or one
+ * settled before WITHOUT an answer (answersLate: a turn end's notice, overdue, withdrawn), which
+ * reads replied with `lateFrom` and leaves every "ended without a reply" and "overdue, still
+ * open" list (a reopened asker does not restore it either). Deciding in the same write as the
+ * change, so a sweep, a turn end or a restore racing the answer never leaves it in a no-answer
+ * status. Null when the row is gone or already answered: the caller then stays silent or
+ * delivers as a repeat or a second answer, and never settles it again. `outbox` owes the
+ * answer's delivery in the same write (reply-outbox.ts), late or not. The kept `outcome` and
+ * `overdueAt` of a late row are its history: readers go by `status`.
+ */
 export async function settleReplied(
   id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp,
   outbox?: (settled: SessionRequest) => ReplyOutbox | undefined,
 ): Promise<SessionRequest | null> {
-  return settle(id, 'replied', undefined, reply ?? undefined, forwardedTo, answer, outbox);
+  let settled: SessionRequest | null = null;
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    const from = requests[idx]?.status;
+    if (idx === -1 || (from !== 'pending' && !answersLate(from))) return undefined;
+    const row: SessionRequest = {
+      ...requests[idx], status: 'replied', settledAt: new Date().toISOString(),
+      ...(from !== 'pending' ? { lateFrom: from } : {}),
+      ...(reply ? { reply } : {}), ...(forwardedTo ? { forwardedTo } : {}), ...stampAnswer(requests, id, answer),
+    };
+    const owed = outbox?.(row);
+    settled = owed ? { ...row, outbox: owed } : row;
+    requests[idx] = settled;
+    // A request this one carried has its work back (a late row's came back when it was settled).
+    if (from === 'pending' && settled.carries?.length) pullInBack(requests, id);
+    return { requests };
+  });
+  return settled;
 }
 
 /** The answer owed to `id`'s asker with this queue row id is in its queue now (or will never be): clear it. */
@@ -598,29 +643,6 @@ export async function noteReplyOutboxTry(id: string, messageId: string): Promise
     requests[idx] = { ...requests[idx], outbox: { ...owed, tries: (owed.tries ?? 0) + 1 } };
     return { requests };
   });
-}
-
-/**
- * A reply to a request settled without an answer (answersLate: notified by a turn end, overdue,
- * withdrawn): it is answered now, so it reads replied and leaves every "overdue, still open" or
- * "ended without a reply" list, and a reopened asker does not restore it. Exactly once, like
- * settle: null when it was not in one of those statuses.
- */
-export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp): Promise<SessionRequest | null> {
-  let settled: SessionRequest | null = null;
-  await updateRequests((store) => {
-    const requests = [...(store.requests ?? [])];
-    const idx = requests.findIndex((r) => r.id === id);
-    const from = requests[idx]?.status;
-    if (idx === -1 || !answersLate(from)) return undefined;
-    settled = {
-      ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: from,
-      ...(reply ? { reply } : {}), ...(forwardedTo ? { forwardedTo } : {}), ...stampAnswer(requests, id, answer),
-    };
-    requests[idx] = settled;
-    return { requests };
-  });
-  return settled;
 }
 
 /** How long an overdue request stays open: as long as a settled row is kept at all. */

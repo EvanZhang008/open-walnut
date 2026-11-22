@@ -39,8 +39,6 @@ import {
   getSessionRequest,
   settleReplied,
   clearReplyOutbox,
-  settleLateReply,
-  answersLate,
   withdrawRequest,
   listAllSessionRequests,
   answerDigest,
@@ -924,8 +922,8 @@ async function settleAnswerNotDelivered(
   }
   const { readStructuredReply } = await import('../peers/structured-reply.js');
   const fields = input.reply ? readStructuredReply(input.reply) : null;
-  if (request.status === 'pending') await settleReplied(request.id, fields).catch(() => null);
-  else if (answersLate(request.status)) await settleLateReply(request.id, fields).catch(() => null);
+  // Open, or settled before without an answer: decided in the store's own write (settleReplied).
+  await settleReplied(request.id, fields).catch(() => null);
 }
 
 async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult | HeldSendResult> {
@@ -1317,9 +1315,8 @@ async function performReply(
   // Before the settle: a refused answer leaves the request open for a forced retry.
   const replyBody = await admitCompleteTarget(caller, origin.taskId, input, text, 'reply');
 
-  // Settles one request with this answer, pending or overdue; `fwd` marks one whose asker the answer went past.
-  const settleOpen = async (rid: string, fwd?: string) =>
-    (await settleReplied(rid, fields, fwd).catch(() => null)) ?? await settleLateReply(rid, fields, fwd).catch(() => null);
+  // Settles one request with this answer, open or settled before without one; `fwd` marks one whose asker the answer went past.
+  const settleOpen = async (rid: string, fwd?: string) => await settleReplied(rid, fields, fwd).catch(() => null);
   // The same words from this task already reached this asker for another (or this) request:
   // this one settles with it, and the asker reads one line instead of the answer again.
   const stamp: AnswerStamp = {
@@ -1372,17 +1369,6 @@ async function performReply(
     const status = fresh.status;
     if (onward) {
       // Settled once the answer is delivered: a failed delivery leaves the whole chain open.
-    } else if (status !== 'pending') {
-      // Late but honest: the asker was already notified (turn end / timeout), yet
-      // a real answer beats a status notice — deliver it anyway, marked late.
-      log.session.info('session reply after settle — delivering late', { requestId: id, status });
-      // Settled without an answer (a turn end's notice, overdue, withdrawn): this answer settles
-      // it as replied (answersLate). Lost that race, or answered already: these may be the words it got then.
-      const late = answersLate(status) ? await settleLateReply(id, fields, undefined, stamp).catch(() => null) : null;
-      sameAs = late ? late.sameAnswerAs : sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
-      // Its answer is still owed (the server died before delivering it, and the replier sends again):
-      // this answer goes out as that same queue row, and the outbox owes nothing more.
-      if (fresh.outbox && !sameAs) { deliveryId = fresh.outbox.messageId; owed = true; }
     } else {
       // The answer's delivery is owed in the same write as the settle (reply-outbox.ts): a server
       // that dies before it reaches the asker's queue delivers it at its next start. Not for a
@@ -1393,13 +1379,22 @@ async function performReply(
         ...(resultHead ? { report: { taskId: caller.record.taskId!, head: resultHead, fields } } : {}),
         at: new Date().toISOString(),
       };
+      // Open, or settled before without an answer (a turn end's notice, overdue, withdrawn): this
+      // answer settles it, decided in the store's own write, so a racing sweep or turn end never
+      // leaves it there (settleReplied).
       const settled = await settleReplied(id, fields, undefined, stamp, owe);
       owed = !!settled?.outbox;
       if (!settled) {
-        log.session.info('session reply lost the settle race — delivering late', { requestId: id });
+        // Answered already (or by a racing answer): a real answer beats silence, so it goes out late.
+        log.session.info('session reply after settle — delivering late', { requestId: id, status });
+      } else if (settled.lateFrom) {
+        log.session.info('session reply settled a request that ended without one', { requestId: id, lateFrom: settled.lateFrom });
       }
-      // Lost the race to another answer: these may be the very words it delivered.
+      // Answered already, and these may be the very words it got then (or another request got).
       sameAs = settled ? settled.sameAnswerAs : sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
+      // Its answer is still owed (the server died before delivering it, and the replier sends again):
+      // this answer goes out as that same queue row, and the outbox owes nothing more.
+      if (!settled && fresh.outbox && !sameAs) { deliveryId = fresh.outbox.messageId; owed = true; }
     }
     if (resultHead) await noteResultReport(caller.record.taskId!, resultHead, fields);
 

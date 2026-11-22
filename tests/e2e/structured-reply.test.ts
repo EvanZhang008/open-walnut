@@ -7,7 +7,7 @@
  *    reads them as plain sections of the delivered text (composeReplyText). The fields without
  *    `in_reply_to` are refused; a plain reply leaves no result_report.
  *  - A late reply to a request settled WITHOUT an answer (notified by a turn end, expired,
- *    withdrawn: REPLY_TO_STATUS `late`) settles it as replied (settleLateReply, `lateFrom`).
+ *    withdrawn: REPLY_TO_STATUS `late`) settles it as replied (settleReplied, `lateFrom`).
  *  - `POST /api/v1/tasks/:id/complete` with `result` / `not_done` keeps a result_report via
  *    'complete'; `POST /api/v1/tasks/:id/not-done` settles it; nothing to settle is 409.
  *  - A SESSION completing ANOTHER task that is still in use or unfinished (a Partial nobody
@@ -353,6 +353,30 @@ describe('a late reply to an overdue request', () => {
     expect(second?.reply?.result).toBe('first')
     await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
   }, 60_000)
+})
+
+describe('a late answer to an asker that completed', () => {
+  it('the turn end withdraws the ask, a forced answer settles it replied, and reopening the asker does not bring it back', async () => {
+    const closer = await startWorker('close the release once it is checked')
+    const rq = await createSessionRequest({ fromSessionId: closer.sid, fromTaskId: closer.taskId, toSessionId: lead.sid, toTaskId: lead.taskId, text: 'is the signing key rotated?' })
+    expect((await req('POST', `/api/v1/tasks/${closer.taskId}/complete`, {})).status).toBeLessThan(300)
+    // The target's turn ends without an answer: nobody waits, so the fallback withdraws it.
+    const { notifyRequesterFallback } = await import('../../src/core/sessions/session-request-notify.js')
+    await notifyRequesterFallback((await getSessionRequest(rq.id))!, 'completed')
+    expect((await getSessionRequest(rq.id))?.status).toBe('withdrawn')
+    const r = await req('POST', '/api/v1/messages', {
+      in_reply_to: rq.id, text: 'The signing key is rotated.', force: true, reason: 'the release it closed ships with this key',
+    }, asSession(lead.sid))
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(await getSessionRequest(rq.id)).toMatchObject({ status: 'replied', lateFrom: 'withdrawn' })
+    // Reopened: the answered ask stays answered (before 2026-11-22 it was restored to pending, and
+    // its next turn end told the asker "finished without replying").
+    expect((await req('PATCH', `/api/tasks/${closer.taskId}`, { phase: 'IN_PROGRESS' })).status).toBeLessThan(300)
+    await until('reopened', () => task(closer.taskId), (t) => t.phase !== 'COMPLETE')
+    await new Promise((res) => setTimeout(res, 500))
+    expect((await getSessionRequest(rq.id))?.status).toBe('replied')
+    await until('closer idle', () => sessionStatus(closer.sid), (s) => s !== 'running', 30_000)
+  }, 120_000)
 })
 
 describe('a completion with a result', () => {
