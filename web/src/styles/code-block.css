@@ -282,12 +282,6 @@
    with no line too long for it has nothing to wrap: no Wrap button.
    On is the family's pressed key (aria-pressed, code-block-actions.ts). */
 .md-code[data-fits]:not([data-wrap]) .md-code-wrap { display: none; }
-/* In a bubble sized to its words (the person's own message), the header's width is part of
-   the bubble's: a Wrap that came and went made the bubble narrower, the code then fit, the
-   Wrap left, the bubble grew, the code no longer fit, about 23 px back and forth every frame
-   (2026-11-22, a panel whose 85% bubble landed at the code's width). There it keeps its room
-   and only hides. */
-.session-msg-user .md-code[data-fits]:not([data-wrap]) .md-code-wrap { display: inline-flex; visibility: hidden; }
 /* A long finished block opens folded to its first ~30 lines, fading out
    over a "Show all N lines" button (code-block-actions.ts). Copy still takes
    all of it. */
