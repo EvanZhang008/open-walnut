@@ -132,7 +132,7 @@ describe('host_copy', () => {
     put('strangerbox', 'work/src.tgz', body)
     const sent = await asOp('host_copy', { from: '~/work/src.tgz', to_host: 'macbox', to: '~/in/' })
     expect(sent).toMatchObject({ ok: true, result: { running: false, from_host: 'strangerbox', to_host: 'macbox', to: '~/in/src.tgz', bytes: body.length, sha256: sha(body), replaced: false } })
-    expect(String(sent.result.outcome)).toMatch(new RegExp(`^Copied 3\\.0 MB from strangerbox:~/work/src\\.tgz to macbox:~/in/src\\.tgz in [\\d.]+ m?s \\(sha256 ${sha(body)}\\)\\.$`))
+    expect(String(sent.result.outcome)).toMatch(new RegExp(`^Done: copied 3\\.0 MB from strangerbox:~/work/src\\.tgz to macbox:~/in/src\\.tgz in [\\d.]+ m?s \\(sha256 ${sha(body)}\\)\\. The file is there, its size and checksum checked\\.$`))
     expect(fs.readFileSync(path.join(hosts.macbox.home, 'in', 'src.tgz')).equals(body)).toBe(true)
 
     const read = await asOp('host_copy_result', { copy_id: String(sent.result.copyId), wait_ms: 0 })
