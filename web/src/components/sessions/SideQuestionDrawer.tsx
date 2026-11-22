@@ -722,7 +722,10 @@ function SideQuestionDrawerBody({
 
           {/* Thread chips — one per LIVE thread, plus "+ New". Filed ones move to
               the Archived shelf below, which is why the × is an archive and not a
-              delete: an aside is often the only place a decision was reasoned out. */}
+              delete: an aside is often the only place a decision was reasoned out.
+              With no side chat yet there is no row: asking below is the one next step
+              (2026-11-22 UI audit: "+ New" beside the empty state said it twice). */}
+          {(liveThreads.length > 0 || archivedThreads.length > 0) && (
           <div className="side-thread-chips">
             {liveThreads.map((t) => {
               const isActive = t.id === state.activeThreadId;
@@ -784,6 +787,7 @@ function SideQuestionDrawerBody({
               </DisclosureButton>
             )}
           </div>
+          )}
 
           {archivedOpen && archivedThreads.length > 0 && (
             <div className="side-thread-archived" id={`${instanceId}-archived-shelf`}>

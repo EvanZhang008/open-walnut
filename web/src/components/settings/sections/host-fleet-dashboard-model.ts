@@ -117,7 +117,8 @@ export function problemTitle(list: Problem[]): string {
   return list.map((p) => p.detail.replace(/`/g, '')).join('\n');
 }
 
-export interface Segment { from: number; to: number; tone: 'good' | 'warn' | 'bad' | 'none'; title: string }
+/** `note`, on a leading stretch with no record: the words the lane says beside it (a gap never reads as a line). */
+export interface Segment { from: number; to: number; tone: 'good' | 'warn' | 'bad' | 'none'; title: string; note?: string }
 
 function clock(t: number): string {
   return new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -134,7 +135,7 @@ export function timeline(h: FleetHost, now: number): Segment[] {
   const start = end - TIMELINE_MS;
   const at = (t: number) => Math.min(1, Math.max(0, (t - start) / TIMELINE_MS));
   if (!hist || hist.coverageFrom === null || hist.coverageFrom >= end) {
-    return [{ from: 0, to: 1, tone: 'none', title: 'No record for the last 12 hours yet' }];
+    return [{ from: 0, to: 1, tone: 'none', title: 'No record for the last 12 hours yet', note: 'No record yet' }];
   }
   // The daemon lists its newest 20 outages: with that many, the time before the oldest is not known here.
   const listed = hist.outages.length >= 20 ? Math.min(...hist.outages.map((o) => o.from)) : -Infinity;
@@ -144,7 +145,7 @@ export function timeline(h: FleetHost, now: number): Segment[] {
     .map((o) => ({ from: Math.max(o.from, cov), to: Math.min(o.to, end), kind: o.kind }))
     .sort((a, b) => a.from - b.from);
   const out: Segment[] = [];
-  if (cov > start) out.push({ from: 0, to: at(cov), tone: 'none', title: cov === listed ? `Too many drops to show before ${clock(cov)}` : `No record before ${clock(cov)}` });
+  if (cov > start) out.push({ from: 0, to: at(cov), tone: 'none', title: cov === listed ? `Too many drops to show before ${clock(cov)}` : `No record before ${clock(cov)}`, note: `Since ${clock(cov)}` });
   let cursor = cov;
   for (const m of marks) {
     const from = Math.max(m.from, cursor);

@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DndContext } from '@dnd-kit/core';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
@@ -107,6 +107,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
 
   const step = (dir: 1 | -1) => setDay(formatDateOnly(addDays(anchor, dir)));
   const isToday = day === formatDateOnly(new Date());
+  const navigate = useNavigate();
 
   const canCreateEvent = canCreateEventOf(calendar);
 
@@ -129,9 +130,12 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           title="Calendars not read"
           hint={why?.reason === 'permission-denied' && !why.message
             ? 'Re-grant Walnut under System Settings → Privacy & Security → Calendars.'
-            : why?.message ? undefined : 'Mac calendars are off or not allowed. Calendar Accounts on the Apps page turns them on.'}
+            : why?.message ? undefined : 'Mac calendars are off or not allowed here.'}
           detail={why?.message}
-          onRetry={why?.reason === 'fetch-error' ? calendar.refetch : undefined}
+          // One next step: a read that failed is retried; anything else is fixed in Calendar Accounts.
+          action={why?.reason === 'fetch-error'
+            ? { label: 'Retry', onClick: () => calendar.refetch() }
+            : { label: 'Open Calendar Accounts', testId: 'cal-side-status-accounts', onClick: () => navigate('/settings#calendar') }}
         />
       )
       : isDayEmpty(items, day)

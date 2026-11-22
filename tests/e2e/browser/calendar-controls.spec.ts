@@ -168,6 +168,8 @@ test("the Agenda header: its time stays inside the panel, one kind of button, an
   await expect(panel.getByTestId('cal-side-status').locator('.empty-state-title')).toHaveText('Calendars not read', { timeout: 15_000 });
   await expect(panel.getByTestId('cal-side-status')).toHaveAttribute('data-kind', 'unavailable');
   await expect(panel.getByTestId('cal-side-status').locator('.empty-state-hint')).toHaveText('Calendars are not set up on this Mac.');
+  // Its one next step opens Calendar Accounts.
+  await expect(panel.getByTestId('cal-side-status-accounts')).toHaveText('Open Calendar Accounts');
   await expect.poll(() => panel.getByTestId('cal-side-status').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 

@@ -98,6 +98,8 @@
 .hf-timeline i { position: absolute; top: 0; bottom: 0; }
 /* A drop of a few minutes is still a visible sliver, drawn over the runs beside it. */
 .hf-timeline i[data-tone="warn"], .hf-timeline i[data-tone="bad"] { min-width: 2px; z-index: 1; }
+/* No record: hatched, never the flat track, so a gap never reads as a reading. */
+.hf-timeline i[data-tone="none"] { background: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--fg-muted) 35%, transparent) 3px 4px); }
 .hf-timeline i[data-tone="good"] { background: var(--success); }
 .hf-timeline i[data-tone="warn"] { background: var(--warning); }
 .hf-timeline i[data-tone="bad"] { background: var(--error); }

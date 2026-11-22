@@ -318,9 +318,9 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await expect(popover.locator('.side-question-popover-hint')).toContainText('the main session never sees')
   // Prewarm is what makes the first ask instant — assert it actually fired.
   await expect.poll(() => stub.standbyCalls, { timeout: 10_000 }).toBeGreaterThan(0)
-  // Empty state, and the only chip is "+ New".
-  await expect(popover.locator('.side-thread-chip')).toHaveCount(1)
-  await expect(popover.locator('.side-thread-chip-new')).toBeVisible()
+  // Empty state, and no chip row: asking below is the one next step, never also "+ New".
+  await expect(popover.getByTestId('side-question-empty')).toBeVisible()
+  await expect(popover.locator('.side-thread-chip')).toHaveCount(0)
 
   // ── The drawer's composer is the real one: every control the main composer has
   //    EXCEPT "btw" itself — a side thread of a side thread is not a feature. ──

@@ -104,7 +104,8 @@ export function FleetVitals({ host, now, system }: { host: FleetHost; now: numbe
               <i key={`${s.from}-${s.tone}`} data-tone={s.tone} title={s.title} style={{ left: `${s.from * 100}%`, width: `${(s.to - s.from) * 100}%` }} />
             ))}
           </div>
-          <span className="hf-lane-value" />
+          {/* A stretch with no record says so in words beside the lane (the charts under it are blank there). */}
+          <span className="hf-lane-value" data-testid="host-fleet-record-since">{segments[0]?.note}</span>
         </div>
         {sparks(host).map((c) => <SparkRow key={c.key} s={c} />)}
         <div className="hf-lane hf-lane-axis" aria-hidden="true">

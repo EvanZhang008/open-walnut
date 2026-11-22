@@ -46,9 +46,10 @@ function fmt(v: number | null, unit: string): string {
   return unit ? `${n} ${unit}` : n;
 }
 
-function Spark({ points, state }: { points: Array<number | null>; state: AlarmState }) {
+export function Spark({ points, state }: { points: Array<number | null>; state: AlarmState }) {
   const vals = points.filter((p): p is number => p !== null);
-  if (!vals.length) return <span className="health-spark-empty">no data</span>;
+  // An alarm with too little data draws no line: a flat line would read as a steady reading.
+  if (!vals.length || state === 'INSUFFICIENT_DATA') return <span className="health-spark-empty">No data</span>; // empty-state-ok: a table cell's value
   const max = Math.max(...vals, 1e-9);
   const min = Math.min(...vals, 0);
   const w = 120;
