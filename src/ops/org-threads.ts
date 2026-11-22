@@ -12,19 +12,37 @@ import {
 } from './org-answer-shapes.js'
 import { CONTENT_MAX_CHARS } from './answer.js'
 import type { OpCall } from './core.js'
-import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_OPTIONS_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
+import { WORD_TO_USER_RULE, THREADS_OPTIONS_RULE, THREADS_MOVE_RULE } from '../core/org/thread-rules.js'
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
 import { THREAD_STATES } from '../core/org/threads-model.js'
 import { ACK_PLACES, PLACE_WHY_MAX } from '../core/org/thread-view.js'
-import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM, USER_KIND_WORDS_PARAM, DESIGN_REVIEW_PARAM } from '../core/org/user-kind.js'
+import { USER_KINDS, USER_KIND_WHY_MIN } from '../core/org/user-kind.js'
 
-const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
-  + '(Main and every lead keep them; a VP is a lead), or beside your chat on a task the user turned Threads on for. Walnut files every message he sends you, and tells you in that message which '
-  + 'thread it went to. You keep each thread current: a short title in the language you write to him, one line of what he wants (ask), '
-  + 'its state (working: you are on it; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him), the summary (reply) and '
-  + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
-  + '(merge_into). Walnut puts your chat reply under each of his messages by itself (answer). He closes a thread with Acknowledge; a '
-  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_MOVE_RULE + ' ' + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_OPTIONS_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + THREAD_ONE_PLACE_RULE
+/**
+ * What a thread op says about Threads. The rules for keeping them (what a card holds, when an
+ * answer counts as known, what shows to him, one place per update, the proof in place, opening
+ * and moving a thread) are NOT repeated in the ops: every task that keeps Threads (Main, a VP, a
+ * lead, a task with Threads on: org/keeps-threads.ts) reads them in its always-loaded prompt
+ * (sessions/session-context.ts threadsLine, in the `org-role` block). Until 2026-11-22 every op
+ * carried a 5 K copy, so the first thread_update of a process loaded 16 K, about 4.3K tokens
+ * (1,718 calls in 7 days). A rule some keeper's prompt lacks rides the op it applies to:
+ * THREADS_OPTIONS_RULE and WORD_TO_USER_RULE (no prompt), THREADS_MOVE_RULE (a task with Threads
+ * on gets another last line). tests/core/org/thread-rule-places.ts holds each rule to the prompt
+ * or the op, and tests/core/org/thread-op-size.test.ts caps each op's loaded definition.
+ */
+const THREADS_ABOUT = 'Threads are the user\'s own requests to Main, a VP, a lead or a task with Threads on, one thread per subject; '
+  + 'a message on one is his own words.'
+/**
+ * Where a writer reads the rules. A keeper's prompt carries them in the paragraph that opens with
+ * "Your Threads (" (threadsLine; thread-rules-guard.test.ts holds the prompt and this pointer to
+ * it). Any other caller can write a keeper's Threads by naming `task` (the route checks only that
+ * the task named keeps Threads, org-threads-v1.ts nodeTask): an Ask of the Personal AI lists these
+ * ops and has no such paragraph, and `walnut tools help` shows only this description, so the
+ * write ops keep the few rules a writer cannot do without.
+ */
+const RULES_IN_PROMPT = 'Main, a VP, a lead and a task with Threads on read the rules in their prompt\'s paragraph "Your Threads (...)". '
+  + 'Writing another node\'s Threads without it: his answer counts as known only once he reacted; the summary goes latest first, never a log; '
+  + 'news about a thread goes to that thread only, never also a letter; its proof (a path or URL) goes in the summary.'
 
 async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> {
   const id = typeof args.task === 'string' && args.task.trim()
@@ -36,24 +54,37 @@ async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> 
 
 /** A choice he clicks (core/ask-options.ts reads it, the report's ask_options too). */
 const OPTION_ARG = z.object({
-  id: z.string().regex(/^[\w-]{1,40}$/).optional().describe('A short id; default o1, o2...'),
+  id: z.string().regex(/^[\w-]{1,40}$/).optional().describe('Default o1, o2...'),
   label: z.string().min(1).max(80).describe('What he clicks, a few words'),
   detail: z.string().max(200).optional().describe('One line of what it leads to'),
-  recommended: z.boolean().optional().describe('The one you recommend: put it first'),
+  recommended: z.boolean().optional().describe('Your pick: put it first'),
 })
-const OPTIONS_WHY = `With state needs: the choices he picks from, 2 to ${ASK_OPTIONS_MAX}, the recommended one first; his click is his answer, filed in the thread. [] takes them off. With his one-card setting on (threads_one_card) they are his buttons, and required when the summary lists choices (A:, B:, 1., 2.): Walnut refuses that write without them (409 needs_options)`
+const OPTIONS_WHY = 'With needs: the choices, your pick first; [] takes them off; 409 needs_options when the summary lists choices without them'
 
-const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main, a lead or a task with Threads on; default: your own task')
+const TASK_ARG = z.string().min(1).optional().describe('Main, a lead or a task with Threads on (id or unique prefix); default: your own task')
 
 interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; pinned?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
 
-/** Every thread op that hands a thread to the user (same-ask.ts). */
+/**
+ * The asking arguments of thread_update and thread_create, each cut to what it means and its
+ * real constraint. Which questions are his and which never are is the team charter's (the
+ * always-loaded `how-we-work` block), a refusal lists every kind with its meaning
+ * (org/user-kind.ts), and the refusals of the rare ones (same_ask, other_open_asks, a design
+ * with no review) name the call that goes through, so the ops do not repeat USER_KIND_PARAM's
+ * glossary or DESIGN_REVIEW_PARAM's example.
+ */
+const ASK_INPUT = {
+  user_kind: z.enum(USER_KINDS).optional().describe('Required with needs: which of his own kinds this ask is (How we work; a refusal lists each). Anything else is yours to decide'),
+  user_kind_why: z.string().max(300).optional().describe(`With user_kind: one line (${USER_KIND_WHY_MIN}+ characters), in his language, saying what in THIS question makes it that kind`),
+  user_kind_words: z.string().max(500).optional().describe('His earlier words user_kind_why rests on, verbatim'),
+  user_kind_about: z.string().max(200).optional().describe('What those words were about (a task, CR, ticket or post)'),
+  design_review: z.string().max(500).optional().describe('With needs showing a design or page: another model\'s scores and what changed, or "small: <what changed>"'),
+  /** Every thread op that hands a thread to the user (same-ask.ts). */
+  same_ask_reason: z.string().max(300).optional().describe('After a 409 same_ask: why this is another decision (10+ characters)'),
+}
 /** Every thread op that hands a thread to the user while its task asks him something else (thread-supersede.ts). */
-const SUPERSEDES_PARAM = 'With needs, when your task still asks the user something else (another of its threads in needs, a decision letter he has not answered; 409 other_open_asks names them): the ids (th-..., lt-...) this one replaces. They leave his Needs you now: one matter is asked in one place'
-const SEPARATE_REASON_PARAM = 'With needs, after a 409 other_open_asks, when those asks are other decisions that stay open: one line (10+ characters) saying why'
-
-const SAME_ASK_REASON_PARAM = 'With needs: only after a 409 same_ask (a task in your team already asks him this; leave the ask to it and keep the thread working or pending), '
-  + 'when this really is a different decision: one line (10+ characters) saying why. Never stored'
+const SUPERSEDES_ARG = z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe('After a 409 other_open_asks: the asks (th-..., lt-...) this one replaces')
+const SEPARATE_REASON_ARG = z.string().max(300).optional().describe('After a 409 other_open_asks: why those stay open (10+ characters)')
 
 const THREAD_ID = z.string().regex(/^th-[a-f0-9]{6,32}$/)
 
@@ -146,8 +177,8 @@ function threadListAnswer(result: unknown, args: Record<string, unknown>, cap: n
 defineOp({
   name: 'thread_list',
   title: 'List Threads',
-  description: `${THREADS_SCOPE} Lists the open ones (newest change first), ${THREAD_LIST_PAGE} at a time: each with its id, title, state, counts, ask, summary (reply), tasks and one line of the newest message; `
-    + 'thread_get reads one with its messages. closed: true (or state "closed") lists the closed ones of the past week too (to reopen one); ids, state, offset and limit narrow it; bodies: true adds the messages. task defaults to your own task.',
+  description: `${THREADS_ABOUT} Lists the open ones of a task (default your own), newest change first, ${THREAD_LIST_PAGE} at a time: each with its id, title, state (new, working, needs: waits on him, answered, pending: handed off), counts, ask, summary (reply), tasks and one line of the newest message; `
+    + 'thread_get reads one with its messages. closed: true (or state "closed") adds the closed ones of the past week (to reopen one); ids, state, offset and limit narrow it; bodies: true adds the messages.',
   input: {
     task: TASK_ARG,
     closed: z.boolean().optional().describe('Also the closed ones of the past week'),
@@ -244,7 +275,7 @@ defineOp({
   name: 'thread_get',
   title: 'Read one Thread',
   description: 'One of your Threads by id, open or closed (see thread_list): its state, ask, summary (reply), tasks and its newest messages (the user\'s words and your answer, '
-    + `each cut to body_max, each with its tm- id; an answer repeated under several messages is named once). message reads one message whole (part: only his words or only the answer); "_full": true the whole thread as stored. task defaults to your own task.`,
+    + `each cut to body_max, each with its tm- id; an answer repeated under several messages is named once). message reads one message whole (part: only his words or only the answer); "_full": true the whole thread as stored.`,
   input: {
     id: THREAD_ID.describe('The thread (th-...)'),
     limit: z.number().int().min(1).max(200).optional().describe(`The newest this many messages (default ${THREAD_GET_MESSAGES})`),
@@ -276,32 +307,27 @@ defineOp({
 /** Thread_update's arguments, named here so a refusal can list them. */
 const UPDATE_INPUT = {
   id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
-  title: z.string().min(1).max(120).optional().describe('A few words, in the language you write to the user'),
+  title: z.string().min(1).max(120).optional().describe('A few words, in the language you write to him'),
   ask: z.string().max(400).optional().describe('One line: what he wants ("" clears it)'),
-  state: z.enum(THREAD_STATES).optional().describe('working (you are on it; out of his sight until your answer), needs (waiting on him), answered (you answered; he may close it), pending (only handed off: hidden even with your answer on it). A new reply without a state sets answered'),
-  user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
-  user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
-  user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
-  user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
-  design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
-  same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
-  ask_owner: z.string().max(128).optional().describe('The id of the task in your team whose Needs you already asks him this thread\'s decision: the thread then points at that ask (read as pending with askedIn, its conversation kept) and waits on him again by itself once that task stops asking it or asks another decision. Refused (409) when that task asks him nothing now. "" takes it off'),
-  reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
-  since_you_wrote: z.string().max(600).optional().describe('Back to needs after he wrote in the thread: one line on what you did about his message (the answer to his question, what you checked). Walnut puts it first on the card under his words, then your reply as the decision; without it the write is refused (409 returned_ask)'),
-  decision: z.enum(['same', 'new']).optional().describe('Back to needs after he wrote, or new options while it waits on him, on a thread that asked before: "same" when it asks that decision again, "new" when another one. A new decision is refused here: answer him in this thread and open the new one with thread_create (supersedes naming this one)'),
-  supersedes: z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe(SUPERSEDES_PARAM),
-  separate_reason: z.string().max(300).optional().describe(SEPARATE_REASON_PARAM),
+  state: z.enum(THREAD_STATES).optional().describe('working (you are on it), needs (waits on him), answered (your answer is in; he may close it) or pending (handed off: hidden); a new reply with no state sets answered'),
+  ...ASK_INPUT,
+  ask_owner: z.string().max(128).optional().describe('The id of a team task whose Needs you already asks him this decision: the thread reads pending with askedIn and waits on him again once that task stops asking it. Refused (409) when it asks him nothing now; "" takes it off'),
+  reply: z.string().max(2000).optional().describe('The summary his card shows, latest first: what he must decide, then one or two sentences of background; Markdown ("" clears it)'),
+  since_you_wrote: z.string().max(600).optional().describe('Back to needs after he wrote here: one line on what you did about his message (409 returned_ask)'),
+  decision: z.enum(['same', 'new']).optional().describe('On a thread that asked him before, going back to needs after he wrote or getting new options: "same" when it asks that decision again; "new" (another decision) is refused: open that one with thread_create'),
+  supersedes: SUPERSEDES_ARG,
+  separate_reason: SEPARATE_REASON_ARG,
   options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
   tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
   add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
   known: z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/).optional().describe('He reacted to your answers through this message (tm-...), or "all": they leave the card. Refused before he reacted'),
-  close: z.enum(['acked', 'dropped']).optional().describe('Close it: acked (he reacted to it as finished), dropped (he said it is no longer wanted). Refused before he reacted, unless user_words quotes him asking for it'),
-  user_words: z.string().max(500).optional().describe('With close: his own words asking you to close it, or saying it is done or no longer wanted, quoted exactly from his latest message in this thread (what he typed in your chat is filed in a thread: merge it into this one first). Counts only when that message came after everything said in the thread'),
+  close: z.enum(['acked', 'dropped']).optional().describe('acked (he reacted to it as finished) or dropped (no longer wanted). Refused before he reacted, unless user_words quotes him'),
+  user_words: z.string().max(500).optional().describe('With close: his words asking for it, quoted exactly from his latest message in this thread, which counts only when it came after everything said in the thread (merge the thread holding them in first)'),
   reopen: z.boolean().optional().describe('Open a closed thread again'),
-  place: z.enum(ACK_PLACES).optional().describe('On a thread he acknowledged (his card reads "AI is deciding where this goes"): where it goes now. Alone with place_why, no state or close'),
-  place_why: z.string().max(PLACE_WHY_MAX).optional().describe('With place: one short line his card shows (what it waits on and until when, what still runs, or why it is over)'),
-  snooze: z.string().max(40).optional().describe('Put it aside until this time: an ISO datetime, a date (that day\'s local midnight) or a duration from now ("4h", "3d"); at most a year; "" takes the snooze off'),
-  pin: z.boolean().optional().describe('true pins it to the top of his view whatever its state (until he unpins or acknowledges it); false unpins it. You cannot unpin one he pinned'),
+  place: z.enum(ACK_PLACES).optional().describe('After his Acknowledge, when his card asks where it goes: closed (it is over), waiting (on something outside) or working (its work still runs). Only with place_why'),
+  place_why: z.string().max(PLACE_WHY_MAX).optional().describe('With place: one line his card shows (what it waits on, or why it is over)'),
+  snooze: z.string().max(40).optional().describe('When he asked to come back to it later: it leaves his view for the Snoozed section until an ISO time, a date or a duration ("4h", "3d"), at most a year, and returns sooner when he writes in it, you answer it or it moves to needs or answered; "" ends it'),
+  pin: z.boolean().optional().describe('true pins it to the top of his view whatever its state, until he unpins or acknowledges it; false unpins. One he pinned you cannot unpin, snooze or close'),
   merge_into: THREAD_ID.optional().describe('Put this thread under that open thread (same subject); alone in its call'),
   task: TASK_ARG,
 }
@@ -309,13 +335,12 @@ const UPDATE_INPUT = {
 defineOp({
   name: 'thread_update',
   title: 'Update a Thread',
-  description: `${THREADS_SCOPE} Change one thread: title, ask, state, reply, tasks (replace the list) or add_tasks, known (he reacted to your answers through `
-    + 'this message: they fold to context), close ("acked" when he reacted to it as finished, "dropped" when he said it is no longer wanted), reopen, '
-    + 'snooze (put it aside until a time when he asked to come back to it later: it leaves his view for its Snoozed section and comes back on its date, or earlier when he writes in it, you answer it, or it moves to needs or answered; "" takes it off), '
-    + 'pin (true keeps it at the top of his view whatever its state, until he unpins or acknowledges it; false unpins it; one HE pinned '
-    + 'you cannot unpin, snooze or close: 409 pinned_by_user), '
-    + 'or merge_into another open thread (alone in its call: its messages move there and it is gone). '
-    + `A wrong merge is undone with thread_split. ${WORD_TO_USER_RULE} Answers a receipt (ids, state, message count, what changed); thread_get reads the thread. task defaults to your own task.`,
+  description: 'Change one of your Threads. The common calls: '
+    + 'answer: {"id":"th-...","reply":"<summary>","state":"answered"}; '
+    + 'ask him: {"id":"th-...","state":"needs","reply":"<what he decides, what you recommend>","user_kind":"<kind>","user_kind_why":"<why>","options":[{"label":"<pick>","recommended":true},{"label":"<other>"}]}; '
+    + 'after he reacted: known "<tm-id>" or "all", or close "acked" or "dropped" (user_words quoting him when he asked for it); '
+    + 'the same subject as another open thread: {"id":"th-...","merge_into":"th-..."} alone (thread_split undoes it). '
+    + `A refusal names the call that goes through. Answers a receipt; thread_get reads the thread. ${RULES_IN_PROMPT} ${THREADS_OPTIONS_RULE} ${WORD_TO_USER_RULE}`,
   input: UPDATE_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)
@@ -353,19 +378,14 @@ defineOp({
 const CREATE_INPUT = {
   title: z.string().min(1).max(120).describe('A few words, in the language you write to the user'),
   text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),
-  reply: z.string().max(2000).optional().describe('The card\'s summary, as thread_update\'s reply: its first sentence says what he decides and what you recommend, then the key points and evidence paths. Left out, the card shows only the first line of the post, so a needs thread whose post runs longer is refused without it'),
+  reply: z.string().max(2000).optional().describe('The card\'s summary: first what he decides and what you recommend, then the key points and evidence paths. Without it the card shows the post\'s first line, and a needs thread with a longer post is refused'),
   from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
   ref: z.string().max(120).optional().describe('What it points at: a task id, a letter id (lt-...), a mail subject'),
   state: z.enum(['needs', 'answered']).optional().describe('Default needs (it waits on him)'),
   options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
-  user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
-  user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
-  user_kind_words: z.string().max(500).optional().describe(USER_KIND_WORDS_PARAM),
-  user_kind_about: z.string().max(200).optional().describe(USER_KIND_ABOUT_PARAM),
-  design_review: z.string().max(500).optional().describe(DESIGN_REVIEW_PARAM),
-  same_ask_reason: z.string().max(300).optional().describe(SAME_ASK_REASON_PARAM),
-  supersedes: z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe(SUPERSEDES_PARAM),
-  separate_reason: z.string().max(300).optional().describe(SEPARATE_REASON_PARAM),
+  ...ASK_INPUT,
+  supersedes: SUPERSEDES_ARG,
+  separate_reason: SEPARATE_REASON_ARG,
   tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
   task: TASK_ARG,
 }
@@ -373,10 +393,10 @@ const CREATE_INPUT = {
 defineOp({
   name: 'thread_create',
   title: 'Open a Thread yourself',
-  description: `${THREADS_SCOPE} Opens a thread of your own for something that reached you the user must act on or asked to follow `
-    + '(a mail he must answer, a team\'s question only he can settle, news he asked to hear about): its first post is yours, shown as '
-    + 'opened by you and where from, and his reply is filed under it. Never a progress feed, and never beside a letter about the same '
-    + `thing: what is on a thread stays there, a decision as its needs state. ${WORD_TO_USER_RULE} task defaults to your own task.`,
+  description: 'Opens one of your Threads yourself, for something that reached you the user must act on or asked to follow (a mail he must answer, '
+    + 'a team\'s question only he can settle, news he asked to hear about): its first post is yours, shown as opened by you and where from, and his reply is filed under it. '
+    + 'It waits on him (needs, the default), so it names user_kind and user_kind_why: {"title":"<a few words>","text":"<the post>","from":"mail","reply":"<what he decides and what you recommend>",'
+    + `"user_kind":"<kind>","user_kind_why":"<why>","options":[...]}; state answered when it only tells him a result. ${RULES_IN_PROMPT} ${THREADS_OPTIONS_RULE} ${WORD_TO_USER_RULE}`,
   input: CREATE_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)
@@ -439,8 +459,9 @@ function notAppliedWords(args: Record<string, unknown>, body: { thread: ThreadVi
 defineOp({
   name: 'thread_split',
   title: 'Split a Thread message out',
-  description: `${THREADS_SCOPE} Takes one message (tm-...) out of a thread into a new thread of its own (a merge that was wrong), or with merge_into straight into another open thread, in one call. `
-    + 'The thread it leaves closes (acked) when nothing is left open on it; keep_open: true keeps it open. Answers a receipt of both threads. task defaults to your own task.',
+  description: 'Takes one message (tm-..., thread_get shows the ids) out of one of your Threads: into a new thread of its own (a merge that was wrong), or with merge_into straight into another open thread, in one call. '
+    + 'The thread it leaves closes (acked) when nothing is left open on it; keep_open: true keeps it open. '
+    + '{"id":"th-...","message":"tm-..."}, or {"id":"th-...","message":"tm-...","merge_into":"th-...","keep_open":true}. Answers a receipt of both threads.',
   input: SPLIT_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)
@@ -475,8 +496,8 @@ defineOp({
 defineOp({
   name: 'thread_file',
   title: 'File a request as a Thread',
-  description: `${THREADS_SCOPE} Files words of the user's that Walnut did not (a request he made elsewhere, or before Threads existed) on a node's Threads, `
-    + 'as a new thread or under thread. Quote his words; never your own. task defaults to your own task.',
+  description: 'Files words of the user\'s that Walnut did not file itself (a request he made elsewhere, or before Threads existed) on your Threads (the user\'s requests, one per subject), '
+    + 'as a new thread or under thread. Quote his words; never your own. A new thread then gets a short title with thread_update.',
   input: {
     text: z.string().min(1).max(8000).describe('The user\'s words, quoted'),
     thread: z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe('Put it under this thread'),
@@ -501,10 +522,9 @@ defineOp({
 defineOp({
   name: 'thread_move',
   title: 'Move a Thread to another node',
-  description: `${THREADS_SCOPE} Moves one open thread to another node's Threads (another VP, Main, or the node whose team a task is in), `
-    + 'with everything on it: his messages, the answers, its state, pin and tasks; it reads "Moved here from" there, and it closes on yours as moved, '
-    + 'pointing at it. Use it when one of his asks belongs to another node (he said so, or the work is theirs); handing the work on with '
-    + 'task_send, org_send, task_start or task_create naming `thread` does the same in one step. task defaults to your own task.',
+  description: 'Moves one of your open Threads (the user\'s requests, one per subject) to another node\'s Threads (another VP, Main, or the node whose team a task is in), '
+    + 'with everything on it: his messages, the answers, its state, pin and tasks; it reads "Moved here from" there, and it closes on yours as moved, pointing at it. '
+    + `${THREADS_MOVE_RULE} On a task with Threads on, naming thread in a handoff only lists that task and Walnut never moves its threads: only thread_move does.`,
   input: {
     id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
     to: z.string().min(1).describe('Where it goes: a node\'s task id, a task (its team\'s node takes it), a project name or the name the user gave a VP'),

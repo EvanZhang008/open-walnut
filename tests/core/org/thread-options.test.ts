@@ -14,6 +14,7 @@ import { listsChoices, threadOptionsOf } from '../../../src/core/org/thread-opti
 import { THREADS_OPTIONS_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE, TASK_THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { getOp } from '../../../src/ops/index.js'
+import { opsWhereRuleIsUnread } from './thread-rule-places.js'
 import { setOneCard } from '../../../src/core/org/one-card.js'
 import { emptyThreads, fileMessage, normalizeThreads, openThread, ThreadError, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 
@@ -167,10 +168,10 @@ describe('every place a node reads the rule carries it', () => {
   it('the thread ops (whole) and their options field; the always-loaded prompt stays within its budget without it', () => {
     expect(THREADS_LINE).not.toContain(THREADS_OPTIONS_RULE)
     expect(TASK_THREADS_LINE).not.toContain(THREADS_OPTIONS_RULE)
+    // Not in any keeper's prompt, so the two ops that write options carry it whole (thread-rule-places.ts).
+    expect(opsWhereRuleIsUnread(THREADS_OPTIONS_RULE, ['thread_update', 'thread_create'])).toEqual([])
     for (const name of ['thread_update', 'thread_create']) {
-      const op = getOp(name)!
-      expect(op.description, name).toContain(THREADS_OPTIONS_RULE)
-      expect(op.input.options?.description, name).toContain('needs_options')
+      expect(getOp(name)!.input.options?.description, name).toContain('needs_options')
     }
   })
 })

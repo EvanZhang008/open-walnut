@@ -5,22 +5,24 @@
  * answering it: "I had not replied ... so clearly I had not acknowledged it ... you cannot remove
  * it"; and "you can also create a new thread even if it is not from me").
  *
- * Fails when the prompt line or a thread op loses the rule (the `threads` hint and the
- * `threads-tidy` reminder are one line of facts since 2026-11-06 and leave the rules to the
- * prompt), when the hint again tells the node it may close on its own say, when Walnut lets a
+ * Fails when the prompt line loses the rule, or a node that keeps Threads reads it neither in its
+ * always-loaded prompt nor in the thread op it calls (the ops carry only what no prompt does since
+ * 2026-11-22: thread-rule-places.ts; the `threads` hint and the `threads-tidy` reminder are one
+ * line of facts since 2026-11-06 and leave the rules to the prompt), when the hint again tells the node it may close on its own say, when Walnut lets a
  * node close or fold an answer the user has not reacted to, or when a thread the node opened stops
  * taking his reply; or when a place stops saying what a card holds (title, summary latest first,
  * only the answers he has not seen) and that news about a thread updates its summary, never adds
  * to it ("the purpose is to keep the thread extremely concise").
  */
 import { describe, it, expect } from 'vitest'
-import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../../../src/core/org/thread-rules.js'
+import { THREADS_KNOWN_RULE, THREADS_MOVE_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { threadHintText, threadsTidyOf, threadsTidyText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { promises as fs } from 'node:fs'
 import { emptyThreads, fileMessage, mergeThreads, openThread, setAnswers, ThreadError, updateThread } from '../../../src/core/org/threads-model.js'
 import { findHint } from '../../../src/core/hints/hint-registry.js'
 import { getOp } from '../../../src/ops/index.js'
+import { keeperPrompts, opsWhereRuleIsUnread } from './thread-rule-places.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 1, 4, min)).toISOString()
 const hint: ThreadHintState = {
@@ -82,12 +84,21 @@ describe('every place a node reads it carries it', () => {
     expect(spec?.triggers).toContain('every_n_turns')
   })
 
-  it('the thread ops', () => {
-    for (const name of ['thread_list', 'thread_update', 'thread_create', 'thread_split', 'thread_file']) {
-      expect(getOp(name)?.description, name).toContain(THREADS_KNOWN_RULE)
-      expect(getOp(name)?.description, name).toContain(THREADS_SUMMARY_RULE)
-      expect(getOp(name)?.description, name).toContain(THREADS_PENDING_RULE)
+  it('the thread ops: each rule in the always-loaded prompt of every role that keeps Threads, or in the op', () => {
+    // The roles are real: each fixture keeps Threads, and its prompt has the paragraph the write
+    // ops point a writer to by its opening words.
+    const OPENING = 'Your Threads ('
+    for (const p of keeperPrompts()) {
+      expect(p.keeps, p.name).toBe(true)
+      expect(p.text, p.name).toContain(OPENING)
     }
+    for (const name of ['thread_update', 'thread_create']) expect(getOp(name)?.description, name).toContain(`"${OPENING}...)"`)
+    for (const rule of [THREADS_KNOWN_RULE, THREADS_SUMMARY_RULE, THREADS_PENDING_RULE, THREADS_OPEN_RULE]) {
+      expect(opsWhereRuleIsUnread(rule), rule.slice(0, 60)).toEqual([])
+    }
+    // A thread goes with its work: a task with Threads on gets another last line, so thread_move carries it.
+    expect(opsWhereRuleIsUnread(THREADS_MOVE_RULE, ['thread_move'])).toEqual([])
+    // The op still names the mark it sets.
     expect(getOp('thread_update')?.description).toMatch(/known/)
   })
 })

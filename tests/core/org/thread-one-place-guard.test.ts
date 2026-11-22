@@ -4,8 +4,9 @@
  * cluster and duplicate everything everywhere, inbox leave for something else ... if it is just a
  * thread just put it there without sending it to inbox").
  *
- * Fails when a place an Org node reads (its prompt, the thread ops, human_inbox_send) loses
- * THREAD_ONE_PLACE_RULE (the user-away and threads hints are one line of facts since 2026-11-06 and
+ * Fails when a place an Org node reads (its prompt, human_inbox_send) loses THREAD_ONE_PLACE_RULE,
+ * or a node that keeps Threads reads it neither in its always-loaded prompt nor in the thread op it
+ * calls (the ops carry only what no prompt does since 2026-11-22: thread-rule-places.ts; the user-away and threads hints are one line of facts since 2026-11-06 and
  * leave the rules to the prompt); when ANY text a node reads (every prompt line,
  * hint, op and param description, built-in skill) tells it again to send a thread's result to the
  * inbox, or that a result he asked for goes there while he is away; and when any of them says
@@ -21,6 +22,7 @@ import { AWAY_INBOX_LINE, THREADS_LINE, defaultInstructions } from '../../../src
 import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { USER_BACK_TEXT, effectiveHints, userAwayText } from '../../../src/core/hints/hint-registry.js'
 import { getOp, listOps } from '../../../src/ops/index.js'
+import { opsWhereRuleIsUnread } from './thread-rule-places.js'
 
 const hint: ThreadHintState = {
   threadId: 'th-aaaaaaaaaaaa', title: 'Star in Slack', created: true, followUp: false, duplicate: false,
@@ -51,10 +53,8 @@ describe('every place a node reads it carries it', () => {
     expect(defaultInstructions({ project: 'Walnut' })).not.toContain(THREAD_ONE_PLACE_RULE)
   })
 
-  it('the thread ops and human_inbox_send', () => {
-    for (const name of ['thread_list', 'thread_update', 'thread_create', 'thread_split', 'thread_file']) {
-      expect(getOp(name)?.description, name).toContain(THREAD_ONE_PLACE_RULE)
-    }
+  it('the thread ops (the prompt of every role that keeps Threads, or the op) and human_inbox_send', () => {
+    expect(opsWhereRuleIsUnread(THREAD_ONE_PLACE_RULE)).toEqual([])
     expect(getOp('human_inbox_send')?.description).toMatch(/One place per update[\s\S]*never also a letter/)
   })
 })
