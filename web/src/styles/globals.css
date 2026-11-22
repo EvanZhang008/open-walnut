@@ -29597,7 +29597,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
    bottom one and its list starts at the window's edge, instead of floating in a 24px frame with a
    divider that stops short (refines .memory-split-view above). The phone keeps its own padding
    and height (phone-layout.css). */
-@media not ((max-width: 768px) or ((pointer: coarse) and (max-height: 500px))) {
+@media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
   .app-content-area:has(> .memory-split-view) {
     padding: 0;
     overflow: hidden;
