@@ -13,8 +13,7 @@ import { ORG_MAIN_NODE, buildOrgTree, orgProjectNode } from '../../src/core/org/
 import { resolvePinNode, watchNodeOf } from '../../src/core/org/org-pins.js'
 import { USER_STATE_LABELS } from '../../src/core/user-status.js'
 import { MAIN_KEY, buildChannels, projectRowKey, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, allTasksSections, orgTaskTabs, stateTab, keptByRow, keptWhyKind, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
-import { sectionHeadState } from '../../web/src/utils/task-icon-state.js'
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, allTasksSections, orgTaskTabs, stateTab, keptByRow, keptWhyKind, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -142,7 +141,7 @@ describe('the Watching tab', () => {
       const tab = stateTab(task)
       // To read is drawn under Needs you (shownState, 2026-11-03); every other state is its own tab.
       expect(tab, s).toBe(s === 'read' ? 'needs' : s)
-      expect(sectionHeadState(tab), s).toBeTruthy()
+      expect(TAB_DOT[tab], s).toBeTruthy()
       expect(USER_STATE_LABELS[tab], s).toBeTruthy()
     }
   })

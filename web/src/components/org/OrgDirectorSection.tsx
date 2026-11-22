@@ -14,7 +14,7 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { type ChannelRow, shownName } from './org-channels-model';
 import { NodeAvatar } from './OrgAvatar';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { TAB_DOT } from './org-task-tabs';
 import { directorRows, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
@@ -75,7 +75,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
                   <span className="org-channel-name wn-title">{d.title}</span>
                 </span>
                 <span className="org-channel-latest wn-meta" data-testid="org-director-line">
-                  <TaskStateIcon state={d.icon} className="org-director-mark" size={12} decorative />{state} · {vpName}
+                  <i className="org-director-dot" style={{ background: TAB_DOT[d.state] }} aria-hidden="true" />{state} · {vpName}
                 </span>
               </span>
             </button>

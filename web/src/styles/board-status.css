@@ -60,7 +60,13 @@
 /* The filter chips are the shared Chip (controls/Chip.tsx); this file only places them. */
 .board-status .bs-filters { margin-bottom: 12px; }
 
-/* Each chip and pill wears TaskStateIcon at 12px (styles/task-state.css). */
+.board-status .bs-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--bs-waiting); }
+.board-status .bs-chip-needs .bs-dot, .board-status .bs-pill-needs .bs-dot { background: var(--bs-needs); }
+.board-status .bs-chip-working .bs-dot, .board-status .bs-pill-working .bs-dot { background: var(--bs-working); }
+.board-status .bs-chip-done .bs-dot, .board-status .bs-pill-done .bs-dot { background: var(--bs-done); }
+/* Not started: the dashed ring of Home's section (ICON_NOT_STARTED), never Waiting's filled dot. */
+.board-status .bs-ring { flex: none; display: inline-flex; color: var(--bs-waiting); }
+.board-status .bs-ring svg { width: 10px; height: 10px; }
 
 .board-status .bs-table { width: 100%; border-collapse: collapse; }
 

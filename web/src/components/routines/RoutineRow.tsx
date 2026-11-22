@@ -140,10 +140,7 @@ export function RoutineRow({
           aria-controls={open ? detailId : undefined}
           onClick={() => { onOpenChange(!open); setConfirmDelete(false); }}
         >
-          {/* Off routines differ by shape, not by colour: Paused (someone paused it) is two bars,
-              Off (a one-time routine that ran, a plain switch-off) a dashed ring. */}
-          <span className={`routine-dot cron-status-dot ${health}`} data-off={health === 'off' ? offLabel(routine).toLowerCase() : undefined}
-            title={label} aria-label={label} role="img" />
+          <span className={`routine-dot cron-status-dot ${health}`} title={label} aria-label={label} role="img" />
           <span className="routine-row-text">
             <span className="routine-row-name cron-job-name wn-title">{routine.name}</span>
             <span className="routine-row-timing cron-job-desc" title={scheduleTitle(routine.schedule)}>

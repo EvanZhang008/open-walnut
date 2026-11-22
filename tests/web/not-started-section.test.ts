@@ -23,7 +23,7 @@ import {
 } from '../../web/src/components/tasks/status-sections';
 import { bottomStatusSections } from '../../web/src/components/tasks/panel-design';
 import { STATUS_SECTION_FOLD } from '../../web/src/components/tasks/section-fold-rule';
-import { sectionIconState } from '../../web/src/utils/task-icon-state';
+import { ICON_NOT_STARTED, ICON_PHASE_WAITING, ICON_SNOOZE, sectionRowIcon } from '../../web/src/components/common/Icons';
 import {
   STATUS_CHIPS, buildStatusBoard, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, statusBrief, briefCountsLine,
 } from '../../web/src/components/board/board-status-model';
@@ -91,8 +91,11 @@ describe('Not started: Home (Flat)', () => {
     expect(STATUS_SECTION_LABELS.notstarted).toBe('Not started');
   });
 
-  it('its rows wear the dashed ring, never the clock or the moon', () => {
-    for (const own of ['waiting', 'snoozed', 'todo'] as const) expect(sectionIconState('notstarted', own)).toBe('todo');
+  it('its rows wear the dashed ring, never the hourglass or the moon', () => {
+    const icon = sectionRowIcon('notstarted', false, 'TODO', false, 'waiting');
+    expect(icon).toBe(ICON_NOT_STARTED);
+    expect(icon).not.toBe(ICON_PHASE_WAITING);
+    expect(icon).not.toBe(ICON_SNOOZE);
   });
 });
 

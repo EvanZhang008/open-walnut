@@ -323,10 +323,10 @@ test('an error does not hand back a task with a live background command, and the
   expect(task.session_id).toBe(sessionId)
   // The header has no status badge any more (2026-11-02), and no turn streams here (only the
   // background command runs), so the panel shows no Stop: the card's live circle below is the
-  // surface that says the process still runs (its status icon reads Working).
+  // surface that says the process still runs.
   await selectSection(page, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
   const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
-  await expect(card.locator('.task-state-icon[data-state="working"]')).toBeVisible()
+  await expect(card.locator('.task-circle-running')).toBeVisible()
   await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/error-with-live-background.png` })
 
@@ -338,7 +338,7 @@ test('an error does not hand back a task with a live background command, and the
   const stillRunning = await page.request.get(`/api/tasks/${taskId}`)
   expect(stillRunning.ok()).toBe(true)
   expect((await stillRunning.json()).task.phase).toBe('IN_PROGRESS')
-  await expect(card.locator('.task-state-icon[data-state="working"]')).toBeVisible()
+  await expect(card.locator('.task-circle-running')).toBeVisible()
   await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/background-across-next-turn.png` })
   const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
@@ -380,7 +380,7 @@ test('an error does not hand back a task with a live background command, and the
     expect(response.ok()).toBe(true)
     return (await response.json()).task.phase
   }).toBe('NEED_ACTION')
-  await expect(card.locator('.task-state-icon[data-state="working"]')).toHaveCount(0)
+  await expect(card.locator('.task-circle-running')).toHaveCount(0)
   await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/background-drained-followup.png` })
 })

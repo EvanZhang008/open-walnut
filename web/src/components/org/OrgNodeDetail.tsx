@@ -39,11 +39,7 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { useOrgThreads } from './useOrgThreads';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
-import { ORG_TASK_MODES, OrgTaskRail, type OrgAnswers, type OrgTaskMode } from './OrgTaskRail';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-// The threads pill wears the threads' own mark (.top-thread-dot).
-import '@/styles/top-thread.css';
-import { sectionHeadState } from '@/utils/task-icon-state';
+import { ORG_TASK_MODES, OrgTaskRail, TAB_DOT, type OrgAnswers, type OrgTaskMode } from './OrgTaskRail';
 import { askWords } from './org-ask-form';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
@@ -114,6 +110,10 @@ const railParts = (briefOff: boolean): string => (briefOff ? 'Tasks and Threads'
 /** The quote Quote puts in the chat: which task, and what it asks. */
 export const alertQuote = (a: OrgAlertView): string => `> ${a.title}: ${askWords(a)}\n\n`;
 
+const COLUMN_DOT: Record<TeamColumn['key'], string> = {
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
+};
+
 /** The header's counts: the user's status of the node's work in the Board's words, made by
  *  `headerPills` from the same tabs as the side bar's sections; each pill opens its tab, and no
  *  "N open" (2026-11-03, the user: "remove xx open not needed also show thread and number").
@@ -128,7 +128,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
     <button key={tab} type="button" className="btn btn-sm btn-ghost" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
-      <TaskStateIcon state={sectionHeadState(tab) ?? 'waiting'} size={12} decorative />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
+      <i style={{ background: TAB_DOT[tab] }} />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
     </button>
   );
   return (
@@ -142,8 +142,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
           onClick={onThreads}
           title={shown ? `${threadCountLabel(shown)} for you${threads?.title ? `: ${threads.title}` : ''}` : 'Show Threads'}
         >
-          {/* It counts threads, not tasks: the threads' own mark (the top thread's, red while one asks), never a task's status icon. */}
-          <i className={`top-thread-dot${shown ? ' is-needs' : ''}`} aria-hidden="true" />{threadCountLabel(shown)} for you
+          <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)} for you
         </button>
       )}
       {keepsThreads && headerPills(tabs, approvals, keepsThreads).length > 0 && <span className="org-pills-label" data-testid="org-pills-tasks-label">Tasks</span>}
@@ -171,12 +170,12 @@ function TeamBoard({ columns, onPick, emptyText }: {
     <div className="org-team" data-testid="org-team">
       {columns.map((c) => (
         <section key={c.key} className="org-team-col" data-testid="org-team-col" data-column={c.key}>
-          <h3 className="org-team-head"><TaskStateIcon state={sectionHeadState(c.key) ?? 'waiting'} size={12} decorative />{c.label}<span className="org-team-count">{c.items.length}</span></h3>
+          <h3 className="org-team-head"><i style={{ background: COLUMN_DOT[c.key] }} />{c.label}<span className="org-team-count">{c.items.length}</span></h3>
           <ul className="org-team-list">
             {c.items.map((it) => (
               <li key={it.id}>
                 <button type="button" className="org-team-item" data-testid="org-team-item" data-peek-row="" data-task-id={it.id} onClick={() => onPick(it)} title={it.title}>
-                  <TaskStateIcon state={sectionHeadState(c.key) ?? 'waiting'} className="org-team-ring" decorative />
+                  <span className="org-team-ring" style={{ borderColor: COLUMN_DOT[c.key] }} aria-hidden="true" />
                   <span className="org-team-text">
                     <span className="org-team-title wn-title">{it.title}</span>
                     {it.live && <TeamLiveLine live={it.live} />}

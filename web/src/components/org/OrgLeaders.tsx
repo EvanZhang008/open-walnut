@@ -25,7 +25,7 @@ import { DisclosureButton } from '@/components/controls';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { domId } from './OrgChartVp';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { TAB_DOT } from './org-task-tabs';
 import { directorsLabel, firstLeaders, foldGroups, leaderTotal, leadersMatch, subsMatch, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
@@ -122,7 +122,7 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
           onClick={() => onOpen(l.id)}
           onKeyDown={hasSubs ? foldKeys(open, setOpen) : undefined}
         >
-          <TaskStateIcon state={l.icon} decorative />
+          <i style={{ background: TAB_DOT[l.state] }} aria-hidden="true" />
           <NodeAvatar taskId={l.id} name={l.title} size={20} className="org-leader-avatar" />
           {/* The eye and "leads N" end the title's last line, at the row's right edge (or under it when that
               line is full), so they take no column from the words (2026-11-22, the UI audit). */}

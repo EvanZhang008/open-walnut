@@ -4,7 +4,7 @@
  * The palette lists TASKS, one level, nothing else. A task and its session are
  * one thing here: the session is the task's runtime (the task's single session
  * slot), so a task's run state (running, waiting on you, idle) is the task's
- * own run state, named in its meta line; the row wears the task's status icon. Picking a row
+ * own state, drawn as the row's dot and named in its meta line. Picking a row
  * INSERTS A `<task-ref/>` pill into the message; the server's reference card
  * for a task carries that state, and the agent reaches the task with task_get /
  * task_send. Nothing is routed by the composer.
@@ -22,7 +22,6 @@
  */
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { phaseIconState, taskIconState, type TaskIconState } from '@/utils/task-icon-state';
 import { extractEntityRefs } from '@/utils/entity-ref-tags';
 import { projectDisplayName } from '@/utils/project-display';
 import type { EntitySearchHit } from '@/stores/mention-search';
@@ -44,10 +43,8 @@ export interface MentionEntity {
   active?: boolean;
   /** Comparable recency key (ISO timestamp or any lexically ordered string). */
   recencyKey?: string;
-  /** Its run state, for the sort and the meta line's word. */
+  /** The row's dot. */
   state: MentionRunState;
-  /** The row's status icon (TaskStateIcon): the task's own, as every surface draws it. */
-  icon: TaskIconState;
   /** Server search snippet — shown when the row is a semantic hit so the user
    *  sees WHY it matched even without highlighted characters. */
   summary?: string;
@@ -92,7 +89,6 @@ export function taskEntity(t: Task, live?: TaskLiveStatus | null): MentionEntity
     active: t.phase !== 'COMPLETE',
     recencyKey: t.updated_at ?? '',
     state,
-    icon: taskIconState(t, live, false, resolveTaskSessionId(t)),
   };
 }
 
@@ -144,7 +140,6 @@ export function hitsAsTasks(
         meta: hitMeta(h),
         active: h.phase !== 'COMPLETE',
         state: 'idle',
-        icon: phaseIconState(h.phase),
         summary: h.summary,
       });
   }

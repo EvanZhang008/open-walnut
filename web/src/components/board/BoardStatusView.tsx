@@ -18,8 +18,7 @@ import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
 import { timeAgo } from '@/utils/time';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-import { iconStateOf, sectionHeadState } from '@/utils/task-icon-state';
+import * as ICONS from '@/components/common/Icons';
 import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
@@ -66,13 +65,13 @@ function StatusPill({ row }: { row: StatusRow }) {
   const state = shownState(row.status.state);
   // Stuck is a wait nothing will wake: the state's own name, in the stuck colour (its words say why).
   if (state === 'waiting' && kind === 'stuck') {
-    return <span className="bs-pill bs-pill-stuck" data-state="stuck"><TaskStateIcon state="waiting" size={12} decorative />{USER_STATE_LABELS.waiting}</span>;
+    return <span className="bs-pill bs-pill-stuck" data-state="stuck">{USER_STATE_LABELS.waiting}</span>;
   }
   // Nobody started it: its own pill (a dashed ring), never Waiting's (2026-11-09).
   if (isNotStartedStatus(row.status)) {
-    return <span className="bs-pill bs-pill-notstarted" data-state="notstarted"><TaskStateIcon state="todo" size={12} decorative />{NOT_STARTED_LABEL}</span>;
+    return <span className="bs-pill bs-pill-notstarted" data-state="notstarted"><span className="bs-ring">{ICONS.ICON_NOT_STARTED}</span>{NOT_STARTED_LABEL}</span>;
   }
-  const main = <span className={`bs-pill bs-pill-${state}`} data-state={state}><TaskStateIcon state={iconStateOf(row.status.state, { snoozed: !!row.status.snoozed })} size={12} decorative />{USER_STATE_LABELS[state]}</span>;
+  const main = <span className={`bs-pill bs-pill-${state}`} data-state={state}><span className="bs-dot" />{USER_STATE_LABELS[state]}</span>;
   // Its latest result left things not done (structured-reply.ts): "Done" alone would overstate it.
   if (!resultIsPartial(row.task.result_report)) return main;
   return <>{main}<span className="badge badge-warning bs-pill-partial" data-testid="board-partial-pill">Partial</span></>;
@@ -299,7 +298,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
               key={s}
               className={`bs-chip bs-chip-${s}`}
               pressed={filter === s}
-              leading={<TaskStateIcon state={sectionHeadState(s) ?? 'waiting'} size={12} decorative />}
+              leading={s === 'notstarted' ? <span className="bs-ring">{ICONS.ICON_NOT_STARTED}</span> : <span className="bs-dot" />}
               count={chipCount(board, s)}
               onClick={() => pick(s)}
               data-testid={`board-status-filter-${s}`}

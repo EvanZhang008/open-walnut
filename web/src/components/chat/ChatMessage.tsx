@@ -28,8 +28,6 @@ import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-import { phaseIconState } from '@/utils/task-icon-state';
 import { badge, priorityTone } from '@/components/common/badge';
 export interface RouteInfo {
   direction: 'sent' | 'received';
@@ -120,6 +118,11 @@ function CompactionDetails({ details }: { details: string }) {
   );
 }
 
+// Phase symbols matching StatusBadge (inline, no import needed)
+const PHASE_SYMBOLS: Record<string, string> = {
+  TODO: '\u25CB', WAITING: '\u29D6', IN_PROGRESS: '\u25D0', NEED_ACTION: '\u2713',
+  WAIT: '\u229A', COMPLETE: '\u2713\u2713',
+};
 
 interface TaskContextSectionProps {
   ctx: TaskContext;
@@ -157,7 +160,7 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
         <span className="chat-task-context-badges">
           {ctx.phase && (
             <span className="state-word">
-              <TaskStateIcon state={phaseIconState(ctx.phase)} decorative /> {PHASE_LABELS[ctx.phase as TaskPhase] ?? ctx.phase}
+              {PHASE_SYMBOLS[ctx.phase] ?? '?'} {PHASE_LABELS[ctx.phase as TaskPhase] ?? ctx.phase}
             </span>
           )}
           {showPriority && ctx.priority && ctx.priority !== 'none' && (

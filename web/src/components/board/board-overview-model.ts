@@ -35,7 +35,7 @@ import type { Task } from '@open-walnut/core';
 import { projectIdentity } from '@/utils/project-display';
 import type { BoardChoice, BoardMessage, BoardProject, BoardProjectStatus, BoardReminder, BoardSeen } from './board-model';
 import { reminderDue } from './board-items-model';
-import { deriveDisplayStatus, resolveTaskSessionId, taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
+import { deriveDisplayStatus, resolveTaskSessionId, taskCircleClass, taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { subtaskPlaceLabel, subtasksOf } from '@/components/tasks/subtask-index';
 import type { ProcessStatus } from '@/types/session';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
@@ -379,6 +379,8 @@ export function describeTask(
 export interface OverviewRow extends RowState {
   id: string;
   task: Task;
+  /** The phase circle's class (taskCircleClass: grey, blue, blue pulsing, done). */
+  circle: string;
   depth: number;
   parentId: string;
   signals: BoardSignal[];
@@ -631,6 +633,7 @@ export function buildTeamOverview(input: OverviewInput): TeamOverview {
     const live = statusOf(task);
     return {
       ...describeTask(task, live, own, opts),
+      circle: taskCircleClass(task, live),
       id: task.id,
       task,
       depth,

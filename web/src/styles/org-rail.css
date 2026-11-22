@@ -68,6 +68,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
   font-weight: 600; text-align: left; cursor: pointer;
 }
 .org-task-section-head:hover { background: var(--bg-secondary); }
+.org-task-section-head i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
 /* The chevron is drawn, so the heading's text is its name and count alone. */
 .org-task-section-head::before { content: '›' / ''; flex: none; width: 10px; color: var(--fg-muted); transition: transform 0.12s; }
 .org-task-section-head[aria-expanded="true"]::before { transform: rotate(90deg); }
@@ -83,7 +84,10 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
   border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer;
 }
 .org-task-row:hover { background: var(--bg-secondary); }
-/* The row's status icon is TaskStateIcon's (styles/task-state.css). */
+.org-task-row > i { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+/* Not started: the dashed ring of Home's section, never a filled dot. */
+.org-task-row > .org-task-ring { flex: none; display: inline-flex; color: var(--fg-muted); }
+.org-task-row > .org-task-ring svg { width: 10px; height: 10px; }
 .org-task-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* The title wraps in full (.wn-title, text-fit.css); the note is metadata and cuts (.wn-meta). */
 .org-task-note { font-size: var(--font-size-sm); color: var(--fg-secondary); }
@@ -147,16 +151,13 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 /* Open beside the page: the selected row's accent, lighter. No frame. */
 .org-watched-item[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .org-watched-item[data-open]:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
-/* The 12px status icon with the 4px gap every icon beside small text keeps (task-state.css), 2px in from the
-   reason: the title stays a little in from the row's name, where it sat beside the old 8px dot. */
 .org-watched-open {
-  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 4px; padding: 2px;
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 6px; padding: 2px;
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); line-height: 18px; text-align: left; cursor: pointer;
 }
-/* The title wraps (.wn-title): the status icon, the eye and the × stay level with its first line, whose
-   middle is 11px down the row (2px of padding and half its 18px line). The 12px icon is moved 3px down
-   (2px + 3px + 6px) by its own offset, so no spacing leaves the 2px grid. */
-.org-watched-open > .task-state-icon { top: 3px; }
+/* The title wraps (.wn-title): the dot, the eye and the × stay level with its first line, whose middle
+   is 11px down the row (2px of padding and half its 18px line). */
+.org-watched-open > i { flex: none; width: 6px; height: 6px; margin-top: 6px; border-radius: 50%; }
 /* Why it hangs here: an eye, a lock, or both in one glyph, centred on the guide line like a tree's node
    (the list's own background cuts the line around it), so the dot and the title keep about their places. Thin
    and muted: it reads as a label, and the dot stays the state. */

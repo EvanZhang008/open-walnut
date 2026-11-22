@@ -331,8 +331,8 @@ Why (2026-11-21, the user, of the pill-shaped controls): "什么鬼东西都要�
 blue, violet and grey pills, dashed boxes, a violet "12 workers" beside a red "3 need you", each
 drawn by its own class (565 class names, 155 looks).
 
-- A state is a dot and a word (`NoticeStatus`); a task's state icon is `TaskStateIcon`. A count, a
-  tag or a kind (Worker, Leader, Trigger, Cron, a pull request, a source, Beta) is the one `.badge`
+- A state is a dot and a word (`NoticeStatus`); a task's state icon is its phase glyph
+  (`phaseIcon`, `web/src/components/common/Icons.tsx`). A count, a tag or a kind (Worker, Leader, Trigger, Cron, a pull request, a source, Beta) is the one `.badge`
   (`web/src/styles/badge.css`, class list from `badge()` in `web/src/components/common/badge.ts`).
   Settings' `SettingsTag` follows it: a state tone (success, warning, error: Ready, Needs setup,
   Failed) draws the dot and word, neutral and accent (Built-in, Recommended) the badge.
@@ -362,39 +362,10 @@ drawn by its own class (565 class names, 155 looks).
   box (fill or edge, and a corner short of a circle). Its per-file count only goes down.
 - Text a badge may cut goes in a child element (`<span>`): a flex box draws no ellipsis on bare
   text (`.badge > *` ellipsizes).
-- **A task's status is drawn by ONE component, `TaskStateIcon`** (`web/src/components/common/
-  TaskStateIcon.tsx`), its state from ONE helper (`web/src/utils/task-icon-state.ts`:
-  `taskIconState`, `sectionIconState`, `phaseIconState`), its colours and dots from ONE stylesheet
-  (`web/src/styles/task-state.css`). No row, pill, menu, badge, chart or card draws its own ring,
-  glyph or coloured dot for a task. Guard: `tests/web/task-state-icon-guard.test.ts`.
-- **Seven states, each its own shape**, so it reads without colour:
-
-  | State | Word | Shape | Colour |
-  |---|---|---|---|
-  | `needs` | Needs you | filled circle, white "!" | `--error` |
-  | `read` | To read | page with two lines | `--warning` |
-  | `working` | Working | ring with a centre dot that breathes | `--success` |
-  | `waiting` | Waiting | ring with clock hands | `--fg-muted` |
-  | `snoozed` | Snoozed | crescent moon | `--fg-muted` |
-  | `todo` | Not started | dashed ring | `--fg-muted` |
-  | `done` | Completed | filled circle with a check | `--fg-muted` |
-
-  Working is always green and Needs you always red, everywhere; only Needs you is red.
-- **Tokens only**: `--error`, `--success`, `--warning`, `--fg-muted`. In the light theme green and
-  amber are mixed 80% with black (`--task-state-working`, `--task-state-read`) so they reach 3:1 on
-  white; the dark theme uses the tokens as they are.
-- **Sizes**: the icon is 14px beside 13px text (16x16 viewBox); beside small text (a count, a
-  chip, a task pill in a message) it is the 8px dot (`<TaskStateIcon dot />`, or the pill's
-  `a.task-link[data-user-state]::before`) in the same colours: a filled disc, a ring for a wait or
-  a snooze, a dashed ring for not started. Spacing on the 4px grid.
-- **Only Working moves**: its dot breathes (opacity 1 to .55 and back, 2s ease-in-out, CSS only, no
-  JS timers) and is still under `prefers-reduced-motion: reduce`. The breathing centre is an
-  element of its own over the SVG ring (`.tsi-pulse`), so the fade composites instead of repainting
-  the SVG; the page's lines and the tick are holes (an SVG mask), never shapes in the page colour.
-- **Completed wins**: a finished task's icon is Completed whatever its session does (a late turn,
-  a prompt), as its word says.
-- One status mark per row: no second dot or ring for Needs you beside the icon. The unread dot
-  (`.task-unread-dot`, output not seen yet) is a different signal and stays.
+- **Only a Working task's status glyph moves**: it breathes (opacity 1 to .55 and back, 2 s, CSS only,
+  no JS timers) and is still under `prefers-reduced-motion: reduce`. Rule: `.task-working-pulse` in
+  `web/src/styles/globals.css`; guard: `tests/web/working-pulse-guard.test.ts`. iOS does the same and
+  respects Reduce Motion.
 
 ## Text that does not fit
 

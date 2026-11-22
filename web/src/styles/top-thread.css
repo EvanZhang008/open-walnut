@@ -21,6 +21,10 @@
 }
 .session-top > .action-needed.is-strip:has(+ .top-thread:not(.is-hidden)) { max-height: calc(var(--session-top-room, 100vh) * 0.3); }
 .top-thread { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 0 1 auto; min-height: 0; }
+/* Hidden to its one line, the top never shrinks under the strip's items: squeezed, the line drew
+   over the chat below it and the top's fit swung as it did (2026-11-22, the user on a session with an
+   ask in its strip: "this is fucking flashing, the thread"). The strip's items scroll instead. */
+.session-top > .top-thread.is-hidden { flex: none; }
 .top-thread-bar { flex: none; }
 .top-thread-list { flex: 0 1 auto; min-height: 0; }
 .top-thread-list > .org-thread { flex: 0 1 auto; min-height: 0; }

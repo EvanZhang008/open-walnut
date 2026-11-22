@@ -8,6 +8,7 @@
 import type { Task } from '@open-walnut/core';
 import type { ProcessStatus, TaskPhase } from '@/types/session';
 import { USER_STATE_LABELS, shownState, snoozedAhead, stateWord, storedUserState } from '@open-walnut/user-status';
+import { idleCompactingStore } from '@/stores/idle-compacting-store';
 
 // ── Session ID resolution ──
 
@@ -70,6 +71,41 @@ export function taskUserState(task: Pick<Task, 'phase' | 'status' | 'user_status
   return task.phase === 'IN_PROGRESS' ? 'working' : 'waiting';
 }
 
+/** Color class for the task circle (the clickable open ↔ Completed toggle).
+ *
+ *  THREE colors, deliberately (2026-08-14 user request — the short-lived
+ *  5-state version with red/green circles was "过于复杂"):
+ *    grey        = plain task, no session attached
+ *    blue        = session attached, not actively working
+ *    blue, pulse = session actively running a turn
+ *  (done keeps its green check — that's the complete toggle, not a live state.)
+ *
+ *  Error and waiting are NOT circle states: a session error drives the task
+ *  phase to NEED_ACTION which turns the whole row red (taskNeedsAction),
+ *  and a permission wait shows as the SessionPill's red "Waiting". The circle
+ *  only answers "is anything attached / is it working right now".
+ *
+ *  `liveStatus` comes from the session-status store (see useTaskCircle) so
+ *  the circle updates in real time; callers without a store subscription can
+ *  pass the task's enrichment snapshot (`session_status`) instead. */
+export function taskCircleClass(
+  task: Task,
+  liveStatus?: {
+    process_status?: string;
+    errorMessage?: string | null;
+    pendingPermissionTool?: string | null;
+  } | null,
+): string {
+  const isDone = task.status === 'done' || task.phase === 'COMPLETE';
+  if (isDone) return 'task-circle-done';
+  const sessionId = resolveTaskSessionId(task);
+  if (!sessionId) return 'task-circle-todo';
+  const s = liveStatus ?? task.session_status ?? null;
+  // Walnut's idle compaction runs the CLI but is no work of the task's: it does not read as Working.
+  if (s?.process_status === 'running' && !idleCompactingStore.has(sessionId)) return 'task-circle-running';
+  return 'task-circle-session';
+}
+
 // ── Labels ──
 
 export const PROCESS_LABELS: Record<ProcessStatus, string> = {
@@ -107,27 +143,12 @@ export const PHASE_LABELS: Record<TaskPhase, string> = {
 export function taskStatusLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'> & Partial<Pick<Task, 'session_id'>>, snoozed = false): string {
   const state = shownState(taskUserState(task, snoozed));
   if (state !== 'waiting') return USER_STATE_LABELS[state];
-  const wait = waitFacts(task, snoozed);
-  if (wait.limited) return LIMITED_LABEL;
-  if (wait.notStarted) return NOT_STARTED_LABEL;
-  return stateWord('waiting', wait.snoozed);
-}
-
-/**
- * What kind of wait a task's Waiting is: snoozed, held by a usage limit, or nobody started it. The
- * one reading the status words (taskStatusLabel) and the status icon (taskIconState) share.
- * `snoozed`: the caller's reading of the start date, for a task the server has not derived yet.
- */
-export function waitFacts(task: Pick<Task, 'phase' | 'user_status'> & Partial<Pick<Task, 'session_id' | 'start_date' | 'org_role'>>, snoozed = false): { snoozed: boolean; limited: boolean; notStarted: boolean } {
   const us = task.user_status;
-  // A snooze just written reads as one at once (taskUserState), before the server's next pass.
-  const isSnoozed = us ? !!us.snoozed || snoozedAhead(us, task.start_date, task.org_role === 'main') : snoozed;
-  return {
-    snoozed: isSnoozed,
-    limited: !isSnoozed && !!us?.limit,
-    // Not started means no session (2026-11-16): a TODO with one is not, as on the server.
-    notStarted: !isSnoozed && !us?.limit && (us ? us.kind === 'not-started' : task.phase === 'TODO' && !task.session_id),
-  };
+  const isSnoozed = us ? !!us.snoozed : snoozed;
+  if (!isSnoozed && us?.limit) return LIMITED_LABEL;
+  // Not started means no session (2026-11-16): a TODO with one is not, as on the server.
+  if (!isSnoozed && (us ? us.kind === 'not-started' : task.phase === 'TODO' && !task.session_id)) return NOT_STARTED_LABEL;
+  return stateWord('waiting', isSnoozed);
 }
 
 // ── Colors ──
@@ -181,6 +202,14 @@ export function waitingBadgeTitle(pp: { toolName?: string; receivedAt?: string }
   return `Waiting for approval: ${tool}`;
 }
 
+export const PHASE_COLORS: Record<TaskPhase, string> = {
+  TODO: '#6b7280',
+  WAITING: '#8b5cf6',
+  IN_PROGRESS: '#f59e0b',
+  NEED_ACTION: '#3b82f6',
+  COMPLETE: '#22c55e',
+};
+
 // ── Phase picker choices (simplified) ──
 
 /**
@@ -207,6 +236,16 @@ export function matchesPhaseFilter(filter: string, phase: TaskPhase | string | u
   if (!filter) return true;
   if (filter === 'TODO') return phase !== 'COMPLETE';
   return phase === filter;
+}
+
+// ── Composite helpers ──
+
+/** Single color for indicators that combine process status and task phase.
+ *  Running = IN_PROGRESS color, error = red, otherwise = PHASE_COLORS[phase]. */
+export function compositePhaseColor(ps: ProcessStatus, phase: TaskPhase | undefined): string {
+  if (ps === 'running') return PHASE_COLORS.IN_PROGRESS;
+  if (ps === 'error') return PROCESS_COLORS.error;
+  return phase ? (PHASE_COLORS[phase] ?? '#6b7280') : '#6b7280';
 }
 
 // ── CSS class suffix for SessionPill ──

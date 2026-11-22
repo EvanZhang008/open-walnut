@@ -208,7 +208,7 @@ struct WorkCardSheet: View {
             let on = list == l
             Button { list = l } label: {
                 HStack(spacing: 4) {
-                    TaskStateIcon(state: l.iconState, size: 11).accessibilityHidden(true)
+                    Circle().fill(Self.dot(l)).frame(width: 7, height: 7)
                     Text(n.map { "\($0) \(l.label)" } ?? l.label)
                 }
                 .font(.caption.weight(on ? .semibold : .medium))
@@ -218,8 +218,8 @@ struct WorkCardSheet: View {
                 .padding(.vertical, 5)
                 .frame(maxWidth: fill ? .infinity : nil)
                 // The chosen list is filled in its own colour; the others are outlines.
-                .background(Capsule().fill(on ? l.iconState.color.opacity(0.18) : Color.clear))
-                .overlay(Capsule().stroke(on ? l.iconState.color : Color.secondary.opacity(0.35), lineWidth: on ? 1.5 : 1))
+                .background(Capsule().fill(on ? Self.dot(l).opacity(0.18) : Color.clear))
+                .overlay(Capsule().stroke(on ? Self.dot(l) : Color.secondary.opacity(0.35), lineWidth: on ? 1.5 : 1))
                 .padding(.horizontal, 2)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
@@ -227,6 +227,14 @@ struct WorkCardSheet: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(on ? .isSelected : [])
             .accessibilityIdentifier("workcard.sheet.chip.\(l.rawValue)")
+        }
+    }
+
+    static func dot(_ l: WorkCardList) -> Color {
+        switch l {
+        case .working: return UserStatePill.color(.working)
+        case .needs: return UserStatePill.color(.needs)
+        case .completed: return UserStatePill.color(.done)
         }
     }
 

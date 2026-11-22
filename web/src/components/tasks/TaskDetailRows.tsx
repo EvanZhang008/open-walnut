@@ -10,8 +10,6 @@ import type { ReactNode } from 'react';
 import type { ProcessStatus, SessionRecord, TaskPhase } from '@open-walnut/core';
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import { PHASE_LABELS, PROCESS_COLORS, PROCESS_LABELS } from '@/utils/session-status';
-import { phaseIconState, type TaskIconState } from '@/utils/task-icon-state';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { timeAgo } from '@/utils/time';
 import { sessionDisplayName, type SessionOwner } from '@/utils/project-display';
 
@@ -75,12 +73,16 @@ interface TaskRowProps {
   done: boolean;
   /** The task's own status words (taskStatusLabel), when the caller holds the task. */
   status?: string;
-  /** The task's own status icon state (taskIconState), when the caller holds the task. */
-  state?: TaskIconState;
   onOpen: () => void;
 }
 
-export function TaskRow({ title, phase, done, status, state, onOpen }: TaskRowProps) {
+const PHASE_DOT: Partial<Record<string, string>> = {
+  IN_PROGRESS: '#007aff',
+  NEED_ACTION: 'var(--error)',
+  COMPLETE: '#34c759',
+};
+
+export function TaskRow({ title, phase, done, status, onOpen }: TaskRowProps) {
   return (
     <div
       className={`tdp-row tdp-task-row${done ? ' is-done' : ''}`}
@@ -91,7 +93,7 @@ export function TaskRow({ title, phase, done, status, state, onOpen }: TaskRowPr
       onKeyDown={(e) => activate(e, onOpen)}
     >
       <div className="tdp-row-line">
-        <TaskStateIcon state={state ?? (done ? 'done' : phaseIconState(phase))} decorative />
+        <span className="tdp-dot" style={{ background: (done ? PHASE_DOT.COMPLETE : PHASE_DOT[phase]) ?? 'var(--fg-muted)' }} />
         <span className="tdp-row-title wn-title">{title}</span>
         <span className="tdp-row-end">{status ?? PHASE_LABELS[phase as TaskPhase] ?? phase}</span>
       </div>

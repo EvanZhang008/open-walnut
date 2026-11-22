@@ -145,16 +145,17 @@ struct OrgNodeTasksView: View {
     }
 }
 
-/// One task of a node's work: its status icon, its title, one line of what it does now, and when.
+/// One task of a node's work: its status dot, its title, one line of what it does now, and when.
 struct OrgTaskRow: View {
     let task: WalnutTask
-    @ScaledMetric(relativeTo: .subheadline) private var iconSize: CGFloat = 14
 
     var body: some View {
         let state = TeamStatusModel.state(of: task)
         HStack(alignment: .top, spacing: 10) {
-            TaskStateIcon(state: TeamStatusModel.iconState(of: task), size: iconSize)
-                .padding(.top, 3)
+            Circle()
+                .fill(UserStatePill.color(state))
+                .frame(width: 8, height: 8)
+                .padding(.top, 6)
             VStack(alignment: .leading, spacing: 3) {
                 Text(AskProjectName.displayTitle(task.title, project: task.project, orgRole: task.orgRole))
                     .font(.subheadline.weight(.medium))

@@ -23,8 +23,6 @@ import '@/styles/home-board.css';
 import { DisclosureButton, SegmentedControl } from '@/components/controls';
 import { MicInput } from '@/components/common/BoxMic';
 import { useFocusView } from '@/focus-spaces/useFocusView';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-import { taskIconState } from '@/utils/task-icon-state';
 import '@/styles/header-fit.css';
 
 function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
@@ -49,7 +47,7 @@ function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, 
       <button type="button" className="home-board-title" onClick={() => onOpen(task)}>{orgDisplayTitle(task)}</button>
       {mode === 'pin' && <button ref={drag.setActivatorNodeRef} type="button" className="home-board-drag" disabled={moving} aria-label={`Drag ${orgDisplayTitle(task)}`} title="Drag to another pin tier" {...drag.attributes} {...drag.listeners}>⠿</button>}
     </div>
-    <div className="home-board-meta"><span className={`home-board-state home-board-state-${state}`}><TaskStateIcon state={taskIconState(task)} size={12} decorative />{taskStatusLabel(task)}</span>{mode === 'status' && <span>{tierLabel(task)}</span>}
+    <div className="home-board-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(task)}</span>{mode === 'status' && <span>{tierLabel(task)}</span>}
       {until && <span className="home-board-snoozed" data-board-snoozed>{/^snoozed/i.test(taskStatusLabel(task)) ? `until ${until}` : `Snoozed until ${until}`}</span>}
       {open && <span className="home-board-actions">
         <button type="button" data-board-snooze aria-haspopup="dialog" aria-label={`Snooze ${orgDisplayTitle(task)}`} onClick={e => onSnooze(task, e.currentTarget)}>Snooze</button>

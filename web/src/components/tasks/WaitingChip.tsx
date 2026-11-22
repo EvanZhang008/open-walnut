@@ -22,10 +22,10 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { triggerPillTitle } from '@/components/routines/TriggerPill';
-import { formatWaitUntil } from './TaskStatusControl';
+import { formatWaitUntil, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { taskUserState } from '@/utils/session-status';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { ICON_PHASE_IN_PROGRESS, ICON_TO_READ } from '@/components/common/Icons';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource, type AgentTextSource } from '@/utils/agent-text-source';
 import { OPEN_CENTER_EVENT, OPEN_FILE_EVENT } from '@/utils/open-anywhere';
@@ -144,6 +144,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
   const rows = waitingDetailSourcedLines(task, triggerPillTitle(triggers));
   const lines = rows.map((r) => r.text);
   const reads = parkReads(task);
+  const icon = reads === 'working' ? ICON_PHASE_IN_PROGRESS : reads === 'read' ? ICON_TO_READ : WAIT_UNTIL_ICON;
   return (
     <>
       <button
@@ -170,7 +171,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
           setOpen(!open);
         }}
       >
-        {compact ? <span className="task-waiting-chip-icon" aria-hidden="true"><TaskStateIcon state={reads} size={16} decorative /></span> : <span>{label}</span>}
+        {compact ? <span className="task-waiting-chip-icon" aria-hidden="true">{icon}</span> : <span>{label}</span>}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(

@@ -209,8 +209,7 @@ enum BoardRowSurface {
 }
 
 /// One board row. A row, and nothing else: a dot in the leading gutter (unread, or
-/// waiting on you), the status ring (the task's `TaskStateIcon`, also its done toggle), the
-/// title, and the project in grey when the band
+/// waiting on you), the done ring, the title, and the project in grey when the band
 /// heading does not already say it. Under Needs you, one more grey line: what it needs from
 /// the user (2026-11-03, the user: "thridline cna show what need u ... in one line").
 ///
@@ -232,9 +231,7 @@ enum BoardRowSurface {
 /// human. The user called it confusing (the word said "handed back" while the open
 /// conversation said "Running") and asked for the web's language instead: a filled red
 /// dot for unread, a hollow red dot for read-but-waiting-on-you, no state word, no age,
-/// no red row. `BoardModel.dot` is that rule; this view only draws it. The state came back
-/// as a shape, not a word (2026-11-21, the user could not tell Working from Not started): the
-/// ring is the task's status icon, the same one the web, the Org pages and the pills draw.
+/// no red row. `BoardModel.dot` is that rule; this view only draws it.
 struct TaskBoardRow: View {
     let row: BoardRow
     /// False under a heading that already names the project ("By project"), where the
@@ -270,9 +267,6 @@ struct TaskBoardRow: View {
     /// The glyph's own box: 21pt circle centred in it, and this is the geometry that
     /// decides where the ring is DRAWN. Unchanged since the row shipped.
     static let ringGlyphSize = CGSize(width: 34, height: 30)
-
-    /// The drawn icon: the 16-unit design's 14-unit disc lands at the old 21pt ring.
-    static let ringDiameter: CGFloat = 24
 
     /// Width of the ring's TAP AREA, which is not its drawn size.
     ///
@@ -367,7 +361,7 @@ struct TaskBoardRow: View {
             .accessibilityLabel(displayTitle)
             // The dot is drawn, never read, so its meaning rides on the row itself, and so
             // does the third line (the label above is the title alone).
-            .accessibilityValue([ringState.label, dot?.accessibilityValue, need?.line].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityValue([dot?.accessibilityValue, need?.line].compactMap { $0 }.joined(separator: ", "))
             // The hint follows where the tap GOES, which is not "does the list have a
             // session for this task": a task whose session is known only by id opens
             // that session, and a task nobody has asked about yet opens whichever of the
@@ -483,16 +477,28 @@ struct TaskBoardRow: View {
         .accessibilityHint("Marks the task done")
     }
 
-    /// The row's status icon (`TaskStateIcon`, 2026-11-21: the one mark every task wears, so
-    /// Working and Not started read apart at a glance), the Completed one a filled ring with its
-    /// tick cut out. It is the done TOGGLE (Reminders muscle memory): the row's tap belongs to
-    /// the session, so the ring needs its own hit shape.
+    /// One glyph: an open ring, or a filled ring with a tick when done. It is the
+    /// done TOGGLE (Reminders muscle memory) — the row's tap belongs to the
+    /// session, so the ring needs its own hit shape.
     private var ring: some View {
         Button(action: onToggleDone) {
-            TaskStateIcon(state: ringState, size: Self.ringDiameter)
-                // The toggle names itself below; the state rides on the row's value.
-                .accessibilityHidden(true)
-                .frame(width: Self.ringGlyphSize.width, height: Self.ringGlyphSize.height)
+            ZStack {
+                Circle()
+                    .strokeBorder(row.isDone ? Color.secondary : Color(.systemGray3), lineWidth: 1.6)
+                    .background(row.isDone ? Circle().fill(Color.secondary) : Circle().fill(Color.clear))
+                    .frame(width: 21, height: 21)
+                if row.isDone {
+                    Image(systemName: "checkmark")
+                        // The tick is PUNCHED OUT of the ring, so its colour is the paper
+                        // behind the row — which is the card now, not the window's
+                        // background. In dark mode those are different colours (28,28,30
+                        // against black), so a tick left on `systemBackground` would read
+                        // as a hole through the card instead of as a hole in the ring.
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(BoardBandCard.surface)
+                }
+            }
+            .frame(width: Self.ringGlyphSize.width, height: Self.ringGlyphSize.height)
             // The TARGET, which is not the glyph box: 44pt wide (the platform minimum)
             // and the full height of the row, with the glyph still pinned top-leading so
             // nothing moves on screen. `maxHeight` rather than a fixed 44 on purpose —
@@ -514,13 +520,6 @@ struct TaskBoardRow: View {
         .padding(.trailing, -Self.ringTrailingBleed)
         .accessibilityIdentifier("board.ring.\(row.id)")
         .accessibilityLabel(row.isDone ? "Reopen" : "Mark done")
-    }
-
-    /// The ring's state: the task's own as its section draws it, else Working (a session-only
-    /// row has no task to read, so it is drawn under Working: `BoardStatusSectionModel.stateSection`).
-    private var ringState: TaskIconState {
-        guard let task = row.task else { return .working }
-        return BoardStatusSectionModel.iconState(TeamStatusModel.iconState(of: task), in: section)
     }
 
     /// The title as read: an ask on its placeholder reads "Quick question", Main "CEO".

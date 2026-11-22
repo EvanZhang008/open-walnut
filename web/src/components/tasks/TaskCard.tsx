@@ -14,8 +14,6 @@ import { ICON_TRASH } from '../common/Icons';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import { TaskStateIcon } from '../common/TaskStateIcon';
-import { taskIconState } from '@/utils/task-icon-state';
 
 export type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -166,7 +164,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
         }}
         aria-label={task.phase === 'COMPLETE' ? 'Reopen' : 'Complete'}
       >
-        <TaskStateIcon state={taskIconState(task)} decorative />
+        {task.phase === 'COMPLETE' ? '\u25CF' : '\u25CB'}
       </button>
 
       {groupInfo && onUngroup && (

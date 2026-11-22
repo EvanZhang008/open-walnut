@@ -9,6 +9,7 @@
 .status-section { display: block; }
 .status-section-heading-icon { display: inline-flex; flex: none; margin-right: -2px; }
 .status-section-heading-icon svg { width: 12px; height: 12px; display: block; }
+.status-section-needs .status-section-heading-icon { color: var(--error); }
 /* The divider heading (NavigationHeading `divider`): a status section's, and a tier's
    in By project (the user, 2026-10-31: the regular Focus too, "the same pattern with a
    line"). Past home-navigation.css's .navigation-heading.todo-pinned-header and
@@ -131,8 +132,12 @@
 .needs-category-close { color: var(--success); }
 /* Close at the line's end: the family's link (btn btn-link), so the line keeps its height. */
 .status-card-needs-line .needs-close-btn { flex: none; margin-left: auto; }
-/* Waiting / snoozed: an unread dot that does not read as an ask (2026-11-02, the user: "looks
-   kike they are waiting for my input"). The row's status icon is TaskStateIcon's own. */
+.status-section-card .pinned-phase-picker[data-row-mark="needs-read"] { color: var(--accent); }
+/* Waiting / snoozed: the row's wait or snooze mark, muted, and an unread dot that does not
+   read as an ask (2026-11-02, the user: "looks kike they are waiting for my input"). */
+.status-section-card .pinned-phase-picker[data-row-mark="waiting"],
+.status-section-card .pinned-phase-picker[data-row-mark="snoozed"],
+.status-section-card .pinned-phase-picker[data-row-mark="not-started"] { color: var(--fg-muted); }
 .status-section-card > .task-unread-dot.task-unread-dot-quiet { background: var(--fg-muted); opacity: 0.55; }
 /* A usage limit stopped it (Walnut continues it at the reset): the session banner's tag
    (usage-limit.css), on the row and as a count on the Waiting heading. */

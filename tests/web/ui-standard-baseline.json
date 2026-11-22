@@ -28,7 +28,10 @@
   "rawAccent": {
     "components/apps-page/builtin-apps.ts": 2,
     "components/board/board-runtime.css.ts": 5,
+    "components/org/ThreadTaskChips.tsx": 1,
+    "components/org/org-task-tabs.ts": 1,
     "components/settings/core-settings-registry.tsx": 6,
+    "components/tasks/TaskDetailRows.tsx": 1,
     "styles/globals.css": 3,
     "styles/settings-nav.css": 1,
     "utils/perf-logger.ts": 1
@@ -61,7 +64,7 @@
     "styles/light-subagent.css": 4,
     "styles/link-hover-card.css": 3,
     "styles/notice-card.css": 5,
-    "styles/org-page.css": 1,
+    "styles/org-page.css": 3,
     "styles/overlay-glass.css": 18,
     "styles/page-find.css": 5,
     "styles/passage-comments.css": 2,

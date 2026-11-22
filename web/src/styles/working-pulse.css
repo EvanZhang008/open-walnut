@@ -1,0 +1,31 @@
+/* A Working task's status glyph breathes (2026-11-21, the user: a working task should blink), and
+   only that glyph: the row's phase circle while its session runs a turn, the Ask Walnut list's dot,
+   an Org avatar's corner dot, the session taskbar's dot, a task pill's dot and a thread's task chip.
+   Opacity only, so it composites; still under reduced motion. Guard:
+   tests/web/working-pulse-guard.test.ts. */
+.task-working-pulse,
+.task-phase-icon-btn.task-circle-running,
+.task-quick-phase-btn.task-circle-running,
+.ask-walnut-drawer-dot.task-circle-running,
+.org-state-dot.org-state-working,
+[data-running] > * > .session-taskbar-dot,
+.session-taskbar-card[data-running] .session-taskbar-dot,
+a.task-link[data-user-state='working']::before {
+  animation: task-working-pulse 2s ease-in-out infinite;
+}
+@keyframes task-working-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-working-pulse,
+  .task-phase-icon-btn.task-circle-running,
+  .task-quick-phase-btn.task-circle-running,
+  .ask-walnut-drawer-dot.task-circle-running,
+  .org-state-dot.org-state-working,
+  [data-running] > * > .session-taskbar-dot,
+  .session-taskbar-card[data-running] .session-taskbar-dot,
+  a.task-link[data-user-state='working']::before {
+    animation: none;
+  }
+}

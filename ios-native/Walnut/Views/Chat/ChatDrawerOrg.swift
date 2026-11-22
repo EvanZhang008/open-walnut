@@ -157,13 +157,11 @@ struct ChatOrgRowView: View {
             .frame(width: 34, height: 34)
             .background(ceo ? Theme.tint : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
             .overlay(alignment: .bottomTrailing) {
-                // The node's state as its status icon, on a disc of the drawer's paper so it
-                // stands off the avatar. The line under the name says the state in words.
-                TaskStateIcon(state: row.state.icon, size: 12)
-                    .accessibilityHidden(true)
-                    .padding(1.5)
-                    .background(Circle().fill(Color(.secondarySystemBackground)))
-                    .offset(x: 3, y: 3)
+                Circle()
+                    .fill(row.state == .waiting ? Color(.systemGray) : UserStatePill.color(row.state))
+                    .frame(width: 11, height: 11)
+                    .overlay(Circle().stroke(Color(.secondarySystemBackground), lineWidth: 2))
+                    .offset(x: 2, y: 2)
             }
     }
 

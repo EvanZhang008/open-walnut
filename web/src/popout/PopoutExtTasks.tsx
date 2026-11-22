@@ -18,8 +18,6 @@ import { sendSessionMessage } from '@/api/session-send';
 import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
 import { useApprovals } from '@/components/approvals/approvals-store';
 import { AgentText } from '@/components/common/AgentText';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-import { taskIconState } from '@/utils/task-icon-state';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useImageAttachments } from '@/components/common/image-attachments';
@@ -214,7 +212,7 @@ function TaskRow({ section, row, open, onToggle, replies, setReplies }: { sectio
   return <div className={`ext-task${open ? ' is-open' : ''}`} data-testid="ext-task" data-task-id={task.id} data-state={row.state}>
     <div className="ext-task-headrow">
       <button type="button" className="ext-task-head" onClick={onToggle} aria-expanded={open}>
-        <TaskStateIcon state={taskIconState(task)} size={12} className="ext-task-mark" decorative />
+        <span className={`ext-task-dot state-${row.state}`} aria-hidden="true" />
         <span className="ext-task-text">
           <span className="ext-task-title wn-title">{taskTitleOf(task)}</span>
           {line && <span className="ext-task-line" data-testid="ext-task-line">{line}</span>}

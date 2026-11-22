@@ -1102,6 +1102,14 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 
 
+/* Task circle colors — deliberately session-driven, NOT phase-driven
+   (2026-08-13 user request: the per-phase rainbow was unreadable).
+   grey = plain task, blue = has a session attached, green = done.
+   Compound selectors so they beat the .task-phase-icon-btn base color. */
+.task-phase-icon-btn.task-circle-todo, .task-quick-phase-btn.task-circle-todo { color: var(--fg-muted); }
+.task-phase-icon-btn.task-circle-session, .task-quick-phase-btn.task-circle-session { color: var(--accent); }
+.task-phase-icon-btn.task-circle-done, .task-quick-phase-btn.task-circle-done { color: var(--success); }
+
 /* Inline phase icon (before title text) */
 .task-phase-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -5017,7 +5025,23 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-weight: 400;
 }
 
-/* Every task pill wears its task's live status icon: styles/task-state.css. */
+/* Every task pill wears its task's live status (web/src/utils/task-pill-status.ts
+   stamps data-user-state): needs you red, working green, done blue, waiting grey.
+   A link inside code is never stamped. */
+a.task-link[data-user-state]::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--fg-muted);
+}
+a.task-link[data-user-state='needs']::before { background: var(--error); }
+a.task-link[data-user-state='read']::before { background: var(--error); }
+a.task-link[data-user-state='working']::before { background: var(--success); }
+a.task-link[data-user-state='done']::before { background: var(--accent); }
 
 /* A task id linked in place inside code (bare-task-ids.ts): the code keeps its
    own font and box, the id reads as a link the way a path in code does. The
@@ -6841,7 +6865,15 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   cursor: pointer;
 }
 .mention-row.selected { background: var(--accent-subtle); }
-/* A task row's status mark is TaskStateIcon (styles/task-state.css). */
+.mention-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.mention-dot.running { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
+.mention-dot.waiting { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
+.mention-dot.idle { background: var(--fg-muted); opacity: 0.55; }
 .mention-ficon { flex-shrink: 0; width: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--font-size-md); color: var(--fg-muted); }
 .mention-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .mention-title {
@@ -8973,6 +9005,42 @@ body.walnut-dragging {
   color: var(--warning);
 }
 
+.task-quick-attention {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.task-quick-attention:hover {
+  opacity: 1;
+  border-color: var(--border);
+}
+
+.task-quick-attention.active {
+  opacity: 1;
+}
+
+.task-quick-attention-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+
+.task-quick-attention.active .task-quick-attention-dot {
+  background: var(--error);
+}
+
 .session-panel-body {
   flex: 1;
   min-height: 0;
@@ -9350,6 +9418,13 @@ body.walnut-dragging {
   height: 13px;
   background: var(--border);
   margin: 0 3px;
+  flex: none;
+}
+.todo-minibar-running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
   flex: none;
 }
 
@@ -27307,6 +27382,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   flex: none;
 }
 
+/* ── Live task-circle state (2026-08-14, kept deliberately minimal: grey =
+   no session, blue = session attached, blue PULSING = actively working).
+   Error/waiting are not circle colors — errors turn the whole row red via
+   the phase (todo-*-needs-action) and waits show on the SessionPill. ── */
+.task-phase-icon-btn.task-circle-running, .task-quick-phase-btn.task-circle-running {
+  color: var(--accent);
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Notification center v2 (`nfc-` = notification center) — rail + detail panes,
@@ -28489,10 +28571,12 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .agent-search-row:hover { background: var(--hover-bg, rgba(0,0,0,0.04)); }
 .agent-search-row.is-needs-action { background: rgba(255, 59, 48, 0.08); }
 .agent-search-row.is-needs-action:hover { background: rgba(255, 59, 48, 0.14); }
-/* The row's status icon (TaskStateIcon, 12px) sits inside the row button. */
+/* The circle is a span inside the row button (a button can't nest a button);
+   it borrows .task-phase-icon-btn for colour, without its own hover. */
 .agent-search-row-circle { pointer-events: none; }
 /* .wn-title on the element: a task's title wraps, never cut; the project is metadata and gives
    up its room first (.wn-meta, text-fit.css). */
+.agent-search-row-circle svg { width: 12px; height: 12px; }
 .agent-search-row-title {
   flex: 1;
   min-width: 0;

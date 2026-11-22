@@ -12,7 +12,8 @@
 import type { SessionSlot } from './sessionColumns';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import type { Task } from '@open-walnut/core';
-import { taskIconState, type LiveSessionStatus, type TaskIconState } from '@/utils/task-icon-state';
+import { shownState } from '@open-walnut/user-status';
+import { taskUserState } from '@/utils/session-status';
 
 /** A column id that names a real session (not a draft, a launch or a workspace on its way). */
 export function isRealSessionColumn(id: string): boolean {
@@ -153,24 +154,23 @@ export function parseRecent(value: unknown, chips: readonly string[]): string[] 
   return parseChips(value).filter(id => !chips.includes(id)).slice(0, RECENT_MAX);
 }
 
-/** A chip's dot: the task's status icon state (TaskStateIcon's dot, utils/task-icon-state.ts), the
- *  same as every row and pill of that task; grey only for a wait, a snooze or not started
- *  (2026-11-09, the user: "we use red means it is ready, green is working ... grey might means it
- *  is wait liek wait staus, or snoozed"). */
-export type ChipState = TaskIconState;
+/** A chip's dot, in the colors every task pill wears: red Needs you, green Working, blue Done, grey
+ *  only for a wait or a snooze (2026-11-09, the user: "we neve ruse the grey acutally if itis read
+ *  it is read, we use red means it is ready, green is working ... grey might means it is wait liek
+ *  wait staus, or snoozed"). */
+export type ChipState = 'needs' | 'working' | 'waiting' | 'done';
 
-/** The task's icon state fed the live status: a prompt waiting on the user is Needs you, a running
- *  turn Working (`running`: a turn runs now; Walnut's own idle compaction of `sessionId` is no
- *  turn of the task's). A session with no task reads its process alone, an
- *  error as Needs you. Having seen a session never greys it. */
+/** The task's one user status (To read drawn as Needs you), a prompt waiting on the user as Needs
+ *  you, a running turn as Working (`running` pulses the dot). A session with no task reads its
+ *  process alone, an error as Needs you. Having seen a session never greys it. */
 export function chipStateOf(
   task: Pick<Task, 'phase' | 'status' | 'user_status'> | undefined,
-  status: LiveSessionStatus | null | undefined,
-  sessionId?: string | null,
+  status: { process_status?: string | null; pendingPermissionTool?: string | null } | null | undefined,
 ): { state: ChipState; running: boolean } {
   const running = status?.process_status === 'running';
-  if (task) return { state: taskIconState(task, status, false, sessionId), running };
-  const state: ChipState = status?.pendingPermissionTool || status?.process_status === 'error' ? 'needs'
-    : running ? 'working' : 'waiting';
+  const user = task ? shownState(taskUserState(task)) : status?.process_status === 'error' ? 'needs' : null;
+  const state: ChipState = status?.pendingPermissionTool || user === 'needs' ? 'needs'
+    : running || user === 'working' ? 'working'
+      : user === 'done' ? 'done' : 'waiting';
   return { state, running };
 }

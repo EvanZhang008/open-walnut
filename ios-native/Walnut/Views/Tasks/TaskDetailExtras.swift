@@ -22,7 +22,6 @@ struct TaskDetailExtras: View {
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .subheadline) private var relativeIcon: CGFloat = 13
 
     /// The editors' Save waits for words still being spoken or transcribed into
     /// them (`DictationSendGate`). One sheet shows at a time, so one gate.
@@ -187,15 +186,16 @@ struct TaskDetailExtras: View {
         // The one status the user reads (TeamStatusModel), as the Team section shows it, from
         // the live store; the detail snapshot's phase only for a task this phone has not loaded.
         let full = tasks.tasks.first(where: { $0.id == relative.id })
-        let iconState = full.map { TeamStatusModel.iconState(of: $0) }
-            ?? TeamStatusModel.iconState(phase: relative.phase, status: relative.status)
-        // One icon per row: the pill beside a loaded task says only the word.
-        let icon = TaskStateIcon(state: iconState, size: relativeIcon)
+        let done = full.map { TeamStatusModel.state(of: $0) == .done }
+            ?? (relative.phase == "COMPLETE" || relative.status == "done")
+        let icon = Image(systemName: done ? "checkmark.circle.fill" : "circle")
+            .font(.caption)
+            .foregroundStyle(done ? Theme.success : .secondary)
         let shownTitle = AskProjectName.displayTitle(full?.title ?? relative.title, project: full?.project, orgRole: full?.orgRole)
         let title = Text(shownTitle).font(.subheadline)
         @ViewBuilder var state: some View {
-            if full != nil {
-                UserStatePill(state: iconState, stuck: full.map { TeamStatusModel.isStuck($0) } ?? false, showsIcon: false)
+            if let full {
+                UserStatePill(state: TeamStatusModel.state(of: full), stuck: TeamStatusModel.isStuck(full))
             } else if let phase = relative.phase {
                 Text(Self.phaseLabel(phase))
                     .font(.caption2)

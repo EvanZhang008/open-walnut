@@ -226,8 +226,11 @@
 .oc-task:hover { background: var(--bg-secondary); }
 .oc-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The icons the task list's sections wear, in their colours. */
-/* The row's status icon (TaskStateIcon), on the first line of a title that wraps. */
-.oc-task-icon { display: block; margin-top: 1px; }
+.oc-task-icon { flex: none; display: inline-flex; margin-top: 1px; color: var(--fg-muted); }
+.oc-task-icon svg { width: 13px; height: 13px; display: block; }
+.oc-task-icon.is-needs, .oc-task-icon.is-read { color: var(--error); }
+.oc-task-icon.is-working { color: var(--success); }
+.oc-task-icon.is-done { color: var(--accent); }
 .oc-task-title { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-size-sm); line-height: 1.35; }
 .oc-task-empty { padding: 3px 4px; color: var(--fg-muted); font-size: var(--font-size-sm); }
 

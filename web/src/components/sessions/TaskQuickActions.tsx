@@ -14,9 +14,8 @@ import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
 import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
-import { resolveTaskSessionId, taskStatusLabel, taskUserState } from '@/utils/session-status';
-import { taskIconState } from '@/utils/task-icon-state';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import * as ICONS from '@/components/common/Icons';
+import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
 import { NEEDS_CATEGORY_LABELS, needsLineOf } from '@open-walnut/user-status';
@@ -34,9 +33,18 @@ import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu
 /** The task's detail, loaded when it opens: it brings the notes editor, and every composer has these actions. */
 const OutsideTaskDetail = lazy(() => import('@/components/tasks/OutsideTaskDetail').then((m) => ({ default: m.OutsideTaskDetail })));
 
+/* ── Phase constants ─────────────────────────────────────────────── */
+
+const PHASE_ICON: Record<string, ReactNode> = {
+  TODO: '○',
+  IN_PROGRESS: '◐',
+  NEED_ACTION: '✓',
+  COMPLETE: '✓✓',
+};
+
 /** The task's status as the user reads it (taskStatusLabel: Needs you, Working, Waiting, Not
  *  started, Completed); one with only a result to read names what to do with it, the category of
- *  its Needs you line (2026-11-02), beside the To read icon. */
+ *  its Needs you line (2026-11-02; Icons.tsx binaryPhaseIcon). */
 function quickPhaseLabel(task: Task): string {
   if (taskUserState(task) === 'read') { const line = task.user_status ? needsLineOf(task.user_status) : null; return NEEDS_CATEGORY_LABELS[line?.category ?? 'look']; }
   return taskStatusLabel(task);
@@ -386,7 +394,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   const circleSessionId = task ? resolveTaskSessionId(task) : null;
   const circleStatus = useSessionStatus(circleSessionId);
   useIdleCompactingSession(circleSessionId);
-  const iconState = task ? taskIconState(task, circleStatus, false, circleSessionId) : 'todo';
 
   // A task-less session still shows the kebab when it carries a Session section.
   if (!task && !(slot !== 'phase' && extraSection)) return null;
@@ -399,7 +406,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       {slot !== 'kebab' && task && (
       <div className="task-quick-phase">
         <button
-          className="task-quick-phase-btn"
+          className={`task-quick-phase-btn ${taskCircleClass(task, circleStatus)}`}
           onClick={(e) => {
             e.stopPropagation();
             handlePhaseChange(isDone ? 'TODO' : 'COMPLETE', true);
@@ -408,7 +415,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           // An icon alone (a narrow column) still says what it does.
           aria-label={compact ? (isDone ? 'Reopen the task' : 'Complete the task') : undefined}
         >
-          <span className="task-quick-phase-icon"><TaskStateIcon state={iconState} decorative /></span>
+          <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}</span>
           {!compact && <span className="task-quick-phase-label">{quickPhaseLabel(task)}</span>}
         </button>
       </div>

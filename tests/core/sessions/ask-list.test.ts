@@ -8,7 +8,7 @@
  *   activity, search, 60+ asks, mixed-script titles, ties, broken stamps, the
  *   held order and printed stamps while the drawer is open (one snapshot per
  *   agent), and the two parity pins against the
- *   board's own session-id and status icon rules.
+ *   board's own session-id and circle rules.
  *
  * All data is invented. Non-ASCII titles are written as \u escapes (test data
  * only): U+7814 U+7A76 reads "research", U+90E8 U+7F72 reads "deploy".
@@ -20,8 +20,7 @@ import {
   compareAsks, holdOrder, isAskOf, matchesAskQuery, nextHeldOrder, printedStamp, selectAsks, toAskRow,
   type AskTaskLike, type HeldOrder, type HeldRowView, type PrintedStamp,
 } from '../../../src/core/sessions/ask-list.js'
-import { resolveTaskSessionId } from '../../../web/src/utils/session-status.js'
-import { taskIconState } from '../../../web/src/utils/task-icon-state.js'
+import { resolveTaskSessionId, taskCircleClass } from '../../../web/src/utils/session-status.js'
 import type { Task } from '../../../src/core/types.js'
 
 const WALNUT = { id: GENERAL_AGENT_ID, project: ASK_WALNUT_PROJECT }
@@ -403,7 +402,7 @@ describe('nextHeldOrder + printedStamp: what the open drawer shows', () => {
   })
 })
 
-describe('parity with the board: same session id, the same status icon', () => {
+describe('parity with the board: same session id, same circle', () => {
   const sessionShapes: Array<Partial<AskTaskLike>> = [
     {},
     { session_id: 'one' },
@@ -421,6 +420,7 @@ describe('parity with the board: same session id, the same status icon', () => {
   ]
   const lives = [undefined, null, { process_status: 'running' }, { process_status: 'idle' }, { process_status: 'stopped' }]
   const snapshots = [undefined, { process_status: 'running' }, { process_status: 'error' }]
+  const CLASS = { running: 'task-circle-running', idle: 'task-circle-session', done: 'task-circle-done', todo: 'task-circle-todo' }
 
   it('askSessionId === resolveTaskSessionId for every slot shape', () => {
     for (const shape of sessionShapes) {
@@ -429,17 +429,11 @@ describe('parity with the board: same session id, the same status icon', () => {
     }
   })
 
-  // The drawer draws a row's status icon (taskIconState) beside askState: a finished task is
-  // Completed in both, and a running turn (live, else the snapshot) is Working unless the task
-  // needs the user.
-  it('askState maps onto the status icon for every phase x slot x live x snapshot', () => {
+  it('askState maps onto taskCircleClass for every phase x slot x live x snapshot', () => {
     let checked = 0
     for (const shape of sessionShapes) for (const ph of phases) for (const live of lives) for (const snap of snapshots) {
       const t = { id: 'p', session_id: undefined, session_ids: [], ...shape, ...ph, ...(snap ? { session_status: snap } : {}) } as AskTaskLike
-      const ask = askState(t, live)
-      const icon = taskIconState(t as unknown as Task, live as never)
-      expect(ask === 'done', `${ask} vs ${icon}`).toBe(icon === 'done')
-      if (ask === 'running') expect(icon).toBe(ph.phase === 'NEED_ACTION' ? 'needs' : 'working')
+      expect(CLASS[askState(t, live)]).toBe(taskCircleClass(t as unknown as Task, live as never))
       checked++
     }
     expect(checked).toBe(sessionShapes.length * phases.length * lives.length * snapshots.length)

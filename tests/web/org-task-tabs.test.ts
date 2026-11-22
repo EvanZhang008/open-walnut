@@ -8,8 +8,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_TASK_TABS, ORG_TASK_TAB_LABELS, allTasksSections, isSectionFlips, orgTaskTabs, sectionFor, sectionOpen, stateTab, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
-import { sectionHeadState } from '../../web/src/utils/task-icon-state.js'
+import { ORG_RAIL_TABS, ORG_TASK_TABS, ORG_TASK_TAB_LABELS, TAB_DOT, allTasksSections, isSectionFlips, orgTaskTabs, sectionFor, sectionOpen, stateTab, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -50,8 +49,7 @@ describe('the Task view tabs', () => {
     expect(ORG_TASK_TABS.map((k) => ORG_TASK_TAB_LABELS[k])).toEqual(['Needs you', 'Working', 'Waiting / snoozed', 'Not started', 'Completed'])
     for (const k of ORG_TASK_TABS) expect(ORG_TASK_TAB_LABELS[k]).toBe(STATUS_SECTION_LABELS[k])
     expect(ORG_RAIL_TABS).not.toContain('read')
-    // Each tab's heading dot is its section's status icon state (TaskStateIcon).
-    for (const k of ORG_TASK_TABS) expect(sectionHeadState(k), k).toBeTruthy()
+    expect(Object.keys(TAB_DOT)).not.toContain('read')
   })
 
   it('All tasks draws every tab as a section in the rail\'s order, empty ones left out', () => {

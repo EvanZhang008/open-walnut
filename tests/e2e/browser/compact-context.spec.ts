@@ -280,7 +280,7 @@ test('the idle compaction row says why it ran and changes its setting in place',
     const out = { running: 0, compacting: 0 }
     const until = Date.now() + 60_000
     while (Date.now() < until) {
-      if (document.querySelector(`.todo-panel-item[data-task-id="${id}"] .task-state-icon[data-state="working"]`)) out.running++
+      if (document.querySelector(`.todo-panel-item[data-task-id="${id}"] .task-circle-running`)) out.running++
       if (document.body.textContent?.includes('Walnut is compacting this idle session')) out.compacting++
       if (/Compacted by Walnut while idle/.test(document.querySelector('.session-history')?.textContent ?? '')) break
       await new Promise((r) => setTimeout(r, 40))

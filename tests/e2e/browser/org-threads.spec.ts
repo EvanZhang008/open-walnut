@@ -163,8 +163,7 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await expect(c1.getByTestId('org-thread-state')).toHaveText('Working')
   await expect(c1.getByTestId('org-thread-reply').locator('strong')).toHaveText('Build Threads')
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"]`)).toContainText(`Build Threads ${STAMP}`)
-  // The chip wears its task's live status: the one status icon (components/common/TaskStateIcon.tsx).
-  await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] .task-state-icon`)).toHaveCount(1)
+  await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] i`)).toHaveCount(1)
 
   // A second ask right after the first is the same conversation: it joins the first thread at once
   // (core/org/threads-model.ts SAME_CONVERSATION_MS), never a card of its own.

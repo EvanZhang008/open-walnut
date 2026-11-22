@@ -238,7 +238,7 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   // The reason sits on the row's guide line, before the state dot, small and apart from it; the
   // title keeps its place a little in from the row's name.
   const [whyBox, dot, title, group, name] = await Promise.all([
-    why.boundingBox(), kept.locator('.org-watched-open > .task-state-icon').boundingBox(), kept.locator('.org-watched-title').boundingBox(),
+    why.boundingBox(), kept.locator('.org-watched-open > i').boundingBox(), kept.locator('.org-watched-title').boundingBox(),
     page.locator(`[data-testid="org-watched"][data-key="${NODE}"]`).boundingBox(),
     page.locator(`[data-testid="org-channel"][data-key="${NODE}"] .org-channel-name`).boundingBox(),
   ])

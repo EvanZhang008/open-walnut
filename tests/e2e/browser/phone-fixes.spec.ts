@@ -106,8 +106,7 @@ test('N5: a tier card row that needs the user says Needs you in words, not only 
   await expect(card).toBeVisible({ timeout: 15_000 })
   const words = card.locator('.phone-row-needs-you')
   await expect(words).toHaveText('Needs you', { timeout: 15_000 })
-  // One status mark: the row's Needs you icon (TaskStateIcon), no second dot or ring for it.
-  await expect(card.locator('.task-phase-icon-btn .task-state-icon')).toHaveAttribute('data-state', 'needs')
+  await expect(card.locator('.task-attention-dot')).toBeHidden()
   const fit = await words.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, right: el.getBoundingClientRect().right, fs: parseFloat(getComputedStyle(el).fontSize) }))
   expect(fit.sw).toBeLessThanOrEqual(fit.cw + 1)
   expect(fit.right).toBeLessThanOrEqual(page.viewportSize()!.width)

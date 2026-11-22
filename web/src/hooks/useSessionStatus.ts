@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { SessionRecord } from '@/types/session';
 import type { SessionCronMetadata, Task } from '@open-walnut/core';
-import { resolveTaskSessionId } from '@/utils/session-status';
-import { taskIconState, type TaskIconState } from '@/utils/task-icon-state';
+import { resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import { onPageVisible } from '@/utils/page-visibility';
 import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
 import {
@@ -124,14 +123,13 @@ export function useResolvedSessionRecord<T extends SessionRecord | null>(record:
   );
 }
 
-/** A task's live status icon state (utils/task-icon-state.ts): subscribes the icon to the
- *  session-status store, so a turn that starts or a prompt that waits on the user shows at once
- *  (2026-08-14: every unfinished Satellite task rendered the same calm blue). Falls back to the
- *  task's REST enrichment snapshot (`session_status`) while the store has nothing yet. */
-export function useTaskIconState(task: Task, snoozed = false): TaskIconState {
-  const sessionId = resolveTaskSessionId(task);
-  const status = useSessionStatus(sessionId);
-  // Re-read when Walnut's idle compaction starts or ends (taskIconState reads it).
-  useIdleCompactingSession(sessionId);
-  return taskIconState(task, status, snoozed, sessionId);
+/** Live task-circle class: subscribes the circle to the session-status store
+ *  so error/waiting/running surface in task lists in real time (2026-08-14:
+ *  every unfinished Satellite task rendered the same calm blue). Falls back
+ *  to the task's REST enrichment snapshot when the store has nothing yet. */
+export function useTaskCircle(task: Task): string {
+  const status = useSessionStatus(resolveTaskSessionId(task));
+  // Re-read when Walnut's idle compaction starts or ends (taskCircleClass reads it).
+  useIdleCompactingSession(resolveTaskSessionId(task));
+  return taskCircleClass(task, status);
 }

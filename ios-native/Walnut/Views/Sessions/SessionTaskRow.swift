@@ -22,7 +22,6 @@ struct SessionTaskRow: View {
     @State private var saving = false
     @State private var errorText: String?
     @State private var showDetail = false
-    @ScaledMetric(relativeTo: .title3) private var statusIconSize: CGFloat = 20
 
     /// Live store row first, fetched fallback second.
     private var task: WalnutTask? {
@@ -97,8 +96,8 @@ struct SessionTaskRow: View {
         Button {
             toggleDone()
         } label: {
-            // The task's status icon; a row still resolving its task is not started.
-            TaskStateIcon(state: task.map { TeamStatusModel.iconState(of: $0) } ?? .todo, size: statusIconSize)
+            StatusCircle(status: task?.statusKind ?? .unknown)
+                .font(.title3)
         }
         .buttonStyle(.plain)
         .disabled((saving && !isLiveRow) || task == nil || store == nil)

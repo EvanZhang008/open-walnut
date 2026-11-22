@@ -19,8 +19,7 @@
 import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-import { taskIconState } from '@/utils/task-icon-state';
+import { binaryPhaseIcon } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
@@ -43,6 +42,15 @@ export interface SearchResultRowView {
  *  phase only when the store has no row for it (the search answer carries no status). */
 export function rowNeedsYou(row: Pick<SearchResultRowView, 'phase' | 'user_status'>): boolean {
   return taskUserState({ phase: (row.phase ?? 'TODO') as TaskPhase, status: 'todo', user_status: row.user_status }) === 'needs';
+}
+
+/** Same circle colours as the board rows (utils/session-status taskCircleClass),
+ *  from the phase alone — an agent result is not a Task, and IN_PROGRESS /
+ *  NEED_ACTION already imply a session exists. */
+function circleClassForPhase(phase: string | undefined): string {
+  if (phase === 'COMPLETE') return 'task-circle-done';
+  if (phase === 'IN_PROGRESS' || phase === 'NEED_ACTION') return 'task-circle-session';
+  return 'task-circle-todo';
 }
 
 function rowTooltip(row: SearchResultRowView): string {
@@ -104,8 +112,8 @@ export function AgentSearchResultRows({ rows, className }: {
               title={rowTooltip(row)}
               onClick={() => openTask(row.taskId)}
             >
-              <span className="task-phase-icon-btn agent-search-row-circle" aria-hidden="true">
-                <TaskStateIcon state={taskIconState({ phase: (row.phase ?? 'TODO') as TaskPhase, status: isDone ? 'done' : 'todo', user_status: row.user_status })} size={12} decorative />
+              <span className={`task-phase-icon-btn agent-search-row-circle ${circleClassForPhase(row.phase)}`} aria-hidden="true">
+                {binaryPhaseIcon(isDone, row.phase, taskUserState({ phase: row.phase, user_status: row.user_status } as Parameters<typeof taskUserState>[0]))}
               </span>
               <span className="agent-search-row-title wn-title">{row.title ?? row.taskId}</span>
               <span className="agent-search-row-project wn-meta">{projectDisplayName(row.project)}</span>

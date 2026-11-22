@@ -13,16 +13,21 @@ enum WorkCardList: String, CaseIterable, Codable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The names every surface uses for these states (src/core/user-status.ts USER_STATE_LABELS):
-    /// the status icon's.
-    var label: String { iconState.label }
-
-    /// The list's task status icon (`TaskStateIcon`, Shared/TaskStateIcon.swift).
-    var iconState: TaskIconState {
+    /// The names every surface uses for these states (src/core/user-status.ts USER_STATE_LABELS).
+    var label: String {
         switch self {
-        case .working: return .working
-        case .needs: return .needs
-        case .completed: return .done
+        case .working: return "Working"
+        case .needs: return "Needs you"
+        case .completed: return "Completed"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .working: return "hammer.circle.fill"
+        // A raised hand: the user's turn, not an error.
+        case .needs: return "hand.raised.circle.fill"
+        case .completed: return "checkmark.circle.fill"
         }
     }
 }

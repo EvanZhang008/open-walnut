@@ -188,6 +188,7 @@ const KNOWN_ALERT_LENGTHS = [
   'web/src/components/org/org-channels-model.ts: shownState(userStateOf(task)', // which tasks get a card (To read too, folded on the page)
   'web/src/components/org/org-channels-model.ts: shownState(storedUserState(s)', // a team's line for the column it is in
   'web/src/components/org/org-task-tabs.ts: shownState(userStateOf(task)', // the dot and tab a watched row wears
+  'web/src/components/org/ThreadTaskChips.tsx: shownState(userStateOf(task)', // a thread's task dot
 ]
 
 function scan(dirs: string[], re: RegExp): string[] {

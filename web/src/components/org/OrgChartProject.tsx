@@ -7,11 +7,11 @@
  * move under another VP is a drag or a right-click on the row. Every VP card lists its
  * projects, its own included. Each row remembers whether it was open (usePageViewOf).
  */
-import { useRef, type DragEvent } from 'react';
+import { useRef, type DragEvent, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { teamNews, type OrgTaskNode, type TeamNewsItem, type TeamNewsTask } from '@open-walnut/org-tree';
-import { TaskStateIcon } from '../common/TaskStateIcon';
-import { TASK_ICON_WORDS, iconStateOf, type TaskIconState } from '@/utils/task-icon-state';
+import { stateWord } from '@open-walnut/user-status';
+import * as ICONS from '../common/Icons';
 import type { VpProject } from './org-chart-model';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { domId, useChartOpen } from './OrgChartVp';
@@ -23,10 +23,8 @@ export interface ProjectTaskLine {
   words: string;
   /** 0 = a team of the project; 1 = a worker under one; 2 = a worker's own worker, ... */
   depth: number;
-  /** A waiting task the user snoozed (its icon is the moon, not the clock). */
+  /** A waiting task the user snoozed (its icon is the moon, not the hourglass). */
   snoozed: boolean;
-  /** Its status icon (TaskStateIcon): the state, a snooze and a task nobody started told apart. */
-  icon: TaskIconState;
 }
 
 /** The project's open tasks, what needs the user first, then the newest; workers under their team, at every depth. */
@@ -37,12 +35,10 @@ export function projectTasks(project: VpProject, byId: ReadonlyMap<string, Task>
   const add = (nodes: readonly OrgTaskNode[], depth: number) => {
     const known = new Map(nodes.map((n) => [n.id, n] as const));
     for (const item of teamNews(nodes.map(line))) {
-      // A task with only something to read sorts with Needs you (teamNews) and wears the To read
-      // icon there, as its row does under Needs you on Home.
-      const us = byId.get(item.taskId)?.user_status;
-      const snoozed = !!us?.snoozed;
-      const icon = iconStateOf(item.state, { snoozed, notStarted: us?.kind === 'not-started' });
-      out.push({ id: item.taskId, title: item.title, state: item.state, words: item.words, depth, snoozed, icon });
+      // A task with only something to read sorts with Needs you (teamNews) and wears the task
+      // list's page icon there, as its row does under Needs you (sectionRowIcon).
+      const snoozed = !!byId.get(item.taskId)?.user_status?.snoozed;
+      out.push({ id: item.taskId, title: item.title, state: item.state, words: item.words, depth, snoozed });
       const node = known.get(item.taskId);
       if (node?.workers.length) add(node.workers, depth + 1);
     }
@@ -50,6 +46,20 @@ export function projectTasks(project: VpProject, byId: ReadonlyMap<string, Task>
   add(project.row.node?.teams ?? [], 0);
   return out;
 }
+
+/** The icon a task's status wears in its row: the same ones the task list's sections wear. */
+export function stateIcon(t: Pick<ProjectTaskLine, 'state' | 'snoozed'>): ReactNode {
+  switch (t.state) {
+    case 'needs': return ICONS.ICON_ATTENTION;
+    case 'read': return ICONS.ICON_TO_READ;
+    case 'working': return ICONS.ICON_PHASE_IN_PROGRESS;
+    case 'waiting': return t.snoozed ? ICONS.ICON_SNOOZE : ICONS.ICON_PHASE_WAITING;
+    case 'done': return ICONS.ICON_PHASE_COMPLETE;
+  }
+}
+
+/** One task's state in a word: "Snoozed" or "Waiting", not the tab's "Waiting / snoozed". */
+const stateName = (t: ProjectTaskLine) => stateWord(t.state, t.snoozed);
 
 interface Props {
   project: VpProject;
@@ -128,10 +138,10 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
                 data-state={t.state}
                 data-depth={t.depth}
                 // The status is the icon; its words are a hover away.
-                title={[t.title, `${TASK_ICON_WORDS[t.icon]}${t.words ? `: ${t.words}` : ''}`].join('\n')}
+                title={[t.title, `${stateName(t)}${t.words ? `: ${t.words}` : ''}`].join('\n')}
                 onClick={() => { onLeave(); openTask(t.id); }}
               >
-                <TaskStateIcon state={t.icon} className="oc-task-icon" testId="org-chart-task-icon" />
+                <span className={`oc-task-icon is-${t.state}${t.snoozed ? ' is-snoozed' : ''}`} role="img" aria-label={stateName(t)} data-testid="org-chart-task-icon">{stateIcon(t)}</span>
                 <span className="oc-task-title wn-title">{t.title}</span>
               </button>
             </li>

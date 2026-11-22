@@ -36,6 +36,12 @@ export type OrgRailTab = 'watching' | OrgTaskTab;
 export const ORG_RAIL_TABS: readonly OrgRailTab[] = ['watching', ...ORG_TASK_TABS];
 export const ORG_RAIL_TAB_LABELS: Record<OrgRailTab, string> = { watching: STATUS_SECTION_LABELS.watching, ...ORG_TASK_TAB_LABELS };
 
+/** Each status tab's dot. */
+export const TAB_DOT: Record<OrgTaskTab, string> = {
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
+  notstarted: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+};
+
 /** Completed work stays listed this long (the Board's Status view and the phone use the same). */
 export const ORG_DONE_WINDOW_DAYS = 7;
 

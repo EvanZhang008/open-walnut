@@ -1,6 +1,6 @@
 /**
- * Walnut's idle compaction runs the CLI, but its turn is quiet: a task's status icon does not read
- * as Working through it (web/src/stores/idle-compacting-store.ts, web/src/utils/task-icon-state.ts).
+ * Walnut's idle compaction runs the CLI, but its turn is quiet: a task's circle does not read as
+ * Working through it (web/src/stores/idle-compacting-store.ts, web/src/utils/session-status.ts).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Task } from '@open-walnut/core'
@@ -19,29 +19,27 @@ const ws = {
 vi.mock('@/api/ws', () => ({ wsClient: ws }))
 
 const { idleCompactingStore, IDLE_COMPACTION_EVENT, IDLE_COMPACTING_END_GRACE_MS } = await import('@/stores/idle-compacting-store')
-const { taskIconState } = await import('@/utils/task-icon-state')
+const { taskCircleClass } = await import('@/utils/session-status')
 
 const SID = 'sess-1'
-// A parked task: Working only while a real turn runs.
-const task = { id: 't1', status: 'todo', phase: 'WAITING', session_id: SID } as unknown as Task
-const icon = () => taskIconState(task, running, false, SID)
+const task = { id: 't1', status: 'todo', phase: 'NEED_ACTION', session_id: SID } as unknown as Task
 const running = { process_status: 'running' }
 
 beforeEach(() => { vi.useFakeTimers(); idleCompactingStore.resetForTest() })
 afterEach(() => { vi.useRealTimers() })
 
-describe("a task's status icon while Walnut's idle compaction runs", () => {
-  it('reads as Working for a real turn, and not while the idle compaction runs', () => {
-    expect(icon()).toBe('working')
+describe("a task's circle while Walnut's idle compaction runs", () => {
+  it('reads as running for a real turn, and not while the idle compaction runs', () => {
+    expect(taskCircleClass(task, running)).toBe('task-circle-running')
     ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: true })
-    expect(icon()).toBe('waiting')
+    expect(taskCircleClass(task, running)).toBe('task-circle-session')
     ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: false })
     // Its end comes a moment before the CLI's status leaves running: still quiet for that moment.
-    expect(icon()).toBe('waiting')
+    expect(taskCircleClass(task, running)).toBe('task-circle-session')
     // The composer reads it exactly: a turn that follows shows its Stop at once.
     expect(idleCompactingStore.has(SID, true)).toBe(false)
     vi.advanceTimersByTime(IDLE_COMPACTING_END_GRACE_MS)
-    expect(icon()).toBe('working')
+    expect(taskCircleClass(task, running)).toBe('task-circle-running')
   })
 
   it('a start inside the moment after an end keeps it quiet', () => {
@@ -54,13 +52,13 @@ describe("a task's status icon while Walnut's idle compaction runs", () => {
 
   it('another session compacting leaves this one as it is', () => {
     ws.emit(IDLE_COMPACTION_EVENT, { sessionId: 'other', active: true })
-    expect(icon()).toBe('working')
+    expect(taskCircleClass(task, running)).toBe('task-circle-running')
   })
 
   it("says which of Walnut's compactions runs: the context-full recovery is quiet too", () => {
     ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: true, reason: 'context' })
     expect(idleCompactingStore.kind(SID, true)).toBe('context')
-    expect(icon()).toBe('waiting')
+    expect(taskCircleClass(task, running)).toBe('task-circle-session')
     ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: true })
     expect(idleCompactingStore.kind(SID, true)).toBe('idle')
     ws.emit(IDLE_COMPACTION_EVENT, { sessionId: SID, active: false, reason: 'context' })

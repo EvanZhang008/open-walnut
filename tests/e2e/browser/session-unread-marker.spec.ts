@@ -70,7 +70,7 @@ async function sessionIdForTask(page: Page, taskId: string): Promise<string> {
   return sessions[0].claudeSessionId
 }
 
-interface TaskRow { phase: string; unread?: boolean }
+interface TaskRow { phase: string; unread?: boolean; user_status?: { state: string } }
 
 async function readTask(page: Page, taskId: string): Promise<TaskRow> {
   const response = await page.request.get(`/api/tasks/${taskId}`)
@@ -79,9 +79,8 @@ async function readTask(page: Page, taskId: string): Promise<TaskRow> {
 }
 
 const dot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot')
-const solidDot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot')
-/** The task's status icon beside the title (TaskStateIcon in TaskQuickActions). */
-const statusIcon = (panel: Locator): Locator => panel.locator('.session-panel-header .task-quick-phase-btn .task-state-icon')
+const solidDot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot:not(.session-panel-attention-dot)')
+const ringDot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot.session-panel-attention-dot')
 const composerCard = (panel: Locator): Locator => panel.locator('.session-panel-input .chat-input-box')
 /** The title's x inside its own panel (columns move when another one opens). */
 const titleX = async (panel: Locator): Promise<number> =>
@@ -92,6 +91,7 @@ async function expectMarked(page: Page, panel: Locator, taskId: string): Promise
   await expect.poll(async () => (await readTask(page, taskId)).unread === true, { timeout: 30_000 }).toBe(true)
   await expect(panel).toHaveClass(UNREAD_CLASS, { timeout: 15_000 })
   await expect(solidDot(panel)).toBeVisible()
+  await expect(ringDot(panel)).toHaveCount(0)
   // The card's own 0.2s transition fades the red in; read it once it settles. One red edge, no
   // second red ring around it (2026-11-21 UI audit: the double red read as an error), and the
   // box says in words what the red means.
@@ -104,11 +104,20 @@ async function expectMarked(page: Page, panel: Locator, taskId: string): Promise
 
 async function expectRead(page: Page, panel: Locator, taskId: string): Promise<void> {
   await expect(panel).not.toHaveClass(UNREAD_CLASS, { timeout: 15_000 })
-  // Read is not done: the task still has something for the user, which its status icon says
-  // (Needs you, or To read for a turn that ended with a result; TaskStateIcon) until they reply
-  // or complete; no second mark beside it.
+  // Read is not done: a task that still asks the user (Needs you) keeps the list's hollow ring
+  // (transparent fill, red outline) until they reply or complete. A turn that ended with only a
+  // result reads To read, which wears no ring here (taskNeedsAction), as in the task list.
   await expect(solidDot(panel)).toHaveCount(0)
-  await expect(statusIcon(panel)).toHaveAttribute('data-state', /^(needs|read)$/)
+  if ((await readTask(page, taskId)).user_status?.state !== 'needs') {
+    await expect(ringDot(panel)).toHaveCount(0)
+    await expect.poll(async () => (await readTask(page, taskId)).unread === true, { timeout: 15_000 }).toBe(false)
+    return
+  }
+  await expect(ringDot(panel)).toBeVisible()
+  expect(await ringDot(panel).evaluate((el) => {
+    const s = getComputedStyle(el)
+    return { fill: s.backgroundColor, ring: s.boxShadow.includes('rgb(255, 59, 48)') }
+  })).toEqual({ fill: 'rgba(0, 0, 0, 0)', ring: true })
   await expect.poll(() => composerCard(panel).evaluate((el) => getComputedStyle(el).boxShadow.includes('rgba(255, 59, 48')),
     { timeout: 5_000 }).toBe(false)
   await expect.poll(async () => (await readTask(page, taskId)).unread === true, { timeout: 15_000 }).toBe(false)

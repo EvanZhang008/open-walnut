@@ -108,9 +108,23 @@
 .session-taskbar-recent-pill .session-taskbar-open { gap: 5px; padding: 0 2px 0 8px; font-size: var(--font-size-sm); }
 .session-taskbar-recent-pill .session-taskbar-close { width: 18px; height: 18px; border-radius: 9px; }
 .session-taskbar-recent-pill .session-taskbar-close svg { width: 9px; height: 9px; }
+.session-taskbar-recent-pill .session-taskbar-dot { width: 6px; height: 6px; }
 
-/* The state mark is TaskStateIcon at 12px (styles/task-state.css): the task's status shape and
-   colour, Working breathing, still under reduced motion. */
+/* The state dot: the colors every task pill wears (globals.css a.task-link[data-user-state]):
+   needs you red, working green (pulsing while a turn runs), done blue, waiting or snoozed grey. */
+.session-taskbar-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+[data-state='needs'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='needs'] .session-taskbar-dot { background: var(--error); }
+[data-state='working'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='working'] .session-taskbar-dot { background: var(--success); }
+[data-state='done'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='done'] .session-taskbar-dot { background: var(--accent); }
 
 /* The card: solid, never glass, so the strip behind never shows through. */
 .session-taskbar-card {
@@ -192,3 +206,4 @@
 .session-taskbar-more-row .session-taskbar-open { flex: 1 1 auto; min-width: 0; gap: 7px; padding: 0 4px 0 8px; font-size: var(--font-size-sm); justify-content: flex-start; }
 .session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: 11px; }
 .session-taskbar-more-row .session-taskbar-close svg { width: 10px; height: 10px; }
+.session-taskbar-more-row .session-taskbar-dot { width: 6px; height: 6px; }
