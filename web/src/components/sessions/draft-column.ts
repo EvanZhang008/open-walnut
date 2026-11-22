@@ -212,6 +212,11 @@ export interface DraftColumn {
   /** The folder (`host::cwd`) whose "start in a fresh workspace instead?" the person answered
    *  "Keep this folder" (draft-work-in.ts workInSuggestion). */
   workInKept?: string;
+  /** The folder-set project (`projectSource: 'folder'`) is the project whose code is in this
+   *  folder (detectProjectForFolder), recorded when the folder set it (stampFolderDetection), so
+   *  Start never depends on the registry having loaded: such a project goes as it is, never to
+   *  the server's folder rule (sendsFolderProject). Read only while it names `project`. */
+  detectedProject?: string;
 }
 
 /** Undo what entering walnut mode wrote to `meta`, keeping what the user picked
@@ -306,7 +311,7 @@ function dirKey(d: { cwd: string; host: string | null }): string {
  *  divider (DraftLaunchBar) and reads as its own zone at eight. */
 const QUICK_TOP_BY_COUNT = 4;
 /** The default worktrees folder (workspace-core worktreesRoot): its folders are tasks' isolated workspaces. */
-const WORKSPACES_DIR_PART = '/.open-walnut-worktrees/';
+export const WORKSPACES_DIR_PART = '/.open-walnut-worktrees/';
 const QUICK_TOP_BY_RECENT = 4;
 
 /**

@@ -127,7 +127,7 @@
   "web/src/components/sessions/ContextFullBanner.tsx": [1, 0],
   "web/src/components/sessions/DiffComparePicker.tsx": [5, 0],
   "web/src/components/sessions/DraftDecisionRow.tsx": [6, 0],
-  "web/src/components/sessions/DraftLaunchBar.tsx": [4, 2],
+  "web/src/components/sessions/DraftLaunchBar.tsx": [2, 2],
   "web/src/components/sessions/DraftSessionPanel.tsx": [14, 0],
   "web/src/components/sessions/EngineFallbackBanner.tsx": [2, 0],
   "web/src/components/sessions/EngineSettingsPopover.tsx": [7, 0],

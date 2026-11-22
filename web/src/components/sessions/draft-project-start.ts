@@ -11,14 +11,15 @@
  *   source  a project with a code source is picked: a fresh workspace, its value chips.
  *
  * While the draft may start from a project (`canPick`, also in 'off' after a folder pick), the
- * row shows ONE "Work in" pill for both (DraftWorkInPill, its words in draft-work-in.ts).
+ * draft shows its Project + Where row for both (DraftWhereRow, its words in draft-work-in.ts).
  *
  * The server reads the source (src/core/workspaces/project-source.ts) and resolves the start
  * itself (`fromProject` on quick-start); this file only mirrors what the row shows.
  */
 import type { StartSource } from '@/api/projects';
 import type { DraftColumn } from './draft-column';
-import { clearAiFields } from './draft-column';
+import { clearAiFields, withDirLaunchMemory } from './draft-column';
+import { homeDraftFolder } from './draft-home-default';
 import { isInboxProject } from '../../../../src/core/inbox-project';
 
 export type ProjectStartMode = 'off' | 'pick' | 'source';
@@ -69,7 +70,7 @@ export interface DraftProjectStartState {
   source: StartSource | null;
   /** The draft's project by its current name (a rename followed). */
   project: string;
-  /** The Work in pill applies: a project pick goes through pickProjectForStart (also after a folder pick). */
+  /** The Project + Where row applies: a project pick goes through pickProjectForStart (also after a folder pick). */
   canPick: boolean;
 }
 
@@ -87,6 +88,17 @@ export function draftProjectStart(draft: ModeDraft, ctx: {
   const found = startSourceOf(ctx.rows, draft.project, ctx.resolve);
   const mode = projectStartMode(draft, { flagOn: ctx.flagOn, eligible: ctx.eligible, source: found.source });
   return { mode, source: mode === 'source' ? found.source : null, project: found.project, canPick: ctx.flagOn && ctx.eligible };
+}
+
+/**
+ * Whether the draft's own Isolated workspace choice (draftWorkspaceRequest) is part of the start:
+ * every start but one from a project's code source, which makes its own workspace. The row that
+ * shows and defaults the choice is mounted on exactly this, and Start reads the choice on exactly
+ * this, so a choice the row no longer shows can never reach a start (a folder's isolation default
+ * carried into a project's Auto home folder asked for a worktree of ~).
+ */
+export function startReadsDraftWorkspace(state: Pick<DraftProjectStartState, 'mode'>): boolean {
+  return state.mode !== 'source';
 }
 
 /** The draft's host for a source's host: `null` is this machine. */
@@ -154,11 +166,11 @@ export function settleProjectStart(before: DraftColumn, after: DraftColumn, ctx:
 }
 
 /**
- * A project pick in the Work in popover (or More while project-first is on). A project with a
+ * A project pick in the Project field (or a Recent chip). A project with a
  * source starts from it, its chips back on the favourites and its own host; one without a source
  * (or the Inbox) is today's project pick, and a draft that stood on a source gets its folder back
- * (settleProjectStart). `toHome` (the Work in popover, where a project row says "Works in its
- * folder"): one without a source also puts the draft on its own default folder and host.
+ * (settleProjectStart). `toHome` (Auto: "Its folder notes"): one without a source also puts the
+ * draft on its own default folder and host.
  */
 export function pickProjectForStart(
   draft: DraftColumn, project: string, source: StartSource | null | undefined, home?: ProjectHome, opts: { toHome?: boolean } = {},
@@ -181,7 +193,7 @@ export function pickProjectForStart(
 
 /**
  * A folder picked by hand: the draft no longer starts from a project's code source, and keeps the
- * picked folder. While the Work in pill applies (`workIn`) the pick is final against every way a
+ * picked folder. While the Where row applies (`workIn`) the pick is final against every way a
  * draft enters source mode (a hand pick, a project "+" seed, the background parse): it writes
  * `fromProject: false`, so only a later project pick brings a source back.
  */
@@ -192,9 +204,48 @@ export function leaveForFolderPick(d: DraftColumn, workIn = false): DraftColumn 
   return left || d.fromProject ? { ...rest, fromProject: false } : rest;
 }
 
-/** The Work in popover's "Runs on": another host for this start only. */
+/** The Where field's host on a start from a source: another host for this start only. */
 export function pickStartHost(draft: DraftColumn, host: string | null, hostLabel?: string): DraftColumn {
   return { ...draft, host, hostLabel: host ? hostLabel : undefined, fromProjectHostPicked: true, userTouched: true };
+}
+
+/** The home folder of a host as a draft stores it: this machine's absolute home, `~` elsewhere. */
+export function homeFolderOn(host: string | null): string {
+  return host ? '~' : homeDraftFolder();
+}
+
+/**
+ * Another host for a draft that runs in a folder (not a start from a source). The home folder
+ * follows the host (every host has one); any other folder stays as it is, and the row says when
+ * that host does not have it.
+ */
+export function moveDraftHost(draft: DraftColumn, host: string | null, hostLabel: string | undefined, opts: { home: boolean }): DraftColumn {
+  return {
+    ...draft,
+    host,
+    hostLabel: host ? hostLabel : undefined,
+    ...(opts.home ? { cwd: homeFolderOn(host), cwdPinned: false, createCwd: false } : {}),
+    userTouched: true,
+  };
+}
+
+/**
+ * A project pick that restores the folder the project last ran in: the folder, pinned, with its
+ * launch memory, and marked kept, so a restored folder never asks "use a fresh workspace instead?".
+ */
+export function restoreFolderPlace(draft: DraftColumn, cwd: string, host: string | null, hostLabel?: string): DraftColumn {
+  const left = leaveForFolderPick(draft, true);
+  const next: DraftColumn = {
+    ...left, cwd, host, hostLabel: host ? hostLabel : undefined, cwdPinned: true, createCwd: false, userTouched: true,
+    meta: draft.metaTouched ? draft.meta : withDirLaunchMemory(draft.meta, cwd, host),
+  };
+  return { ...next, workInKept: workInFolderKey(next) };
+}
+
+/** A folder's identity on its host, as the "Keep" answer (`workInKept`) remembers it. */
+export function workInFolderKey(d: Pick<DraftColumn, 'cwd' | 'host'>): string {
+  const h = d.host;
+  return `${!h || h === '__local__' || h === 'local' ? '__local__' : h}::${d.cwd.length > 1 ? d.cwd.replace(/\/+$/, '') : d.cwd}`;
 }
 
 const strings = (v: unknown): string[] => (Array.isArray(v)
@@ -279,4 +330,13 @@ export function projectStartRequest(
 /** A draft that may start from a project at all: not bound to a task, a fork, Ask Walnut or a repair. */
 export function projectStartEligible(d: Pick<DraftColumn, 'forkOf' | 'walnut' | 'taskId' | 'intent'>): boolean {
   return !d.forkOf && !d.walnut && !d.taskId && d.intent !== 'fix-walnut';
+}
+
+/**
+ * The words a refused start from a project puts on the line: the server's, except a project
+ * with no code source, which says it short (it takes the line's one row with its action).
+ */
+export function projectStartRefusalWords(err: { message: string; body?: unknown }): string {
+  const code = err.body && typeof err.body === 'object' ? (err.body as { code?: unknown }).code : undefined;
+  return code === 'no-project-source' ? 'No code source: set one in the project\'s settings.' : err.message;
 }

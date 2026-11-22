@@ -7,6 +7,7 @@
  *
  * `tests/core/human-inbox/letter-origin-surfaces.test.ts` fails on a letter surface without it.
  */
+import { WalnutIcon } from '@/components/common/WalnutIcon';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { LETTER_ORIGIN_KIND_LABEL, letterOriginOf, type LetterEnvelope } from '@/api/human-inbox';
 import { taskPath } from '@/utils/task-path';
@@ -45,7 +46,7 @@ export function LetterOriginBadge({ letter, variant = 'row', linkTask = false }:
     >
       {variant === 'reader' && <span className="hib-origin-from">From</span>}
       <span className={`badge${origin.kind === 'task' || origin.kind === 'session' ? ' badge-accent' : ''} hib-origin-badge${showKind ? '' : ' hib-origin-badge--mark'}`}>
-        <img src="/walnut-icon.png" alt="" className="hib-origin-mark" aria-hidden="true" />
+        <WalnutIcon className="hib-origin-mark" />
         {showKind && <span className="hib-origin-kind">{kindLabel}</span>}
       </span>
       {linkTask && origin.taskId ? (

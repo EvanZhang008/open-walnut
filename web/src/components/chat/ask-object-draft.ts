@@ -14,6 +14,7 @@
 import type { CreateTaskInput } from '@/api/tasks';
 import { ASK_WALNUT_PROJECT, type DraftColumn } from '@/components/sessions/draft-column';
 import { enterWalnutDraft, launchMetaFor } from '@/components/sessions/draft-ownership';
+import { sendsFolderProject } from '@/components/sessions/draft-work-in';
 import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import type { ImageAttachment } from '@/api/chat';
 import { launchEngineForHost, normalizeEngine, type EngineCatalog } from '@/utils/engines';
@@ -91,7 +92,8 @@ export function askLaunchBody(input: {
     ...(model ? { model } : {}),
     ...(meta.mode ? { mode: meta.mode } : {}),
     ...(draft.project ? { project: draft.project } : {}),
-    ...(draft.project && draft.projectSource === 'folder' ? { projectFromFolder: true } : {}),
+    // The drawer's drafts never record a detection: today's folder rule.
+    ...(sendsFolderProject(draft, false) ? { projectFromFolder: true } : {}),
     ...(draft.createCwd ? { createCwd: true } : {}),
   };
 }

@@ -1,0 +1,153 @@
+/* The v6 draft's menus (experiment project_first_start): the Project, Host and Where menus
+   (ProjectStartFlyout shells), the Where menu's rows, a code source's packages, More's Task source.
+   The layout itself is draft-v6.css. */
+
+/* ── Menus (ProjectStartFlyout shells) ── */
+.project-start-flyout.draft-v6-menu { max-width: none; padding: 4px 0; font-size: var(--font-size-md); }
+.project-start-flyout.draft-v6-where-menu { padding: 0; overflow: hidden; }
+.project-start-flyout.draft-v6-host-menu { width: 300px; }
+.project-start-flyout.draft-v6-project-menu { width: 320px; height: 310px; overflow: hidden; }
+.draft-v6-menu-title { padding: 8px 14px 4px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
+.draft-v6-menu-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 4px 4px; }
+.draft-v6-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 8px);
+  margin: 0 4px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.draft-v6-menu-list .draft-v6-option { width: 100%; margin: 0; }
+.draft-v6-option:hover, .draft-v6-option.is-current { background: var(--bg-hover); }
+.draft-v6-option-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.draft-v6-option-name { font-weight: 500; }
+.draft-v6-option-line { font-size: var(--font-size-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-v6-check { flex: none; display: inline-flex; color: var(--accent); }
+
+/* The Where menu: search, a list that fades out at its bottom edge, the keys. */
+.draft-v6-wm { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.draft-v6-wm-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+.draft-v6-wm-search.is-small { height: 40px; }
+.draft-v6-wm-field { flex: 1; min-width: 0; }
+.draft-v6-wm-path { font-family: var(--font-mono); font-size: var(--font-size-sm); }
+.draft-v6-kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 18px;
+}
+.draft-v6-wm-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 4px 22px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
+}
+.draft-v6-wm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.draft-v6-wm-row.is-active { background: var(--bg-hover); }
+.draft-v6-wm-row.is-disabled { cursor: default; background: none; }
+.draft-v6-wm-ico {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+.draft-v6-wm-ico.is-ban { color: var(--warning); }
+.draft-v6-wm-row.is-disabled .draft-v6-wm-ico.is-ban .where-icon { opacity: 0.55; }
+.draft-v6-wm-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.draft-v6-wm-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 500; color: var(--fg); white-space: nowrap; }
+/* A title (.wn-title) wraps inside its own box, before the tag and the right column (check, time). */
+.draft-v6-wm-title { flex: 0 1 auto; }
+.draft-v6-wm-name code { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-muted); font-weight: 400; }
+/* Only titles and icons of things you cannot pick are greyed; their reasons stay readable. */
+.draft-v6-wm-name.is-dim { opacity: 0.55; }
+.draft-v6-wm-line { font-size: var(--font-size-sm); color: var(--fg-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.draft-v6-wm-line.is-path { font-family: var(--font-mono); font-size: var(--font-size-xs); }
+.draft-v6-wm-line.is-reason {
+  color: var(--fg-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.35;
+}
+.draft-v6-wm-row.is-cannot { align-items: flex-start; }
+/* Auto's second line is read whole: up to two lines (a reason why it cannot run wraps in full). */
+[data-testid="draft-v6-auto-row"] .draft-v6-wm-line:not(.is-reason) { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; }
+.draft-v6-wm-row.is-cannot .draft-v6-mini { flex: none; align-self: flex-start; max-width: 100%; margin-top: 6px; overflow: hidden; }
+.draft-v6-wm-empty.is-quiet { padding: 4px 10px 8px; font-size: var(--font-size-sm); }
+.draft-v6-wm-right { flex: none; display: inline-flex; align-items: center; min-width: 20px; justify-content: flex-end; }
+.draft-v6-wm-time { font-size: var(--font-size-xs); color: var(--fg-muted); }
+.draft-v6-wm-group { padding: 8px 10px 2px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
+.draft-v6-wm-empty { padding: 10px 12px; color: var(--fg-muted); }
+.draft-v6-wm-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.draft-v6-wm-crumbs .draft-v6-crumb { font-weight: 400; }
+/* A row's own small key (the family's btn-sm, DraftWhereMenu); this only lays it out. */
+.draft-v6-mini { flex: none; }
+.draft-v6-wm-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-height: 32px;
+  padding: 6px 12px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--border);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.draft-v6-wm-count { margin-left: auto; }
+
+/* The packages of a code source, right under the Auto row. */
+.draft-v6-packages { display: flex; flex-direction: column; gap: 4px; padding: 2px 10px 6px 48px; }
+.draft-v6-package-check { display: inline-flex; }
+.draft-v6-package-input { width: 140px; }
+.draft-v6-package-none { font-size: var(--font-size-sm); color: var(--fg-secondary); }
+
+/* More's "Task source" row. */
+.draft-task-source-row { display: flex; align-items: center; gap: 8px; }
+.draft-task-source-label { flex: 1; }

@@ -102,13 +102,25 @@ export function shownFolderName(cwd: string, host: string | null | undefined): s
   return folderNameIn(cwd, knownHomeOf(host));
 }
 
-/** A path (already shown with its home as `~`) as breadcrumb segments: the last three, after an
+/** One breadcrumb: its words and the folder it stands for (`~/a`, `/srv/a`; '' for the `…`). */
+export interface PathCrumb { label: string; dir: string }
+
+/** A path (already shown with its home as `~`) as breadcrumb segments: the last `keep` (3), after an
  *  ellipsis when longer. A path under the home keeps its `~` first (2026-11-11 review: the Files
  *  crumbs read "… › projects › app › notes.md" for `~/projects/app/notes.md`); the ellipsis then
- *  stands only for the folders between. */
-export function pathCrumbs(p: string): string[] {
+ *  stands only for the folders between. Each crumb carries its folder, so a click on a middle one
+ *  can open that level (the draft's Where field). */
+export function pathCrumbItems(p: string, keep = 3): PathCrumb[] {
   const segs = p.split('/').filter(Boolean);
-  if (segs.length === 0) return [p || '/'];
-  if (segs[0] === '~') return segs.length > 4 ? ['~', '…', ...segs.slice(-3)] : segs;
-  return segs.length > 3 ? ['…', ...segs.slice(-3)] : segs;
+  if (segs.length === 0) return [{ label: p || '/', dir: p || '/' }];
+  const abs = !p.startsWith('~');
+  const items = segs.map((label, i) => ({ label, dir: `${abs ? '/' : ''}${segs.slice(0, i + 1).join('/')}` }));
+  const lead = segs[0] === '~' ? 1 : 0;
+  if (segs.length - lead <= keep) return items;
+  return [...items.slice(0, lead), { label: '…', dir: '' }, ...items.slice(-keep)];
+}
+
+/** pathCrumbItems' words only. */
+export function pathCrumbs(p: string): string[] {
+  return pathCrumbItems(p).map((c) => c.label);
 }

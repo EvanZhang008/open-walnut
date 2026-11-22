@@ -10,6 +10,12 @@
  */
 export const LOCAL_HOST_LABEL = 'Local';
 
+/** This machine in a sentence ("This Mac" / "This computer", as the server's start source names it):
+ *  the new task draft's Where field (experiment project_first_start), where the host leads the path. */
+export function thisMachineName(platform: string = typeof navigator === 'undefined' ? '' : navigator.platform): string {
+  return /Mac/i.test(platform) ? 'This Mac' : 'This computer';
+}
+
 /** The cloud companion's host alias (core/hosts/cloud-box-host.ts), and its name when nothing else is known. */
 export const CLOUD_BOX_ALIAS = '__cloudbox__';
 export const CLOUD_BOX_LABEL = 'Cloud';

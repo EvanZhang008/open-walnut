@@ -5,7 +5,9 @@
  * the selected tab is in the Tab order.
  *
  * `Tabs` takes a list of items; `TabList` + `Tab` are for a strip whose tabs carry more (a close
- * button, a drag handle): the look and the keys are the same.
+ * button, a drag handle): the look and the keys are the same. `TabList tiles` draws its tabs as
+ * large square cards (an icon, a title, a line), for a choice between two kinds of the same
+ * thing at the top of a form (the new task draft's Start task / Quick chat); the keys stay.
  */
 import { type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { segmentIndexForKey } from '../settings/inputs/SegmentedControl'
@@ -54,12 +56,12 @@ function onListKey(e: KeyboardEvent<HTMLElement>) {
   tabs[next].click()
 }
 
-export function TabList({ className, flush, children, onKeyDown, ...rest }: HTMLAttributes<HTMLDivElement> & { flush?: boolean; 'aria-label'?: string; ref?: Ref<HTMLDivElement> }) {
+export function TabList({ className, flush, tiles, children, onKeyDown, ...rest }: HTMLAttributes<HTMLDivElement> & { flush?: boolean; tiles?: boolean; 'aria-label'?: string; ref?: Ref<HTMLDivElement> }) {
   return (
     <div
       role="tablist"
       {...rest}
-      className={`wn-tabs${flush ? ' wn-tabs-flush' : ''}${className ? ` ${className}` : ''}`}
+      className={`wn-tabs${flush || tiles ? ' wn-tabs-flush' : ''}${tiles ? ' wn-tabs-tiles' : ''}${className ? ` ${className}` : ''}`}
       onKeyDown={(e) => { onKeyDown?.(e); if (!e.defaultPrevented) onListKey(e) }}
     >
       {children}

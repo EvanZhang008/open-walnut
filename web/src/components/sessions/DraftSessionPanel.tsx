@@ -51,14 +51,16 @@ import { quickParseTask, updateTask, fetchTask } from '@/api/tasks';
 import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
-import type { DraftRowUpdate } from './DraftWorkInPill';
+import type { DraftRowUpdate } from './useDraftWhere';
+import { DraftV6Body } from './DraftV6Body';
+import { DraftV6SendLabel, useDraftV6 } from './DraftV6Panel';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { nextSessionMode } from './session-mode-cycle';
-import { PermissionModeMenu } from './PermissionModeMenu';
-import { DEFAULT_SESSION_MODE, SESSION_EFFORTS, SESSION_MODES, modelSupportsEffort, modelSupportsMaxEffort, modelSupportsXhighEffort, SESSION_MODE_LABELS, type SessionEffort, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { DraftModePill } from './DraftModePill';
+import { DEFAULT_SESSION_MODE, SESSION_EFFORTS, modelSupportsEffort, modelSupportsMaxEffort, modelSupportsXhighEffort, type SessionEffort, type SessionEngine, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import {
@@ -80,7 +82,7 @@ import { useProjectLaunchDefaults } from '@/hooks/useProjectRegistry';
 import { projectGroupKey } from '@/utils/project-display';
 import {
   useGlobalClaudeLaunchDefaults,
-  defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, launchSourceRows, unnamedLaunchIsNotClaude, useGlobalDefaultEngine, type LaunchSourceRow,
+  defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, launchSourceRows, unnamedLaunchIsNotClaude, useGlobalDefaultEngine,
 } from '@/utils/launch-source';
 import { fetchEngineModelCatalog } from '@/api/sessions';
 import {
@@ -185,7 +187,7 @@ function effortFor(model: string, effort: SessionEffort | undefined): SessionEff
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote, projectEffort }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote, projectEffort, autoWord = 'Auto' }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
@@ -205,6 +207,8 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   sourceNote?: React.ReactNode;
   /** The draft's project's own default effort (its settings), under a pick here. */
   projectEffort?: SessionEffort;
+  /** The word for no model picked: the v6 draft says "Default", so its one Auto is Where's. */
+  autoWord?: string;
 }) {
   const [open, setOpen] = useState(false);
   // The provider tab the picker shows while the launch is on the fallback: it opens on the
@@ -261,7 +265,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
     // name, never as a provider id like "global.anthropic.claude-..." (N10).
     ? nameOfModel(meta.model!)
     : defaultModel ? `Default (${nameOfModel(defaultModel)})`
-    : autoResolved ? `Auto (${autoResolved})` : 'Auto';
+    : autoResolved ? `${autoWord} (${autoResolved})` : autoWord;
   // What the effort picker's Default row starts at: the project's, else Walnut's, else Claude Code's own.
   const effortDefault = projectEffort
     ? { level: effortLabel(projectEffort), title: 'No level picked here: the project\'s default effort applies (its settings)' }
@@ -394,40 +398,6 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   );
 }
 
-/**
- * DraftModePill — the permission mode the session will START in, in the same
- * spot and dress as a running session's mode pill (`.mode-toggle-pill`, Plan in
- * amber). Before any pick it reads the launch default (Bypass), because that is
- * what the spawn does with no mode; a click opens the mode menu and Shift+Tab
- * steps through the enabled cycle (Settings › Sessions). A user who starts a task
- * could not see, let alone choose, whether it would run with full trust or in
- * Plan mode until the session was already up (2026-10-01).
- */
-function DraftModePill({ mode, onPick, nextMode, source }: {
-  mode: SessionMode;
-  nextMode: SessionMode;
-  onPick: (mode: SessionMode) => void;
-  /** Where the mode comes from (its project's default, the global one): said in the title, and a
-   *  project's default also on the pill. */
-  source?: LaunchSourceRow;
-}) {
-  const labels = SESSION_MODE_LABELS as Record<string, string>;
-  const label = labels[mode] ?? mode;
-  const description = SESSION_MODES.find((m) => m.id === mode)?.description;
-  return (
-    <PermissionModeMenu
-      mode={mode}
-      onPick={onPick}
-      className="draft-mode-pill"
-      heading="This task starts in"
-      data-mode={mode}
-      data-source={source?.source}
-      aria-label={`Permission mode: ${label}`}
-      title={`Starts in ${label} mode${description ? ` (${description.toLowerCase()})` : ''}${source ? `: ${source.words.charAt(0).toLowerCase()}${source.words.slice(1)}` : ''}. Click to choose a mode; Shift+Tab steps to ${labels[nextMode] ?? nextMode}`}
-    />
-  );
-}
-
 interface Props {
   draft: DraftColumn;
   /** Focus the composer after mount (the column that "+" just opened). */
@@ -495,6 +465,8 @@ interface Props {
   /** "Customize Walnut" quick action: the owner turns THIS draft into the repair
    *  draft. Omit (no repair target on this install) and the chip never renders. */
   onCustomizeWalnut?: (draftId: string) => void;
+  /** The new task draft's Quick chat (experiment project_first_start): a recent chat opens in the Ask Walnut slot. */
+  onOpenAsk?: (taskId: string) => void;
   /** Where a repair draft runs (Walnut's source, or the clone a first Start
    *  makes): the repair hint names it. */
   repairTarget?: WalnutRepairTarget | null;
@@ -526,7 +498,7 @@ interface Props {
   ownFolderLabel?: string;
   /** With `pickFolder`: the folder pill's × back to no folder. Such a host makes no isolated workspace, so none is offered. */
   onClearFolder?: (draftId: string) => void;
-  /** The host is writing (a save as todo or a start on its way): Save as task waits, so one click makes one task. */
+  /** The host is writing (a save as task or a start on its way): Save as task waits, so one click makes one task. */
   saveBusy?: boolean;
   /** A write on the draft row: present, the draft may start from a project (DraftLaunchBar). */
   onProjectStart?: DraftRowUpdate;
@@ -536,7 +508,7 @@ export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, launchNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false, onProjectStart,
+  onCustomizeWalnut, onOpenAsk, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false, onProjectStart,
 }: Props) {
   countRender('DraftSessionPanel');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -603,6 +575,9 @@ export function DraftSessionPanel({
   // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
   const showTabs = !isFork && !isRepair && !!onWalnutToggle;
+  // The v6 layout (experiment project_first_start, DraftV6Panel.tsx): a plain new draft only.
+  const v6s = useDraftV6(!!onProjectStart && showTabs && !isBound && !ownFolder && !plainChat && !draft.orgLead);
+  const { v6 } = v6s;
 
   // The permission mode the launch will carry, and the pill that shows it. The
   // pill follows the ENGINE that will actually spawn (the model pill's rule):
@@ -878,6 +853,7 @@ export function DraftSessionPanel({
     // Ask Walnut needs no folder — the server owns the cwd (WALNUT_HOME); nor does a host that
     // starts such a task in its own directory.
     // A start from a project's code source names no folder: the server makes the workspace.
+    if (v6s.holdsStart(draft, !!ownFolder)) return false;
     if (!draft.cwd && !draft.walnut && !ownFolder && !draft.fromProject) {
       // The picker is the RECOVERY, not the explanation (alone it read as a dead
       // Start button), so say why next to the pill. Cleared once a folder lands.
@@ -888,7 +864,7 @@ export function DraftSessionPanel({
     const override = overrideNextRef.current;
     overrideNextRef.current = false;
     return onStart(draft.id, body, images, override ? { overrideReadiness: true } : undefined);
-  }, [draft.cwd, draft.walnut, draft.id, onStart, ownFolder, draft.fromProject]);
+  }, [draft, onStart, ownFolder, v6s]);
 
   // "Start anyway" (the host gate's override) is a send by another name: click
   // ChatInput's own send button (in THIS column) so pasted IMAGES ride along and
@@ -902,9 +878,165 @@ export function DraftSessionPanel({
     void startWith(text.trim());
   }, [startWith, text]);
 
+  const modePill = showModePill && (
+    <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode} {...(v6 ? { prefix: 'Permissions: ' } : {})}
+      source={sourceRows?.find((r) => r.key === 'mode')} />
+  );
+  // Why the last Start did not start (a refusal, the host gate) and the fallback engine: both layouts.
+  const gateBar = gateError && <HostGateErrorBar gate={gateError} draftHost={draft.host} label={draft.hostLabel || gateError.body.host}
+    onClear={clearGate} onStartAnyway={() => { overrideNextRef.current = true; handleStartClick(); }} />;
+  const fallbackNotice = <DraftFallbackNotice now={fallbackNow} named={fallbackNamed}
+    onUseFallback={() => onMetaChange(draft.id, (m) => ({ ...m, model: undefined, engine: undefined }), { touched: false })} />;
+  // ONE composer for both layouts (today's and the v6 one).
+  const composer = (
+    <ChatInput
+      onSend={(body, images) => startWith(body, images)}
+      // No session yet: files land on this machine and go to the session's host with its first message.
+      fileTarget={NO_SESSION_YET}
+      onValueChange={setText}
+      // The arrow is the ONE start affordance, so an empty composer may send
+      // only where '' means something: a bound draft sends its task's title, a
+      // fork just branches. A plain draft needs words (spawn-and-idle is legal,
+      // but an accidental Enter must not start a CLI on nothing).
+      allowEmptySend={(isBound && !draft.orgLead) || isFork}
+      sendTitle={isFork
+        ? 'Fork the source session (an empty message just branches the conversation)'
+        : isBound && isWalnut
+          ? 'Ask a quick question about this task (an empty message sends the task title)'
+          : draft.orgLead
+            ? `Send to ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}`
+            : isBound
+            ? 'Start the session on this task (an empty message sends the task title)'
+            : isWalnut
+              ? askLabel
+              : 'Start the session'}
+      // Only offered where the parse actually runs. A fork has nothing to
+      // guess at, Ask Walnut has no launch pills, and a column with no
+      // onAiParse has nowhere to put the answer — a switch that changes
+      // nothing about the composer in front of you is worse than none.
+      plusMenuToggles={onAiParse && !isFork && !isWalnut ? [{
+        id: 'quick-parse',
+        // Kept as short as its neighbours ("Attach image", "Commands") so the
+        // row stays one line; the cost of turning it on lives in the tooltip.
+        label: 'Auto-fill fields',
+        on: aiParseOn,
+        title: aiParseOn
+          ? 'A model reads what you type and fills the folder, project and date pills. Off by default: on a Claude Code provider each guess starts a whole CLI process, which is slow enough to hold up the rest of the page.'
+          : 'Off. Turn on to let a model read what you type and fill the folder, project and date pills — one background request per sentence.',
+        onToggle: setQuickParseEnabled,
+        // The other half of "mounting a composer costs nothing": the flag is
+        // read when the menu that draws this switch opens, so the row tells the
+        // truth for someone who turned it on and reloaded without typing yet.
+        onMenuOpen: ensureQuickParseLoaded,
+      }] : undefined}
+      draftKey={draftComposerKey(draft.id)}
+      placeholder={placeholder ?? (isFork ? FORK_PLACEHOLDER
+        : isRepair ? REPAIR_PLACEHOLDER
+          : askAgent ? `Ask ${askAgent.name} a quick question…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
+            : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : isBound ? BOUND_PLACEHOLDER : PLACEHOLDER)}
+      prefillText={prefill.text}
+      prefillNonce={prefill.nonce}
+      showCommands={false}
+      {...(plainChat ? {} : {
+        sessionCommands: slashCommands,
+        searchSessionCommands: searchSlashCommands,
+        onRefreshSessionCommands: refreshSlashCommands,
+        onSessionCommandsPaletteOpen: onSlashPaletteOpen,
+        sessionCommandsStatus: slashCommandsStatus,
+      })}
+      // The same "@" palette a running session has: Tasks and Files, in
+      // every draft. Before a folder is picked the Files group browses the
+      // host's home (the server and the daemon both expand `~`), so the
+      // palette never loses a group. A picked task lands in the text as
+      // `@[title]`; the launch message carries the tag and the server
+      // appends its reference card.
+      mentionCwd={draft.cwd || '~'}
+      mentionHost={draft.host ?? undefined}
+      enableEntityMention={!plainChat}
+      mentionSelfTaskId={draft.taskId}
+      // Shift+Tab cycles the permission mode, as it does in a running session.
+      onToggleMode={showModePill ? cycleDraftMode : undefined}
+      {...(plainChat && composerPill ? { contextPill: composerPill } : {})}
+      // A plain chat (the browser side panel) picks its mode and model as every composer does
+      // (2026-11-09, the user: "why can't i choose model, and mode etc"), after its own chips.
+      controlsSlot={plainChat ? (
+        <>
+          {composerBar}
+          <div className="session-mode-bar draft-actions-bar is-plain-chat-pickers">
+            {showModePill && <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode} />}
+            <DraftModelPill
+              meta={draft.meta}
+              onMetaChange={(updater) => onMetaChange(draft.id, updater)}
+              host={draft.host}
+              cwd={draft.cwd || undefined}
+              walnut={isWalnut}
+              fork={isFork}
+            />
+          </div>
+        </>
+      ) : (
+        <div className="session-mode-bar draft-actions-bar">
+          {/* The row reads like a running session's: mode first, then model.
+              The mode is the one launch choice that changes what the session
+              MAY do, so it is never hidden behind a menu. */}
+          {!v6 && modePill}
+          {/* The model belongs with the message — same place a real session
+              keeps its model pill (the mode bar). Opens the SHARED two-pane
+              provider|models picker, so every composer offers the same
+              surface; on a draft both providers stay clickable. */}
+          <DraftModelPill
+            meta={shownMeta}
+            // A pick starts from what the pill shows: the project's or the global engine
+            // becomes this task's own pair (the updater sees it, never the row's raw meta).
+            onMetaChange={(updater) => onMetaChange(draft.id, (m) => updater(choice ? { ...m, engine: choice.engine, model: choice.model } : m))}
+            sourceNote={sourceNote}
+            host={draft.host}
+            cwd={draft.cwd || undefined}
+            walnut={isWalnut}
+            fork={isFork}
+            fallbackLabel={onFallback ? draftFallbackPill(fallbackNow) : null}
+            fallbackEngine={onFallback?.engine ?? null}
+            fallbackModel={onFallback?.model}
+            projectEffort={projectDefaults.effort}
+            {...(v6 ? { autoWord: 'Default' } : {})}
+          />
+          {/* v6: the model, then "Permissions: Auto" (the approved order; its words say what it is). */}
+          {v6 && modePill}
+          {/* No "Start ↵" here: the composer's send arrow (and Enter) already
+              starts the session, and two buttons for one action read as two
+              actions (user, 2026-09-29). */}
+        </div>
+      )}
+      // "Save as task" is the text's other exit, so it sits beside the send
+      // arrow, not among the launch settings on the left (user, 2026-10-03).
+      // A bound draft is already a task, and a fork's sibling task is the
+      // fork route's job — offering "create task" on either would make a
+      // duplicate. Walnut mode hides it too: it would file the QUESTION as a
+      // Walnut/Focus task with no session to answer it.
+      // v6: the send arrow says what it starts; Save as task moved to the lower row.
+      sendSlot={v6 ? ({ canSend }: { canSend: boolean }) => <DraftV6SendLabel canSend={canSend} walnut={isWalnut} onClick={handleStartClick} />
+        : !isBound && !isFork && !isWalnut ? (
+        <button
+          className="btn draft-later-btn"
+          disabled={!text.trim() || saveBusy}
+          aria-busy={saveBusy || undefined}
+          onClick={() => { void onSaveAsTask(draft.id, text); }}
+          title="Save as task: creates a task from this text (first line becomes the title). No session starts."
+          aria-label="Save as task"
+        >
+          {/* Three widths, chosen by the controls row (CSS container query):
+              the full words, "Todo", or the glyph alone in a ~270px column. */}
+          <span className="draft-later-glyph" aria-hidden="true">◌</span>
+          <span className="draft-later-words">Save as task</span>
+          <span className="draft-later-short" aria-hidden="true">Todo</span>
+        </button>
+      ) : undefined}
+    />
+  );
+
   return (
     <div
-      className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}${plainChat ? ' is-plain-chat' : ''}`}
+      className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}${plainChat ? ' is-plain-chat' : ''}${v6 ? ' is-v6' : ''}`}
       ref={rootRef}
       data-draft-id={draft.id}
       onKeyDownCapture={showDraftMenu && onTaskFieldChange ? onComposerKeyDown : undefined}
@@ -959,6 +1091,19 @@ export function DraftSessionPanel({
         </div>
       </div>}
 
+      {v6 ? (
+        <DraftV6Body draft={draft} panelRef={rootRef} composer={composer} startWhy={v6s.startWhy} onUpdate={onProjectStart!} onPathChange={onPathChange}
+          notices={<>{launchNotice}{gateBar}{fallbackNotice}</>}
+          onWalnutToggle={(walnut) => { onWalnutToggle?.(draft.id, walnut); v6s.clearWhy(); focusComposer(); }}
+          blockedRef={v6s.blockedRef} openWhereNonce={v6s.whereNonce + (draft.openPickerNonce ?? 0)}
+          // A seed replaces the composer's words, so it waits while there are words to lose.
+          tryChips={WALNUT_SUGGESTS.map((t) => ({ label: t.label, icon: t.icon, onClick: () => { if (!text.trim()) setPrefill((p) => ({ text: t.text, nonce: p.nonce + 1 })); } }))}
+          composerText={text} getComposer={getComposer} openMenuNonce={openMenuNonce}
+          onTaskFieldChange={showDraftMenu ? onTaskFieldChange : undefined} onReturnFieldToWalnut={showDraftMenu ? onReturnFieldToWalnut : undefined}
+          onSaveAsTask={() => { void onSaveAsTask(draft.id, text); }} saveBusy={saveBusy} onOpenAsk={onOpenAsk}
+          {...(onCustomizeWalnut ? { onCustomizeWalnut: () => { onCustomizeWalnut(draft.id); focusComposer(); } } : {})}
+          {...(askAgent ? { quickTitle: `Ask ${askAgent.name}.`, quickLine: askAgent.description || `A session with ${askAgent.name}.` } : {})} />
+      ) : (<>
       {/* Empty body. On a plain draft it carries the ENTRY FORK, made before
           the first keystroke: two big intent cards (the approved mockup's
           grammar — user: not a thin tab strip, "two big rounded ones"). Start Task is
@@ -1069,15 +1214,7 @@ export function DraftSessionPanel({
         {/* Why the last Start didn't start. Above the launch bar so it sits
             directly over the folder pill that resolves it. */}
         {launchNotice}
-        {gateError && (
-          <HostGateErrorBar
-            gate={gateError}
-            draftHost={draft.host}
-            label={draft.hostLabel || gateError.body.host}
-            onClear={clearGate}
-            onStartAnyway={() => { overrideNextRef.current = true; handleStartClick(); }}
-          />
-        )}
+        {gateBar}
         {needsFolder && !draft.cwd && (
           <div className="draft-needs-folder" role="status" data-testid="draft-needs-folder">
             Pick a folder first — the session runs in it.
@@ -1106,154 +1243,13 @@ export function DraftSessionPanel({
           composerText={text}
           getComposer={getComposer}
           openMenuNonce={openMenuNonce}
-          {...(onProjectStart ? { onProjectStart } : {})}
           {...(ownFolder ? { emptyFolder: ownFolderLabel ?? 'its own', alwaysProject: true, workspaces: false, ...(onClearFolder ? { onClearFolder } : {}) } : {})}
         />}
         {/* The default engine is out of usage here: where this task starts instead. */}
-        <DraftFallbackNotice now={fallbackNow} named={fallbackNamed}
-          onUseFallback={() => onMetaChange(draft.id, (m) => ({ ...m, model: undefined, engine: undefined }), { touched: false })} />
-        <ChatInput
-          onSend={(body, images) => startWith(body, images)}
-          // No session yet: files land on this machine and go to the session's host with its first message.
-          fileTarget={NO_SESSION_YET}
-          onValueChange={setText}
-          // The arrow is the ONE start affordance, so an empty composer may send
-          // only where '' means something: a bound draft sends its task's title, a
-          // fork just branches. A plain draft needs words (spawn-and-idle is legal,
-          // but an accidental Enter must not start a CLI on nothing).
-          allowEmptySend={(isBound && !draft.orgLead) || isFork}
-          sendTitle={isFork
-            ? 'Fork the source session (an empty message just branches the conversation)'
-            : isBound && isWalnut
-              ? 'Ask a quick question about this task (an empty message sends the task title)'
-              : draft.orgLead
-                ? `Send to ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}`
-                : isBound
-                ? 'Start the session on this task (an empty message sends the task title)'
-                : isWalnut
-                  ? askLabel
-                  : 'Start the session'}
-          // Only offered where the parse actually runs. A fork has nothing to
-          // guess at, Ask Walnut has no launch pills, and a column with no
-          // onAiParse has nowhere to put the answer — a switch that changes
-          // nothing about the composer in front of you is worse than none.
-          plusMenuToggles={onAiParse && !isFork && !isWalnut ? [{
-            id: 'quick-parse',
-            // Kept as short as its neighbours ("Attach image", "Commands") so the
-            // row stays one line; the cost of turning it on lives in the tooltip.
-            label: 'Auto-fill fields',
-            on: aiParseOn,
-            title: aiParseOn
-              ? 'A model reads what you type and fills the folder, project and date pills. Off by default: on a Claude Code provider each guess starts a whole CLI process, which is slow enough to hold up the rest of the page.'
-              : 'Off. Turn on to let a model read what you type and fill the folder, project and date pills — one background request per sentence.',
-            onToggle: setQuickParseEnabled,
-            // The other half of "mounting a composer costs nothing": the flag is
-            // read when the menu that draws this switch opens, so the row tells the
-            // truth for someone who turned it on and reloaded without typing yet.
-            onMenuOpen: ensureQuickParseLoaded,
-          }] : undefined}
-          draftKey={draftComposerKey(draft.id)}
-          placeholder={placeholder ?? (isFork ? FORK_PLACEHOLDER
-            : isRepair ? REPAIR_PLACEHOLDER
-              : askAgent ? `Ask ${askAgent.name} a quick question…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
-                : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : isBound ? BOUND_PLACEHOLDER : PLACEHOLDER)}
-          prefillText={prefill.text}
-          prefillNonce={prefill.nonce}
-          showCommands={false}
-          {...(plainChat ? {} : {
-            sessionCommands: slashCommands,
-            searchSessionCommands: searchSlashCommands,
-            onRefreshSessionCommands: refreshSlashCommands,
-            onSessionCommandsPaletteOpen: onSlashPaletteOpen,
-            sessionCommandsStatus: slashCommandsStatus,
-          })}
-          // The same "@" palette a running session has: Tasks and Files, in
-          // every draft. Before a folder is picked the Files group browses the
-          // host's home (the server and the daemon both expand `~`), so the
-          // palette never loses a group. A picked task lands in the text as
-          // `@[title]`; the launch message carries the tag and the server
-          // appends its reference card.
-          mentionCwd={draft.cwd || '~'}
-          mentionHost={draft.host ?? undefined}
-          enableEntityMention={!plainChat}
-          mentionSelfTaskId={draft.taskId}
-          // Shift+Tab cycles the permission mode, as it does in a running session.
-          onToggleMode={showModePill ? cycleDraftMode : undefined}
-          {...(plainChat && composerPill ? { contextPill: composerPill } : {})}
-          // A plain chat (the browser side panel) picks its mode and model as every composer does
-          // (2026-11-09, the user: "why can't i choose model, and mode etc"), after its own chips.
-          controlsSlot={plainChat ? (
-            <>
-              {composerBar}
-              <div className="session-mode-bar draft-actions-bar is-plain-chat-pickers">
-                {showModePill && <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode} />}
-                <DraftModelPill
-                  meta={draft.meta}
-                  onMetaChange={(updater) => onMetaChange(draft.id, updater)}
-                  host={draft.host}
-                  cwd={draft.cwd || undefined}
-                  walnut={isWalnut}
-                  fork={isFork}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="session-mode-bar draft-actions-bar">
-              {/* The row reads like a running session's: mode first, then model.
-                  The mode is the one launch choice that changes what the session
-                  MAY do, so it is never hidden behind a menu. */}
-              {showModePill && (
-                <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode}
-                  source={sourceRows?.find((r) => r.key === 'mode')} />
-              )}
-              {/* The model belongs with the message — same place a real session
-                  keeps its model pill (the mode bar). Opens the SHARED two-pane
-                  provider|models picker, so every composer offers the same
-                  surface; on a draft both providers stay clickable. */}
-              <DraftModelPill
-                meta={shownMeta}
-                // A pick starts from what the pill shows: the project's or the global engine
-                // becomes this task's own pair (the updater sees it, never the row's raw meta).
-                onMetaChange={(updater) => onMetaChange(draft.id, (m) => updater(choice ? { ...m, engine: choice.engine, model: choice.model } : m))}
-                sourceNote={sourceNote}
-                host={draft.host}
-                cwd={draft.cwd || undefined}
-                walnut={isWalnut}
-                fork={isFork}
-                fallbackLabel={onFallback ? draftFallbackPill(fallbackNow) : null}
-                fallbackEngine={onFallback?.engine ?? null}
-                fallbackModel={onFallback?.model}
-                projectEffort={projectDefaults.effort}
-              />
-              {/* No "Start ↵" here: the composer's send arrow (and Enter) already
-                  starts the session, and two buttons for one action read as two
-                  actions (user, 2026-09-29). */}
-            </div>
-          )}
-          // "Save as task" is the text's other exit, so it sits beside the send
-          // arrow, not among the launch settings on the left (user, 2026-10-03).
-          // A bound draft is already a task, and a fork's sibling task is the
-          // fork route's job — offering "create task" on either would make a
-          // duplicate. Walnut mode hides it too: it would file the QUESTION as a
-          // Walnut/Focus task with no session to answer it.
-          sendSlot={!isBound && !isFork && !isWalnut ? (
-            <button
-              className="btn draft-later-btn"
-              disabled={!text.trim() || saveBusy}
-              aria-busy={saveBusy || undefined}
-              onClick={() => { void onSaveAsTask(draft.id, text); }}
-              title="Save as task: creates a task from this text (first line becomes the title). No session starts."
-              aria-label="Save as task"
-            >
-              {/* Three widths, chosen by the controls row (CSS container query):
-                  the full words, "Todo", or the glyph alone in a ~270px column. */}
-              <span className="draft-later-glyph" aria-hidden="true">◌</span>
-              <span className="draft-later-words">Save as task</span>
-              <span className="draft-later-short" aria-hidden="true">Todo</span>
-            </button>
-          ) : undefined}
-        />
+        {fallbackNotice}
+        {composer}
       </div>
+      </>)}
     </div>
   );
 }

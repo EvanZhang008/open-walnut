@@ -387,8 +387,9 @@ interface ChatInputProps {
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
   /** A second exit for the text, rendered right before the send arrow (after the
-   *  mic) so the two ways out sit together: the draft's "Save as task". */
-  sendSlot?: React.ReactNode;
+   *  mic) so the two ways out sit together: the draft's "Save as task". A function gets
+   *  `canSend` (the send arrow's own "is there anything to send"), for a slot that sends too. */
+  sendSlot?: React.ReactNode | ((state: { canSend: boolean }) => React.ReactNode);
   /** A removable chip at the top of the box saying where the send goes (the
    *  session's question target). The owner renders it, × included. */
   contextPill?: React.ReactNode;
@@ -2422,7 +2423,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
-        {!sendBlocked && sendSlot}
+        {!sendBlocked && (typeof sendSlot === 'function' ? sendSlot({ canSend }) : sendSlot)}
         {/* Send — icon button (↑). While streaming with an EMPTY composer the
             primary swaps to a square STOP (Claude-style); typing flips it back
             to send, which grows a split "▾" exposing Interrupt & send. */}

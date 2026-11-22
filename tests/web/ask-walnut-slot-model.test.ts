@@ -26,7 +26,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
-  GENERAL_ASK_AGENT, agentOfTask, askProjectFor, resolveSelection, selectAgentTasks, toAskAgent,
+  GENERAL_ASK_AGENT, agentOfTask, askProjectFor, recentAsks, resolveSelection, selectAgentTasks, toAskAgent,
 } from '@/components/chat/ask-walnut-slot-model';
 
 function task(over: Partial<Task> & { id: string }): Task {
@@ -260,5 +260,29 @@ describe('resolveSelection', () => {
     it('falls back to the newest bare task when nothing has a session', () => {
       expect(resolveSelection(null, mixed, () => false)).toBe('newer-todo');
     });
+  });
+});
+
+describe('recentAsks: the new draft\'s Quick chat "Recent chats"', () => {
+  it('the agent\'s newest asks with a conversation, in the drawer\'s order and titles, Main left out, at most `limit`', () => {
+    const s = (id: string) => ({ session_id: `s-${id}` }) as Partial<Task>;
+    const tasks = [
+      walnut('old', { title: 'Plan my Friday', last_session_update: '2026-09-02T00:00:00.000Z', ...s('old') }),
+      walnut('new', { title: 'Retry notes', last_session_update: '2026-09-05T00:00:00.000Z', session_ids: ['s-new'] }),
+      walnut('main', { title: 'CEO', org_role: 'main', last_session_update: '2026-09-09T00:00:00.000Z', ...s('main') } as Partial<Task>),
+      walnut('untitled', { title: 'Ask Walnut', last_session_update: '2026-09-03T00:00:00.000Z', ...s('untitled') }),
+      // No session yet (a launch that never started): nothing to reopen.
+      walnut('empty', { title: 'Never ran', last_session_update: '2026-09-06T00:00:00.000Z' }),
+      task({ id: 'work', title: 'Not a chat', last_session_update: '2026-09-08T00:00:00.000Z', ...s('work') }),
+      walnut('mentor', { agent_id: 'mentor', title: 'Reflect', last_session_update: '2026-09-07T00:00:00.000Z', ...s('mentor') } as Partial<Task>),
+    ];
+    expect(recentAsks(tasks, GENERAL_ASK_AGENT, 3)).toEqual([
+      { id: 'new', title: 'Retry notes', at: '2026-09-05T00:00:00.000Z' },
+      { id: 'untitled', title: 'Quick question', at: '2026-09-03T00:00:00.000Z' },
+      { id: 'old', title: 'Plan my Friday', at: '2026-09-02T00:00:00.000Z' },
+    ]);
+    expect(recentAsks(tasks, GENERAL_ASK_AGENT, 1).map((r) => r.id)).toEqual(['new']);
+    expect(recentAsks(tasks, MENTOR, 2).map((r) => r.id)).toEqual(['mentor']);
+    expect(recentAsks([], GENERAL_ASK_AGENT, 2)).toEqual([]);
   });
 });

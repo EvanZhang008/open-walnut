@@ -27,6 +27,17 @@ const otherMainWords = new Map([
   ['web/src/components/quickbar/quickbar-people.ts|Main', 'A name the CEO answers to when said first ("to Main, ..."), never shown'],
 ]);
 
+/** The approved v6 new task draft (experiment project_first_start) says "Ask Walnut" as a verb,
+ *  the Quick chat mode's action, never as the retired feature's name: each exact string, by file. */
+const v6AskVerb = new Map([
+  ['web/src/components/sessions/DraftModeTiles.tsx|Ask Walnut, no task', 'v6 draft copy approved by the user: the Quick chat tile\'s line, a verb'],
+  ['web/src/components/sessions/DraftModeTiles.tsx|Ask Walnut.', 'v6 draft copy approved by the user: the Quick chat block\'s title, a verb'],
+  ['web/src/components/sessions/DraftV6Panel.tsx|Ask Walnut', 'v6 draft copy approved by the user: the send button\'s label in Quick chat, a verb'],
+]);
+/** The same approved copy on the phone's new task sheet: each exact line of Swift, by file. */
+const v6NativeAskVerb = new Map([
+]);
+
 describe('quick question and CEO display names', () => {
   it('no web source introduces the retired feature name outside stored project keys', () => {
     const found: string[] = [];
@@ -44,7 +55,7 @@ describe('quick question and CEO display names', () => {
           const otherMain = otherMainWords.has(`${file}|${node.text}`);
           const retiredMain = !internalMain && !otherMain && /(?:^Main$|\b(?:Tell|Open) Main\b|\bMain (?:[Aa]gent|AI|is waiting|did not|and|or)\b|\bto Main\b)/.test(node.text.trim());
           if (retiredQuestion || retiredMain) {
-            const stored = node.text === 'Ask Walnut' && storedProjectOwners.has(file);
+            const stored = (node.text === 'Ask Walnut' && storedProjectOwners.has(file)) || v6AskVerb.has(`${file}|${node.text}`);
             if (!stored) found.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`);
           }
         }
@@ -67,7 +78,7 @@ describe('quick question and CEO display names', () => {
       source.split('\n').forEach((line, index) => {
         const text = line.trim();
         if (text.startsWith('//')) return;
-        if (/(?:Text|Label|Button|navigationTitle)\(\s*"[^"\n]*(?:Ask Walnut|\bMain\b)/.test(text)) {
+        if (/(?:Text|Label|Button|navigationTitle)\(\s*"[^"\n]*(?:Ask Walnut|\bMain\b)/.test(text) && !v6NativeAskVerb.has(`${file}|${text}`)) {
           found.push(`${file}:${index + 1}`);
         }
       });

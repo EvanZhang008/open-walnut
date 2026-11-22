@@ -1,13 +1,13 @@
 /**
- * The one flyout shell of the draft's project-first row (the Work in popover, its host list, a
- * value chip's "+ Add"): portalled to <body>, placed by useMenuPlacement against its trigger
- * (upward first, like the folder picker beside it), closed through the overlay layer by an
- * outside press and by Escape (consumed: the page's own Escape would also clear the focused task;
- * only the newest open layer closes, so a nested host list closes before its popover) and when
- * the trigger goes.
+ * The one flyout shell of the draft's Project + Where row (the Where, Host and Project menus, a
+ * package's "+ Add"): portalled to <body>, placed by useMenuPlacement against its trigger
+ * (downward under the field by default, inside the draft when `boundsRef` names it), closed
+ * through the overlay layer by an outside press and by Escape (consumed: the page's own Escape
+ * would also clear the focused task; only the newest open layer closes, so a nested host list
+ * closes before its menu) and when the trigger goes.
  * The portal stops pointerdown so a sortable ancestor never starts a drag (web/src/AGENTS.md).
  */
-import { useRef, type ReactNode, type RefObject } from 'react';
+import { useRef, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -15,7 +15,9 @@ import '@/styles/project-start.css';
 
 export const PROJECT_START_FLYOUT_CLASS = 'project-start-flyout';
 
-export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId, label, children, minHeight = 160 }: {
+export function ProjectStartFlyout({
+  open, anchorRef, onClose, className, testId, label, children, minHeight = 160, side = 'down', boundsRef, style,
+}: {
   open: boolean;
   anchorRef: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -25,9 +27,16 @@ export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId
   label: string;
   children: ReactNode;
   minHeight?: number;
+  side?: 'up' | 'down';
+  /** The box the flyout stays inside (the draft panel). */
+  boundsRef?: RefObject<HTMLElement | null>;
+  /** A fixed size (the Where menu's 440 x 310): merged under the placement. */
+  style?: CSSProperties;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const placement = useMenuPlacement(open, anchorRef, boxRef, { minHeight, preferSide: 'up', align: 'left', onAnchorLost: onClose });
+  const placement = useMenuPlacement(open, anchorRef, boxRef, {
+    minHeight, preferSide: side, align: 'start', gap: 6, edgeOverflow: 'clamp', onAnchorLost: onClose, ...(boundsRef ? { boundsRef } : {}),
+  });
   useOverlayLayer({
     passOutsideClick: true,
     open,
@@ -47,7 +56,7 @@ export function ProjectStartFlyout({ open, anchorRef, onClose, className, testId
       aria-label={label}
       className={`${PROJECT_START_FLYOUT_CLASS} wn-overlay${className ? ` ${className}` : ''}`}
       data-testid={testId}
-      style={menuPlacementStyle(placement)}
+      style={{ ...style, ...menuPlacementStyle(placement) }}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >

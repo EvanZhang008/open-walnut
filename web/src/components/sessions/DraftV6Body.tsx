@@ -1,0 +1,126 @@
+/**
+ * The new task draft's v6 layout (experiment `project_first_start`; spec: the approved v6
+ * design), under the draft's header:
+ *
+ *            [ >_ Start task ]  [ (W) Quick chat ]          tiles, centred
+ *   [PROJECT ...........] [WHERE host › Auto ........]      row (or Quick chat's block)
+ *   line under the row                                       one fixed slot
+ *                       (empty)
+ *   [ composer ...................... Start task ↑ ]        a fixed place, lower on the page
+ *   Recent [..] [..] [..]          Save as task   More       lower row
+ *
+ * One content column, at most 960 px wide and centred. Every slot has a fixed size, so switching
+ * mode, project, host or folder, opening a menu or typing never moves the composer or the lower
+ * row. The row's state is useDraftWhere's; this component only lays the parts out and reports to
+ * the panel whether Start can run (`blockedRef`).
+ */
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode, type RefObject } from 'react';
+import { useDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
+import { DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
+import type { DraftColumn, DraftTaskField, DraftTaskFieldPatch } from './draft-column';
+import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
+import { DraftModeTiles, QuickChatBlock } from './DraftModeTiles';
+import { DraftWhereRow, type RowMenu } from './DraftWhereRow';
+import { DraftLowerRow, type TryChip } from './DraftLowerRow';
+import { useDraftWhere, type DraftRowUpdate } from './useDraftWhere';
+import '@/styles/draft-v6.css';
+import '@/styles/draft-v6-menus.css';
+
+/** Narrower than this, the row shows the host and the folder name only (spec: narrow rules). */
+const NARROW_PX = 760;
+
+export function DraftV6Body({
+  draft, panelRef, composer, notices, startWhy, onUpdate, onPathChange, onWalnutToggle, blockedRef, openWhereNonce,
+  tryChips, composerText, getComposer, openMenuNonce, onTaskFieldChange, onReturnFieldToWalnut, onSaveAsTask, saveBusy, quickTitle, quickLine,
+  onCustomizeWalnut, onOpenAsk,
+}: {
+  draft: DraftColumn;
+  panelRef: RefObject<HTMLDivElement | null>;
+  /** The composer (ChatInput), built by the panel: one composer for both layouts. */
+  composer: ReactNode;
+  /** Why the last Start did not start (a host's refusal, a launch error, the fallback engine): over the gap. */
+  notices: ReactNode;
+  /** Start was pressed while the row says it cannot run: the reason, near the button. */
+  startWhy: string | null;
+  onUpdate: DraftRowUpdate;
+  onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => void;
+  onWalnutToggle: (walnut: boolean) => void;
+  /** Written every render: the panel's Start reads it. */
+  blockedRef: MutableRefObject<string | null>;
+  /** Bumped by the owner when a Start needs a place (a draft with no folder): opens the Where menu. */
+  openWhereNonce?: number;
+  tryChips: readonly TryChip[];
+  composerText: string;
+  getComposer: () => HTMLTextAreaElement | null;
+  openMenuNonce?: number;
+  onTaskFieldChange?: (draftId: string, patch: DraftTaskFieldPatch) => void;
+  onReturnFieldToWalnut?: (draftId: string, field: DraftTaskField) => void;
+  onSaveAsTask: () => void;
+  saveBusy: boolean;
+  /** Another console agent's draft names it in the Quick chat block. */
+  quickTitle?: string;
+  quickLine?: string;
+  /** "Customize Walnut": the Project menu's last row turns this draft into the repair draft. */
+  onCustomizeWalnut?: () => void;
+  /** Quick chat's Recent chats open a chat in the Ask Walnut slot. */
+  onOpenAsk?: (taskId: string) => void;
+}) {
+  const walnut = !!draft.walnut;
+  const where = useDraftWhere(draft, { onUpdate, onPathChange });
+  blockedRef.current = walnut ? null : where.blocked;
+  const [menu, setMenu] = useState<RowMenu>(null);
+  const narrow = useNarrow(panelRef, NARROW_PX);
+  const startError = useDraftWorkspace(draft.id).startError;
+  useEffect(() => { if (walnut) setMenu(null); }, [walnut]);
+  useEffect(() => { if (openWhereNonce && !walnut) setMenu({ kind: 'where', query: '' }); }, [openWhereNonce, walnut]);
+
+  return (
+    <div className={`draft-v6-body${narrow ? ' is-narrow' : ''}${where.blocked && !walnut ? ' is-blocked' : ''}`} data-testid="draft-v6">
+      <DraftModeTiles walnut={walnut} onPick={onWalnutToggle} />
+      <div className="draft-v6-col">
+        {walnut ? <QuickChatBlock title={quickTitle} line={quickLine} /> : (
+          <DraftWhereRow draft={draft} where={where} boundsRef={panelRef} narrow={narrow} menu={menu} setMenu={setMenu}
+            startError={startError} onUpdate={onUpdate} onCustomizeWalnut={onCustomizeWalnut} />
+        )}
+        <div className="draft-v6-gap">
+          <div className="draft-v6-notices">
+            {notices}
+            {/* The draft's isolated workspace (its default, and the body once turned on in
+                More), as in today's draft: over the gap, so it moves nothing. Mounted exactly when
+                Start reads it (startReadsDraftWorkspace): a start from a project's code source
+                makes its own workspace and reads none of this. */}
+            {!walnut && where.readsWorkspace && (
+              <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />
+            )}
+          </div>
+        </div>
+        <div className="session-panel-input draft-v6-input">
+          {composer}
+          {startWhy && <div className="draft-v6-start-why" role="alert" data-testid="draft-v6-start-why">{startWhy}</div>}
+        </div>
+        <DraftLowerRow draft={draft} where={where} walnut={walnut} narrow={narrow} tryChips={tryChips} composerText={composerText}
+          getComposer={getComposer} openMenuNonce={openMenuNonce} onTaskFieldChange={onTaskFieldChange} onReturnFieldToWalnut={onReturnFieldToWalnut}
+          onSaveAsTask={onSaveAsTask} saveBusy={saveBusy} onMoreRecent={() => setMenu({ kind: 'project' })} onOpenAsk={onOpenAsk} />
+      </div>
+    </div>
+  );
+}
+
+/** True while the element is narrower than `px` (a ResizeObserver; the draft is a column of any width). */
+function useNarrow(ref: RefObject<HTMLElement | null>, px: number): boolean {
+  const [narrow, setNarrow] = useState(false);
+  const last = useRef<boolean | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const read = () => {
+      const n = el.clientWidth > 0 && el.clientWidth < px;
+      if (n !== last.current) { last.current = n; setNarrow(n); }
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, px]);
+  return narrow;
+}

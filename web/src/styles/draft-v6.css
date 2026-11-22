@@ -1,0 +1,321 @@
+/* The new task draft's v6 layout (experiment project_first_start): DraftV6Body, DraftModeTiles,
+   DraftWhereRow, DraftWhereMenu, DraftProjectMenu, DraftLowerRow, DraftSourcePackages.
+   Geometry from the approved design (a 900 px draft): tiles 164 square at top 22, the row at 210
+   (48 tall), the line at 264 (28), the composer at 476, the lower row under it. Every slot has a
+   fixed size; the gap above the composer shrinks only with the column's height, never with state. */
+
+.draft-session-panel.is-v6 { display: flex; flex-direction: column; }
+/* The draft's own controls keep the theme's colours (the chosen tile's accent, a host's green
+   dot, a warning's amber): chat-palette.css greys every colour inside a session panel, which is
+   right for a conversation and wrong for this form. The composer (.chat-input-container) is
+   greyed again by its own rule. */
+.draft-session-panel.is-v6 .draft-v6-body {
+  --accent: var(--chat-hue-accent);
+  --accent-subtle: var(--chat-hue-accent-subtle);
+  --warning: var(--chat-hue-warning);
+  --success: var(--chat-hue-success);
+}
+.draft-v6-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  container-type: size;
+  container-name: draft-v6;
+}
+
+/* ── Tiles ── */
+/* The strip's place (a TabList, so its own class weighs as much as .wn-tabs). */
+.wn-tabs.draft-v6-tiles {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 22px;
+  height: 164px;
+}
+/* A tile is the shared tabs' tile variant (TabList tiles, choice-controls.css); here only its width. */
+.draft-v6-tile { width: min(164px, calc((100cqw - 48px) / 2)); }
+.draft-v6-tile-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 20px;
+  height: 20px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.draft-v6-tile[aria-selected='true'] .draft-v6-tile-check { display: inline-flex; }
+.draft-v6-tile-icon {
+  width: 58px;
+  height: 58px;
+  margin-bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+.draft-v6-tile-icon.is-term svg { width: 26px; height: 26px; }
+.draft-v6-tile-icon.is-walnut { background: none; }
+.draft-v6-tile-walnut { width: 58px; height: 58px; border-radius: var(--radius-md); }
+.draft-v6-tile:not([aria-selected='true']) .draft-v6-tile-icon { filter: grayscale(1); opacity: 0.55; }
+.draft-v6-tile-title { font-size: var(--font-size-xl); font-weight: 600; line-height: 1.2; }
+.draft-v6-tile-line { font-size: var(--font-size-sm); color: var(--fg-muted); line-height: 1.25; text-align: center; }
+
+/* ── The content column ── */
+.draft-v6-col {
+  flex: none;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(960px + 96px);
+  margin: 0 auto;
+  padding: 0 48px 16px;
+  display: flex;
+  flex-direction: column;
+}
+@container draft-v6 (max-width: 560px) {
+  .draft-v6-col { padding-left: 16px; padding-right: 16px; }
+}
+
+/* The row and its line: one slot of 82 px (48 + 6 + 28), Quick chat's block in the same box. */
+.draft-v6-row-slot,
+.draft-v6-quick { flex: none; height: 82px; margin-top: 24px; box-sizing: border-box; }
+.draft-v6-row {
+  display: grid;
+  grid-template-columns: clamp(150px, 26%, 240px) minmax(0, 1fr);
+  gap: 8px;
+  height: 48px;
+}
+.draft-v6-field {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  text-align: left;
+  position: relative;
+}
+.draft-v6-field:hover, .draft-v6-field.is-open { border-color: var(--border-strong); }
+.draft-v6-field.is-off { border-color: var(--warning); }
+/* A field's own button (the family's link key, so it draws nothing) lies under its parts
+   (DraftWhereRow); only the parts that are buttons themselves (the host, a level) take the pointer. */
+.draft-v6-field-open { position: absolute; inset: 0; width: 100%; }
+.draft-v6-field-open:focus-visible { outline: none; }
+/* The ring goes round the whole field, at its own corner. */
+.draft-v6-field:has(> .draft-v6-field-open:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.draft-v6-field > :not(.draft-v6-field-open) { pointer-events: none; }
+/* Painted over the button (it comes first): the in-flow parts by position, the search icon is absolute already. */
+.draft-v6-field > :not(.draft-v6-field-open, .draft-v6-search) { position: relative; }
+.draft-v6-field button:not(.draft-v6-field-open) { pointer-events: auto; }
+.draft-v6-field-key {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  line-height: 12px;
+}
+.draft-v6-field-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* The project and host names are .wn-meta (text-fit.css): one line, cut last, the whole name on hover. */
+.draft-v6-project-name { flex: 0 1 auto; }
+/* "detected" on the key line: the name under it keeps the field's whole width. */
+.draft-v6-key-note { margin-left: 6px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--accent); }
+.draft-v6-project-name.is-empty { color: var(--fg-muted); font-weight: 500; }
+.draft-v6-caret { flex: none; display: inline-flex; color: var(--fg-muted); margin-left: auto; }
+.draft-v6-host .draft-v6-caret { margin-left: 2px; }
+.draft-v6-project-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+}
+.draft-v6-project-icon.is-git { color: var(--success); }
+.draft-v6-project-icon.is-box { color: var(--warning); }
+/* A folder's project, "recommended", "not on <host>": the one label (.badge); here only its place. */
+.draft-v6-tag { flex: none; max-width: 50%; }
+.draft-v6-tag.is-rec { margin-left: 8px; }
+
+/* Where: the host first, then the path or Auto. */
+.draft-v6-crumbs { padding-right: 22px; }
+.draft-v6-crumb {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* A level of the path is the family's link key (DraftWhereRow); this only lays it out. */
+.draft-v6-level { flex: none; gap: 4px; }
+/* The folded levels read as a part of the path, never as a thin mark between two arrows. */
+.draft-v6-crumb.is-fold { color: var(--fg-secondary); font-weight: 600; }
+.draft-v6-crumb.is-last { color: var(--fg); font-weight: 600; flex: 0 0 auto; }
+/* The host part: the family's small key when it opens the Host menu (wide), the same shape as a
+   plain part when the whole field opens Where (narrow). */
+.draft-v6-host { flex: none; }
+.draft-v6-host-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
+.draft-v6-host-name { max-width: 14ch; font-size: var(--font-size-md); font-weight: 600; }
+.draft-v6-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
+.draft-v6-dot.is-on { background: var(--success); }
+.draft-v6-sep { flex: none; color: var(--fg-muted); font-weight: 400; }
+.draft-v6-folder-crumbs { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.draft-v6-crumb-wrap { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.draft-v6-gone { flex: none; color: var(--warning); }
+.draft-v6-auto-value { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.draft-v6-auto-tag { flex: none; }
+.draft-v6-auto-words { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.draft-v6-auto-count { flex: none; color: var(--fg-muted); font-weight: 500; }
+.draft-v6-search { position: absolute; right: 12px; bottom: 12px; color: var(--fg-muted); display: inline-flex; }
+
+/* The line under the row: 28 px, words then at most two actions; faded while a menu is open. */
+.draft-v6-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  margin-top: 6px;
+  padding-left: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-md);
+  color: var(--fg-secondary);
+  transition: opacity 0.15s;
+}
+.draft-v6-row-slot.has-menu .draft-v6-line { opacity: 0.3; }
+.draft-v6-line .where-icon { flex: none; color: var(--accent); }
+.draft-v6-line.is-warn .where-icon,
+.draft-v6-line.is-error .where-icon { color: var(--warning); }
+/* A refusal is read whole: it may take a second line (over the empty gap, so nothing moves). */
+.draft-v6-line.is-error { color: var(--fg); height: auto; min-height: 28px; white-space: normal; }
+.draft-v6-line.is-error .draft-v6-line-text { overflow: visible; }
+.draft-v6-line-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.draft-v6-line-text b { color: var(--fg); font-weight: 600; }
+.draft-v6-line-text code { font-family: var(--font-mono); font-size: var(--font-size-sm); color: var(--fg); }
+/* The line's actions are the family's small keys (a way out) and link keys (a quiet one). */
+.draft-v6-line-act { flex: none; }
+
+/* Quick chat's block. */
+.draft-v6-quick { display: flex; align-items: center; gap: 14px; padding-left: 4px; }
+.draft-v6-quick-icon { flex: none; width: 36px; height: 36px; border-radius: var(--radius-sm); }
+.draft-v6-quick-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.draft-v6-quick-title { font-size: var(--font-size-2xl); font-weight: 700; color: var(--fg); }
+.draft-v6-quick-line { font-size: var(--font-size-md); color: var(--fg-secondary); }
+
+/* The gap above the composer: 184 px in a 678 px draft, shorter only in a shorter one. */
+.draft-v6-gap {
+  flex: none;
+  position: relative;
+  height: clamp(12px, calc(100cqh - 292px - 184px), 184px);
+}
+.draft-v6-notices { position: absolute; left: 0; right: 0; bottom: 6px; display: flex; flex-direction: column; gap: 4px; }
+
+/* The composer: today's ChatInput, at its fixed place. */
+/* The composer spans the v6 column like the row above it: the chat's reading column
+   (chat-reading.css, --chat-column) is for a conversation, not this form. */
+:root .draft-session-panel.is-v6 .session-panel-input.draft-v6-input { padding: 0; z-index: auto; flex: none; }
+/* The send arrow's words: the family's quiet key (DraftV6Panel); this only lays it out. */
+.draft-v6-send-label { flex: none; }
+/* The model and the permission mode read as the design's controls: the row's own size and face,
+   with a chevron (the shared pills are a running session's small readouts). */
+.draft-session-panel.is-v6 .draft-actions-bar :is(.draft-model-select, .draft-mode-pill) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  color: var(--fg-secondary);
+}
+.draft-session-panel.is-v6 .draft-actions-bar .draft-mode-pill .mode-toggle-pill-label { font-size: var(--font-size-md); font-family: inherit; }
+.draft-session-panel.is-v6 .draft-actions-bar :is(.draft-model-select, .draft-mode-pill)::after {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: -2px 0 0 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.draft-v6-body.is-blocked .draft-v6-send-label { opacity: 0.45; }
+.draft-v6-start-why {
+  position: absolute;
+  right: 8px;
+  bottom: calc(100% + 6px);
+  max-width: min(420px, 90%);
+  padding: 6px 10px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: var(--font-size-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 1;
+}
+
+/* The lower row: 40 px. */
+.draft-v6-lower {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin-top: 10px;
+  min-width: 0;
+}
+.draft-v6-chips { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.draft-v6-lower-key { flex: none; margin-right: 8px; font-size: var(--font-size-md); color: var(--fg-muted); }
+.draft-v6-chip-group { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+.draft-v6-lower-sep { flex: none; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
+/* A part that does not fit whole is not shown (useFitWhole); the button family sets its own display. */
+.draft-v6-chips [data-fit][hidden] { display: none; }
+/* Recent, Try, "+N" and the Task source tag are the button family's small button (.btn .btn-sm);
+   this rule only lays them out (the UI standard: no second look for a chip). */
+.draft-v6-place { flex: none; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.draft-v6-place-ic { display: inline-flex; flex: none; }
+.draft-v6-place-ic.is-git { color: var(--success); }
+.draft-v6-place-ic.is-box { color: var(--warning); }
+.draft-v6-place-ic.is-now { color: var(--accent); }
+/* The isolation chip reads at the row's size (it is today's small session chip elsewhere). */
+.draft-v6-lower .draft-workspace-auto { font-size: var(--font-size-md); }
+.draft-v6-lower-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 12px; }
+/* Save as todo: the family's quiet small key (DraftLowerRow); this only lays it out. */
+.draft-v6-save { flex: none; }

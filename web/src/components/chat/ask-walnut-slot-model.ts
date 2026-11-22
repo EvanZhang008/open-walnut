@@ -24,7 +24,10 @@
 import type { Task } from '@open-walnut/core';
 import {
   GENERAL_AGENT_ID,
+  askActivityAt,
   askProjectFor as sharedAskProjectFor,
+  askSessionId,
+  askTitle,
   compareAsks,
   isAskOf as sharedIsAskOf,
   selectAsks,
@@ -88,6 +91,21 @@ export function isAskOf(task: Task, agent: AskAgent): boolean {
  *  list (it is the shared task store's array). */
 export function selectAgentTasks(tasks: readonly Task[], agent: AskAgent): Task[] {
   return selectAsks(tasks, agent);
+}
+
+/** One quick chat a new draft offers to reopen. */
+export interface RecentAsk { id: string; title: string; at?: string }
+
+/**
+ * The agent's newest quick chats, for the new task draft's Quick chat lower row ("Recent chats"):
+ * the drawer's own list, order and titles (the shared ask rules), Main left out (it has its own
+ * pinned row in the drawer), and only chats with a conversation to reopen (a session).
+ */
+export function recentAsks(tasks: readonly Task[], agent: AskAgent, limit: number): RecentAsk[] {
+  return selectAsks(tasks, agent)
+    .filter((t) => t.org_role !== 'main' && !!askSessionId(t))
+    .slice(0, Math.max(0, limit))
+    .map((t) => ({ id: t.id, title: askTitle(t, agent), ...(askActivityAt(t) ? { at: askActivityAt(t) } : {}) }));
 }
 
 /**

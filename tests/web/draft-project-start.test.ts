@@ -3,7 +3,8 @@
  * (draft-project-start.ts): the row's shape per draft (the flag off keeps today's
  * row), what a project pick writes and what leaving a source gives back (a folder
  * pick included), the value chips of a source's array inputs, the "+ Add" rows, and
- * what Start sends. The Work in pill's own data is draft-work-in.test.ts. The one
+ * what Start sends, and the v6 Where field's host and restore writes. The row's own words are
+ * draft-work-in.test.ts. The one
  * class every case guards: the row says "fresh workspace" only when Start sends
  * `fromProject`, and a draft off a source never runs in that source's folder.
  */
@@ -294,5 +295,43 @@ describe('startSourceOf and eligibility', () => {
     expect(ps.projectStartEligible(draft({ forkOf: { sessionId: 's' } }))).toBe(false);
     expect(ps.projectStartEligible(draft({ walnut: true }))).toBe(false);
     expect(ps.projectStartEligible(draft({ intent: 'fix-walnut' }))).toBe(false);
+  });
+});
+
+describe('the v6 Where field\'s writes: another host, a restored folder', () => {
+  it('a folder start on another host keeps its folder; the home folder follows the host', () => {
+    const d = draft({ cwd: '/repos/app', host: null, cwdPinned: true });
+    expect(ps.moveDraftHost(d, 'big-box', 'Big box', { home: false })).toMatchObject({ cwd: '/repos/app', host: 'big-box', hostLabel: 'Big box', cwdPinned: true, userTouched: true });
+    const home = ps.moveDraftHost(draft({ cwd: '/home/u', host: null }), 'big-box', 'Big box', { home: true });
+    expect(home).toMatchObject({ cwd: '~', host: 'big-box', cwdPinned: false });
+    // Back on this computer: a label never rides a local host.
+    expect(ps.moveDraftHost(home, null, 'ignored', { home: false })).toMatchObject({ host: null, hostLabel: undefined });
+    expect(ps.homeFolderOn('big-box')).toBe('~');
+  });
+
+  it('a start from a source on another host is that start\'s own pick, sent with it', () => {
+    const picked = ps.pickStartHost(ps.pickProjectForStart(draft(), 'Marina', git), null);
+    expect(picked).toMatchObject({ fromProject: true, host: null, fromProjectHostPicked: true });
+    expect(ps.projectStartRequest(picked, { source: git, project: 'Marina' })).toMatchObject({ project: 'Marina', host: '__local__' });
+  });
+
+  it('a restored folder leaves the source, is pinned, and is marked kept (it never asks for a fresh workspace)', () => {
+    const onSource = ps.pickProjectForStart(draft(), 'Marina', git);
+    const back = ps.restoreFolderPlace(ps.pickProjectForStart(onSource, 'Marina', null), '/work/dupfix/', 'big-box', 'Big box');
+    expect(back).toMatchObject({ project: 'Marina', projectSource: 'user', fromProject: false, cwd: '/work/dupfix/', host: 'big-box', hostLabel: 'Big box', cwdPinned: true });
+    expect(back.fromProjectPrev).toBeUndefined();
+    expect(back.workInKept).toBe('big-box::/work/dupfix');
+    expect(ps.workInFolderKey({ cwd: '/', host: 'local' })).toBe('__local__::/');
+    expect(ps.draftProjectStart(back, { flagOn: true, eligible: true, rows: [{ name: 'Marina', startSource: git }] }).mode).toBe('off');
+  });
+});
+
+describe('projectStartRefusalWords', () => {
+  // Review round 2: the line cut the server's long sentence mid-way.
+  it('a project with no code source says it short; any other refusal keeps the server\'s words', () => {
+    expect(ps.projectStartRefusalWords({ message: 'Project "Acme" has no code source: set one in its settings (Code source), or pick a folder.', body: { error: 'x', code: 'no-project-source' } }))
+      .toBe('No code source: set one in the project\'s settings.');
+    expect(ps.projectStartRefusalWords({ message: 'Unknown project "Zed".', body: { code: 'unknown-project' } })).toBe('Unknown project "Zed".');
+    expect(ps.projectStartRefusalWords({ message: 'Bad inputs.' })).toBe('Bad inputs.');
   });
 });

@@ -140,6 +140,33 @@
   border-radius: var(--choice-radius-box) var(--choice-radius-box) 0 0;
 }
 
+/* Tile tabs (TabList tiles: the new task draft's Start task / Quick chat): large cards with an
+   icon, a title and a line, as tall as their strip; the view gives the width. The picked one has
+   the accent edge, a ring and a tint; every tile keeps the same edge width, so a pick moves nothing. */
+.wn-tabs-tiles { overflow: visible; }
+.wn-tabs-tiles > .wn-tab {
+  height: auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  white-space: normal;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.wn-tabs-tiles > .wn-tab:hover:not(:disabled):not([aria-disabled='true']) { border-color: var(--border-strong); }
+.wn-tabs-tiles > .wn-tab[aria-selected='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg-elevated));
+  color: var(--fg);
+}
+.wn-tabs-tiles > .wn-tab:focus-visible { border-radius: var(--radius-lg); outline: 2px solid var(--accent); outline-offset: 3px; }
+.wn-tabs-tiles > .wn-tab:focus-visible:not([aria-selected='true']) { box-shadow: none; }
+
 /* A vertical list (TabList aria-orientation="vertical": the model picker's engine rail). No line
    under it and none under a tab: the picked tab is filled in the accent's tint instead, and Up and
    Down move between tabs. */

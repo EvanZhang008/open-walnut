@@ -1,79 +1,8 @@
-/* Start a new task from a project (experiment project_first_start): the draft's one Work in
-   pill and the suggestion under its row (DraftWorkInPill), its popover (WorkInPicker), the value
-   chips above the row (DraftProjectSourceRow), their flyouts (ProjectStartFlyout), and the
-   project settings' "Code source" section (ProjectCodeSource). */
+/* Start a new task from a project (experiment project_first_start): the one flyout shell of the
+   draft's Project + Where row (ProjectStartFlyout: the Where, Host and Project menus) and the
+   project settings' "Code source" section (ProjectCodeSource). The v6 draft itself: draft-v6.css. */
 
-.draft-composer-bar > .draft-work-in-pill { gap: 0; max-width: 100%; }
-.draft-work-in-pill .work-in-icon { flex: none; margin-right: 5px; }
-.work-in-icon.is-git { color: var(--success); }
-.work-in-icon.is-box { color: var(--warning); }
-.work-in-icon.is-folder, .work-in-icon.is-host { color: var(--fg-muted); }
-.draft-work-in-detail {
-  flex: 0 1 auto;
-  min-width: 3ch;
-  margin-left: 4px;
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.draft-work-in-pill.is-empty .draft-work-in-detail { margin-left: 0; }
-.draft-work-in-pill .draft-pill-dot { margin-left: 5px; }
-/* The folder's project is a `.badge` (styles/badge.css): blue where it has source (and on the pill),
-   dashed for a project Start would create. */
-.draft-work-in-project-tag {
-  flex: none;
-  max-width: 140px;
-  margin-left: 6px;
-}
-
-/* "This is Marina's code. Start in a fresh git worktree instead?": one quiet line under the row. */
-.draft-work-in-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 5px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--accent-subtle);
-  font-size: var(--font-size-sm);
-  color: var(--fg);
-}
-.draft-work-in-suggest-text { flex: 1 1 180px; min-width: 0; }
-.draft-work-in-suggest-use,
-.draft-work-in-suggest-keep {
-  flex: none;
-  height: 22px;
-  padding: 0 9px;
-  border-radius: 6px;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-/* Both quiet: a suggestion, not a call to action. */
-.draft-work-in-suggest-use,
-.draft-work-in-suggest-keep { border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
-.draft-work-in-suggest-use { color: var(--accent); }
-.draft-work-in-suggest-use:hover,
-.draft-work-in-suggest-keep:hover { background: var(--bg-hover); }
-
-/* The value chips: one line per array input, wrapping inside the column. */
-.draft-project-source-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 2px 0 4px;
-}
-.draft-source-field {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-sm);
-}
-.draft-source-field-label { color: var(--fg-muted); margin-right: 2px; }
+/* A code source value chip (the project settings' Code source section, ProjectCodeSource). */
 .draft-source-value {
   display: inline-flex;
   align-items: center;
@@ -89,30 +18,19 @@
 .draft-source-value-name { overflow: hidden; white-space: nowrap;
   text-overflow: ellipsis; /* meta: a source chip's label (a repo or a path), its whole value shown on hover */ }
 .draft-source-star { color: var(--accent); font-size: var(--font-size-xs); }
-.draft-source-remove,
-.draft-source-add {
+.draft-source-remove {
+  width: 18px;
+  height: 18px;
+  padding: 0;
   border: none;
+  border-radius: 50%;
   background: none;
   color: var(--fg-muted);
   cursor: pointer;
   font: inherit;
-}
-.draft-source-remove {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  padding: 0;
   line-height: 1;
 }
 .draft-source-remove:hover { background: var(--bg-hover); color: var(--fg); }
-.draft-source-add {
-  height: 22px;
-  padding: 0 8px;
-  border: 1px dashed var(--border);
-  border-radius: 999px;
-}
-.draft-source-add:hover, .draft-source-add[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
-.draft-source-none { color: var(--fg-muted); font-style: italic; }
 
 /* The flyouts: the project picker's look (.task-kebab-project-flyout). */
 .project-start-flyout {
@@ -131,136 +49,6 @@
   color: var(--fg);
   z-index: 1200;
 }
-.work-in-picker { width: 380px; padding: 0 0 4px; }
-.psp-title-small { font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted); padding: 4px 10px 2px; }
-.psp-search {
-  width: 100%;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 5px 8px;
-  font-size: var(--font-size-sm);
-}
-.project-start-add .psp-search { margin: 4px 8px; width: calc(100% - 16px); }
-.psp-group {
-  padding: 8px 10px 2px;
-  font-size: var(--font-size-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
-.psp-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.psp-option:hover { background: var(--accent-subtle); }
-.psp-option.is-current { color: var(--accent); font-weight: 600; }
-.psp-option-meta { color: var(--fg-muted); font-weight: 400; }
-.psp-option-free { color: var(--accent); }
-.psp-empty { padding: 8px 12px; color: var(--fg-muted); }
-.psp-host-dot { flex: none; }
-
-/* The Work in popover: search, Projects | Folders, rows with an icon and what a pick gives. */
-.wip-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 8px 6px;
-  background: var(--bg-elevated);
-}
-.wip-tabs { flex: none; }
-.wip-list { display: flex; flex-direction: column; padding: 0 4px; }
-.wip-row { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
-.wip-row:hover, .wip-row:focus-within { background: var(--bg-hover); }
-.wip-row.is-current { background: var(--accent-subtle); }
-.wip-pick {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 8px;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.wip-ico {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: var(--bg-secondary);
-}
-.wip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-/* A project's or a folder's name in the picker wraps whole (`wn-title`, WorkInPicker.tsx); its line under it may cut. */
-.wip-name { font-weight: 500; }
-.wip-line { color: var(--fg-muted); font-size: var(--font-size-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.work-in-check { flex: none; color: var(--accent); }
-.wip-row .draft-work-in-project-tag { margin-left: 0; }
-/* "Set up source…": one small action, shown on the row under the pointer or the keyboard. */
-.wip-setup {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 6px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-  opacity: 0;
-}
-.wip-row:hover .wip-setup, .wip-row:focus-within .wip-setup, .wip-setup:focus-visible { opacity: 1; }
-/* A touch screen has no hover: the action is always there. */
-@media (hover: none) { .wip-setup { opacity: 1; } }
-.wip-setup:hover { background: var(--bg-secondary); color: var(--accent); }
-.wip-host,
-.wip-browse {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin: 4px 0 0;
-  padding: 7px 8px;
-  border: none;
-  border-top: 1px solid var(--border);
-  background: none;
-  color: var(--fg-muted);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-/* "Runs on" stays in view at the bottom of a long Projects list, as the search does at the top
-   (-4px: the popover's own bottom padding). */
-.wip-host {
-  position: sticky;
-  bottom: -4px;
-  z-index: 1;
-  background: var(--bg-elevated);
-}
-.wip-host strong { color: var(--fg); font-weight: 500; }
-.wip-host:hover, .wip-browse:hover { color: var(--fg); background: var(--bg-hover); }
-/* The hover tint is see-through: over the sticky row's solid ground, never over the rows behind it. */
-.wip-host:hover { background: linear-gradient(var(--bg-hover), var(--bg-hover)) var(--bg-elevated); }
-.wip-caret { margin-left: auto; }
 
 /* Project settings: Code source. */
 .project-code-source { display: flex; flex-direction: column; gap: 8px; }

@@ -53,13 +53,9 @@
  *   the model + engine stay in the composer's controls row, where a real
  *   session's mode and model pills sit.
  *
- * With the experiment `project_first_start` (owner passes onProjectStart), ONE "Work in" pill
- * (DraftWorkInPill) answers where the task runs, a project or a folder: it stands where the
- * folder pill, the isolated-workspace chip, the quick folders and the project chip stood (the
- * quick folders are its Folders tab). A project with a code source adds its value chips above
- * the row (DraftProjectSourceRow); a folder of such a project, one suggestion under it. A folder
- * start isolates exactly as without the pill (the defaults, More's switch, the body above the
- * row), and the pill says so ("· isolated copy") where the auto chip stood.
+ * With the experiment `project_first_start` a plain new draft has no launch bar: its Project +
+ * Where row sits above the composer and its lower row under it (DraftSessionPanel's v6 layout,
+ * DraftWhereRow, DraftLowerRow). This bar is every other draft's (and all of them with it off).
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
@@ -70,32 +66,24 @@
 import { shownFolderName } from '@/utils/home-folder';
 import { onHomeDefault } from './draft-home-default';
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+import { useDraftMoreMenu } from './useDraftMoreMenu';
 import type { WorkingDirEntry } from '@/api/sessions';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { hostDotOf, type HostDot } from '@open-walnut/host-problem';
 import { HostStatusDot } from './path-selector/HostStatusDot';
 import { hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
-import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
-import { useShowPriorityState } from '@/hooks/useShowPriority';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from './SessionPathSelector';
 import {
   applyLaunchMemory, quickDirsFor,
   type DraftAiField, type DraftColumn, type DraftTaskField, type DraftTaskFieldPatch,
 } from './draft-column';
-import {
-  customTierLabelLookup, draftDecisionChips, draftDecisionsKeyVisible, draftSuggestionLabel, draftWalnutPicks,
-  type DraftDecisionCtx,
-} from './draft-decisions';
-import { DraftDecisionChips, DraftMoreButton, useDraftDecisionMenu } from './DraftDecisionRow';
+import { DraftDecisionChips, DraftMoreButton } from './DraftDecisionRow';
 import { DraftTaskMenuPopover } from './DraftTaskMenu';
 import { DraftFolderPill, DraftPillsBreak, DraftProjectChip } from './DraftLaunchPills';
 import { DraftWorkspaceAutoChip, DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
 import { SyncChoiceChip } from '@/components/tasks/SyncChoice';
-import { DraftWorkInPill, DraftWorkInSuggest, useDraftProjectStart, useWorkIn, type DraftRowUpdate } from './DraftWorkInPill';
-import { DraftProjectSourceRow } from './DraftProjectSourceRow';
-import { projectStartEligible } from './draft-project-start';
 import { Chip, ChipGroup } from '@/components/controls';
 import { ICON_CLOSE } from '@/components/common/Icons';
 
@@ -141,9 +129,6 @@ interface Props {
   onClearFolder?: (draftId: string) => void;
   /** false: the host's launch makes no isolated workspace (the browser extension), so none is offered. */
   workspaces?: boolean;
-  /** A write on the draft row. Present: the draft may start from a project (experiment
-   *  `project_first_start`, draft-project-start.ts); absent: today's row only. */
-  onProjectStart?: DraftRowUpdate;
 }
 
 /** The chip label: the folder's name, the host's home as `~` (utils/home-folder.ts). */
@@ -154,14 +139,15 @@ function chipName(d: { cwd: string; host?: string | null }): string {
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
   onPathChange, onProjectChange, isKnownProject, onBoundProjectMove, onAfterQuickPick,
-  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder, workspaces = true, onProjectStart,
+  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder, workspaces = true,
 }: Props) {
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
   // pill: "pops from where you clicked", not a centered modal.
   const cwdPillRef = useRef<HTMLButtonElement>(null);
-  const moreRef = useRef<HTMLButtonElement>(null);
-  const menu = useDraftDecisionMenu({ getComposer, composerText, openMenuNonce, moreRef });
+  const {
+    menu, moreRef, decisionsOn, priorityVisible, decisionChips, keyVisible, walnutPicks, handleTaskFieldChange, handleReturnToWalnut,
+  } = useDraftMoreMenu(draft, { getComposer, composerText, openMenuNonce, onTaskFieldChange, onReturnFieldToWalnut });
 
   // The row's meta at the moment the folder picker opened: the owner rebases
   // the picker's returned meta against it field by field (onPathChange's 4th
@@ -172,39 +158,6 @@ export function DraftLaunchBar({
     pickerOpenMetaRef.current = pickerOpen ? draft.meta : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshot at open only
   }, [pickerOpen]);
-
-  // Decision chips: data from the pure catalog, words from the app's tables.
-  const decisionsOn = !!onTaskFieldChange;
-  const focusBar = useFocusBarContextSafe();
-  const priorityVisible = useShowPriorityState();
-  const customTiers = focusBar?.customTiers;
-  const tierLabel = useMemo(() => customTierLabelLookup(customTiers ?? []), [customTiers]);
-  const ctx: DraftDecisionCtx = {
-    tierLabel,
-    // Outside the provider (isolated surfaces) there are no custom tiers to wait for.
-    customTiersLoaded: focusBar ? focusBar.customTiersLoaded : true,
-    priorityVisible,
-    now: new Date(),
-  };
-  const decisionChips = decisionsOn ? draftDecisionChips(draft, ctx) : [];
-  const keyVisible = draftDecisionsKeyVisible(draft, composerText, decisionChips);
-  const walnutPicks = useMemo(() => {
-    if (!decisionsOn || !onReturnFieldToWalnut) return undefined;
-    const raw = draftWalnutPicks(draft, { priorityVisible });
-    const labels: Partial<Record<DraftTaskField, string>> = {};
-    for (const [f, v] of Object.entries(raw) as [DraftTaskField, string][]) {
-      labels[f] = draftSuggestionLabel(f, v, { tierLabel, now: new Date() });
-    }
-    return labels;
-  }, [decisionsOn, onReturnFieldToWalnut, draft, priorityVisible, tierLabel]);
-  const handleTaskFieldChange = useCallback(
-    (patch: DraftTaskFieldPatch) => onTaskFieldChange?.(draft.id, patch),
-    [onTaskFieldChange, draft.id],
-  );
-  const handleReturnToWalnut = useCallback(
-    (field: DraftTaskField) => onReturnFieldToWalnut?.(draft.id, field),
-    [onReturnFieldToWalnut, draft.id],
-  );
 
   // A quick chip is a full path pick: it goes through the SAME onPathChange the
   // picker uses (so it pins the cwd and can't be overwritten by a late project
@@ -230,37 +183,24 @@ export function DraftLaunchBar({
   // client sends, so its More edits the task fields but offers no project.
   const isRepair = draft.intent === 'fix-walnut';
   const projectMenu = decisionsOn && !isRepair;
-  // Project first (experiment): flag off (or a draft that cannot start from a project) keeps
-  // today's row exactly; on, the Work in pill is the row's one "where" ('source': a project with a
-  // code source, its value chips above the row; else a folder).
-  const ps = useDraftProjectStart(draft, projectStartEligible(draft) && !emptyFolder && workspaces, onProjectStart);
-  const workIn = ps.canPick;
-  const fromSource = ps.mode === 'source';
-  const work = useWorkIn(draft, ps);
   const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: projectMenu, always: alwaysProject });
-  // While the Work in pill applies (also after a folder pick), a project pick goes through it:
-  // one with a code source puts the draft back on it.
   const pickProject = useCallback((project: string) => {
     if (draft.taskId) onBoundProjectMove?.(project);
-    else if (ps.canPick) ps.pick(project);
     else onProjectChange(draft.id, project);
-  }, [draft.taskId, draft.id, onBoundProjectMove, onProjectChange, ps.canPick, ps.pick]);
+  }, [draft.taskId, draft.id, onBoundProjectMove, onProjectChange]);
   const menuProject = projectMenu && !isWalnut ? {
     value: draft.project ?? '',
     isNew: draftProjectIsNew(draft, isKnownProject),
     why: draftProjectProvenance(draft, isKnownProject),
-    // While the Work in pill applies, More's project row is the same pick as its Projects tab.
-    onPick: (project: string) => (ps.canPick ? ps.pick(project) : onProjectChange(draft.id, project)),
+    onPick: (project: string) => onProjectChange(draft.id, project),
   } : undefined;
   // No quick chips on a fork draft: the folder is immutable, so a row of other
   // folders would be five inert buttons (or worse, five ways to break the fork).
   // Same for Ask Walnut.
   const chipDot = useQuickChipHostDots();
   // A host that is off (a test server) never runs a session: its chips would only be refused.
-  // With the Work in pill they are its Folders tab instead of a row.
-  const quick = (isFork || isWalnut ? [] : quickDirsFor(fromSource ? undefined : { cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
+  const chips = (isFork || isWalnut ? [] : quickDirsFor({ cwd: draft.cwd, host: draft.host ?? null, hostLabel: draft.hostLabel }))
     .filter((d) => !d.host || chipDot(d.host)?.kind !== 'off');
-  const chips = workIn ? [] : quick;
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const chipHostLabel = useQuickChipHostLabels(chips);
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
@@ -343,22 +283,18 @@ export function DraftLaunchBar({
       {/* The "Isolated workspace" body, right above the folder it isolates: nothing
           while off (the switch is in More), so a folder pick never grows the bar.
           A bound draft has no More: its inline toggle shows from the first paint. */}
-      {fromSource && <DraftProjectSourceRow draft={draft} source={ps.source} onUpdate={onProjectStart!} />}
-      {!isWalnut && !isFork && workspaces && !fromSource && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
+      {!isWalnut && !isFork && workspaces && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
 
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">
-          {workIn ? (
-            <DraftWorkInPill draft={draft} ps={ps} work={work} pillRef={cwdPillRef} folders={quick}
-              onPickFolder={pickDir} onBrowse={onOpenPicker} onUpdate={onProjectStart!} />
-          ) : <DraftFolderPill
+          <DraftFolderPill
             draft={draft}
             pillRef={cwdPillRef}
             pickerOpen={pickerOpen}
             ai={isAi('cwd')}
             onOpenPicker={onOpenPicker}
             {...(emptyFolder ? { emptyFolder } : {})}
-          />}
+          />
           {emptyFolder && onClearFolder && draft.cwd && !isFork && (
             <button
               type="button"
@@ -369,9 +305,9 @@ export function DraftLaunchBar({
               onClick={() => { onClearFolder(draft.id); onAfterQuickPick?.(); }}
             >{ICON_CLOSE}</button>
           )}
-          {!isFork && workspaces && draft.cwd && !workIn && <DraftWorkspaceAutoChip draftId={draft.id} />}
+          {!isFork && workspaces && draft.cwd && <DraftWorkspaceAutoChip draftId={draft.id} />}
           <DraftPillsBreak />
-          {projectChip && !workIn && (
+          {projectChip && (
             <DraftProjectChip
               chip={projectChip}
               menu={projectMenu ? menu : undefined}
@@ -392,7 +328,6 @@ export function DraftLaunchBar({
           {decisionsOn && <DraftMoreButton menu={menu} moreRef={moreRef} priorityVisible={priorityVisible} withProject={!isRepair} />}
         </div>
       )}
-      {workIn && !isWalnut && <DraftWorkInSuggest draft={draft} ps={ps} work={work} onUpdate={onProjectStart!} />}
 
       {decisionsOn && (
         <DraftTaskMenuPopover
@@ -410,7 +345,7 @@ export function DraftLaunchBar({
           focusNonce={menu.mode === 'keyboard' ? menu.focusNonce : 0}
           focusTarget={menu.anchor?.classList.contains('draft-project-chip') ? 'project' : 'tier'}
           project={menuProject}
-          workspace={!isWalnut && !isFork && workspaces && !fromSource
+          workspace={!isWalnut && !isFork && workspaces
             ? <DraftWorkspaceMenuItem draftId={draft.id} hasFolder={!!draft.cwd} onDone={() => menu.close('select')} />
             : undefined}
         />

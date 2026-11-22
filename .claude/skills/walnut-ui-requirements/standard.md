@@ -201,6 +201,10 @@ width); it never gives them a fill, border, corner or size of its own, and never
 | Checkbox, Radio | `Checkbox`, `Radio` (`SettingsCheckbox` for a Settings list row) | picking items of a list, or a choice a form applies on Save; a radio for one of a few choices that each need a line of words | the native input drawn: 16 px, corner 4 px (half of `--radius-sm`; a radio is round), 1 px `--choice-box-border`; checked `--accent` with a white tick (a radio a 5 px accent ring); with `label` the box and words are one clickable row, 8 px apart, 13 px, an optional 12 px `--fg-muted` detail line | `:checked` (`:indeterminate` for "some") |
 | Disclosure | `DisclosureButton`, or `DisclosureChevron` inside a header that is its own button | showing or hiding what is under it | a 12 px chevron in `--fg-muted` that points right when closed and turns down when open (one rotation rule), the label 13 px weight 500 `--fg-secondary`; transparent, hover `--bg-hover`, corner 8 px; `inline` takes the size of a line of small text it sits in (16 px) | `aria-expanded` |
 
+Tabs have one other look, `TabList tiles`: large square cards (an icon, a title and a line),
+picked with the accent edge, a ring and a tint, for a choice between two kinds of the same thing at
+the top of a form (the new task draft's Start task and Quick chat). Its keys and ARIA are the tabs'.
+
 Which one: a switch acts at once, a checkbox waits for Save. Tabs change what panel shows; a
 segmented control changes a value or a mode of the same content. A chip filters a list or picks
 from many options that wrap; it is never a status label (that is a `.badge`). One of a few short

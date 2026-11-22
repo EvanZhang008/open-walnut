@@ -128,8 +128,9 @@ import { recordTaskOpened, recentOpenRecorder } from '@/utils/recent-opened';
 import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
 import { onOpenProjectSettings } from '@/utils/project-settings-open';
 import { useExperimental } from '@/hooks/useExperimental';
-import { draftProjectStart, leaveForFolderPick, projectStartEligible, projectStartRequest, settleProjectStart, startSourceOf, type ProjectStartRequest } from '@/components/sessions/draft-project-start';
-import { withDetectedOwner } from '@/components/sessions/draft-work-in';
+import { draftProjectStart, leaveForFolderPick, projectStartEligible, projectStartRequest, projectStartRefusalWords, settleProjectStart, startReadsDraftWorkspace, startSourceOf, type ProjectStartRequest } from '@/components/sessions/draft-project-start';
+import { sendsFolderProject, stampFolderDetection, withDetectedOwner } from '@/components/sessions/draft-work-in';
+import { forgetDraftWhere } from '@/components/sessions/useDraftWhere';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
@@ -1508,6 +1509,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setDraftColumns(prev => prev.filter(d => d.id !== draftId));
     setFocusDraftId(prev => (prev === draftId ? null : prev));
     discardDraft(draftComposerKey(draftId));
+    forgetDraftWhere(draftId);
     // The borrow ends with the draft (both exits funnel here, so it can never
     // outlive it); a borrow the user already cancelled (ref cleared on explicit
     // re-open) is left alone. A ✕ gives the main chat its spot back: nothing was
@@ -1563,7 +1565,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // A folder picked by hand: this draft no longer starts from a project's code source (with
       // the Work in pill, whoever put it there: a pick, a project "+" seed, the parse).
       const workIn = projectStartRef.current.on && projectStartEligible(d);
-      return leaveForFolderPick(applyDraftPathPick(d, path, meta, openedMeta, forDir, projectTakenRef.current), workIn);
+      // The folder found the project whose code it is: recorded now, so Start reads the draft only.
+      return stampFolderDetection(
+        leaveForFolderPick(applyDraftPathPick(d, path, meta, openedMeta, forDir, projectTakenRef.current), workIn),
+        { ...projectStartRef.current, home: knownHomeOf(path.host) },
+      );
     }));
   }, []);
 
@@ -1676,9 +1682,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Not before the registry loaded: an empty one would rename every owned folder's pill.
   useEffect(() => {
     if (!projectRegistry.loaded) return;
-    setDraftColumns(prev => mapDrafts(prev, (d) => refreshFolderProject(
-      d, withDetectedOwner(projectForDir, d, d.host, { ...projectStartRef.current, home: knownHomeOf(d.host) }), projectRegistry.isKnownProject,
-    )));
+    setDraftColumns(prev => mapDrafts(prev, (d) => {
+      const ctx = { ...projectStartRef.current, home: knownHomeOf(d.host) };
+      return stampFolderDetection(refreshFolderProject(d, withDetectedOwner(projectForDir, d, d.host, ctx), projectRegistry.isKnownProject), ctx);
+    }));
   }, [projectForDir, projectRegistry.isKnownProject, projectRegistry.loaded]);
 
   /** Registry membership for the launch bar's "new" badge — reports everything as
@@ -2661,6 +2668,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       openSessionOrToast(sessionId);
     }
   }, [openSessionOrToast]);
+  // A new draft's Quick chat "Recent chats" chip: that chat, in the Ask Walnut slot.
+  const openRecentAsk = useLeanCallback((taskId: string) => {
+    showAskInSlot(taskId);
+    setChatVisible(true);
+    log.info('draft', 'quick chat: a recent chat opened from the draft', { taskId });
+  }, []);
   const revealOnHome = useLeanCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
     if (sessionId) openTaskSession(task, sessionId);
     // Whatever details popup was open goes (2026-11-13, the user: a task-ref click is "go to taht
@@ -3068,7 +3081,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * pending column goes and the SAME draft comes back in the same slot with its text, host,
    * folder, model, images and meta; no 'Quick Start Failed' notification.
    */
-  const restoreRefusedDraft = useLeanCallback((pendingColId: string, restore: GatedRestore, err: QuickStartGateError | { message: string }) => {
+  const restoreRefusedDraft = useLeanCallback((pendingColId: string, restore: GatedRestore, err: QuickStartGateError | { message: string; body?: unknown }) => {
     const { draft, composerText, images } = restore;
     // Written BEFORE the commit: ChatInput reads its text at mount.
     try { localStorage.setItem(draftComposerKey(draft.id), composerText); } catch { /* quota */ }
@@ -3080,7 +3093,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       return back !== prev ? back : forceAddSessionColumn(prev, draft.id);
     });
     if (err instanceof QuickStartGateError) setDraftGateErrors(prev => ({ ...prev, [draft.id]: { code: err.code, body: err.body, at: Date.now() } }));
-    else setDraftWorkspace(draft.id, { startError: err.message });
+    else setDraftWorkspace(draft.id, { startError: projectStartRefusalWords(err) });
     setDraftRestoreImages(prev => {
       if (!images?.length) { if (!(draft.id in prev)) return prev; const n = { ...prev }; delete n[draft.id]; return n; }
       return { ...prev, [draft.id]: images };
@@ -3316,7 +3329,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // project, inputs it rejects): a Retry would only fail again, so the same draft comes back
         // with the server's words, nothing having been made.
         if (opts?.fromProject && opts.restore && err instanceof ApiError && PROJECT_START_REFUSALS.includes(err.status)) {
-          restoreRefusedDraft(pendingColId, opts.restore, { message: err.message });
+          restoreRefusedDraft(pendingColId, opts.restore, { message: err.message, body: err.body });
           return;
         }
         // Keep the pending column visible with error — user can Retry from panel
@@ -3444,9 +3457,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // required field empty): the Start waits and the row says why.
     // A start from a project makes its workspace from the source: the draft's own choice is not read.
     // A folder start under the Work in pill isolates exactly as it does without it (the defaults, More's switch).
-    const wsRequest = fromProject ? null : draftWorkspaceRequest(draftId);
-    const detectedByCode = projectStartRef.current.on && !!draft.project
-      && projectTakenRef.current(draft.project) && projectForDirRef.current(draft.cwd).toLowerCase() !== draft.project.toLowerCase();
+    const wsRequest = startReadsDraftWorkspace(projectStart) ? draftWorkspaceRequest(draftId) : null;
+    // The detection was recorded on the draft when its folder set the project (stampFolderDetection).
+    const sendFolderProject = sendsFolderProject(draft, projectStartRef.current.on);
     if (wsRequest && 'error' in wsRequest) {
       setDraftWorkspace(draftId, { startError: wsRequest.error });
       return false;
@@ -3490,10 +3503,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {
         columnId: draftId,
         ...(draft.taskId ? { taskId: draft.taskId } : {}),
-        // Folder-derived project → the server may stamp a NEW row's default_cwd. Not a project the
-        // Work in pill found by its code (the folder has no registry owner of that name): the
-        // server's folder rule would file the task under a new project named after the folder.
-        ...(draft.project && draft.projectSource === 'folder' && !detectedByCode ? { projectFromFolder: true } : {}),
+        // Folder-derived project → the server may stamp a NEW row's default_cwd; never a project
+        // found by its code in this folder (sendsFolderProject).
+        ...(sendFolderProject ? { projectFromFolder: true } : {}),
         // A host refusal (409), or a start from a project refused for good, brings this very draft back.
         restore: { draft, composerText: text, ...(images?.length ? { images } : {}) },
         ...(startOpts?.overrideReadiness ? { overrideReadiness: true } : {}),
@@ -4079,6 +4091,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     restoreImages={draftRestoreImages[sid]}
                     // "Customize Walnut" quick action + where a repair draft runs.
                     onCustomizeWalnut={walnutRepairTarget ? handleCustomizeWalnut : undefined}
+                    onOpenAsk={openRecentAsk}
                     repairTarget={walnutRepairTarget}
                   />
                 ) : null

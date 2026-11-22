@@ -1,4 +1,5 @@
 import { Fragment, useState, useEffect, type RefObject } from 'react';
+import { WalnutIcon } from '@/components/common/WalnutIcon';
 import { setNotificationCenterOpen } from '@/stores/notification-center-open';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { linkTargetFor } from '@/utils/last-location';
@@ -410,7 +411,7 @@ export function Sidebar({
           <HamburgerIcon />
         </button>
         <span className="sidebar-label">
-          <WalnutIcon /> Walnut
+          <WalnutIcon alt="Walnut" className="sidebar-open-walnut-icon" /> Walnut
         </span>
       </div>
       <nav className="sidebar-nav" onClick={handleNavClick}>
@@ -527,12 +528,6 @@ function navLinkClass({ isActive }: { isActive: boolean }) {
 }
 
 /* Inline SVG icons */
-
-function WalnutIcon() {
-  return (
-    <img src="/walnut-icon.png" alt="Walnut" className="sidebar-open-walnut-icon" />
-  );
-}
 
 function BellIcon() {
   return (

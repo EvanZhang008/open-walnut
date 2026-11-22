@@ -1,131 +1,180 @@
 /**
- * Start a new task from a project (experiment project_first_start) in the browser: with the
- * experiment off the draft's row is today's; on, ONE "Work in" pill asks where the task runs. Its
- * Projects tab picks a project with a code source (a git checkout, a plugin provider with a list
- * of packages: value chips above the row), and Start files a task whose workspace the host makes
- * from the source; its Folders tab (and "Browse or type a path…", today's folder picker) picks a
- * folder, tags it with the project whose code it is, and offers a fresh worktree instead. A row's
- * "Set up source…" opens the project's settings, whose "Code source" section saves a source that
- * is there after a reload.
+ * The v6 new task draft (experiment project_first_start) in the browser. With the experiment off
+ * the draft is today's. On: two mode tiles (Start task, Quick chat), one row [Project] [Where]
+ * whose Where is a path that starts with the host, Auto as the first row of the Where menu (a
+ * fresh worktree or a plugin workspace from the project's code source, its packages right under
+ * it), the folders by host, a typed path with its states, a line under the row, Quick chat in the
+ * row's place. A project restores its last place (derived from the folders Walnut recorded, then
+ * from what this draft did). The composer and the row under it never move. Part two (hosts, the
+ * task source, narrow, isolation, refusals, the keyboard): project-first-start-where.spec.ts.
  *
  * Real UI, real server, the MockDaemon running the real workspace core (real `git worktree`,
- * the fake multi-repo plugin provider); only the Claude CLI is mocked. Needs the workspace
- * fixture, on its own port:
+ * the fake multi-repo plugin provider); only the Claude CLI is mocked. A remote host comes from
+ * the server's host fixture, so the spec runs in the one-at-a-time host fixture project. Needs the
+ * workspace fixture, on its own port:
  *
- *   PW_WORKSPACE_FIXTURE=1 PW_TEST_PORT=3516 ./node_modules/.bin/playwright test tests/e2e/browser/project-first-start.spec.ts --project=chromium
+ *   PW_WORKSPACE_FIXTURE=1 PW_TEST_PORT=3516 ./node_modules/.bin/playwright test tests/e2e/browser/project-first-start.spec.ts tests/e2e/browser/project-first-start-where.spec.ts --project=chromium-host-fixture
  */
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
-import { discoverBrowserFixture } from './codex-test-audit'
-import { draftComposer, draftPanel, draftTaskMenu, openDraft, openDraftSettings } from './draft-helpers'
-import { openSessionFromPlus } from './draft-surface-helpers'
-import { isolateUiPrefs, listProjectHeader, openProjectDetails, presetPanelView } from './todo-panel-helpers'
+import { draftComposer, draftPanel, openDraft } from './draft-helpers'
+import { resetServerHostFixture } from './host-problems-fixture-helpers'
+import { APP, PLAIN, fx, minutesAgo, setupFixture } from './project-first-start-fixture'
 import {
-  PORT, SHOTS, browseTo, expectOnePill, makeProject, openHome, openPicker, picker, pickProject, pillsRow, projectRow,
-  readTask, setFlag, shot, start, waitWorkspace, watchErrors, workIn,
+  LOCAL_NAME, expectSameGeometry, geometry, line, openHome, openWhere,
+  pickProject, pickTypedPath, projectField, projectMenu, readTask, sendLabel, setFlag, shot, start, tile, v6, waitWorkspace,
+  watchErrors, whereField, whereMenu, withDirs,
 } from './project-first-start-helpers'
 
 test.skip(process.env.PW_WORKSPACE_FIXTURE !== '1', 'needs PW_WORKSPACE_FIXTURE=1 on its own PW_TEST_PORT')
-test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
+// The user's window (1200 x 794), light theme: the screenshots are reviewed at this size.
+test.use({ viewport: { width: 1200, height: 794 }, deviceScaleFactor: 1, colorScheme: 'light' })
 // One after another: the experiment is a server-wide setting.
 test.describe.configure({ mode: 'default' })
 
 let home = ''
-const stamp = Date.now().toString(36)
-const MARINA = `Marina ${stamp}`
-const ACME = `Acme ${stamp}`
-const LIFE = `Life ${stamp}`
-const GONE = `Acme gone ${stamp}`
-const APP = (): string => path.join(home, 'ws-fixture', 'app')
-/** A checkout of its own for the project whose source goes away, so it never shares APP's folder. */
-const GONE_REPO = (): string => path.join(home, 'ws-fixture', 'gone-repo')
+let stamp = ''
+let MARINA = ''
+let ACME = ''
+let LIFE = ''
 
 test.beforeAll(async ({ request }) => {
-  ;({ walnutHome: home } = await discoverBrowserFixture(PORT))
-  const real = fs.realpathSync(home)
-  if (!real.startsWith(fs.realpathSync(os.tmpdir()) + path.sep)) throw new Error(`fixture home ${home} is not a temp dir`)
-  fs.mkdirSync(SHOTS, { recursive: true })
-  await makeProject(request, MARINA, { workspace_source: { provider: 'git-worktree', anchor: path.join(home, 'ws-fixture', 'app') } })
-  await makeProject(request, ACME, {
-    default_cwd: path.join(home, 'ws-fixture', 'multi'),
-    workspace_source: { provider: 'fake-multirepo', inputs: { packages: ['alpha', 'beta'] } },
-  })
-  await makeProject(request, LIFE, {})
-  // Made once per fixture server: a worker that restarts after a failure runs this hook again.
-  if (!fs.existsSync(path.join(GONE_REPO(), '.git'))) {
-    fs.mkdirSync(GONE_REPO(), { recursive: true })
-    fs.writeFileSync(path.join(GONE_REPO(), 'README.md'), '# gone\n')
-    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'init']]) {
-      execFileSync('git', ['-c', 'user.name=Walnut Test', '-c', 'user.email=walnut-test@example.invalid', '-c', 'init.defaultBranch=main', ...args], { cwd: GONE_REPO() })
-    }
-  }
-  await makeProject(request, GONE, { workspace_source: { provider: 'git-worktree', anchor: GONE_REPO() } })
+  await setupFixture(request)
+  ;({ home, stamp, MARINA, ACME, LIFE } = fx)
 })
 
 test.afterAll(async ({ request }) => {
   await setFlag(request, false)
+  await resetServerHostFixture(request)
 })
 
-test('experiment off: the draft row is today\'s, with no Work in pill', async ({ page, request }) => {
+test('experiment off: the draft is today\'s, with no tiles and no Where row', async ({ page, request }) => {
   await setFlag(request, false)
   const errors = watchErrors(page)
   await openHome(page)
   const panel = await openDraft(page)
-  const row = pillsRow(panel)
+  const row = panel.locator('.draft-composer-bar')
   await expect(row).toBeVisible()
-  await expect(workIn(panel)).toHaveCount(0)
-  await expect(page.getByTestId('work-in-suggest')).toHaveCount(0)
-  // The folder pill leads, as it always has.
+  await expect(v6(panel)).toHaveCount(0)
+  await expect(panel.locator('.draft-v6-tile')).toHaveCount(0)
+  // The folder pill leads, as it always has, and the mode pill has no "Permissions:" prefix.
   await expect(row.locator('.session-action-chip').first()).toHaveClass(/draft-folder-pill/)
-  await shot(page, 'flag-off-row', panel.locator('.draft-launch-bar'))
+  await expect(panel.getByText('Permissions:', { exact: false })).toHaveCount(0)
+  await shot(page, 'flag-off-row')
   expect(errors).toEqual([])
 })
 
-test('a git source from the Projects tab: one pill, Start files a task whose worktree the host makes', async ({ page, request }) => {
-  test.setTimeout(240_000)
+test('the tiles, the row and Quick chat: a switch never moves the composer', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
   await openHome(page)
   const panel = await openDraft(page)
-  await expectOnePill(panel)
-  const box = await openPicker(page, panel)
-  // Projects is the default tab.
-  await box.getByTestId('work-in-search').fill(stamp)
-  await expect(projectRow(box, MARINA).getByTestId('work-in-line')).toHaveText('Fresh git worktree on Local')
-  await expect(projectRow(box, ACME).getByTestId('work-in-line')).toHaveText('Fresh Fake multi-repo workspace on Local · alpha, beta')
-  await expect(projectRow(box, LIFE).getByTestId('work-in-line')).toHaveText('Works in a folder you pick')
-  // A project with no source has one small "Set up source…" action, shown on its row under the pointer.
-  const setup = projectRow(box, LIFE).getByTestId(`work-in-setup-${LIFE}`)
-  await expect(setup).toHaveAttribute('title', 'Set up source…')
-  await expect(projectRow(box, MARINA).locator('.wip-setup')).toHaveCount(0)
-  await projectRow(box, LIFE).hover()
-  await expect(setup).toBeVisible()
-  await projectRow(box, MARINA).hover()
-  await shot(page, 'picker-projects', box)
-  await projectRow(box, MARINA).locator('.wip-pick').click()
-  await expect(picker(page)).toHaveCount(0)
+  await expect(v6(panel)).toBeVisible()
+  // Two tabs; Start task is chosen.
+  await expect(v6(panel).getByRole('tab')).toHaveCount(2)
+  await expect(tile(panel, 'task')).toHaveAttribute('aria-selected', 'true')
+  await expect(tile(panel, 'chat')).toHaveAttribute('aria-selected', 'false')
+  await expect(tile(panel, 'chat').locator('img')).toHaveCount(1)
+  // One row: Project, then Where with the host first. No old pill is left.
+  await expect(projectField(panel)).toContainText('Project')
+  await expect(whereField(panel).getByTestId('draft-v6-host')).toHaveText(LOCAL_NAME)
+  for (const gone of ['.draft-folder-pill', '.draft-project-chip', '[data-testid="draft-work-in-pill"]', '[data-testid="draft-start-host-pill"]']) {
+    await expect(panel.locator(gone), gone).toHaveCount(0)
+  }
+  await expect(sendLabel(panel)).toHaveText('Start task')
+  await expect(panel.locator('.draft-v6-input')).toContainText('Permissions:')
+  const base = await geometry(panel)
+  // The composer's column is at most 960 px wide and centred in the draft.
+  expect(base.composer.width).toBeLessThanOrEqual(961)
+  await shot(page, 'v6-start-task')
 
-  await expect(workIn(panel)).toContainText('Work in:')
-  await expect(workIn(panel)).toContainText(MARINA)
-  await expect(workIn(panel)).toContainText('fresh git worktree')
-  await expectOnePill(panel)
-  // The current one is ticked, and its host is chosen at the bottom of the Projects tab.
-  const again = await openPicker(page, panel)
-  await again.getByTestId('work-in-search').fill(MARINA)
-  await expect(projectRow(again, MARINA)).toHaveClass(/is-current/)
-  await expect(again.getByTestId('work-in-host')).toContainText('Runs on Local')
-  await again.getByTestId('work-in-host').click()
-  await expect(page.getByTestId('draft-start-host-list')).toBeVisible()
-  // Escape closes the nested host list only; a second one the popover.
+  await tile(panel, 'chat').click()
+  await expect(tile(panel, 'chat')).toHaveAttribute('aria-selected', 'true')
+  await expect(panel.getByTestId('draft-v6-quick')).toBeVisible()
+  await expect(panel.locator('.draft-v6-row')).toHaveCount(0)
+  await expect(sendLabel(panel)).toHaveText('Ask Walnut')
+  await expect(panel.getByRole('group', { name: 'Try' })).toBeVisible()
+  // The lower row's Recent chats: the fixture's newest quick chats (each with its session), each
+  // chip whole, in the row's fixed height.
+  const chats = panel.getByTestId('draft-v6-recent-chats')
+  await expect(chats).toContainText('Recent chats')
+  const chatTitle = ((await chats.getByTestId('draft-v6-recent-chat').first().textContent()) ?? '').trim()
+  expect(chatTitle).not.toBe('')
+  const shown = chats.locator('[data-testid="draft-v6-recent-chat"]:visible')
+  expect(await shown.count()).toBeGreaterThanOrEqual(1)
+  expect(await shown.count()).toBeLessThanOrEqual(2)
+  const lowerBox = (await panel.getByTestId('draft-v6-lower').boundingBox())!
+  for (const chip of await panel.getByTestId('draft-v6-quick-lower').locator('[data-fit]:visible').all()) {
+    const b = (await chip.boundingBox())!
+    expect(b.x + b.width, 'a chip is shown whole').toBeLessThanOrEqual(lowerBox.x + lowerBox.width + 1)
+  }
+  await expect(panel.getByTestId('draft-v6-save-todo')).toHaveCount(0)
+  await expectSameGeometry(panel, base, 'Quick chat')
+  await shot(page, 'v6-quick-chat')
+
+  await tile(panel, 'task').click()
+  await expect(panel.locator('.draft-v6-row')).toBeVisible()
+  await expectSameGeometry(panel, base, 'back to Start task')
+  // Words in the composer change nothing either.
+  await draftComposer(page).fill('Look at the readme')
+  await expect(panel.getByTestId('draft-v6-save-todo')).toBeEnabled()
+  await expectSameGeometry(panel, base, 'typing')
+
+  // A recent chat opens in the Ask Walnut slot.
+  await tile(panel, 'chat').click()
+  await panel.getByTestId('draft-v6-recent-chat').first().click()
+  const slot = page.getByTestId('ask-walnut-slot')
+  await expect(slot).toBeVisible({ timeout: 15_000 })
+  await expect(slot).toContainText(chatTitle, { timeout: 15_000 })
+  await shot(page, 'v6-quick-chat-opened')
+  expect(errors).toEqual([])
+})
+
+test('a git source: Auto is the Where menu\'s first row, Start files a task whose worktree the host makes', async ({ page, request }) => {
+  test.setTimeout(240_000)
+  await setFlag(request, true)
+  const errors = watchErrors(page)
+  // Only folders of no project: a start of Marina in another test (either spec, any order) would restore its place.
+  await withDirs(page, [{ cwd: PLAIN(), count: 2 }, { cwd: path.join(home, 'ws-fixture', 'web'), count: 1, lastUsed: minutesAgo(30) }], { only: true })
+  await openHome(page)
+  const panel = await openDraft(page)
+  const base = await geometry(panel)
+  // No project yet: Auto waits for one.
+  let menu = await openWhere(page, panel)
+  await expect(menu.getByTestId('draft-v6-auto-row')).toHaveAttribute('data-state', 'no-project')
+  await expect(menu.getByTestId('draft-v6-auto-row')).toContainText('Pick a project first: Auto follows the project')
+  await expectSameGeometry(panel, base, 'Where menu open')
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('draft-start-host-list')).toHaveCount(0)
-  await expect(picker(page)).toBeVisible()
+  await expect(whereMenu(page)).toHaveCount(0)
+
+  // The Project menu says what each project's Auto makes, and where.
+  await projectField(panel).click()
+  await projectMenu(page).getByTestId('draft-v6-project-search').fill(stamp)
+  await expect(projectMenu(page).getByTestId(`draft-v6-project-${MARINA}`).first()).toContainText(`New worktree · ${LOCAL_NAME}`)
+  await expect(projectMenu(page).getByTestId(`draft-v6-project-${ACME}`).first()).toContainText(`New Fake multi-repo workspace · ${LOCAL_NAME}`)
+  await shot(page, 'v6-project-menu')
+  await projectMenu(page).getByTestId(`draft-v6-project-${MARINA}`).first().click()
+  await expect(projectMenu(page)).toHaveCount(0)
+  await expectSameGeometry(panel, base, 'project picked')
+
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'true')
+  await expect(panel.getByTestId('draft-v6-auto')).toContainText('New worktree')
+  // A first start with this project: Auto on its usual host, and the line says so.
+  await expect(line(panel)).toHaveAttribute('data-kind', 'last-used')
+  await expect(line(panel)).toContainText(`First time with ${MARINA}:`)
+  menu = await openWhere(page, panel)
+  const first = menu.getByRole('option').first()
+  await expect(first).toHaveAttribute('data-testid', 'draft-v6-auto-row')
+  await expect(first).toHaveAttribute('data-state', 'ok')
+  await expect(first).toHaveAttribute('aria-selected', 'true')
+  await expect(first).toContainText(`Auto · New worktree on ${LOCAL_NAME}`)
+  await expect(first).toContainText('Fresh copy of the default branch, removed when merged')
+  // The menu never covers the Start task label (review N6).
+  const menuBox = (await menu.boundingBox())!
+  const labelBox = (await sendLabel(panel).boundingBox())!
+  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(labelBox.x)
+  await shot(page, 'v6-where-auto')
   await page.keyboard.press('Escape')
-  await expect(picker(page)).toHaveCount(0)
-  await shot(page, 'git-source-row', panel.locator('.session-panel-input'))
 
   const { sent, answer } = await start(page, 'Tidy the readme')
   expect(sent).toMatchObject({ fromProject: true, project: MARINA, workspaceInputs: {} })
@@ -140,33 +189,33 @@ test('a git source from the Projects tab: one pill, Start files a task whose wor
   expect(errors).toEqual([])
 })
 
-test('a plugin source: value chips, × and + Add change what Start sends', async ({ page, request }) => {
+test('a plugin source: its packages sit under Auto, a click and + Add change what Start sends', async ({ page, request }) => {
   test.setTimeout(240_000)
   await setFlag(request, true)
   const errors = watchErrors(page)
   await openHome(page)
   const panel = await openDraft(page)
+  const base = await geometry(panel)
   await pickProject(page, panel, ACME)
-  await expect(workIn(panel)).toContainText('fresh Fake multi-repo workspace')
-  await expectOnePill(panel)
-  const field = panel.getByTestId('draft-source-field-packages')
-  await expect(field.getByTestId('draft-source-value')).toHaveText(['★alpha×', '★beta×'])
+  await expect(panel.getByTestId('draft-v6-auto')).toContainText('New Fake multi-repo workspace · 2 packages')
+  const menu = await openWhere(page, panel)
+  await expect(menu.getByTestId('draft-v6-auto-row')).toContainText('2 packages · A fresh Fake multi-repo workspace, removed when merged')
+  const field = menu.getByTestId('draft-source-field-packages')
+  await expect(field.getByTestId('draft-source-value')).toHaveText(['alpha', 'beta'])
+  await expect(field.locator('[data-value="beta"]')).toHaveAttribute('aria-pressed', 'true')
 
-  // × drops one for this start; + Add takes a typed name.
-  await field.locator('[data-value="beta"]').getByTestId('draft-source-remove').click()
-  await expect(field.getByTestId('draft-source-value')).toHaveText(['★alpha×'])
+  // A click leaves one out for this start; + Add takes a typed name.
+  await field.locator('[data-value="beta"]').click()
+  await expect(field.locator('[data-value="beta"]')).toHaveAttribute('aria-pressed', 'false')
   await field.getByTestId('draft-source-add').click()
-  const add = page.getByTestId('draft-source-add-flyout')
-  await expect(add).toBeVisible()
-  // The dropped favourite is offered back.
-  await expect(add.getByTestId('draft-source-suggestion')).toHaveText(['beta'])
-  await add.getByTestId('draft-source-add-input').fill('gamma')
-  await expect(add.getByTestId('draft-source-free')).toHaveText('Add “gamma”')
-  await add.getByTestId('draft-source-free').click()
-  await expect(field.getByTestId('draft-source-value')).toHaveText(['★alpha×', 'gamma×'])
+  await field.getByTestId('draft-source-add-input').fill('gamma')
+  await field.getByTestId('draft-source-add-input').press('Enter')
+  await expect(field.locator('[data-value="gamma"]')).toHaveAttribute('aria-pressed', 'true')
+  await shot(page, 'v6-plugin-packages')
   await page.keyboard.press('Escape')
-  await expect(add).toHaveCount(0)
-  await shot(page, 'plugin-source-row', panel.locator('.session-panel-input'))
+  await expect(whereMenu(page)).toHaveCount(0)
+  await expect(panel.getByTestId('draft-v6-auto')).toContainText('2 packages')
+  await expectSameGeometry(panel, base, 'packages changed')
 
   const { sent, answer } = await start(page, 'Wire alpha to gamma')
   expect(sent).toMatchObject({ fromProject: true, project: ACME, workspaceInputs: { packages: ['alpha', 'gamma'] } })
@@ -178,40 +227,39 @@ test('a plugin source: value chips, × and + Add change what Start sends', async
   expect(errors).toEqual([])
 })
 
-test('a folder of a project\'s code: its project as a tag, and "Use fresh git worktree" starts from the project', async ({ page, request }) => {
+test('a folder of a project\'s code: its project is detected, and "Use fresh workspace" starts from it', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
   const sub = path.join(APP(), 'pkg')
-  // The fixture's recent folders, plus one inside the git checkout (only the LIST is added to).
-  await page.route('**/api/sessions/working-dirs*', async (route) => {
-    const res = await route.fetch()
-    const body = await res.json() as { dirs?: Array<Record<string, unknown>> }
-    body.dirs = [{ cwd: sub, host: null, project: '', count: 9, lastUsed: new Date().toISOString() }, ...(body.dirs ?? [])]
-    await route.fulfill({ response: res, json: body })
-  })
+  await withDirs(page, [{ cwd: sub, count: 9 }])
   await openHome(page)
   const panel = await openDraft(page)
-  const box = await openPicker(page, panel, 'folders')
-  await box.getByTestId('work-in-search').fill('pkg')
-  const row = box.locator('.wip-row[data-testid^="work-in-folder-"]').filter({ hasText: 'ws-fixture/app/pkg' }).first()
-  await expect(row.getByTestId('work-in-folder-project')).toHaveText(MARINA)
-  await expect(box.getByTestId('work-in-browse')).toBeVisible()
-  await shot(page, 'picker-folders', box)
-  await row.locator('.wip-pick').click()
-  await expect(picker(page)).toHaveCount(0)
+  const base = await geometry(panel)
+  const menu = await openWhere(page, panel)
+  await menu.getByTestId('draft-v6-where-search').fill('pkg')
+  const row = menu.getByTestId('draft-v6-folder-row').filter({ hasText: 'ws-fixture/app/pkg' }).first()
+  await expect(row).toContainText(MARINA)
+  await shot(page, 'v6-where-search')
+  await row.click()
+  await expect(whereMenu(page)).toHaveCount(0)
 
-  // The folder, tagged with the project whose code it is, and one suggestion under the row.
-  await expect(workIn(panel)).toContainText('pkg')
-  await expect(panel.getByTestId('draft-work-in-project-tag')).toHaveText(MARINA)
-  await expectOnePill(panel)
-  const suggest = panel.getByTestId('work-in-suggest')
-  await expect(suggest).toContainText(`This is ${MARINA}'s code. Start in a fresh git worktree instead?`)
-  await expect(suggest.getByTestId('work-in-suggest-use')).toHaveText('Use fresh git worktree')
-  await shot(page, 'folder-suggest', panel.locator('.session-panel-input'))
+  // The folder, its project detected, and one suggestion on the line.
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'false')
+  await expect(panel.getByTestId('draft-v6-folder')).toContainText('pkg')
+  await expect(panel.getByTestId('draft-v6-project-name')).toHaveText(MARINA)
+  await expect(panel.getByTestId('draft-v6-detected')).toHaveText('detected')
+  await expect(line(panel)).toHaveAttribute('data-kind', 'suggest')
+  await expect(line(panel)).toContainText(`This folder is ${MARINA}’s code. Use a fresh workspace instead?`)
+  await expectSameGeometry(panel, base, 'folder picked')
+  await shot(page, 'v6-folder-suggest')
+  // The Where menu marks Auto as the recommended way for this folder.
+  const again = await openWhere(page, panel)
+  await expect(again.getByTestId('draft-v6-auto-row')).toContainText('recommended')
+  await page.keyboard.press('Escape')
 
-  await suggest.getByTestId('work-in-suggest-use').click()
-  await expect(suggest).toHaveCount(0)
-  await expect(workIn(panel)).toContainText(`${MARINA} · fresh git worktree`)
+  await line(panel).getByTestId('work-in-suggest-use').click()
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'true')
+  await expect(panel.getByTestId('draft-v6-auto')).toContainText('New worktree')
   const sentReq = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
   const input = draftComposer(page)
   await input.fill('Bump the package')
@@ -220,17 +268,53 @@ test('a folder of a project\'s code: its project as a tag, and "Use fresh git wo
   expect(errors).toEqual([])
 })
 
-test('"Keep this folder" hides the suggestion for this draft, a reload included; the folder start runs in it', async ({ page, request }) => {
+test('a typed path: its levels, "Use this path" with the project it finds, and a folder that is not there', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
   await openHome(page)
   const panel = await openDraft(page)
-  await browseTo(page, panel, APP())
-  await expect(panel.getByTestId('draft-work-in-project-tag')).toHaveText(MARINA)
-  const suggest = panel.getByTestId('work-in-suggest')
-  await expect(suggest).toBeVisible()
-  await suggest.getByTestId('work-in-suggest-keep').click()
-  await expect(suggest).toHaveCount(0)
+  const menu = await openWhere(page, panel)
+  const search = menu.getByTestId('draft-v6-where-search')
+  // Not there: shown, greyed, and says why; Enter picks nothing.
+  await search.fill(path.join(home, 'ws-fixture', `nothere-${stamp}`))
+  const use = menu.getByTestId('draft-v6-use-path')
+  await expect(use).toHaveAttribute('data-state', 'missing', { timeout: 20_000 })
+  await expect(use).toContainText(`Folder not found on ${LOCAL_NAME}`)
+  await shot(page, 'v6-path-missing')
+  await search.press('Enter')
+  await expect(whereMenu(page)).toBeVisible()
+  // A real one: its parent's folders listed, its project detected before the pick.
+  await search.fill(`${path.join(home, 'ws-fixture')}/`)
+  await expect(menu.getByTestId('draft-v6-folder-row').filter({ hasText: 'app' }).first()).toBeVisible({ timeout: 20_000 })
+  await search.fill(APP())
+  await expect(use).toHaveAttribute('data-state', 'valid', { timeout: 20_000 })
+  await expect(use).toContainText(`Project: ${MARINA} (detected)`)
+  // The breadcrumb is the level being listed (the parent), each part a button.
+  await expect(menu.getByTestId('draft-v6-typed-crumbs')).toContainText('ws-fixture')
+  await shot(page, 'v6-path-valid')
+  await search.press('Enter')
+  await expect(whereMenu(page)).toHaveCount(0)
+  await expect(panel.getByTestId('draft-v6-folder')).toContainText('app')
+  await expect(panel.getByTestId('draft-v6-detected')).toBeVisible()
+  // "~" lists the home of every host.
+  const homeMenu = await openWhere(page, panel)
+  await homeMenu.getByTestId('draft-v6-where-search').fill('~')
+  await expect(homeMenu.getByTestId('draft-v6-folder-row').filter({ hasText: `Home on ${LOCAL_NAME}` })).toBeVisible()
+  await shot(page, 'v6-path-home')
+  await page.keyboard.press('Escape')
+  expect(errors).toEqual([])
+})
+
+test('"Keep" hides the suggestion for this draft, a reload included; the folder start runs in it', async ({ page, request }) => {
+  await setFlag(request, true)
+  const errors = watchErrors(page)
+  await openHome(page)
+  const panel = await openDraft(page)
+  await pickTypedPath(page, panel, APP())
+  await expect(panel.getByTestId('draft-v6-project-name')).toHaveText(MARINA)
+  await expect(line(panel)).toHaveAttribute('data-kind', 'suggest')
+  await line(panel).getByTestId('work-in-suggest-keep').click()
+  await expect(line(panel)).toHaveAttribute('data-kind', 'none')
   // The words keep the draft (and its answer) across a reload.
   await draftComposer(page).fill('Read the readme')
   await page.waitForTimeout(600)
@@ -239,8 +323,9 @@ test('"Keep this folder" hides the suggestion for this draft, a reload included;
   const back = draftPanel(page)
   await expect(back).toBeVisible()
   await expect(draftComposer(page)).toHaveValue('Read the readme')
-  await expect(workIn(back)).toContainText('app')
-  await expect(back.getByTestId('work-in-suggest')).toHaveCount(0)
+  await expect(back.getByTestId('draft-v6-folder')).toContainText('app')
+  await expect(line(back)).not.toHaveAttribute('data-kind', 'suggest')
+  await shot(page, 'v6-keep-after-reload')
 
   const response = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
   await draftComposer(page).press('Enter')
@@ -249,182 +334,52 @@ test('"Keep this folder" hides the suggestion for this draft, a reload included;
   expect(sent).not.toHaveProperty('fromProject')
   expect(sent).not.toHaveProperty('workspace')
   expect(sent).toMatchObject({ cwd: APP(), project: MARINA })
-  // Filed under the project the tag named, never a new one the server names after the folder.
+  // Filed under the detected project, never a new one the server names after the folder.
   expect(sent).not.toHaveProperty('projectFromFolder')
   const taskId = String(((await res.json()) as { taskId?: string }).taskId)
   expect((await readTask(page, taskId)).project).toBe(MARINA)
   expect(errors).toEqual([])
 })
 
-test('isolated workspaces on by default: a folder start under the Work in pill still makes its workspace, and says so', async ({ page, request }) => {
-  test.setTimeout(240_000)
-  await setFlag(request, true, { isolated_workspace_by_default: true })
-  try {
-    const errors = watchErrors(page)
-    await openHome(page)
-    const panel = await openDraft(page)
-    await browseTo(page, panel, APP())
-    // The pill says what the auto chip said: this start isolates the folder.
-    await expect(panel.getByTestId('draft-work-in-isolated')).toHaveText('· isolated copy', { timeout: 30_000 })
-    await expect(workIn(panel)).toHaveAttribute('aria-label', `Work in: app (${MARINA}) · isolated copy`)
-    await expectOnePill(panel)
-    // "Keep this folder" answers the suggestion only: the folder start still isolates.
-    await panel.getByTestId('work-in-suggest-keep').click()
-    await expect(panel.getByTestId('work-in-suggest')).toHaveCount(0)
-    await expect(panel.getByTestId('draft-work-in-isolated')).toBeVisible()
-    // More keeps the switch, so the person can turn it off.
-    const menu = await openDraftSettings(panel)
-    await expect(menu.getByTestId('draft-menu-workspace')).toHaveAttribute('aria-checked', 'true')
-    await page.keyboard.press('Escape')
-    await expect(draftTaskMenu(page)).toHaveCount(0)
-    await shot(page, 'folder-start-isolated', panel.locator('.session-panel-input'))
-
-    const { sent, answer } = await start(page, 'Isolated folder start')
-    expect(sent).not.toHaveProperty('fromProject')
-    expect(sent).toMatchObject({ cwd: APP(), workspace: { provider: 'git-worktree' } })
-    expect(answer.preparing).toBe(true)
-    const ws = await waitWorkspace(page, String(answer.taskId), 'ready')
-    expect(ws.provider).toBe('git-worktree')
-    expect(errors).toEqual([])
-  } finally {
-    await setFlag(request, true, { isolated_workspace_by_default: false })
-  }
-})
-
-test('a draft from a project\'s "+" on its code source: a folder pick leaves the source, Start runs in that folder', async ({ page, request }) => {
-  test.setTimeout(180_000)
+test('a project restores its last place: a folder or Auto from the recorded folders, then what this draft did', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
-  const folder = path.join(home, 'ws-fixture', `plain-${stamp}`)
-  fs.mkdirSync(folder, { recursive: true })
-  // A task, so the project has a header on the board whose menu opens a draft in it.
-  expect((await request.post('/api/tasks', { data: { title: `Marina chore ${stamp}`, project: MARINA, source: 'local', pinned: false } })).ok()).toBe(true)
-  await isolateUiPrefs(page)
-  await presetPanelView(page, { section: 'all', project: '' })
-  await page.addInitScript(() => { try { localStorage.setItem('walnut-todo-groupBy', 'project') } catch { /* storage off */ } })
-  await openHome(page)
-  const header = listProjectHeader(page, MARINA)
-  await expect(header).toBeVisible({ timeout: 25_000 })
-  await openSessionFromPlus(page, header)
-  const panel = draftPanel(page)
-  await expect(panel).toBeVisible({ timeout: 10_000 })
-  // The "+" seed starts from the project's source.
-  await expect(workIn(panel)).toContainText(`${MARINA} · fresh git worktree`)
-
-  await browseTo(page, panel, folder)
-  await expect(workIn(panel)).not.toContainText('fresh')
-  await expect(panel.getByTestId('draft-work-in-project-tag')).toHaveText(MARINA)
-  await shot(page, 'seed-then-folder', panel.locator('.session-panel-input'))
-
-  const { sent } = await start(page, 'Work in the plain folder')
-  expect(sent).not.toHaveProperty('fromProject')
-  expect(sent).toMatchObject({ cwd: folder, project: MARINA })
-  expect(errors).toEqual([])
-})
-
-test('a project without a source after one with a source: back on the draft\'s own folder, a folder start', async ({ page, request }) => {
-  await setFlag(request, true)
-  const errors = watchErrors(page)
+  await withDirs(page, [
+    // Life's folder, used 5 minutes ago; a Marina worktree (Auto), used 12 minutes ago.
+    { cwd: PLAIN(), project: LIFE, count: 2, lastUsed: minutesAgo(5) },
+    { cwd: path.join(home, '.open-walnut-worktrees', `app-${stamp}`), project: MARINA, count: 4, lastUsed: minutesAgo(12) },
+  ], { only: true })
   await openHome(page)
   const panel = await openDraft(page)
-  const folderName = workIn(panel).locator('.draft-pill-name')
-  const before = ((await folderName.textContent()) ?? '').trim()
-  await pickProject(page, panel, MARINA)
-  await expect(workIn(panel)).toContainText('fresh git worktree')
+  const base = await geometry(panel)
 
   await pickProject(page, panel, LIFE)
-  await expect(workIn(panel)).not.toContainText('fresh')
-  await expect(panel.getByTestId('draft-work-in-project-tag')).toHaveText(LIFE)
-  // The folder the draft stood on, not Marina's checkout.
-  await expect(folderName).toHaveText(before)
-  await shot(page, 'source-then-no-source', panel.locator('.session-panel-input'))
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'false')
+  await expect(panel.getByTestId('draft-v6-folder')).toContainText(path.basename(PLAIN()))
+  await expect(panel.getByTestId('draft-v6-last-used')).toContainText(`Last used for ${LIFE}:`)
+  await expect(panel.getByTestId('draft-v6-last-used')).toContainText(new RegExp(`${path.basename(PLAIN())} on ${LOCAL_NAME}, \\d+ min ago`))
+  await expect(line(panel).getByTestId('draft-v6-back-to-auto')).toBeVisible()
+  await shot(page, 'v6-memory-folder')
 
-  const sentReq = page.waitForRequest((r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-  const input = draftComposer(page)
-  await input.fill('Plan the week')
-  await input.press('Enter')
-  const sent = (await sentReq).postDataJSON() as Record<string, unknown>
-  expect(sent).not.toHaveProperty('fromProject')
-  expect(sent.project).toBe(LIFE)
-  expect(sent.cwd).not.toBe(APP())
-  expect(errors).toEqual([])
-})
+  await pickProject(page, panel, MARINA)
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'true')
+  // Auto either way: the seeded worktree (12 min ago), or the workspace an earlier test's Marina
+  // start made in this run (derivedPlace counts a task's workspace from the moment it is made).
+  await expect(panel.getByTestId('draft-v6-last-used')).toContainText(new RegExp(`Last used for ${MARINA}: Auto on ${LOCAL_NAME}, (\\d+ min ago|just now)`))
+  await shot(page, 'v6-memory-auto')
+  await expectSameGeometry(panel, base, 'project restored its place')
 
-test('a start from a project the server refuses for good brings the draft back with its words', async ({ page, request }) => {
-  await setFlag(request, true)
-  const errors = watchErrors(page)
-  await openHome(page)
-  const panel = await openDraft(page)
-  await pickProject(page, panel, GONE)
-  await expect(workIn(panel)).toContainText('fresh git worktree')
-  // The source goes away behind the draft's back (another tab, an agent).
-  const cleared = await request.put(`/api/projects/${encodeURIComponent(GONE)}/metadata`, { data: { workspace_source: null } })
-  expect(cleared.ok(), await cleared.text()).toBe(true)
-
-  const response = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-  const input = draftComposer(page)
-  await input.fill('Refused start')
-  await input.press('Enter')
-  const res = await response
-  // Still a start from the project, never a run in the old source's folder.
-  expect(res.request().postDataJSON()).toMatchObject({ fromProject: true, project: GONE })
-  expect(res.status()).toBe(400)
-  expect(((await res.json()) as { code?: string }).code).toBe('no-project-source')
-
-  // The same draft is back with its text and project, saying the server's words; no Retry.
-  const back = draftPanel(page)
-  await expect(back).toBeVisible()
-  await expect(draftComposer(page)).toHaveValue('Refused start')
-  await expect(workIn(back)).toContainText(GONE)
-  await expect(back.getByTestId('draft-project-start-error')).toContainText('has no code source')
-  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
-  await shot(page, 'refused-start-restored', back.locator('.session-panel-input'))
-  expect(errors).toEqual([])
-})
-
-test('the Code source section, opened from a row\'s "Set up source…", saves a source shown after a reload', async ({ page, request }) => {
-  test.setTimeout(180_000)
-  await setFlag(request, true)
-  const errors = watchErrors(page)
-  // A task, so the project has a header on the board to open its details from after the reload.
-  expect((await request.post('/api/tasks', { data: { title: `Life chore ${stamp}`, project: LIFE, source: 'local', pinned: false } })).ok()).toBe(true)
-  await isolateUiPrefs(page)
-  await presetPanelView(page, { section: 'all', project: '' })
-  await page.addInitScript(() => { try { localStorage.setItem('walnut-todo-groupBy', 'project') } catch { /* storage off */ } })
-  await openHome(page)
-  const panel = await openDraft(page)
-  const box = await openPicker(page, panel)
-  await box.getByTestId('work-in-search').fill(LIFE)
-  await projectRow(box, LIFE).hover()
-  await projectRow(box, LIFE).getByTestId(`work-in-setup-${LIFE}`).click()
-
-  const pane = page.locator('.project-detail-pane')
-  const section = pane.getByTestId('project-code-source')
-  await expect(section).toBeVisible({ timeout: 15_000 })
-  await expect(section.getByTestId('project-code-source-folder')).toHaveAttribute('aria-checked', 'true')
-  await section.getByTestId('project-code-source-git-worktree').click()
-  // No Working Dir and no folder yet: Save waits and says a folder is needed.
-  await expect(section.getByTestId('project-code-source-needs-folder')).toBeVisible()
-  await expect(section.getByTestId('project-code-source-save')).toBeDisabled()
-  await section.getByTestId('project-code-source-anchor').fill(path.join(home, 'ws-fixture', 'app'))
-  await expect(section.getByTestId('project-code-source-needs-folder')).toHaveCount(0)
-  const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().includes('/metadata'))
-  await section.getByTestId('project-code-source-save').click()
-  expect((await saved).status()).toBe(200)
-  await expect(section.getByTestId('project-code-source-save')).toHaveCount(0)
-  await shot(page, 'settings-code-source', section)
-
-  await page.reload()
-  await expect(page.locator('.main-page')).toBeVisible({ timeout: 90_000 })
-  const after = await openProjectDetails(page, LIFE)
-  await expect(after.getByTestId('project-code-source-git-worktree')).toHaveAttribute('aria-checked', 'true')
-  await expect(after.getByTestId('project-code-source-anchor')).toHaveValue(path.join(home, 'ws-fixture', 'app'))
-  // And the draft's Projects tab now lists it with its source, and no setup action.
-  const draft = await openDraft(page)
-  const again = await openPicker(page, draft)
-  await again.getByTestId('work-in-search').fill(LIFE)
-  await expect(projectRow(again, LIFE).getByTestId('work-in-line')).toHaveText('Fresh git worktree on Local')
-  await expect(projectRow(again, LIFE).locator('.wip-setup')).toHaveCount(0)
-  await page.keyboard.press('Escape')
+  // This draft's own choice wins next time: Marina in a folder, away and back.
+  await pickTypedPath(page, panel, APP())
+  await pickProject(page, panel, LIFE)
+  await pickProject(page, panel, MARINA)
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'false')
+  await expect(panel.getByTestId('draft-v6-folder')).toContainText('app')
+  // A restored folder never asks "use a fresh workspace instead?", even one of the project's code.
+  await expect(line(panel)).toHaveAttribute('data-kind', 'last-used')
+  // Back to Auto from the line.
+  await line(panel).getByTestId('draft-v6-back-to-auto').click()
+  await expect(whereField(panel)).toHaveAttribute('data-auto', 'true')
+  await expectSameGeometry(panel, base, 'back to Auto')
   expect(errors).toEqual([])
 })

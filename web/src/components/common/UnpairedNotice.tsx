@@ -16,6 +16,7 @@
  * Portalled to <body> for the same reason as StaleBuildPill: a `contain: paint`
  * ancestor turns `position: fixed` into "fixed inside that box".
  */
+import { WalnutIcon } from './WalnutIcon';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { getSignedOutReason, getUnpairedState, noteSignedIn, subscribeUnpaired } from '@/api/unpaired';
@@ -121,7 +122,7 @@ export function UnpairedNotice({ probeFailed = false, onRetryProbe }: UnpairedNo
 }
 
 function Brand() {
-  return <img className="unpaired-notice-icon" src="/walnut-icon.png" alt="" width={64} height={64} />;
+  return <WalnutIcon className="unpaired-notice-icon" size={64} />;
 }
 
 /** A scanned code being traded: no steps, no form, one line and a ring. */

@@ -73,6 +73,8 @@ interface Props {
   /** The "Isolated workspace" row, right under the Project section (absent:
    *  Ask Walnut and forks, which run where they must). */
   workspace?: ReactNode;
+  /** The v6 draft's "Task source" row (SyncChoiceMenuRow), after the workspace row. */
+  taskSource?: ReactNode;
 }
 
 /** The task's project, as the menu's first section shows it. */
@@ -88,7 +90,7 @@ export interface DraftMenuProject {
 
 export function DraftTaskMenuPopover({
   open, anchorEl, menuRef, meta, priorityVisible, walnutPicks,
-  onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce, focusTarget = 'tier', project, workspace,
+  onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce, focusTarget = 'tier', project, workspace, taskSource,
 }: Props) {
   // A fresh ref OBJECT per anchor: useMenuPlacement re-places (and re-decides
   // the side) when its ref identity changes, so a re-anchor moves the open menu.
@@ -181,6 +183,7 @@ export function DraftTaskMenuPopover({
       </div>
       {project && <ProjectSection project={project} onDone={() => onClose('select')} />}
       {workspace}
+      {taskSource}
       <TaskActionMenuItems
         task={{
           priority: (meta.priority ?? 'none') as TaskPriority,

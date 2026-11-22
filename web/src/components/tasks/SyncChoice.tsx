@@ -6,6 +6,9 @@
  *
  *   SyncChoiceChip   one chip in the draft column's bar: "Local" / "<service>", a click flips it
  *   SyncChoiceField  a labelled two-button row in the quick add form
+ *   SyncChoiceMenuRow / SyncChoiceTag  the new task draft's (experiment project_first_start, v6):
+ *                    "Task source: Walnut | <service>" in More, and a "Task source: <service>"
+ *                    tag in its lower row while the service is chosen
  */
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
@@ -81,5 +84,37 @@ export function SyncChoiceField({ project, local, onChange, disabled }: {
         ]}
       />
     </div>
+  );
+}
+
+/** More's "Task source" row on the v6 draft: Walnut (local) or the project's service. */
+export function SyncChoiceMenuRow({ project, local, onChange }: { project: string | undefined; local: boolean; onChange: (local: boolean) => void }) {
+  const service = useProjectService(project);
+  if (!service) return null;
+  return (
+    <div className="task-kebab-item draft-task-source-row" data-testid="draft-task-source" role="group" aria-label="Task source">
+      <span className="draft-task-source-label">Task source</span>
+      <SegmentedControl size="sm" horizontalKeys aria-label="Task source"
+        value={local ? 'local' : 'project'}
+        onChange={(v) => onChange(v === 'local')}
+        options={[
+          { value: 'local', label: 'Walnut', testId: 'draft-task-source-walnut', title: `Stays in Walnut, never sent to ${service.name}` },
+          { value: 'project', label: service.name, testId: 'draft-task-source-service', title: `Sent to ${service.name} once Walnut checked it is not private` },
+        ]}
+      />
+    </div>
+  );
+}
+
+/** The lower row's tag while the service is the task's source; a click opens More, where it changes. */
+export function SyncChoiceTag({ project, local, onOpen }: { project: string | undefined; local: boolean; onOpen: () => void }) {
+  const service = useProjectService(project);
+  if (!service || local) return null;
+  return (
+    <button type="button" className="btn btn-sm draft-v6-place" data-testid="draft-task-source-tag"
+      title={`Syncs to ${service.name} once Walnut checked it is not private. More changes it.`}
+      onMouseDown={(e) => e.preventDefault()} onClick={onOpen}>
+      Task source: {service.name}
+    </button>
   );
 }
