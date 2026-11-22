@@ -1,5 +1,6 @@
 import { getDeviceToken, renewSignIn } from './device-token';
 import { noteAuthRefusal } from './unpaired';
+import { isLongPollPath, sameRead, type SameReadDeps } from './same-read-turn';
 import { asDeadlineError } from '../utils/request-failure';
 import { mintOpId, isWriteMethod, OP_ID_HEADER, WAIT_HEADER, DEFAULT_WRITE_WAIT_MS } from './op-id';
 import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
@@ -419,8 +420,16 @@ function waitOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** One attempt of a call: the admission queue, the sign-in renewal and the cache-race resend. */
-async function requestOnce<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
+const SAME_READ_DEPS: SameReadDeps = { admission: (priority) => fetchAdmission(priority as FetchPriority), holding: () => holdingSlots() };
+
+/** One attempt of a call: identical reads share or take turns (same-read-turn.ts), then it is sent. */
+function requestOnce<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
+  if (method !== 'GET' || isLongPollPath(path)) return sendOnce<T>(method, path, body, extra);
+  return sameRead<T, RequestExtra>(path, priorityOf(method, extra), extra, (e) => sendOnce<T>(method, path, body, e), SAME_READ_DEPS);
+}
+
+/** Sending one attempt: the admission queue, the sign-in renewal and the cache-race resend (they stay in its read's turn). */
+async function sendOnce<T>(method: string, path: string, body?: unknown, extra?: RequestExtra): Promise<T> {
   const read = method === 'GET' || extra?.readOnly === true;
   const write = isWriteMethod(method) && !read;
   const outlives = write && (!extra?.background || extra?.keepalive === true);
@@ -464,11 +473,11 @@ async function requestOnce<T>(method: string, path: string, body?: unknown, extr
         throw retryWithToken.refusal;
       }
     }
-    return requestOnce<T>(method, path, body, { ...extra, tokenRetried: true });
+    return sendOnce<T>(method, path, body, { ...extra, tokenRetried: true });
   }
   // Cache-race retry re-enters through the gate (fresh slot, fresh timer) —
   // retrying while still holding the slot would double-book the pool.
-  return requestOnce<T>(method, path, body, { ...extra, cacheBypass: true });
+  return sendOnce<T>(method, path, body, { ...extra, cacheBypass: true });
 }
 
 /** fetch, and once more without keepalive when keepalive refused it (its in-flight budget was full). */

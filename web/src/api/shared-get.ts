@@ -13,6 +13,7 @@
  * is dropped still answers its own callers.
  */
 import { wsClient } from './ws';
+import { copyOf } from './same-read-turn';
 
 const MEMO_MS = 3_000;
 
@@ -46,14 +47,6 @@ function invalidateOnEvents(key: string, events: readonly string[]): void {
   }
 }
 
-function copyOf<T>(value: T): T {
-  if (value === null || typeof value !== 'object') return value;
-  try {
-    return structuredClone(value);
-  } catch {
-    return value;
-  }
-}
 
 export function sharedGet<T>(
   key: string,
