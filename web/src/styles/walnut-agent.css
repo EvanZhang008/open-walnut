@@ -611,9 +611,14 @@
   }
 }
 
-/* The draft's empty tool row (DraftSessionPanel) only where it sits beside session columns. */
-.draft-header-tool-row { display: none; }
-.main-page-session-column .draft-session-panel .draft-header-tool-row { display: flex; }
+/* The draft's empty tool row (DraftSessionPanel) only where it sits beside other session columns, so
+   its header lines meet theirs; alone, its title row is the header's first line (2026-11-22 review:
+   an empty band above "New task" dropped it below the Scratchpad's and the task panel's first line). */
+/* Outranks `.session-meta-row-2 { display: flex }` (globals.css, loaded later), which a bare
+   `.draft-header-tool-row` only tied and lost to: the row showed everywhere. */
+.draft-session-panel .session-panel-header > .draft-header-tool-row { display: none; }
+.main-page-session-column:has(~ .main-page-session-column) .draft-session-panel .draft-header-tool-row,
+.main-page-session-column ~ .main-page-session-column .draft-session-panel .draft-header-tool-row { display: flex; }
 /* A session's title row is as tall as its kebab key (TaskQuickActions: the 28px quiet icon key of
    the session header), so the draft's header lines meet its neighbours' (draft-first-frame.spec.ts). */
 .main-page-session-column .draft-session-panel .session-panel-header-top { min-height: 28px; }
