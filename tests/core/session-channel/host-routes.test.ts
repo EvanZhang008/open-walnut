@@ -62,6 +62,7 @@ async function startDoor(withRoutes: boolean): Promise<void> {
   routes = withRoutes ? createHostSessionRoutes({
     enabled: async () => enabled, runner: async () => runner, bundles, channel: () => channel,
     emit: (name, data, source) => emitted.push({ name, data, source }),
+    enqueue: async (sid, lines) => { emitted.push({ name: 'enqueue', data: { sid, lines }, source: '' }) },
     spillDir: path.join(dir, 'prompts'),
     commandRunsOp: (c, op) => c.includes(op),
   }) : null
@@ -175,12 +176,21 @@ describe('start, send, interrupt', () => {
     expect((await post('/host-api/sessions/start', { message: 'x' })).status).toBe(400)
   })
 
-  it('send and interrupt are this host\'s bus events, with the leader\'s source', async () => {
+  it('send and interrupt are this host\'s bus events, with the leader\'s source; a send\'s lines are queued here first', async () => {
     expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: 'go', source: 'chat' })).body).toEqual({ ok: true })
     expect((await post('/host-api/sessions/interrupt', { sessionId: 'sid-1' })).body).toEqual({ ok: true })
+    // The leader's queued lines go to this host's queue under their ids; a kick with none queues nothing.
+    const lines = [{ id: 'qm-1', message: 'go [hinted]', sentBy: 'person' }]
+    expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: 'go', queued: lines, source: 'chat' })).body).toEqual({ ok: true })
+    expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: '', queued: [] })).body).toEqual({ ok: true })
     expect(emitted).toEqual([
+      // Made on this host (no lines from a leader): its own message is the line.
+      { name: 'enqueue', data: { sid: 'sid-1', lines: [{ message: 'go' }] }, source: '' },
       { name: 'session:send', data: { sessionId: 'sid-1', message: 'go' }, source: 'chat' },
       { name: 'session:interrupt', data: { sessionId: 'sid-1' }, source: 'host-api' },
+      { name: 'enqueue', data: { sid: 'sid-1', lines }, source: '' },
+      { name: 'session:send', data: { sessionId: 'sid-1', message: 'go' }, source: 'chat' },
+      { name: 'session:send', data: { sessionId: 'sid-1', message: '' }, source: 'host-api' },
     ])
   })
 })

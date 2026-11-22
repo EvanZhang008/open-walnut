@@ -17,13 +17,14 @@
 import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
 import { EventNames, type BusEvent } from '../core/event-bus.js'
-import { judgeOfStart, judgingHostOf, noteHostJudged } from '../core/sessions/judge-of.js'
+import { forgetHostJudged, judgeOfStart, judgingHostOf, noteHostJudged } from '../core/sessions/judge-of.js'
 import { sessionPort } from '../core/sessions/session-port.js'
 import { sessionTaskAndEngineInStore } from '../core/session-db.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { remoteJudgedSession, type RemoteJudgedSession } from './remote-judged-session.js'
 import type { HostCallTarget } from '../core/session-channel/host-calls.js'
-import type { StartBody, StartBundle } from '../core/session-channel/host-api.js'
+import type { QueuedLine, StartBody, StartBundle } from '../core/session-channel/host-api.js'
+import type { QueuedMessage } from '../core/session-queue-store.js'
 
 type AnyFn = (...args: any[]) => any
 type Proto = Record<string, unknown>
@@ -87,17 +88,15 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
     case EventNames.SESSION_INTERRUPT: {
       const host = judgingHostOf(sid)
       if (!host) return null
-      const op = event.name === EventNames.SESSION_SEND ? 'send' : 'interrupt'
       // The provenance rides the envelope (phase.ts reads it): it goes with the command.
       const body = { ...(event.data as Record<string, unknown>), source: event.source }
-      return leaderSide().then((side) => op === 'send' ? side.sendToHost(host, body) : side.interruptOnHost(host, body)).then(async (a) => {
-        if (a.ok !== true) throw new Error(`the host ${host} refused the ${op}: ${a.error ?? 'no reason given'}`)
-        // The task is the leader's: its side of the send is done here (leader-tasks.ts).
-        if (op === 'send') {
-          const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
-          void noteHostSessionSend(sid, event.source, (event.data as { endsWait?: unknown }).endsWait === true)
-        }
-      })
+      if (event.name === EventNames.SESSION_INTERRUPT) {
+        return inOrder(sid, async () => {
+          const a = await (await leaderSide()).interruptOnHost(host, body)
+          if (a.ok !== true) throw new Error(`the host ${host} refused the interrupt: ${a.error ?? 'no reason given'}`)
+        })
+      }
+      return inOrder(sid, () => forwardSend(sid, host, body, event.source, (event.data as { endsWait?: unknown }).endsWait === true))
     }
     // The host settles the turn, drains the queue and releases what waited on a prompt (its own
     // runner, on its own bus); what it did comes back as facts.
@@ -108,6 +107,52 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
     default:
       return null
   }
+}
+
+/**
+ * The commands of one session to its host, one at a time and in the order they came: a send
+ * takes the queue's lines the one before it left, an interrupt after a send goes after it.
+ */
+const commandChains = new Map<string, Promise<void>>()
+
+function inOrder(sid: string, run: () => Promise<void>): Promise<void> {
+  const next = (commandChains.get(sid) ?? Promise.resolve()).catch(() => {}).then(run)
+  commandChains.set(sid, next)
+  void next.finally(() => { if (commandChains.get(sid) === next) commandChains.delete(sid) }).catch(() => {})
+  return next
+}
+
+function lineOf(m: QueuedMessage): QueuedLine {
+  return {
+    id: m.id, message: m.message,
+    ...(m.userUuid ? { userUuid: m.userUuid } : {}), ...(m.lineUuid ? { lineUuid: m.lineUuid } : {}),
+    ...(m.closesPrompt ? { closesPrompt: true as const } : {}), ...(m.sentBy ? { sentBy: m.sentBy } : {}),
+  }
+}
+
+/**
+ * A send to a session its host runs: the lines this leader queued for it (the send route queued
+ * them here, hints and all) go with it to the host's queue, and leave this one once the host took
+ * them; refused or lost, they are put back and go with the next send.
+ */
+async function forwardSend(sid: string, host: string, body: Record<string, unknown>, source: string, endsWait: boolean): Promise<void> {
+  const side = await leaderSide()
+  const { takeLinesForHost } = await import('../core/session-message-queue.js')
+  const taken = await takeLinesForHost(sid)
+  let a: Awaited<ReturnType<typeof side.sendToHost>>
+  try {
+    a = await side.sendToHost(host, { ...body, queued: taken.lines.map(lineOf) })
+  } catch (err) {
+    await taken.putBack()
+    throw err
+  }
+  if (a.ok !== true) {
+    await taken.putBack()
+    throw new Error(`the host ${host} refused the send: ${a.error ?? 'no reason given'}`)
+  }
+  // The task is the leader's: its side of the send is done here (leader-tasks.ts).
+  const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
+  void noteHostSessionSend(sid, source, endsWait)
 }
 
 /** Would `host`'s own service run a start there? */
@@ -177,18 +222,63 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   payload.startBundle = await startBundle(data)
   if (source) payload.source = source
   const side = await leaderSide()
+  // A row seeded for this start (task-start.ts makes one under the id it answers with) is the
+  // host's before the host speaks: its facts can beat the start's answer.
+  const seeded = (data as { preassignedSessionId?: unknown }).preassignedSessionId
+  const tracker = await import('../core/session-tracker.js')
+  let handed = false
+  if (typeof seeded === 'string' && seeded) {
+    noteHostJudged(seeded, host)
+    handed = await tracker.handSeedToHost(seeded, host).catch((err: unknown) => {
+      log.session.warn('host start: the seeded row was not handed to its host', { sessionId: seeded, host, error: err instanceof Error ? err.message : String(err) })
+      return false
+    })
+  }
   log.session.info('session routing', { taskId: data.taskId, type: 'host', host })
+  // A start whose answer was lost may still run there: the seed stays the host's, and its channel tells.
   const a = await side.startOnHost(host, payload)
   if (a.ok !== true || typeof a.sessionId !== 'string' || !a.sessionId) {
+    // The host said no: the seed is the leader's again, and the start's failure is written on it.
+    if (typeof seeded === 'string' && seeded) {
+      forgetHostJudged(seeded)
+      if (handed) await tracker.takeSeedBack(seeded, host).catch(() => {})
+    }
     throw new Error(`the host ${host} did not start the session: ${a.error ?? 'no reason given'}${a.why ? ` (${String(a.why)})` : ''}`)
   }
   noteHostJudged(a.sessionId, host)
   kinds.set(a.sessionId, isAcpEngine(data.engine) ? 'acp' : 'native')
   void commit(a.sessionId).catch(() => {})
+  // The start is this leader's, so its session:started is too, as the runner says it for a start
+  // it runs (handleStart), now with the id the host named. The host's own copy of it (an engine
+  // whose start names its id) is not said again (startAnnouncedHere).
+  announced.add(a.sessionId)
+  if (announced.size > ANNOUNCED_MAX) announced.delete(announced.values().next().value!)
+  const { bus } = await import('../core/event-bus.js')
+  bus.emit(EventNames.SESSION_STARTED, {
+    sessionId: a.sessionId, claudeSessionId: a.sessionId, taskId: data.taskId,
+    project: (data as { project?: string }).project ?? payload.startBundle?.task?.project ?? '', host,
+  }, ['main-ai'], { source: 'session-runner' })
   // The task is the leader's: its slot, link and phase are set here (leader-tasks.ts).
   const { noteHostSessionStarted } = await import('../core/session-channel/leader-tasks.js')
   void noteHostSessionStarted(a.sessionId, data.taskId, data.mode)
   return { claudeSessionId: a.sessionId, title: typeof a.title === 'string' ? a.title : '' }
+}
+
+/** Sessions whose session:started this leader said itself (a start it handed to their host). */
+const announced = new Set<string>()
+const ANNOUNCED_MAX = 5_000
+
+/** Did this leader say `sid`'s session:started itself? */
+export function startAnnouncedHere(sid: string): boolean {
+  return announced.has(sid)
+}
+
+/** A host's fact this leader already said itself (the session:started of a start it handed on): the channel does not say it again. */
+export function saidHereAlready(name: string, data: unknown): boolean {
+  if (name !== EventNames.SESSION_STARTED) return false
+  const d = data as { sessionId?: unknown; claudeSessionId?: unknown } | null
+  const sid = d?.sessionId ?? d?.claudeSessionId
+  return typeof sid === 'string' && announced.has(sid)
 }
 
 /** Lookups: the runner's own object first, then a host-judged session's proxy. */
@@ -267,4 +357,5 @@ export function installHostJudgedRouting(proto: object): void {
 
 export function _resetHostJudgedRunnerForTesting(): void {
   kinds.clear()
+  announced.clear()
 }

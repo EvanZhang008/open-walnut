@@ -3511,6 +3511,26 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<{ 
 
 export { loadChannelCursor } from './session-db.js';
 
+/**
+ * A row this leader made for a start before the runner handed it to `host`, whose own service
+ * runs and judges it (a task start seeds its row under the id it answers with): marked the host's
+ * now, so the channel's `born` row of that session fills it in (applyHostChannelBatch takes only a
+ * host's rows) and keeps the leader's own fields. False: no such seed (nothing to do).
+ */
+export async function handSeedToHost(sid: string, host: string): Promise<boolean> {
+  const rec = await getSessionByClaudeId(sid);
+  if (!rec || rec.host !== host || judgedByHost(rec)) return false;
+  await updateSessionRecord(sid, { judge: 'host' });
+  return true;
+}
+
+/** The start handSeedToHost prepared did not go: the seed is the leader's again (its failure is written on it). */
+export async function takeSeedBack(sid: string, host: string): Promise<void> {
+  const rec = await getSessionByClaudeId(sid);
+  if (!rec || rec.host !== host || !judgedByHost(rec)) return;
+  await writingAsHost(() => updateSessionRecord(sid, { judge: undefined }));
+}
+
 export async function sweepOrphanedCancelledSnapshots(): Promise<void> {
   const { readQueueFileFresh, removeCancelledSnapshots } = await import('./session-queue-store.js');
   const ids = Object.keys((await readQueueFileFresh()).cancelled ?? {});

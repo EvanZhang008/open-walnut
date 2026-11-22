@@ -109,6 +109,15 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     bundles,
     channel: () => current?.channel ?? null,
     emit: (name, data, source) => bus.emit(name, data, ['session-runner'], { source }),
+    enqueue: async (sid, lines) => {
+      const { enqueueMessage } = await import('../session-message-queue.js')
+      for (const l of lines) {
+        await enqueueMessage(sid, l.message, {
+          ...(l.id ? { id: l.id } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
+          ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
+        })
+      }
+    },
     spillDir: path.join(dir, 'prompts'),
     log: say,
   })

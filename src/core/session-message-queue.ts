@@ -870,6 +870,35 @@ export async function revertToPending(messages: QueuedMessage[]): Promise<void> 
 }
 
 /**
+ * The lines of a session its host runs and judges that wait in this leader's queue, taken out:
+ * they go to the host's queue with the send (session-channel/host-api.ts SendBody.queued), whose
+ * runner drains them. Only rows ready to go (pending); a row held for later stays here.
+ * `put back`: the host did not take them (the same rows, in their place again).
+ */
+export async function takeLinesForHost(sessionId: string): Promise<{ lines: QueuedMessage[]; putBack(): Promise<void> }> {
+  const lines = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return [] as QueuedMessage[];
+    const taken = queue.filter((m) => m.status === 'pending');
+    if (taken.length === 0) return taken;
+    s.queues[sessionId] = queue.filter((m) => m.status !== 'pending');
+    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
+    return taken;
+  }, false, true);
+  return {
+    lines,
+    putBack: async () => {
+      if (lines.length === 0) return;
+      await mutateStore((s) => {
+        const queue = s.queues[sessionId] ?? (s.queues[sessionId] = []);
+        const ids = new Set(queue.map((m) => m.id));
+        queue.unshift(...lines.filter((m) => !ids.has(m.id)));
+      }, false, true);
+    },
+  };
+}
+
+/**
  * Get all queued messages for a session.
  */
 export async function getQueue(sessionId: string): Promise<QueuedMessage[]> {

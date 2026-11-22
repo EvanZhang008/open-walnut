@@ -43,6 +43,11 @@ export function noteHostJudged(sid: string, host: string): void {
   anyCursor = true
 }
 
+/** A start the leader handed to a host did not go: `sid` is not that host's after all. */
+export function forgetHostJudged(sid: string): void {
+  known.delete(sid)
+}
+
 /** The host whose service judges `sid`, or null (a legacy session, or no such row). */
 export function judgingHostOf(sid: string): string | null {
   if (!sid) return null

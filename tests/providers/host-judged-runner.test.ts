@@ -19,7 +19,7 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 
 import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
 import { SessionRunner } from '../../src/providers/claude-code-session.js'
-import { HOST_JUDGED_RUNNER_METHODS, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, startGoesToHost } from '../../src/providers/host-judged-runner.js'
+import { HOST_JUDGED_RUNNER_METHODS, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
 import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
 import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
@@ -34,12 +34,16 @@ import { getRegisteredSessionManager } from '../../src/providers/session-manager
 
 const HOST_SID = '50000000-0000-4000-8000-0000000000c1'
 
-function fakeSide() {
+function fakeSide(o: { refuse?: boolean } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, unknown> }> = []
   const calls: Array<{ host: string } & HostCallBody> = []
   const side = {
-    startOnHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'start', host, body }); return { ok: true, sessionId: 'started-on-host', title: 'Host title' } },
-    sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return { ok: true } },
+    startOnHost: async (host: string, body: Record<string, unknown>) => {
+      sent.push({ op: 'start', host, body })
+      if (o.refuse) return { ok: false, error: 'no claude here' }
+      return { ok: true, sessionId: (body.preassignedSessionId as string | undefined) ?? 'started-on-host', title: 'Host title' }
+    },
+    sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return o.refuse ? { ok: false, error: 'busy' } : { ok: true } },
     interruptOnHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'interrupt', host, body }); return { ok: true } },
     callHost: async (host: string, body: HostCallBody) => { calls.push({ host, ...body }); return body.member === 'isBackgroundWorkActive' ? true : body.member === 'markExpectedTeardown' ? { undoId: 'u-1' } : null },
   }
@@ -92,6 +96,56 @@ describe('a host-judged session', () => {
     expect(sent.map((s) => `${s.op}:${s.host}`)).toEqual(['send:devbox', 'interrupt:devbox'])
     expect(sent[0].body).toMatchObject({ sessionId: HOST_SID, message: 'hello', source: 'mobile' })
     expect(h.writes).toEqual([])
+  })
+
+  it('a send takes the lines queued here for it to its host\'s queue; a refused one puts them back', async () => {
+    const h = harness()
+    h.runner.init()
+    await settle(100)
+    await hostRow()
+    const { enqueueMessage, getQueue } = await import('../../src/core/session-message-queue.js')
+    await enqueueMessage(HOST_SID, 'hello [with its hints]', { id: 'qm-host-1', sentBy: 'person' })
+    const refused = fakeSide({ refuse: true })
+    bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'hello' }, ['*'], { source: 'mobile' })
+    await vi.waitFor(() => expect(refused.sent).toHaveLength(1))
+    await settle(30)
+    expect((await getQueue(HOST_SID)).map((m) => m.id)).toEqual(['qm-host-1'])
+    const { sent } = fakeSide()
+    bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'hello' }, ['*'], { source: 'mobile' })
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].body.queued).toEqual([{ id: 'qm-host-1', message: 'hello [with its hints]', sentBy: 'person' }])
+    await vi.waitFor(async () => expect(await getQueue(HOST_SID)).toEqual([]))
+  })
+
+  it('a row seeded for a start on that host is the host\'s before it answers, and its born row fills it; a refused start gives it back', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { updateTask } = await import('../../src/core/task-manager.js')
+    await updateTask('gate-task-b', { phase: 'TODO' })
+    const seeded = '50000000-0000-4000-8000-0000000000d1'
+    await createSessionRecord(seeded, 'gate-task-b', 'p', '/w', { host: 'devbox', title: 'Seeded', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' })
+    fakeSide()
+    const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+    expect(r.claudeSessionId).toBe(seeded)
+    // Its task side runs here (leader-tasks.ts): done before anything below.
+    const { getTask } = await import('../../src/core/task-manager.js')
+    await vi.waitFor(async () => expect((await getTask('gate-task-b')).phase).toBe('IN_PROGRESS'))
+    expect((await getSessionByClaudeId(seeded))).toMatchObject({ judge: 'host', host: 'devbox', title: 'Seeded' })
+    const applied = await applyHostChannelBatch({
+      hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 2 },
+      rows: [{ sid: seeded, born: true, patch: { claudeSessionId: seeded, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', title: 'Host title', startedAt: 'x', lastActiveAt: 'x', messageCount: 1 } }],
+    })
+    expect(applied).toEqual({ written: [seeded], skipped: [] })
+    // The host's fields, the leader's own title.
+    expect(await getSessionByClaudeId(seeded)).toMatchObject({ process_status: 'running', title: 'Seeded', judge: 'host' })
+    // Another seed, a start the host refuses: the leader's again.
+    const other = '50000000-0000-4000-8000-0000000000d2'
+    await createSessionRecord(other, 'gate-task-c', 'p', '/w', { host: 'devbox', title: 'Seeded 2', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' })
+    fakeSide({ refuse: true })
+    await expect(h.runner.startSession({ taskId: 'gate-task-c', message: 'go', host: 'devbox', preassignedSessionId: other } as never, 'test')).rejects.toThrow(/no claude here/)
+    expect((await getSessionByClaudeId(other))?.judge).toBeUndefined()
+    expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId(other))).toBe(false)
   })
 
   it('its result runs no turn end here: no processNext, no record write; a legacy result still does', async () => {
@@ -153,8 +207,14 @@ describe('a host-judged session', () => {
     // A task with no session yet (gate-task already has the harness's own).
     const { getTask, updateTask } = await import('../../src/core/task-manager.js')
     await updateTask('gate-task-b', { phase: 'TODO' })
+    const said: unknown[] = []
+    bus.subscribe('test-started', (e) => { said.push(e.data) }, { global: true, interest: [EventNames.SESSION_STARTED] })
     const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'see file', host: 'devbox', largePromptFile: { localPath: spill, originalLength: 21 } } as never, 'test')
+    bus.unsubscribe('test-started')
     expect(r).toEqual({ claudeSessionId: 'started-on-host', title: 'Host title' })
+    // Its session:started is said here, with the id the host named (the channel skips the host's own).
+    expect(said).toEqual([expect.objectContaining({ sessionId: 'started-on-host', taskId: 'gate-task-b', host: 'devbox' })])
+    expect(startAnnouncedHere('started-on-host')).toBe(true)
     expect(sent).toHaveLength(1)
     expect(sent[0].op).toBe('start')
     expect(sent[0].body.largePrompt).toBe('the whole long prompt')

@@ -24,12 +24,13 @@ export function _setActiveLeaderSideForTesting(side: LeaderSide | null): void {
 
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
-  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote] = await Promise.all([
+  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready }] = await Promise.all([
     import('../session-tracker.js'),
     import('../host-server/index.js'),
     import('../leader/primary-leader.js'),
     import('../device-auth.js'),
     import('../../providers/remote-judged-session.js'),
+    import('../../providers/host-judged-runner.js'),
   ])
   const side = createLeaderSide({
     walnutId: async () => getInstanceId(),
@@ -42,7 +43,10 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     },
     applyBatch: applyHostChannelBatch,
     loadCursor: async (hostId) => loadChannelCursor(hostId),
-    emit: (name, data, opts) => bus.emit(name, data, ['*'], { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) }),
+    emit: (name, data, opts) => {
+      if (saidHereAlready(name, data)) return
+      bus.emit(name, data, ['*'], { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) })
+    },
     noteLive: remote.noteLiveState,
     noteRename: (from, to) => {
       remote.renameRemoteJudgedSession(from, to)

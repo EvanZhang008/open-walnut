@@ -21,7 +21,7 @@ import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from '#ws'
 import { hostCallAllowed } from './host-calls.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
-import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type StartBody } from './host-api.js'
+import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
 
 /** The largest body a route reads (a start's large prompt rides it). */
@@ -48,6 +48,8 @@ export interface HostRoutesOptions {
   channel(): HostChannel | null
   /** A bus event for this host's runner (SESSION_SEND, SESSION_INTERRUPT). */
   emit(name: string, data: unknown, source: string): void
+  /** Queue a send's lines on this host (session-message-queue.ts), before its SESSION_SEND: the runner drains the queue. */
+  enqueue(sid: string, lines: QueuedLine[]): Promise<void>
   /** Where a start's large prompt is spilled (0700, files 0600). */
   spillDir: string
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
@@ -207,7 +209,15 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (op === 'send' || op === 'interrupt') {
         const b = body as { sessionId?: unknown; source?: unknown }
         if (typeof b?.sessionId !== 'string' || !b.sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId is required' })
-        const { source, ...payload } = b as Record<string, unknown>
+        const { source, queued, ...payload } = b as Record<string, unknown>
+        // A send's lines are queued here first, as the leader's send route queues them for its own
+        // runner: the SESSION_SEND only tells the runner to drain.
+        if (op === 'send') {
+          const lines = Array.isArray(queued)
+            ? (queued as QueuedLine[]).filter((l) => l && typeof l.message === 'string')
+            : typeof payload.message === 'string' && payload.message ? [{ message: payload.message }] : []
+          if (lines.length > 0) await o.enqueue(b.sessionId, lines)
+        }
         o.emit(op === 'send' ? 'session:send' : 'session:interrupt', payload, typeof source === 'string' && source ? source : 'host-api')
         return sendJson(res, 200, { ok: true })
       }

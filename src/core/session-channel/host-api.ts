@@ -53,7 +53,16 @@ export type StartBody = Omit<SessionStartEvent, 'largePromptFile'> & {
 
 export type StartAnswer = { ok: true; sessionId: string; title: string } | { ok: false; error: string; why?: string }
 
-export type SendBody = SessionSendEvent & { source?: string }
+/**
+ * One queued line a send hands to the host (the leader's queue row, its hints already in the text):
+ * the host queues it under the same id (a repeat of the same id is queued once) and drains it.
+ */
+export interface QueuedLine { id?: string; message: string; userUuid?: string; lineUuid?: string; closesPrompt?: true; sentBy?: 'person' | 'agent' }
+/**
+ * `queued`: the lines the leader had queued for this session, which go to the host's queue. A send
+ * without it (one made on the host itself) queues its `message`.
+ */
+export type SendBody = SessionSendEvent & { source?: string; queued?: QueuedLine[] }
 export type InterruptBody = SessionInterruptEvent & { source?: string }
 
 export interface CallBody {
