@@ -697,4 +697,13 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/host-exec-detach.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: a stop of a run adopted with no start to check sends no signal, so its group still runs" },
   { file: "tests/providers/oneshot-mcp-restart.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500)) // the calls reached the daemon and the server", reason: "lets the calls reach the daemon before its SIGKILL; the asserts (every call settles, the slots free) hold whether each got there or not" },
   { file: "tests/providers/trigger-restart-once.test.ts", sleep: "await sleep(1_000)", reason: "negative: the resent fire must not reach the session a second time" },
+  { file: "tests/providers/log-appender-core.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: while the pool is slow (not past its deadline) no line is written synchronously" },
+  { file: "tests/providers/one-service-door.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: a stop asked by another Walnut must not end this Walnut's CLI" },
+  { file: "tests/providers/one-service-lock.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: the in-process runtime writes no launcher marks of its own" },
+  { file: "tests/providers/registry-persist-coalesce.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30))", reason: "negative: the spawn is not answered while the write holding it has not landed" },
+  { file: "tests/providers/registry-persist-coalesce.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20))", reason: "negative: the late async rename must not overwrite the exit's synchronous write" },
+  { file: "tests/providers/registry-persist-coalesce.test.ts", sleep: "await new Promise((r) => setTimeout(r, 30))", reason: "negative: the released stuck write must not overwrite the newer synchronous one" },
+  { file: "tests/replica/follower-link-direct.test.ts", sleep: "await new Promise((x) => setTimeout(x, 40))", reason: "negative: a view naming another Walnut must not make the link follow" },
+  { file: "tests/replica/follower-link-direct.test.ts", sleep: "await new Promise((x) => setTimeout(x, 50))", reason: "negative: a poll the drain refuses must not drop the link or its known view" },
+  { file: "tests/replica/follower-link-direct.test.ts", sleep: "await new Promise((x) => setTimeout(x, 60))", reason: "negative: a seated link attaches no more" },
 ]

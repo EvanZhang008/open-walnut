@@ -7,7 +7,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createLogAppender, type LogAppenderDeps } from '../../src/providers/log-appender-core.js'
 import { armFilePoolDeadline } from '../../src/providers/file-pool-deadline.js'
 
@@ -109,7 +109,7 @@ describe('log appender', () => {
     expect(lines().slice(3)).toEqual(['later', 'later error'])
     // The pool answers again: the stuck batch lands a second time (accepted), and writes go async again.
     release()
-    await new Promise((r) => setTimeout(r, 20))
+    await vi.waitFor(() => expect(lines().filter((l) => l === 'first')).toHaveLength(2))
     log.append('after\n')
     await log.drained()
     expect(lines().at(-1)).toBe('after')

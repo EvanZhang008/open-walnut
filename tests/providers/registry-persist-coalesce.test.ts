@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRegistryWriter, type RegistrySessionLike } from '../../src/providers/registry-writer-core.js'
 import { armFilePoolDeadline } from '../../src/providers/file-pool-deadline.js'
 
@@ -129,7 +129,7 @@ describe('registry writer', () => {
     const two = writer(s2, { fs: slowFs(gate) })
     const held = two.w.hold()
     s2.get('c')!.state = 'dead'
-    await new Promise((r) => setTimeout(r, 20))
+    await vi.waitFor(() => expect(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toHaveLength(1))
     two.w.writeSync()
     expect(onDisk()).toEqual(['c'])
     release()
@@ -343,9 +343,7 @@ describe('registry writer', () => {
     const zombie = writer(zombieSessions, { pid: 1001 })
     sessions.set('b', live(2))
     const ahead = successor.w.durable(true)
-    await new Promise((r) => setTimeout(r, 20))
-    const temps = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'))
-    expect(temps).toEqual(['sessions.json.2002.tmp'])
+    await vi.waitFor(() => expect(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual(['sessions.json.2002.tmp']))
     // The zombie's write leaves the successor's temp alone, so its write-ahead still lands.
     zombie.w.writeSync()
     expect(fs.existsSync(path.join(dir, 'sessions.json.2002.tmp'))).toBe(true)
