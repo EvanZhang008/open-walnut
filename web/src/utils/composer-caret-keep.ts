@@ -95,7 +95,7 @@ export function initComposerCaretKeep(opts: { now?: () => number; doc?: Document
   const onInput = (e: Event) => note(e.target, now());
   // The person moves the caret themself: a press anywhere outside the box (a button, another
   // box, the page), Tab or Escape. A remount after it gives nothing back either. 2026-11-12: the
-  // extension's Save as todo re-keyed its composer after the click on Save, and the new box took
+  // extension's Save as task re-keyed its composer after the click on Save, and the new box took
   // the caret, so it never docked.
   const onPress = (e: Event) => {
     const t = typed;

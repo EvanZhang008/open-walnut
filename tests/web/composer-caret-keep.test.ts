@@ -1,7 +1,7 @@
 /**
  * A composer replaced under the caret takes it back (web/src/utils/composer-caret-keep.ts), but
  * only when the person did not choose something else first. 2026-11-12: the extension panel's
- * Save as todo re-keys its composer after the click on Save, and the new box took the caret back,
+ * Save as task re-keys its composer after the click on Save, and the new box took the caret back,
  * so the composer stayed grown instead of docking (extension-first-page.spec.ts). A press anywhere
  * outside the box the person typed in is their choice: no remount after it pulls the caret back.
  */

@@ -119,7 +119,7 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
       )}
       {p.detail && (
         <Item icon={ICONS.ICON_INFO} onClick={act(p.detail.onToggle)} className={p.detail.open ? 'task-kebab-item-active' : undefined}>
-          {p.detail.open ? 'Close details' : 'Details'}
+          {p.detail.open ? 'Close task details' : 'Task details'}
         </Item>
       )}
       {p.onOpenMemory && hasMemoryAndInstructions(task) && (

@@ -122,17 +122,12 @@ export interface SourceShortInput {
   resolved?: string
 }
 
-/** `git · host/owner/repo` or `npm · @acme/plugin` for the source line under a row. */
-export function sourceShortLabel(source: SourceShortInput): string {
-  const isNpm = source.kind === 'npm' || source.type === 'npm'
-  if (isNpm) {
-    const name = source.packageName
-      ?? (source.resolved ? source.resolved.slice(0, Math.max(0, source.resolved.lastIndexOf('@'))) : undefined)
-      ?? (source.spec ? source.spec.replace(/(?!^)@.*$/, '') : undefined)
-      ?? 'package'
-    return `npm · ${name}`
-  }
-  return `git · ${source.url ? shortRemote(source.url) : 'remote'}`
+/**
+ * What kind of source it is, as a person says it, for the line under a source's title. The
+ * title already names it; the exact remote or package sits in the source's (i) flyout.
+ */
+export function sourceShortLabel(source: Pick<SourceShortInput, 'kind' | 'type'>): string {
+  return source.kind === 'npm' || source.type === 'npm' ? 'npm package' : 'Git repository'
 }
 
 // ---------------------------------------------------------------------------------
@@ -329,8 +324,8 @@ function chipViewFor(state: UpdateState, opts: ChipViewOptions): ChipView {
       return v
     }
     case 'missing': {
-      const v = base('missing', 'Not installed here', 'slash-circle', ['--missing'])
-      v.title = 'The files for this plugin are not on this machine. Restore will clone them again.'
+      const v = base('missing', 'Files not on this Mac', 'slash-circle', ['--missing'])
+      v.title = 'Its files are not on this Mac, so it cannot update. Restore downloads them again.'
       v.clickable = false
       return v
     }

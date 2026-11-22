@@ -117,8 +117,8 @@ test('F06 + C56: a search has one number for its rows: count = All badge = drawn
   const before = await agree()
   expect(before).toBeLessThan(11)
   // F26: no chip, so the row does not claim filters it does not have.
-  await expect(filterRow(page)).toContainText('Searching all tasks')
-  const include = filterRow(page).getByRole('button', { name: /^Include Complete \(7\)/ })
+  await expect(filterRow(page)).toContainText('In all open tasks')
+  const include = filterRow(page).getByRole('button', { name: /^Include completed \(7\)/ })
   await expect(include).toBeVisible()
   await include.click()
   await expect(include).toHaveAttribute('aria-pressed', 'true')

@@ -41,6 +41,17 @@ export function wideHidden(hidden: readonly string[]): readonly string[] {
   return kept > 2 ? hidden : hidden.filter((id) => !WIDE_FLOOR.includes(id));
 }
 
+/** What a tab's count counts, said on its hover: a tab reads "All 49" beside a "Waiting / snoozed (155)"
+ *  group whose rows the count leaves out (2026-11-21 words audit). */
+export interface TabCountScope { search: boolean; waitingLeftOut: boolean }
+
+export function tabCountTitle(count: number, scope: TabCountScope, tab?: string): string {
+  const tasks = `${count} ${count === 1 ? 'task' : 'tasks'}`;
+  if (scope.search) return `${tasks} found`;
+  // Recent counts every task opened lately, waiting ones included.
+  return scope.waitingLeftOut && tab !== 'recent' ? `${tasks}, not counting the waiting and snoozed ones` : tasks;
+}
+
 /** Up to this many tabs, every tab spells out its name; past it, only the active one does. */
 export const ROOMY_TAB_LIMIT = 3;
 

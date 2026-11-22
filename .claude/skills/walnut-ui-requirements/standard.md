@@ -403,6 +403,41 @@ room; Org names were cut at every tree level while right-edge counts stayed.
 - **Width goes by content.** A list whose rows are cut never sits beside an empty reader or an empty
   form at its full width: the list takes the room first, the empty pane shrinks to its content.
 
+## Words
+
+Why (2026-11-21, the UI audit on the user's data): the composer showed "Bypass", "btw" and "Note"
+in one row with no word on what each does; the side chat was "btw" on its button, "Side thread"
+in the + menu and "Side threads" in its own header, beside the user's Threads; Settings said "Bar
+chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks the rules below
+(per file, in `tests/web/ui-words-baseline.json`), and the counts only go down.
+
+1. **One name per concept**, the same on every screen:
+
+   | Concept | Say | Never |
+   |---|---|---|
+   | a unit of work on the board | task (subtask under it) | todo, ticket, job |
+   | an agent run on a task | session | conversation, agent run |
+   | one subject of the user's requests to a node | thread | topic (a topic is a group chat with members, its own thing) |
+   | a question asked beside a session, kept out of it | side chat | side thread, btw |
+   | a task's states | Needs you, To read, Working, Waiting / snoozed (one task: Waiting or Snoozed), Not started, Completed | Need action, Needs action, Needs attention, Done (for a task) |
+   | a thread's groups | Needs you, Waiting, Closed | |
+   | the machine Walnut's server runs on | This Mac, else its host name | local, `__local__` |
+   | shipped with Walnut | Built-in | Builtin, builtin |
+
+2. **A control's label says what happens**: a verb and its object ("Mute for 1 hour", "Send in
+   split view"), never a bare noun, an abbreviation or an inside name ("Quiet 1h", "Bar chips").
+   A pick in a menu that changes how something behaves says what it does in a few muted words on
+   its own line or at its right (the permission-mode menu).
+3. **Every icon-only button has an `aria-label` or a `title`** that says what it does.
+4. **Two counts side by side say what each counts** ("49 open", "155 waiting"), or one of them goes.
+5. **No tool, field, file or engine ids in UI text**: no `snake_case` names (`org_send`), no model
+   ids (`opus-5-5`), no config keys. Name the thing; a raw value the user must type or copy stays in
+   `<code>`.
+6. **Times read as a person says them**: one format in one list ("until today 1:30 AM", "until
+   Nov 30, 6:00 PM"), the same clock (12 or 24 hour) everywhere, a duration in words ("1 hour").
+7. **Plain English, sentence case** for labels and buttons ("Clear all", not "Clear All"); no
+   em dashes.
+
 ## Tokens (from `globals.css` `:root`)
 
 | Kind | Tokens |

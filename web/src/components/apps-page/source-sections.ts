@@ -23,14 +23,18 @@ export interface SourceSection {
 export const BUILTIN_SECTION_TITLE = 'Built-in plugins'
 export const LOCAL_SECTION_TITLE = 'On this computer'
 
-/** A source's name as a person says it: the repo's last path part, or the npm package. */
+/**
+ * A source's name as a person says it: the repo's last path part in words (`AcmePluginStore`
+ * reads "Acme Plugin Store", `walnut-plugin` "Walnut plugin"), or the npm package as typed.
+ */
 export function sourceDisplayName(source: Pick<PluginSource, 'slug' | 'kind' | 'type' | 'url' | 'spec' | 'packageName'>): string {
   if (source.kind === 'npm' || source.type === 'npm') {
     return source.packageName ?? (source.spec ? source.spec.replace(/(?!^)@[^/]*$/, '') : source.slug)
   }
   const url = (source.url ?? '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '')
-  const last = url.split(/[/:]/).filter(Boolean).pop()
-  return last || source.slug
+  const last = url.split(/[/:]/).filter(Boolean).pop() || source.slug
+  const words = last.replace(/[-_.]+/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim()
+  return words ? words[0].toUpperCase() + words.slice(1) : last
 }
 
 /**

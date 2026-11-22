@@ -39,7 +39,7 @@ export function homeLaunchBody(input: {
   return { ...body, ...(input.hints ? { hints: input.hints } : {}), ...(!body.cwd && !body.host ? { ownTaskDir: true } : {}) };
 }
 
-/** "Save as todo" from the first page: the text's first line is the title, and the page it was on rides the description. */
+/** "Save as task" from the first page: the text's first line is the title, and the page it was on rides the description. */
 export function homeTodoInput(input: { draft: DraftColumn; text: string; page: PanelPage | null; withPage: boolean; tierKnown: TierKnown }): CreateTaskInput | null {
   const p = input.withPage ? input.page : null;
   const block = p ? `From the browser: ${p.title ? `${p.title} (${p.url})` : p.url}` : '';

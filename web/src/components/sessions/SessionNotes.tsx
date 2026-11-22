@@ -4,6 +4,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { MicButton } from '../common/MicButton';
 import { LinkifiedText } from '../common/LinkifiedText';
 import { CollapsibleUrlEditor, type CollapsibleUrlEditorHandle } from '../common/CollapsibleUrlEditor';
+import { SESSION_NOTE_LABEL, SESSION_NOTE_TITLE } from '../chat/composer-words';
 
 /**
  * One reference note, shared by every session surface. It is the top band of the
@@ -125,9 +126,9 @@ export function SessionNotesPill({ noteState, expanded, onToggleExpanded }: Sess
       aria-haspopup="dialog"
       aria-expanded={expanded}
       onClick={onToggleExpanded}
-      title="Add a session note"
+      title={SESSION_NOTE_TITLE}
     >
-      <span>Note</span>
+      <span>{SESSION_NOTE_LABEL}</span>
     </button>
   );
 }

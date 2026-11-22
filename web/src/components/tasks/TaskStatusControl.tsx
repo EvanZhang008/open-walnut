@@ -34,9 +34,10 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { updateTask as apiUpdateTask } from '@/api/tasks';
 import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
-// formatDraftDate: a time exactly 7 days out would print as today's weekday with
-// the shared formatter.
+// formatDraftDate (a date with no hour): a day exactly 7 days out would print as today's
+// weekday with the shared formatter.
 import { formatDraftDate } from '@/components/sessions/draft-decisions';
+import { snoozeWhenWords } from '@/components/common/date-time-pick';
 import { log } from '@/utils/log';
 import { PHASE_LABELS, taskStatusLabel } from '@/utils/session-status';
 import { phaseIconState, taskIconState } from '@/utils/task-icon-state';
@@ -93,9 +94,10 @@ function useSetWaitUntil(onSetWaitUntil?: SetWaitUntil): SetWaitUntil {
   }, [onSetWaitUntil, ctx]);
 }
 
-/** A Waiting task's clock for display ("Fri 9:00"), '' when it has none. */
+/** A Waiting task's clock for display, the snooze pill's words ("Today 1:30 AM", "Fri 9:00 AM",
+ *  "Nov 30, 6:00 PM"); a date with no hour keeps its day words; '' when it has none. */
 export function formatWaitUntil(iso: string | undefined | null): string {
-  return iso ? formatDraftDate(iso) : '';
+  return iso ? snoozeWhenWords(iso) ?? formatDraftDate(iso) : '';
 }
 
 /**

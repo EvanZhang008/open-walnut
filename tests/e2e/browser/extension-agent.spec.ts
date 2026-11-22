@@ -964,7 +964,7 @@ test('Settings, Browser extension shows the browser and the allowed site; Remove
   await expect(mine).toHaveCount(1)
   await expect(mine).toContainText(/Walnut extension \(Chrome on/)
   await expect(mine).toContainText(/Connected\. Version \d+\.\d+\.\d+/, { timeout: 20_000 })
-  await expect(mine).toContainText('Agents on')
+  await expect(mine).toContainText('Agents can use this browser')
   await expect(page.getByTestId('ext-features')).toContainText('Agents use your browser')
   const row = page.locator('.settings-row', { hasText: 'example.test' })
   await expect(row).toBeVisible()

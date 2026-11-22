@@ -2,9 +2,9 @@
  * The human's quiet-mode toggle in the notification panel header.
  *
  * It only ever touches the `user` hold: a plugin's focus timer holds quiet on its
- * own and ends it on its own, so "End quiet" appears only when the human's hold is
+ * own and ends it on its own, so "Unmute" appears only when the human's hold is
  * what is keeping Walnut quiet. While another source holds quiet, a small "Quiet"
- * chip says so (its title names the holds) and "Quiet for 1 hour" still adds the human's own.
+ * chip says so (its title names the holds) and "Mute for 1 hour" still adds the human's own.
  * It is one of the header's tool buttons (NotificationRail.tsx), and reads in full: "Quiet 1h"
  * said neither what goes quiet nor for how long (2026-11-21 audit).
  */
@@ -45,11 +45,11 @@ export function QuietToggle() {
         data-testid="nfc-quiet-toggle"
         disabled={busy}
         title={userHold
-          ? `${quietLabel(live)}. End it to get toasts, sounds and phone pushes again.`
+          ? `${quietLabel(live)}. Unmute to get toasts, sounds and phone pushes again.`
           : 'Mute toasts, sounds and phone pushes for an hour. This list still collects everything, and permission asks still show.'}
         onClick={() => { void toggle(); }}
       >
-        {userHold ? 'End quiet' : 'Quiet for 1 hour'}
+        {userHold ? 'Unmute' : 'Mute for 1 hour'}
       </button>
     </span>
   );

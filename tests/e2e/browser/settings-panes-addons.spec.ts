@@ -645,7 +645,7 @@ test('C65 C83: every account state has its tag, providers sit under their base, 
   await expect(page.locator('#plugin-store')).not.toContainText(' ago')
   await expect(page.locator('#plugin-store .settings-tag', { hasText: /^(ON|On)$/ })).toHaveCount(0)
   await expect(page.getByTestId('plugin-card-north-sync').locator('.apps-card-line')).toHaveText('North Sync keeps things in step.')
-  await expect(page.getByTestId('plugin-card-north-sync').locator('.apps-card-kind')).toHaveText('Built in')
+  await expect(page.getByTestId('plugin-card-north-sync').locator('.apps-card-kind')).toHaveText('Built-in')
 })
 
 test('C65 C36: cascade asks before writing, quarantine offers Try again, setup rows lead the plugin page', async ({ page }) => {

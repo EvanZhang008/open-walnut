@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_HIDDEN_TABS, DISPLAY_FIRST_LAYER_LIMIT, ROOMY_TAB_LIMIT, allViews, displayViewLayers, tabBarTabs,
-  tabMenuGroups, viewLabel, viewTitle, visibleTabBarTabs, WIDE_HIDDEN_TABS, wideHidden,
+  tabCountTitle, tabMenuGroups, viewLabel, viewTitle, visibleTabBarTabs, WIDE_HIDDEN_TABS, wideHidden,
 } from '@/components/tasks/tab-bar-model'
 
 const customs = [{ id: 'ct_a', label: 'Reading' }, { id: 'ct_b', label: 'Errands' }]
@@ -172,5 +172,15 @@ describe('wideHidden: the extension\'s first page (review round 5, Opus #2)', ()
     expect(wideHidden(DEFAULT_HIDDEN_TABS)).toEqual(DEFAULT_HIDDEN_TABS.filter((id) => !['focus', 'satellite'].includes(id)))
     // A choice that keeps three or more built-in tabs is the person's, as it stands.
     expect(wideHidden(['satellite', 'recent'])).toEqual(['satellite', 'recent'])
+  })
+})
+
+describe('tab count hover', () => {
+  it('says what the count counts: the waiting rows it leaves out, or a search\'s hits', () => {
+    expect(tabCountTitle(49, { search: false, waitingLeftOut: true })).toBe('49 tasks, not counting the waiting and snoozed ones')
+    expect(tabCountTitle(1, { search: false, waitingLeftOut: false })).toBe('1 task')
+    expect(tabCountTitle(37, { search: true, waitingLeftOut: false })).toBe('37 tasks found')
+    // Recent's count is every task opened lately, the waiting ones included.
+    expect(tabCountTitle(12, { search: false, waitingLeftOut: true }, 'recent')).toBe('12 tasks')
   })
 })

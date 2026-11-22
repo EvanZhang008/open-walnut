@@ -147,9 +147,8 @@ export function SessionInboxPane({
             <div className="session-inbox-empty">
               {!loaded
                 ? 'Loading letters…'
-                : 'This session hasn’t written you a letter yet. An agent sends one with '
-                  + 'wn tools call human_inbox_send when it finishes something, needs a decision, '
-                  + 'or has a report worth reading later.'}
+                : 'This session hasn’t written you a letter yet. An agent sends one when it '
+                  + 'finishes something, needs a decision, or has a report worth reading later.'}
             </div>
           ) : (
             <div className="hib-list">

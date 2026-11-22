@@ -4,7 +4,7 @@ import type {
   RoutineCheckTestResult, RoutineCheckTimeLimit, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
 } from '@/api/routines';
 import { testRoutineCheck } from '@/api/routines';
-import { describeSchedule, describeWake } from '@/utils/routine-format';
+import { CUSTOM_SCHEDULE, describeSchedule, describeWake } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 import '@/styles/routine-mic.css';
 import { BoxMic, MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
@@ -438,7 +438,9 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     // "Runs every day", "Runs weekdays", but "Runs Mondays": a day keeps its capital.
     const said = describeSchedule(schedule);
     const lead = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)/.test(said) ? said : said.replace(/^./, (c) => c.toLowerCase());
-    return `Runs ${lead}${abbr ? ` ${abbr}` : ''}`;
+    // The person editing a schedule the words cannot say still sees what they wrote.
+    const custom = schedule.kind === 'cron' && said.startsWith(CUSTOM_SCHEDULE) ? ` (${schedule.expr})` : '';
+    return `Runs ${lead}${custom}${abbr ? ` ${abbr}` : ''}`;
   }, [schedule]);
 
   // Instructions + model are hoisted into the prominent top section; the

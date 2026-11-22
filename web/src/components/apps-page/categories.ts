@@ -12,8 +12,11 @@ export const PLUGIN_CATEGORY_LABELS: Readonly<Record<PluginCategoryId, string>> 
   tasks: 'Tasks & sync',
   time: 'Time & focus',
   developer: 'Developer',
-  other: 'More',
+  other: 'Other',
 }
+
+/** The section of plugins you can add (and its chip): one name in both places. */
+export const GET_MORE_TITLE = 'Plugins to add'
 
 /** What the page shows: everything, one section, or one plugin group. */
 export type AppsFilter = 'all' | 'builtin' | 'get' | PluginCategoryId

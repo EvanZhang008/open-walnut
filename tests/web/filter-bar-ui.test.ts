@@ -413,10 +413,10 @@ describe('FilterBar: the filter row', () => {
     expect(bar(controller({ state: withState({ projects: ['Garden'] }), count: 1 })).querySelector('[data-testid="filter-count"]')?.textContent).toBe('1 task')
   })
 
-  it('count is empty while loading and says Loading completed while the archive arrives', () => {
+  it('count is empty while loading and says Loading completed tasks while the archive arrives', () => {
     const s = withState({ projects: ['Garden'] })
     expect(bar(controller({ state: s, count: null })).querySelector('[data-testid="filter-count"]')?.textContent).toBe('')
-    expect(bar(controller({ state: s, archiveLoading: true })).querySelector('[data-testid="filter-count"]')?.textContent).toBe('Loading completed')
+    expect(bar(controller({ state: s, archiveLoading: true })).querySelector('[data-testid="filter-count"]')?.textContent).toBe('Loading completed tasks')
   })
 
   it('C60: Blocked and Time window chips show only the value; tags drop the label: prefix', () => {
@@ -438,7 +438,7 @@ describe('FilterBar: the filter row', () => {
     expect(val.getAttribute('title')).toBe('No task has this value now')
   })
 
-  it('C70: View item has no x and is not a chip; search mode leads with the sentence and the Include Complete toggle', () => {
+  it('C70: View item has no x and is not a chip; search mode leads with the sentence and the Include completed toggle', () => {
     const view = bar(controller({ viewItem: { label: 'Pinned' } }))
     const item = view.querySelector('.fb-view-item')!
     expect(item.getAttribute('aria-label')).toBe('View: Pinned, change in Display')
@@ -446,12 +446,15 @@ describe('FilterBar: the filter row', () => {
     expect(view.querySelector('.fb-chip-x')).toBeNull()
     expect(view.querySelector('.fb-clear')).toBeNull()
     const search = bar(controller({ search: { active: true, includeComplete: { count: 3, on: false, toggle: () => {} } } }))
-    // F26: with no chip the lead says the search covers every task; with chips, that it uses them.
-    expect(search.querySelector('.fb-row-lead')?.textContent).toBe('Searching all tasks')
+    // F26: with no chip the lead says the search covers every open task (every task once
+    // completed ones are included); with chips, that it uses them.
+    expect(search.querySelector('.fb-row-lead')?.textContent).toBe('In all open tasks')
+    const withDone = bar(controller({ search: { active: true, includeComplete: { count: 3, on: true, toggle: () => {} } } }))
+    expect(withDone.querySelector('.fb-row-lead')?.textContent).toBe('In all tasks')
     const scoped = bar(controller({ state: withState({ projects: ['Garden'] }), search: { active: true, includeComplete: null } }))
     expect(scoped.querySelector('.fb-row-lead')?.textContent).toBe('Search uses these filters')
     const toggle = search.querySelector('.fb-toggle')!
-    expect(toggle.textContent).toBe('Include Complete (3)')
+    expect(toggle.textContent).toBe('Include completed (3)')
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
   })
 })

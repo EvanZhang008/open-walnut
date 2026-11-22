@@ -1,5 +1,5 @@
 /**
- * Contract tests for the side-threads store — the shared state behind the "btw"
+ * Contract tests for the side-threads store — the shared state behind the side chat
  * drawer. It exists BECAUSE the drawer is mounted twice per SessionPanel, so the
  * invariants a browser spec can't see are exactly the ones that matter here:
  *
@@ -411,7 +411,7 @@ describe('formatSideThreadDigestForComposer', () => {
     // The receiving session must be able to tell second-hand text from the real
     // transcript — it acts on this without ever seeing the thread.
     expect(formatSideThreadDigestForComposer('why is it flaky', '  RETRY_MS races the clock.  '))
-      .toBe('[Summary of side thread "why is it flaky"]\nRETRY_MS races the clock.\n\n');
+      .toBe('[Summary of side chat "why is it flaky"]\nRETRY_MS races the clock.\n\n');
   });
 });
 
@@ -426,7 +426,7 @@ describe('formatSideThreadForComposer', () => {
       { role: 'assistant', text: 'RETRY_MS' },
     ]);
     expect(text).toBe([
-      '[From side thread "why is it flaky"]',
+      '[From side chat "why is it flaky"]',
       'Q: why is it flaky',
       'A: the retry races the clock',
       'Q: and what changes it',
@@ -443,11 +443,11 @@ describe('formatSideThreadForComposer', () => {
       { role: 'assistant', text: '   ' },
       { role: 'assistant', text: 'kept' },
     ]);
-    expect(text).toBe('[From side thread "t"]\nA: kept\n\n');
+    expect(text).toBe('[From side chat "t"]\nA: kept\n\n');
   });
 
   it('ends with a blank line so the user types on a fresh paragraph', () => {
-    expect(formatSideThreadForComposer('t', [])).toBe('[From side thread "t"]\n\n');
+    expect(formatSideThreadForComposer('t', [])).toBe('[From side chat "t"]\n\n');
   });
 
   /** The digest REQUEST is hidden in history but its reply is not, so a thread that
@@ -459,7 +459,7 @@ describe('formatSideThreadForComposer', () => {
       { role: 'assistant', text: 'the retry races the clock' },
       { role: 'assistant', text: `${SIDE_THREAD_DIGEST_MARKER} the retry races the clock.` },
     ]);
-    expect(text).toBe('[From side thread "t"]\nQ: why is it flaky\nA: the retry races the clock\n\n');
+    expect(text).toBe('[From side chat "t"]\nQ: why is it flaky\nA: the retry races the clock\n\n');
   });
 });
 
@@ -476,7 +476,7 @@ describe('sideThreadLabel', () => {
 
   it('never renders an empty chip', () => {
     expect(sideThreadLabel({ id: 'st-x', threadSessionId: 'fork-x', createdAt: 'x' }))
-      .toBe('Side thread');
+      .toBe('Side chat');
   });
 });
 
@@ -493,7 +493,7 @@ describe('deriveThreadTitle', () => {
   });
 
   it('never produces an empty label', () => {
-    expect(deriveThreadTitle('   ')).toBe('Side thread');
+    expect(deriveThreadTitle('   ')).toBe('Side chat');
   });
 });
 
@@ -796,7 +796,7 @@ describe('side-threads store — archive (file away, never delete)', () => {
     expect(row?.archivedAt).toBe('2026-09-01T00:00:00.000Z');
     expect(isSideThreadReadOnly(row)).toBe(true);
     expect(archivedSideThreads(state).map((t) => t.id)).toEqual(['st-1']);
-    expect(state.error).toMatch(/Restore failed/);
+    expect(state.error).toMatch(/Could not restore/);
   });
 
   it('filing a PROMOTED thread does not claim its process died (the server keeps it)', async () => {

@@ -6,7 +6,7 @@
  * the table has none of them, and the helper row says no build tool or service manager.
  */
 import { describe, expect, it } from 'vitest'
-import { dayTitle, dayTone, fleetRows, gb, pct, span, statusKind } from '../../web/src/components/settings/sections/host-fleet-model'
+import { dayTitle, dayTone, fleetRows, gb, localMachineName, pct, span, statusKind } from '../../web/src/components/settings/sections/host-fleet-model'
 import type { FleetHost } from '../../web/src/api/hosts-fleet'
 
 const NOW = Date.UTC(2026, 9, 30, 12)
@@ -171,5 +171,16 @@ describe('a host whose link keeps dropping', () => {
     const p = problemsOf(flapping, NOW).find((x) => x.key === 'unstable')
     expect(p).toMatchObject({ text: 'Link unstable: dropped 5 times in 30 min', tone: 'warn' })
     expect(problemsOf(h, NOW).some((x) => x.key === 'unstable')).toBe(false)
+  })
+})
+
+describe('localMachineName', () => {
+  it('says This Mac on macOS or an unknown system, This computer on another system', () => {
+    const sys = (platform: string | null) => ({ os: null, platform, arch: null, cpus: null, memBytes: null, diskFreeBytes: null, kind: 'desktop', probedAt: null })
+    expect(localMachineName({ system: sys('darwin') })).toBe('This Mac')
+    expect(localMachineName({ system: null })).toBe('This Mac')
+    expect(localMachineName({ system: sys('linux') })).toBe('This computer')
+    expect(localMachineName({ system: null, capabilities: { os: 'linux' } as FleetHost['capabilities'] })).toBe('This computer')
+    expect(localMachineName({ system: sys('linux'), capabilities: { os: 'macos' } as FleetHost['capabilities'] })).toBe('This Mac')
   })
 })

@@ -111,7 +111,7 @@ export function BugReportSection() {
 
   return (
     <SettingsSection id="bug-report" title="Bug Report">
-      <SettingsGroup footer="Secrets are masked; paste the bundle into an issue or chat when reporting a problem.">
+      <SettingsGroup footer="Paste the bundle into a GitHub issue or a chat when you report a problem.">
         <SettingsRow
           label="Logs from the last"
           control={
@@ -126,7 +126,7 @@ export function BugReportSection() {
         />
         <SettingsRow
           label="Diagnostic bundle"
-          help="Recent server logs, system health, config and this browser's state, scrubbed."
+          help="Holds recent server logs, system health, your settings and this browser's state. Passwords, keys and tokens in it are masked."
           control={
             <SettingsButton variant="primary" onClick={handleGenerate} busy={generating} busyLabel="Generating..."
               data-testid="bug-report-generate">

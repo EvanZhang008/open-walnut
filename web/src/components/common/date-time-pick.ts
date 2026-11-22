@@ -93,6 +93,21 @@ export function snoozeWhenWords(value: string, nowMs = Date.now()): string | nul
 }
 
 /**
+ * A row's "until ..." words mid-sentence, from snoozeWhenWords or the day words: "until today
+ * 1:30 AM", "until Sun 3:30 PM", "until Nov 30, 6:00 PM". Every Home row's waiting and snoozed
+ * pill reads this one shape (2026-11-21 words audit: "until Today 1:30", "until 11/30 18:00"
+ * and "Apr 9, 2027, 3:30 PM" in one list).
+ */
+export function untilWords(when: string): string {
+  return `until ${midSentence(when)}`;
+}
+
+/** A time's words inside a sentence: "Checks again today 1:30 AM", never "again Today". */
+export function midSentence(when: string): string {
+  return when.replace(/^(Today|Tomorrow)\b/, (day) => day.toLowerCase());
+}
+
+/**
  * The first day a picker offers once an hour is typed. A day alone means its midnight, so a
  * date-only snooze picker may start tomorrow (the Org snoozes' minDate); with an hour, today
  * still counts while that hour is ahead (the past check refuses the rest).

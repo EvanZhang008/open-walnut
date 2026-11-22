@@ -69,8 +69,8 @@ function when(iso: string): string {
  * inner heading would repeat them.
  */
 export const SUGGEST_ACCURACY_BLURB =
-  "A new session's draft guesses its project and folder from what you type; this compares " +
-  'every guess against what the launch actually carried.';
+  'While you type a new session, Walnut suggests its project and folder. This compares each ' +
+  'suggestion with the project and folder the session started in.';
 
 export function SuggestAccuracyPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const [summary, setSummary] = useState<SuggestAccuracySummary | null>(null);
@@ -154,7 +154,7 @@ export function SuggestAccuracyPanel({ standalone = false }: { standalone?: bool
         {summary && !error && rows.length === 0 && (
           <SettingsRow
             label="Nothing recorded yet."
-            help="Start a session from a draft with something typed in it and the first guesses land here."
+            help="Type a message in a new session, let Walnut suggest a project and folder, then start it. The first result shows here."
           />
         )}
         {summary && !error && rows.length > 0 && (

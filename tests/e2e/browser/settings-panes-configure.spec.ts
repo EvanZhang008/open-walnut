@@ -511,7 +511,7 @@ test('C63: Tasks rows, the after-session group and the triage label in General',
   await expect(row(general, 'Session triage results')).toHaveCount(0)
 })
 
-test('C76: Uses names the resolved runner; .check() on both segments switches and saves', async ({ page }) => {
+test('C76: Guesses come from names the resolved runner; .check() on both segments switches and saves', async ({ page }) => {
   const cfg = await fakeConfig(page, (c) => {
     c.agent = { ...c.agent, main_provider: 'claude_cli' }
     c.jev = { ...c.jev, decisions: { quick_parse: false, session_organize: false } }
@@ -535,7 +535,7 @@ test('C76: with an API in effect the first segment is that API', async ({ page }
   await openSettings(page)
   const tasks = await clickNav(page, 'tasks')
   await expect(tasks.getByTestId('smart-runner-default')).toHaveText('Anthropic')
-  await expect(row(tasks, 'Uses').locator('.settings-row-help')).toHaveText('Slow: each guess calls Anthropic once.')
+  await expect(row(tasks, 'Guesses come from').locator('.settings-row-help')).toHaveText('Slow: each guess calls Anthropic once.')
 })
 
 test('C53 + C54 + C58 + C79: Jev test result, two-step Remove, no native dialogs, widths hold', async ({ page }) => {

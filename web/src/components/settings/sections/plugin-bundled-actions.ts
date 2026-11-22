@@ -79,7 +79,7 @@ export async function runBundledAction(
 export function removedNotice(row: { name: string; sourceSlug?: string }): string {
   return row.sourceSlug
     ? `Removed ${row.name}; it waits under its source to install again.`
-    : `Removed ${row.name}; it is back under Get more.`;
+    : `Removed ${row.name}; it is back under Plugins to add.`;
 }
 
 /** The notice after an Install: honest about a plugin that loaded but is not running yet. */

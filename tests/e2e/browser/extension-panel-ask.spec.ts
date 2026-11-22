@@ -56,7 +56,7 @@ test('Ask is a plain chat about the page, before and after the first question', 
   await expect(v.getByTestId('ask-object-quote')).toContainText('retries a failed upload three times', { timeout: 60_000 })
   // No coding-session fork, no draft header: a composer about the page.
   await expect(v.locator('.draft-intent-cards')).toHaveCount(0)
-  await expect(v.getByText('Start Task')).toHaveCount(0)
+  await expect(v.locator('.draft-intent-card')).toHaveCount(0)
   await expect(v.locator('.draft-session-panel .session-panel-header')).toHaveCount(0)
   // No Start Task bar (folder, project, task fields): only the mode and model pills (2026-11-09).
   await expect(v.locator('.draft-actions-bar:not(.is-plain-chat-pickers)')).toHaveCount(0)

@@ -223,8 +223,8 @@ describe('two layers: which router processed it, then what it decided', () => {
   it('names the router that decided, first, on every decided state', () => {
     for (const status of ['routed', 'not_routed', 'failed', 'routing', 'unknown'] as const) {
       const view = mailRouteView(route({ status, router }));
-      expect(view.by, status).toMatchObject({ lead: 'Processed by', name: 'Personal mail router', routerId: 'router-1' });
-      expect(view.title, status).toMatch(/^Processed by Personal mail router · /);
+      expect(view.by, status).toMatchObject({ lead: 'Reviewed by', name: 'Personal mail router', routerId: 'router-1' });
+      expect(view.title, status).toMatch(/^Reviewed by Personal mail router · /);
     }
     // An older server names no router: the area's router stands for it, never a made-up name.
     expect(mailRouteView(route({}), false, { name: 'Personal' }).by?.name).toBe('the Personal router');

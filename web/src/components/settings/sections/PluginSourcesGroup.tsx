@@ -269,7 +269,7 @@ export function PluginSourceHead(props: PluginSourceHeadProps) {
       {source.lastError && (
         <p className="settings-row-error settings-row-error-indent" role="alert">{source.lastError}</p>
       )}
-      {/* Not cloned: the chip says "Not installed here" and Restore is the verb. Cards shown:
+      {/* Not cloned: the chip says "Files not on this Mac" and Restore is the verb. Cards shown:
           the plugins are the cards below. Otherwise the plugins the source carries, here. */}
       {!source.cloned || cardsShown ? null : only ? (
         <SettingsRow indent label={only.name ?? only.id ?? 'Unnamed'} help={only.error} state={only.error ? 'warning' : undefined} />

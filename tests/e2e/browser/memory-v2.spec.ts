@@ -60,7 +60,7 @@ test('memory page shows seeded files in tree', async ({ page }) => {
   await expect(treeHeader).toContainText('Memory')
 
   // Verify tree sections exist — Global section with MEMORY.md
-  const globalSection = treePanel.locator('.memory-tree-section', { hasText: 'Global' })
+  const globalSection = treePanel.locator('.memory-tree-section', { hasText: 'Read in every session' })
   await expect(globalSection).toBeVisible({ timeout: 5000 })
 
   // Verify MEMORY.md item under Global

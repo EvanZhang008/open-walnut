@@ -17,7 +17,7 @@ import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, directorsLayoutHelp, useDirectorSettings } from '../../org/useDirectorSettings';
+import { DIRECTORS_LAYOUT_LABEL, DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, DIRECTORS_PROJECTS_LABEL, directorsLayoutHelp, useDirectorSettings } from '../../org/useDirectorSettings';
 import { ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch } from '../../org/useOrgSwitch';
 
 export { ORG_OFF_STOPS };
@@ -40,9 +40,9 @@ export function OrgSection() {
       </SettingsGroup>
       {dir.on && (
         <SettingsGroup heading="Directors" data-testid="org-directors-settings">
-          <SettingsRow label="Layout" help={directorsLayoutHelp(dir.layout)} error={dir.error} data-testid="org-directors-layout-row"
+          <SettingsRow label={DIRECTORS_LAYOUT_LABEL} help={directorsLayoutHelp(dir.layout)} error={dir.error} data-testid="org-directors-layout-row"
             control={<SegmentedControl aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />} />
-          <SettingsRow label="Project names" help={DIRECTORS_PROJECTS_HELP} htmlFor="org-directors-projects" data-testid="org-directors-projects-row"
+          <SettingsRow label={DIRECTORS_PROJECTS_LABEL} help={DIRECTORS_PROJECTS_HELP} htmlFor="org-directors-projects" data-testid="org-directors-projects-row"
             control={<ToggleSwitch id="org-directors-projects" checked={dir.showProjects} busy={dir.busy} onChange={dir.setShowProjects} />} />
         </SettingsGroup>
       )}

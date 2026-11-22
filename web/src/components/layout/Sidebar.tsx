@@ -252,8 +252,8 @@ export function Sidebar({
   // group, apart from Home's panels, holding only them (Evan, 2026-11-10). A phone mounts
   // neither, so the group is not drawn there.
   const sideBarGroup = !phone && (railShown['home-agenda'] || railShown['home-scratchpad']) ? (
-    <div className="sidebar-side-bar-group" role="group" aria-label="Side bars" data-testid="sidebar-side-bar-group">
-      <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Side bar</div>
+    <div className="sidebar-side-bar-group" role="group" aria-label="Side panels" data-testid="sidebar-side-bar-group">
+      <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Side panels</div>
       {railShown['home-agenda'] && (
       <button
         className={`sidebar-link sidebar-panel-toggle${agendaOpen ? ' active' : ''}`}
@@ -430,7 +430,7 @@ export function Sidebar({
         })}
         {openApps.length > 0 && (
           <div className="sidebar-open-apps" role="group" aria-label="Open apps" data-testid="sidebar-open-apps">
-            <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Open</div>
+            <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Open apps</div>
             {openApps.map((app) => (
               <div key={`${app.key}:${app.generation}`} className="sidebar-open-app" data-testid={`sidebar-open-app-${app.key}`}>
                 {appLink(app)}

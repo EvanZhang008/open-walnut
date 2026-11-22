@@ -140,7 +140,7 @@ test('the session kebab fits the viewport and scrolls when the window is short',
 
   // 1. It IS the tall two-section menu (guards against the test passing because
   //    a short single-section menu rendered instead).
-  await expect(menu.getByText('Details', { exact: true })).toHaveCount(1)
+  await expect(menu.getByText('Task details', { exact: true })).toHaveCount(1)
   // Priority is hidden by default (Settings → Tasks → Show task priority), so the
   // marker for the task half of the menu is its Dates group.
   await expect(menu.getByTestId('kebab-group-dates')).toBeVisible()

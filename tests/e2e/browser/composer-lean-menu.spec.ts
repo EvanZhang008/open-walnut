@@ -43,14 +43,14 @@ test('one Reference row, Snooze and Add a trigger one click away, More flyout an
   await input.fill('Keep this unsent draft: review the long release checklist');
   for (let i = 0; i < 3; i++) {
     await add.click();
-    await expect(mainMenu.getByRole('menuitem', { name: /@\s*Reference/, exact: true })).toHaveCount(1);
+    await expect(mainMenu.getByRole('menuitem', { name: /@\s*Mention a/ })).toHaveCount(1);
     await expect(mainMenu.locator('[data-add-control="note"], [data-add-control="btw"]')).toHaveCount(0);
     await expect(mainMenu.locator('[data-action-id="compact-context"]')).toHaveCount(0);
     // The session has a task, so its two wait rows sit on the "+" menu itself, in this order.
     await expect.poll(() => mainMenu.locator('[data-action-id]').evaluateAll(
       (rows) => rows.map((row) => row.getAttribute('data-action-id')),
     )).toEqual(['wait-until', 'trigger']);
-    await mainMenu.getByRole('menuitem', { name: 'More', exact: true }).click();
+    await mainMenu.getByRole('menuitem', { name: 'More actions', exact: true }).click();
     await expect(more).toBeVisible();
     await expect(more.getByRole('menuitem', { name: /Compact context/ })).toBeVisible();
     await expect(more.locator('[data-action-id="wait-until"], [data-action-id="trigger"]')).toHaveCount(0);
@@ -104,7 +104,7 @@ test('Reference picks files and folders from the unified picker without dropping
   // The fixture's seeded tasks share the very same All picker with files and folders.
   await input.fill('Review ');
   await composer.locator('.chat-plus-btn').first().click();
-  await composer.getByRole('menuitem', { name: /@\s*Reference/, exact: true }).click();
+  await composer.getByRole('menuitem', { name: /@\s*Mention a/ }).click();
   const taskRow = composer.locator('.mention-palette .mention-row-task').first();
   await expect(taskRow).toBeVisible();
   await taskRow.click();
@@ -112,7 +112,7 @@ test('Reference picks files and folders from the unified picker without dropping
   for (const kind of ['file', 'folder']) {
     await input.fill('Review ');
     await composer.locator('.chat-plus-btn').first().click();
-    await composer.getByRole('menuitem', { name: /@\s*Reference/, exact: true }).click();
+    await composer.getByRole('menuitem', { name: /@\s*Mention a/ }).click();
     const palette = composer.locator('.mention-palette');
     await expect(palette).toBeVisible();
     if (kind === 'file') await palette.locator('.mention-row', { hasText: 'release-guide.md' }).click();
@@ -137,7 +137,7 @@ test('short draft menu and phone composer retain reachable direct controls and s
   await expect(barOf(panel)).not.toHaveAttribute('data-direct-folded', 'true');
   await expect(controlOf(panel, 'model').locator('.composer-model-pill-short')).toHaveText('Fable');
   await composer.locator('.chat-plus-btn').first().click();
-  await composer.getByRole('menuitem', { name: 'More', exact: true }).click();
+  await composer.getByRole('menuitem', { name: 'More actions', exact: true }).click();
   await fits(page, page.getByRole('menu', { name: 'More composer actions' }));
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
@@ -145,7 +145,7 @@ test('short draft menu and phone composer retain reachable direct controls and s
   const draft = await openDraft(page);
   await draft.locator('.chat-plus-btn').click();
   const menu = draft.locator('.chat-plus-group > .chat-plus-menu');
-  await expect(menu.getByRole('menuitem', { name: /@\s*Reference/, exact: true })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /@\s*Mention a/ })).toBeVisible();
   await fits(page, menu);
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);

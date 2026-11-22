@@ -542,7 +542,7 @@ test('triage history: the stored analysis links its file past the old preview cu
   // A press on the row only selects it; its details open from the row's menu, as a person opens them.
   await click(page, row.getByRole('button', { name: 'More actions' }))
   // The menu portals to <body>, outside the row.
-  await click(page, page.locator('.task-kebab-menu').getByRole('button', { name: 'Details', exact: true }))
+  await click(page, page.locator('.task-kebab-menu').getByRole('button', { name: 'Task details', exact: true }))
   const detail = page.locator('.task-detail-modal')
   await expect(detail).toBeVisible({ timeout: 20_000 })
   await click(page, detail.getByRole('button', { name: /Triage history \(1\)/ }))

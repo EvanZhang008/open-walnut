@@ -8,7 +8,7 @@
  *   Settings), the header (≡, Walnut, the relay pill, the key), Home's task panel filling the page
  *   (tabs, search, Needs you with each row's status line, the rows), and New task docked at the
  *   bottom on one line ("This page" and send), which grows into the whole composer (the page chip
- *   with ×, Act in this tab, Save as todo) when clicked; all drawn by the extension the moment it opens;
+ *   with ×, Act in this tab, Save as task) when clicked; all drawn by the extension the moment it opens;
  * - each side bar entry: Passwords (locked, its one unlock row), Browser control (the status, an
  *   agent's tab shown everywhere at once with no reload, Stop; "Shared earlier" only for tabs he
  *   handed over; its settings), Settings; the panel opens on the entry it was left on;
@@ -16,12 +16,12 @@
  * - typing and Send make a task and a session that knows the page, shown in the panel with Back;
  *   Back returns to the list where it was; × leaves the page out; Act in this tab hands the tab over
  *   and the strip shows while the agent holds it, with Stop;
- * - Save as todo files the words as a todo without starting anything;
+ * - Save as task files the words as a todo without starting anything;
  * - the tabs and the search are Home's own, over a list of more than 100 tasks;
  * - a task with no conversation opens its detail in the panel, never a new tab, and so do the
  *   parent and the subtasks its detail links to;
  * - Act in this tab hands over only the tab Send was pressed in (moved to another tab while the task
- *   starts, nothing is handed over); Save as todo saves once, whatever the clicks; a question the
+ *   starts, nothing is handed over); Save as task saves once, whatever the clicks; a question the
  *   popup handed over that Walnut could not start comes back in the side panel's composer;
  * - the relay pill opens the relay panel: agents on and off, the tab in use with Stop, Stop all;
  * - the asks stay one ≡ away;
@@ -262,7 +262,7 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
     // the row, never inside it (a row is a button; tests/web/ask-card-words-guard.test.ts).
     await expect(asksOf(card)).toContainText(n.ask, { timeout: 30_000 })
   }
-  // A click grows it into the whole composer: the page chip with ×, Act in this tab, Save as todo.
+  // A click grows it into the whole composer: the page chip with ×, Act in this tab, Save as task.
   await box.click()
   await expect(composer).toHaveAttribute('data-docked', 'false')
   await expect(v.getByTestId('ext-panel-include')).toContainText('Release notes 4.2', { timeout: 30_000 })
@@ -521,7 +521,7 @@ test('the grown composer picks the folder and the project; the task files there,
   await frame(panel).evaluate(() => localStorage.removeItem('walnut-ext-home-place'))
 })
 
-test('× leaves the page out; Save as todo files the words and starts nothing', async () => {
+test('× leaves the page out; Save as task files the words and starts nothing', async () => {
   test.setTimeout(150_000)
   const v = askView(panel)
   const box = v.locator('[data-testid="ext-home-composer"] textarea')
@@ -560,7 +560,7 @@ test('× leaves the page out; Save as todo files the words and starts nothing', 
   await firstInRecent(String(todo!.id))
 })
 
-test('Save as todo saves once: a double click makes one todo, and Send waits while it saves', async () => {
+test('Save as task saves once: a double click makes one todo, and Send waits while it saves', async () => {
   test.setTimeout(150_000)
   const v = askView(panel)
   const words = 'Order the spare keyboard for the lab'

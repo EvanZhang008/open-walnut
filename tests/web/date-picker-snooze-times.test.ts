@@ -9,7 +9,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tomorrowTimePills } from '../../web/src/components/common/DatePicker';
-import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, snoozeWhenWords, timeTarget } from '../../web/src/components/common/date-time-pick';
+import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, snoozeWhenWords, timeTarget, untilWords } from '../../web/src/components/common/date-time-pick';
 
 const ORIGINAL_TZ = process.env.TZ;
 afterEach(() => { process.env.TZ = ORIGINAL_TZ; });
@@ -140,6 +140,27 @@ describe('a timed snooze, closed', () => {
     const read = (rel: string) => fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src', rel), 'utf8');
     expect(read('components/tasks/TaskKebabMenu.tsx')).toMatch(/snoozeWhenWords\(task\.start_date!\)/);
     expect(read('components/tasks/StatusSections.tsx')).toMatch(/snoozeWhenWords\(snoozeDate\)/);
+  });
+});
+
+describe("a Home row's until words", () => {
+  it('read mid-sentence: today and tomorrow in lower case, a weekday or date as it is', () => {
+    expect(untilWords('Today 1:30 AM')).toBe('until today 1:30 AM');
+    expect(untilWords('Tomorrow 9:00 AM')).toBe('until tomorrow 9:00 AM');
+    expect(untilWords('Sun 3:30 PM')).toBe('until Sun 3:30 PM');
+    expect(untilWords('Nov 30, 6:00 PM')).toBe('until Nov 30, 6:00 PM');
+    expect(untilWords('Today')).toBe('until today');
+    expect(untilWords('1:30 AM')).toBe('until 1:30 AM');
+  });
+
+  it('the waiting pill and the snoozed pill of one list both read untilWords', () => {
+    const read = (rel: string) => fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src', rel), 'utf8');
+    const rows = read('components/tasks/StatusSections.tsx');
+    expect(rows).toMatch(/\{untilWords\(snoozedUntil\)\}/);
+    expect(rows).toMatch(/\{untilWords\(twoLine \? formatWaitUntil/);
+    expect(read('components/tasks/TodoPanel.tsx')).toMatch(/\{untilWords\(formatWaitUntil\(task\.wait_until\)\)\}/);
+    // A wait's clock is the snooze's words, not a second 24-hour format.
+    expect(read('components/tasks/TaskStatusControl.tsx')).toMatch(/snoozeWhenWords\(iso\) \?\? formatDraftDate\(iso\)/);
   });
 });
 

@@ -6539,7 +6539,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   gap: 2px;
   padding: 0 6px 6px;
   /* A query container, so a control in the row can shed its words as the column
-     narrows (the draft's "Save as todo" pill, below). Its menus anchor to their
+     narrows (the draft's "Save as task" pill, below). Its menus anchor to their
      own positioned wrappers, so the containment changes none of them. */
   container-type: inline-size;
 }
@@ -19487,7 +19487,7 @@ a.tag-chip:hover .tag-chip-value,
   overflow: hidden;
 }
 
-/* "Save as todo": the draft's one exit besides the send arrow, so it sits
+/* "Save as task": the draft's one exit besides the send arrow, so it sits
    right before the arrow (ChatInput `sendSlot`), not among the launch settings
    on the left (user, 2026-10-03). A plain key (`btn`), as tall as the arrow and
    behind the solid send arrow; one line, never shrinking: the right cluster keeps

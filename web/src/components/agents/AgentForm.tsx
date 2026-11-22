@@ -24,7 +24,7 @@ const CONTEXT_SOURCE_DEFS: { id: ContextSourceId; label: string; auto: boolean; 
   { id: 'global_memory', label: 'Global Memory', auto: false, defaultBudget: 2000, description: 'Global MEMORY.md' },
   { id: 'daily_log', label: 'Daily Log', auto: false, defaultBudget: 3000, description: 'Recent daily activity logs' },
   { id: 'session_history', label: 'Session History', auto: false, defaultBudget: 4000, description: 'History of the triggering session' },
-  { id: 'conversation_log', label: 'Conversation Log', auto: false, defaultBudget: 1000, description: "Task's conversation_log field" },
+  { id: 'conversation_log', label: 'Conversation Log', auto: false, defaultBudget: 1000, description: "The task's conversation log" },
   { id: 'main_global_memory', label: 'Quick question memory', auto: false, defaultBudget: 2000, description: "General agent's MEMORY.md (read-only)" },
   { id: 'main_daily_log', label: 'Quick question daily log', auto: false, defaultBudget: 3000, description: "General agent's daily activity logs (read-only)" },
 ];
@@ -179,7 +179,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
         {error && <div className="agent-form-error">{error}</div>}
         {isBuiltinEdit && (
           <div className="agent-form-info">
-            This is a builtin agent. Saving will create a config override — the original builtin definition is preserved and can be restored via &quot;Reset to Default&quot;.
+            This is a built-in agent. Saving keeps your version beside the original, and &quot;Reset to Default&quot; brings the original back.
           </div>
         )}
 

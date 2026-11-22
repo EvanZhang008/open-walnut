@@ -308,6 +308,8 @@ export interface SessionModeEntry {
   label: string;
   /** Tooltip: what the mode actually does to tool calls. */
   description: string;
+  /** A few muted words beside the label in the mode menu (2 to 4 words). */
+  hint: string;
 }
 
 /**
@@ -321,12 +323,12 @@ export interface SessionModeEntry {
  * and keeps working on older CLIs too.
  */
 export const SESSION_MODES: readonly SessionModeEntry[] = [
-  { id: 'plan',    cli: 'plan',              label: 'Plan',     description: 'Explore and plan only — no edits or commands' },
-  { id: 'default', cli: 'default',           label: 'Default',  description: 'Ask before anything sensitive' },
-  { id: 'dontAsk', cli: 'dontAsk',           label: "Don't Ask", description: 'Never prompt — deny whatever is not pre-approved' },
-  { id: 'accept',  cli: 'acceptEdits',       label: 'Accept',   description: 'Auto-accept file edits, still ask for the rest' },
-  { id: 'auto',    cli: 'auto',              label: 'Auto',     description: 'Classify each call and auto-allow the safe ones' },
-  { id: 'bypass',  cli: 'bypassPermissions', label: 'Bypass',   description: 'Full trust — never ask, allow everything' },
+  { id: 'plan',    cli: 'plan',              label: 'Plan',     hint: 'reads, changes nothing',     description: 'Explore and plan only: no file edits and no commands' },
+  { id: 'default', cli: 'default',           label: 'Default',  hint: 'asks before risky steps',    description: 'Ask before anything sensitive' },
+  { id: 'dontAsk', cli: 'dontAsk',           label: "Don't Ask", hint: 'never asks, denies the rest', description: 'Never ask: run what is pre-approved and deny everything else' },
+  { id: 'accept',  cli: 'acceptEdits',       label: 'Accept',   hint: 'edits files freely',         description: 'Accept file edits without asking, still ask for everything else' },
+  { id: 'auto',    cli: 'auto',              label: 'Auto',     hint: 'a checker allows safe steps', description: 'A checker reviews each step and allows the safe ones without asking' },
+  { id: 'bypass',  cli: 'bypassPermissions', label: 'Bypass',   hint: 'never asks, allows all',     description: 'Full trust: never ask, allow everything, skip every permission check' },
 ] as const;
 
 /** Ordered mode ids (safest → loosest) — the default toggle cycle order. */

@@ -132,7 +132,7 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
   await expect(recentCard(recentNear)).toHaveCount(0);
   await expect(recentCard(recentMatch)).toBeVisible();
   await expect(page.locator('.todo-search-results')).toHaveCount(0);
-  await expect(page.locator('.fb-row-lead')).toHaveText('Searching Recent');
+  await expect(page.locator('.fb-row-lead')).toHaveText('In recent tasks');
   await expect(page.locator('.fb-row .fb-toggle')).toHaveCount(0);
   // The count is the Recent rows left, not the all-task hits (2026-11-07 verifier: "61 tasks" over 4 rows).
   await expect(page.getByTestId('filter-count')).toHaveAttribute('aria-label', '1 task');
@@ -142,7 +142,7 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
   await expect(page.getByTestId('todo-recent-search-empty')).toContainText('No task you opened matches');
   await expect(page.getByTestId('filter-count')).toHaveAttribute('aria-label', '0 tasks');
   await page.getByRole('button', { name: 'Search all tasks' }).click();
-  await expect(page.locator('.fb-row-lead')).toHaveText('Searching all tasks', { timeout: 5_000 });
+  await expect(page.locator('.fb-row-lead')).toHaveText('In all open tasks', { timeout: 5_000 });
   await selectSection(page, 'Recent');
   await expect(page.getByTestId('todo-recent-search-empty')).toBeVisible();
   await page.locator('.todo-search-clear').click();

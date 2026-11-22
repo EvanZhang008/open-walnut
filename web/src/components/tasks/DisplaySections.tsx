@@ -19,7 +19,7 @@ import { useTaskStatusLines } from './useTaskStatusLines';
 import { useWorkerFold } from './worker-fold';
 
 export const TAB_BAR_SWITCH_TITLE = 'All, Pinned and the other views as tabs across the top';
-export const WORKER_FOLD_SWITCH_TITLE = "A leader's row carries its workers; turn off to list every worker as its own row";
+export const WORKER_FOLD_SWITCH_TITLE = "A parent task's row carries its subtasks; turn off to show every subtask as its own row";
 export const VIEW_ROW_TITLE = 'View: All, Pinned and the other views';
 
 const GROUP_CHOICES: readonly SegChoice<GroupBy>[] = [
@@ -27,7 +27,7 @@ const GROUP_CHOICES: readonly SegChoice<GroupBy>[] = [
   { key: 'none', label: 'In one list', title: 'One list, in pin order' },
 ];
 /** Below page one's rows wherever the layout Group row shows: By project is the default, the other two are experimental. */
-export const EXPERIMENTAL_LAYOUTS_NOTE = 'Group: Flat and In one list are experimental';
+export const EXPERIMENTAL_LAYOUTS_NOTE = 'Experimental: By status and In one list';
 export const MIXED_ORDER_NOTE = 'Lists in this view differ';
 
 /**
@@ -126,7 +126,7 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
           checked={showStatusLines} onChange={setShowStatusLines} />
         {/* Flat's sections fold each leader's workers into its row (worker-fold.ts). */}
         {flat && (
-          <SwitchRow option="worker-fold" label="Fold workers into leaders" title={WORKER_FOLD_SWITCH_TITLE}
+          <SwitchRow option="worker-fold" label="Group subtasks under their parent" title={WORKER_FOLD_SWITCH_TITLE}
             checked={workerFold.fold} onChange={(on) => setWorkerFold((v) => ({ ...v, fold: on }))} />
         )}
         <DisplayRow option={sessionRow.key} label="Session columns" title={sessionRow.title} flash={flashOption === sessionRow.key}>

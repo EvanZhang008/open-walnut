@@ -193,7 +193,7 @@ for (const scheme of ['light', 'dark'] as const) {
 
     // The header: tool buttons in one group, saying what they do.
     const tools = panel.locator('.nfc-header-tools')
-    await expect(tools.locator('button.btn')).toHaveText(['Clear all', 'Quiet for 1 hour', ''])
+    await expect(tools.locator('button.btn')).toHaveText(['Clear all', 'Mute for 1 hour', ''])
     await expect(tools.getByTestId('nfc-quiet-toggle')).toHaveAttribute('title', /Mute toasts, sounds and phone pushes for an hour/)
 
     // A light scrim right of the panel; a click on it closes the panel.

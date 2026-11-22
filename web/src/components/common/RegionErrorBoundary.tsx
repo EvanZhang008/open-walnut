@@ -15,7 +15,7 @@ import '@/styles/region-error.css';
 export const ERROR_REGIONS = {
   'session-panel': 'This session',
   composer: 'The message box',
-  'side-threads': 'Side threads',
+  'side-threads': 'Side chats',
 } as const;
 
 export type ErrorRegion = keyof typeof ERROR_REGIONS;

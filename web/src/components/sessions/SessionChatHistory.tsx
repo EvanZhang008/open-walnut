@@ -6034,7 +6034,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     </>
   ) : (
     <>
-      <div className="session-msg-failed-badge">
+      {/* The recovery first, the path only on hover: the banner above names the folder. */}
+      <div className="session-msg-failed-badge" title={isFolderGoneReason(m.failedError) ? goneFolderOf(m.failedError) : undefined}>
         {isFolderGoneReason(m.failedError)
           ? folderGoneBanner
             ? 'Not delivered yet: it goes out once the session continues in a new folder (the notice above).'
@@ -6048,7 +6049,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           ? folderGoneBanner ? null : <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
           : <button type="button" className="btn btn-sm btn-primary" data-testid="send-retry" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>}
         {m.parked
-          ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
+          ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard message</button>
           : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
       </div>
     </>

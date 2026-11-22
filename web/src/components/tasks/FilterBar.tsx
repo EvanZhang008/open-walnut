@@ -111,7 +111,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   }, [chips, chipMenu]);
 
   // Track the CHIP BOX's width (not the row's): the count beside it changes
-  // width too ("Loading completed" -> "37 tasks"), and the fit must follow.
+  // width too ("Loading completed tasks" -> "37 tasks"), and the fit must follow.
   useEffect(() => {
     const el = chipsRef.current;
     if (!routeShown || !visible || !el || typeof ResizeObserver === 'undefined') return;
@@ -256,8 +256,12 @@ export function FilterBar({ controller: c }: FilterBarProps) {
   const menuChip = chipMenu ? chips.find((ch) => ch.dim === chipMenu.dim) : undefined;
 
   if (!visible) return null;
-  const countText = c.archiveLoading ? 'Loading completed' : c.count === null ? '' : filterCountText(c.count);
+  const countText = c.archiveLoading ? 'Loading completed tasks' : c.count === null ? '' : filterCountText(c.count);
   const inc = c.search.active ? c.search.includeComplete : null;
+  // Where the search looks (every task, whatever the view), said the same while it runs and
+  // after it ends: completed tasks join only through Include completed.
+  const searchLead = chips.length > 0 ? 'Search uses these filters'
+    : c.search.lead ?? (inc?.on ? 'In all tasks' : 'In all open tasks');
   const rowStyle = holdHeight !== null ? { minHeight: holdHeight } : undefined;
   return (
     <div
@@ -270,12 +274,12 @@ export function FilterBar({ controller: c }: FilterBarProps) {
     >
       <div ref={chipsRef} className="fb-row-chips">
         {c.search.active && (
-          <span className="fb-row-lead">{chips.length > 0 ? 'Search uses these filters' : (c.search.lead ?? 'Searching all tasks')}</span>
+          <span className="fb-row-lead">{searchLead}</span>
         )}
         {inc && (
           <button type="button" className="fb-toggle" tabIndex={0} aria-pressed={inc.on} onClick={inc.toggle}>
             {inc.on && <span className="fb-check" aria-hidden="true">{ICON_CHECK}</span>}
-            <span>{`Include Complete (${inc.count})`}</span>
+            <span>{`Include completed (${inc.count})`}</span>
           </button>
         )}
         {c.viewItem && (
@@ -319,7 +323,7 @@ export function FilterBar({ controller: c }: FilterBarProps) {
         )}
       </div>
       {/* The tail sits outside the chip box at the top right: the count, then Clear. Its
-          width ("Loading completed" to "6 tasks", Clear coming and going) never re-wraps
+          width ("Loading completed tasks" to "6 tasks", Clear coming and going) never re-wraps
           the chips (C47), and Clear never sits alone on a line of its own. */}
       <span className="fb-row-tail">
         <span

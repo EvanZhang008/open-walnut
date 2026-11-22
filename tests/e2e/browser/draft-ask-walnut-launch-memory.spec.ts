@@ -30,7 +30,7 @@ test.describe.configure({ mode: 'serial' })
 
 const modelPill = (page: Page) => draftPanel(page).locator('.draft-actions-bar .draft-model-select')
 const askWalnutCard = (page: Page) => page.locator('.draft-intent-card-walnut')
-const startTaskCard = (page: Page) => page.locator('.draft-intent-card').filter({ hasText: 'Start Task' })
+const startTaskCard = (page: Page) => page.locator('.draft-intent-card').filter({ hasText: 'New task' })
 const isQuickStart = (url: string) => new URL(url).pathname === '/api/sessions/quick-start'
 const isMemoryRead = (url: string) => new URL(url).pathname === '/api/sessions/ask-walnut-launch'
 /** Ask Walnut has no "Start ↵" button: the composer's send arrow is the one send affordance. */

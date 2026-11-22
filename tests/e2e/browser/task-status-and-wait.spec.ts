@@ -97,7 +97,7 @@ async function openRowKebab(page: Page, task: { id: string; title: string }): Pr
 
 async function openDetail(page: Page, task: { id: string; title: string }): Promise<Locator> {
   const menu = await openRowKebab(page, task)
-  await menu.getByText('Details', { exact: true }).click()
+  await menu.getByText('Task details', { exact: true }).click()
   const detail = page.locator('.todo-detail-pane').filter({ hasText: task.title })
   await expect(detail).toBeVisible()
   return detail

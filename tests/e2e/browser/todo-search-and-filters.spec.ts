@@ -85,7 +85,7 @@ test('search honors a Status chip the user added', async ({ page, baseURL }) => 
   const shown = await page.locator('.todo-search-results .todo-panel-item[data-task-id]').count();
   await expect(page.getByTestId('filter-count')).toHaveText(`${shown} ${shown === 1 ? 'task' : 'tasks'}`);
   // No Include Complete toggle while a Status chip decides.
-  await expect(rowEl.getByRole('button', { name: /^Include Complete/ })).toHaveCount(0);
+  await expect(rowEl.getByRole('button', { name: /^Include completed/ })).toHaveCount(0);
 });
 
 /** The fixture board has one source, so the Source case runs on a stubbed board of two. */
@@ -134,7 +134,7 @@ test('with the tab bar hidden, Include Complete lives in the filter row (C56)', 
   await boot(page, baseURL!, false);
   await search(page, 'marmalade');
   await expect(hit(page, DEFERRED)).toBeVisible({ timeout: 10_000 });
-  const toggle = filterRow(page).getByRole('button', { name: /^Include Complete/ });
+  const toggle = filterRow(page).getByRole('button', { name: /^Include completed/ });
   // The inline window shows a done title hit already; the toggle reveals the rest.
   if (await toggle.count()) {
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');

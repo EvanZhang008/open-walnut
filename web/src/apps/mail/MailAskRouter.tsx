@@ -41,7 +41,7 @@ export function MailAskRouter({ message, bodyText }: { message: MailMessageDto; 
             .finally(() => setWriting(false));
         }}
       >
-        Ask router
+        Ask the router about this mail
       </button>
     </div>
   );

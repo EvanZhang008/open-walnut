@@ -118,6 +118,9 @@ function TimeChip({ totals, onOpen }: { totals: TimeTotals; onOpen: () => void }
           <AgentIcon />
           <span className="wt-pill-name">Agent</span>
           <span className="wt-fact-v is-agent">{agent}</span>
+          {/* What the click does: the pill alone gives no sign it opens anything. */}
+          <span className="wt-fact-sep">{'\u00b7'}</span>
+          <span className="wt-pill-name">Open day by day</span>
         </span>
       </span>
     </span>

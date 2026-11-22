@@ -66,17 +66,16 @@ export function CreatePluginPage() {
         <p className="create-plugin-kicker">Plugins</p>
         <h1>Build your own Walnut app</h1>
         <p className="create-plugin-lede">
-          A plugin is plain TypeScript and React that runs inside Walnut with full access:
-          it can put an app in the sidebar, give the AI new tools, add skills, routes,
-          hooks, and more. Describe what you want and an AI session builds it, or run
-          one command yourself.
+          Describe what you want and an AI session builds it as a plugin: a new app in
+          your sidebar, new tools for the AI, or both. Or build it yourself with the
+          steps below.
         </p>
       </header>
 
       {/* The steps below ARE the manual path, so the card drops its own manual line. */}
       <BuildPluginCard showManual={false} />
 
-      <h2 className="create-plugin-diy">Do it yourself</h2>
+      <h2 className="create-plugin-diy">Build it yourself</h2>
       <ol className="create-plugin-steps">
         <li className="create-plugin-step">
           <div className="create-plugin-step-head">
@@ -109,11 +108,11 @@ export function CreatePluginPage() {
         <li className="create-plugin-step">
           <div className="create-plugin-step-head">
             <span className="create-plugin-step-num">2</span>
-            <h2>Watch it appear here</h2>
+            <h2>Watch it appear in this list</h2>
           </div>
           <p>
-            The CLI tells this Walnut to load your plugin the moment the first build succeeds.
-            No restart, no refresh: this list is live.
+            The list holds the plugin apps you already have. Yours joins it the moment its
+            first build succeeds, with no restart or refresh.
           </p>
           <div className="create-plugin-live" data-testid="create-plugin-live">
             {pluginApps.length === 0 ? (
@@ -141,9 +140,10 @@ export function CreatePluginPage() {
             <h2>Make it yours</h2>
           </div>
           <p>
-            Edit <code>src/web.tsx</code> for the UI and <code>src/server.ts</code> for
+            A plugin is plain TypeScript and React with full access to Walnut. Edit
+            {' '}<code>src/web.tsx</code> for the UI and <code>src/server.ts</code> for
             everything else; each save rebuilds and reloads your plugin in place.
-            Everything Walnut can do is on the table:
+            It can use any of these:
           </p>
           <div className="create-plugin-caps">
             {CAPABILITIES.map((capability) => (

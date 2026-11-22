@@ -44,7 +44,7 @@ export function ComposerMoreMenu({ children }: { children: ReactNode }) {
       aria-haspopup="menu" aria-expanded={open}
       onClick={(event) => { byKeyRef.current = event.detail === 0; setOpen((value) => !value); }}>
       <span className="chat-plus-menu-key" aria-hidden="true">···</span>
-      <span>More</span>
+      <span>More actions</span>
       <span className="chat-plus-menu-control-value" aria-hidden="true">›</span>
     </button>
     {open && createPortal(<div ref={menuRef} role="menu" aria-label="More composer actions"

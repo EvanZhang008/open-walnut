@@ -33,11 +33,11 @@ export const PANE_TITLE = 'Phones & Cloud';
  * a first-time user should pick a tab without knowing the network names).
  */
 export const TAB_HINT: Record<PhonesCloudTab, string> = {
-  [WAY_PANES.cloud]: 'App anywhere · Mac can sleep',
-  [WAY_PANES.tailscale]: 'App anywhere · Mac awake',
-  [WAY_PANES.browser]: 'Browser anywhere',
-  [WAY_PANES.wifi]: 'App or browser on this network',
-  [DEVICES_TAB]: 'Remove, sign out',
+  [WAY_PANES.cloud]: 'The app anywhere, even while the Mac sleeps',
+  [WAY_PANES.tailscale]: 'The app anywhere while the Mac is awake',
+  [WAY_PANES.browser]: 'A browser from anywhere',
+  [WAY_PANES.wifi]: 'The app or a browser on this Wi-Fi',
+  [DEVICES_TAB]: 'Remove phones, sign out browsers',
 };
 
 interface TabView {

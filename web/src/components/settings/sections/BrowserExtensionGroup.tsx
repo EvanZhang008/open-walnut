@@ -77,7 +77,7 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
       <SettingsGroup
         heading="Your browsers"
         data-testid="ext-browsers"
-        footer={shipped ? <>This Walnut ships version {shipped.version} (build {shipped.build.slice(0, 7)}). One from the Chrome Web Store updates through the store; one set up from Walnut&apos;s folder updates itself with every Walnut update.</> : undefined}
+        footer={shipped ? <>Walnut ships version {shipped.version} (build {shipped.build.slice(0, 7)}). Installed from the Chrome Web Store, the extension updates through the store. Set up from Walnut&apos;s folder, it updates itself after each Walnut update.</> : undefined}
       >
         {rows === null && <SettingsRow label={loadError ? 'Could not read the connected browsers' : 'Loading…'} help={loadError || undefined} control={null} />}
         {rows?.length === 0 && (

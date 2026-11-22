@@ -294,7 +294,7 @@ const LEDGER_FIELDS: readonly DraftAiField[] = ['project', 'cwd', 'pinTier', 'pr
 
 /**
  * The suggested-vs-chosen ledger for a draft that is about to commit (Start, or
- * "Save as todo").
+ * "Save as task").
  *
  * The auto-suggestion is the part of the draft the user did not write, so every
  * proposal is recorded against what the launch actually carried: "the AI feels

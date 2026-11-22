@@ -174,7 +174,7 @@ test('Home: a task detail open before a reload or relaunch does not come back ov
   await loadHome(page)
   const card = (p: Page) => p.locator('.todo-pinned-card', { hasText: title }).first()
   await card(page).getByRole('button', { name: 'More actions' }).click()
-  await page.getByRole('button', { name: 'Details', exact: true }).click()
+  await page.getByRole('button', { name: 'Task details', exact: true }).click()
   await expect(page.locator('.task-detail-modal .todo-detail-title')).toHaveText(title)
   await expect.poll(() => new URL(page.url()).searchParams.get('task')).toBe(task.id)
 
@@ -197,7 +197,7 @@ test('Home: a task detail open before a reload or relaunch does not come back ov
   await shut(recycled, 'after a relaunch')
   // The detail still opens on a click.
   await card(recycled).getByRole('button', { name: 'More actions' }).click()
-  await recycled.getByRole('button', { name: 'Details', exact: true }).click()
+  await recycled.getByRole('button', { name: 'Task details', exact: true }).click()
   await expect(recycled.locator('.task-detail-modal .todo-detail-title')).toHaveText(title)
   await recycled.close()
 })

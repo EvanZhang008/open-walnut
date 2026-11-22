@@ -47,7 +47,7 @@ test('turn-retry is configurable from the Hooks page via real UI clicks', async 
   await toggle.scrollIntoViewIfNeeded()
 
   // The hook must read as a DAEMON policy (that's the whole point of where the
-  // retry runs): it sits in the Daemon hooks group, whose heading says so once
+  // retry runs): it sits in the "Built-in, on each host" group, whose heading says so once
   // instead of a tag repeated on every row (N3-11), and its details name the
   // daemon-policy source and its config key.
   const hookRow = page.getByTestId('hook-row-turn-error-auto-retry')

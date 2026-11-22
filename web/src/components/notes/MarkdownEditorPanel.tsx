@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { timeAgo } from '@/utils/time';
 import type { Editor } from '@tiptap/core';
-import { NotesEditor } from './NotesEditor';
+import { NOTES_PLACEHOLDER, NotesEditor } from './NotesEditor';
 import { NotesFormatToolbar } from './NotesFormatToolbar';
 import { BacklinksPanel } from './BacklinksPanel';
 import { RawMarkdownView } from './RawMarkdownView';
@@ -588,7 +588,7 @@ export function MarkdownEditorPanel({
             readOnly={readOnly}
             onDirty={handleEditorUpdate}
             autoFocus={autoFocus && !readOnly}
-            placeholder={placeholder ?? 'Start writing...'}
+            placeholder={placeholder ?? NOTES_PLACEHOLDER}
             enableWikiLinks={enableWikiLinks}
             enableBlockTools={enableBlockTools}
             wikiLinkNotes={notesList}

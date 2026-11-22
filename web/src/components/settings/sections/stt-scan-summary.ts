@@ -5,13 +5,18 @@
  */
 import type { DetectionResult } from '@/api/stt';
 
+/** Where the scan ran, in words: the server's machine, "this Mac" unless it says it runs another system. */
+export function scanPlace(d: Pick<DetectionResult, 'platform'> | null | undefined): 'this Mac' | 'this computer' {
+  return d?.platform?.os && d.platform.os !== 'darwin' ? 'this computer' : 'this Mac';
+}
+
 export function sttScanSummary(d: DetectionResult): string {
   const engines: string[] = [];
   if (d.mlx?.ready) engines.push('Qwen3-ASR');
   if (d.whisperCli.found) engines.push('whisper-cli');
   if (d.whisperServer?.found) engines.push('whisper-server');
   if (d.sherpaOnnxNode?.found) engines.push('Sherpa-ONNX');
-  if (engines.length === 0) return 'No dictation engine found on this Mac.';
+  if (engines.length === 0) return 'No dictation engine installed yet.';
   const models = d.models.length;
   const tail = models > 0 ? `, ${models} Whisper model${models === 1 ? '' : 's'}` : '';
   return `Found ${engines.join(', ')}${tail}.`;

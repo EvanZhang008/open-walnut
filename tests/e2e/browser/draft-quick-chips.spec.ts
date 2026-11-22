@@ -284,7 +284,7 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   await expect(panel.getByText(/fix\s+walnut/i)).toHaveCount(0)
   // The composer keeps its own placeholder too (the repair copy belonged to the
   // removed chip).
-  await expect(draftComposer(page)).toHaveAttribute('placeholder', 'What should this session do?')
+  await expect(draftComposer(page)).toHaveAttribute('placeholder', 'What should this task do?')
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-quick-actions.png`, fullPage: false })
 })

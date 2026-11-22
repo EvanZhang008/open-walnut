@@ -98,7 +98,7 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   let menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Open/, /^Window/, /^Columns/, /^Snooze until/, /^Details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
+  const order = [/^Open panel/, /^Open in window/, /^Columns/, /^Snooze until/, /^Task details$/, /^Status: /, /^Pin to/, /^Dates/, /^Move & transfer/, /^Team/, /^Delete$/, /^Session/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)
@@ -115,7 +115,7 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   await expect(menu.getByTestId('kebab-pin-satellite')).toBeVisible()
   await expect(group(menu, 'kebab-group-pin').locator('.task-kebab-group-toggle')).toHaveCount(0)
   await expect(group(menu, 'session-kebab-open').locator('.task-kebab-group-hint')).toHaveText(/^changed · files .*inbox · code/)
-  await expect(group(menu, 'session-kebab-session').locator('.task-kebab-group-hint')).toHaveText('copy · debug · restart · info')
+  await expect(group(menu, 'session-kebab-session').locator('.task-kebab-group-hint')).toHaveText('copy · debug · restart · session info')
   // The strip's panel count stays on the first level as the Columns row (the Display menu
   // calls the same setting "Session columns"), a segmented switch with Settings' choices.
   await expect(menu.getByTestId('kebab-panels').locator('.task-kebab-panels-label')).toHaveText('Columns')

@@ -58,7 +58,7 @@ async function expectFocusedWithoutDetail(page: Page, title: string, taskId: str
 async function openDetails(page: Page, title: string): Promise<void> {
   const card = page.locator('.todo-pinned-card', { hasText: title }).first();
   await card.getByRole('button', { name: 'More actions' }).click();
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
+  await page.getByRole('button', { name: 'Task details', exact: true }).click();
 }
 
 async function expectExactTargetUrl(page: Page): Promise<void> {
@@ -118,7 +118,7 @@ test('malformed HTTP 200 task list retains and restores the deep-linked task', a
   const taskCard = page.locator('.todo-pinned-card', { hasText: title });
   await expect(taskCard).toBeVisible();
   await taskCard.getByRole('button', { name: 'More actions' }).click();
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
+  await page.getByRole('button', { name: 'Task details', exact: true }).click();
   await expect.poll(() =>
     new URL(page.url()).searchParams.get('task')).toBe(taskId);
   await expect(page.locator('.task-detail-modal .todo-detail-title')).toHaveText(title);

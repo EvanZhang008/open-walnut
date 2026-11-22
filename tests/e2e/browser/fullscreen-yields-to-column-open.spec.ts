@@ -61,7 +61,7 @@ test('2. Fork from the fullscreen chip row drops the sheet and reveals the fork 
   await expect(panel).toBeVisible()
   const draft = page.locator(DRAFT_PANEL)
   await expect(draft).toBeVisible({ timeout: 10_000 })
-  await expect(draft.locator('.session-panel-title')).toHaveText('Fork Session')
+  await expect(draft.locator('.session-panel-title')).toHaveText('Fork session')
   await expect(draft.locator('.draft-bound-task')).toContainText('fork of:')
   await expectOnTop(draft)
   // Where the user types next. (Focus is independent of z-order, so this is not

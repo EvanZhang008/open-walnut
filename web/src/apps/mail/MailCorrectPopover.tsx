@@ -1,6 +1,6 @@
 /**
  * The correction card: the row menu's `Not important…` / `Important…` and the reader head's
- * `Not right?`.
+ * `Change group`.
  *
  * A portalled popover placed by `useMenuPlacement` next to the row (never past the viewport, flipped
  * above when there is no room below), `onPointerDown` stopped at the root so no row drag or outside

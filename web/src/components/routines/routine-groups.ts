@@ -108,7 +108,9 @@ export function groupRoutines(routines: readonly Routine[]): RoutineGroup[] {
   });
 }
 
+/** Lower-cases a cadence's first letter to follow "Checks", but a day's name keeps its capital. */
 function lowerFirst(s: string): string {
+  if (/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)/.test(s)) return s;
   return s ? s[0].toLowerCase() + s.slice(1) : s;
 }
 

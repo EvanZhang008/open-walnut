@@ -8,6 +8,8 @@ import type { EngineCatalog } from '@/utils/engines';
 
 /** The select's value for "no fallback": a new task waits for the reset on the default engine. */
 export const FALLBACK_OFF = 'off';
+/** That choice's one name, in the select and in the row's help. */
+export const FALLBACK_OFF_LABEL = 'Wait for the reset';
 
 export interface FallbackEngineOption {
   value: SessionEngine | typeof FALLBACK_OFF;
@@ -30,7 +32,7 @@ export function fallbackEngineOptions(
   catalog: EngineCatalog, defaultEngine: SessionEngine, nameOf: (label: string) => string,
 ): FallbackEngineOption[] {
   return [
-    { value: FALLBACK_OFF, label: 'Wait for the reset' },
+    { value: FALLBACK_OFF, label: FALLBACK_OFF_LABEL },
     ...catalog.map((e) => ({
       value: e.id,
       label: `${nameOf(e.displayName)}${e.id === defaultEngine ? ', another model' : ''}${e.availability.installed ? '' : ' (not installed here)'}`,

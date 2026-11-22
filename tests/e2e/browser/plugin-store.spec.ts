@@ -413,7 +413,7 @@ test('a bundled plugin installs in one click, and Remove takes it back to Get mo
     await expect(available.getByTestId(`plugin-card-${id}`)).toHaveCount(1, { timeout: 60_000 })
     await expect(installed.getByTestId(`plugin-card-${id}`)).toHaveCount(0)
     await expect(card).toHaveAttribute('data-plugin-status', 'available')
-    await expect(page.locator('#plugin-store')).toContainText('Removed Omega; it is back under Get more.')
+    await expect(page.locator('#plugin-store')).toContainText('Removed Omega; it is back under Plugins to add.')
     await expect.poll(() => configPluginKeys(), { timeout: 15_000 }).not.toContain(id)
     if (round === 1) await available.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-removed.png` })
   }

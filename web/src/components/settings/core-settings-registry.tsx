@@ -178,7 +178,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'shortcuts', label: 'Keyboard shortcuts', title: 'Keyboard shortcuts', group: 'configure',
     icon: 'keyboard', tint: '#636366',
-    description: 'Every shortcut and its key, and a new key for the ones that can change.',
+    description: 'See every shortcut. Pick a new key for any that has a Change button.',
     keywords: ['keyboard', 'shortcut', 'shortcuts', 'key', 'keys', 'hotkey', 'command', 'new task', 'close column', 'cmd'],
     render: () => <KeyboardShortcutsSection />,
   },
@@ -248,7 +248,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'triage', label: 'Inbox Triage', title: 'Inbox Triage', group: 'configure',
     icon: 'tray', tint: '#007AFF',
-    description: 'Walnut reads new mail and messages and sorts out what needs you.',
+    description: 'Walnut reads new Slack messages and sorts out what needs you.',
     keywords: [
       'mail', 'slack', 'inbox', 'assist', 'mark read', 'interval',
     ],
@@ -360,7 +360,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure',
     icon: 'sliders', tint: '#8E8E93',
-    description: 'Keep awake, developer options and device records.',
+    description: 'Developer options, device records, and on a Mac, keeping it awake during sessions.',
     keywords: [
       'keep awake', 'lid', 'battery', 'sdk',
       { word: 'port', rowLabel: 'Port', anchor: 'sdk-port' }, // the row's real label (N17)
@@ -393,7 +393,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'walnut-health', label: 'Walnut Health', title: 'Walnut Health', group: 'diagnostics',
     icon: 'heart-pulse', tint: '#FF2D55',
-    description: 'Alarms on Walnut\'s own health, like CloudWatch: what is high, what Walnut fixed itself, and its fix tasks.',
+    description: 'Alarms on Walnut\'s own health: what is higher than usual, what Walnut fixed itself, and the tasks it opened to fix the rest.',
     keywords: ['health', 'alarm', 'monitor', 'metrics', 'cloudwatch', 'errors', 'disk', 'stall', 'anomaly'],
     render: () => <HealthMonitorSection />,
   },
@@ -421,7 +421,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'suggest-accuracy', label: 'Suggestion Accuracy', title: 'Suggestion Accuracy', group: 'diagnostics',
     icon: 'target', tint: '#FF9500',
-    description: "How often a new session's draft guesses its project and folder right.",
+    description: "How often Walnut's suggested project and folder for a new session were right.",
     keywords: ['suggestion', 'accuracy', 'quick add', 'guesses'],
     render: () => <SuggestAccuracySection />,
   },

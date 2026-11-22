@@ -93,7 +93,7 @@ test('a fresh draft shows no chip for its Focus default; a landed parse orders l
   // No project chip yet: the project follows the folder, and there is none.
   await expect(draftPills(panel)).toHaveCount(1)
   const more = draftMoreButton(panel)
-  await expect(more).toHaveText('More')
+  await expect(more).toHaveText('Task settings')
   await expect(more).toHaveAttribute('aria-label', 'Task settings')
   await expect(more).toHaveAttribute('aria-haspopup', 'dialog')
   await expect(more).toHaveAttribute('aria-expanded', 'false')

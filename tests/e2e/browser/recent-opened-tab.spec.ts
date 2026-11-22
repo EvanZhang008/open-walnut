@@ -144,7 +144,7 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await tierCard(page, a).click()
   await clickTaskLink(page, c)
   await tierCard(page, b).getByRole('button', { name: 'More actions' }).click()
-  await page.getByRole('button', { name: 'Details', exact: true }).click()
+  await page.getByRole('button', { name: 'Task details', exact: true }).click()
   await expect(page.locator('.task-detail-modal-overlay')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal-overlay')).toHaveCount(0)
@@ -173,7 +173,7 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   // Open in this window = greyed: a's details are open, the rest are not.
   await expect(page.locator('.todo-recent-card-open')).toHaveCount(0)
   await recentCard(page, a).getByRole('button', { name: 'More actions' }).click()
-  await page.getByRole('button', { name: 'Details', exact: true }).click()
+  await page.getByRole('button', { name: 'Task details', exact: true }).click()
   await expect(page.locator('.task-detail-modal-overlay')).toBeVisible()
   await expect(recentCard(page, a)).toHaveClass(/todo-recent-card-open/)
   await expect(recentCard(page, b)).not.toHaveClass(/todo-recent-card-open/)

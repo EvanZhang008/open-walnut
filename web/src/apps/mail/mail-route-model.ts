@@ -150,7 +150,7 @@ function withBy(view: MailRouteView, route: MailRouteDto, area?: { name?: string
   const named = clean(route.router?.name);
   const areaName = clean(area?.name);
   const name = named || (areaName ? `the ${areaName} router` : 'a router');
-  const lead = route.origin === 'legacy' ? 'Recorded by' : 'Processed by';
+  const lead = route.origin === 'legacy' ? 'Recorded by' : 'Reviewed by';
   const when = typeof route.at === 'number' ? formatMailDate(route.at) : '';
   const routerId = route.router?.available && clean(route.router.id) ? clean(route.router.id) : undefined;
   const text = `${lead} ${name}` + (when ? ` · ${when}` : '');

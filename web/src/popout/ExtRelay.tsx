@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
+import { AGENTS_IN_BROWSER } from '@/components/settings/sections/browser-labels';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { ownerWord, relayGroups, relayTabName, taskOfOwner, type RelayPillKind, type RelayState, type RelayTab } from './ext-relay-model';
 import { taskHead } from './ext-tasks-model';
@@ -90,7 +91,7 @@ export function RelayPanel({ relay, here, tasks, anchorRef, onClose, settings }:
           <label className="ext-relay-agents-row">
             <ToggleSwitch checked={on} data-testid="ext-relay-agents" aria-label="Let Walnut agents use this browser"
               onChange={(v) => { setWant(v); toParent({ type: 'relay-set', on: v }); }} />
-            <span>{on ? 'Agents on' : 'Agents off'}</span>
+            <span>{on ? AGENTS_IN_BROWSER.all : AGENTS_IN_BROWSER.shared}</span>
           </label>
         )}
       </div>

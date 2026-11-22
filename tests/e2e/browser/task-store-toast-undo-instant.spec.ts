@@ -46,7 +46,7 @@ test('mod+z after "Save as todo" drops the board row before the DELETE is answer
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // The draft column is the one place a task is created; "Save as todo"
+  // The draft column is the one place a task is created; "Save as task"
   // is its no-session path.
   const panel = await openDraft(page)
   await draftComposer(page).fill(title)

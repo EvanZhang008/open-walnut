@@ -71,7 +71,7 @@ export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, 
       <div className="apps-detail" data-testid="plugin-detail" data-plugin-id={pluginId}>
         {back}
         <SettingsGroup>
-          <SettingsRow label="This plugin is not on this computer" help="It may have been removed. Everything you can add is under Get more." />
+          <SettingsRow label="This plugin is not on this computer" help="It may have been removed. Everything you can add is under Plugins to add." />
         </SettingsGroup>
       </div>
     )
@@ -244,7 +244,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
           ? 'Deletes the files Walnut installed for it. Plugins from the same source go with it.'
           : row.sourceSlug
             ? 'Turns it off and forgets its settings. Its source keeps it, ready to install again.'
-            : 'Turns it off and forgets its settings. It stays under Get more.'}
+            : 'Turns it off and forgets its settings. It stays under Plugins to add.'}
         control={
           <InlineConfirmButton
             disabled={store.busy === (ownRemove ? row.id : row.sourceSlug)}

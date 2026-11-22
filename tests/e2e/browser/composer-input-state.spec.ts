@@ -177,17 +177,17 @@ test('normalization, prefills and command insertion preserve state', async ({ pa
   await expect(page.getByTestId('mirror')).toHaveText('/review')
 })
 
-test('the Skills shortcut shows skills first without hiding commands when slash is typed', async ({ page }) => {
+test('the Run a skill shortcut shows skills first without hiding commands when slash is typed', async ({ page }) => {
   const input = await openComposer(page)
   await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-  await page.getByRole('menuitem', { name: '/Skills' }).click()
+  await page.getByRole('menuitem', { name: /\/\s*Run a skill/ }).click()
   await expect(input).toHaveValue('/')
   const palette = page.locator('.command-palette')
   await expect(palette.locator('.command-palette-name')).toHaveText(['/deploy', '/project-helper'])
   await input.press('Escape')
   await input.fill('')
   await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-  await page.getByRole('menuitem', { name: '/Skills' }).click()
+  await page.getByRole('menuitem', { name: /\/\s*Run a skill/ }).click()
   await expect(palette.locator('.command-palette-name')).toHaveText(['/deploy', '/project-helper'])
   await input.press('Escape')
   await input.fill('')

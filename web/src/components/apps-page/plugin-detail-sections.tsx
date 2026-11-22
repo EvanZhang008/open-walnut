@@ -193,7 +193,7 @@ export function PartsSection({ store, row, parts, tints, onOpen }: {
   const pluginUi = usePluginUi()
   if (parts.length === 0) return null
   return (
-    <SettingsGroup heading={`Parts of ${row.name}`} className="apps-detail-group" data-testid={`plugin-parts-${row.id}`}>
+    <SettingsGroup heading={`Included in ${row.name}`} className="apps-detail-group" data-testid={`plugin-parts-${row.id}`}>
       {parts.map((part) => {
         const on = isRunning(part)
         const switchOn = store.cascadeAsk?.target.id === part.id ? true : (store.pendingToggle[part.id] ?? on)

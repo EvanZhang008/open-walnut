@@ -9,7 +9,10 @@ import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/
 
 type FilterTab = 'all' | 'builtin' | 'config';
 
-// Console agents show in the home chat switcher; everything else runs in the background.
+// 'config' agents are the ones the user made (kept in their config), so the tab says Custom.
+const FILTER_LABEL: Record<FilterTab, string> = { all: 'All', builtin: 'Built-in', config: 'Custom' };
+
+// Home chat (console) agents show in the home chat switcher; everything else runs in the background.
 // 'general' is always a console agent regardless of its flag.
 const isConsoleAgent = (a: AgentDefinition) => a.id === 'general' || a.console === true;
 
@@ -86,7 +89,7 @@ export function AgentsPage() {
       <div className="page-header flex justify-between items-center">
         <div>
           <h1 className="page-title">Agents</h1>
-          <p className="page-subtitle">Manage subagent definitions</p>
+          <p className="page-subtitle">Agents you chat with on Home and agents that run in the background: edit their prompts or make your own.</p>
         </div>
         {!showForm && (
           <button className="btn btn-primary" onClick={() => { setEditingAgent(undefined); setCloningFrom(undefined); setShowForm(true); }}>
@@ -114,7 +117,7 @@ export function AgentsPage() {
             count={counts[tab]}
             onClick={() => setFilter(tab)}
           >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {FILTER_LABEL[tab]}
           </Chip>
         ))}
       </ChipGroup>
@@ -122,15 +125,15 @@ export function AgentsPage() {
       {filtered.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">&#129302;</div>
-          <p>{filter === 'all' ? 'No agents defined yet' : `No ${filter} agents`}</p>
+          <p>{filter === 'all' ? 'No agents defined yet' : `No ${FILTER_LABEL[filter].toLowerCase()} agents`}</p>
           {filter === 'all' && (
             <p className="text-sm mt-2">Create an agent to define specialized AI assistants</p>
           )}
         </div>
       ) : (
         <>
-          {renderAgentSection('Console agents', 'shown in the home chat switcher', consoleAgents)}
-          {renderAgentSection('Background agents', 'run automatically, not in the switcher', backgroundAgents)}
+          {renderAgentSection('Home chat agents', 'you can pick these in the Home chat', consoleAgents)}
+          {renderAgentSection('Background agents', 'run on their own, not in the Home chat', backgroundAgents)}
         </>
       )}
     </div>

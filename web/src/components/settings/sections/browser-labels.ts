@@ -26,3 +26,14 @@ export function browserRowLabels(
   }
   return out;
 }
+
+/**
+ * What agents may do in one browser, the same words in Settings > Browser extension and the
+ * extension's relay panel: not connected for agents, only the tabs the person shares, or the
+ * shared tabs plus tabs of their own.
+ */
+export const AGENTS_IN_BROWSER = {
+  none: "Agents can't use this browser",
+  shared: 'Agents use only tabs you share',
+  all: 'Agents can use this browser',
+} as const;

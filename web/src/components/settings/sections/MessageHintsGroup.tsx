@@ -50,8 +50,8 @@ const ROLES: Role[] = ['main', 'lead', 'worker', 'ask', 'other'];
 /** Whose hint a row is: Walnut's own (the same in every Walnut) or the user's. */
 export function hintOrigin(h: Pick<HintRow, 'built_in' | 'overridden'>): { label: string; title: string; kind: 'built-in' | 'changed' | 'yours' } {
   if (!h.built_in) return { kind: 'yours', label: 'Yours', title: 'A hint you added. Only your Walnut sends it.' };
-  if (h.overridden) return { kind: 'changed', label: 'Built in, changed by you', title: "Walnut's built-in hint and its text, with your own settings for it (on or off, when, to whom, where). Reset to default undoes them." };
-  return { kind: 'built-in', label: 'Built in', title: "Walnut's built-in hint, the same in every Walnut." };
+  if (h.overridden) return { kind: 'changed', label: 'Built-in, changed by you', title: "Walnut's built-in hint and its text, with your own settings for it (on or off, when, to whom, where). Reset to default undoes them." };
+  return { kind: 'built-in', label: 'Built-in', title: "Walnut's built-in hint, the same in every Walnut." };
 }
 
 export function hintWhen(h: Pick<HintRow, 'enabled' | 'triggers' | 'every_turns'>): string {
@@ -240,7 +240,7 @@ export function MessageHintsGroup() {
       heading="Message hints"
       id="message-hints"
       data-testid="message-hints"
-      footer="Short text sent with a message to the AI. Built in: Walnut's own, the same in every Walnut. Yours: a hint you added. They are for the AI and are not shown in the chat; a session's menu, Raw input & output, shows exactly what it received. Agents can change these too (hint_set)."
+      footer="Short text sent with a message to the AI. Built-in: Walnut's own, the same in every Walnut. Yours: a hint you added. They are for the AI and are not shown in the chat; a session's menu, Raw input & output, shows exactly what it received. Agents can change these too."
     >
       <SettingsRow
         anchor="settings-show-walnut-additions"

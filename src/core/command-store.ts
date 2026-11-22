@@ -65,8 +65,10 @@ function toFilename(name: string): string {
   return `${name}.md`;
 }
 
+/** A hidden file is never a command: macOS writes `._<name>.md` beside a copied file (its
+ *  AppleDouble metadata), and the slash list showed it as `/._<name>` with no description. */
 function nameFromFile(filename: string): string | null {
-  if (!filename.endsWith('.md')) return null;
+  if (!filename.endsWith('.md') || filename.startsWith('.')) return null;
   // A hidden file is never a command: macOS writes `._<name>.md` (AppleDouble metadata, binary)
   // beside a file copied to some disks, and editors leave `.#<name>.md` locks; listed, one showed
   // as a command whose prompt was binary noise (2026-11-22, the UI audit).

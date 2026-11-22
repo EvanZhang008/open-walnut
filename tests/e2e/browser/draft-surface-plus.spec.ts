@@ -162,7 +162,7 @@ test('the Satellite tab carries a tier "+" that opens a draft preset to Satellit
 
   // THE assertion, read off the OUTCOME the user sees on the board: the task the
   // seeded draft creates lands in Satellite, not in the Focus default. Committed through
-  // "Save as todo" (needs no folder, spawns no CLI).
+  // "Save as task" (needs no folder, spawns no CLI).
   await expectSeededTierLands(page, panel, 'satellite', `satellite tab seed probe ${Date.now()}`)
 })
 

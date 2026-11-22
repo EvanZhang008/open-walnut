@@ -18,7 +18,7 @@ import { hostDotOf } from '@open-walnut/host-problem';
 import { HostStatusDot } from './path-selector/HostStatusDot';
 import { CLOUD_BOX_ALIAS, hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import type { DraftColumn } from './draft-column';
-import { shownFolderName } from '@/utils/home-folder';
+import { homeFolderWords, shownFolderName } from '@/utils/home-folder';
 import type { DraftDecisionMenu } from './DraftDecisionRow';
 import { DRAFT_MENU_OWNER_ATTR, menuTriggerProps } from './DraftDecisionRow';
 import type { DraftProjectChipModel } from './draft-project-chip';
@@ -79,7 +79,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
         <>
           {/* The spaces are text for copy and specs; flex drops them visually. */}
           <span className="draft-pill-key">Folder/Host:</span>{' '}
-          <span className="draft-pill-name btn-value">{shownFolderName(draft.cwd, draft.host)}</span>{' '}
+          <span className="draft-pill-name btn-value">{homeFolderWords(shownFolderName(draft.cwd, draft.host))}</span>{' '}
           <span className="draft-pill-host">· {hostName}</span>
           {saysSomething && <HostStatusDot dot={hostDot!} host={draft.host ?? undefined} className="draft-pill-dot" />}
         </>

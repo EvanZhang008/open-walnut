@@ -89,6 +89,14 @@ export function folderNameIn(cwd: string, home?: string): string {
   return dir.slice(dir.lastIndexOf('/') + 1) || dir;
 }
 
+/** What a label says for the home folder: a bare `~` alone reads as nothing to a person
+ *  (2026-11-21 UI audit: "Work in: ~", a Files tree headed `~` over a root row `~`). A path keeps
+ *  its `~` (`~/code`); only a name that IS the home becomes these words. */
+export const HOME_FOLDER_LABEL = 'Home folder';
+export function homeFolderWords(name: string): string {
+  return name === '~' ? HOME_FOLDER_LABEL : name;
+}
+
 /** A folder's name as shown on `host`: `~` for that host's home, else its last segment. */
 export function shownFolderName(cwd: string, host: string | null | undefined): string {
   return folderNameIn(cwd, knownHomeOf(host));

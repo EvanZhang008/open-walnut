@@ -23,7 +23,7 @@
  * applied, dates applied unseen) is counted apart. Priority is recorded only while
  * `ui.show_priority` is on: a hidden field is neither written nor measured.
  *
- * Committed through "◌ Save as todo" rather than Start: both exits record
+ * Committed through "◌ Save as task" rather than Start: both exits record
  * (`surface` tells them apart), and the task exit needs no folder and spawns no CLI,
  * so the claim under test isn't wrapped in a session launch.
  *

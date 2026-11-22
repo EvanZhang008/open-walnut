@@ -66,8 +66,8 @@ function coverageLine(report: CostReport, days: string[], stillReading: boolean,
     parts.push(`Recorded by Walnut${own.length > 1 && ownFrom !== latest ? ':' : ''} ${each}.`);
   } else if (days[0] && days[0] < latest) {
     // The period reaches back past a host's first stored day: say where each one starts.
-    parts.push(`Stored ${each}.`);
-    if (days[0] < ownFrom) parts.push('Nothing earlier: those transcripts were gone before Walnut kept usage.');
+    parts.push(`Recorded ${each}.`);
+    if (days[0] < ownFrom) parts.push('The grey days before have none: those transcripts were gone before Walnut kept usage.');
   } else parts.push('Every day of this period is stored.');
   if (stillReading) parts.push('The latest hours are still being read.');
   return parts.join(' ');

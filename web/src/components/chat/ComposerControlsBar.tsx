@@ -456,7 +456,9 @@ function OverflowRow({ control, barRef, onActivate }: {
     return () => mo.disconnect();
   }, [barRef, control.id]);
   const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
-  const value = label && norm(label) !== norm(control.name) ? label : '';
+  // A control that shows its own name plus a count ("Side chat 2") keeps only the count.
+  const value = !label || norm(label) === norm(control.name) ? ''
+    : label.startsWith(control.name) ? label.slice(control.name.length).trim() : label;
   return (
     <button
       type="button"

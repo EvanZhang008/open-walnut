@@ -552,7 +552,7 @@ test.describe('Tasks', () => {
       await expect(row).toBeVisible({ timeout: 5_000 })
     }).toPass({ timeout: 40_000 })
     await row.getByRole('button', { name: 'More actions' }).click()
-    await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+    await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
     const modal = page.locator('.task-detail-modal')
     await expect(modal.locator('.todo-detail-title')).toHaveText(title, { timeout: 30_000 })
     const input = modal.locator('.tdp-note-add').getByPlaceholder('Add to note...')

@@ -39,7 +39,7 @@ export async function pinnedTierOf(page: Page, taskId: string): Promise<string> 
 }
 
 /**
- * "◌ Save as todo" on `panel`, returning the created task's id.
+ * "◌ Save as task" on `panel`, returning the created task's id.
  *
  * The task exit is the cheapest way to COMMIT a draft's launch meta: it needs no
  * folder and spawns no CLI, and the id comes straight from the POST /api/tasks

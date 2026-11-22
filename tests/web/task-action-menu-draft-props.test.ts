@@ -429,7 +429,7 @@ describe('draft decision menu controller', () => {
   it('More and chips are dialog triggers that keep the composer caret on mousedown (C2, C55, C62)', async () => {
     await render();
     const m = more();
-    expect(m.textContent).toBe('More');
+    expect(m.textContent).toBe('Task settings');
     expect(m.getAttribute('aria-label')).toBe('Task settings');
     expect(m.getAttribute('aria-haspopup')).toBe('dialog');
     expect(m.getAttribute('aria-expanded')).toBe('false');

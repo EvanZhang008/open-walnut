@@ -397,7 +397,7 @@ export function SessionKebabSection({
     <div className="task-kebab-section">
       {/* One row for the session process itself (the user's pick of the menu redesign,
           2026-11-02): what opens beside the chat lives in Open at the top of the menu. */}
-      <KebabGroup label="Session" hint="copy · debug · restart · info" icon={ICON_CHAT} testId="session-kebab-session">
+      <KebabGroup label="Session" hint="copy · debug · restart · session info" icon={ICON_CHAT} testId="session-kebab-session">
 
       {/* Copy & open: take the session somewhere else (an editor, a terminal, the
           clipboard), and the facts that go with it. */}

@@ -287,7 +287,7 @@ export function AdvancedSection({ config, onSave }: Props) {
         )}
 
         {/* SDK Session Server: a developer switch (Agent SDK server instead of CLI sessions). */}
-        <SettingsDisclosure id="advanced-sdk" data-testid="advanced-disclosure-sdk" label="SDK session server" summary={sdkEnabled ? 'On' : 'Off'}>
+        <SettingsDisclosure id="advanced-sdk" data-testid="advanced-disclosure-sdk" label="SDK session server" help="For developers: run sessions through the Agent SDK instead of the CLI." summary={sdkEnabled ? 'On' : 'Off'}>
           <SettingsRow indent label="Use the Agent SDK server" help="Runs sessions through the SDK server instead of the CLI." htmlFor="sdk-enabled"
             control={<ToggleSwitch id="sdk-enabled" name="sdk-enabled" checked={sdkEnabled} onChange={setSdkEnabled} />} />
           {/* Depends on the switch above: dimmed and read-only while it is off (N3-23). */}
@@ -295,7 +295,7 @@ export function AdvancedSection({ config, onSave }: Props) {
             control={<FormNumber id="sdk-port" defaultValue={config.session_server?.port ?? 7890} min={1024} max={65535} readOnly={!sdkEnabled} />} />
         </SettingsDisclosure>
 
-        <SettingsDisclosure id="advanced-raw" data-testid="advanced-disclosure-raw" label="Raw config" summary="Read only">
+        <SettingsDisclosure id="advanced-raw" data-testid="advanced-disclosure-raw" label="Raw config" help="Every setting as Walnut saved it, to read or copy." summary="Read only">
           <SettingsMonoBlock label="Current config" text={JSON.stringify(config, null, 2)} data-testid="advanced-raw-config" />
         </SettingsDisclosure>
         {formError && <p className="settings-row-error" role="alert" data-testid="advanced-save-error">{formError}</p>}

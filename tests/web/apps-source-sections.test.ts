@@ -47,7 +47,7 @@ describe('sourceSections', () => {
     expect(sections.map((s) => [s.title, s.rows.map((r) => r.id)])).toEqual([
       [BUILTIN_SECTION_TITLE, ['calendar', 'rhythm']],
       ['@zeta/walnut-plugin', []],
-      ['AcmePluginStore', ['tracker', 'notes']],
+      ['Acme Plugin Store', ['tracker', 'notes']],
       [LOCAL_SECTION_TITLE, ['folder-one', 'dev-link']],
     ])
   })
@@ -56,7 +56,7 @@ describe('sourceSections', () => {
     const gone = source({ slug: 'gone', kind: 'git', url: 'https://example.com/me/gone.git', cloned: false })
     const sections = sourceSections([], [gone])
     expect(sections).toHaveLength(1)
-    expect(sections[0]).toMatchObject({ id: 'source:gone', kind: 'source', title: 'gone', rows: [] })
+    expect(sections[0]).toMatchObject({ id: 'source:gone', kind: 'source', title: 'Gone', rows: [] })
   })
 
   it('treats a row whose source is not installed any more as local', () => {
@@ -70,12 +70,12 @@ describe('sourceSections', () => {
 })
 
 describe('sourceDisplayName', () => {
-  it('names a git source by its repo and an npm source by its package', () => {
-    expect(sourceDisplayName(acme)).toBe('AcmePluginStore')
-    expect(sourceDisplayName(source({ slug: 's', kind: 'git', url: 'git@github.com:me/walnut-plugin.git' }))).toBe('walnut-plugin')
-    expect(sourceDisplayName(source({ slug: 's', kind: 'git', url: 'https://github.com/me/repo/' }))).toBe('repo')
+  it('names a git source by its repo in words and an npm source by its package', () => {
+    expect(sourceDisplayName(acme)).toBe('Acme Plugin Store')
+    expect(sourceDisplayName(source({ slug: 's', kind: 'git', url: 'git@github.com:me/walnut-plugin.git' }))).toBe('Walnut plugin')
+    expect(sourceDisplayName(source({ slug: 's', kind: 'git', url: 'https://github.com/me/repo/' }))).toBe('Repo')
     expect(sourceDisplayName(zeta)).toBe('@zeta/walnut-plugin')
-    expect(sourceDisplayName(source({ slug: 'fallback', kind: 'git' }))).toBe('fallback')
+    expect(sourceDisplayName(source({ slug: 'fallback', kind: 'git' }))).toBe('Fallback')
   })
 })
 

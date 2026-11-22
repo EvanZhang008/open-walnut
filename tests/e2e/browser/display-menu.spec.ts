@@ -445,7 +445,7 @@ test('with the tab bar off, the filter row names the view and opens Display', as
 
   // C56: searching a finished task with the bar off: the row offers it, one click shows it.
   await page.locator('#home-task-navigation .todo-search-bar input').fill(`hidden bar finished ${stamp}`)
-  const include = filterRow(page).getByRole('button', { name: /Include Complete \(\d+\)/ })
+  const include = filterRow(page).getByRole('button', { name: /Include completed \(\d+\)/ })
   await expect(include).toBeVisible({ timeout: 15_000 })
   await include.click()
   await expect(page.locator(`#home-task-navigation [data-task-id="${done}"]`).first()).toBeVisible({ timeout: 15_000 })

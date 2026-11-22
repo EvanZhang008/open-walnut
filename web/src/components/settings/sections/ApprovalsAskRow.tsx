@@ -17,7 +17,7 @@ import type { Config } from '@open-walnut/core';
 import { SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
-import { listApprovals, type Approval } from '@/api/approvals';
+import { APPROVALS_SWITCH_LABEL, listApprovals, type Approval } from '@/api/approvals';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
@@ -49,8 +49,11 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
   return (
     <>
       <SettingsRow
-        label="Ask me before Walnut's own steps"
-        help="Posts, mail, browser steps and uploads, passwords, a first command on a host. Off: they go ahead, listed below. A walnut approve in your own script always asks you."
+        label={APPROVALS_SWITCH_LABEL}
+        help={<>
+          On: agents wait for your yes before a post, mail, browser step, upload, saved password or first command on another host. Off: these go ahead without asking, and each is listed below.
+          <br />A <code>walnut approve</code> in your own script always asks you, whatever this says.
+        </>}
         htmlFor="settings-approvals-ask-me"
         error={setting.error}
         data-testid="settings-approvals-ask-me-row"

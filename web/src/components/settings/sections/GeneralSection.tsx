@@ -142,8 +142,8 @@ function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<t
  * Walnut, so their help says so; every other row is a config row via onSave.
  */
 const TASKBAR_LEAVING_OPTIONS: Array<{ value: TaskbarLeaving; label: string }> = [
-  { value: 'recent', label: 'Recent' },
-  { value: 'chips', label: 'Bar chips' },
+  { value: 'recent', label: 'Recent list' },
+  { value: 'chips', label: 'Taskbar' },
 ];
 
 export function GeneralSection({ config, onSave }: Props) {
@@ -211,7 +211,7 @@ export function GeneralSection({ config, onSave }: Props) {
         />
         <SettingsRow
           label="Closed sessions go to"
-          help="Where a session goes when × closes it or a new one pushes it out."
+          help="Where a session goes when × closes it or a new one pushes it out: the Recent list at the taskbar's right end, or a taskbar chip, as if you minimized it."
           data-testid="settings-taskbar-leaving-row"
           control={
             <SegmentedControl
@@ -224,14 +224,14 @@ export function GeneralSection({ config, onSave }: Props) {
           }
         />
         <SettingsRow
-          label="Hide the bottom bar when it has only Recent"
-          help="The bar shows once a session is minimized, with Recent beside its chips."
+          label="Hide the taskbar when it has only the Recent list"
+          help="The taskbar along the bottom of Home then shows once you minimize a session, with the Recent list at its right end."
           htmlFor="settings-taskbar-hide-recent-only"
           data-testid="settings-taskbar-hide-recent-only-row"
           control={
             <ToggleSwitch
               id="settings-taskbar-hide-recent-only"
-              aria-label="Hide the bottom bar when it has only Recent"
+              aria-label="Hide the taskbar when it has only the Recent list"
               checked={taskbar.hideRecentOnly}
               onChange={setTaskbarHideRecentOnly}
             />

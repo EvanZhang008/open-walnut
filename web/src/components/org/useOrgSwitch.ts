@@ -12,10 +12,10 @@ export const ORG_OFF_STOPS = [
   'CEO and the VPs start no session, and Walnut wakes none of them',
   'Status updates, team notes and Brief refreshes stop going up to them',
   'Their away letters, scheduled reports and the routines aimed at them do not run',
-  'Agents cannot reach them with org_send',
+  'Agents cannot message them',
 ] as const;
 
-export const ORG_OFF_STILL = 'You can still type to CEO or a VP in its chat. Tasks, their sessions, the Board and the inbox keep working.';
+export const ORG_OFF_STILL = 'Still works: you can type to CEO or a VP in its chat, and tasks, their sessions, the Board and the inbox keep working.';
 
 export function orgSwitchFooter(on: boolean): string {
   return on

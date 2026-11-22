@@ -237,8 +237,8 @@ test('S4-W6: Start Task picks its folder, More closes on Escape, and the launch 
   await expect(draft).toBeVisible({ timeout: 60_000 })
   const card = (label: string) => draft.locator('.draft-intent-card', { hasText: label })
   await expect(card('Quick question')).toHaveAttribute('aria-pressed', 'true')
-  await card('Start Task').click()
-  await expect(card('Start Task')).toHaveAttribute('aria-pressed', 'true')
+  await card('New task').click()
+  await expect(card('New task')).toHaveAttribute('aria-pressed', 'true')
 
   await draftCwdPill(draft).click()
   const picker = page.locator('.session-path-selector')

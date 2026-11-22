@@ -120,8 +120,8 @@ export async function openPlusMenu(panel: Locator): Promise<Locator> {
  *  page, never inside a panel; only one composer's flyout is open at a time. */
 export const moreMenu = (page: Page): Locator => page.getByRole('menu', { name: 'More composer actions' })
 
-/** The "More" row of an open "+" menu. */
-export const moreRow = (menu: Locator): Locator => menu.getByRole('menuitem', { name: 'More', exact: true })
+/** The "More actions" row of an open "+" menu. */
+export const moreRow = (menu: Locator): Locator => menu.getByRole('menuitem', { name: 'More actions', exact: true })
 
 /** "+" -> More: Recall and the caller-defined actions (Latest update, Engine
  *  settings, Transfer, Compact context, Main's quick actions) live in this flyout.

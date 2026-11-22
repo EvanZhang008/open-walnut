@@ -133,6 +133,7 @@ import { observeRowFit } from '@/utils/row-fit';
 import { observeMetaLineFit } from '@/utils/meta-line-fit';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { formatWaitUntil } from './TaskStatusControl';
+import { untilWords } from '../common/date-time-pick';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { type SortBy, type GroupBy } from './ViewDropdown';
 import {
@@ -1335,9 +1336,9 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             <span
               className="badge todo-item-due-pill todo-item-wait-pill"
               data-testid="task-row-wait-until"
-              title={`Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
+              title={`Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}
             >
-              <span>until {formatWaitUntil(task.wait_until)}</span>
+              <span>{untilWords(formatWaitUntil(task.wait_until))}</span>
             </span>
           )}
           {!!task.is_blocked && !isDone && (
@@ -3140,9 +3141,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         return next;
       });
     }
-    // 5.11: a task just created (a tier quick-add, Save as todo) that the chips
+    // 5.11: a task just created (a tier quick-add, Save as task) that the chips
     // hide keeps the override too, so it stays on screen with its pill.
-    // 'created' = the draft's Save as todo (F07): its task gets the pill too.
+    // 'created' = the draft's Save as task (F07): its task gets the pill too.
     const keepCreated = wouldBeHidden && (pinnedOnly || focusScope === 'created') && isJustCreated(task.created_at);
 
     if (wouldBeHidden && (!pinnedOnly || keepCreated)) {
@@ -7747,7 +7748,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     archiveLoading,
     search: {
       active: isSearchMode,
-      lead: effectiveSection === 'recent' ? 'Searching Recent' : null,
+      lead: effectiveSection === 'recent' ? 'In recent tasks' : null,
       // Recent lists every state already: the chip would switch nothing there.
       includeComplete: isSearchMode && statusIsDefault && searchDoneCount > 0 && effectiveSection !== 'recent'
         ? { count: searchDoneCount, on: showDoneResults, toggle: toggleIncludeComplete }
@@ -8186,6 +8187,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         counts={sectionCounts}
         heldCounts={sectionHeldCounts}
         countsReady={!loading}
+        countScope={{ search: isSearchMode, waitingLeftOut: !isSearchMode && !waitingRevealed }}
         customTiers={customTiers}
         fixed={tabBarAlways}
         wide={tabBarAlways}

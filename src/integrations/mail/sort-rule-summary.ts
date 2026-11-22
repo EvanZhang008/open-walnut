@@ -57,7 +57,10 @@ export function messageRuleLabel(rule: Pick<Rule, 'label' | 'when'>): string {
 
 /** `From issues@* or noreply-oncall-notifications@* → On-call & tickets`. */
 export function summarizeRule(rule: Pick<Rule, 'when' | 'then' | 'label'> & Pick<Partial<Rule>, 'moveTo'>, ctx: SummaryContext = {}): string {
-  const target = rule.moveTo ? `${rule.then.trim()}, filed into ${rule.moveTo.trim()}` : rule.then.trim()
+  const group = rule.then.trim()
+  const folder = rule.moveTo?.trim()
+  // A folder named as its group is said once.
+  const target = !folder ? group : folder.toLowerCase() === group.toLowerCase() ? `${group}, filed into a folder of that name` : `${group}, filed into ${folder}`
   if (rule.when.message) return `${messageRuleLabel(rule)} → ${target}`
   return `${summarizeWhen(rule.when, ctx)} → ${target}`
 }

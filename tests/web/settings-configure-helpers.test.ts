@@ -98,7 +98,7 @@ describe('summaries and result lines are plain words', () => {
     expect(providerDisplayName('some-new-api')).toBe('an unknown provider')
     expect(providerDisplayName('openrouter')).toBe('OpenRouter')
     expect(usesHelp('default' as never, 'claude_cli')).toBe('Slow: each guess starts Claude Code once.')
-    expect(usesHelp('jev' as never, 'claude_cli')).toBe('Under a second, fractions of a cent.')
+    expect(usesHelp('jev' as never, 'claude_cli')).toBe('Under a second, fractions of a cent. Its key, endpoint and model are below.')
   })
 
   it('never uses a dash in these strings', () => {

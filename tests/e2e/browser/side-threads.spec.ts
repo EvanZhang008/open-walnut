@@ -276,7 +276,7 @@ async function openParentColumn(page: Page): Promise<Locator> {
  *  controls bar's own pill is visually hidden and carries the count, so it is read,
  *  never clicked; the composer's direct "btw" button (same class, no count) opens it. */
 const btwPill = (panel: Locator): Locator =>
-  panel.locator('.composer-controls-bar .side-question-pill', { hasText: 'btw' }).first()
+  panel.locator('.composer-controls-bar .side-question-pill', { hasText: 'Side chat' }).first()
 
 async function openDrawer(panel: Locator): Promise<Locator> {
   await directControl(panel, 'btw').click()
@@ -314,8 +314,8 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   const popover = await openDrawer(panel)
 
   // Header + hint: the drawer must read as "multi-turn, kept out of the chat".
-  await expect(popover.locator('.side-question-popover-title')).toHaveText('Side threads')
-  await expect(popover.locator('.side-question-popover-hint')).toContainText('multi-turn')
+  await expect(popover.locator('.side-question-popover-title')).toHaveText('Side chats')
+  await expect(popover.locator('.side-question-popover-hint')).toContainText('the main session never sees')
   // Prewarm is what makes the first ask instant — assert it actually fired.
   await expect.poll(() => stub.standbyCalls, { timeout: 10_000 }).toBeGreaterThan(0)
   // Empty state, and the only chip is "+ New".
@@ -361,7 +361,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // A note annotates an existing thread, so the pill is absent until one exists.
   await expect(composer.locator('.session-notes-pill')).toHaveCount(0)
   // NO recursive "btw": the drawer must never host another side-thread pill.
-  await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
+  await expect(popover.locator('.side-question-pill', { hasText: 'Side chat' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/drawer-composer.png`, fullPage: true })
 
   await drawerInput(popover).pressSequentially('why does ', { delay: 20 })
@@ -382,7 +382,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // With a live thread the Note pill joins the row (its subject now exists), and
   // there is STILL no nested "btw".
   await expect(composer.locator('.session-notes-pill')).toBeVisible({ timeout: 15_000 })
-  await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
+  await expect(popover.locator('.side-question-pill', { hasText: 'Side chat' })).toHaveCount(0)
   // THE assertion this spec exists for: the answer streams into the DRAWER.
   await expect(body.getByText(answerFor(FIRST_Q), { exact: false }).first())
     .toBeVisible({ timeout: 60_000 })
@@ -471,7 +471,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await summaryButton.click()
   const composerBox = panel.locator('textarea.chat-input-textarea').first()
   await expect(composerBox)
-    .toHaveValue(new RegExp(`\\[Summary of side thread "${FIRST_Q}"\\]`), { timeout: 30_000 })
+    .toHaveValue(new RegExp(`\\[Summary of side chat "${FIRST_Q}"\\]`), { timeout: 30_000 })
   // The marker line is STRIPPED before injecting: the header already says where the
   // text came from, so the machine first line must not survive into the composer.
   const injected = await composerBox.inputValue()
@@ -479,7 +479,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   expect(summaryBody.startsWith(DIGEST_MARKER)).toBeFalsy()
   expect(summaryBody).toContain(DIGEST_STANDIN)
   // The SUMMARY variant, not the transcript one: no Q/A rows, no other header.
-  await expect(composerBox).not.toHaveValue(/From side thread/)
+  await expect(composerBox).not.toHaveValue(/From side chat/)
   expect(stub.digested).toEqual(['st-1'])
   await composerBox.fill('')
 
@@ -523,7 +523,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await popover.getByRole('button', { name: /Inject full/ }).click()
   const mainComposer = panel.locator('textarea.chat-input-textarea').first()
   await expect(mainComposer)
-    .toHaveValue(new RegExp(`\\[From side thread "${FIRST_Q}"\\]`), { timeout: 20_000 })
+    .toHaveValue(new RegExp(`\\[From side chat "${FIRST_Q}"\\]`), { timeout: 20_000 })
   await expect(mainComposer).toHaveValue(new RegExp(`A: .*${FIRST_Q}`))
   // NOT asserted here: the `Q:` lines. The mock CLI writes no USER lines to its
   // transcript, so a fixture thread's history is assistant-only — a Q assertion
@@ -600,7 +600,7 @@ test('the chip × files a thread away, and it stays retrievable', async ({ page,
   await fileChip.click()
   await expect(popover.locator('.side-thread-body')).toBeVisible({ timeout: 20_000 })
 
-  await popover.getByRole('button', { name: 'Archive side thread: file me away' }).click()
+  await popover.getByRole('button', { name: 'Archive side chat: file me away' }).click()
 
   // Filed: out of the chip row, into the shelf, and the row still EXISTS server-side.
   await expect(liveChips(popover)).toHaveCount(1, { timeout: 10_000 })
@@ -631,12 +631,12 @@ test('the chip × files a thread away, and it stays retrievable', async ({ page,
   await expect(popover.locator('.side-thread-body')).toBeVisible({ timeout: 20_000 })
   await expect(popover.locator('.side-thread-body')).toContainText(answerFor('file me away'), { timeout: 30_000 })
   await expect(popover.locator('.side-question-composer-label')).toContainText('Archived ·')
-  await expect(popover.locator('.side-question-composer-label')).toContainText('history only')
+  await expect(popover.locator('.side-question-composer-label')).toContainText('read only')
   await expect(drawerInput(popover)).toBeDisabled()
   // The actions row turns into the way BACK — an "Archive" button on an already
   // filed thread would be the one screen where it does nothing.
-  await expect(popover.getByRole('button', { name: 'Restore this side thread' })).toBeVisible()
-  await expect(popover.getByRole('button', { name: 'Archive this side thread' })).toHaveCount(0)
+  await expect(popover.getByRole('button', { name: 'Restore this side chat' })).toBeVisible()
+  await expect(popover.getByRole('button', { name: 'Archive this side chat' })).toHaveCount(0)
   // Summarizing needs a live process to answer; injecting the full aside reads the
   // transcript, so it stays available. Promote stays available too — it RESTORES.
   await expect(popover.getByRole('button', { name: /Inject summary/ })).toBeDisabled()
@@ -665,7 +665,7 @@ test('the chip × files a thread away, and it stays retrievable', async ({ page,
   await expect(reopened.locator('.side-thread-archived')).toBeVisible({ timeout: 10_000 })
 
   // (2) Restorable: back in the chip row, and usable again.
-  await reopened.getByRole('button', { name: 'Restore side thread: file me away' }).click()
+  await reopened.getByRole('button', { name: 'Restore side chat: file me away' }).click()
   await expect(liveChips(reopened)).toHaveCount(2, { timeout: 10_000 })
   await expect(reopened.locator('.side-thread-chip-archived-toggle')).toHaveCount(0)
   expect(stub.restored).toEqual(['st-file'])
@@ -768,7 +768,7 @@ test('an engine that cannot fork shows an inline notice, not a dead drawer', asy
   await ask(popover, 'this engine cannot fork')
 
   await expect(popover.locator('.side-question-notice'))
-    .toHaveText("This engine can't fork side threads", { timeout: 15_000 })
+    .toHaveText("This engine can't start side chats", { timeout: 15_000 })
   // The optimistic chip rolled back — no phantom thread left behind.
   await expect(liveChips(popover)).toHaveCount(0)
   // The composer is still usable (the drawer did not lock up).

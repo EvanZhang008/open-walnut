@@ -38,7 +38,7 @@ test.describe('Walnut Health', () => {
     // The seeded spike by its id: the shared fixture server's own log lines raise spike
     // alarms of their own as other specs run, each with the same title.
     const spike = section.locator(`tr[data-alarm="log.spike:${signatureId(HEALTH_SPIKE_SIG)}"]`)
-    await expect(spike).toContainText('Log line far above its normal')
+    await expect(spike).toContainText('A log line far more often than usual')
     await expect(spike).toContainText(HEALTH_SPIKE_SIG)
     await expect(section.getByTestId('health-summary')).toContainText('in alarm')
     // every built-in alarm has a row, the ones without data too

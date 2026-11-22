@@ -68,7 +68,7 @@ describe('cardStatus', () => {
 
 describe('originKind', () => {
   it('names where the code comes from in a few words', () => {
-    expect(originKind(row({ id: 'a', builtin: true, source: { kind: 'builtin' } }))).toBe('Built in')
+    expect(originKind(row({ id: 'a', builtin: true, source: { kind: 'builtin' } }))).toBe('Built-in')
     expect(originKind(row({ id: 'a', source: { kind: 'bundled' } }))).toBe('Comes with Walnut')
     expect(originKind(row({ id: 'a', source: { kind: 'linked' } }))).toBe('Git checkout')
     expect(originKind(row({ id: 'a', source: { kind: 'local' } }))).toBe('Local folder')

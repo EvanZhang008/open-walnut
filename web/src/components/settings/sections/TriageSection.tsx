@@ -94,13 +94,13 @@ export function TriageSection({ config, onSave }: Props) {
           control={<ToggleSwitch id="inbox-triage-enabled" checked={enabled.value} busy={enabled.busy} onChange={enabled.set}
             {...masterProps(GOVERNED.schedule, GOVERNED.sources, GOVERNED.actions, ...ruleGroups)} />} />
         <ControlGroup id={GOVERNED.schedule} off={off} className="settings-rows-contents" reason="Inbox triage is off: turn it on to use these settings.">
-        <SettingsRow indent disabled={off} label="Interval" help={'A duration such as 30m or 1h; at least 5m, and "0" turns it off.'}
+        <SettingsRow indent disabled={off} label="Run every" help={'A time such as 30m or 1h, at least 5m. 0: no timed runs.'}
           htmlFor="inbox-triage-every" error={every.error} data-testid="inbox-triage-every-row"
           control={<input id="inbox-triage-every" type="text" data-no-draft="autosave" className="settings-input settings-input--number" placeholder={DEFAULT_EVERY} disabled={off} {...every.inputProps} />} />
-        <SettingsRow indent disabled={off} label="Or every" help="0 runs on the interval only." htmlFor="inbox-triage-every-messages"
+        <SettingsRow indent disabled={off} label="Or after every" help="Also runs once this many new messages arrive. 0: only on the timer above." htmlFor="inbox-triage-every-messages"
           error={messages.error} data-testid="inbox-triage-messages-row"
           control={<NumberInput id="inbox-triage-every-messages" field={messages.inputProps} unit="messages" placeholder={String(DEFAULT_EVERY_MESSAGES)} min={0} disabled={off} />} />
-        <SettingsRow indent disabled={off} label="Active hours" help="Empty runs around the clock." htmlFor="inbox-triage-hours"
+        <SettingsRow indent disabled={off} label="Active hours" help="24-hour times such as 08:00-22:00, in the time zone of the computer Walnut runs on. Empty: around the clock." htmlFor="inbox-triage-hours"
           error={hours.error} data-testid="inbox-triage-hours-row"
           control={<input id="inbox-triage-hours" type="text" data-no-draft="autosave" className="settings-input settings-input--number" placeholder={DEFAULT_ACTIVE_HOURS} disabled={off} {...hours.inputProps} />} />
         </ControlGroup>

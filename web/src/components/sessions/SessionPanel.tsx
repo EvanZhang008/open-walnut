@@ -90,6 +90,7 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { keepCommandFirst } from '@/components/chat/leading-command';
 import type { PrefillMode } from '@/components/chat/prefill-place';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
+import { SESSION_NOTE_LABEL, SIDE_CHAT_LABEL } from '@/components/chat/composer-words';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useAgentFileOpener, useSessionTextRender } from '@/hooks/useAgentFileOpener';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
@@ -2958,7 +2959,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     return [
       {
         id: 'mode',
-        name: 'Mode',
+        name: 'Permission mode',
         priority: 1,
         // Its pill opens a menu placed against it, so the overflow row pins it first.
         anchored: true,
@@ -2974,7 +2975,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             mode={currentMode as NonNullable<SessionRecord['mode']>}
             label={label}
             onPick={setModeOptimistic}
-            title={`Mode: ${label}. Click to choose a mode; Shift+Tab in the box steps to ${MODE_LABELS[nextMode] ?? nextMode}`}
+            title={`Permission mode: ${label}. Click to choose a mode; Shift+Tab in the box steps to ${MODE_LABELS[nextMode] ?? nextMode}`}
           />
         ),
       },
@@ -3020,7 +3021,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       },
       {
         id: 'btw',
-        name: 'Side thread',
+        name: SIDE_CHAT_LABEL,
         priority: 4,
         inAddMenu: true,
         node: (
@@ -3040,7 +3041,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       },
       {
         id: 'note',
-        name: 'Note',
+        name: SESSION_NOTE_LABEL,
         priority: 5,
         inAddMenu: true,
         node: (

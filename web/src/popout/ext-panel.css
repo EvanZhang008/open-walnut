@@ -310,7 +310,7 @@
 /* The mode trigger ("Bypass") and the model trigger ("Auto ▾") are the family's quiet keys, as in
    the app; the caret after the model's name says it opens a menu. */
 /* Where the bar has no room for them beside its own controls (the first page's grown composer, with
-   Act in this tab and Save as todo; any bar under 420 px), they take a line of their own over it. */
+   Act in this tab and Save as task; any bar under 420 px), they take a line of their own over it. */
 .ext-home-composer.is-grown .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }
 .ext-home-composer.is-grown .session-mode-bar.is-plain-chat-pickers { order: -1; flex-basis: 100%; }
 /* The bar is its own query container (globals.css), so its wrap is set outside the query: a query
@@ -323,7 +323,7 @@
 .ext-home-pills .ext-chips { overflow: visible; }
 .ext-home-pills .ext-chip-page { max-width: 100%; }
 .ext-home-act { display: inline-flex; align-items: center; gap: 7px; font-size: var(--font-size-md); color: var(--fg-secondary); cursor: pointer; white-space: nowrap; }
-/* "Save as todo" or "Todo" as Home picks them (the controls row's container query): beside the
+/* "Save as task" or "Todo" as Home picks them (the controls row's container query): beside the
    side bar a 400 px panel gives the row about 330 px, where "Todo" leaves the send arrow its room. */
 /* Home's phone label on a row is drawn by Home's phone shell; here the row's red dot says it. */
 .ext-home .phone-row-needs-you { display: none; }
@@ -354,7 +354,7 @@
 .ext-home-dock-chip .ext-chip-fav svg { width: 11px; height: 11px; }
 /* Grown: the full composer; its controls get room in a 400 px popup (review round 5, Sol #4). */
 .ext-home-composer.is-grown .chat-input-controls { gap: 4px; padding-right: 2px; }
-/* Beside the side bar (the row about 330 px) "Save as todo" is its glyph alone, its words in the
+/* Beside the side bar (the row about 330 px) "Save as task" is its glyph alone, its words in the
    tooltip: Act in this tab keeps its words and the send arrow its room. */
 @container (max-width: 345px) {
   .ext-home-composer .draft-later-words, .ext-home-composer .draft-later-short { display: none; }

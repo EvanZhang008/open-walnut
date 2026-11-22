@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { useFieldContent } from '@/hooks/useFieldContent';
 import { saveGlobalMemory, saveUserMemory, saveMemory } from '@/api/memory';
+import { STANDING_STORES } from './MemoryTreePanel';
 import {
   splitMemoryFile,
   joinMemoryFile,
@@ -22,8 +23,7 @@ interface MemoryContentPanelProps {
 }
 
 function formatPath(p: string): string {
-  if (p === 'MEMORY.md') return 'Global / MEMORY.md';
-  if (p === 'USER.md') return 'Global / USER.md';
+  if (p === 'MEMORY.md' || p === 'USER.md') return `${STANDING_STORES[p].label} / ${p}`;
   return p.split('/').join(' / ');
 }
 

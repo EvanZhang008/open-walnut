@@ -51,6 +51,7 @@ import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 import { composerDrawing, type DrawingPlace } from './drawing-place';
 import { ToggleSwitch } from '@/components/controls';
+import { SESSION_NOTE_LABEL, SIDE_CHAT_LABEL } from './composer-words';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -384,7 +385,7 @@ interface ChatInputProps {
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
   /** A second exit for the text, rendered right before the send arrow (after the
-   *  mic) so the two ways out sit together: the draft's "Save as todo". */
+   *  mic) so the two ways out sit together: the draft's "Save as task". */
   sendSlot?: React.ReactNode;
   /** A removable chip at the top of the box saying where the send goes (the
    *  session's question target). The owner renders it, × included. */
@@ -2233,9 +2234,9 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   <div className="chat-plus-menu-label">Shortcuts</div>
                   {(enableEntityMention || mentionCwd) && (
                     <button className="chat-plus-menu-item" onClick={() => insertShortcut('@')}
-                      type="button" role="menuitem" title={mentionCwd ? (enableEntityMention ? 'Reference a task, file or folder with @' : 'Reference a file or folder with @') : 'Reference a task with @'}>
+                      type="button" role="menuitem" title={mentionCwd ? (enableEntityMention ? 'Mention a task, file or folder with @' : 'Mention a file or folder with @') : 'Mention a task with @'}>
                       <span className="chat-plus-menu-key">@</span>
-                      <span>Reference</span>
+                      <span>{mentionCwd ? (enableEntityMention ? 'Mention a task or file' : 'Mention a file') : 'Mention a task'}</span>
                     </button>
                   )}
                   {(showCommands || isSessionMode) && (
@@ -2244,10 +2245,10 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                       onClick={() => insertShortcut('/', { skills: true })}
                       type="button"
                       role="menuitem"
-                      title="Browse available skills"
+                      title="Pick a skill to run"
                     >
                       <span className="chat-plus-menu-key">/</span>
-                      <span>Skills</span>
+                      <span>Run a skill</span>
                     </button>
                   )}
                 </>
@@ -2328,8 +2329,8 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   <div className="chat-plus-menu-divider" role="separator" />
                   {addMenuRowIds.map((id) => {
                     const raw = addMenuControls!.handleRef.current?.state(id) ?? '';
-                    // A folded btw button reads "btw" plus its unread count: the row names it, so only the count stays.
-                    const label = id === 'btw' ? raw.replace(/^btw\s*/, '') : raw;
+                    // A folded side chat button reads its name plus its unread count: the row names it, so only the count stays.
+                    const label = id === 'btw' && raw.startsWith(SIDE_CHAT_LABEL) ? raw.slice(SIDE_CHAT_LABEL.length).trim() : raw;
                     return (
                       <button
                         key={id}
@@ -2342,8 +2343,8 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                           addMenuControls!.handleRef.current?.activate(id);
                         }}
                       >
-                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? 'Side thread' : id === 'note' ? 'Note' : id}</span>
-                        {label && (id !== 'note' || label !== 'Note') && <span className="chat-plus-menu-control-value">{label}</span>}
+                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? SIDE_CHAT_LABEL : id === 'note' ? SESSION_NOTE_LABEL : id}</span>
+                        {label && (id !== 'note' || label !== SESSION_NOTE_LABEL) && <span className="chat-plus-menu-control-value">{label}</span>}
                       </button>
                     );
                   })}
@@ -2467,7 +2468,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                       title="Send, and keep what you are reading on top while the answer comes below"
                     >
                       {ICON_READ_SPLIT}
-                      <span>Send in split</span>
+                      <span>Send in split view</span>
                     </button>
                   )}
                   {isStreaming && onStop && (

@@ -86,7 +86,7 @@ const SCENARIOS: Record<string, (page: Page) => Promise<void>> = {
     // The drawer's error sits where btw does; the open drawer goes with the crash.
     const error = panel.locator('.session-panel-input [data-error-region="side-threads"]');
     await expect(error).toHaveCount(1);
-    await expect(error).toContainText('Side threads hit an error.');
+    await expect(error).toContainText('Side chats hit an error.');
     await expect(popover).toHaveCount(0);
     // The main composer and the conversation stay.
     await expect(panel.locator('[data-error-region="composer"], [data-error-region="session-panel"]')).toHaveCount(0);
@@ -98,7 +98,7 @@ const SCENARIOS: Record<string, (page: Page) => Promise<void>> = {
     await error.getByRole('button', { name: 'Retry' }).click();
     await expect(page.locator('[data-error-region]')).toHaveCount(0);
     await directControl(panel, 'btw').click();
-    await expect(popover.locator('.side-question-popover-title')).toHaveText('Side threads');
+    await expect(popover.locator('.side-question-popover-title')).toHaveText('Side chats');
     await expect(popover.locator('.side-question-composer textarea')).toBeVisible();
   },
 };

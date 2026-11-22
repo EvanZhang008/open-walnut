@@ -66,9 +66,9 @@ describe('engineOptionsFor: the picker offers exactly three engines', () => {
 
   it('keeps a hand-set MLX env as its own option beside the automatic one', () => {
     const opts = engineOptionsFor(MAC, 'mlx');
-    expect(labels(opts)).toEqual(['Qwen3-ASR', 'Qwen3-ASR (own Python env)', 'Whisper', 'OpenAI-compatible API']);
+    expect(labels(opts)).toEqual(['Qwen3-ASR', 'Qwen3-ASR (set up by hand)', 'Whisper', 'OpenAI-compatible API']);
     expect(opts.find((o) => o.value === 'mlx')?.recommended).toBeFalsy();
-    expect(labels(engineOptionsFor(INTEL_MAC, 'mlx'))).toEqual(['Qwen3-ASR (own Python env)', 'Whisper', 'OpenAI-compatible API']);
+    expect(labels(engineOptionsFor(INTEL_MAC, 'mlx'))).toEqual(['Qwen3-ASR (set up by hand)', 'Whisper', 'OpenAI-compatible API']);
   });
 
   it('offers a legacy engine only to the install already using it, labelled legacy', () => {

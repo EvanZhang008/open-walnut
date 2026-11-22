@@ -136,7 +136,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
       {/* Locate and Watch are on the header itself (2026-11-19: the crosshair among the window
           buttons, the eye on the label row); Open in new tab lives only in the Window group below. */}
       <KebabGroup
-        label="Open"
+        label="Open panel"
         hint={`changed · files${p.board !== 'none' ? ' · board' : ''}${p.threads ? ' · threads' : ''}${appsRow ? ' · apps' : ''} · inbox · code · web${hintCount ? ` (${hintCount})` : ''}`}
         icon={OPEN_ICON}
         testId="session-kebab-open"
@@ -163,7 +163,7 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
         <SessionViewItems {...views} onAfterAction={close} />
       </KebabGroup>
       {windows.length > 0 && (
-        <KebabGroup label="Window" hint="new tab · full screen" icon={WINDOW_ICON} testId="session-kebab-window">
+        <KebabGroup label="Open in window" hint="new tab · full screen" icon={WINDOW_ICON} testId="session-kebab-window">
           {windows}
         </KebabGroup>
       )}

@@ -1,5 +1,5 @@
 /**
- * Side-threads module store — the shared state behind the "btw" drawer.
+ * Side-threads module store — the shared state behind the side chat drawer.
  *
  * WHY a module store and not component state: SideQuestionDrawer is mounted TWICE
  * inside one SessionPanel (the main composer's mode bar AND the plan popover's),
@@ -33,6 +33,7 @@ import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import type { SideQuestion } from '@/api/sideQuestions';
 import { log } from '@/utils/log';
+import { SIDE_CHAT_LABEL } from '@/components/chat/composer-words';
 
 /** Sentinel promotedTaskId while the real id is still on its way. */
 export const PENDING_PROMOTE = '__pending__';
@@ -139,7 +140,7 @@ export function findSideThread(state: SideThreadsState, threadId: string | null)
  *  so the server record carries the same label the chip shows. */
 export function deriveThreadTitle(question: string): string {
   const one = question.replace(/\s+/g, ' ').trim();
-  if (one.length <= 48) return one || 'Side thread';
+  if (one.length <= 48) return one || SIDE_CHAT_LABEL;
   const cut = one.slice(0, 48);
   const lastSpace = cut.lastIndexOf(' ');
   return `${(lastSpace > 24 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
@@ -169,7 +170,7 @@ export function formatSideThreadForComposer(
   label: string,
   messages: Array<{ role: 'user' | 'assistant' | 'system'; text?: string; injected?: boolean }>,
 ): string {
-  const lines: string[] = [`[From side thread "${label}"]`];
+  const lines: string[] = [`[From side chat "${label}"]`];
   for (const m of messages) {
     // `injected` = a CLI-inserted user line (skill dumps, compaction summaries),
     // never something the human asked.
@@ -196,7 +197,7 @@ export function formatSideThreadForComposer(
  * the user's own sentence.
  */
 export function formatSideThreadDigestForComposer(label: string, summary: string): string {
-  return `[Summary of side thread "${label}"]\n${summary.trim()}\n\n`;
+  return `[Summary of side chat "${label}"]\n${summary.trim()}\n\n`;
 }
 
 /**
@@ -641,7 +642,7 @@ export async function setSideThreadArchivedOptimistic(
         // refresh. Keep it on the shelf, where the affordance and the reason both are.
         apply(previous, previousActive);
         patch(parentSessionId, {
-          error: 'Restore failed: this side thread\'s session is gone — its transcript is still readable',
+          error: 'Could not restore: this side chat has ended. You can still read it',
         });
       } else {
         apply({ archivedAt: undefined, archived: false },

@@ -10,18 +10,18 @@ interface AgentCardProps {
 }
 
 function badgeInfo(agent: AgentDefinition): { label: string; className: string }[] {
-  // Console vs background kind — visible even in the "All" filter. 'general' is always console.
+  // Home chat vs background kind, visible even in the "All" filter. 'general' is always a home chat agent.
   const isConsole = agent.id === 'general' || agent.console === true;
   const kindBadge = isConsole
-    ? { label: 'console', className: 'badge agent-badge agent-badge-console' }
+    ? { label: 'home chat', className: 'badge agent-badge agent-badge-console' }
     : { label: 'background', className: 'badge agent-badge agent-badge-background' };
   if (agent.overrides_builtin) return [
     kindBadge,
-    { label: 'builtin', className: 'badge agent-badge agent-badge-builtin' },
-    { label: 'override', className: 'badge badge-accent agent-badge agent-badge-override' },
+    { label: 'built-in', className: 'badge agent-badge agent-badge-builtin' },
+    { label: 'edited', className: 'badge badge-accent agent-badge agent-badge-override' },
   ];
-  if (agent.source === 'builtin') return [kindBadge, { label: 'builtin', className: 'badge agent-badge agent-badge-builtin' }];
-  return [kindBadge, { label: 'config', className: 'badge agent-badge agent-badge-config' }];
+  if (agent.source === 'builtin') return [kindBadge, { label: 'built-in', className: 'badge agent-badge agent-badge-builtin' }];
+  return [kindBadge, { label: 'custom', className: 'badge agent-badge agent-badge-config' }];
 }
 
 export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCardProps) {
@@ -40,7 +40,7 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
         <div className="agent-card-title-row">
           {badges.map((b) => <span key={b.label} className={b.className}>{b.label}</span>)}
           <span className="agent-card-name">{agent.name}</span>
-          {isBuiltin && <span className="agent-card-lock" title="Builtin (read-only)">&#128274;</span>}
+          {isBuiltin && <span className="agent-card-lock" title="Built-in: editing saves your own version, and Reset to Default brings the original back">&#128274;</span>}
           <span className="agent-card-id text-muted font-mono">{agent.id}</span>
         </div>
         <div className="agent-card-actions">
@@ -75,7 +75,7 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
             {confirmAction && (
               <div className="agent-confirm-popover" onMouseLeave={() => { setConfirmAction(null); setMenuOpen(false); }}>
                 <p className="agent-confirm-text">
-                  {confirmAction === 'delete' ? 'Delete this agent?' : 'Reset to builtin default?'}
+                  {confirmAction === 'delete' ? 'Delete this agent?' : 'Reset to the built-in version?'}
                 </p>
                 <div className="agent-confirm-actions">
                   <button className="btn btn-sm" onClick={() => { setConfirmAction(null); setMenuOpen(false); }}>

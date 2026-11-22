@@ -35,11 +35,11 @@ describe('N3-05: the Voice scan ends in a sentence, never in silence', () => {
   const none = { found: false }
   const base = { ffmpeg: found, whisperCli: none, whisperServer: none, sherpaOnnxNode: none, homebrew: found, models: [], recommendation: null }
   it('names what it found, or says nothing was found', () => {
-    expect(sttScanSummary(base as never)).toBe('No dictation engine found on this Mac.')
+    expect(sttScanSummary(base as never)).toBe('No dictation engine installed yet.')
     expect(sttScanSummary({ ...base, whisperCli: found, models: [{}, {}] } as never)).toBe('Found whisper-cli, 2 Whisper models.')
     // A ready Qwen3-ASR environment counts as an engine, and comes first.
     expect(sttScanSummary({ ...base, whisperCli: found, mlx: { ready: true } } as never)).toBe('Found Qwen3-ASR, whisper-cli.')
-    expect(sttScanSummary({ ...base, mlx: { ready: false } } as never)).toBe('No dictation engine found on this Mac.')
+    expect(sttScanSummary({ ...base, mlx: { ready: false } } as never)).toBe('No dictation engine installed yet.')
   })
 })
 

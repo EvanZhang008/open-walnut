@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   auditClock, auditHistory, auditTarget, clockHostTitle, describeAgo, describeAuditEntry, describeCheck, describeClockWait,
   describeExecutorBadge, describeFireTally, describeLastCheck, describeRunTime, describeSchedule,
+  CUSTOM_SCHEDULE, scheduleTitle,
 } from '../../web/src/utils/routine-format';
 
 const NOW = Date.parse('2026-09-16T12:00:00Z');
@@ -355,12 +356,25 @@ describe('describeSchedule: stepped and ranged cron', () => {
   it('says a day step', () => {
     expect(said('30 20 */2 * *')).toBe('Every 2 days at 8:30 PM')
   })
-  it('keeps the expression for what it cannot say', () => {
-    expect(said('*/7 * * * 2,4')).toBe('Cron: */7 * * * 2,4')
+  it('says a day range and a day list in words', () => {
+    expect(said('15 22 * * 0-4')).toBe('Sunday to Thursday at 10:15 PM')
+    // A range that wraps past Saturday starts after the gap.
+    expect(said('15 22 * * 5-7')).toBe('Friday to Sunday at 10:15 PM')
+    expect(said('0 9 * * 1,3,5')).toBe('Mon/Wed/Fri at 9:00 AM')
+    expect(said('0 9 * * 0-6')).toBe('Every day at 9:00 AM')
+    expect(said('0 9 * * 7')).toBe('Sundays at 9:00 AM')
+    expect(said('*/15 * * * 1,3')).toBe('Every 15 min on Mon/Wed')
+    expect(said('*/15 * * * 2-4')).toBe('Every 15 min, Tuesday to Thursday')
+  })
+  it('reads what it cannot say as a custom schedule, the expression in the title', () => {
+    expect(said('*/7 * * * 2,4')).toBe(CUSTOM_SCHEDULE)
     // A step that does not divide the hour or the day is not an even interval.
-    expect(said('*/45 * * * *')).toBe('Cron: */45 * * * *')
-    expect(said('0 */13 * * *')).toBe('Cron: 0 */13 * * *')
-    expect(said('0 9 * 1-6 *')).toBe('Cron: 0 9 * 1-6 *')
+    expect(said('*/45 * * * *')).toBe(CUSTOM_SCHEDULE)
+    expect(said('0 */13 * * *')).toBe(CUSTOM_SCHEDULE)
+    expect(said('0 9 * 1-6 *')).toBe(CUSTOM_SCHEDULE)
+    expect(scheduleTitle({ kind: 'cron', expr: '0 9 * 1-6 *' })).toBe('Cron expression: 0 9 * 1-6 *')
+    expect(scheduleTitle({ kind: 'cron', expr: '0 9 * * *', tz: 'UTC' })).toBe('Cron expression: 0 9 * * * (UTC)')
+    expect(scheduleTitle({ kind: 'every', everyMs: 60_000 })).toBeUndefined()
   })
 })
 

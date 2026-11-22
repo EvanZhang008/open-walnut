@@ -13,19 +13,23 @@ import { useOrgSettings } from './useOrgSettings';
 
 export type DirectorsLayout = 'fold' | 'sections';
 
+/** The two rows' names, the same in Settings > Org and the Org page's settings panel. */
+export const DIRECTORS_LAYOUT_LABEL = 'Where Directors show';
+export const DIRECTORS_PROJECTS_LABEL = 'Group Directors by project';
+
 export const DIRECTORS_LAYOUT_OPTIONS: ReadonlyArray<SegmentedOption<DirectorsLayout>> = [
   { value: 'fold', label: 'Under each VP', testId: 'directors-layout-fold' },
-  { value: 'sections', label: 'Own section', testId: 'directors-layout-sections' },
+  { value: 'sections', label: 'In their own section', testId: 'directors-layout-sections' },
 ];
 
 /** One line per choice: what it means. */
 export function directorsLayoutHelp(layout: DirectorsLayout): string {
   return layout === 'sections'
-    ? 'A DIRECTORS section after the VPs, one row per Director, the size of a VP row.'
+    ? 'A Directors section after the VPs, one row per Director, the size of a VP row.'
     : 'A folded "N directors" line under each VP; open it to see them.';
 }
 
-export const DIRECTORS_PROJECTS_HELP = 'The "N directors" fold (and the Org chart\'s) groups them under their project\'s name. Off: the Directors alone, in their order.';
+export const DIRECTORS_PROJECTS_HELP = 'In the "N directors" line (and in the Org chart), each project\'s Directors sit under its name. Off: one list, in their order.';
 
 export function useDirectorSettings() {
   const on = useExperimental('org_leaders');

@@ -243,7 +243,8 @@ export function SearchSection({ config, onSave }: Props) {
               }
             />
             {indexStatus && (() => {
-              const laneOn = !!indexStatus.model.name && indexStatus.model.name !== 'disabled';
+              // No model (the server answers 'keyword-only' or 'disabled'): search by keyword only.
+              const laneOn = !!indexStatus.model.name && indexStatus.model.name !== 'disabled' && indexStatus.model.name !== 'keyword-only';
               const comp = embedding.status;
               if (laneOn && comp && comp.state !== 'ready' && comp.state !== 'unsupported') {
                 return (
@@ -258,11 +259,14 @@ export function SearchSection({ config, onSave }: Props) {
               }
               return (
                 <SettingsRow
-                  label="Embedding model"
-                  help={laneOn && comp?.state === 'unsupported' ? 'Search by meaning is not available on this system.' : undefined}
+                  label="Search by meaning"
+                  help={laneOn && comp?.state === 'unsupported'
+                    ? 'Not available on this system, so search matches words only.'
+                    : laneOn ? 'Finds results by what they mean, not only the words typed.' : 'Search matches the words you type.'}
+                  data-testid="search-meaning-row"
                   control={laneOn && comp?.state !== 'unsupported'
-                    ? <code className="settings-mono-value">{indexStatus.model.name}</code>
-                    : <span className="settings-addons-muted">Off, keyword search only</span>}
+                    ? <span title={`Model: ${indexStatus.model.name}`}>On</span>
+                    : <span className="settings-addons-muted">Off</span>}
                 />
               );
             })()}

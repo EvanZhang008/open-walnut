@@ -165,14 +165,14 @@ test('token types show their share of tokens and of cost, kinds of work split, a
   await expect(chart).toHaveAttribute('data-buckets', '30')
 
   const coverage = page.getByTestId('usage-coverage')
-  await expect(coverage).toContainText('Stored from ')
-  await expect(coverage).toContainText('Nothing earlier: those transcripts were gone before Walnut kept usage.')
+  await expect(coverage).toContainText('Recorded from ')
+  await expect(coverage).toContainText('The grey days before have none: those transcripts were gone before Walnut kept usage.')
   await expect(coverage).toContainText('The latest hours are still being read.')
   await expect(page.getByTestId('usage-breakdown-unrecorded')).toBeVisible()
   // Hovering an unrecorded day says so, instead of "no model calls".
   const box = (await chart.boundingBox())!
   await page.mouse.move(box.x + 70, box.y + 100)
-  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="none"]')).toContainText('Not recorded')
+  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="none"]')).toContainText('No data')
   await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200)
 
   // Token type: tokens and cost are two different shares.
@@ -228,7 +228,7 @@ test('days imported from a bill are named as such in the line above the chart an
   await page.mouse.move(box.x + box.width * 0.5, box.y + 100)
   await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="imported"]')).toContainText('Imported from the usage bill')
   await page.mouse.move(box.x + 70, box.y + 100)
-  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="none"]')).toContainText('Not recorded')
+  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="none"]')).toContainText('No data')
   await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200)
 })
 

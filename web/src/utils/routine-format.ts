@@ -37,13 +37,46 @@ function foreignZone(tz: string | undefined): string | null {
   }
 }
 
-/** ", weekdays" / " on Mondays" / "" for a cron's day-of-week field; null when it says more. */
+/** The days a cron's day-of-week field names (0 is Sunday, 7 too), sorted; null for a shape it cannot read. */
+function cronDaySet(dow: string): number[] | null {
+  if (dow === '*') return [0, 1, 2, 3, 4, 5, 6];
+  const days = new Set<number>();
+  for (const part of dow.split(',')) {
+    const m = /^(\d)(?:-(\d))?$/.exec(part);
+    if (!m) return null;
+    const [a, b] = [Number(m[1]), Number(m[2] ?? m[1])];
+    if (a > b || b > 7) return null;
+    for (let d = a; d <= b; d++) days.add(d % 7);
+  }
+  return [...days].sort((x, y) => x - y);
+}
+
+/**
+ * A cron's days in words, capitalised: "" for every day, "Weekdays", "Weekends", "Mondays",
+ * "Sunday to Thursday" for three or more days in a row, else "Mon/Wed"; null when unreadable.
+ */
+function cronDayWords(dow: string): string | null {
+  const days = cronDaySet(dow);
+  if (!days) return null;
+  const key = days.join(',');
+  if (days.length === 7) return '';
+  if (key === '1,2,3,4,5') return 'Weekdays';
+  if (key === '0,6') return 'Weekends';
+  if (days.length === 1) return `${DAY_NAMES[days[0]]}s`;
+  // Days in a row may wrap past Saturday ("5-7" is Friday, Saturday, Sunday): start after the gap.
+  const start = days.findIndex((d, i) => (d - days[(i + days.length - 1) % days.length] + 7) % 7 !== 1);
+  const ordered = start < 0 ? days : [...days.slice(start), ...days.slice(0, start)];
+  const inARow = ordered.every((d, i) => i === 0 || d === (ordered[i - 1] + 1) % 7);
+  if (inARow && days.length >= 3) return `${DAY_NAMES[ordered[0]]} to ${DAY_NAMES[ordered[ordered.length - 1]]}`;
+  return ordered.map((d) => DAY_NAMES[d].slice(0, 3)).join('/');
+}
+
+/** ", weekdays" / " on Mondays" / "" for a cron's day-of-week field, after a cadence; null when unreadable. */
 function cronDays(dow: string): string | null {
-  if (dow === '*') return '';
-  if (dow === '1-5') return ', weekdays';
-  if (dow === '0,6' || dow === '6,0') return ', weekends';
-  if (/^\d$/.test(dow) && DAY_NAMES[Number(dow)]) return ` on ${DAY_NAMES[Number(dow)]}s`;
-  return null;
+  const words = cronDayWords(dow);
+  if (words === null || words === '') return words;
+  if (words === 'Weekdays' || words === 'Weekends') return `, ${words.toLowerCase()}`;
+  return words.includes(' to ') ? `, ${words}` : ` on ${words}`;
 }
 
 /**
@@ -114,15 +147,9 @@ function describeCronExpr(expr: string): string | null {
   if (!/^\d{1,2}$/.test(hour)) return null;
   const time = formatTime(Number(hour), Number(min));
 
-  if (dow === '*') return `Every day at ${time}`;
-  if (dow === '1-5') return `Weekdays at ${time}`;
-  if (dow === '0,6' || dow === '6,0') return `Weekends at ${time}`;
-  if (/^\d$/.test(dow)) return `${DAY_NAMES[Number(dow)]}s at ${time}`;
-  if (/^\d(,\d)+$/.test(dow)) {
-    const days = dow.split(',').map((d) => DAY_NAMES[Number(d)]?.slice(0, 3)).filter(Boolean);
-    return `${days.join('/')} at ${time}`;
-  }
-  return null;
+  const days = cronDayWords(dow);
+  if (days === null) return null;
+  return days === '' ? `Every day at ${time}` : `${days} at ${time}`;
 }
 
 export function describeSchedule(schedule: RoutineSchedule): string {
@@ -140,8 +167,18 @@ export function describeSchedule(schedule: RoutineSchedule): string {
     return Number.isInteger(hours) ? (hours === 1 ? 'Every hour' : `Every ${hours} hours`) : `Every ${mins} min`;
   }
   const zone = foreignZone(schedule.tz);
-  const said = describeCronExpr(schedule.expr) ?? `Cron: ${schedule.expr}`;
+  // What it cannot say in words reads as a custom schedule; the expression is in scheduleTitle.
+  const said = describeCronExpr(schedule.expr) ?? CUSTOM_SCHEDULE;
   return zone ? `${said} ${zone}` : said;
+}
+
+/** The line for a cron expression too odd to say in words (its expression is the line's title). */
+export const CUSTOM_SCHEDULE = 'On a custom schedule';
+
+/** A hover title for a schedule line: the cron expression as written, so nothing is hidden. */
+export function scheduleTitle(schedule: RoutineSchedule): string | undefined {
+  if (schedule.kind !== 'cron') return undefined;
+  return `Cron expression: ${schedule.expr}${schedule.tz ? ` (${schedule.tz})` : ''}`;
 }
 
 export function describeNextRun(state: RoutineState | undefined): string | null {

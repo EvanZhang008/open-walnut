@@ -46,6 +46,15 @@ export function usd(v: number): string {
 /** The local machine's name on Remote Hosts (the rest of the page says "this Mac" too). */
 export const THIS_MAC = 'This Mac';
 
+/**
+ * The local machine's name from its own reading: "This Mac" unless the reading says it runs
+ * another system (Walnut runs on Linux too), then "This computer". Unknown keeps "This Mac".
+ */
+export function localMachineName(h: Pick<FleetHost, 'system' | 'capabilities'>): string {
+  const os = h.capabilities?.os ?? (h.system?.platform === 'darwin' ? 'macos' : h.system?.platform ? 'other' : null);
+  return os && os !== 'macos' ? 'This computer' : THIS_MAC;
+}
+
 const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: THIS_MAC, 'ssh-tunnel': 'SSH tunnel', 'host-network': 'Host network', bridge: 'It connects in to this Mac' };
 
 /** One cell per day: how much of the minutes the ledger covered the host was up. */

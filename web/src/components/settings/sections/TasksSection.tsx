@@ -182,7 +182,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
         />
         <SettingsRow
           label="Quick add creates tasks in"
-          help="Walnut is instant and never synced; a connected service creates the task there."
+          help="Walnut saves the task on this device right away. A task saved in Walnut is not synced to a connected service; pick the service to create it there."
           htmlFor="settings-platform"
           error={platform.error}
           control={
@@ -192,7 +192,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
               value={platform.value}
               onChange={(e) => platform.set(e.target.value)}
             >
-              <option value="local">Walnut (this device, instant)</option>
+              <option value="local">Walnut (this device)</option>
               {integrations.map((i) => (
                 <option key={i.id} value={i.id}>{i.name}</option>
               ))}

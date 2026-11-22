@@ -26,7 +26,7 @@ import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '.
 import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link'
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
-import { PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
+import { GET_MORE_TITLE, PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
 import { AppBadge, AppsGrid, SidebarSwitch } from './app-bits'
 import { StoreCard, type StoreCardPart } from './StoreCard'
 import { originKind, partParents, type RegistryRow } from './plugin-store-model'
@@ -338,7 +338,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
         <div className="apps-plugin-groups plugin-store-installed" data-testid="plugin-store-installed">
           <div className="apps-plugins-bar">
             <span className="apps-plugins-count" data-testid="apps-plugins-count">
-              {!registry ? '' : `${topLevel.length} plugin${topLevel.length === 1 ? '' : 's'} installed${partCount > 0 ? `, plus ${partCount} part${partCount === 1 ? '' : 's'}` : ''}`}
+              {!registry ? '' : `${topLevel.length} plugin${topLevel.length === 1 ? '' : 's'} installed${partCount > 0 ? `, plus ${partCount} included in them` : ''}`}
             </span>
             {store.updatable.length > 0 && <UpdatesHead updates={store.updates} slowLoad={store.slowLoad} onCheckAll={store.checkAll} />}
           </div>
@@ -358,7 +358,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
 
       {showGetMore && (
         <section className="apps-section apps-get-more" data-testid="apps-get-more" aria-labelledby="apps-get-more-title">
-          <h2 className="apps-section-title" id="apps-get-more-title">Get more</h2>
+          <h2 className="apps-section-title" id="apps-get-more-title">{GET_MORE_TITLE}</h2>
           <p className="apps-section-sub">Plugins you can add in one click, or from any git or npm link.</p>
           <AppsGrid data-testid="plugin-store-available">
             {matchingAvailable.map(card)}

@@ -21,7 +21,7 @@ import { BuiltinAppsGrid, BuiltinDetail, foldedPluginRows, heldPlugins, useBuilt
 import { MakeAppCard } from '@/components/apps-page/MakeAppCard'
 import { AppQuickOpen } from '@/components/apps-page/AppQuickOpen'
 import { builtinParts, builtinsMatching, builtinsShown } from '@/components/apps-page/builtin-apps'
-import { PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
+import { GET_MORE_TITLE, PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
 import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
 import { PluginDetail } from '@/components/apps-page/PluginDetail'
@@ -162,7 +162,7 @@ function AppsPageBody() {
   const chips: { id: AppsFilter; label: string }[] = [
     { id: 'all', label: 'All' },
     ...chipCategories.map((category) => ({ id: category, label: PLUGIN_CATEGORY_LABELS[category] })),
-    { id: 'get', label: 'Get more' },
+    { id: 'get', label: GET_MORE_TITLE },
     { id: 'builtin', label: 'Built-in apps' },
   ]
 
@@ -186,7 +186,7 @@ function AppsPageBody() {
           <span className="apps-hero-icon" aria-hidden="true"><AppsIcon size={26} /></span>
           <div className="apps-hero-text">
             <h1>Apps</h1>
-            <p>Every app and plugin Walnut has. Open one for its settings, its sign-in and where it comes from.</p>
+            <p>Plugins add features to Walnut, and apps are its pages on the sidebar. Open one to set it up.</p>
           </div>
           {/* One indicator, in whichever view is showing (the grid stays mounted, hidden). */}
           {!detailOpen && <SettingsSavedIndicator placement="header" />}

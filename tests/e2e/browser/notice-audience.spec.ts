@@ -8,7 +8,7 @@
  *     the real incident path). No toast, nothing in the bell's Errors list; the bell's one
  *     line leads to Settings > Walnut Health > Background errors, where it is grouped with
  *     how often, first and last seen, and its details.
- *  2. The person's own action fails for good (Save as todo, the server answers 500 with its
+ *  2. The person's own action fails for good (Save as task, the server answers 500 with its
  *     internals): a toast says in words that it did not go through, with no raw internals.
  *  3. A host Walnut reconnects by itself (a Mac on the host network that is off) never toasts or
  *     sits in the bell; Walnut Health lists it. A login only the person can do still reaches them.

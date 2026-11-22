@@ -21,8 +21,8 @@ export function musicOptions(listing: MusicTracksResult | null, starred: readonl
   const spotify = listing?.spotify
   const stars = new Set(starred)
   const sounds: MusicOption[] = [
-    ...(listing?.tracks ?? []).map((track) => ({ choice: { kind: 'track', id: track.id } as StartChoice, title: track.title, meta: 'Plays on this device', starred: false })),
-    ...(spotify?.available ? spotify.playlists.map((one) => ({ choice: { kind: 'spotify', uri: one.uri } as StartChoice, title: one.name, meta: 'Spotify, plays on your Mac', starred: false })) : []),
+    ...(listing?.tracks ?? []).map((track) => ({ choice: { kind: 'track', id: track.id } as StartChoice, title: track.title, meta: 'Sound', starred: false })),
+    ...(spotify?.available ? spotify.playlists.map((one) => ({ choice: { kind: 'spotify', uri: one.uri } as StartChoice, title: one.name, meta: 'Spotify playlist', starred: false })) : []),
   ].map((option) => ({ ...option, starred: stars.has(choiceKey(option.choice)) }))
   return [
     { choice: { kind: 'none' }, title: 'No music', meta: 'Silent', starred: false },

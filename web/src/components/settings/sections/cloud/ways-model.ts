@@ -244,7 +244,7 @@ export function deriveWays(i: WaysInput): { now: NowLine; ways: Way[] } {
 
 /** The Devices tab's own line, in the shape of a way's (what it is; when to use each tab is its hint, PhonesCloudTabs TAB_HINT). */
 export const DEVICES_INTRO = {
-  what: 'Every phone, browser and Walnut extension that can open Walnut (and other Macs, when there are any): remove a phone or sign a browser out here.',
+  what: 'Every phone, browser and Walnut extension that can open Walnut. Remove a phone or sign a browser out here.',
 } as const;
 
 /**

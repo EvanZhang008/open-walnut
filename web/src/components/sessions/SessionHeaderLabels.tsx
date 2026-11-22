@@ -35,6 +35,9 @@ export function countLabels(list: Element): { count: number; text: string } {
   return { count: names.length, text: names.filter(Boolean).join(' · ') };
 }
 
+/** "1 tag", "3 tags": what the header's bare count counts (2026-11-21 words audit). */
+const tagsWord = (n: number) => `${n} ${n === 1 ? 'tag' : 'tags'}`;
+
 const textOf = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
 
 const TAG_ICON = (
@@ -145,8 +148,8 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
           data-testid="session-header-labels"
           aria-haspopup="dialog"
           aria-expanded={open}
-          aria-label={`Tags (${count}): ${text}`}
-          title={text}
+          aria-label={`Show ${tagsWord(count)}: ${text}`}
+          title={`${tagsWord(count)}: ${text}`}
           // No pointerdown stop here: another flyout still open must hear this press to close.
           onClick={(e) => {
             e.stopPropagation();

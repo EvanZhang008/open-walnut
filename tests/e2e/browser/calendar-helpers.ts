@@ -29,7 +29,7 @@ export async function calendarSlotPoint(
   minute = 0,
 ): Promise<{ x: number; y: number }> {
   const hourPx = await calendarHourPx(scope)
-  // The grid may start later than midnight ("Show 7 AM to 1 AM"): its first minute is on the element.
+  // The grid may start later than midnight (7 AM to 1 AM, the "24 hours" toggle off): its first minute is on the element.
   const startMinute = Number(await scope.locator('.cal-grid').first().getAttribute('data-start-minute')) || 0
   const offset = ((hour * 60 + minute - startMinute) / 60) * hourPx
   await scope.locator('.cal-grid-scroll').first().evaluate((el, y) => { el.scrollTop = y - el.clientHeight / 2 }, offset)

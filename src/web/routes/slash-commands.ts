@@ -115,7 +115,8 @@ async function scanCommandDir(
 
   const items: SlashCommandItem[] = []
   for (const file of entries) {
-    if (!file.endsWith('.md')) continue
+    // A hidden file (macOS's `._<name>.md` metadata beside a copied file) is never a command.
+    if (!file.endsWith('.md') || file.startsWith('.')) continue
     const name = file.slice(0, -3)
     // Handle subdirectory commands (e.g. address-comments/)
     if (!name) continue
@@ -136,7 +137,7 @@ async function scanCommandDir(
       if (!stat.isDirectory()) continue
       const subFiles = await fsp.readdir(fullPath)
       for (const subFile of subFiles) {
-        if (!subFile.endsWith('.md')) continue
+        if (!subFile.endsWith('.md') || subFile.startsWith('.')) continue
         const subName = subFile.slice(0, -3)
         if (!subName) continue
         const cmdName = `${entry}:${subName}`

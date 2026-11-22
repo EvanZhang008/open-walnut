@@ -23,7 +23,7 @@ export type PanelDesign = 'status' | 'project';
 
 export const PANEL_DESIGNS: readonly { id: PanelDesign; label: string; title: string; experimental?: true }[] = [
   { id: 'project', label: 'By project', title: 'Grouped by project; each project folds its own waiting tasks, and completed tasks fold in one row at the bottom' },
-  { id: 'status', label: 'Flat', title: 'Experimental: one list per status (Needs you, Working, Waiting, Completed), each task with its project above the title', experimental: true },
+  { id: 'status', label: 'By status', title: 'Experimental: one list per status (Needs you, Working, Waiting, Completed), each task with its project above the title', experimental: true },
 ];
 
 export const DEFAULT_PANEL_DESIGN: PanelDesign = 'project';

@@ -16,6 +16,7 @@ import { AuditRow } from './RoutineAuditRow';
 import {
   auditHistory, clockHostTitle, describeAgo, describeCheck, describeClockHost, describeClockWait,
   describeAuditEntry, describeExecutorBadge, describeFireTally, describeLastCheck, describeRoutineTiming, describeRunTime,
+  scheduleTitle,
 } from '@/utils/routine-format';
 import { describeMissed, describeRunEntry, runEntryFailed } from '@/utils/routine-runs';
 import { openSessionOnHome, openTaskHere } from '@/utils/open-session';
@@ -145,7 +146,7 @@ export function RoutineRow({
             title={label} aria-label={label} role="img" />
           <span className="routine-row-text">
             <span className="routine-row-name cron-job-name wn-title">{routine.name}</span>
-            <span className="routine-row-timing cron-job-desc">
+            <span className="routine-row-timing cron-job-desc" title={scheduleTitle(routine.schedule)}>
               {health === 'error' ? (
                 <>
                   <span className="routine-row-flag">{label === 'Stopped' ? 'Stopped' : 'Failed'}</span>

@@ -70,7 +70,7 @@ function Spark({ points, state }: { points: Array<number | null>; state: AlarmSt
 function whatWalnutDid(row: AlarmRow): string {
   if (row.held) return row.override?.enabled === false ? 'Turned off: no actions' : 'Muted: no actions for now';
   const last = row.actions[row.actions.length - 1];
-  if (!last) return row.state === 'ALARM' ? 'Watching' : '';
+  if (!last) return row.state === 'ALARM' ? 'Nothing done yet' : '';
   return last.detail;
 }
 

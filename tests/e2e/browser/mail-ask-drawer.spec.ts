@@ -26,7 +26,7 @@
  *      into the same session as a follow-up: one quick-start, both questions answered.
  *  10. The draft is the Home draft's fork: Ask Walnut by default, Start Task one card away (it needs a
  *      folder, and runs there with the mail as its context), a task that starts in Focus, and More for
- *      its fields. "Save as todo" files the text with the mail in its description.
+ *      its fields. "Save as task" files the text with the mail in its description.
  *
  * Two fixtures, because the two halves need opposite installs: `PW_MAIL_CTX=1` is the small mailbox
  * with one account that can send and one that cannot, and `PW_MAIL_DENSE=1` is the production-density
@@ -130,7 +130,7 @@ function draftPanel(page: Page): Locator {
 }
 
 /** One of the draft's two mode cards. */
-function intentCard(page: Page, label: 'Quick question' | 'Start Task'): Locator {
+function intentCard(page: Page, label: 'Quick question' | 'New task'): Locator {
   return draftPanel(page).locator('.draft-intent-card', { hasText: label })
 }
 
@@ -309,7 +309,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(drawer(page).locator('.draft-session-panel textarea')).toBeFocused()
     // The Home draft's fork, Quick question chosen, and More for the task fields.
     await expect(intentCard(page, 'Quick question')).toHaveAttribute('aria-pressed', 'true')
-    await expect(intentCard(page, 'Start Task')).toHaveAttribute('aria-pressed', 'false')
+    await expect(intentCard(page, 'New task')).toHaveAttribute('aria-pressed', 'false')
     await expect(draftPanel(page).locator('.draft-launch-bar button.draft-more-btn')).toBeVisible()
     await expect(userTurns(page)).toHaveCount(0)
     console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'ask-compose')}`)
@@ -463,8 +463,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     const launches = recordLaunches(page)
     await openWriterInbox(page)
     await ask(page, WRITER, KEEPER, ASK)
-    await intentCard(page, 'Start Task').click()
-    await expect(intentCard(page, 'Start Task')).toHaveAttribute('aria-pressed', 'true')
+    await intentCard(page, 'New task').click()
+    await expect(intentCard(page, 'New task')).toHaveAttribute('aria-pressed', 'true')
     // Still about the mail.
     await expect(drawer(page).getByTestId('ask-object-quote')).toContainText('Quarterly keeper report')
 
@@ -539,14 +539,14 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(answers(page, /When is lunch\?/)).toHaveCount(1, { timeout: 90_000 })
   })
 
-  test('S4-16: Save as todo files the text with the mail in its description', async ({ page }) => {
+  test('S4-16: Save as task files the text with the mail in its description', async ({ page }) => {
     const creates = recordTaskCreates(page)
     const launches = recordLaunches(page)
     await openWriterInbox(page)
     await ask(page, WRITER, KEEPER, ASK)
     // Walnut mode has no such exit: it would file the question with nothing to answer it.
     await expect(draftPanel(page).locator('.draft-later-btn')).toHaveCount(0)
-    await intentCard(page, 'Start Task').click()
+    await intentCard(page, 'New task').click()
     const composer = draftPanel(page).locator('textarea.chat-input-textarea')
     await composer.fill('Reply to the keeper\nBefore the May opening.')
     await draftPanel(page).locator('.draft-later-btn').click()

@@ -15,7 +15,7 @@ import { resolveProjectName, useProjectRegistry, type ProjectRegistryRow } from 
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { projectDisplayName } from '@/utils/project-display';
 import { hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
-import { knownHomeOf, shownFolderName } from '@/utils/home-folder';
+import { homeFolderWords, knownHomeOf, shownFolderName } from '@/utils/home-folder';
 import { log } from '@/utils/log';
 import { HostStatusDot } from './path-selector/HostStatusDot';
 import { WorkInPicker } from './WorkInPicker';
@@ -78,7 +78,7 @@ export function useWorkIn(draft: DraftColumn, ps: DraftProjectStart): WorkIn {
     : null;
   const face = workInFace(draft, {
     mode: ps.mode, project: ps.project, source: ps.source, detected, isolated,
-    folderName: draft.cwd ? shownFolderName(draft.cwd, draft.host) : '',
+    folderName: draft.cwd ? homeFolderWords(shownFolderName(draft.cwd, draft.host)) : '',
   });
   return { face, detected, rows, hostName, suggestion: ps.canPick ? workInSuggestion(draft, { mode: ps.mode, detected, rows }) : null };
 }

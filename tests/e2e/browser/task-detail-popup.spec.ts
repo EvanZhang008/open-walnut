@@ -72,7 +72,7 @@ async function openDetails(page: Page, taskId: string, search: string): Promise<
     await row.getByRole('button', { name: 'More actions' }).click()
     const menu = page.locator('.task-kebab-menu:visible')
     await expect(menu).toBeVisible()
-    await menu.getByText('Details', { exact: true }).click()
+    await menu.getByText('Task details', { exact: true }).click()
     await expect(modal).toBeVisible({ timeout: 3_000 })
   }).toPass({ timeout: 20_000 })
   return modal

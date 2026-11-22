@@ -131,7 +131,7 @@ async function signIn(page: Page): Promise<void> {
 /** On a phone a task is renamed and completed in its detail page, from the row's menu. */
 async function openDetails(page: Page, title: string): Promise<void> {
   await row(page, title).getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-item').filter({ has: page.locator('span', { hasText: /^Details$/ }) }).first().click()
+  await page.locator('.task-kebab-item').filter({ has: page.locator('span', { hasText: /^Task details$/ }) }).first().click()
   await expect(page.locator('.phone-detail-head .phone-detail-title')).toHaveValue(title)
 }
 

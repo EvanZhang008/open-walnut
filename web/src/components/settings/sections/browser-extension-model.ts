@@ -3,6 +3,7 @@
  * whether it is connected now, the version it runs against the one Walnut ships, how it updates,
  * and whether agents may use it. Pure, so the words are tested once for every install kind.
  */
+import { AGENTS_IN_BROWSER } from './browser-labels'
 
 export type InstallKind = 'walnut-folder' | 'unpacked' | 'store' | 'other'
 
@@ -72,7 +73,7 @@ export function extRows(devices: ExtDevice[], seen: ExtSeen[], polling: Readonly
     const parts = [
       live ? 'Connected' : `Last heard ${ago(s?.at ?? d.lastUsedAt, now)}`,
       s?.version ? `Version ${s.version}${s.build ? ` (build ${s.build.slice(0, 7)})` : ''}, ${UPDATE_WORDS[update]}` : 'Version not reported yet (an older extension, or one that has not checked in since Walnut started)',
-      !polling.has(d.name) ? 'Agents off' : polling.get(d.name)!.includes('handed-tabs-only') ? 'Agents only in tabs you hand over' : 'Agents on',
+      !polling.has(d.name) ? AGENTS_IN_BROWSER.none : polling.get(d.name)!.includes('handed-tabs-only') ? AGENTS_IN_BROWSER.shared : AGENTS_IN_BROWSER.all,
     ]
     return { device: d.name, label: d.info?.deviceName ?? 'Walnut extension', live, ...(s?.version ? { version: s.version } : {}), update, line: `${parts.join('. ')}.` }
   })

@@ -33,6 +33,9 @@ interface Props {
   onSave: (partial: Partial<Config>) => Promise<void>
 }
 
+/** When a new unlock time takes effect, said where it is picked and when it is saved. */
+const UNLOCK_CHANGE_WHEN = 'A shorter time applies at once; a longer one from your next unlock.'
+
 export function PasswordsSection({ config, onSave }: Props) {
   const navigate = useNavigate()
   const [status, setStatus] = useState<VaultStatus | null>(null)
@@ -80,7 +83,7 @@ export function PasswordsSection({ config, onSave }: Props) {
     // Forever is the machine key: turning it on or off needs the master password.
     if (v === 'always' || isForever) { if (v !== status?.unlockFor) { setForeverTo(v); setForeverPw('') } return }
     setForeverTo(null)
-    void run('unlock', async () => { await saveUnlockFor(v); return 'Saved. A shorter choice also applies to the windows open now; a longer one to the next unlock.' })
+    void run('unlock', async () => { await saveUnlockFor(v); return `Saved. ${UNLOCK_CHANGE_WHEN}` })
   }
   const confirmForever = () => {
     const to = foreverTo
@@ -126,7 +129,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           className="settings-row-stacked"
           help={status?.unlockFor === 'always'
             ? 'Forever: a key stays on this Mac, so agents can use Passwords while you are away. Any program running as you could read the vault.'
-            : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} A shorter choice also applies to the windows open now; a longer one to the next unlock.`}
+            : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} ${UNLOCK_CHANGE_WHEN}`}
           control={<SegmentedControl<UnlockFor> id="pw-unlock-for" aria-label="Keep Passwords unlocked" value={foreverTo ?? status?.unlockFor ?? '48h'} disabled={!status?.setUp || busy === 'unlock' || busy === 'forever'}
             options={UNLOCK_OPTIONS.map((o) => ({ value: o.value, label: unlockOptionLabel(o, status?.lockAfterIdleMinutes), testId: `pw-unlock-${o.value}` }))}
             onChange={pickUnlock} />}
@@ -157,7 +160,8 @@ export function PasswordsSection({ config, onSave }: Props) {
           />
         )}
         <SettingsRow
-          label="Lock every window now"
+          label="Lock Passwords in every window"
+          help="Each open window then needs your master password again."
           control={<SettingsButton busy={busy === 'lock'} disabled={!status?.setUp} onClick={() => void run('lock', async () => { await vaultApi.lock(true); return 'Every window is locked.' })}>Lock all</SettingsButton>}
         />
       </SettingsGroup>

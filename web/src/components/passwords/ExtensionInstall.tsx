@@ -73,7 +73,7 @@ function ChromeSetupSteps() {
         <button type="button" className="btn btn-sm" data-testid="ext-setup" disabled={busy} onClick={() => void setup()}>
           {busy ? 'Setting up…' : done ? 'Set up again' : 'Set up in Chrome'}
         </button>{' '}
-        Walnut puts the extension in a folder on this computer{isMac() ? ', copies the folder\'s path' : ''} and opens Chrome&apos;s Extensions page.
+        Walnut puts the extension in a folder on this computer{isMac() ? ', copies the folder\'s path' : ''} and opens Chrome&apos;s Extensions page. The rest happens in Chrome.
         {done && (
           <span className="pw-ext-done" data-testid="ext-setup-done" style={{ display: 'block', marginTop: 6 }}>
             The folder: <CopyAddress text={done.dir} />{done.copied ? ' (already copied)' : ''}
@@ -86,12 +86,12 @@ function ChromeSetupSteps() {
       </li>
       <li>On the Extensions page, turn on <b>Developer mode</b> (the switch at the top right). A row of buttons appears: <b>Load unpacked</b>, <b>Pack extension</b>, <b>Update</b>.</li>
       <li>
-        Click <b>Load unpacked</b>. In the folder window {isMac()
-          ? <>press <kbd>⌘</kbd><kbd>⇧</kbd><kbd>G</kbd>, paste the folder (<kbd>⌘</kbd><kbd>V</kbd>), press <kbd>Return</kbd></>
-          : <>paste the folder into the folder box</>}, then click <b>Select</b>.
+        Click <b>Load unpacked</b>. Chrome opens a window to pick a folder: {isMac()
+          ? <>press <kbd>⌘</kbd><kbd>⇧</kbd><kbd>G</kbd>, paste the folder&apos;s path from step 1 (<kbd>⌘</kbd><kbd>V</kbd>), press <kbd>Return</kbd></>
+          : <>paste the folder&apos;s path from step 1 into its address box</>}, then click <b>Select</b>.
       </li>
-      <li>The Walnut card appears. Pin Walnut from the puzzle-piece menu, click it, then <b>Connect</b>.</li>
-      <li className="pw-ext-note">Walnut keeps this folder up to date: after each Walnut update the extension reloads itself.</li>
+      <li>Walnut now shows in the list of extensions. Click the puzzle-piece icon in Chrome&apos;s toolbar, pin Walnut, click the Walnut icon, then <b>Connect</b>.</li>
+      <li className="pw-ext-note">Updates: Walnut keeps this folder current, and the extension reloads itself after each Walnut update.</li>
     </ol>
   );
 }
@@ -103,7 +103,7 @@ function ChromeStoreStep() {
       <a className="btn btn-sm" data-testid="ext-store" href={CHROME_STORE_URL} target="_blank" rel="noopener noreferrer">
         Add from Chrome Web Store
       </a>{' '}
-      Click <b>Add to Chrome</b>, pin Walnut from the puzzle-piece menu, click it, then <b>Connect</b>. The store keeps it updated.
+      Click <b>Add to Chrome</b>, pin Walnut from the puzzle-piece icon in the toolbar, click the Walnut icon, then <b>Connect</b>. Updates come through the store.
     </div>
   );
 }
@@ -124,7 +124,7 @@ export function ExtensionInstallSteps({ browser }: { browser: ExtBrowser }) {
     <>
       <ChromeStoreStep />
       <p className="pw-ext-or" data-testid="ext-or-folder">
-        Or load it from this Walnut, which gets each new build first and needs Chrome&apos;s Developer mode:
+        Or load the copy Walnut ships with. It gets each new build first and needs Chrome&apos;s Developer mode:
       </p>
       {onWalnutMachine() ? <ChromeSetupSteps /> : (
         <ol className="pw-ext-steps" data-testid="ext-steps-chrome">

@@ -35,6 +35,15 @@ export function unreadWord(unread: number): string {
   return `${formatCount(unread)} unread`;
 }
 
+/** The header's count, every unread mail in the view: `7 unread in all`, beside a section's own `6 unread`. */
+export function totalUnreadWord(unread: number): string {
+  return `${unreadWord(unread)} in all`;
+}
+
+/** The section of mail that can wait, named by how Walnut sorted it; its title says what that means. */
+export const GROUPED_SECTION = 'Sorted into groups';
+export const GROUPED_SECTION_TITLE = 'Mail Walnut found not important, sorted into groups by kind. Important mail is listed below.';
+
 /** The header while the model is still sorting new mail (that mail waits in Important meanwhile). */
 export function sortingText(pending: number): string {
   return `Sorting ${formatCount(pending)} new`;
@@ -239,4 +248,5 @@ export function readerWhyText(label: string, why: string): string {
   return why ? `In ${label} · ${why}` : `In ${label}`;
 }
 
-export const NOT_RIGHT = 'Not right?';
+/** The reader's sort line opens the correction card: it moves the mail to another group or Important. */
+export const NOT_RIGHT = 'Change group';

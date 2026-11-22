@@ -30,9 +30,9 @@ export function defaultRunnerName(provider: string | undefined, providers?: Prov
   return resolveMainProvider(provider, providers).label;
 }
 
-/** Help under `Uses` (pure, unit tested). */
+/** Help under `Guesses come from` (pure, unit tested). */
 export function usesHelp(runner: Runner, provider: string | undefined, providers?: Providers): string {
-  if (runner === 'jev') return 'Under a second, fractions of a cent.';
+  if (runner === 'jev') return 'Under a second, fractions of a cent. Its key, endpoint and model are below.';
   const name = defaultRunnerName(provider, providers);
   if (name === 'Claude Code') return 'Slow: each guess starts Claude Code once.';
   return name === 'Your API' ? 'Slow: each guess calls your API once.' : `Slow: each guess calls ${name} once.`;
@@ -188,13 +188,13 @@ export function SmartTaskCreation({ config, onSave, onReload }: Props) {
         }
       />
       <SettingsRow
-        label="Uses"
+        label="Guesses come from"
         help={usesHelp(runner, provider, config.providers)}
         error={errors.runner}
         data-testid="smart-runner-row"
         control={
           <SegmentedControl<Runner>
-            aria-label="Smart task creation uses"
+            aria-label="Smart task creation guesses come from"
             name="smart-task-runner"
             value={runner}
             onChange={pickRunner}

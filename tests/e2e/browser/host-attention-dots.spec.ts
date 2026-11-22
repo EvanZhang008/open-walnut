@@ -146,7 +146,7 @@ test.describe('the bell names its reason word for word', () => {
     await openBell(page)
     const toggle = page.getByTestId('nfc-quiet-toggle')
     await toggle.click()
-    await expect(toggle).toHaveText('End quiet', { timeout: 10_000 })
+    await expect(toggle).toHaveText('Unmute', { timeout: 10_000 })
     await closePanel(page, 'escape')
     // Quiet is Do Not Disturb for the rail (b55ee8d97): no count or dot, in the marks or the name.
     await expect(bell(page)).toHaveAttribute('data-quiet', 'true')
@@ -158,7 +158,7 @@ test.describe('the bell names its reason word for word', () => {
     expect(name).not.toContain('remote hosts')
     await openBell(page)
     await toggle.click()
-    await expect(toggle).toHaveText('Quiet for 1 hour', { timeout: 10_000 })
+    await expect(toggle).toHaveText('Mute for 1 hour', { timeout: 10_000 })
     await closePanel(page, 'escape')
     await expect(bell(page)).not.toHaveAttribute('data-quiet', 'true')
     await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)

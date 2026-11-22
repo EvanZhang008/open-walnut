@@ -104,10 +104,10 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
       <SettingsRow
         label="Share new tasks"
         help={on
-          ? 'Any task start that names no engine takes turns between the checked entries below (not the chat composer, Main, leads, asks, routines, plugin tasks, reviewer subtasks or a project not listed under In projects). Usage & Costs compares them. Switch off to run every new task on the default engine again; the entries stay as they are.'
+          ? 'A new task that names no engine takes turns between the checked entries below, and Usage & Costs compares them. Not included: the chat composer, Main, leads, asks, routines, plugin tasks and reviewer subtasks. Switch off to run every new task on the default engine again; the entries stay.'
           : enough
             ? 'Switched off: every new task runs on the default engine. The entries below are kept; switch on to share tasks between them again.'
-            : 'Check two or more entries below to spread new tasks between them; until then they all run on the default engine.'}
+            : 'Check two or more entries below to share new tasks between them. Until then every new task runs on the default engine.'}
         error={pick.error ?? offPick.error}
         data-testid="engine-split-row"
         control={(
@@ -137,7 +137,7 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
         return (
           <SettingsCheckbox key={k} checked={checked.has(k)} onChange={(v) => toggle(k, v)} disabled={!ready}
             label={modelLineLabel(nameOf(engine), engine, model)}
-            trailing={acp.has(engine) ? <span className="settings-addons-muted">takes no model here: set it in engines.{engine}.model</span>
+            trailing={acp.has(engine) ? <span className="settings-addons-muted">takes no model here: set it in <code>engines.{engine}.model</code> in <code>config.yaml</code></span>
               : modelLineLabel(nameOf(engine), engine, model).toLowerCase().endsWith((model ?? "").toLowerCase()) ? undefined : <span className="settings-addons-muted">{model}</span>}
             data-testid={`engine-split-${k}`} />
         );
@@ -149,8 +149,8 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
       <SettingsRow
         label="In projects"
         help={projects.length
-          ? `Only tasks in ${projects.join(', ')} take turns. A task in any other project runs on the default engine.`
-          : 'Every project. Name projects here to share only their tasks; the rest run on the default engine.'}
+          ? `Only tasks in ${projects.join(', ')} take turns. Tasks in any other project run on the default engine.`
+          : 'None named, so tasks in every project take turns. Name a project here to share only its tasks; the rest run on the default engine.'}
         error={projectsPick.error}
         data-testid="engine-split-projects"
         control={(
@@ -170,10 +170,10 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
       ))}
       {modelEngines.length > 0 && (
         <SettingsRow
-          label="Add an engine on a model"
+          label="Add an engine with a chosen model"
           help={unlisted
             ? `${typed} is not in the models Claude Code lists on this machine. It is sent as typed, so check the name (a model your proxy serves is fine).`
-            : "Shares tasks with an engine running a model you name (for example Claude Code on sonnet, or another company's model your proxy serves), next to the engines above."}
+            : "Adds an entry above for an engine running the model you name (for example Claude Code on sonnet, or a model your proxy serves), so new tasks can take turns with it."}
           state={unlisted ? 'warning' : undefined}
           data-testid="engine-split-add"
           control={(

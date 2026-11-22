@@ -22,7 +22,7 @@ import { useModelOptions } from '@/components/sessions/path-selector/model-optio
 import { fetchEngineModelCatalog } from '@/api/sessions';
 import { fetchEngineFallbackNow, type EngineFallbackNow } from '@/api/engine-fallback';
 import { currentDefaultEngine } from './default-engine-select';
-import { currentFallback, FALLBACK_OFF, fallbackEngineOptions, fallbackNeedsModel, fallbackSave } from './fallback-engine-select';
+import { currentFallback, FALLBACK_OFF, FALLBACK_OFF_LABEL, fallbackEngineOptions, fallbackNeedsModel, fallbackSave } from './fallback-engine-select';
 import { engineName } from './DefaultEngineRow';
 import type { useSerialSave } from './GeneralSection';
 import { log } from '@/utils/log';
@@ -142,7 +142,7 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
         htmlFor="fallback-engine-select"
         help={<span data-testid="fallback-engine-help">{picked
           ? 'A new task starts on this engine while the default engine is out of usage on its machine. Sessions already running wait for the reset.'
-          : 'Pick an engine for new tasks while the default engine is out of usage on its machine. Off, they wait for the reset, as sessions already running do.'}</span>}
+          : `Pick an engine for new tasks while the default engine is out of usage on its machine. ${FALLBACK_OFF_LABEL}: new tasks start on the default engine once its usage resets, as sessions already running do.`}</span>}
         error={engine.error}
         data-testid="fallback-engine-row"
         control={(

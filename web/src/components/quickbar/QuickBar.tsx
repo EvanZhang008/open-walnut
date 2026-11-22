@@ -468,105 +468,105 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
   const switchTo = quickSwitchTarget(shown, picks, readRecents(), readChosen());
   // Idle, the box says Tab is there: what else the bar does is never a hidden key (2026-11-20).
   const phone = usePhoneLayout();
-  // A phone has no Tab key, and the longer hint wrapped and was cut in its one-line bar.
-  const tabHint = phone ? '' : ', or Tab to see what you can do';
-  const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? `Type a message${tabHint}` : `Speak or type${tabHint}`;
+  // A phone's one-line bar cut the longer hint: there it says only what typing does.
+  const findHint = phone ? '' : ', or find tasks and notes';
+  const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? `Send a message${findHint}` : `Speak or type a message${findHint}`;
 
   return (
-    <div
-      className={`${surface === 'panel' ? 'qb-bar qb-bar-panel' : 'qb-bar'}${pictureInput.dragOver ? ' qb-drag-over' : ''}`}
-      role="dialog"
-      aria-label="Quick bar"
-      data-recording={recording ? 'true' : 'false'}
-      data-mode={mode}
-      onKeyDown={onKeyDown}
-      {...(mode === 'send' ? pictureInput.dropProps : {})}
-    >
-      <div className="qb-row">
+  <div
+    className={`${surface === 'panel' ? 'qb-bar qb-bar-panel' : 'qb-bar'}${pictureInput.dragOver ? ' qb-drag-over' : ''}`}
+    role="dialog"
+    aria-label="Quick bar"
+    data-recording={recording ? 'true' : 'false'}
+    data-mode={mode}
+    onKeyDown={onKeyDown}
+    {...(mode === 'send' ? pictureInput.dropProps : {})}
+  >
+    <div className="qb-row">
+      <button
+        type="button"
+        className={`qb-mic${recording ? ' qb-mic-on' : ''}${voiceOff ? ' qb-mic-off' : ''}`}
+        aria-label={recording ? 'Stop listening' : 'Start listening'}
+        title={voiceOff ? 'Voice input is not set up (Settings, Voice)' : recording ? 'Stop listening (Esc)' : 'Speak'}
+        onClick={() => (recording ? void finishTake() : startTake())}
+        disabled={(voiceOff || mode !== 'send') && !recording}
+      >
+        <MicGlyph level={recording ? stt.level : 0} />
+      </button>
+      {spec ? (
+        <button type="button" className={`qb-to qb-mode-chip qb-mode-${mode}`} onClick={() => enterMode('send')} aria-label={`${spec.chip}. Back to the message`} title="Back to the message (Esc)">
+          <span className="qb-to-name">{spec.chip}</span>
+          <span className="qb-mode-x" aria-hidden="true">×</span>
+        </button>
+      ) : (
         <button
           type="button"
-          className={`qb-mic${recording ? ' qb-mic-on' : ''}${voiceOff ? ' qb-mic-off' : ''}`}
-          aria-label={recording ? 'Stop listening' : 'Start listening'}
-          title={voiceOff ? 'Voice input is not set up (Settings, Voice)' : recording ? 'Stop listening (Esc)' : 'Speak'}
-          onClick={() => (recording ? void finishTake() : startTake())}
-          disabled={(voiceOff || mode !== 'send') && !recording}
+          className={`qb-to${pickedBySpeech ? ' qb-to-heard' : ''}`}
+          onClick={() => { stopCount(); setPicking((v) => !v); }}
+          aria-label={`To ${shown?.title ?? 'CEO'}. Change`}
+          title={switchTo === undefined ? 'Change who gets it (Tab)' : `Change who gets it (Tab). Shift-Tab: ${switchTo?.title ?? 'CEO'}`}
+          aria-expanded={picking}
         >
-          <MicGlyph level={recording ? stt.level : 0} />
+          {shown && <PersonAvatar person={shown} size={20} />}
+          <span className="qb-to-name">{shown?.title ?? 'CEO'}</span>
+          <span className="qb-to-caret" aria-hidden="true" />
         </button>
-        {spec ? (
-          <button type="button" className={`qb-to qb-mode-chip qb-mode-${mode}`} onClick={() => enterMode('send')} aria-label={`${spec.chip}. Back to the message`} title="Back to the message (Esc)">
-            <span className="qb-to-name">{spec.chip}</span>
-            <span className="qb-mode-x" aria-hidden="true">×</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={`qb-to${pickedBySpeech ? ' qb-to-heard' : ''}`}
-            onClick={() => { stopCount(); setPicking((v) => !v); }}
-            aria-label={`To ${shown?.title ?? 'CEO'}. Change`}
-            title={switchTo === undefined ? 'Change who gets it (Tab)' : `Change who gets it (Tab). Shift-Tab: ${switchTo?.title ?? 'CEO'}`}
-            aria-expanded={picking}
-          >
-            {shown && <PersonAvatar person={shown} size={20} />}
-            <span className="qb-to-name">{shown?.title ?? 'CEO'}</span>
-            <span className="qb-to-caret" aria-hidden="true" />
-          </button>
-        )}
-        <textarea
-          ref={boxRef}
-          className="qb-text"
-          data-draft-key={draft.key ?? undefined}
-          rows={1}
-          value={value}
-          placeholder={placeholder}
-          aria-label={spec ? spec.action : 'Message'}
-          onChange={(e) => {
-            if (mode !== 'send') { setQuery(e.target.value); return; }
-            setText(e.target.value);
-            setNotice(null);
-            if (!e.target.value.trim()) addressTaken.current = false;
-          }}
-          onPaste={mode === 'send' ? pictureInput.onPaste : undefined}
-          spellCheck={false}
-        />
-        {recording ? <Waveform level={stt.level} /> : mode === 'send' && <AttachPictureButton pictures={pictures} className="qb-attach" testId="qb-attach" />}
-      </div>
-      {mode === 'send' && <PictureStrip pictures={pictures} className="qb-shots" testId="qb-pictures" />}
-      {countdownAt !== null && <div key={countdownAt} className="qb-count" style={{ animationDuration: `${SEND_COUNTDOWN_MS}ms` }} />}
-      {picking && (
-        <QuickBarPicker
-          sections={sections}
-          current={shown}
-          onPick={pick}
-          onClose={() => { setPicking(false); boxRef.current?.focus(); }}
-          modes={MODES}
-          // During a take the words are a message: Enter still picks who gets them.
-          startOnPeople={recording || stt.isTranscribing}
-          focusNote={focusNote}
-          // The words in the box become the search or the question; Esc brings them back.
-          onMode={(next) => { const words = text.trim(); enterMode(next, words, words.length > 0); }}
-        />
       )}
-      {(mode === 'tasks' || mode === 'notes') && <QuickBarResults ref={resultsRef} mode={mode} query={query} onOpen={openResult} />}
-      {mode === 'ask' && <QuickBarAsk turns={asking.turns} onTask={(taskId) => openResult({ key: taskId, title: '', sub: '', to: taskPath(taskId) })} />}
-      <QuickBarFoot
-        mode={mode}
-        recording={recording}
-        transcribing={stt.isTranscribing}
-        micLive={stt.micLive}
-        counting={countdownAt !== null}
-        to={shown}
-        note={notice ?? stt.error ?? stt.silenceWarning ?? (stt.isRecording ? stt.draftNotice : null) ?? null}
-        peopleFailed={peopleFailed}
-        onRetryPeople={loadPeople}
-        switchTo={switchTo}
-        typedMode={typedMode}
-        // The Tab list shows the modes itself: no second row of them under it.
-        empty={!text.trim() && !picking}
-        onMode={(next) => enterMode(next)}
-        canCapture={!!onCapture}
+      <textarea
+        ref={boxRef}
+        className="qb-text"
+        data-draft-key={draft.key ?? undefined}
+        rows={1}
+        value={value}
+        placeholder={placeholder}
+        aria-label={spec ? spec.action : 'Message'}
+        onChange={(e) => {
+          if (mode !== 'send') { setQuery(e.target.value); return; }
+          setText(e.target.value);
+          setNotice(null);
+          if (!e.target.value.trim()) addressTaken.current = false;
+        }}
+        onPaste={mode === 'send' ? pictureInput.onPaste : undefined}
+        spellCheck={false}
       />
+      {recording ? <Waveform level={stt.level} /> : mode === 'send' && <AttachPictureButton pictures={pictures} className="qb-attach" testId="qb-attach" />}
     </div>
-  );
+    {mode === 'send' && <PictureStrip pictures={pictures} className="qb-shots" testId="qb-pictures" />}
+    {countdownAt !== null && <div key={countdownAt} className="qb-count" style={{ animationDuration: `${SEND_COUNTDOWN_MS}ms` }} />}
+    {picking && (
+      <QuickBarPicker
+        sections={sections}
+        current={shown}
+        onPick={pick}
+        onClose={() => { setPicking(false); boxRef.current?.focus(); }}
+        modes={MODES}
+        // During a take the words are a message: Enter still picks who gets them.
+        startOnPeople={recording || stt.isTranscribing}
+        focusNote={focusNote}
+        // The words in the box become the search or the question; Esc brings them back.
+        onMode={(next) => { const words = text.trim(); enterMode(next, words, words.length > 0); }}
+      />
+    )}
+    {(mode === 'tasks' || mode === 'notes') && <QuickBarResults ref={resultsRef} mode={mode} query={query} onOpen={openResult} />}
+    {mode === 'ask' && <QuickBarAsk turns={asking.turns} onTask={(taskId) => openResult({ key: taskId, title: '', sub: '', to: taskPath(taskId) })} />}
+    <QuickBarFoot
+      mode={mode}
+      recording={recording}
+      transcribing={stt.isTranscribing}
+      micLive={stt.micLive}
+      counting={countdownAt !== null}
+      to={shown}
+      note={notice ?? stt.error ?? stt.silenceWarning ?? (stt.isRecording ? stt.draftNotice : null) ?? null}
+      peopleFailed={peopleFailed}
+      onRetryPeople={loadPeople}
+      switchTo={switchTo}
+      typedMode={typedMode}
+      // The Tab list shows the modes itself: no second row of them under it.
+      empty={!text.trim() && !picking}
+      onMode={(next) => enterMode(next)}
+      canCapture={!!onCapture}
+    />
+  </div>
+);
 });
 

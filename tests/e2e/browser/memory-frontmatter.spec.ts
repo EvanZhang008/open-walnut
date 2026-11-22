@@ -64,7 +64,7 @@ async function openStore(page: Page, label: 'MEMORY.md' | 'USER.md') {
 
   const tree = page.locator('.memory-tree-panel')
   await expect(tree).toBeVisible({ timeout: 15000 })
-  const globalSection = tree.locator('.memory-tree-section', { hasText: 'Global' })
+  const globalSection = tree.locator('.memory-tree-section', { hasText: 'Read in every session' })
   await expect(globalSection).toBeVisible({ timeout: 10000 })
   const item = globalSection.locator('.memory-tree-item', { hasText: label })
   await expect(item).toBeVisible({ timeout: 10000 })

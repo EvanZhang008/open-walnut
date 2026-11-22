@@ -4,7 +4,7 @@
  * Every "+" in the app (todo toolbar, project header, pin-tier header, the Ask Walnut slot's "+ Session" chip,
  * `/session`, ⌘⇧Enter) now grows an EMPTY session column instead of opening a
  * launcher popover. The column is pure client state until the user commits:
- * a send morphs it `draft:` → `pending:` → a real session, "◌ Save as todo"
+ * a send morphs it `draft:` → `pending:` → a real session, "◌ Save as task"
  * turns the composed text into a task, and closing it leaves NO trace anywhere.
  *
  * SHAPE (the approved v4 layout — everything stacked UP from the composer):
@@ -312,9 +312,9 @@ test('closing a draft leaves no trace: no task, no persisted column, no draft ke
   expect(residue.draftKeys, 'the draft composer key is cleared on close').toEqual([])
 })
 
-// ── 5. "Save as todo" — one click, first line is the title ───────
+// ── 5. "Save as task" — one click, first line is the title ───────
 
-test('Save as todo turns the draft into a task: first line = title, rest = description', async ({ page }) => {
+test('Save as task turns the draft into a task: first line = title, rest = description', async ({ page }) => {
   await loadHome(page)
   const stamp = Date.now()
   const title = `Fix the login bug ${stamp}`
@@ -327,7 +327,7 @@ test('Save as todo turns the draft into a task: first line = title, rest = descr
   // for later" was too long next to the send arrow), so it is asserted, not
   // just clicked.
   const later = panel.locator('.draft-later-btn')
-  await expect(later).toContainText('Save as todo')
+  await expect(later).toContainText('Save as task')
   // ONE click, no dialog — that is the whole point of this control.
   await later.click()
 
@@ -356,7 +356,7 @@ test('Save as todo turns the draft into a task: first line = title, rest = descr
 
 // ── 6. Project header "+" seeds the project (R7: one click, no menu) ────────
 
-test('project header "+" pre-fills the project pill, and Save as todo files the task there', async ({ page }) => {
+test('project header "+" pre-fills the project pill, and Save as task files the task there', async ({ page }) => {
   // Both panel axes open (stacked sections + the All project chip) so the project
   // group headers — and their "+" — render.
   await presetPanelView(page, { section: 'all', project: '' })
@@ -491,7 +491,7 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   // …the task's own folder came along as a pin (so Start needs no picker)…
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
   await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
-  // …and "Save as todo" is GONE: this draft already IS a task, so
+  // …and "Save as task" is GONE: this draft already IS a task, so
   // offering to create one could only mint a duplicate.
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
 

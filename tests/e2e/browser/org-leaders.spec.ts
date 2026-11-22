@@ -13,7 +13,7 @@
  *     the task stores director 'no'); the task kebab's Team row makes a task with no subtasks one;
  *     a VP's right-click "New Director…" opens the fold on a name input, Enter makes the task (a
  *     Director, not started) and opens it beside the page
- *   - Settings: the "Own section" layout lists every Director under DIRECTORS; project names off
+ *   - Settings: the "In their own section" layout lists every Director under DIRECTORS; project names off
  *     drops the fold's project headings; both are kept on the server (GET /api/v1/org/settings)
  *   - off: none of the Director actions or settings show
  * The fixture is shared, so this file makes its own project and removes what it made.
@@ -297,7 +297,7 @@ test('a VP\'s right-click New Director… opens the fold on a name input; Enter 
   await expect(listLeaders(page).getByTestId('org-new-director')).toBeVisible()
 })
 
-test('settings: Own section lists every Director as a row under DIRECTORS; project names off drops the fold\'s headings', async ({ page, request }) => {
+test('settings: In their own section lists every Director as a row under DIRECTORS; project names off drops the fold\'s headings', async ({ page, request }) => {
   test.setTimeout(120_000)
   await setFlag(request, true)
   await page.setViewportSize({ width: 1280, height: 800 })

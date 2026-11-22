@@ -15,7 +15,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { Config } from '@open-walnut/core';
 import { fetchSttDetection, retryQwenSetup, DEFAULT_MLX_MODEL, type DetectionResult } from '@/api/stt';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
-import { sttScanSummary } from './stt-scan-summary';
+import { scanPlace, sttScanSummary } from './stt-scan-summary';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SecretInput } from '../inputs/SecretInput';
 import { SegmentedControl } from '../inputs/SegmentedControl';
@@ -254,8 +254,8 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
               disabled={(!engine && loading) || jobRunning}
               onChange={(e) => engineSetting.set(e.target.value as SttEngine)}
             >
-              {!engine && <option value="">{loading ? 'Checking this Mac...' : 'Choose an engine'}</option>}
-              <optgroup label="On this Mac">
+              {!engine && <option value="">{loading ? `Checking ${scanPlace(detection)}...` : 'Choose an engine'}</option>}
+              <optgroup label={`On ${scanPlace(detection)}`}>
                 {options.filter((o) => o.badge === 'Local').map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </optgroup>
               <optgroup label="Cloud">
@@ -268,13 +268,13 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
 
       {/* One row for the scan: its line changes in place, so nothing below moves (N3-05). */}
       <SettingsRow
-        label="This Mac"
+        label={`Installed on ${scanPlace(detection)}`}
         className="stt-scan-row"
         data-testid="stt-scan-row"
         state={error && !loading ? 'warning' : undefined}
         help={
           <span className="stt-scan-status" data-scan={loading ? 'scanning' : error ? 'failed' : 'done'}>
-            {loading ? 'Scanning this Mac...' : error ? `Couldn't scan this Mac: ${error}` : detection ? sttScanSummary(detection) : ''}
+            {loading ? `Scanning ${scanPlace(detection)}...` : error ? `Couldn't scan ${scanPlace(detection)}: ${error}` : detection ? sttScanSummary(detection) : ''}
           </span>
         }
         control={!loading && error ? <SettingsButton variant="text" onClick={() => void runDetection(true)}>Retry</SettingsButton> : undefined}

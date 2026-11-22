@@ -26,7 +26,7 @@ import { isOpenRow, MailRow } from './MailMessageRow';
 import { MailUnsubscribePlanDialog } from './MailUnsubscribePlanDialog';
 import {
   ALL_CAUGHT_UP, ALL_CAUGHT_UP_DETAIL, ALL_CAUGHT_UP_EMPTY, GROUPS_UPDATING_TITLE, IMPORTANT_EMPTY, IMPORTANT_EMPTY_UNREAD, STALE_COUNTS,
-  groupsErrorText, rulesErrorText, sortProgressText, unreadWord,
+  GROUPED_SECTION, GROUPED_SECTION_TITLE, groupsErrorText, rulesErrorText, sortProgressText, unreadWord,
 } from './mail-groups-copy';
 import { groupedNumbers, groupedScopeOf, wireGroupsBus } from './mail-groups-live';
 import {
@@ -289,8 +289,8 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
         ) : (
           <>
             {drawn.length > 0 && (
-              <p className="mail-list-section mail-not-important-head" data-testid="mail-not-important-head">
-                <span className="mail-list-section-name wn-title">Not important</span>
+              <p className="mail-list-section mail-not-important-head" data-testid="mail-not-important-head" title={GROUPED_SECTION_TITLE}>
+                <span className="mail-list-section-name wn-title">{GROUPED_SECTION}</span>
                 {(numbers?.groupedUnread ?? 0) > 0 && (
                   <span className="mail-important-unread wn-fixed" data-testid="mail-not-important-unread">{unreadWord(numbers!.groupedUnread)}</span>
                 )}

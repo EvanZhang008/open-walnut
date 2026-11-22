@@ -48,8 +48,8 @@ export function groupShowsTags(hooks: Array<Pick<HookInfo, 'source'>>): boolean 
 }
 
 const GROUPS: Array<{ key: HookGroupKey; title: string; footer: string }> = [
-  { key: 'walnut', title: 'Walnut hooks', footer: 'Run on session, task and cron events.' },
-  { key: 'daemon', title: 'Daemon hooks', footer: 'Run inside the session daemon on each host.' },
+  { key: 'walnut', title: 'Built-in', footer: 'Walnut runs these on its own when a session or task changes, or a schedule fires.' },
+  { key: 'daemon', title: 'Built-in, on each host', footer: 'Each machine that runs sessions runs these for its own sessions.' },
   { key: 'yours', title: 'Your hooks', footer: '' },
 ];
 

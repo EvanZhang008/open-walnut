@@ -202,7 +202,7 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   // The detail pane lists every tag, not only the row's first (a plain word is stored as
   // a label and reads as its word).
   await row(page, many).getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Task details', { exact: true }).click()
   const detail = page.locator('.todo-detail-pane').filter({ hasText: `Three tags ${stamp}` })
   await expect(detail).toBeVisible()
   const detailChips = detail.locator('.todo-detail-badges [data-testid="tag-editor"] .tag-chip')

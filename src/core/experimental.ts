@@ -21,7 +21,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'isolated_workspace_by_default',
     name: 'Code tasks start in an isolated workspace',
-    description: 'A new task whose folder is in a git repository, or one a workspace plugin claims, starts in its own workspace (a git worktree, or the plugin\'s), so tasks never edit the same checkout. A project\'s settings can turn it on or off for that project; a start can opt out with workspace: false.',
+    description: 'Each new code task gets its own copy of the code, so two tasks never edit the same files. It applies when the task\'s folder is in a git repository (the copy is a git worktree) or a workspace plugin manages it. A project\'s own settings can turn it on or off for that project.',
     default: false,
   },
   {
@@ -39,7 +39,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'router_chat_sources',
     name: 'Router reads chat messages',
-    description: 'New direct messages, mentions and watched-channel messages from a connected chat (Slack) go to your router, the one that reads your mail, which hands each one with its link to the task or VP that owns it. Each chat account can be filtered in Router settings. Off: the chat plugin keeps its own letters.',
+    description: 'On: new chat messages (Slack) go to the router that reads your mail, which passes each one, with its link, to the task or VP that owns it. Direct messages, mentions and watched channels count; Router settings can filter each chat account. Off: the chat plugin writes its own letters, as before.',
     default: false,
   },
   {

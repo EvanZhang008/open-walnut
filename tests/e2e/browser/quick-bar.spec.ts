@@ -237,7 +237,7 @@ test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page 
   await expect(bar(page)).toBeVisible()
   await expect(bar(page)).toHaveAttribute('data-recording', 'false')
   // The box says Tab is there.
-  await expect(box(page)).toHaveAttribute('placeholder', 'Type a message, or Tab to see what you can do')
+  await expect(box(page)).toHaveAttribute('placeholder', 'Send a message, or find tasks and notes')
   await expect(page.locator('.qb-keys')).toContainText('more')
   await box(page).press('Tab')
   const picker = page.locator('.qb-picker')

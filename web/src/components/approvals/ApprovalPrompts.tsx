@@ -27,7 +27,7 @@ import { QUIET_CATCHUP_ID } from '@/contexts/notifications/system-notice';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
-import type { Approval } from '@/api/approvals';
+import { APPROVALS_SWITCH_LABEL, type Approval } from '@/api/approvals';
 import {
   applyApprovalEvent, approveAndStopAsking, dismissStoppedAsking, undoStopAsking, closeApproval, decideApproval, openApproval, pendingAt, refreshApprovals,
   useApprovals, type ApprovalsState,
@@ -179,7 +179,7 @@ function StopAsking({ a, s }: { a: Approval; s: ApprovalsState }) {
   if (a.singleUse || a.outsideSwitch || s.busy[a.id]) return null;
   return (
     <button type="button" className="approval-link approval-stop-asking" data-testid="approval-stop-asking"
-      title="Approve this one and turn approvals off (Settings › General › Ask me before agents act). Each step then goes ahead and is listed there."
+      title={`Approve this one and turn approvals off (Settings › General › ${APPROVALS_SWITCH_LABEL}). Each step then goes ahead and is listed there.`}
       onClick={(e) => { e.stopPropagation(); void approveAndStopAsking(a); }}>
       Approve, and stop asking me
     </button>

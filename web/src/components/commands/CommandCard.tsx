@@ -23,6 +23,13 @@ export function commandSummary(content: string): { text: string; cut: boolean } 
   return { text: `${(space > SUMMARY_MAX_CHARS / 2 ? head.slice(0, space) : head).replace(/[\s.,;:]+$/, '')}...`, cut: true };
 }
 
+/** Where a command comes from, in the words the card and the page's filter both use. */
+export const COMMAND_SOURCE_LABEL: Record<CommandDef['source'], string> = {
+  builtin: 'Built-in',
+  user: 'Custom',
+  plugin: 'Plugin',
+};
+
 export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -41,7 +48,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
           <div className="cmd-card-name-row">
             <code className="cmd-card-name">/{command.name}</code>
             <span className={`cmd-source-badge ${isReadOnly ? 'badge builtin' : 'badge badge-accent user'}`}>
-              <span>{command.source}</span>
+              <span>{COMMAND_SOURCE_LABEL[command.source] ?? command.source}</span>
             </span>
           </div>
           {command.description && (

@@ -247,7 +247,7 @@ test('a task created outside the chips stays with an Outside filters pill and a 
     await filterProjects(page, [garden])
     const panel = await openDraft(page)
     await draftComposer(page).fill(`new outside ${stamp}`)
-    // Save as todo (no session); pinned or not, the board must keep it on screen.
+    // Save as task (no session); pinned or not, the board must keep it on screen.
     const created = page.waitForResponse((res) => res.request().method() === 'POST' && new URL(res.url()).pathname === '/api/tasks')
     await panel.locator('.draft-later-btn').click()
     const id = ((await (await created).json()) as { task: { id: string } }).task.id

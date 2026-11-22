@@ -16,7 +16,7 @@ import { ICON_GEAR } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import { ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch } from './useOrgSwitch';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
-import { DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, directorsLayoutHelp, useDirectorSettings } from './useDirectorSettings';
+import { DIRECTORS_LAYOUT_LABEL, DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, DIRECTORS_PROJECTS_LABEL, directorsLayoutHelp, useDirectorSettings } from './useDirectorSettings';
 import '@/styles/org-rail.css';
 
 export function OrgSettingsMenu() {
@@ -77,12 +77,12 @@ export function OrgSettingsMenu() {
             <div className="org-settings-directors" data-testid="org-settings-directors">
               <div className="org-settings-stops-head">Directors</div>
               <div className="org-settings-row is-stacked">
-                <span className="org-settings-label"><strong>Layout</strong><span className="org-answer-q">{directorsLayoutHelp(dir.layout)}</span></span>
+                <span className="org-settings-label"><strong>{DIRECTORS_LAYOUT_LABEL}</strong><span className="org-answer-q">{directorsLayoutHelp(dir.layout)}</span></span>
                 <SegmentedControl size="sm" aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
               </div>
               <div className="org-settings-row">
                 <label htmlFor="org-settings-directors-projects" className="org-settings-label">
-                  <strong>Project names</strong>
+                  <strong>{DIRECTORS_PROJECTS_LABEL}</strong>
                   <span className="org-answer-q">{DIRECTORS_PROJECTS_HELP}</span>
                 </label>
                 <ToggleSwitch id="org-settings-directors-projects" data-testid="org-settings-directors-projects" checked={dir.showProjects} busy={dir.busy} onChange={dir.setShowProjects} />

@@ -304,7 +304,7 @@ export function DraftMoreButton({ menu, moreRef, priorityVisible, withProject = 
       title={title}
       {...menuTriggerProps(menu)}
     >
-      More
+      Task settings
     </button>
   );
 }

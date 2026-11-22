@@ -92,6 +92,7 @@ import {
   updateLegacySideQuestions,
   applySideThreadTitle,
 } from '@/stores/side-threads';
+import { SIDE_CHAT_LABEL, SIDE_CHAT_TITLE } from '@/components/chat/composer-words';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { Chip, DisclosureButton } from '@/components/controls';
 import '@/styles/header-fit.css';
@@ -562,7 +563,7 @@ function SideQuestionDrawerBody({
         error: err instanceof Error ? err.message : String(err),
       });
       // Surface it — a silently empty composer reads as a dead button.
-      setSideThreadsError(sessionId, 'Inject failed — could not load the thread transcript');
+      setSideThreadsError(sessionId, 'Could not load this side chat, so nothing was added to the message box');
     } finally {
       setInjecting(false);
     }
@@ -613,7 +614,7 @@ function SideQuestionDrawerBody({
       // touch nothing: prefilling now would overwrite whatever they are doing.
       if (outcome.ok === false && outcome.reason === 'cancelled') return;
       if (outcome.ok === false) {
-        setSideThreadsError(sessionId, 'No summary came back — inject the full thread instead');
+        setSideThreadsError(sessionId, 'No summary came back. Use Inject full instead');
         return;
       }
       onInjectToComposer(formatSideThreadDigestForComposer(
@@ -637,7 +638,7 @@ function SideQuestionDrawerBody({
         : undefined;
       setSideThreadsError(
         sessionId,
-        detail || 'Could not summarize this thread — inject the full thread instead',
+        detail || 'Could not summarize this side chat. Use Inject full instead',
       );
     } finally {
       // ALWAYS clear it. Guarding this on "still the current run" left the button
@@ -684,9 +685,9 @@ function SideQuestionDrawerBody({
         disabled={disabled}
         title={disabled
           ? 'Available once the session has started'
-          : 'Side threads — multi-turn questions kept out of the main conversation'}
+          : SIDE_CHAT_TITLE}
       >
-        <span>btw</span>
+        <span>{SIDE_CHAT_LABEL}</span>
         {badgeCount > 0 && <span className="badge badge-count side-question-count">{badgeCount}</span>}
       </button>
 
@@ -702,15 +703,15 @@ function SideQuestionDrawerBody({
           onDrop={(e) => e.stopPropagation()}
         >
           <div className="side-question-popover-header" data-fit-header="">
-            <span className="side-question-popover-title" data-fit-title="">Side threads</span>
-            <span className="side-question-popover-hint" data-fit-sub="">multi-turn · kept out of the chat</span>
+            <span className="side-question-popover-title" data-fit-title="">Side chats</span>
+            <span className="side-question-popover-hint" data-fit-sub="">the main session never sees these</span>
             <button
               type="button"
               className="btn btn-icon btn-sm task-action-btn side-question-fullscreen"
               onClick={isFullscreen ? exitFullscreen : enterFullscreen}
               disabled={!fullscreenPlace}
               title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
-              aria-label={isFullscreen ? 'Collapse side threads' : 'Expand side threads to full screen'}
+              aria-label={isFullscreen ? 'Collapse side chats' : 'Expand side chats to full screen'}
               aria-pressed={isFullscreen}
             >
               {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
@@ -751,8 +752,8 @@ function SideQuestionDrawerBody({
                     <button
                       className="side-thread-chip-archive"
                       onClick={() => void fileThread(t.id)}
-                      title="Archive this side thread (kept, and restorable)"
-                      aria-label={`Archive side thread: ${sideThreadLabel(t)}`}
+                      title="Archive this side chat (kept, and restorable)"
+                      aria-label={`Archive side chat: ${sideThreadLabel(t)}`}
                     >
                       {'×'}
                     </button>
@@ -764,7 +765,7 @@ function SideQuestionDrawerBody({
               className="side-thread-chip side-thread-chip-new"
               pressed={state.activeThreadId === null}
               onClick={startNewThread}
-              title="Start a new side thread"
+              title="Start a new side chat"
             >
               {'+ New'}
             </Chip>
@@ -773,7 +774,7 @@ function SideQuestionDrawerBody({
                 ref={archivedToggleRef}
                 className="side-thread-chip-archived-toggle"
                 onClick={() => setArchivedOpen((v) => !v)}
-                title="Side threads you filed away — still readable, and restorable"
+                title="Side chats you archived: still readable, and restorable"
                 expanded={archivedOpen}
                 aria-controls={`${instanceId}-archived-shelf`}
               >
@@ -793,7 +794,7 @@ function SideQuestionDrawerBody({
                     className="side-thread-chip is-archived is-muted"
                     pressed={t.id === state.activeThreadId}
                     onClick={() => setActiveSideThread(sessionId, t.id)}
-                    title={`${sideThreadLabel(t)} — open (read-only until restored)`}
+                    title={`${sideThreadLabel(t)}: open it (read-only until restored)`}
                     trailing={t.promotedTaskId && <span className="side-thread-chip-badge">{'✓task'}</span>}
                   >
                     <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
@@ -801,16 +802,16 @@ function SideQuestionDrawerBody({
                   <button
                     className="side-thread-chip-archive"
                     onClick={() => void setSideThreadArchivedOptimistic(sessionId, t.id, false)}
-                    title="Restore this side thread (its process resumes on the next follow-up)"
-                    aria-label={`Restore side thread: ${sideThreadLabel(t)}`}
+                    title="Restore this side chat (it picks up again on your next follow-up)"
+                    aria-label={`Restore side chat: ${sideThreadLabel(t)}`}
                   >
                     {'↺'}
                   </button>
                   <button
                     className="side-thread-chip-archive side-thread-chip-purge"
                     onClick={() => void purgeThread(t)}
-                    title="Delete permanently — this one cannot be undone"
-                    aria-label={`Delete side thread permanently: ${sideThreadLabel(t)}`}
+                    title="Delete permanently. This cannot be undone"
+                    aria-label={`Delete side chat permanently: ${sideThreadLabel(t)}`}
                   >
                     {'🗑'}
                   </button>
@@ -848,17 +849,17 @@ function SideQuestionDrawerBody({
             </div>
           ) : activeIsPending ? (
             <div className="side-thread-body side-thread-body-pending">
-              <span className="side-question-spinner" /> Forking a side thread…
+              <span className="side-question-spinner" /> Starting a side chat…
             </div>
           ) : (
             <div className="side-question-empty">
               {/* "pick a thread above" has to be true: with every thread filed, the
                   chip row is empty and the only pickable threads are in the shelf. */}
               {liveThreads.length === 0 && archivedThreads.length === 0
-                ? 'No side threads yet — ask something below. Each thread is a hidden fork of this session, so the answers never enter the main chat.'
+                ? 'No side chats yet. Ask something below: each side chat is a hidden copy of this session, so its answers never enter the main chat.'
                 : liveThreads.length === 0
-                  ? 'New thread — ask below, or reopen one from Archived above.'
-                  : 'New thread — ask below, or pick a thread above to follow up.'}
+                  ? 'New side chat: ask below, or reopen one from Archived above.'
+                  : 'New side chat: ask below, or pick one above to follow up.'}
             </div>
           )}
 
@@ -873,7 +874,7 @@ function SideQuestionDrawerBody({
                 className="btn btn-sm"
                 onClick={() => void injectToComposer(activeThread)}
                 disabled={injecting || digesting || !onInjectToComposer}
-                title="Copy this thread's whole Q&A into the main composer"
+                title="Copy this side chat's whole Q&A into the main message box"
               >
                 <ArrowUpRightIcon size={12} /> {injecting ? 'Injecting…' : 'Inject full'}
               </button>
@@ -887,12 +888,12 @@ function SideQuestionDrawerBody({
                 disabled={injecting || digesting || !onInjectToComposer || activeIsPending
                   || threadStreaming || isSideThreadReadOnly(activeThread) || !!activeThread.promotedTaskId}
                 title={threadStreaming
-                  ? 'Wait for this thread to finish answering, then summarize'
+                  ? 'Wait for this side chat to finish answering, then summarize'
                   : isSideThreadReadOnly(activeThread)
-                    ? 'This thread\'s process is gone — inject the full aside instead'
+                    ? 'This side chat has ended. Use Inject full instead'
                     : activeThread.promotedTaskId
-                      ? 'This thread is a task now — inject the full aside instead'
-                      : 'Ask this thread to summarize itself, then put the summary in the main composer'}
+                      ? 'This side chat is a task now. Use Inject full instead'
+                      : 'Ask this side chat to summarize itself, then put the summary in the main message box'}
               >
                 {digesting ? '✦ Summarizing…' : '✦ Inject summary'}
               </button>
@@ -918,8 +919,8 @@ function SideQuestionDrawerBody({
                 <button
                   className="btn btn-sm side-thread-archive-action side-thread-restore"
                   onClick={() => void setSideThreadArchivedOptimistic(sessionId, activeThread.id, false)}
-                  title="Restore this side thread so you can follow up again"
-                  aria-label="Restore this side thread"
+                  title="Restore this side chat so you can follow up again"
+                  aria-label="Restore this side chat"
                 >
                   {'↺ Restore'}
                 </button>
@@ -927,8 +928,8 @@ function SideQuestionDrawerBody({
                 <button
                   className="btn btn-sm side-thread-archive-action side-thread-delete"
                   onClick={() => void setSideThreadArchivedOptimistic(sessionId, activeThread.id, true)}
-                  title="Archive this side thread — kept and restorable, out of the chip row"
-                  aria-label="Archive this side thread"
+                  title="Archive this side chat: kept and restorable, out of the row above"
+                  aria-label="Archive this side chat"
                 >
                   {'⌦ Archive'}
                 </button>
@@ -937,7 +938,7 @@ function SideQuestionDrawerBody({
           )}
 
           {state.forkUnsupported && (
-            <div className="side-question-notice">This engine can&apos;t fork side threads</div>
+            <div className="side-question-notice">This engine can&apos;t start side chats</div>
           )}
           {state.error && <div className="side-question-error">{state.error}</div>}
 
@@ -948,9 +949,9 @@ function SideQuestionDrawerBody({
             <label className="side-question-composer-label">
               {activeThread
                 ? (isSideThreadReadOnly(activeThread)
-                  ? `Archived · ${sideThreadLabel(activeThread)} — history only${activeThread.archivedAt ? ' (restore it to follow up)' : ''}`
+                  ? `Archived · ${sideThreadLabel(activeThread)}: read only${activeThread.archivedAt ? ' (restore it to follow up)' : ''}`
                   : `Follow up · ${sideThreadLabel(activeThread)}`)
-                : 'New side thread'}
+                : 'New side chat'}
             </label>
             <ChatInput
               onSend={(text, images) => submit(text, images)}
@@ -980,8 +981,8 @@ function SideQuestionDrawerBody({
                   <PermissionModeMenu
                     mode={pillMode}
                     onPick={pickMode}
-                    heading={activeThreadSid ? 'Thread mode' : 'The new thread starts in'}
-                    title={`${activeThreadSid ? 'Thread mode' : 'The new thread starts in'}: ${MODE_LABELS[pillMode] ?? pillMode}. Click to choose a mode; Shift+Tab steps to ${MODE_LABELS[nextPillMode] ?? nextPillMode}`}
+                    heading={activeThreadSid ? 'Side chat mode' : 'The new side chat starts in'}
+                    title={`${activeThreadSid ? 'Side chat mode' : 'The new side chat starts in'}: ${MODE_LABELS[pillMode] ?? pillMode}. Click to choose a mode; Shift+Tab steps to ${MODE_LABELS[nextPillMode] ?? nextPillMode}`}
                   />
                   {/* Reply style. On a live thread it PATCHes that session like the
                       main composer's pill; before one exists the pick rides the
@@ -999,8 +1000,8 @@ function SideQuestionDrawerBody({
                       else setNewOutputMode(output_mode);
                     }}
                     titleSuffix={activeThreadSid
-                      ? 'Applies to this side thread'
-                      : 'Applies to the next side thread'}
+                      ? 'Applies to this side chat'
+                      : 'Applies to the next side chat'}
                   />
                   {/* A note annotates something that EXISTS — before the first ask
                       there is no thread to attach one to, so the pill appears with
@@ -1040,8 +1041,8 @@ function SideQuestionDrawerBody({
                       },
                     })}
                     title={activeThreadSid
-                      ? 'Applies to this side thread.'
-                      : 'Applies to the next side thread (inherited from the parent).'}
+                      ? 'Applies to this side chat.'
+                      : "Applies to the next side chat (it starts with this session's model)."}
                   />
                 </div>
               )}

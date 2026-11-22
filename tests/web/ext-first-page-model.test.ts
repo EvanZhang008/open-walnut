@@ -3,7 +3,7 @@
  * ext-relay-model.ts, and the words ext-panel-model.ts reads for it):
  *   . Send is Home's New task draft (never Ask Walnut), with the page as a hint beside the words and
  *     the task's own directory when no folder is picked (the extension has no folder picker);
- *   . Save as todo names the page it was on in the description, and only when the chip was on;
+ *   . Save as task names the page it was on in the description, and only when the chip was on;
  *   . the drawing of the next open is read from the task panel's own markup, cut to what it draws;
  *   . the relay word is read strictly (owner keys, http pages, a cap), and the pill, the panel's two
  *     lists and a row's name follow the extension's state.
@@ -128,7 +128,7 @@ describe('Where the first page starts its next task (2026-11-10: "choose which f
   });
 });
 
-describe('Save as todo on the first page', () => {
+describe('Save as task on the first page', () => {
   it('names the page in the description while the chip is on', () => {
     const input = homeTodoInput({ draft: draft(), text: 'Renew the parking permit\nbefore Friday', page: PAGE, withPage: true, tierKnown: TIERS });
     expect(input?.title).toBe('Renew the parking permit');

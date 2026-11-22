@@ -111,7 +111,7 @@ for (const status of ['task', 'vp', 'legacy', 'not_routed', 'failed', 'unknown',
     await expect(page.getByTestId('mail-reader-route')).toHaveText(words);
     // The first layer: which router processed it, above its decision (a receipt after the fact was recorded).
     const by = page.getByTestId('mail-reader-route-by');
-    await expect(by).toContainText(`${status === 'legacy' ? 'Recorded by' : 'Processed by'} ${status === 'legacy' ? 'the Personal router' : 'Personal mail router'}`);
+    await expect(by).toContainText(`${status === 'legacy' ? 'Recorded by' : 'Reviewed by'} ${status === 'legacy' ? 'the Personal router' : 'Personal mail router'}`);
     expect((await by.boundingBox())!.y).toBeLessThan((await page.getByTestId('mail-reader-route').boundingBox())!.y);
     await expect(page.getByTestId('mail-reader-route')).toHaveAttribute('data-route-area', 'personal');
     if (status === 'failed') await expect(page.getByTestId('mail-reader-route')).toContainText('Receiver was not ready');
@@ -495,7 +495,7 @@ test('a letter to the person reads as one, under the router that processed it; b
   await expect(rowLine).not.toContainText('Not routed');
   await row.click();
   const by = page.getByTestId('mail-reader-route-by');
-  await expect(by).toContainText('Processed by Personal mail router');
+  await expect(by).toContainText('Reviewed by Personal mail router');
   await expect(page.getByTestId('mail-reader-route')).toHaveText('Letter to you · Only the person can accept the invitation');
   await capture(page, { path: '/tmp/router-mail/letter-two-layers.png' });
   // The decision opens the letter in the notification center, the router's name its Org page.

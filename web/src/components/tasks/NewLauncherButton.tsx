@@ -1,7 +1,7 @@
 /**
  * NewLauncherButton: the "New task" action in the task-panel toolbar, the family's quiet key.
  *
- * A task may remain sessionless ("Save as todo") or start with a
+ * A task may remain sessionless ("Save as task") or start with a
  * session. Both paths begin in the same draft column, so the toolbar presents
  * one task-first verb instead of exposing that implementation detail.
  */

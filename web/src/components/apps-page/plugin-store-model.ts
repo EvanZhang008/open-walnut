@@ -148,7 +148,7 @@ export function cardStatus(
 
 /** Where the code comes from, in two or three words, for the card's corner and the header. */
 export function originKind(row: Pick<RegistryRow, 'builtin' | 'source'>): string {
-  if (row.builtin || row.source.kind === 'builtin') return 'Built in'
+  if (row.builtin || row.source.kind === 'builtin') return 'Built-in'
   switch (row.source.kind) {
     case 'bundled': return 'Comes with Walnut'
     case 'linked': return 'Git checkout'

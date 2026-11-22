@@ -44,7 +44,7 @@ test('the Skills shortcut on a real session lists skills without replacing the s
   await panel.locator('.session-panel-input .chat-plus-btn').click()
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   await panel.locator('.session-panel-input .chat-plus-menu').screenshot({ path: `${SCREENSHOT_DIR}/skills-menu-${test.info().project.name}.png`, animations: 'disabled' })
-  await panel.getByRole('menuitem', { name: /Skills$/ }).click()
+  await panel.getByRole('menuitem', { name: /Run a skill$/ }).click()
   const palette = panel.locator('.command-palette')
   await expect(palette.locator('.command-palette-name')).toHaveText(['/project-helper', '/walnut-trigger'])
   await input.press('ArrowDown')

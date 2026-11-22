@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clearVisits, fetchVisits, type VisitStore } from '@/api/page-visits';
-import { knownPlaces, type PaneName } from './page-use-model';
+import { knownPlaces, placeOfKey, type PaneName } from './page-use-model';
 import { useAppCatalog } from '@/apps/hooks';
 import { SettingsGroup, SettingsNotice, SettingsLoadingRow, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -53,7 +53,7 @@ export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneNam
     if (!store) return [];
     const labelOf = new Map(places.map((p) => [p.key, p]));
     return Object.entries(store.keys)
-      .map(([key, e]) => ({ key, entry: e, place: labelOf.get(key) }))
+      .map(([key, e]) => ({ key, entry: e, place: labelOf.get(key) ?? placeOfKey(key) }))
       .sort((a, b) => b.entry.count - a.entry.count || b.entry.lastAt.localeCompare(a.entry.lastAt));
   }, [store, places]);
   const never = useMemo(() => (store ? places.filter((p) => !store.keys[p.key]) : []), [store, places]);
@@ -90,8 +90,8 @@ export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneNam
                   <tbody>
                     {opened.map(({ key, entry, place }) => (
                       <tr key={key} data-key={key}>
-                        <td>{place?.label ?? key}</td>
-                        <td>{place?.where ?? (key.startsWith('settings:') ? 'Settings' : 'Page')}</td>
+                        <td title={key}>{place.label}</td>
+                        <td>{place.where}</td>
                         <td>{entry.count}</td>
                         <td>{lastDays(entry.days, 30, now)}</td>
                         <td>{relative(entry.lastAt, now)}</td>

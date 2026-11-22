@@ -1,5 +1,5 @@
 /**
- * The draft composer's no-run exit reads "◌ Save as todo".
+ * The draft composer's no-run exit reads "◌ Save as task".
  *
  * The pill is the text's other exit, so it sits right before the send arrow
  * (ChatInput `sendSlot`), not among the launch settings on the left (user,
@@ -14,7 +14,7 @@ import { draftComposer, draftSend, homeColumns, loadHome, openDraft, seedColumns
 import { holdPanelCountLock } from './panel-count-lock'
 
 const SHOTS = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-save-as-todo'
-const LABEL = 'Save as todo'
+const LABEL = 'Save as task'
 
 test.setTimeout(180_000)
 
@@ -35,7 +35,7 @@ async function expectLabelFits(page: Page, panel: Locator, shot: string, tier: T
   // The words are always the button's name (screen readers, the tooltip), even
   // in a tier that draws only the glyph.
   await expect(later).toHaveAttribute('aria-label', LABEL)
-  await expect(later).toHaveAttribute('title', /Save as todo/)
+  await expect(later).toHaveAttribute('title', /Save as task/)
   await expect(later).toBeDisabled()
   await draftComposer(page).fill(`save-as-todo label ${shot}`)
   await expect(later).toBeEnabled()

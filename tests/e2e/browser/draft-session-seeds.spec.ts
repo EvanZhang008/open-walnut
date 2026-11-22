@@ -84,7 +84,7 @@ test.describe.configure({ mode: 'serial' })
 
 test('project header "+" opens a draft in one click with the project AND its default_cwd', async ({ page }) => {
   // The sibling spec's scenario 6 already proves the PILL reads the project and that
-  // the seed reaches a "Save as todo". What R7 adds — and what only this
+  // the seed reaches a "Save as task". What R7 adds — and what only this
   // scenario checks — is the OTHER half of the seed: the project's declared folder
   // lands on the row too, so Start needs no folder pick. Plus the one-click contract
   // itself: no menu is allowed to appear between the "+" and the column (the "+"
@@ -413,7 +413,7 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
   await stubParse(page, { title: 'ship it', due_date: DUE, start_date: START })
   await loadHome(page)
 
-  // ── Exit 1: "Save as todo" carries the dates ──
+  // ── Exit 1: "Save as task" carries the dates ──
   const panel = await openDraft(page)
   const stamp = Date.now()
   // The parse has to have been APPLIED before the commit (armParse), or the exit
@@ -462,7 +462,7 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
   // hold, per the fork contract (a fork resumes the source conversation in
   // place): folder + project arrive preselected and IMMUTABLE, the quick chips
   // and the tier/priority meta row are gone (the fork API takes only
-  // message+model), "Save as todo" is gone (the fork route creates the
+  // message+model), "Save as task" is gone (the fork route creates the
   // sibling task itself), and a send calls POST /api/sessions/<src>/fork,
   // not quick-start.
   await page.setViewportSize({ width: 2400, height: 1000 })
@@ -475,7 +475,7 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
-  await expect(panel.locator('.session-panel-title')).toHaveText('Fork Session')
+  await expect(panel.locator('.session-panel-title')).toHaveText('Fork session')
   await expect(panel.locator('.draft-bound-task')).toContainText('fork of:')
 
   // The immutable seed: both pills render the SOURCE's facts, disabled.

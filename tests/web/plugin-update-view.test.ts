@@ -99,7 +99,7 @@ describe('chipView renders the spec 4.1 table', () => {
     expect(view(FIXTURES.diverged)).toMatchObject({ label: '3 behind · 2 ahead', icon: 'arrows-up-down', modifiers: ['--diverged'] })
     expect(view(FIXTURES.diverged).title).toBe(`Both you and the remote have new commits. Rebase or merge in the checkout, then check again.${CLICK_TO_CHECK_SUFFIX}`)
     const missing = view(FIXTURES.missing)
-    expect(missing).toMatchObject({ label: 'Not installed here', icon: 'slash-circle', modifiers: ['--missing'], clickable: false })
+    expect(missing).toMatchObject({ label: 'Files not on this Mac', icon: 'slash-circle', modifiers: ['--missing'], clickable: false })
     expect(missing.title).toBe('The files for this plugin are not on this machine. Restore will clone them again.')
   })
 })
@@ -392,7 +392,6 @@ describe('helpers: npmToVersion, scrubReason, shortRemote, shortenHome, sourceSh
     expect(shortRemote('file:///tmp/fixtures/origin.git/')).toBe('origin')
     expect(shortRemote('/home/sample/repos/acme-plugins')).toBe('acme-plugins')
     expect(shortRemote('file:///')).toBe('local repository')
-    expect(sourceShortLabel({ kind: 'git', url: 'file:///home/sample/repos/acme-plugins.git' })).toBe('git · acme-plugins')
   })
 
   it('shortenHome replaces the home prefix with ~ and leaves other paths alone', () => {
@@ -404,15 +403,10 @@ describe('helpers: npmToVersion, scrubReason, shortRemote, shortenHome, sourceSh
     expect(shortenHome('/opt/plugins', undefined)).toBe('/opt/plugins')
   })
 
-  it('sourceShortLabel: git host/owner/repo or npm package, never a URL, userinfo or .git', () => {
-    expect(sourceShortLabel({ kind: 'git', url: 'https://x:y@github.com/acme/plugins.git' })).toBe('git · github.com/acme/plugins')
-    expect(sourceShortLabel({ kind: 'npm', type: 'npm', spec: '@acme/plugin@^1', packageName: '@acme/plugin' })).toBe('npm · @acme/plugin')
-    expect(sourceShortLabel({ kind: 'npm', type: 'npm', resolved: '@acme/plugin@1.3.0' })).toBe('npm · @acme/plugin')
-    expect(sourceShortLabel({ kind: 'npm', type: 'npm', spec: 'acme-plugin@2' })).toBe('npm · acme-plugin')
-    expect(sourceShortLabel({ kind: 'npm', type: 'npm', spec: '@acme/plugin' })).toBe('npm · @acme/plugin')
-    for (const label of [sourceShortLabel({ kind: 'git', url: 'git@github.com:acme/plugins.git' })]) {
-      expect(/https?:\/\/|git@|\.git\b/.test(label)).toBe(false)
-    }
+  it('sourceShortLabel names the kind of source in words, never a URL, userinfo or .git', () => {
+    expect(sourceShortLabel({ kind: 'git' })).toBe('Git repository')
+    expect(sourceShortLabel({ kind: 'npm', type: 'npm' })).toBe('npm package')
+    expect(sourceShortLabel({ type: 'npm' })).toBe('npm package')
   })
 })
 

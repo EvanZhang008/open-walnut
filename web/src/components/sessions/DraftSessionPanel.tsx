@@ -3,7 +3,7 @@
  *
  * Nothing exists server-side yet (0 bytes): column, cwd/host, project, launch
  * meta and text are pure client state until a send (→ `pending:` → real session)
- * or "Save as todo" (→ a task); closing leaves no trace. Same chrome
+ * or "Save as task" (→ a task); closing leaves no trace. Same chrome
  * classes as SessionPanel/PendingSessionPanel. Imported normally (never
  * React.lazy): instant-open cannot wait on a chunk fetch.
  *
@@ -17,7 +17,7 @@
  *                      picker POPS OUT over the page (fixed, anchored to the cwd
  *                      pill; a ~300px column can't contain it)
  *   composer           shared ChatInput; its controls row holds the model select
- *                      and "Save as todo". Its send arrow (Enter) is the one way
+ *                      and "Save as task". Its send arrow (Enter) is the one way
  *                      to START: the old "Start ↵" twin was removed on 2026-09-29
  *                      (it did the same thing). Mod+. here opens the More menu.
  *
@@ -103,8 +103,10 @@ const NO_SESSION_YET = {} as const;
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { ShortcutHint } from '@/keyboard/ShortcutHint';
 
-const PLACEHOLDER = 'What should this session do?';
-const HINT = 'Nothing runs yet: send to start, or save it as a todo.';
+/** A plain draft makes a task; a bound one adds a session to an existing task. */
+const PLACEHOLDER = 'What should this task do?';
+const BOUND_PLACEHOLDER = 'What should this session do?';
+const HINT = 'Nothing runs yet: send to start, or save it as a task.';
 const BOUND_HINT = 'Start a session on this task: type the first instruction, or send with nothing typed to use its title.';
 /** A project lead's column: what the lead is, so the first message is a chat, not a task brief. */
 function orgLeadHint(title: string | undefined, project: string | undefined): string {
@@ -524,7 +526,7 @@ interface Props {
   ownFolderLabel?: string;
   /** With `pickFolder`: the folder pill's × back to no folder. Such a host makes no isolated workspace, so none is offered. */
   onClearFolder?: (draftId: string) => void;
-  /** The host is writing (a save as todo or a start on its way): Save as todo waits, so one click makes one todo. */
+  /** The host is writing (a save as todo or a start on its way): Save as task waits, so one click makes one task. */
   saveBusy?: boolean;
   /** A write on the draft row: present, the draft may start from a project (DraftLaunchBar). */
   onProjectStart?: DraftRowUpdate;
@@ -917,10 +919,10 @@ export function DraftSessionPanel({
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
             <span className="session-panel-title wn-title">
-              {/* A plain draft makes a task (its "Save as todo" makes nothing else), so
+              {/* A plain draft makes a task (its "Save as task" makes nothing else), so
                   it says so; a BOUND draft adds a session to an existing task and
-                  creates none, so it keeps "New Session" beside its "for:" line. */}
-              {isFork ? 'Fork Session' : isRepair ? 'Customize Walnut' : isWalnut ? askLabel : isBound ? 'New Session' : 'New task'}
+                  creates none, so it keeps "New session" beside its "for:" line. */}
+              {isFork ? 'Fork session' : isRepair ? 'Customize Walnut' : isWalnut ? askLabel : isBound ? 'New session' : 'New task'}
             </span>
             <span className="badge session-panel-badge">Draft</span>
             {isBound && (
@@ -979,7 +981,8 @@ export function DraftSessionPanel({
                   onClick={() => { if (isWalnut) { onWalnutToggle?.(draft.id, false); focusComposer(); } }}
                 >
                   <span className="draft-intent-ic" aria-hidden="true">{ICONS.ICON_TERMINAL}</span>
-                  <span className="draft-intent-t">Start Task</span>
+                  {/* The same name as the draft's own header: one name for the flow. */}
+                  <span className="draft-intent-t">{isBound ? 'New session' : 'New task'}</span>
                   <span className="draft-intent-d">A coding session with Claude Code, Codex, OpenCode, etc.</span>
                 </button>
                 <button
@@ -1153,7 +1156,7 @@ export function DraftSessionPanel({
           placeholder={placeholder ?? (isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
               : askAgent ? `Ask ${askAgent.name} a quick question…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
-                : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : PLACEHOLDER)}
+                : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : isBound ? BOUND_PLACEHOLDER : PLACEHOLDER)}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}
@@ -1227,7 +1230,7 @@ export function DraftSessionPanel({
                   actions (user, 2026-09-29). */}
             </div>
           )}
-          // "Save as todo" is the text's other exit, so it sits beside the send
+          // "Save as task" is the text's other exit, so it sits beside the send
           // arrow, not among the launch settings on the left (user, 2026-10-03).
           // A bound draft is already a task, and a fork's sibling task is the
           // fork route's job — offering "create task" on either would make a
@@ -1239,13 +1242,13 @@ export function DraftSessionPanel({
               disabled={!text.trim() || saveBusy}
               aria-busy={saveBusy || undefined}
               onClick={() => { void onSaveAsTask(draft.id, text); }}
-              title="Save as todo: creates a todo from this text (first line becomes the title). No session starts."
-              aria-label="Save as todo"
+              title="Save as task: creates a task from this text (first line becomes the title). No session starts."
+              aria-label="Save as task"
             >
               {/* Three widths, chosen by the controls row (CSS container query):
                   the full words, "Todo", or the glyph alone in a ~270px column. */}
               <span className="draft-later-glyph" aria-hidden="true">◌</span>
-              <span className="draft-later-words">Save as todo</span>
+              <span className="draft-later-words">Save as task</span>
               <span className="draft-later-short" aria-hidden="true">Todo</span>
             </button>
           ) : undefined}

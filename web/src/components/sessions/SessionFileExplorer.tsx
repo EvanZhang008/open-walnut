@@ -60,7 +60,7 @@ import {
 import { useRevealFile } from '@/hooks/useRevealFile';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
-import { folderNameIn, knownHomeOf, pathCrumbs, rememberHostHome, tildePath, untildePath } from '@/utils/home-folder';
+import { folderNameIn, homeFolderWords, HOME_FOLDER_LABEL, knownHomeOf, pathCrumbs, rememberHostHome, tildePath, untildePath } from '@/utils/home-folder';
 
 interface SessionFileExplorerProps {
   cwd?: string;
@@ -1037,7 +1037,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       prefix = isDirectChild ? repoName : `${repoName}/…`;
     }
     const cwdSection: RootSection = {
-      path: root, label: folderNameIn(root, hostHome), prefix, kind: 'cwd', fileCount: cwdChanged?.fileCount,
+      path: root, label: homeFolderWords(folderNameIn(root, hostHome)), prefix, kind: 'cwd', fileCount: cwdChanged?.fileCount,
     };
     const rest = changedRoots.filter((r) => r.path !== rootNorm);
     return [cwdSection, ...rest];
@@ -1579,7 +1579,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           title={`${shownPath}: click to type a path (fuzzy-matches recent folders)`}
           onClick={() => setEditingPath(true)}
         >
-          {pathCrumbs(tildePath(shownPath, hostHome)).map((seg, idx, all) => (
+          {/* With no file open the tree already names its folder: the bar offers the path
+              field instead of a second copy of the same place. */}
+          {!selectedFile ? <span className="sfe-crumb is-last"><span className="sfe-crumb-text">Go to a folder…</span></span>
+            : pathCrumbs(tildePath(shownPath, hostHome)).map((seg, idx, all) => (
             <span key={idx} className={`sfe-crumb${idx === all.length - 1 ? ' is-last' : ''}`}>
               {idx > 0 && <span className="sfe-crumb-sep" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>}
               <span className="sfe-crumb-text">{seg}</span>
@@ -1651,8 +1654,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         >
           {/* Where the folder below lives (its parent's name); the folder itself
               is the tree's first row. The home lives nowhere worth naming ("in homes",
-              "in Users"), so its head is `~` itself. */}
-          {headIsHome ? '~' : <><span className="sfe-tree-head-in">in</span>{folderNameIn(parentPath(focusedDir ?? root), hostHome)}</>}
+              "in Users"), so its head names the home itself. */}
+          {headIsHome ? HOME_FOLDER_LABEL : <><span className="sfe-tree-head-in">in</span>{homeFolderWords(folderNameIn(parentPath(focusedDir ?? root), hostHome))}</>}
         </button>
       )}
       <span className="sfe-tree-head-tools">

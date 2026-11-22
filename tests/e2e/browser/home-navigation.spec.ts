@@ -1217,7 +1217,7 @@ test('the Scratchpad is a side bar in its own rail group, right of the agenda on
     // place either toggle appears in the rail.
     await expect(page.locator('.sidebar-home-panels .sidebar-link .sidebar-label'))
       .toHaveText(['Task panel', 'Quick question']);
-    const sideBars = page.getByRole('group', { name: 'Side bars' });
+    const sideBars = page.getByRole('group', { name: 'Side panels' });
     await expect(sideBars.locator('.sidebar-link .sidebar-label')).toHaveText(['Agenda', 'Scratchpad']);
     await expect(sideBars.locator('.sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
     await expect(page.locator('.sidebar-nav > [data-testid="sidebar-org"] + .sidebar-side-bar-group')).toHaveCount(1);

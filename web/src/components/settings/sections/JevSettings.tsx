@@ -55,9 +55,9 @@ async function jevKeyRequest(method: 'POST' | 'DELETE', key?: string): Promise<v
 }
 
 /**
- * Jev's own rows (indented under `Uses` in Smart task creation): key,
+ * Jev's own rows (indented under `Guesses come from` in Smart task creation): key,
  * endpoint, model, a live test. Never owns WHICH decisions Jev answers (that
- * is the parent's `Uses` control, jev.decisions) and never writes them.
+ * is the parent's `Guesses come from` control, jev.decisions) and never writes them.
  */
 export function JevSettings({ config, onSave, onReload }: Props) {
   const [keyDraft, setKeyDraft] = useState('');

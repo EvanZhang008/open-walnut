@@ -221,7 +221,7 @@ export async function serverHome(page: Page): Promise<string> {
 /** The folder pill's empty-state copy. */
 export const CHOOSE_FOLDER = 'Choose folder and host…'
 /** A New task with no folder picked starts in the home folder (draft-home-default.ts). */
-export const HOME_FOLDER = 'Folder/Host: ~ · Local'
+export const HOME_FOLDER = 'Folder/Host: Home folder · Local'
 /** The More menu's Project section (page-scoped: the menu is portalled). */
 export const draftMenuProject = (page: Page): Locator => page.locator('[data-testid="draft-menu-project"]')
 

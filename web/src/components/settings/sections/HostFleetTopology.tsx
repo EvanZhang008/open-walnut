@@ -34,7 +34,7 @@ function Node({ node, row, h, onPick }: { node: TopoNode; row: RowReport; h: num
     <g
       className="hf-topo-node" data-kind={kind} data-live={node.live ? 'true' : 'false'} data-testid="host-fleet-topo-node" data-host={row.host}
       transform={`translate(${node.x - w / 2} ${node.y - h / 2})`}
-      role="button" tabIndex={0} aria-label={`${row.name}: ${row.local ? 'this Mac' : row.off ? 'off' : row.online ? 'connected' : 'not connected'}`}
+      role="button" tabIndex={0} aria-label={`${row.name}: ${row.local ? 'runs Walnut' : row.off ? 'off' : row.online ? 'connected' : 'not connected'}`}
       onClick={() => onPick(row.host)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(row.host); } }}
     >

@@ -98,7 +98,7 @@ test.describe('the model answering', () => {
     // The header: every unread mail in the view, and the view menu on the same line.
     const unread = groups.important.unread + groups.groups.reduce((sum: number, one: { unread: number }) => sum + one.unread, 0)
     expect(unread).toBe(groups.cachedUnread)
-    await expect(page.getByTestId('mail-grouped-unread')).toHaveText(`${unread.toLocaleString()} unread`)
+    await expect(page.getByTestId('mail-grouped-unread')).toHaveText(`${unread.toLocaleString()} unread in all`)
     await expect(page.getByTestId('mail-view-menu')).toHaveText('Grouped')
     await expect(page.getByTestId('mail-grouped-sorting')).toHaveCount(0)
     await expect(page.getByTestId('mail-grouped-no-ai')).toHaveCount(0)
@@ -212,7 +212,7 @@ test.describe('the model answering', () => {
     const sortLine = page.getByTestId('mail-reader-sort')
     await expect(sortLine).toHaveAttribute('data-group-id', several.id)
     await expect(sortLine).toContainText(`In ${several.label}`)
-    await expect(sortLine.getByTestId('mail-reader-sort-fix')).toHaveText('Not right?')
+    await expect(sortLine.getByTestId('mail-reader-sort-fix')).toHaveText('Change group')
     await shoot(page, SHOTS, 'reader-sort-line')
     // A group whose one unread gets read: it shows 0 while open, and leaves once closed.
     const lone = await openGroupLine(page, single.id)

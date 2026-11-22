@@ -111,7 +111,7 @@ test('every calendar setting holds after a reload and on another device', async 
   await viewTab(a, 'Day').click()
   await a.getByRole('button', { name: 'Hide task list' }).click()
   await a.getByRole('button', { name: 'Zoom in calendar' }).click()
-  await a.getByRole('button', { name: 'Show full day' }).click()
+  await a.locator('.cal-hours-toggle').click()
   await clickEmptySlot(a)
   await pickCalendarTaskSide(a)
   await a.keyboard.press('Escape')

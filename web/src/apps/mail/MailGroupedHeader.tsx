@@ -17,7 +17,7 @@ import { useGroupedBadge } from './mail-groups-live';
 import { writeGroupedPref } from './mail-grouped-pref';
 import {
   ALL_MAIL, GROUPED, SORTED_WITHOUT_AI, SORTED_WITHOUT_AI_TITLE, SORTING_TITLE, UNREAD_ONLY, VIEW_MENU_ARIA,
-  sortingText, unreadWord,
+  sortingText, totalUnreadWord,
 } from './mail-groups-copy';
 import { ChevronIcon } from './mail-icons';
 
@@ -110,7 +110,7 @@ export function MailGroupedHeader({ name, unread, explain, ai, unreadOnly, onUnr
         // The same control as All mail's unread count (MailMessageList): a filter chip, on while
         // only unread mail shows; kept while it is on, so the way out never goes.
         <Chip pressed={unreadOnly} className="mail-unread-chip mail-grouped-unread wn-fixed" data-testid="mail-grouped-unread"
-          title={explain} onClick={() => onUnreadOnly(!unreadOnly)}>{unreadWord(unread)}</Chip>
+          title={explain} onClick={() => onUnreadOnly(!unreadOnly)}>{totalUnreadWord(unread)}</Chip>
       ) : null}
       {ai?.state === 'down' && (
         <span className="mail-grouped-no-ai" data-testid="mail-grouped-no-ai" title={SORTED_WITHOUT_AI_TITLE}>

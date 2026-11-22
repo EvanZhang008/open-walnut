@@ -70,7 +70,7 @@ async function openSearchFromNav(page: Page) {
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
   const section = page.locator('#search')
-  await expect(section).toContainText('Embedding model', { timeout: 30_000 })
+  await expect(section).toContainText('Search by meaning', { timeout: 30_000 })
   await expect(section).not.toHaveAttribute('data-crashed', 'true')
   return section
 }

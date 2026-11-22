@@ -43,7 +43,7 @@ test.describe.configure({ mode: 'serial' })
 
 const isQuickStart = (url: string) => new URL(url).pathname === '/api/sessions/quick-start'
 const askWalnutCard = (page: Page) => draftPanel(page).locator('.draft-intent-card-walnut')
-const startTaskCard = (page: Page) => draftPanel(page).locator('.draft-intent-card').filter({ hasText: 'Start Task' })
+const startTaskCard = (page: Page) => draftPanel(page).locator('.draft-intent-card').filter({ hasText: 'New session' })
 
 /** Create a TITLE-ONLY task in the fixture's Walnut folder and return its id. */
 async function createTitleOnlyTask(page: Page, title: string, cwd: string): Promise<string> {
@@ -107,13 +107,13 @@ test('task-row ▶ opens a bound draft WITH the Start Task / Ask Walnut fork, an
   await expect(panel.locator('.draft-walnut-suggests')).toHaveCount(0)
   await expect(draftSend(panel)).toBeEnabled()
   // Walnut mode has no folder/project pills (the server owns both) — and the
-  // "Save as todo" exit stays gone: this draft already IS a task.
+  // "Save as task" exit stays gone: this draft already IS a task.
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/02-bound-draft-ask-walnut.png` })
 
   // Round trip back and forth: the tab switch must not lose the binding.
   await startTaskCard(page).click()
-  await expect(panel.locator('.session-panel-title')).toHaveText('New Session')
+  await expect(panel.locator('.session-panel-title')).toHaveText('New session')
   await expect(panel.locator('.draft-bound-task')).toContainText(title)
   await askWalnutCard(page).click()
   await expect(panel.locator('.session-panel-title')).toHaveText('Quick question')
@@ -318,7 +318,7 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
   await expect(row).toBeVisible()
   await expect(row).not.toHaveClass(/draft-composer-bar/)
   await expect(panel.locator('.draft-composer-bar')).toHaveCount(0)
-  await expect(row.locator('button.draft-more-btn')).toHaveText('More')
+  await expect(row.locator('button.draft-more-btn')).toHaveText('Task settings')
   await expect(row.locator('.draft-decision-chip')).toHaveCount(0)
   await draftComposer(page).fill('plan my week around the marina launch by friday')
   await page.waitForTimeout(1_200)

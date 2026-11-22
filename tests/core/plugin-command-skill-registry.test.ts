@@ -171,6 +171,9 @@ describe('command-store with plugin commands', () => {
     await writeCommandFile(BUILTIN_COMMANDS_DIR, 'shared', 'builtin copy', 'builtin body')
     await writeCommandFile(BUILTIN_COMMANDS_DIR, 'builtin-only', 'builtin only', 'builtin body')
     await writeCommandFile(COMMANDS_DIR, 'demo:claimed', 'ignored file', 'user body')
+    // macOS metadata beside a copied file (AppleDouble): hidden, never a command.
+    await writeCommandFile(COMMANDS_DIR, '._shared', 'metadata', 'binary')
+    await writeCommandFile(BUILTIN_COMMANDS_DIR, '.hidden', 'hidden', 'body')
     registerOwnedCommand('demo', { id: 'claimed', description: 'plugin owns namespace', content: 'plugin body' })
     registerOwnedCommand('demo', { id: 'ship', description: 'plugin only', content: 'plugin body' })
 

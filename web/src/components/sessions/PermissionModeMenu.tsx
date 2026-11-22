@@ -5,7 +5,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 
 /**
  * The permission-mode pill of a Claude Code composer (session panel, side
- * threads, the new-task draft): one click opens a menu of every mode, safest
+ * chats, the new-task draft): one click opens a menu of every mode, safest
  * first, the current one in the accent colour, and a pick switches to it (Evan, 2026-11-12:
  * "make it drop down menu can select"). Shift+Tab in the box still steps
  * through the enabled cycle; the pill no longer prints that hint.
@@ -91,7 +91,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
         className="session-control-menu permission-mode-menu"
         role="listbox"
         aria-label={heading}
-        // A menu opened from the side thread's own composer belongs to that drawer.
+        // A menu opened from the side chat's own composer belongs to that drawer.
         data-composer-scope={triggerRef.current?.closest('.side-question-popover') ? 'side-question' : undefined}
         onPointerDown={(event) => event.stopPropagation()}
         onKeyDown={onMenuKey}
@@ -101,7 +101,8 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
         {SESSION_MODES.map((option) => {
           const active = option.id === mode;
           return (
-            // One line per mode, the model menu's own row; what the mode does is the row's tooltip.
+            // One line per mode, the model menu's own row: its name, a few muted words on what
+            // it does at the right, and the full sentence as the row's tooltip.
             <button
               key={option.id}
               type="button"
@@ -117,6 +118,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
               }}
             >
               <span className="model-picker-row-name permission-mode-name wn-title">{option.label}</span>
+              <span className="permission-mode-hint">{option.hint}</span>
             </button>
           );
         })}

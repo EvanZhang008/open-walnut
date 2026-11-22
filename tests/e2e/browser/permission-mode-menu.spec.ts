@@ -2,7 +2,7 @@
  * The composer's permission-mode pill is a menu (2026-11-12, the user: "remove the tab thing
  * not needed ... make it drop down menu can select"): no shortcut hint on the pill, a click
  * lists every mode with the current one checked, a pick switches to it. Walked on the three
- * composers that draw it: a running session, the side-thread drawer and the new-task draft.
+ * composers that draw it: a running session, the side chat drawer and the new-task draft.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { mockControlsSession, CTRL_SESSION, directControl, type SettingsWrites } from './composer-controls-overflow-helpers';
@@ -13,6 +13,9 @@ test.use({ viewport: { width: 1200, height: 760 }, deviceScaleFactor: 1 });
 
 const SHOTS = process.env.MODE_MENU_SHOTS ?? '/tmp/permission-mode-menu';
 const LABELS = ['Plan', 'Default', "Don't Ask", 'Accept', 'Auto', 'Bypass'];
+// What each mode does, in a few muted words at the right of its name (src/core/types.ts SESSION_MODES).
+const HINTS = ['reads, changes nothing', 'asks before risky steps', 'never asks, denies the rest',
+  'edits files freely', 'a checker allows safe steps', 'never asks, allows all'];
 
 async function enterHome(page: Page): Promise<Locator> {
   await page.addInitScript((id) => {
@@ -66,6 +69,7 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
     await expect(pill).toHaveAttribute('aria-expanded', 'true');
     await expect(menu.getByRole('option')).toHaveCount(LABELS.length);
     await expect(menu.locator('.permission-mode-name')).toHaveText(LABELS);
+    await expect(menu.locator('.permission-mode-hint')).toHaveText(HINTS);
     await expect(menu.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
     await expect(menu.locator('[role="option"][data-mode="bypass"]')).toHaveAttribute('aria-selected', 'true');
     await fits(page, menu);
@@ -78,13 +82,14 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
     expect(await nameColor(current), 'the current mode has its own colour').not.toBe(await nameColor(other));
     const nameX = async (row: Locator) => (await row.locator('.permission-mode-name').boundingBox())!.x - (await row.boundingBox())!.x;
     expect(await nameX(other), 'no empty leading column').toBeLessThanOrEqual(10);
-    // Compact, like the model menu beside it: one line per mode, no wider than its names need.
+    // Compact, like the model menu beside it: one line per mode, no wider than its name and hint need.
     const menuBox = (await menu.boundingBox())!;
-    expect(menuBox.width, 'the menu fits its content').toBeLessThan(200);
+    expect(menuBox.width, 'the menu fits its content').toBeLessThan(320);
     expect(menuBox.height, 'six one-line rows and a heading').toBeLessThan(240);
     for (const row of await menu.getByRole('option').all()) {
       expect((await row.boundingBox())!.height, 'a mode is one line').toBeLessThanOrEqual(32);
       await expect(row).toHaveAttribute('title', /\S/);
+      await expect(row.locator('.permission-mode-hint'), 'each mode says what it does').toHaveText(/\S/);
     }
     if (i === 0) {
       await fs_mkdir();
@@ -153,11 +158,11 @@ test('a phone-width column: the menu stays on screen', async ({ page }) => {
   await expect(pill).toHaveText('Plan');
 });
 
-test('the side-thread composer and the new-task draft pick their mode from the same menu', async ({ page }) => {
+test('the side chat composer and the new-task draft pick their mode from the same menu', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await enterHome(page);
 
-  // Side threads: the mode the next thread starts in.
+  // Side chats: the mode the next side chat starts in.
   await directControl(panel, 'btw').click();
   const drawer = panel.locator('.side-question-popover--threads');
   await expect(drawer).toBeVisible();
@@ -168,7 +173,7 @@ test('the side-thread composer and the new-task draft pick their mode from the s
   const menu = modeMenu(threadPill);
   await expect(menu.getByRole('option')).toHaveCount(LABELS.length);
   await fits(page, menu);
-  await page.screenshot({ path: `${SHOTS}/3-side-thread-menu.png` });
+  await page.screenshot({ path: `${SHOTS}/3-side-chat-menu.png` });
   await menu.locator('[role="option"][data-mode="plan"]').click();
   // The pick is the drawer's own: it stays open, with its draft.
   await expect(drawer).toBeVisible();

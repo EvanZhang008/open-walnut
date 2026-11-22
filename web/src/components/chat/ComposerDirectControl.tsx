@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
+import { SESSION_NOTE_LABEL, SESSION_NOTE_TITLE, SIDE_CHAT_LABEL, SIDE_CHAT_TITLE } from './composer-words';
 
 interface Mirrored { present: boolean; folded: boolean; open: boolean; disabled: boolean; title: string; count: string }
 const CLOSED: Mirrored = { present: false, folded: false, open: false, disabled: false, title: '', count: '' };
@@ -43,14 +44,14 @@ export function ComposerDirectControl({ id, handleRef, disabled }: {
     // later), and while a tight row folds it into the "+" menu.
     style={state.present && !state.folded ? undefined : { display: 'none' }}
     data-add-control={id} disabled={disabled || state.disabled} aria-haspopup="dialog" aria-expanded={state.open}
-    title={state.title || (id === 'btw' ? 'Open side threads' : 'Add a session note')}
+    title={state.title || (id === 'btw' ? SIDE_CHAT_TITLE : SESSION_NOTE_TITLE)}
     // Keep focus where it is until the toggle runs (no blur first), while other
     // popups still see the press and close. Note's editor would read the press as
     // outside and collapse before its own toggle, so only Note keeps it.
     onMouseDown={(event) => event.preventDefault()}
     onPointerDown={id === 'note' ? (event) => event.stopPropagation() : undefined}
     onClick={() => handleRef.current?.activate(id)}>
-    {id === 'btw' ? 'btw' : 'Note'}
+    {id === 'btw' ? SIDE_CHAT_LABEL : SESSION_NOTE_LABEL}
     {state.count && <span className="badge badge-count side-question-count">{state.count}</span>}
   </button>;
 }

@@ -1,9 +1,9 @@
 /**
  * The reader head's one line about sorting: `In Ticket updates · Automated ticket status change ·
- * Not right?`. Only for a mail opened from the grouped inbox (only those rows carry `sort`); the
+ * Change group`. Only for a mail opened from the grouped inbox (only those rows carry `sort`); the
  * group rows themselves say nothing per mail, so a column of rows is not a column of reasons.
  *
- * `Not right?` opens the same correction card as the row menu's `Important…` / `Not important…`,
+ * `Change group` opens the same correction card as the row menu's `Important…` / `Not important…`,
  * anchored on this line.
  */
 import { useRef } from 'react';

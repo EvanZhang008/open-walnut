@@ -18,6 +18,7 @@ import { fillPattern, MINUTE_MS } from './evaluate.js'
 import { effectiveOverride, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, overrideHolds, type FixMode } from './engine.js'
 import { setGaugeSink } from './gauges.js'
 import { HealthStore } from './store.js'
+import { LOG_ALARM_TITLE } from './log-alarms.js'
 import type { AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState } from './types.js'
 
 let running: HealthMonitor | null = null
@@ -246,7 +247,7 @@ export function alarmRow(m: HealthMonitor, inst: AlarmInstanceState): AlarmRow {
   return {
     id: inst.id,
     defId: inst.defId,
-    title: def?.title ?? (isSpike ? 'Log line far above its normal' : 'Log line high every day'),
+    title: def?.title ?? LOG_ALARM_TITLE[isSpike ? 'spike' : 'chronic'],
     description: def?.description ?? (isSpike
       ? 'This kind of warn/error line came at least 5 times as often as on the same hour of the last week.'
       : 'This kind of line came very often on each of the last 3 days (200 a day for an error, 1,000 for a warning).'),

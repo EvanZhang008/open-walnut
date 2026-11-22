@@ -48,12 +48,12 @@ export function TaskTimePage({ page, store, paths, basePath, navigate }: TaskTim
           <nav className="wt-crumbs" aria-label="Breadcrumb">
             <button type="button" className="wt-crumb" onClick={() => navigate(basePath)}>Time</button>
             <span aria-hidden="true">›</span>
-            <span>{page.kind === 'task' ? 'Task' : 'Session'}</span>
+            <span>{page.kind === 'task' ? 'Time on a task' : 'Time in a session'}</span>
           </nav>
           <h1 data-testid="time-task-title">{title}</h1>
           <p>
-            Your time and agent time on this {page.kind === 'task' ? 'task' : 'session'}, day by day. The two are
-            never added together: you and an agent often work at the same moment, and sessions run in parallel.
+            Your time and agent time on this {page.kind === 'task' ? 'task' : 'session'} are counted separately, day by day.
+            They often overlap (you and an agent work at the same moment, and sessions run in parallel), so they are never added together.
           </p>
         </div>
         <div className="wt-task-actions">
@@ -104,6 +104,23 @@ function Totals({ totals, label }: { totals: TimeTotals; label: string }) {
           </span>
         </div>
       ))}
+    </div>
+  )
+}
+
+/** Each lane has its own scale: agent hours would flatten your minutes to nothing on a shared one. */
+/** The day list's column heads: which number is whose, in the words and colours of the
+ *  totals above, so a row reads without the cards (2026-11-21 UI audit). Built from the
+ *  rows' own classes, so the heads stay over their columns at every width. */
+function DayHead() {
+  return (
+    <div className="wt-task-day-row" aria-hidden="true" style={{ cursor: 'default', paddingBottom: 0 }}>
+      <span className="wt-task-day-date" />
+      <span className="wt-task-bars">
+        <span className="wt-task-bar is-human"><i style={{ width: 0 }} /><b>You</b></span>
+        <span className="wt-task-bar is-agent"><i style={{ width: 0 }} /><b>Agent</b></span>
+      </span>
+      <span className="wt-task-day-caret" />
     </div>
   )
 }
@@ -217,6 +234,7 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
           <h2>Day by day</h2>
           <span className="wt-section-hint">{focused ? names.get(focused) : 'Open a day to see its sessions'}</span>
         </div>
+        <DayHead />
         <ol className="wt-task-days" data-testid="time-task-days">
           {rows.map(({ date, pair, day }) => {
             const expandable = !!day && (day.sessions.length > 0)
@@ -273,6 +291,7 @@ function SessionBody({ data }: { data: SessionTime }) {
       <Totals totals={data.totals} label="This session" />
       <section className="wt-section">
         <div className="wt-section-head"><h2>Day by day</h2></div>
+        <DayHead />
         <ol className="wt-task-days" data-testid="time-task-days">
           {data.days.map((d) => (
             <li key={d.date} className="wt-task-day" data-date={d.date} data-testid="time-task-day">

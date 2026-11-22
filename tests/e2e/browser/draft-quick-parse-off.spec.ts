@@ -219,7 +219,7 @@ test('a draft panel that re-mounts on restored text fires zero quick-parse reque
   // useState initializer, so a panel MOUNTING on left-over text ran the effect with
   // no keystroke at all. That is the "I didn't type and it was still calling" report.
   //
-  // The product's one genuine remount-with-text path is the "Save as todo"
+  // The product's one genuine remount-with-text path is the "Save as task"
   // failure recovery (MainPage: the optimistic close is undone by re-writing
   // `draft:new-session:<id>` and re-adding the column, precisely so ChatInput's
   // mount-time read restores the user's writing). Reached here by failing the CREATE

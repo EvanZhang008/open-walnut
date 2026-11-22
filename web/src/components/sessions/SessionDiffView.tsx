@@ -277,6 +277,11 @@ function statusGlyph(status: SessionFileChange['status'], untracked?: boolean): 
   return { ch: 'M', cls: 'modified', title: 'Modified' };
 }
 
+/** A repo's kind in words: `other` alone said nothing about what it is other than. */
+const REPO_KIND_WORDS: Record<string, string> = {
+  cwd: 'session folder', other: 'other repo', submodule: 'submodule',
+};
+
 function TreeRow({
   node, depth, expanded, onToggle, selectedId, onSelectFile, critical, viewed, wsOnly,
 }: {
@@ -336,14 +341,14 @@ function TreeRow({
         className={`session-diff-tree-dir${isRepo ? ' is-repo' : ''}`}
         style={pad}
         onClick={() => onToggle(node.id)}
-        title={isRepo ? `${node.label} (${node.repoKind})` : node.name}
+        title={isRepo ? `${node.label} (${REPO_KIND_WORDS[node.repoKind] ?? node.repoKind})` : node.name}
       >
         <span className="session-diff-tree-caret">{isOpen ? '▾' : '▸'}</span>
         <span className="session-diff-tree-dir-name wn-title">{isRepo ? node.shortLabel : node.name}</span>
         {/* No pill for a submodule: the deep path in the tooltip already says so,
             and the pill only ate width the name needs in a narrow column. */}
         {isRepo && node.repoKind !== 'submodule' && (
-          <span className={`${badge(node.repoKind === 'cwd' ? 'accent' : 'neutral')} session-diff-tree-repokind kind-${node.repoKind}`}><span>{node.repoKind}</span></span>
+          <span className={`${badge(node.repoKind === 'cwd' ? 'accent' : 'neutral')} session-diff-tree-repokind kind-${node.repoKind}`}><span>{REPO_KIND_WORDS[node.repoKind] ?? node.repoKind}</span></span>
         )}
         <span className="session-diff-tree-count">{node.fileCount}</span>
       </button>
@@ -1386,8 +1391,8 @@ export const FileDiffPane = memo(function FileDiffPane({
               <span className="session-diff-viewed-changed" title="You marked this file viewed, then it changed">Changed since viewed</span>
             )}
             {onNextUnviewed && (
-              <button type="button" className="session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed">
-                Next<span className="session-diff-next-unviewed-text"> unviewed</span> <span aria-hidden>{'↓'}</span>
+              <button type="button" className="session-diff-next-unviewed" onClick={onNextUnviewed} title="Open the next file you have not viewed (N)" aria-label="Next unviewed file">
+                Next<span className="session-diff-next-unviewed-text"> unviewed file</span> <span aria-hidden>{'↓'}</span>
               </button>
             )}
             {onToggleViewed && (
@@ -3011,9 +3016,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             type="button"
             className="btn btn-ghost btn-sm session-diff-ai-toggle"
             onClick={toggleAiSummary}
-            title={aiSummaryOn ? 'AI summaries on — click to hide' : 'AI summaries off — click to show a short AI blurb per file'}
+            title={aiSummaryOn ? 'AI summaries are on: click to hide them' : 'Show a short AI summary of each file'}
             aria-pressed={aiSummaryOn}
-          >✦ AI</button>
+          >✦ AI summaries</button>
           {/* Commits the session's working-tree edits: not offered while a past commit is shown. */}
           {/* Kept in place on a one-commit view (disabled there), so the toolbar never shifts. */}
           <SessionCommitButton sessionId={sessionId} disabled={base === 'commit' || !data || empty} onCommitted={() => load(true)} />

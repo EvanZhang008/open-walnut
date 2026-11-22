@@ -10,6 +10,7 @@
  * A row opens its task on Home, as every task reference does (useOpenTask); a choice that needs
  * the user opens the Page at it. Narrow panes stack each row (board-status.css).
  */
+import { midSentence } from '@/components/common/date-time-pick';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { USER_STATE_LABELS, shownState, stateCountLabel, checkedLine, dueAtMs, resultIsPartial } from '@open-walnut/user-status';
@@ -143,7 +144,7 @@ function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void
   return (
     <>
       {s.next && <AgentText compact inline {...taskTextSource(row.task, 'report')} text={s.next} />}
-      {s.until && s.kind !== 'time' && <span className="bs-muted">Checks again {formatWaitUntil(s.until)}</span>}
+      {s.until && s.kind !== 'time' && <span className="bs-muted">Checks again {midSentence(formatWaitUntil(s.until))}</span>}
     </>
   );
 }

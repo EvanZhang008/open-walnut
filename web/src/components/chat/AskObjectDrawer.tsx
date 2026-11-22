@@ -451,7 +451,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     return launch(text.trim(), undefined, images);
   }, [launch, draftRef, requestFolder]);
 
-  // "Save as todo" (Start Task mode): the text becomes a task that carries the object's
+  // "Save as task" (Start Task mode): the text becomes a task that carries the object's
   // context, and the drawer closes with a notice that can find it on Home.
   const { notify } = useNotifications();
   const navigate = useNavigate();

@@ -236,16 +236,16 @@ export function AudioCaptureSection({ config, onSave }: Props) {
         <SettingsRow
           label="Delete audio after transcription"
           htmlFor="audio-delete-after-transcription"
-          help="Keeps only the text transcript, about 55 MB less per 10 minute chunk."
+          help="Deletes the audio once its text transcript is made; the transcript stays. Saves about 55 MB per 10 minutes."
           control={
             <ToggleSwitch id="audio-delete-after-transcription" checked={deleteAfterTranscription}
               onChange={setDeleteAfterTranscription} />
           }
         />
         <SettingsRow
-          label="Keep recordings for"
+          label="Keep recordings and transcripts for"
           htmlFor="audio-retention-days"
-          help="Older recordings and their transcripts are deleted; 0 keeps them forever."
+          help="After this, the audio and its transcript are both deleted. 0 keeps them forever."
           control={
             <NumberInput id="audio-retention-days" min={0} max={365} unit="days"
               value={retentionDays} onChange={(v) => setRetentionDays(v ?? 0)} />

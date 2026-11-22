@@ -57,7 +57,7 @@ function modePill(panel: Locator): Locator {
 
 async function openTaskDetail(page: Page, row: Locator): Promise<Locator> {
   await row.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   return modal

@@ -103,7 +103,7 @@ test('with only Recent the bar is not drawn; a Minimize brings it with Recent be
   await expect(bar(page)).toHaveCount(0)
 })
 
-test('Settings > General: "Hide the bottom bar when it has only Recent" flips the bar at once and is kept', async ({ page }) => {
+test('Settings > General: "Hide the taskbar when it has only the Recent list" flips the bar at once and is kept', async ({ page }) => {
   const cfg = await pinTaskbarConfig(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await home(page)
@@ -138,7 +138,7 @@ test('Settings > General: "Hide the bottom bar when it has only Recent" flips th
   expect(cfg.writes.every((w) => w.taskbar_leaving === 'recent'), 'the other switch is written unchanged').toBe(true)
 })
 
-test('Settings > General: "Closed sessions go to: Bar chips" makes a closed session a chip, as before; Recent sends it back to Recent', async ({ page }) => {
+test('Settings > General: "Closed sessions go to: Taskbar" makes a closed session a chip, as before; Recent list sends it back to Recent', async ({ page }) => {
   const cfg = await pinTaskbarConfig(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await home(page)

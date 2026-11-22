@@ -3,7 +3,7 @@
  * fills the page (tabs, search, Needs you, the rows), with the relay strip over it while an agent
  * acts in this tab, and New task is docked at the bottom like a chat composer: one line (the words,
  * the page as "This page", send) that grows into the full composer on focus (the page chip with its
- * ×, Act in this tab, Save as todo, the mic) and goes back to one line when left empty.
+ * ×, Act in this tab, Save as task, the mic) and goes back to one line when left empty.
  *
  * Send makes a task and its session, as Home's New task draft does, with the page and the tab as
  * Walnut hints beside the words (never in them): the panel then shows its conversation
@@ -92,7 +92,7 @@ export function ExtHome(p: Props) {
   const [starting, setStarting] = useState('');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState<Task | null>(null);
-  /** A Save as todo on its way: Save waits, and Send keeps its words (one lock with the launch). */
+  /** A Save as task on its way: Save waits, and Send keeps its words (one lock with the launch). */
   const [saving, setSaving] = useState(false);
   /** Moves after a save as todo, so the composer starts empty again. */
   const [composerNo, setComposerNo] = useState(0);
@@ -329,12 +329,12 @@ export function ExtHome(p: Props) {
       {!p.hidden && <>
       {/* Over the docked composer, in the page's own column. */}
       <div className="ext-home-notes">
-        {saving && <p className="ext-home-note" role="status" data-testid="ext-home-saving"><span className="spinner" /> Saving as a todo…</p>}
+        {saving && <p className="ext-home-note" role="status" data-testid="ext-home-saving"><span className="spinner" /> Saving as a task…</p>}
         {starting && <p className="ext-home-note" role="status" data-testid="ext-home-starting"><span className="spinner" /> Starting the task…</p>}
         {error && <p className="ext-home-note ext-panel-error" role="alert" data-testid="ext-home-error">Walnut could not start it: {error}</p>}
         {saved && (
           <p className="ext-home-note" role="status" data-testid="ext-home-saved">
-            Saved as a todo: {saved.title}{' '}
+            Saved as a task: {saved.title}{' '}
             <button type="button" className="ext-panel-link" data-testid="ext-home-saved-open" onClick={() => p.onOpenTask(saved, 'detail')}>Open</button>
           </p>
         )}

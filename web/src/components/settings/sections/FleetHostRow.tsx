@@ -10,7 +10,7 @@ import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot
 import { HostDetails } from './HostDetails';
 import { HostRow, RowLine, type RowPrimary } from './HostRow';
 import { isLive, offlineLine, problemsOf } from './host-fleet-dashboard-model';
-import { statusKind, THIS_MAC } from './host-fleet-model';
+import { localMachineName, statusKind } from './host-fleet-model';
 import { liveLine, needsLook } from './host-row-model';
 import type { ActionState } from './useHostFleet';
 import { hostRowId } from '@/utils/host-settings-nav';
@@ -18,7 +18,7 @@ import { hostRowId } from '@/utils/host-settings-nav';
 export function FleetHostRow({ card, now, detailsOpen, onDetails, boot, onBootStart }: {
   card: FleetHost; now: number; detailsOpen: boolean; onDetails: (open: boolean) => void; boot?: ActionState; onBootStart: () => void;
 }) {
-  const name = card.local ? THIS_MAC : card.label;
+  const name = card.local ? localMachineName(card) : card.label;
   const live = isLive(card);
   const kind = statusKind(card);
   const problem = live ? problemsOf(card, now).find((p) => p.tone === 'warn' || p.tone === 'bad') : undefined;

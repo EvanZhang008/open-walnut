@@ -28,6 +28,9 @@ export const BASELINE_MIN_DAYS = 3
 export const CHRONIC_DAYS = 3
 export const CHRONIC_MIN_ERROR = 200
 export const CHRONIC_MIN_WARN = 1000
+
+/** A log alarm's name in Walnut Health, said once for the def and for a row whose def is gone. */
+export const LOG_ALARM_TITLE = { spike: 'A log line far more often than usual', chronic: 'A log line in large numbers every day' } as const
 /** A day counts for the chronic rule only with this many hours recorded (the server was up). */
 export const CHRONIC_MIN_HOURS = 12
 
@@ -122,7 +125,7 @@ export function signatureId(sig: string): string {
 export function logDef(kind: 'spike' | 'chronic', sig: string, level: 'warn' | 'error'): AlarmDef {
   return {
     id: `log.${kind}`,
-    title: kind === 'spike' ? 'Log line far above its normal' : 'Log line high every day',
+    title: LOG_ALARM_TITLE[kind],
     description: kind === 'spike'
       ? 'This kind of warn/error line came at least 5 times as often as on the same hour of the last week.'
       : `This kind of ${level} line came at least ${level === 'error' ? 200 : 1000} times on each of the last 3 days.`,

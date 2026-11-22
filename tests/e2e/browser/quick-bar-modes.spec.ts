@@ -143,7 +143,7 @@ test('Tab lists what the bar does: the arrows pick Search notes, its words searc
   const seen = await stubSearches(page)
   await openApp(page)
   await page.getByTestId('sidebar-quick-bar').click()
-  await expect(box(page)).toHaveAttribute('placeholder', 'Type a message, or Tab to see what you can do')
+  await expect(box(page)).toHaveAttribute('placeholder', 'Send a message, or find tasks and notes')
   await box(page).press('Tab')
   const rows = page.locator('.qb-mode-row')
   await expect(rows.locator('.qb-mode-row-name')).toHaveText(['Search tasks', 'Search notes', 'Ask a quick question'])

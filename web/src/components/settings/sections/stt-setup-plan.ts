@@ -22,7 +22,7 @@ export interface ServerPlatform { os: string; arch: string }
 
 const QWEN: EngineOption = { value: 'qwen', label: 'Qwen3-ASR', badge: 'Local', description: 'Best for Chinese and English. Walnut installs it on this server by itself.' };
 /** Qwen3-ASR through a Python env set up by hand or by the older Set up button. */
-const QWEN_MLX: EngineOption = { value: 'mlx', label: 'Qwen3-ASR (own Python env)', badge: 'Local', description: 'Qwen3-ASR on Apple Silicon, through the Python env in config.' };
+const QWEN_MLX: EngineOption = { value: 'mlx', label: 'Qwen3-ASR (set up by hand)', badge: 'Local', description: 'Runs on this Mac (Apple Silicon), with a Python setup made by hand or by an older Set up.' };
 const WHISPER: EngineOption = { value: 'whisper-server', label: 'Whisper', badge: 'Local', description: 'Runs on this Mac; works on any Mac.' };
 const OPENAI: EngineOption = { value: 'openai', label: 'OpenAI-compatible API', badge: 'Cloud', description: 'OpenAI, Groq or Fireworks; nothing runs on this Mac.' };
 /** Still valid config values; offered only to the install already using one. */

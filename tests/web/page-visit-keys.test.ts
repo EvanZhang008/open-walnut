@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { pageKeyForPath, settingsVisitKey } from '../../web/src/api/page-visits.js'
-import { knownPlaces } from '../../web/src/components/settings/sections/page-use-model.js'
+import { knownPlaces, placeOfKey } from '../../web/src/components/settings/sections/page-use-model.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -60,5 +60,20 @@ describe('the Page Use list of places', () => {
     for (const pane of panes.filter((p) => p.navHidden)) expect(keys).not.toContain(`settings:${pane.id}`)
     expect(keys).not.toContain('page:settings')
     expect(keys).not.toContain('page:skills')
+  })
+})
+
+describe('a counted key no place names', () => {
+  it('reads as a name and a kind, never as the key', () => {
+    expect(placeOfKey('app:interview-practice~main')).toEqual({ label: 'Interview practice', where: 'App' })
+    expect(placeOfKey('page:popout')).toEqual({ label: 'Browser extension panel', where: 'Page' })
+    expect(placeOfKey('page:usage')).toEqual({ label: 'Usage', where: 'Page' })
+    expect(placeOfKey('settings:mail~rules')).toEqual({ label: 'Mail rules', where: 'Settings' })
+  })
+
+  it('a plugin app is an App whatever its route', () => {
+    const places = knownPlaces([{ path: '/mail', title: 'Mail', pluginId: 'mail' }, { path: '/notes', title: 'Notes' }], [])
+    expect(places.find((p) => p.key === 'page:mail')?.where).toBe('App')
+    expect(places.find((p) => p.key === 'page:notes')?.where).toBe('Page')
   })
 })

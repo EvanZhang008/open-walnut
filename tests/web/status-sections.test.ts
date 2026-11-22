@@ -219,7 +219,7 @@ describe('panel layout (panel-design.ts)', () => {
   it('two layouts, By project first and the default, Flat experimental', () => {
     // 2026-11-06, the user: "when people first use this please only default to the
     // project, the flat (show experimental, not default)".
-    expect(PANEL_DESIGNS.map((d) => [d.id, d.label, !!d.experimental])).toEqual([['project', 'By project', false], ['status', 'Flat', true]]);
+    expect(PANEL_DESIGNS.map((d) => [d.id, d.label, !!d.experimental])).toEqual([['project', 'By project', false], ['status', 'By status', true]]);
     expect(readPanelDesign(null)).toBe('project');
     expect(readPanelDesign('project')).toBe('project');
     // The user's own pick of Flat is kept.

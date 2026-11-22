@@ -497,7 +497,7 @@ export function BackupSection({ config, onSave }: Props) {
           : '')
       : otherWriter ? 'Another computer writes these backups. Move them to this computer first.'
         : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.'
-          : !blocked && enabled ? 'No backup yet. The first one starts within a minute.' : 'No backup yet.'
+          : !blocked && enabled ? 'No backup yet. Next: within a minute.' : 'No backup yet.'
   const versioningOff = legacyMode && ((testResult?.ok && testResult.versioningEnabled === false) || (status?.configured && status.versioningEnabled === false))
   const lastError = otherWriter || keyMismatch ? null : (status?.error ? `Last backup failed: ${status.error}` : runError)
   const inUse = savedDest ? labelOf(savedDest.type) : null

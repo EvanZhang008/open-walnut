@@ -30,7 +30,7 @@ function labelIndexes(n: number, plotW: number): Set<number> {
  * that day (or week) as the period.
  */
 const COVERAGE_NOTE: Record<Coverage, string | null> = {
-  none: 'Not recorded: these transcripts were gone before Walnut kept usage',
+  none: 'No data: these transcripts were gone before Walnut kept usage',
   partial: 'Partly recorded: only the days Walnut holds',
   imported: 'Imported from the usage bill: the whole account, no sessions or projects',
   mixed: 'Part imported from the usage bill, part recorded by Walnut',
@@ -113,7 +113,8 @@ export function UsageBreakdownChart({ data, loading, onPick, coverage }: {
             return (
               <g className="usage-bd-unrecorded" data-testid="usage-breakdown-unrecorded">
                 <rect x={x0} y={PAD.top} width={x1 - x0} height={plotH} />
-                {x1 - x0 > 90 && <text x={(x0 + x1) / 2} y={PAD.top + plotH / 2} textAnchor="middle">Not recorded</text>}
+                {/* The same day the note above the chart names, so the band and the note agree. */}
+                {x1 - x0 > 60 && <text x={(x0 + x1) / 2} y={PAD.top + plotH / 2} textAnchor="middle">{upto < n && x1 - x0 > 150 ? `No data before ${buckets[upto].short}` : 'No data'}</text>}
               </g>
             );
           })()}

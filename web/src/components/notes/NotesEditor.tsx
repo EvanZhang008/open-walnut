@@ -217,6 +217,9 @@ function isUrl(text: string): boolean {
   }
 }
 
+/** An empty note's prompt: start writing, nothing about formats (plain text is fine; 2026-11-21 words audit). */
+export const NOTES_PLACEHOLDER = 'Start writing...';
+
 export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, enableWikiLinks, wikiLinkNotes, onWikiLinkMissing, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
@@ -312,7 +315,7 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         nested: true,
       }),
       Placeholder.configure({
-        placeholder: placeholder ?? 'Write your notes here... (Markdown supported)',
+        placeholder: placeholder ?? NOTES_PLACEHOLDER,
       }),
       // Every surface paints images through ResolvedImage: a relative
       // `![](diagram.png)` resolves against the file's directory (Files panel,

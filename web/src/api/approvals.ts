@@ -68,8 +68,11 @@ export function answerApproval(id: string, body: AnswerBody): Promise<{ approval
   return apiPost(`/api/v1/approvals/${encodeURIComponent(id)}/answer`, body, { quietStatuses: [403, 409] });
 }
 
+/** The Approvals switch's name wherever the person reads it (Settings, General, and the card's way there). */
+export const APPROVALS_SWITCH_LABEL = 'Ask me before outward or sensitive steps';
+
 /**
- * The person's one Approvals switch (Settings, General: "Ask me before agents act";
+ * The person's one Approvals switch (Settings, General: APPROVALS_SWITCH_LABEL;
  * src/core/approvals/ask-me.ts). Off: agents' steps go ahead with no card, each logged. Only a
  * person's own window changes it (routes/config.ts): an agent's call is refused.
  */

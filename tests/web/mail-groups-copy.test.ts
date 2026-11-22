@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bulkResultText, groupRowAria, groupsErrorText, importantCardBody, importantCardTitle, importantSavedText,
   CANT_MARK_HERE, markLabel, moreLabel, progressLabel, readOnlyTitle, readerWhyText, renamedText, rulesErrorText, sortProgressText,
-  sortingText, unreadExplain, unreadWord,
+  sortingText, totalUnreadWord, unreadExplain, unreadWord,
 } from '../../web/src/apps/mail/mail-groups-copy';
 
 describe('unreadExplain', () => {
@@ -31,6 +31,7 @@ describe('unreadExplain', () => {
 describe('header and row words', () => {
   it('says the count and the sorting state', () => {
     expect(unreadWord(19)).toBe('19 unread');
+    expect(totalUnreadWord(19)).toBe('19 unread in all');
     expect(sortingText(3)).toBe('Sorting 3 new');
   });
 

@@ -13,7 +13,7 @@
 import { useState } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
 import { capabilityChips, gauges, offlineLine, problemsOf, problemTitle, roleChips, sessionsTitle, sessionsUnknown, sparks, spendUnknown, systemLine, timeline } from './host-fleet-dashboard-model';
-import { statusKind, THIS_MAC, usd } from './host-fleet-model';
+import { localMachineName, statusKind, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { FleetNumber } from './FleetNumber';
@@ -61,8 +61,8 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
   const problems = problemsOf(host, now).filter((p) => !(host.readError && p.key === 'stale'));
   const first = problems[0];
   const segments = timeline(host, now);
-  // This computer is "This Mac", as its row and its diagram node say.
-  const name = host.local ? THIS_MAC : host.label;
+  // The local machine's name, as its row and its diagram node say.
+  const name = host.local ? localMachineName(host) : host.label;
   return (
     <article className="hf-card" data-testid="hf-dash-card" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <header className="hf-card-head">

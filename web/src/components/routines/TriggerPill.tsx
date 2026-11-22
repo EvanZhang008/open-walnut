@@ -30,7 +30,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
   auditHistory, clockHostTitle, describeCheck, describeClockHost, describeFireTally,
-  describeLastCheck, describeNextRun, describeRunTime, describeSchedule, describeTriggerOff, triggerRunState,
+  describeLastCheck, describeNextRun, describeRunTime, describeSchedule, describeTriggerOff, scheduleTitle, triggerRunState,
 } from '@/utils/routine-format';
 import { TRIGGER_STOP_AFTER_ERRORS } from '../../../../src/core/cron/trigger-run-state';
 import '@/styles/trigger-state.css';
@@ -124,7 +124,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
               {run === 'stopped' ? 'Stopped' : 'Paused'}
             </span>
           )}
-          <span className="trigger-jobs-cadence">{describeSchedule(routine.schedule)}</span>
+          <span className="trigger-jobs-cadence" title={scheduleTitle(routine.schedule)}>{describeSchedule(routine.schedule)}</span>
         </span>
       </div>
       {routine.description && (

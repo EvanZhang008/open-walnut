@@ -329,7 +329,7 @@ test('entering Ask Walnut resets AI task fields, and switching back re-parses th
   await page.waitForTimeout(900)
   expect(mock.calls.length, 'the Ask Walnut tab never parses').toBe(walnutCalls)
 
-  await panel.locator('.draft-intent-card').filter({ hasText: 'Start Task' }).click()
+  await panel.locator('.draft-intent-card').filter({ hasText: 'New task' }).click()
   await expectAiChip(panel, 'pinTier', 'Satellite')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(3)}`)
 
@@ -373,10 +373,10 @@ test('an emptied composer (after the debounce) withdraws AI tier, dates, project
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', model ?? '')
 })
 
-// ── C43: Save as todo carries what the chips say ────────────────────
+// ── C43: Save as task carries what the chips say ────────────────────
 // ("Start unread" left the launch menus on 2026-09-25, so no unread PATCH.)
 
-test('Save as todo sends the chips\' tier, priority and due', async ({ page }) => {
+test('Save as task sends the chips\' tier, priority and due', async ({ page }) => {
   const due = isoDay(3)
   const mock = await boot(page, { pinTier: 'satellite', priority: 'immediate', due_date: due })
   const log = await captureDraftRequests(page)

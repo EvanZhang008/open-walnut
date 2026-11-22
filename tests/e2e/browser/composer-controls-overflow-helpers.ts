@@ -183,7 +183,8 @@ export async function expectSingleRow(panel: Locator): Promise<void> {
 }
 
 /** Every hidden control has a row that NAMES it and repeats whatever its live
- *  pill says (dropped only when the pill just repeats the name). Reading the
+ *  pill says (dropped when the pill just repeats the name; a pill that is its name
+ *  plus a count, "Side chat 2", keeps only the count). Reading the
  *  value off the pill is the point: a second copy would drift. */
 export async function expectMenuNamesHidden(panel: Locator, hidden: string[], names: Record<string, string>): Promise<void> {
   const page = panel.page();
@@ -195,7 +196,8 @@ export async function expectMenuNamesHidden(panel: Locator, hidden: string[], na
     if (sameAsName) {
       await expect(row.locator('.composer-overflow-item-value')).toHaveCount(0);
     } else {
-      await expect(row.locator('.composer-overflow-item-value')).toHaveText(pillText);
+      const rest = pillText.startsWith(names[id]!) ? pillText.slice(names[id]!.length).trim() : pillText;
+      await expect(row.locator('.composer-overflow-item-value')).toHaveText(rest);
     }
   }
 }
@@ -222,7 +224,7 @@ export async function forceAllVisibleGeometry(panel: Locator): Promise<{ lines: 
 
 /** The names SessionPanel gives its five controls. */
 export const CTRL_NAMES: Record<string, string> = {
-  mode: 'Mode', model: 'Model', output: 'Reply style', btw: 'Side thread', note: 'Note',
+  mode: 'Permission mode', model: 'Model', output: 'Reply style', btw: 'Side chat', note: 'Session note',
 };
 
 /** Crop the composer block. `lift` reaches further up the panel, for a shot that

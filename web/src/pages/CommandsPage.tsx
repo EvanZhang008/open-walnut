@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { usePersistentState, oneOf } from '@/hooks/usePersistentState';
 import { useCommands } from '@/hooks/useCommands';
-import { CommandCard } from '@/components/commands/CommandCard';
+import { CommandCard, COMMAND_SOURCE_LABEL } from '@/components/commands/CommandCard';
 import { CommandForm } from '@/components/commands/CommandForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { Chip, ChipGroup } from '@/components/controls';
@@ -93,7 +93,7 @@ export function CommandsPage() {
             count={counts[tab]}
             onClick={() => setFilter(tab)}
           >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === 'all' ? 'All' : COMMAND_SOURCE_LABEL[tab]}
           </Chip>
         ))}
       </ChipGroup>
@@ -101,7 +101,7 @@ export function CommandsPage() {
       {filtered.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">/</div>
-          <p>{filter === 'all' ? 'No commands defined yet' : `No ${filter} commands`}</p>
+          <p>{filter === 'all' ? 'No commands defined yet' : `No ${COMMAND_SOURCE_LABEL[filter].toLowerCase()} commands`}</p>
           {filter === 'all' && (
             <p className="text-sm" style={{ marginTop: 8 }}>Create a command to add quick prompts accessible via /name in chat</p>
           )}

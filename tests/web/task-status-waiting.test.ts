@@ -83,13 +83,14 @@ describe('status options', () => {
 });
 
 describe('wait_until helpers', () => {
-  // A time exactly a week out would print as today's weekday with the shared formatter.
-  it('formats the clock with day words, a week out as M/D, and nothing when unset', () => {
+  // The snooze pill's words (snoozeWhenWords): a week out reads its date, never today's weekday.
+  it('formats the clock with day words and a 12-hour clock, a week out as its date, and nothing when unset', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 29, 10, 0));
-    expect(formatWaitUntil(new Date(2026, 9, 6, 10, 54).toISOString())).toBe('10/6 10:54');
-    expect(formatWaitUntil(new Date(2026, 8, 30, 9, 5).toISOString())).toBe('Tomorrow 9:05');
-    expect(formatWaitUntil(new Date(2026, 9, 2, 18, 0).toISOString())).toBe('Fri 18:00');
+    expect(formatWaitUntil(new Date(2026, 9, 6, 10, 54).toISOString())).toBe('Oct 6, 10:54 AM');
+    expect(formatWaitUntil(new Date(2026, 8, 30, 9, 5).toISOString())).toBe('Tomorrow 9:05 AM');
+    expect(formatWaitUntil(new Date(2026, 9, 2, 18, 0).toISOString())).toBe('Fri 6:00 PM');
+    expect(formatWaitUntil(new Date(2026, 8, 29, 1, 30).toISOString())).toBe('Today 1:30 AM');
     expect(formatWaitUntil(undefined)).toBe('');
     expect(formatWaitUntil('')).toBe('');
   });
@@ -103,14 +104,14 @@ describe('wait_until helpers', () => {
   it('labels the header chip for a Waiting task only', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 29, 10, 0));
-    expect(waitingChipLabel({ phase: 'WAITING', wait_until: new Date(2026, 9, 2, 13, 27).toISOString() })).toBe('Wait until Fri 13:27');
+    expect(waitingChipLabel({ phase: 'WAITING', wait_until: new Date(2026, 9, 2, 13, 27).toISOString() })).toBe('Wait until Fri 1:27 PM');
     expect(waitingChipLabel({ phase: 'WAITING' })).toBe('Waiting');
     expect(waitingChipLabel({ phase: 'TODO' })).toBe('');
     // A park on its own build reads Working, one with only a result To read (2026-11-02).
     const wu = new Date(2026, 9, 2, 13, 27).toISOString()
-    expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', carriesOn: 'watch' } } as never)).toBe('Working · checks back Fri 13:27');
+    expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', carriesOn: 'watch' } } as never)).toBe('Working · checks back Fri 1:27 PM');
     expect(waitingChipLabel({ phase: 'WAITING', user_status: { state: 'read', toRead: 'result' } } as never)).toBe('Can close');
-    expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'waiting', kind: 'outside' } } as never)).toBe('Wait until Fri 13:27');
+    expect(waitingChipLabel({ phase: 'WAITING', wait_until: wu, user_status: { state: 'waiting', kind: 'outside' } } as never)).toBe('Wait until Fri 1:27 PM');
     const own = waitingDetailLines({ phase: 'WAITING', wait_until: wu, user_status: { state: 'working', waitingOn: 'x' } } as never)
     expect(own[0]).toMatch(/own work runs/)
     expect(own.join(' ')).not.toMatch(/Waiting on/)
@@ -199,10 +200,10 @@ describe('TaskStatusMenuSection and Waiting', () => {
     const s = spies();
     const wait_until = new Date(2026, 9, 2, 13, 27).toISOString();
     const host = await mount(TaskStatusMenuSection, { task: task({ phase: 'WAITING', wait_until }), ...s });
-    expect(host.querySelector('.task-kebab-status-value')!.textContent).toBe('Status: Waiting · until Fri 13:27');
+    expect(host.querySelector('.task-kebab-status-value')!.textContent).toBe('Status: Waiting · until Fri 1:27 PM');
     await open(host);
     expect(pill(host, 'WAITING')!.getAttribute('aria-checked')).toBe('true');
-    expect(host.querySelector('[data-testid="task-status-until"]')!.textContent).toContain('Until: Fri 13:27');
+    expect(host.querySelector('[data-testid="task-status-until"]')!.textContent).toContain('Until: Fri 1:27 PM');
     expect(host.querySelector('[data-testid="task-status-until-clear"]')!.textContent).toBe('No limit');
     await click(host.querySelector('[data-testid="task-status-until-clear"]'));
     expect(s.onSetWaitUntil).toHaveBeenCalledWith('task-1', '');

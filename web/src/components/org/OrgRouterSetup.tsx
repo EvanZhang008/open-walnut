@@ -15,7 +15,7 @@ import { apiPost } from '@/api/client';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { useRevealWhen } from './use-reveal';
-import { LINK_FILTER_FROM, ROUTER_LINK_NOTE, ROUTER_NAME_MAX, isOpenVp, linkFilterMatches } from './OrgRouterSettings';
+import { LINK_FILTER_FROM, ROUTER_LINK_NOTE, ROUTER_NAME_MAX, ROUTER_PURPOSE, isOpenVp, linkFilterMatches } from './OrgRouterSettings';
 
 const SETUP_KEY = draftKey('org-router-setup', 'new');
 export const ROUTER_SETUP_AREAS = [{ id: 'personal', name: 'Personal' }, { id: 'work', name: 'Work' }] as const;
@@ -65,12 +65,12 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
   // rest of the form (name, VP links) is for a new router only.
   return <form className="org-router-setup" data-testid="org-router-setup" onSubmit={(event) => { event.preventDefault(); gate.send(); }}>
     <h3>New router</h3>
-    <p>A router sits beside the VPs, not under them. {ROUTER_LINK_NOTE}</p>
+    <p>{ROUTER_PURPOSE} Each area has one.</p>
     <fieldset><legend>Area</legend>{AREAS.map((area) => <label key={area.id}>
-      <Radio name="router-area" checked={draft.value.area === area.id} data-draft-key={draft.key ?? undefined} onChange={() => draft.setValue((value) => ({ ...value, area: area.id }))} disabled={busy} />{area.name}
+      <Radio name="router-area" checked={draft.value.area === area.id} data-draft-key={draft.key ?? undefined} onChange={() => draft.setValue((value) => ({ ...value, area: area.id }))} disabled={busy} />{area.name}{existingRouterFor(tasks, area.id) ? ' (has a router)' : ''}
     </label>)}</fieldset>
     {existing ? <>
-      <p data-testid="router-setup-existing" data-task-id={existing.id}>This area already has a router: <strong>{existing.org_name || existing.title}</strong>. Open it to change its name or VP links.</p>
+      <p data-testid="router-setup-existing" data-task-id={existing.id}>This area already has its router, <strong>{existing.org_name || existing.title}</strong>, so nothing new is made. Open it to change its name or VP links.</p>
       <div className="org-router-setup-actions">
         <button type="submit" className="btn btn-sm btn-primary" data-testid="router-setup-open-existing">Open router</button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>Cancel</button>
@@ -78,6 +78,7 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
     </> : <>
       <label>Name<MicInput value={draft.value.name} maxLength={ROUTER_NAME_MAX} data-draft-key={draft.key ?? undefined} setText={(name) => draft.setValue((value) => ({ ...value, name }))} micRef={nameMic} data-testid="router-name" disabled={busy} /></label>
       <fieldset><legend>Works closely with (optional)</legend>
+        <p className="org-router-hint">{ROUTER_LINK_NOTE}</p>
         {leads.length === 0 && <p data-testid="router-setup-no-vps">No open VP yet. A router works on its own.</p>}
         {leads.length > LINK_FILTER_FROM && (
           <MicInput type="search" className="org-router-link-filter" fieldClassName="org-router-link-filter-field" data-testid="router-setup-vp-filter" data-no-draft="search"

@@ -84,7 +84,7 @@
 .mail-rule-value-input { flex: 1 1 180px; min-width: 0; }
 .mail-rule-then { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mail-rule-skip-inbox { margin-top: 2px; }
-.mail-rule-skip-badge { margin-left: 6px; font-size: var(--font-size-xs); color: var(--accent); white-space: nowrap; }
+.mail-rule-skip-badge { margin-left: 6px; font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap; }
 .mail-rule-field-error { flex-basis: 100%; margin: 0; font-size: var(--font-size-sm); color: color-mix(in srgb, var(--error) 80%, var(--fg)); overflow-wrap: anywhere; }
 /* The calm lines under a condition: why it stays off, a hint, what the field takes. */
 .mail-rule-condition .mail-rule-off,

@@ -452,7 +452,7 @@ test('(C30) a row the registry scan skipped still checks on click: the chip goes
   await page.unroute('**/api/plugin-updates**')
 })
 
-test('(N2-3) a clone that disappears reads Not installed here, keeps its name, and Restore on the Sources card brings it back', async ({ page }) => {
+test('(N2-3) a clone that disappears reads Files not on this Mac, keeps its name, and Restore on the Sources card brings it back', async ({ page }) => {
   await openWithChips(page)
   const clone = path.join(fixture.home, 'plugin-stores', 'native-plugin-repo')
   const parked = `${clone}.parked`
@@ -463,11 +463,11 @@ test('(N2-3) a clone that disappears reads Not installed here, keeps its name, a
     const card = page.getByTestId('plugin-source-native-plugin-repo')
     const sourceChip = page.getByTestId('update-chip-source-native-plugin-repo')
     await expect(sourceChip).toHaveAttribute('data-update-kind', 'missing', { timeout: 30_000 })
-    await expect(sourceChip).toHaveText(/Not installed here/i)
+    await expect(sourceChip).toHaveText(/Files not on this Mac/i)
     // The head reads where the source comes from (the Apps page groups plugins by source since
     // f7a70a356), and the clone that is gone keeps its name: the plugins it carried last time
     // (the server's memo) name its Remove.
-    await expect(card.locator('.plugin-store-source-title .plugin-store-origin')).toContainText('git, ')
+    await expect(card.locator('.plugin-store-source-title .plugin-store-origin')).toContainText('Git repository')
     await expect(card.getByRole('button', { name: 'Remove Walnut Plugin Demo' })).toBeVisible()
     const restore = card.getByRole('button', { name: 'Restore' })
     await expect(restore).toBeVisible()

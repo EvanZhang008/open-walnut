@@ -3,6 +3,17 @@ import { usePersistentState, isString, isStringArray } from '@/hooks/usePersiste
 import type { MemoryBrowseTree, BrowseItem, BrowseDailyItem } from '@/api/memory';
 import { SearchField } from '@/components/common/SearchField';
 
+/**
+ * The two standing stores every session reads, named by what they hold; the file name stays
+ * beside it for anyone who edits the files by hand. The content panel's path line uses it too.
+ */
+export const STANDING_STORES = {
+  section: 'Read in every session',
+  'USER.md': { label: 'Your profile', hint: 'Who you are and how you like to work' },
+  'MEMORY.md': { label: 'Remembered facts', hint: 'Facts Walnut keeps across all projects' },
+} as const;
+const storeLabel = (file: 'USER.md' | 'MEMORY.md') => `${STANDING_STORES[file].label} (${file})`;
+
 interface MemoryTreePanelProps {
   tree: MemoryBrowseTree | null;
   selectedPath: string | null;
@@ -111,11 +122,11 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
     [projectNodes, filter],
   );
   const showGlobal = useMemo(
-    () => tree?.global && (!filter || matchesFilter('Global Memory', 'MEMORY.md', filter)),
+    () => tree?.global && (!filter || matchesFilter(storeLabel('MEMORY.md'), 'MEMORY.md', filter)),
     [tree?.global, filter],
   );
   const showUser = useMemo(
-    () => tree?.user && (!filter || matchesFilter('User Profile', 'USER.md', filter)),
+    () => tree?.user && (!filter || matchesFilter(storeLabel('USER.md'), 'USER.md', filter)),
     [tree?.user, filter],
   );
 
@@ -178,12 +189,13 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
           </Section>
         )}
 
-        {/* Global */}
+        {/* Global: the two stores every session reads */}
         {(showGlobal || showUser) && (
-          <Section title="Global" id="global" collapsed={collapsed} onToggle={toggleSection}>
+          <Section title={STANDING_STORES.section} id="global" collapsed={collapsed} onToggle={toggleSection}>
             {showUser && (
               <TreeItem
-                label="USER.md"
+                label={storeLabel('USER.md')}
+                hint={STANDING_STORES['USER.md'].hint}
                 path="USER.md"
                 selected={selectedPath === 'USER.md'}
                 onClick={() => onSelect('USER.md')}
@@ -191,7 +203,8 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
             )}
             {showGlobal && (
               <TreeItem
-                label="MEMORY.md"
+                label={storeLabel('MEMORY.md')}
+                hint={STANDING_STORES['MEMORY.md'].hint}
                 path="MEMORY.md"
                 selected={selectedPath === 'MEMORY.md'}
                 onClick={() => onSelect('MEMORY.md')}
@@ -341,18 +354,21 @@ function Section({ title, id, collapsed, onToggle, count, children }: SectionPro
 
 interface TreeItemProps {
   label: string;
+  /** What the file holds, for its tooltip (the label alone otherwise). */
+  hint?: string;
   path: string;
   selected: boolean;
   onClick: () => void;
   depth?: number;
 }
 
-function TreeItem({ label, selected, onClick, depth = 0 }: TreeItemProps) {
+function TreeItem({ label, hint, selected, onClick, depth = 0 }: TreeItemProps) {
   return (
     <button
       className={`memory-tree-item${selected ? ' memory-tree-item-selected' : ''}`}
       onClick={onClick}
       style={depth > 0 ? { paddingLeft: `${12 + depth * 16}px` } : undefined}
+      title={hint ? `${label}: ${hint}` : undefined}
     >
       <span className="memory-tree-item-label wn-title">{label}</span>
     </button>

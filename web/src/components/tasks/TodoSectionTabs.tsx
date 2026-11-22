@@ -11,7 +11,7 @@ import {
   useNavigationList, useNavigationPreference,
 } from '@/hooks/useNavigationPreference';
 import { useNotifications } from '@/contexts/notifications/NotificationProvider';
-import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, WIDE_HIDDEN_TABS, tabBarTabs, tabMenuGroups, visibleTabBarTabs, wideHidden, type TabBarTab } from './tab-bar-model';
+import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, WIDE_HIDDEN_TABS, tabBarTabs, tabCountTitle, tabMenuGroups, visibleTabBarTabs, wideHidden, type TabBarTab, type TabCountScope } from './tab-bar-model';
 
 /**
  * The todo panel's tab bar: one tab per view, the picked view owns the panel below.
@@ -51,6 +51,8 @@ interface TodoSectionTabsProps {
   heldCounts?: Partial<Record<TodoSection, number>>;
   /** False while the tasks are still loading: every count reads 0 then, and no tab is empty yet. */
   countsReady?: boolean;
+  /** What the counts count, for each count's hover (a search's hits, or the open list without the waiting rows). */
+  countScope?: TabCountScope;
   /** User-defined tiers: each gets its own tab between Satellite and Recent. */
   customTiers?: CustomTierDef[];
   /** The bar is always on where it is (the browser extension's first page): no "Show tab bar" switch. */
@@ -63,7 +65,7 @@ interface TodoSectionTabsProps {
   wide?: boolean;
 }
 
-export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, customTiers, fixed = false, wide = false }: TodoSectionTabsProps) {
+export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, countScope = { search: false, waitingLeftOut: false }, customTiers, fixed = false, wide = false }: TodoSectionTabsProps) {
   const { notify } = useNotifications();
   const [storedHidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, wide ? WIDE_HIDDEN_TABS : DEFAULT_HIDDEN_TABS);
   const hidden = wide ? wideHidden(storedHidden) : storedHidden;
@@ -145,7 +147,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
               className={`todo-section-tab todo-section-tab-${id.startsWith('ct_') ? 'custom' : id}`}
               onClick={() => onChange(id)}
               title={title}
-              count={count != null && count > 0 ? <span className="todo-section-tab-count">{count > 99 ? '99+' : count}</span> : undefined}
+              count={count != null && count > 0 ? <span className="todo-section-tab-count" title={tabCountTitle(count, countScope, id)}>{count > 99 ? '99+' : count}</span> : undefined}
             >
               {id !== 'all' && <span className="todo-section-tab-icon" aria-hidden="true">{icon(id)}</span>}
               {/* The label is always in the DOM (screen readers, and it names the selected
