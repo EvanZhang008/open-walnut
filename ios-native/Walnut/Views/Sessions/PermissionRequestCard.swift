@@ -549,7 +549,9 @@ struct PermissionRequestCard: View {
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                // A message box: its corner and one-line height, the mic's height beside it.
+                .frame(minHeight: MessageBox.lineHeight)
+                .background(Color(.secondarySystemBackground), in: MessageBox.shape)
                 .submitLabel(.send)
                 .disabled(answering)
                 .focused($noteFocused)
@@ -735,7 +737,9 @@ struct AskUserQuestionCard: View {
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    // A message box: its corner and one-line height, the mic's height beside it.
+                    .frame(minHeight: MessageBox.lineHeight)
+                    .background(Color(.secondarySystemBackground), in: MessageBox.shape)
                     .disabled(answering)
                     .focused($focusedQuestion, equals: question.question)
                     .accessibilityIdentifier("session.askQuestion.other")

@@ -199,7 +199,9 @@ private struct VoiceDictationBody<Field: View>: View {
                         .overlay {
                             if voice.state == .recording {
                                 // Just outside the field, so it never sits on the text.
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                // The box's own corner, grown by the outset, so the two stay concentric.
+                                RoundedRectangle(cornerRadius: MessageBox.cornerRadius + voiceDictationOutlineOutset,
+                                                 style: .continuous)
                                     .strokeBorder(Theme.danger, lineWidth: 2)
                                     .padding(-voiceDictationOutlineOutset)
                                     .allowsHitTesting(false)
@@ -286,10 +288,10 @@ private struct VoiceDictationBody<Field: View>: View {
 
 /// Stop in the mic's own seat, for a box that keeps its row: same size as the
 /// mic, so the field never narrows. A pulsing ring and the elapsed time inside
-/// the circle say it records; Discard is a long press (and a VoiceOver action)
+/// the key say it records; Discard is a long press (and a VoiceOver action)
 /// away, since a take spoken by mistake is rarer than one to keep.
 ///
-/// The time lives inside the circle, under the same checkmark every other Stop
+/// The time lives inside the key, under the same checkmark every other Stop
 /// shows (the long-press menu, the `.below` row, the letter's reply bar): the
 /// action inserts the words. Drawn over the seat, the time ran into whatever sat
 /// above the box (a letter's decision button, a card's border, at the largest
@@ -300,21 +302,21 @@ private struct VoiceRecordingSeat: View {
     let idPrefix: String
     let onCancel: () -> Void
     let onStop: () -> Void
-    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
     @Environment(\.scenePhase) private var scenePhase
     @State private var phase = false
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
         let time = VoiceRecordingIndicator.timeString(voice.elapsed)
-        // The ring (the circle plus 3pt each side) leaves 3pt clear inside the
+        // The ring (the key plus 3pt each side) leaves 3pt clear inside the
         // 44pt seat at every text size: filling the seat at the largest sizes,
         // it touched the field's outline and the two read as one red edge.
         let inner = min(size.diameter, size.target - 12)
         Button(action: onStop) {
-            // Sized from the circle, not from the text size, so the time always
-            // fits inside it: as large as the circle holds "0:00" (11.5pt in
-            // the 32pt circle), shrinking only for a tenth minute. onTint on
+            // Sized from the key, not from the text size, so the time always
+            // fits inside it: as large as the key holds "0:00" (11.5pt in
+            // the 32pt key), shrinking only for a tenth minute. onTint on
             // tint reads 5.84:1 light and 7.02:1 dark (white on the red, 3.55:1).
             VStack(spacing: 0) {
                 Image(systemName: "checkmark")
@@ -327,7 +329,7 @@ private struct VoiceRecordingSeat: View {
             }
             .foregroundStyle(Theme.onTint)
             .frame(width: inner, height: inner)
-            .background(Theme.tint, in: Circle())
+            .background(Theme.tint, in: MessageBox.keyShape)
             .padding(3)
             .overlay {
                 Circle()

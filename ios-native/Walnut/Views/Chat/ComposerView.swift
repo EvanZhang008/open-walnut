@@ -1131,6 +1131,8 @@ struct ComposerBar: View {
                     .lineLimit(1...maximumInputLines)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
+                    // One line is a message box's one-line height (`MessageBox`).
+                    .frame(minHeight: MessageBox.lineHeight)
                     .focused($focused)
                     .accessibilityIdentifier("chat.composer")
             }
@@ -1271,8 +1273,8 @@ struct ComposerBar: View {
                 Image(systemName: Symbol.cancel)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
-                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                    .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
             }
             .accessibilityLabel("Cancel recording")
             .accessibilityIdentifier("chat.voiceCancel")
@@ -1308,8 +1310,8 @@ struct ComposerBar: View {
                 Image(systemName: quickAction.autoSendArmed ? Symbol.send : Symbol.confirm)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.onTint)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.tint, in: Circle())
+                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                    .background(Theme.tint, in: MessageBox.keyShape)
             }
             .accessibilityLabel(quickAction.autoSendArmed ? "Send" : "Stop Recording")
             .accessibilityIdentifier("chat.voiceStop")
@@ -1324,8 +1326,8 @@ struct ComposerBar: View {
                     Image(systemName: Symbol.send)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(live ? Theme.onTint : Color(.tertiaryLabel))
-                        .frame(width: 32, height: 32)
-                        .background(live ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+                        .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                        .background(live ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
                 }
                 .disabled(!live)
                 .accessibilityLabel("Stop and send")
@@ -1381,11 +1383,11 @@ struct ComposerBar: View {
             Image(systemName: Symbol.plus)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
-                .background(Color(.tertiarySystemFill), in: Circle())
+                .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
         }
         // No bottom nudge any more: the old `.padding(.bottom, 3)` on all three
-        // buttons optically aligned 32pt circles against a field that grew to six
+        // buttons optically aligned 32pt keys against a field that grew to six
         // lines beside them. On a dedicated control row there is nothing to align
         // against, so the nudge would just be an asymmetric row.
         .accessibilityIdentifier("chat.plus")
@@ -1534,13 +1536,13 @@ struct ComposerBar: View {
             if voice.state == .transcribing {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(width: 32, height: 32)
+                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
             } else {
                 Image(systemName: Symbol.mic)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
-                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                    .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
             }
         }
         .disabled(voice.state != .idle)
@@ -1556,8 +1558,8 @@ struct ComposerBar: View {
             Image(systemName: Symbol.voiceMode)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.onTint)
-                .frame(width: 32, height: 32)
-                .background(Theme.tint, in: Circle())
+                .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                .background(Theme.tint, in: MessageBox.keyShape)
                 .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(disabled)
@@ -1593,8 +1595,8 @@ struct ComposerBar: View {
                         .foregroundStyle(.white)
                 }
             }
-            .frame(width: 32, height: 32)
-            .background(Theme.danger, in: Circle())
+            .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+            .background(Theme.danger, in: MessageBox.keyShape)
             .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(stopping)
@@ -1686,13 +1688,13 @@ struct ComposerBar: View {
     private var sendButton: some View {
         Button(action: gatedSend) {
             if sendGate.isWaiting {
-                // Waiting for the words: a spinner in the send circle, and a tap
+                // Waiting for the words: a spinner in the send key, and a tap
                 // cancels the wait (the words still land in the box).
                 ProgressView()
                     .controlSize(.small)
                     .tint(Theme.onTint)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.tint, in: Circle())
+                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                    .background(Theme.tint, in: MessageBox.keyShape)
             } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
                 // Its whole name: this send puts the words in the queue, the others act now.
                 Text("Queue")
@@ -1700,14 +1702,14 @@ struct ComposerBar: View {
                     .lineLimit(1)
                 .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
                 .padding(.horizontal, 10)
-                .frame(height: 32)
-                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Capsule())
+                .frame(height: MessageBox.keySize)
+                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
             } else {
                 Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
                     .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))
                     .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
-                    .frame(width: 32, height: 32)
-                    .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                    .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
             }
         }
         .disabled(!canSend && !sendGate.isWaiting)
@@ -1741,7 +1743,7 @@ struct ComposerBar: View {
     }
 
     /// The secondary exit: a soft tinted capsule, so it reads as the quieter of the two
-    /// exits next to the filled send circle. Three widths, the widest that fits: the
+    /// exits next to the filled send key. Three widths, the widest that fits: the
     /// full words, the short word, the glyph alone.
     private func secondaryButton(_ action: ComposerSecondaryAction) -> some View {
         Button {
@@ -2608,8 +2610,8 @@ struct ComposerPlusAction: Identifiable {
 /// The composer's floating card and the page color around it, named once so
 /// everything that sits next to the composer (the new-session launch rows, the
 /// chat tab's drawer band) matches it.
+/// Its corner is every message box's (`MessageBox`).
 enum ComposerCard {
-    static let cornerRadius: CGFloat = 24
     /// Room between the card and the screen edges.
     static let sideInset: CGFloat = 10
     /// The page behind the card: the transcript's own background, so the card is
@@ -2621,10 +2623,6 @@ enum ComposerCard {
     static let fill = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
     })
-
-    static var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-    }
 }
 
 private struct ComposerCardModifier: ViewModifier {
@@ -2633,12 +2631,12 @@ private struct ComposerCardModifier: ViewModifier {
             // The shadow belongs to the card's SHAPE only: on the whole stack it
             // would also shadow every glyph and button inside.
             .background {
-                ComposerCard.shape
+                MessageBox.shape
                     .fill(ComposerCard.fill)
                     .shadow(color: .black.opacity(0.08), radius: 12, y: 3)
             }
             .overlay(
-                ComposerCard.shape
+                MessageBox.shape
                     .strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5)
                     .allowsHitTesting(false)
             )

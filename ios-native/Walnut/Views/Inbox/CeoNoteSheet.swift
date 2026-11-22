@@ -76,7 +76,7 @@ struct CeoNoteSheet: View {
                                 .focused($focused)
                                 .scrollContentBackground(.hidden)
                                 .padding(8)
-                                .background(Theme.tintSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                                .background(Theme.tintSoft.opacity(0.5), in: MessageBox.shape)
                                 .accessibilityLabel("Message to the CEO")
                                 .accessibilityIdentifier("\(identifier).ceoNote")
                             if note.wrappedValue.isEmpty {

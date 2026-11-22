@@ -51,9 +51,9 @@ struct SessionQueueStrip: View {
                 if let gone = queue.withdrawn {
                     undoLine(gone)
                         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill))
+                        .background(MessageBox.shape.fill(ComposerCard.fill))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            MessageBox.shape
                                 .strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
                         )
                 }
@@ -111,10 +111,10 @@ struct SessionQueueStrip: View {
         }
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(ComposerCard.fill)
+            MessageBox.shape.fill(ComposerCard.fill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            MessageBox.shape
                 .strokeBorder(Color(uiColor: .separator).opacity(0.6), lineWidth: 0.5)
         )
     }
@@ -448,7 +448,7 @@ struct SessionQueuedMessageSheet: View {
                             .scrollContentBackground(.hidden)
                             .padding(10)
                             .frame(minHeight: 120, maxHeight: 220)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(Color(.secondarySystemBackground), in: MessageBox.shape)
                             .disabled(!row.canEdit || saving)
                             .accessibilityIdentifier("session.queue.edit.text")
                     }

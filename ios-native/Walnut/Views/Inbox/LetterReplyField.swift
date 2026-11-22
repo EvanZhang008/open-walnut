@@ -97,7 +97,8 @@ struct LetterReplyField: UIViewRepresentable {
         let width = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? max(uiView.bounds.width, 120)
         let font = uiView.font ?? UIFont.preferredFont(forTextStyle: .body)
         let inset = uiView.textContainerInset.top + uiView.textContainerInset.bottom
-        let minHeight = font.lineHeight.rounded(.up) + inset
+        // Never under a message box's one-line height (`MessageBox`), the keys' target.
+        let minHeight = max(font.lineHeight.rounded(.up) + inset, MessageBox.lineHeight)
         let linesHeight = (font.lineHeight * CGFloat(maxLines)).rounded(.up) + inset
         let cap = maxHeight.map { max(minHeight, min(linesHeight, $0.rounded(.down))) } ?? linesHeight
         let fitting = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height

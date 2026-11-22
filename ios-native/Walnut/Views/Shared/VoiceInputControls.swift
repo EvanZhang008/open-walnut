@@ -4,7 +4,7 @@ import SwiftUI
 //
 // The same `VoiceRecorder` the chat composer drives (record to a preserved m4a,
 // upload, the server's engine transcribes mixed Chinese and English), and the
-// same conventions: a mic glyph in a circle beside send, a recording row that
+// same conventions: a mic glyph in a rounded square key beside send, a recording row that
 // REPLACES the input with cancel on the left and stop on the right, the
 // recorder's own sentences for a denied microphone or a failed transcription,
 // and saved takes offered back with Retry and Discard. The keyboard's dictation
@@ -22,10 +22,35 @@ import SwiftUI
 /// The smallest target a finger can reliably hit.
 let voiceControlTarget: CGFloat = 44
 
-/// A round glyph seat that grows with the text size, capped at the target size.
+/// Walnut's ONE message input box, the same look as the web app's
+/// (web/src/styles/input-box.css): every box a person types a message in (the
+/// chat composer's card, the letter reply, the dictation boxes) takes its
+/// corner and one-line height from here, and every mic, send and stop key in
+/// one draws `keyShape`, a rounded square, never a circle (the user,
+/// 2026-11-21: "why does everything have to be round? Everything should be
+/// unified!"). Send is `Theme.tint` with `Theme.onTint`, a grey fill when there
+/// is nothing to send. Form fields (settings, search, task editors) are not
+/// message boxes and keep their own style.
+enum MessageBox {
+    /// The box's corner: rounded, never a capsule (the web's `--input-radius`, 12).
+    static let cornerRadius: CGFloat = 12
+    /// One line of a box: a finger's height, the height of the keys' targets.
+    static let lineHeight: CGFloat = voiceControlTarget
+    /// A key's drawn size at the default text size (`VoiceGlyphSeat` grows it
+    /// with the text, up to the target). Its target stays `voiceControlTarget`.
+    static let keySize: CGFloat = 32
+    static var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
+    /// Every key (mic, send, stop) is a circle, as on the web.
+    static var keyShape: Circle { Circle() }
+}
+
+/// A key's glyph seat that grows with the text size, capped at the target size.
 struct VoiceGlyphSeat {
     let scaled: CGFloat
-    var diameter: CGFloat { min(max(scaled, 32), voiceControlTarget) }
+    var diameter: CGFloat { min(max(scaled, MessageBox.keySize), voiceControlTarget) }
     var glyphSize: CGFloat { diameter * 0.47 }
     var target: CGFloat { max(diameter, voiceControlTarget) }
 }
@@ -34,7 +59,7 @@ struct VoiceGlyphSeat {
 struct VoiceMicButton: View {
     let voice: VoiceRecorder
     let identifier: String
-    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
@@ -59,7 +84,7 @@ struct VoiceMicButton: View {
                     .font(.system(size: size.glyphSize, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: size.diameter, height: size.diameter)
-                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
                     .frame(width: size.target, height: size.target)
                     .contentShape(Rectangle())
             }
@@ -81,7 +106,7 @@ struct VoiceRecordingBar: View {
     /// Send beside Stop, for a box whose words leave through a Send: stops, waits
     /// for the words, then sends the whole box (`DictationSendGate`).
     var onSend: (() -> Void)?
-    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
@@ -91,7 +116,7 @@ struct VoiceRecordingBar: View {
                     .font(.system(size: size.glyphSize, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: size.diameter, height: size.diameter)
-                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
                     .frame(width: size.target, height: size.target)
                     .contentShape(Rectangle())
             }
@@ -107,7 +132,7 @@ struct VoiceRecordingBar: View {
                     .font(.system(size: size.glyphSize, weight: .semibold))
                     .foregroundStyle(Theme.onTint)
                     .frame(width: size.diameter, height: size.diameter)
-                    .background(Theme.tint, in: Circle())
+                    .background(Theme.tint, in: MessageBox.keyShape)
                     .frame(width: size.target, height: size.target)
                     .contentShape(Rectangle())
             }
@@ -121,7 +146,7 @@ struct VoiceRecordingBar: View {
                         .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
                         .foregroundStyle(Theme.onTint)
                         .frame(width: size.diameter, height: size.diameter)
-                        .background(Theme.tint, in: Circle())
+                        .background(Theme.tint, in: MessageBox.keyShape)
                         .frame(width: size.target, height: size.target)
                         .contentShape(Rectangle())
                 }

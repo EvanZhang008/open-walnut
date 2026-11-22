@@ -1235,7 +1235,7 @@ struct OrgThreadFollowUpSheet: View {
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 80, maxHeight: .infinity)
                         .padding(8)
-                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        .background(Color(uiColor: .secondarySystemBackground), in: MessageBox.shape)
                         .overlay(alignment: .topLeading) {
                             if text.wrappedValue.isEmpty {
                                 Text("Write your follow up")

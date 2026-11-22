@@ -940,7 +940,7 @@ struct LetterReaderView: View {
                     }
                     .background(
                         Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        in: MessageBox.shape
                     )
                     VoiceMicButton(voice: voice, identifier: "inbox.letter.mic")
                         .disabled(decisionVoice.state != .idle)
@@ -1350,11 +1350,11 @@ private struct DecisionNoteReveal: ViewModifier {
 
 private struct LetterSendButton: View {
     let enabled: Bool
-    /// Waiting for dictated words (`DictationSendGate`): a spinner in the circle,
+    /// Waiting for dictated words (`DictationSendGate`): a spinner in the key,
     /// and a tap cancels the wait.
     var waiting = false
     let action: () -> Void
-    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
@@ -1379,7 +1379,7 @@ private struct LetterSendButton: View {
                 .animation(nil) { glyph in
                     glyph
                         .foregroundStyle(enabled ? Theme.onTint : Color(.tertiaryLabel))
-                        .background(enabled ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+                        .background(enabled ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
                 }
                 .frame(width: size.target, height: size.target)
                 .contentShape(Rectangle())

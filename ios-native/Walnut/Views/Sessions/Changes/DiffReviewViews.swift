@@ -71,7 +71,7 @@ struct DiffCommentComposer: View {
                                 .frame(minHeight: 110)
                                 .scrollContentBackground(.hidden)
                                 .padding(6)
-                                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                .background(Color(uiColor: .secondarySystemBackground), in: MessageBox.shape)
                                 .accessibilityIdentifier("diff.comment.text")
                             if text.isEmpty {
                                 Text("What should the agent know or change here?")

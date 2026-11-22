@@ -425,10 +425,7 @@ struct TalkReviewPage: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
                     // A field: it reads as text to correct, not only to read.
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color(uiColor: .secondarySystemBackground))
-                    )
+                    .background(MessageBox.shape.fill(Color(uiColor: .secondarySystemBackground)))
                     .accessibilityLabel("Edit your words")
                     .accessibilityIdentifier("talk.review.text")
             }
