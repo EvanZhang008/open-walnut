@@ -204,6 +204,19 @@ export function hostServerRootSpec(): string | undefined {
   return process.env.WALNUT_HOST_SERVER_ROOT?.trim() || undefined
 }
 
+const viewListeners = new Set<(view: HostServerView) => void>()
+
+/** Every change of a host server's view (its phase, its last report). Returns the stop. */
+export function onHostServerView(fn: (view: HostServerView) => void): () => void {
+  viewListeners.add(fn)
+  return () => { viewListeners.delete(fn) }
+}
+
+/** The connected link to `hostKey`'s daemon, through which its server's streams open; null when not connected. */
+export function hostServerLink(hostKey: string): HostServerHost | null {
+  return manager?.hostLink(hostKey) ?? null
+}
+
 export function getHostServerManager(): HostServerManager | null {
   // Only the leader manages hosts' servers: a replica (the companion, a host's own server) never does.
   // The Demo never installs a server on a remote host (demo-remote-host.ts): its host daemon is all it runs there.
@@ -243,7 +256,12 @@ export function getHostServerManager(): HostServerManager | null {
     retryFile: path.join(WALNUT_HOME, 'local', 'host-server-tunnel-retries.json'),
     now: Date.now,
     // The tunnel handover follows what the host's server reports (expose-runtime.ts).
-    changed: noteHostViewForTunnel,
+    changed: (view) => {
+      noteHostViewForTunnel(view)
+      for (const fn of viewListeners) {
+        try { fn({ ...view }) } catch (err) { log.session.warn('host server: a view listener failed', { host: view.hostKey, error: err instanceof Error ? err.message : String(err) }) }
+      }
+    },
     // Stopping: the plugins are disposed before the hosts' links close, and a host must keep its tunnel.
     frozen: async () => (await import('../integration-registry.js')).registry.isClosing(),
     // A newer build waits for a quiet window before it goes to a host that works (update-hold.ts).

@@ -51,9 +51,7 @@
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import http from 'node:http'
 import path from 'node:path'
-import type { Duplex } from 'node:stream'
 import { log } from '../../logging/index.js'
 import { execNeedsBunBeBun } from '../../lib/runtime.js'
 import type { HostServerStatus } from '../../providers/host-server-core.js'
@@ -67,6 +65,7 @@ import {
   walnutDirs, walnutDirsScript,
 } from './install.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, heldNotice, updateHold } from './update-hold.js'
+import { requestOver } from './request-over.js'
 import { FOLLOWER_FLOORS, judgeFollowerRoom, roomProbeScript, type FollowerGateReason } from './eligibility.js'
 import { createTryLater, inWords, type TryLaterKind } from './try-later.js'
 import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
@@ -91,30 +90,6 @@ const FIRST_REPORT_MS = 60_000
 const REPORT_STALE_MS = 20_000
 const PORT_BASE = 41_000
 const PORT_SPAN = 9_000
-
-/** One HTTP request to the host server over a stream, answered as a fetch Response. */
-function requestOver(stream: Duplex, method: string, route: string, body: Buffer | null, timeoutMs: number): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const req = http.request({
-      method, path: route,
-      headers: { host: 'host-server', ...(body ? { 'content-type': 'application/json', 'content-length': body.length } : {}) },
-      createConnection: () => stream,
-      timeout: timeoutMs,
-    } as http.RequestOptions, (res) => {
-      const parts: Buffer[] = []
-      res.on('data', (c: Buffer) => parts.push(c))
-      res.on('end', () => {
-        const headers = new Headers()
-        for (const [k, v] of Object.entries(res.headers)) if (typeof v === 'string') headers.set(k, v)
-        resolve(new Response(Buffer.concat(parts), { status: res.statusCode ?? 502, headers }))
-      })
-      res.on('error', reject)
-    })
-    req.on('timeout', () => req.destroy(new Error(`the host server did not answer within ${Math.round(timeoutMs / 1000)}s`)))
-    req.on('error', reject)
-    req.end(body ?? undefined)
-  })
-}
 
 /** A file this server cannot make for the host waits for Retry or a newer build; any other failure of getting it is tried again later. */
 function noFileYet(err: unknown): never {
@@ -998,6 +973,11 @@ export function createHostServerManager(deps: ManagerDeps) {
     },
     reconcile,
     views: (): HostServerView[] => [...views.values()].map((v) => ({ ...v })),
+    /** The link to a host's daemon while it is connected (its streams reach the server there), else null. */
+    hostLink: (hostKey: string): HostServerHost | null => {
+      const h = hosts.get(hostKey)
+      return h?.connected ? h : null
+    },
     /**
      * The program this Mac configured on a host (the walnut file there and its arguments), or
      * null: the walnut MCP mount of a session that runs there (WP12), so a cold resume on

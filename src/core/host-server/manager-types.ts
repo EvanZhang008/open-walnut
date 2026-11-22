@@ -109,6 +109,8 @@ export interface HostServerView {
     daemon?: { state?: string; lastError?: string | null }
     /** The host's journal (its daemon's follower.status line), a replica's report only (WP14). */
     journal?: Record<string, unknown> | null
+    /** What the server itself can do (session-judge-v1: it runs and judges its sessions; session-channel/switch.ts). */
+    capabilities?: string[]
   } | null
   /**
    * The reported tunnel's `since` on this computer's clock (the host's clock may differ): its
