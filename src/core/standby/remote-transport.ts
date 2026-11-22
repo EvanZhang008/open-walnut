@@ -3,12 +3,15 @@
  * host"), reached through that host's daemon over Walnut's own link (src/core/hosts/link.ts):
  * no port, credential or daemon command of its own.
  *
- *   chunks     fs.writePart, one 1 MiB chunk a part: the daemon checks the part's sha256 (the
- *              chunk's name) and only then renames it into chunks/, so a chunk is there whole or
- *              not at all, and a batch cut off part way leaves every chunk it sent for the next
+ *   chunks     staged on this machine's disk first (remote-spool.ts: the batch reads at the disk's
+ *              pace, so its database pins end soon after its moment), then fs.writePart, one
+ *              1 MiB chunk a part: the daemon checks the part's sha256 (the chunk's name) and only
+ *              then renames it into chunks/, so a chunk is there whole or not at all, and a batch
+ *              cut off part way leaves every chunk it sent for the next
  *   the batch  an upload (BatchUpload: the files that differ from the target's batch) written
- *              into the target the same way, then `walnut standby receive apply` run there by
- *              `exec.script` (receive.ts): the same StandbyTarget.commit a local target runs
+ *              into the target the same way, then `walnut standby receive apply` run there as a
+ *              background job (remote-apply.ts, `exec.run`), followed through its status file:
+ *              the same StandbyTarget.commit a local target runs
  *   reads      `walnut standby receive init` (makes the target owner-only, finishes an apply a
  *              kill cut off, and exports its chunk list and current files when this side lacks
  *              them), read back with fs.readRange
@@ -26,8 +29,12 @@ import { promisify } from 'node:util'
 import { linkFailureKind, markLinkFailure } from '../../providers/link-failure.js'
 import { SCRIPT_MAX_TIMEOUT_MS } from '../../providers/host-script-core.js'
 import { runScriptOnHost } from '../hosts/host-script.js'
+import { HOST_EXEC_DETACH_CAPABILITY, workSurvives } from '../hosts/work-survives.js'
+import { statusFileName } from './apply-status.js'
 import { sha256 } from './chunks.js'
 import { INCOMING, RECEIVE_MARK, type ApplyAnswer, type InitAnswer, type ManifestRef, type TargetExport, type VerifyAnswer } from './receive.js'
+import { runApplyJob, type ApplyJobLink } from './remote-apply.js'
+import { ChunkSpool } from './remote-spool.js'
 import { chunkIds, type BatchFile, type BatchManifest, type BatchUpload, type CommitResult, type StandbyState, type StandbyTransport } from './types.js'
 
 const gzip = promisify(zlib.gzip)
@@ -50,11 +57,14 @@ export interface RemoteTargetOptions {
   linkWaitMs?: number
   /** Chunks in flight at once (default 8): enough to keep a slow link busy. */
   window?: number
-  /**
-   * Bytes of chunks held to send (default 256 MiB): the batch reads on while a slow link sends,
-   * so its files are read right after its moment and not as fast as the link allows.
-   */
-  bufferBytes?: number
+  /** Where chunks wait to go, on this machine (the home's `tmp/standby-spool`). */
+  spoolDir: string
+  /** Bytes the spool's disk keeps free (default: 2 GiB or 1% of the disk, the larger). */
+  spoolReserveBytes?: number
+  /** The spool disk's free and total bytes (tests). */
+  statfs?(dir: string): Promise<{ free: number; total: number }>
+  /** How often a running apply's status is read (default 2 s, then 5 s). */
+  applyPollMs?: number
   /** Variables for the receive runs there (tests: a kill point). */
   env?: Record<string, string>
 }
@@ -88,10 +98,14 @@ export interface RemoteStats {
   sentBytes: number
   /** How long the last apply ran there, its answer's way back included (ms). */
   lastApplyMs: number
+  /** Bytes staged in the spool, the most it held at once, and the time its writes took (ms). */
+  spooledBytes: number
+  spoolPeakBytes: number
+  spoolWriteMs: number
 }
 
 export class RemoteStandbyTarget implements StandbyTransport {
-  readonly stats: RemoteStats = { commands: 0, resent: 0, sentBytes: 0, lastApplyMs: 0 }
+  readonly stats: RemoteStats = { commands: 0, resent: 0, sentBytes: 0, lastApplyMs: 0, spooledBytes: 0, spoolPeakBytes: 0, spoolWriteMs: 0 }
   /** The last command gave up on a link that stayed down (the runner skips its retries then). */
   unreachable = false
   /** The last apply's answer (its verify pass and the drift reports waiting). */
@@ -102,13 +116,9 @@ export class RemoteStandbyTarget implements StandbyTransport {
   /** Chunk ids the target holds (null: not read yet, or dropped after a failure). */
   private held: Set<string> | null = null
   private viewed: { state: StandbyState; files: BatchFile[] } | null = null
-  /** Chunks waiting to go; `queuedBytes` counts them and those in flight. */
-  private queue: Array<{ id: string; data: Buffer }> = []
-  private queuedBytes = 0
-  private inflight = new Set<Promise<void>>()
-  private failed: unknown = null
+  /** Chunks waiting to go, on this machine's disk. */
+  private readonly spool: ChunkSpool
   private closed = false
-  private waiters: Array<() => void> = []
   private readonly dir: string
   private readonly incoming: string
 
@@ -116,6 +126,13 @@ export class RemoteStandbyTarget implements StandbyTransport {
     if (!path.isAbsolute(o.dir)) throw new Error(`the standby directory on the host must be absolute: ${o.dir}`)
     this.dir = path.resolve(o.dir)
     this.incoming = path.join(this.dir, INCOMING)
+    this.spool = new ChunkSpool({
+      root: o.spoolDir, window: o.window ?? 8, reserveBytes: o.spoolReserveBytes, statfs: o.statfs,
+      send: async (id, data) => {
+        await this.writeFile(path.join(this.dir, 'chunks', id.slice(0, 2), id), data)
+        this.held?.add(id)
+      },
+    })
   }
 
   private async conn(): Promise<DaemonLink> {
@@ -138,10 +155,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
   close(): void {
     if (this.closed) return
     this.closed = true
-    this.failed ??= closedError()
-    for (const q of this.queue) this.queuedBytes -= q.data.length
-    this.queue = []
-    this.notify()
+    this.spool.close(closedError())
   }
 
   private open(): void {
@@ -208,11 +222,33 @@ export class RemoteStandbyTarget implements StandbyTransport {
     return Buffer.concat(parts)
   }
 
+  /** The command line of `walnut standby receive <op>` there. */
+  private receiveArgv(op: string, args: string[]): string[] {
+    const env = Object.entries(this.o.env ?? {}).map(([k, v]) => `${k}=${v}`)
+    return [...(env.length ? ['env', ...env] : []), ...(this.o.walnut ?? ['walnut']), 'standby', 'receive', op, this.dir, ...args]
+  }
+
+  /** What the background apply needs of this link (remote-apply.ts). */
+  private jobLink(): ApplyJobLink {
+    return {
+      call: (cmd, params, timeoutMs) => this.call(cmd, params, timeoutMs),
+      readText: async (file) => {
+        try {
+          return (await this.readFile(file)).toString('utf8')
+        } catch (err) {
+          if (err instanceof RemoteRefusal && /\(ENOENT\)/.test(err.message)) return null
+          throw err
+        }
+      },
+      hasCapability: (name) => this.link?.hasCapability?.(name) ?? false,
+      detach: async () => workSurvives(await this.conn(), HOST_EXEC_DETACH_CAPABILITY),
+    }
+  }
+
   /** `walnut standby receive <op>` there; its JSON answer. */
   private async receive<T>(op: string, args: string[], timeoutMs = SHORT_RUN_MS): Promise<T> {
     this.open()
-    const env = Object.entries(this.o.env ?? {}).map(([k, v]) => `${k}=${v}`)
-    const argv = [...(env.length ? ['env', ...env] : []), ...(this.o.walnut ?? ['walnut']), 'standby', 'receive', op, this.dir, ...args]
+    const argv = this.receiveArgv(op, args)
     const run = await runScriptOnHost('standby', { script: 'exec "$@"\n', args: argv, timeoutMs, maxOutputBytes: 8 * 1024 * 1024 }, {
       dial: async () => this.conn(),
     }).catch((err) => { if (linkFailureKind(err)) this.link = null; throw err })
@@ -253,12 +289,9 @@ export class RemoteStandbyTarget implements StandbyTransport {
 
   async current(): Promise<{ state: StandbyState; files: BatchFile[] }> {
     // What a void batch left to send still goes (the next batch need not send it); a failure forgets what the target holds.
-    await this.settle()
+    await this.spool.settle()
     this.open()
-    if (this.failed) {
-      this.failed = null
-      this.reset()
-    }
+    if (this.spool.takeFailure()) this.reset()
     const exportTo = path.join(this.incoming, `export-${nonce()}.json.gz`)
     const args = ['--export', exportTo, '--files', ...(this.base ? ['--have-manifest', JSON.stringify(this.base.ref)] : []), ...(this.held ? [] : ['--chunks'])]
     const init = await this.receiveAgain<InitAnswer>('init', args)
@@ -280,60 +313,21 @@ export class RemoteStandbyTarget implements StandbyTransport {
     return new Set(ids.filter((id) => !this.held!.has(id)))
   }
 
-  private notify(): void {
-    const w = this.waiters
-    this.waiters = []
-    for (const wake of w) wake()
-  }
-
-  private changed(): Promise<void> {
-    return new Promise((resolve) => { this.waiters.push(resolve) })
-  }
-
-  /** Keep `window` chunks in flight from the queue; after a failure, drop the rest (the batch fails). */
-  private pump(): void {
-    while (!this.failed && this.inflight.size < (this.o.window ?? 8) && this.queue.length) {
-      const { id, data } = this.queue.shift()!
-      const p: Promise<void> = this.writeFile(path.join(this.dir, 'chunks', id.slice(0, 2), id), data)
-        .then(() => { this.held?.add(id) }, (err) => { this.failed ??= err })
-        .finally(() => {
-          this.inflight.delete(p)
-          this.queuedBytes -= data.length
-          this.pump()
-          this.notify()
-        })
-      this.inflight.add(p)
-    }
-    if (this.failed && this.queue.length) {
-      for (const q of this.queue) this.queuedBytes -= q.data.length
-      this.queue = []
-      this.notify()
-    }
-  }
-
   async putChunk(id: string, data: Buffer): Promise<void> {
     this.open()
-    // The caller may reuse its buffer once this returns.
-    const own = Buffer.from(data)
-    if (sha256(own) !== id) throw new Error(`chunk ${id} does not match its hash`)
-    const budget = this.o.bufferBytes ?? 256 * 1024 * 1024
-    while (!this.failed && this.queuedBytes > 0 && this.queuedBytes + own.length > budget) await this.changed()
-    if (this.failed) throw this.failed
-    this.queue.push({ id, data: own })
-    this.queuedBytes += own.length
-    this.pump()
+    if (sha256(data) !== id) throw new Error(`chunk ${id} does not match its hash`)
+    await this.spool.put(id, data)
+    this.stats.spooledBytes = this.spool.stats.spooledBytes
+    this.stats.spoolPeakBytes = this.spool.stats.peakBytes
+    this.stats.spoolWriteMs = this.spool.stats.writeMs
   }
 
-  /** Until nothing is queued or in flight (a failure drops the queue). */
-  private async settle(): Promise<void> {
-    while (this.queue.length || this.inflight.size) await this.changed()
-  }
-
-  /** Send every chunk held; throws the first one that failed (and forgets what the target holds). */
+  /** Send every chunk staged; throws the first one that failed (and forgets what the target holds). */
   async flush(): Promise<void> {
-    await this.settle()
+    await this.spool.settle()
     this.open()
-    if (this.failed) { const err = this.failed; this.failed = null; this.reset(); throw err }
+    const err = this.spool.takeFailure()
+    if (err) { this.reset(); throw err }
   }
 
   async commit(manifest: BatchManifest): Promise<CommitResult> {
@@ -359,8 +353,15 @@ export class RemoteStandbyTarget implements StandbyTransport {
     }
     let answer: ApplyAnswer
     const applyStarted = performance.now()
+    // One job id per batch: a start sent again never runs the apply twice (remote-apply.ts).
+    const jobId = `hx-standby-${sha256(Buffer.from(`${this.dir}\n${manifest.batch}\n${manifest.takenAt}\n${upload.hash}`)).slice(0, 40)}`
+    const statusFile = path.join(this.incoming, statusFileName(jobId))
     try {
-      answer = await this.receive<ApplyAnswer>('apply', ['--upload', file, '--verify'], SCRIPT_MAX_TIMEOUT_MS)
+      this.open()
+      answer = await runApplyJob<ApplyAnswer>(this.jobLink(), {
+        jobId, statusFile, pollMs: this.o.applyPollMs,
+        argv: this.receiveArgv('apply', ['--upload', file, '--verify', '--status', statusFile]),
+      })
       this.stats.lastApplyMs = performance.now() - applyStarted
     } catch (err) {
       // Its answer was lost (the link went) or it was refused: what the target holds now says which.

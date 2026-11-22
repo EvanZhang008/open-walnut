@@ -253,9 +253,10 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/tmp/usage-budgets/` | machine | no | Usage budgets as this machine's daemon holds them |
 | `~/.open-walnut/tmp/host-exec/` | machine | no | Commands run on this machine and their output |
 | `~/.open-walnut/tmp/host-vitals/` | machine | no | This machine's load and memory samples |
-| `~/.open-walnut/tmp/standby-staging/` | machine | no | A standby batch being staged on this machine, emptied after each batch |
+| `~/.open-walnut/tmp/standby-staging/` | machine | no | A standby batch being staged on this machine, emptied after each batch; one a killed process left is removed by the next batch |
 | `~/.open-walnut/tmp/ephemeral-slots/` | machine | no | Slots of the throwaway servers running here |
 | `~/.open-walnut/tmp/ephemeral-registry.json` | machine | no | The throwaway servers running here |
+| `~/.open-walnut/tmp/standby-spool/` | rebuildable | no | Chunks of a standby batch waiting to go to the standby host; a folder whose process is gone is removed by the next batch |
 | `~/.open-walnut/tmp/host-replica/` | rebuildable | no | This host's copies of the leader's stores |
 | `~/.open-walnut/tmp/host-server/` | rebuildable | no | Host server build packages |
 | `~/.open-walnut/tmp/plugin-jobs/` | rebuildable | no | Plugin job bundles |

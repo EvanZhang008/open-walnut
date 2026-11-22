@@ -9,7 +9,9 @@
  *   init      make the target (owner-only), finish an apply a kill cut off, and, when asked,
  *             export its chunk list and current files into `.incoming/` for the leader to read
  *   apply     make a batch current from an upload the leader wrote into `.incoming/` (a
- *             BatchUpload: the files that differ from this target's current batch), then verify
+ *             BatchUpload: the files that differ from this target's current batch), then verify;
+ *             run as a background job, it keeps its state in a status file (apply-status.ts),
+ *             and while it runs the other ops say the target is busy
  *   verify    find, save and repair direct edits of the copy (verify.ts)
  *   reported  mark one drift report as handed to Walnut Health
  *
@@ -20,6 +22,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { promisify } from 'node:util'
+import { refuseWhileApplying, withStatus } from './apply-status.js'
 import { CHUNK_ID, sha256 } from './chunks.js'
 import { reportPendingDrift, type DriftReport } from './drift.js'
 import { StandbyTarget, type CommitHooks } from './target.js'
@@ -146,14 +149,20 @@ export async function composeManifest(t: TargetPaths, upload: BatchUpload): Prom
   return manifest
 }
 
-export async function receiveApply(dir: string, uploadFile: string, opts: { verify?: boolean; hooks?: CommitHooks } = {}): Promise<ApplyAnswer> {
+export async function receiveApply(dir: string, uploadFile: string, opts: { verify?: boolean; hooks?: CommitHooks; status?: string } = {}): Promise<ApplyAnswer> {
+  const t = new StandbyTarget(dir).t
+  if (!opts.status) return applyNow(dir, incomingFile(t, uploadFile), opts, () => {})
+  return withStatus(incomingFile(t, opts.status), (setBatch) => applyNow(dir, incomingFile(t, uploadFile), opts, setBatch))
+}
+
+async function applyNow(dir: string, file: string, opts: { verify?: boolean; hooks?: CommitHooks }, setBatch: (n: number) => void): Promise<ApplyAnswer> {
   const target = new StandbyTarget(dir)
   const t = target.t
-  const file = incomingFile(t, uploadFile)
   try {
     // Owner-only again before anything is built (a target removed since the batch's init was made by fs.writePart).
     await target.init()
     const upload = JSON.parse((await gunzip(await fs.readFile(file))).toString('utf8')) as BatchUpload
+    setBatch(upload.head.batch)
     const manifest = await composeManifest(t, upload)
     const commit = await target.commit(manifest, opts.hooks)
     const answer: ApplyAnswer = { commit, manifest: await manifestRef(t, await readState(t)) }
@@ -184,6 +193,8 @@ export interface ReceiveOptions {
   /** JSON of a ManifestRef. */
   haveManifest?: string
   upload?: string
+  /** apply: the status file (in `.incoming/`) a background run keeps its state in. */
+  status?: string
   verify?: boolean
   deep?: boolean
   at?: string
@@ -196,12 +207,14 @@ export interface ReceiveOptions {
  */
 export async function runReceiveOp(op: string, dir: string, o: ReceiveOptions, home?: string): Promise<unknown> {
   await checkTargetPlace(home ?? (await import('../../constants.js')).WALNUT_HOME, dir)
+  // An apply running there holds the target's lock for as long as it runs: say so at once.
+  if (op !== 'apply') await refuseWhileApplying(path.join(path.resolve(dir), INCOMING))
   if (op === 'init') {
     return receiveInit(dir, { exportTo: o.export, chunks: o.chunks, files: o.files, haveManifest: o.haveManifest ? JSON.parse(o.haveManifest) as ManifestRef : null })
   }
   if (op === 'apply') {
     if (!o.upload) throw new Error('--upload <file> is required')
-    return receiveApply(dir, o.upload, { verify: o.verify })
+    return receiveApply(dir, o.upload, { verify: o.verify, status: o.status })
   }
   if (op === 'verify') return receiveVerify(dir, { deep: o.deep })
   if (op === 'reported') {

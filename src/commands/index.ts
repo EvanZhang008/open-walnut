@@ -217,6 +217,7 @@ export function registerCommands(program: Command): void {
     .option('--have-manifest <json>', 'init: skip the files when the current manifest is still this one')
     .option('--upload <file>', 'apply: the batch upload in the target\'s .incoming/')
     .option('--verify', 'apply: run a verify pass after the batch')
+    .option('--status <file>', 'apply: keep the run\'s state in this file of the target\'s .incoming/ (a background run)')
     .option('--deep', 'verify: hash every file')
     .option('--at <time>', 'reported: the drift report handed to Walnut Health')
     .action(async (op: string, dir: string, options: Record<string, unknown>) => {

@@ -149,7 +149,7 @@ function slowLink(connect: () => Promise<DaemonLink>, mbit: number, downMbit: nu
 async function chunkCost(connect: () => Promise<DaemonLink>, dir: string, walnut: string[]): Promise<{ oneAtATimeMs: number; eightAtOnceMs: number }> {
   const timeIt = async (n: number, window: number) => {
     // One at a time: no chunk is held beyond the one being sent.
-    const t = new RemoteStandbyTarget({ connect, dir, walnut, window, ...(window === 1 ? { bufferBytes: 1 } : {}) })
+    const t = new RemoteStandbyTarget({ connect, dir, walnut, window, spoolDir: path.join(path.dirname(dir), 'spool') })
     await t.current()
     const chunks = Array.from({ length: n }, () => rnd(1024 * 1024))
     const started = performance.now()
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
     const slow = slowLink(() => twin!.connect(), MBIT, DOWN_MBIT, RTT_MS)
     wire = slow.wire
     slowSwitch = slow.slow
-    remote = new RemoteStandbyTarget({ connect: slow.connect, dir: target, walnut, linkWaitMs: 10 * 60_000 })
+    remote = new RemoteStandbyTarget({ connect: slow.connect, dir: target, walnut, linkWaitMs: 10 * 60_000, spoolDir: path.join(home, 'tmp', 'standby-spool') })
     result.link = { mbitUp: MBIT, mbitDown: DOWN_MBIT, rttMs: RTT_MS }
     const probeDir = path.join(work, 'probe-target')
     await removeTree(probeDir)
@@ -211,8 +211,8 @@ async function main(): Promise<void> {
   const first = await oneBatch()
   if (!first.ok) throw new Error(`first batch void: ${first.reason}`)
   result.firstBatch = {
-    totalMs: Math.round(first.stats.totalMs), holdMs: Math.round(first.stats.holdMs), sentGB: +(first.stats.sentBytes / 1024 ** 3).toFixed(2), files: first.stats.files,
-    ...(remote ? { applyMs: Math.round(remote.stats.lastApplyMs), commands: commands() - c0, wireUpGB: +((wireMB()!.up - w0!.up) / 1024 ** 3).toFixed(2), wireDownMB: +((wireMB()!.down - w0!.down) / 1024 ** 2).toFixed(1) } : {}),
+    totalMs: Math.round(first.stats.totalMs), holdMs: Math.round(first.stats.holdMs), pinMs: Math.round(first.stats.pinMs), sentGB: +(first.stats.sentBytes / 1024 ** 3).toFixed(2), files: first.stats.files,
+    ...(remote ? { applyMs: Math.round(remote.stats.lastApplyMs), spoolPeakGB: +(remote.stats.spoolPeakBytes / 1024 ** 3).toFixed(2), spoolWriteMs: Math.round(remote.stats.spoolWriteMs), commands: commands() - c0, wireUpGB: +((wireMB()!.up - w0!.up) / 1024 ** 3).toFixed(2), wireDownMB: +((wireMB()!.down - w0!.down) / 1024 ** 2).toFixed(1) } : {}),
   }
   log('first batch', result.firstBatch)
   if (slowSwitch) slowSwitch.on = true
@@ -245,6 +245,7 @@ async function main(): Promise<void> {
     const wireUp: number[] = []
     const cmds: number[] = []
     const applies: number[] = []
+    const pins: number[] = []
     for (let b = 0; b < BATCHES; b++) {
       const w0 = diskWrites()
       const u0 = wireMB()
@@ -257,6 +258,7 @@ async function main(): Promise<void> {
       scansInc.push(out.stats.scanMs)
       if (!out.ok) { voids++; reasons.push(out.reason.slice(0, 120)); continue }
       totals.push(out.stats.totalMs)
+      pins.push(out.stats.pinMs)
       if (remote) applies.push(remote.stats.lastApplyMs)
       sent.push(out.stats.sentBytes)
       handWritten.push(out.commit.bytesWritten ?? 0)
@@ -269,6 +271,7 @@ async function main(): Promise<void> {
       namesInHoldMs: { p50: q(names, 0.5), max: Math.round(Math.max(...names)) },
       scanMs: { p50: q(scansInc, 0.5), max: Math.round(Math.max(...scansInc)) },
       totalMs: totals.length ? { p50: q(totals, 0.5), p95: q(totals, 0.95), max: Math.round(Math.max(...totals)) } : null,
+      pinMs: pins.length ? { p50: q(pins, 0.5), max: Math.round(Math.max(...pins)) } : null,
       sentMB: sent.length ? { p50: +(q(sent, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...sent) / 1024 ** 2).toFixed(1) } : null,
       patchedFiles: patched,
       copyWrittenMB: handWritten.length ? { p50: +(q(handWritten, 0.5) / 1024 ** 2).toFixed(1), max: +(Math.max(...handWritten) / 1024 ** 2).toFixed(1) } : null,

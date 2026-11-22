@@ -144,6 +144,8 @@ describe('standby runner', () => {
     expect(host.log.some((e) => e.cmd === 'receive apply' || e.cmd === 'receive verify')).toBe(false)
     expect(notices).toEqual([])
     expect(writeGateEnabled()).toBe(false)
+    // Its chunks waited on this machine's disk, in the home's scratch: all gone with it.
+    expect(fs.readdirSync(path.join(sb.home, 'tmp', 'standby-spool'))).toEqual([])
   }, 60_000)
 
   it('a standby host out of reach is reported behind once, with the last batch known there, without waiting out each step', async () => {

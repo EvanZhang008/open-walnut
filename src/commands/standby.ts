@@ -69,7 +69,7 @@ export async function runStandbyReceive(op: string, dir: string, options: Record
   try {
     const answer = await runReceiveOp(op, dir, {
       export: str('export'), chunks: options.chunks === true, files: options.files === true, haveManifest: str('haveManifest'),
-      upload: str('upload'), verify: options.verify === true, deep: options.deep === true, at: str('at'),
+      upload: str('upload'), status: str('status'), verify: options.verify === true, deep: options.deep === true, at: str('at'),
     })
     console.log(RECEIVE_MARK + JSON.stringify(answer))
   } catch (err) {

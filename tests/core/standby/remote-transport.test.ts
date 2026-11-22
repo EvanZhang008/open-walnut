@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { RemoteStandbyTarget } from '../../../src/core/standby/remote-transport.js'
 import { composeManifest, runReceiveOp } from '../../../src/core/standby/receive.js'
+import { runningApply } from '../../../src/core/standby/apply-status.js'
 import { fakeStandbyHost } from './fake-standby-host.js'
 
 const sha256Hex = (d: Buffer) => crypto.createHash('sha256').update(d).digest('hex')
@@ -29,8 +30,16 @@ afterEach(async () => {
 })
 const settle = () => new Promise((r) => setTimeout(r, 30))
 
+/** Where every target here keeps its spool, and a quick poll of its apply. */
+const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 20 })
+const spoolFiles = () => walkFiles(path.join(sb.root, 'spool'))
+function walkFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return []
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(path.join(dir, e.name)) : [path.join(dir, e.name)]))
+}
+
 function remote(l: ReturnType<typeof fakeStandbyHost>, o: { linkWaitMs?: number } = {}) {
-  return new RemoteStandbyTarget({ connect: async () => l.link, dir: sb.target, linkWaitMs: o.linkWaitMs ?? 5_000 })
+  return new RemoteStandbyTarget({ connect: async () => l.link, ...place(), linkWaitMs: o.linkWaitMs ?? 5_000 })
 }
 
 const batch = (t: RemoteStandbyTarget) => takeBatch({ home: sb.home, transport: t, stagingDir: path.join(sb.root, 'staging') })
@@ -64,9 +73,10 @@ describe('a standby target on another host', () => {
     expect(second.ok, second.ok ? '' : second.reason).toBe(true)
     if (!second.ok) return
     expect(second.commit).toMatchObject({ batch: 2, written: 1, deleted: 1, unchanged: false })
-    // One new chunk and the upload; the target's files were not read again (this side holds them).
+    // One new chunk and the upload; the target's files were not read again (this side holds them):
+    // what was read is the init's small export and the apply's status.
     expect(chunkWrites(l, mark)).toBe(2)
-    expect(l.log.slice(mark).filter((e) => e.cmd === 'fs.readRange').reduce((n, e) => n + e.bytes, 0)).toBeLessThan(200)
+    expect(l.log.slice(mark).filter((e) => e.cmd === 'fs.readRange' && !e.path?.endsWith('.status.json')).reduce((n, e) => n + e.bytes, 0)).toBeLessThan(200)
     await expectCopyIsHome()
     expect(fs.existsSync(path.join(sb.target, 'copy/user-own-folder/plan.md'))).toBe(false)
 
@@ -138,18 +148,90 @@ describe('a standby target on another host', () => {
     expect(fs.existsSync(orphan)).toBe(false)
   })
 
-  it('an apply whose answer was lost is judged by what the target holds', async () => {
+  it('an apply started as a job whose start answer was lost runs once: the start sent again finds its job', async () => {
     sb = await sandbox('remote-lost-apply')
     dbs.push(...seedHome(sb.home).dbs)
     await settle()
     const l = fakeStandbyHost(sb.root)
-    l.state.fault = (cmd, params) => (cmd === 'exec.script' && (params.args as string[])[3] === 'apply' ? 'lost-after' : undefined)
+    let starts = 0
+    l.state.fault = (cmd, params) => (cmd === 'exec.run' && (params.argv as string[])[3] === 'apply' && ++starts === 1 ? 'lost-after' : undefined)
     const t = remote(l)
     const out = await batch(t)
     expect(out.ok, out.ok ? '' : out.reason).toBe(true)
     expect((await standbyStatus(sb.target)).batch).toBe(1)
-    // Only one apply ran: a lost apply is never sent again.
-    expect(l.log.filter((e) => e.cmd === 'receive apply')).toHaveLength(1)
+    // The start went twice; the apply ran once.
+    expect(l.log.filter((e) => e.cmd === 'receive apply')).toHaveLength(2)
+    expect(l.state.applyRuns).toBe(1)
+    expect(l.log.some((e) => e.cmd === 'exec.read')).toBe(true)
+    await expectCopyIsHome()
+  })
+
+  it('an apply whose status could not be read is judged by what the target holds', async () => {
+    sb = await sandbox('remote-lost-status')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    l.state.fault = (cmd, params) => (cmd === 'fs.readRange' && String(params.path).endsWith('.status.json') ? 'lost-before' : undefined)
+    const out = await batch(remote(l, { linkWaitMs: 300 }))
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(l.state.applyRuns).toBe(1)
+    expect((await standbyStatus(sb.target)).batch).toBe(1)
+  })
+
+  it('an apply job that ended without an answer fails the batch, and the target keeps the batch before', async () => {
+    sb = await sandbox('remote-apply-gone')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    const t = remote(l)
+    expect((await batch(t)).ok).toBe(true)
+    write(sb.home, 'memory/MEMORY.md', '# second version\n')
+    await settle()
+    // The job starts, then ends at once as a kill there would end it: no status, no answer.
+    l.state.fault = (cmd, params) => {
+      if (cmd !== 'exec.run' || (params.argv as string[])[3] !== 'apply') return undefined
+      l.jobs.set(String(params.jobId), { running: false, exitCode: 137, output: 'Killed' })
+      return { ok: true, jobId: params.jobId, running: true }
+    }
+    const out = await batch(t)
+    expect(out.ok).toBe(false)
+    expect(!out.ok && out.reason).toMatch(/ended without an answer \(exit 137: Killed\)/)
+    expect((await standbyStatus(sb.target)).batch).toBe(1)
+    l.state.fault = null
+    expect((await batch(t)).ok).toBe(true)
+    await expectCopyIsHome()
+  })
+
+  it('while an apply runs there the other ops say the target is busy, and a second leader goes on from the batch it made', async () => {
+    sb = await sandbox('remote-busy')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    expect((await batch(remote(l))).ok).toBe(true)
+    write(sb.home, 'memory/MEMORY.md', '# second version\n')
+    await settle()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    l.state.applyPoint = async (name) => { if (name === 'files-built') await gate }
+    const first = batch(remote(l))
+    const incoming = path.join(sb.target, '.incoming')
+    for (let i = 0; i < 500 && (await runningApply(incoming))?.batch !== 2; i++) await new Promise((r) => setTimeout(r, 20))
+    expect((await runningApply(incoming))?.batch).toBe(2)
+    // A leader started meanwhile (a restart): its read is refused at once, not after the target's lock.
+    const started = Date.now()
+    const second = remote(l)
+    const busy = await batch(second)
+    expect(busy.ok).toBe(false)
+    expect(!busy.ok && busy.reason).toMatch(/the target is busy: an apply of batch 2 runs there/)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    release()
+    expect((await first).ok).toBe(true)
+    l.state.applyPoint = null
+    write(sb.home, 'memory/MEMORY.md', '# third version\n')
+    await settle()
+    const next = await batch(second)
+    expect(next.ok && next.commit.batch).toBe(3)
+    expect(l.state.applyRuns).toBe(3)
     await expectCopyIsHome()
   })
 
@@ -241,31 +323,6 @@ describe('a file put back to an old version', () => {
 })
 
 describe('sending chunks', () => {
-  it('holds chunks to send so the batch reads on, up to its buffer, and flush waits for them', async () => {
-    sb = await sandbox('remote-buffer')
-    const l = fakeStandbyHost(sb.root)
-    let open!: () => void
-    const gate = new Promise<void>((r) => { open = r })
-    l.state.fault = () => undefined
-    const slow = { ...l.link, send: async (cmd: string, params?: Record<string, unknown>, ms?: number) => { if (cmd === 'fs.writePart') await gate; return l.link.send(cmd, params, ms) } }
-    const chunk = (n: number) => { const d = Buffer.alloc(1024 * 1024, n); return { id: sha256Hex(d), d } }
-    const t = new RemoteStandbyTarget({ connect: async () => slow, dir: sb.target, bufferBytes: 2 * 1024 * 1024 })
-    await t.current()
-    const [a, b, c] = [chunk(1), chunk(2), chunk(3)]
-    // Two fit the buffer: they return before anything was sent.
-    await t.putChunk(a.id, a.d)
-    await t.putChunk(b.id, b.d)
-    // The third waits for room.
-    let third = false
-    const p = t.putChunk(c.id, c.d).then(() => { third = true })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(third).toBe(false)
-    open()
-    await p
-    await t.flush()
-    for (const x of [a, b, c]) expect(fs.existsSync(path.join(sb.target, 'chunks', x.id.slice(0, 2), x.id))).toBe(true)
-  })
-
   const chunk = (n: number) => { const d = Buffer.alloc(1024 * 1024, n); return { id: sha256Hex(d), d } }
   const onTarget = (id: string) => fs.existsSync(path.join(sb.target, 'chunks', id.slice(0, 2), id))
   /** A link whose chunk writes wait for `open()` and are counted as they start. */
@@ -288,28 +345,67 @@ describe('sending chunks', () => {
     return g
   }
 
-  it('a chunk refused there drops the rest of the queue, wakes a put waiting for room, and the next read starts clean', async () => {
+  it('stages chunks on this machine\'s disk so a put never waits for the link, and flush waits for them', async () => {
+    sb = await sandbox('remote-spool')
+    const l = fakeStandbyHost(sb.root)
+    const g = gatedChunks(l)
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, ...place() })
+    await t.current()
+    const ids = Array.from({ length: 12 }, (_, i) => chunk(i))
+    for (const x of ids) await t.putChunk(x.id, x.d)
+    // Every put returned with the link held: eight on the wire, every one on disk here until it went.
+    expect(g.started).toBe(8)
+    expect(spoolFiles()).toHaveLength(12)
+    let flushed = false
+    const done = t.flush().then(() => { flushed = true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(flushed).toBe(false)
+    g.open()
+    await done
+    expect(ids.every((x) => onTarget(x.id))).toBe(true)
+    // Each chunk's file went once the host had it.
+    expect(spoolFiles()).toEqual([])
+    expect(t.stats.spoolPeakBytes).toBe(12 * 1024 * 1024)
+  })
+
+  it('a chunk that would leave the disk with less than its reserve is refused, and nothing more is staged', async () => {
+    sb = await sandbox('remote-spool-full')
+    const l = fakeStandbyHost(sb.root)
+    const g = gatedChunks(l)
+    let used = 0
+    const t = new RemoteStandbyTarget({
+      connect: async () => g.link, ...place(), spoolReserveBytes: 100 * 1024 * 1024,
+      // 103 MiB free at first: room for three chunks above the reserve.
+      statfs: async () => ({ free: 103 * 1024 * 1024 - used, total: 1024 ** 4 }),
+    })
+    await t.current()
+    const ids = Array.from({ length: 5 }, (_, i) => chunk(40 + i))
+    for (const x of ids.slice(0, 3)) { await t.putChunk(x.id, x.d); used += x.d.length }
+    await expect(t.putChunk(ids[3].id, ids[3].d)).rejects.toThrow(/keeps free: the batch is void/)
+    expect(spoolFiles()).toHaveLength(3)
+    // What was staged still goes.
+    g.open()
+    await t.flush()
+    expect(ids.slice(0, 3).every((x) => onTarget(x.id))).toBe(true)
+    expect(onTarget(ids[3].id)).toBe(false)
+  })
+
+  it('a chunk refused there drops the rest of the queue and its files, and the next read starts clean', async () => {
     sb = await sandbox('remote-queue-fail')
     const l = fakeStandbyHost(sb.root)
     const g = gatedChunks(l, (n) => n === 1 ? { ok: false, error: 'fs.writePart failed: ENOSPC', code: 'io' } : undefined)
-    const t = new RemoteStandbyTarget({ connect: async () => g.link, dir: sb.target, bufferBytes: 3 * 1024 * 1024, window: 1 })
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, ...place(), window: 1 })
     await t.current()
     const ids = Array.from({ length: 6 }, (_, i) => chunk(i))
-    // One in flight, two queued: the buffer is full, so the fourth put waits for room.
-    for (const x of ids.slice(0, 3)) await t.putChunk(x.id, x.d)
-    let woke = false
-    const waiting = t.putChunk(ids[3].id, ids[3].d).finally(() => { woke = true })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(woke).toBe(false)
+    for (const x of ids.slice(0, 4)) await t.putChunk(x.id, x.d)
     g.open()
-    // The refusal wakes it with the error, and every later put and the flush say the same.
-    await expect(waiting).rejects.toThrow(/ENOSPC/)
-    await expect(t.putChunk(ids[4].id, ids[4].d)).rejects.toThrow(/ENOSPC/)
+    // The refusal fails the flush, and every later put says the same until the next read.
     await expect(t.flush()).rejects.toThrow(/ENOSPC/)
-    // The two queued behind it were dropped, never sent.
+    await new Promise((r) => setTimeout(r, 50))
+    // The three queued behind it were dropped, never sent, and their files are gone.
     expect(g.started).toBe(1)
     expect(ids.some((x) => onTarget(x.id))).toBe(false)
-    // The next read starts clean: it reads the chunk list there again and a new put goes through.
+    expect(spoolFiles()).toEqual([])
     await t.current()
     expect((await t.missing(ids.map((x) => x.id))).size).toBe(6)
     await t.putChunk(ids[5].id, ids[5].d)
@@ -317,11 +413,23 @@ describe('sending chunks', () => {
     expect(onTarget(ids[5].id)).toBe(true)
   })
 
+  it('a put after a chunk failed throws that failure', async () => {
+    sb = await sandbox('remote-queue-fail-put')
+    const l = fakeStandbyHost(sb.root)
+    const g = gatedChunks(l, (n) => n === 1 ? { ok: false, error: 'fs.writePart failed: ENOSPC', code: 'io' } : undefined)
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, ...place(), window: 1 })
+    await t.current()
+    await t.putChunk(chunk(60).id, chunk(60).d)
+    g.open()
+    await new Promise((r) => setTimeout(r, 50))
+    await expect(t.putChunk(chunk(61).id, chunk(61).d)).rejects.toThrow(/ENOSPC/)
+  })
+
   it('what a void batch left to send goes before the next read, and is not sent again', async () => {
     sb = await sandbox('remote-queue-leftover')
     const l = fakeStandbyHost(sb.root)
     const g = gatedChunks(l)
-    const t = new RemoteStandbyTarget({ connect: async () => g.link, dir: sb.target, window: 2 })
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, ...place(), window: 2 })
     await t.current()
     const ids = Array.from({ length: 4 }, (_, i) => chunk(10 + i))
     for (const x of ids) await t.putChunk(x.id, x.d)
@@ -336,27 +444,79 @@ describe('sending chunks', () => {
     expect(g.started).toBe(4)
   })
 
-  it('closed, it drops what waits to go and sends nothing more', async () => {
+  it('closed, it drops what waits to go, removes its files and sends nothing more', async () => {
     sb = await sandbox('remote-queue-close')
     const l = fakeStandbyHost(sb.root)
     const g = gatedChunks(l)
-    const t = new RemoteStandbyTarget({ connect: async () => g.link, dir: sb.target, window: 2, bufferBytes: 6 * 1024 * 1024 })
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, ...place(), window: 2 })
     await t.current()
-    const ids = Array.from({ length: 7 }, (_, i) => chunk(20 + i))
-    for (const x of ids.slice(0, 6)) await t.putChunk(x.id, x.d)
+    const ids = Array.from({ length: 6 }, (_, i) => chunk(20 + i))
+    for (const x of ids) await t.putChunk(x.id, x.d)
     expect(g.started).toBe(2)
-    // The buffer is full: this put waits for room, and the close refuses it.
-    const waiting = t.putChunk(ids[6].id, ids[6].d)
     t.close()
     g.open()
-    await expect(waiting).rejects.toThrow(/closed/)
     await new Promise((r) => setTimeout(r, 100))
     // Only the two already on the wire finished there.
     expect(g.started).toBe(2)
     expect(ids.filter((x) => onTarget(x.id)).length).toBe(2)
+    expect(spoolFiles()).toEqual([])
+    expect(fs.readdirSync(path.join(sb.root, 'spool'))).toEqual([])
     await expect(t.putChunk(ids[0].id, ids[0].d)).rejects.toThrow(/closed/)
     await expect(t.current()).rejects.toThrow(/closed/)
     await expect(t.verify()).rejects.toThrow(/closed/)
+  })
+
+  it('a spool or a staging folder a killed leader left is removed by the next batch; a live one stays', async () => {
+    sb = await sandbox('remote-spool-leftover')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    // 2147483646 is past any pid_max: no process has it.
+    const deadSpool = path.join(sb.root, 'spool', '2147483646-0a1b2c3d')
+    const liveSpool = path.join(sb.root, 'spool', `${process.pid}-feedf00d`)
+    const deadStaging = path.join(sb.root, 'staging', 'batch-2147483646-1')
+    for (const d of [deadSpool, liveSpool, deadStaging]) { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'x'), 'left') }
+    expect((await batch(remote(l))).ok).toBe(true)
+    expect(fs.existsSync(deadSpool)).toBe(false)
+    expect(fs.existsSync(deadStaging)).toBe(false)
+    expect(fs.existsSync(liveSpool)).toBe(true)
+  })
+})
+
+describe('a batch over a slow link', () => {
+  it('reads every file and ends its database pins while the link still holds every chunk', async () => {
+    sb = await sandbox('remote-pin-early')
+    dbs.push(...seedHome(sb.home).dbs)
+    write(sb.home, 'big/more.bin', crypto.randomBytes(12 * 1024 * 1024))
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const slow = { ...l.link, async send(cmd: string, params?: Record<string, unknown>, ms?: number) {
+      if (cmd === 'fs.writePart' && String(params?.path).includes('/chunks/')) await gate
+      return l.link.send(cmd, params, ms)
+    } }
+    const t = new RemoteStandbyTarget({ connect: async () => slow, ...place() })
+    let committing = 0
+    const out = takeBatch({
+      home: sb.home, stagingDir: path.join(sb.root, 'staging'),
+      transport: { current: () => t.current(), missing: (ids) => t.missing(ids), putChunk: (id, d) => t.putChunk(id, d), commit: (m) => { committing = performance.now(); return t.commit(m) } },
+    })
+    const heldFrom = performance.now()
+    for (let i = 0; i < 500 && !committing; i++) await new Promise((r) => setTimeout(r, 10))
+    // The batch reached its commit, its pins ended, with not one chunk through the link.
+    expect(committing).toBeGreaterThan(0)
+    expect(fs.existsSync(path.join(sb.target, 'chunks'))).toBe(true)
+    expect(fs.readdirSync(path.join(sb.target, 'chunks')).length).toBe(0)
+    expect(spoolFiles().length).toBeGreaterThan(12)
+    await new Promise((r) => setTimeout(r, 300))
+    const heldMs = performance.now() - heldFrom
+    release()
+    const done = await out
+    expect(done.ok, done.ok ? '' : done.reason).toBe(true)
+    expect(done.stats.pinMs).toBeLessThan(heldMs - 300)
+    await expectCopyIsHome()
+    expect(spoolFiles()).toEqual([])
   })
 })
 

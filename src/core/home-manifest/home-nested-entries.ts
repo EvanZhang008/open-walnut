@@ -148,10 +148,11 @@ const TMP_ENTRIES: readonly HomeEntry[] = [
   mach('tmp.usage-budgets', 'tmp/usage-budgets', 'dir', 'Usage budgets as this machine\'s daemon holds them'),
   mach('tmp.host-exec', 'tmp/host-exec', 'dir', 'Commands run on this machine and their output'),
   mach('tmp.host-vitals', 'tmp/host-vitals', 'dir', 'This machine\'s load and memory samples'),
-  mach('tmp.standby-staging', 'tmp/standby-staging', 'dir', 'A standby batch being staged on this machine, emptied after each batch'),
+  mach('tmp.standby-staging', 'tmp/standby-staging', 'dir', 'A standby batch being staged on this machine, emptied after each batch; one a killed process left is removed by the next batch'),
   mach('tmp.ephemeral-slots', 'tmp/ephemeral-slots', 'dir', 'Slots of the throwaway servers running here'),
   mach('tmp.ephemeral-registry', 'tmp/ephemeral-registry.json', 'file', 'The throwaway servers running here'),
   // Rebuilt or fetched again.
+  rebuild('tmp.standby-spool', 'tmp/standby-spool', 'dir', 'Chunks of a standby batch waiting to go to the standby host; a folder whose process is gone is removed by the next batch'),
   rebuild('tmp.host-replica', 'tmp/host-replica', 'dir', 'This host\'s copies of the leader\'s stores'),
   rebuild('tmp.host-server', 'tmp/host-server', 'dir', 'Host server build packages'),
   rebuild('tmp.plugin-jobs', 'tmp/plugin-jobs', 'dir', 'Plugin job bundles'),

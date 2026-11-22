@@ -72,7 +72,8 @@ function localSite(home: string, dir: string): StandbySite {
 }
 
 function remoteSite(home: string, host: string, dir: string, walnut: string[] | undefined, connect: (host: string) => Promise<DaemonLink>, linkWaitMs?: number): StandbySite {
-  const target = new RemoteStandbyTarget({ connect: () => connect(host), dir, walnut, ...(linkWaitMs ? { linkWaitMs } : {}) })
+  // Chunks wait to go in the home's rebuildable scratch (remote-spool.ts), never in memory.
+  const target = new RemoteStandbyTarget({ connect: () => connect(host), dir, walnut, spoolDir: path.join(home, 'tmp', 'standby-spool'), ...(linkWaitMs ? { linkWaitMs } : {}) })
   return {
     label: `${host}:${dir}`,
     // The home's own scratch (tmp/ is rebuildable): staging never reaches the copy.

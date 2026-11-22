@@ -26,6 +26,7 @@ import { markAppendOnly, stagePrefix, type AppendMark } from './append-only.js'
 import type { ChunkSink, FileDigest } from './chunks.js'
 import { DB_NAME, limiter, scanHome, sameStat, toSourceStat, type ScanEntry } from './scan.js'
 import { namesAtMoment, type MomentNames } from './moment-names.js'
+import { STAGING_NAME, removeDeadOwners } from './scratch.js'
 import { openPinWorker, type Pin, type PinWorker } from './sqlite-pin.js'
 import { stageFile, type StageContext, type StageOutcome } from './stage.js'
 import { STANDBY_FORMAT, STANDBY_VERSION, chunkIds, compareBatchPaths, type BatchFile, type BatchManifest, type CommitResult, type SourceStat, type StandbyTransport } from './types.js'
@@ -60,6 +61,8 @@ export interface BatchStats {
   rescanMs: number
   holdMs: number
   drainMs: number
+  /** From the databases' pins to their end: the leader's WAL cannot be checkpointed past them meanwhile. */
+  pinMs: number
   totalMs: number
   files: number
   databases: number
@@ -130,11 +133,13 @@ async function fsClock(stagingDir: string, home: string): Promise<number> {
 
 export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
   const started = performance.now()
-  const stats: BatchStats = { scanMs: 0, rescanMs: 0, holdMs: 0, drainMs: 0, totalMs: 0, files: 0, databases: 0, stagedFiles: 0, stagedBytes: 0, sentChunks: 0, sentBytes: 0, pinAttempts: 0, namesMs: 0, appendFallbacks: 0 }
+  const stats: BatchStats = { scanMs: 0, rescanMs: 0, holdMs: 0, drainMs: 0, pinMs: 0, totalMs: 0, files: 0, databases: 0, stagedFiles: 0, stagedBytes: 0, sentChunks: 0, sentBytes: 0, pinAttempts: 0, namesMs: 0, appendFallbacks: 0 }
   const settleMs = opts.settleMs ?? 15
   const stagingDir = path.join(opts.stagingDir, `batch-${process.pid}-${Date.now()}`)
   let worker: PinWorker | null = null
   try {
+    // What a batch of a process that is gone left here (a leader killed mid-batch).
+    await removeDeadOwners(opts.stagingDir, STAGING_NAME)
     const { state, files: prevFiles } = await opts.transport.current()
     const prev = new Map(prevFiles.map((f) => [f.p, f]))
 
@@ -188,6 +193,8 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
     const pinner: PinWorker = worker
     const dbStatAll = () => Promise.all(dbs.map(async (d) => [d.p, await databaseStat(path.join(opts.home, d.p))] as const))
     let pin: Pin | null = null
+    /** When the pins were taken (performance clock): stats.pinMs runs from here to their end. */
+    let pinnedFrom = 0
     /** The moment, on the filesystem's own clock (fsClock). */
     let fsMoment = 0
     let names: MomentNames | null = null
@@ -214,6 +221,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       for (const d of dbs) if (dbStats.get(d.p)!.i !== d.st.i) throw new VoidBatch(`database ${d.p} was replaced around the batch's moment`)
       try {
         pin = await pinner.pin()
+        pinnedFrom = performance.now()
       } catch (err) {
         throw new VoidBatch(`databases cannot be pinned: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -336,6 +344,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       out.set(d.p, fileEntry(d.p, dig.size, dig.h, dig.chunks, false, src, true))
     }
     await pinner.close()
+    stats.pinMs = performance.now() - pinnedFrom
 
     // 6. commit (every chunk was sent as it was read)
     const manifest: BatchManifest = {

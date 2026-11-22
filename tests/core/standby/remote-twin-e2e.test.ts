@@ -13,6 +13,8 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { RemoteStandbyTarget } from '../../../src/core/standby/remote-transport.js'
+import { markLinkFailure } from '../../../src/providers/link-failure.js'
+import { runningApply } from '../../../src/core/standby/apply-status.js'
 import { standbyStatus, takeBatch, verifyStandby } from '../../../src/core/standby/index.js'
 import { testBun } from '../../helpers/bun-runtime.js'
 import { leaderPlainFiles, sandbox, seedHome, sha, walk, write, type Sandbox } from './helpers.js'
@@ -43,8 +45,9 @@ async function setUp(name: string): Promise<StandbyTwin> {
   return twin
 }
 
-const target = (t: StandbyTwin, walnut = CLI, linkWaitMs = 30_000) =>
-  new RemoteStandbyTarget({ connect: () => t.connect(), dir: sb.target, walnut, linkWaitMs })
+const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 200 })
+const target = (t: StandbyTwin, walnut = CLI, linkWaitMs = 30_000, env?: Record<string, string>) =>
+  new RemoteStandbyTarget({ connect: () => t.connect(), ...place(), walnut, linkWaitMs, ...(env ? { env } : {}) })
 const batch = (r: RemoteStandbyTarget) => takeBatch({ home: sb.home, transport: r, stagingDir: path.join(sb.root, 'staging') })
 
 async function expectCopyIsHome(): Promise<void> {
@@ -80,7 +83,7 @@ describe.skipIf(!BUN)('a standby target behind a real daemon', () => {
     const connect = t.connect
     // Drop the socket after the 3rd command of the batch, and kill the daemon after the 8th.
     const wrapped = new RemoteStandbyTarget({
-      dir: sb.target, walnut: CLI, linkWaitMs: 60_000,
+      ...place(), walnut: CLI, linkWaitMs: 60_000,
       connect: async () => {
         const l = await connect()
         return {
@@ -98,6 +101,62 @@ describe.skipIf(!BUN)('a standby target behind a real daemon', () => {
     expect(wrapped.stats.resent).toBeGreaterThan(0)
     await expectCopyIsHome()
   }, 180_000)
+
+  it('a leader restarted while its apply runs there finds the target busy, then goes on from that batch; the apply ran once', async () => {
+    const t = await setUp('twin-restart')
+    expect((await batch(target(t))).ok).toBe(true)
+    write(sb.home, 'memory/MEMORY.md', '# second version\n')
+    await settle()
+    const resume = path.join(sb.root, 'resume')
+    const applied = path.join(sb.root, 'applied.log')
+    const env = { STANDBY_FIXTURE_RESUME: resume, STANDBY_FIXTURE_LOG: applied }
+    // The first leader: its link goes for good once its apply runs there (it was killed).
+    let gone = false
+    const first = new RemoteStandbyTarget({
+      ...place(), walnut: DIE('wait:files-built'), linkWaitMs: 1_000, env,
+      connect: async () => {
+        if (gone) throw new Error('this leader is gone')
+        const l = await t.connect()
+        return { send: (cmd, params, ms) => (gone ? Promise.reject(markLinkFailure(new Error('this leader is gone'), 'lost')) : l.send(cmd, params, ms)) }
+      },
+    })
+    const firstOut = batch(first)
+    const incoming = path.join(sb.target, '.incoming')
+    for (let i = 0; i < 600 && (await runningApply(incoming))?.batch !== 2; i++) await new Promise((r) => setTimeout(r, 50))
+    expect((await runningApply(incoming))?.batch).toBe(2)
+    gone = true
+    t.drop()
+    expect((await firstOut).ok).toBe(false)
+    // The leader after the restart: busy while that apply runs, then it holds batch 2.
+    const second = target(t, DIE('-'), 30_000, env)
+    const busy = await batch(second)
+    expect(!busy.ok && busy.reason).toMatch(/the target is busy: an apply of batch 2 runs there/)
+    fs.writeFileSync(resume, '')
+    for (let i = 0; i < 600 && (await standbyStatus(sb.target)).batch !== 2; i++) await new Promise((r) => setTimeout(r, 100))
+    expect((await standbyStatus(sb.target)).batch).toBe(2)
+    write(sb.home, 'memory/MEMORY.md', '# third version\n')
+    await settle()
+    const next = await batch(second)
+    expect(next.ok && next.commit.batch).toBe(3)
+    expect(fs.readFileSync(applied, 'utf8').trim().split('\n')).toEqual(['2', '3'])
+    await expectCopyIsHome()
+  }, 180_000)
+
+  // A run of 20 minutes and more, once by hand: STANDBY_LONG_APPLY_MS=1260000 (exec.script's own limit is 10 minutes).
+  const LONG = Number(process.env.STANDBY_LONG_APPLY_MS ?? 0)
+  it.skipIf(!LONG)('an apply that runs longer than a command may completes as a background job', async () => {
+    const t = await setUp('twin-long')
+    expect((await batch(target(t))).ok).toBe(true)
+    write(sb.home, 'memory/MEMORY.md', '# second version\n')
+    await settle()
+    const started = Date.now()
+    const out = await batch(target(t, DIE(`sleep:files-built:${LONG}`)))
+    expect(out.ok, out.ok ? '' : out.reason).toBe(true)
+    expect(Date.now() - started).toBeGreaterThan(LONG)
+    expect((await standbyStatus(sb.target)).batch).toBe(2)
+    await expectCopyIsHome()
+    console.log(`long apply: ${Math.round((Date.now() - started) / 1000)} s for batch 2`)
+  }, LONG + 600_000)
 
   for (const [point, current] of [['files-built', 1], ['mid-swap', 1], ['state-written', 2]] as const) {
     it(`a receiving process killed at ${point} leaves batch ${current} whole, and the next batch goes on`, async () => {
