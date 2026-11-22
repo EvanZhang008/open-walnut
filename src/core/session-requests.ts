@@ -20,6 +20,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { readJsonFile, updateJsonFile, writeJsonFile } from '../utils/fs.js';
+import { readJsonFileKept } from '../utils/json-kept.js';
 import { buildWalnutMessage, sessionHandle } from './peers/walnut-message-tag.js';
 import { createEnvelopeKit, type EnvelopeHandedOn } from './peers/envelope-kit.js';
 import { isHeldElsewhereReason } from './sessions/undelivered-requests.js';
@@ -331,7 +332,7 @@ async function askerTasksOf(ids: readonly string[]): Promise<Map<string, string>
   const out = new Map<string, string>();
   if (!ids.length) return out;
   try {
-    const named = (await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY)).requests?.filter((r) => ids.includes(r.id)) ?? [];
+    const named = (await readRequestStore()).requests?.filter((r) => ids.includes(r.id)) ?? [];
     const { getSessionByClaudeId } = await import('./session-tracker.js');
     for (const sid of new Set(named.map((r) => r.fromSessionId))) {
       const taskId = (await getSessionByClaudeId(sid).catch(() => undefined))?.taskId;
@@ -361,6 +362,15 @@ interface RequestStore { requests: SessionRequest[] }
 
 const EMPTY: RequestStore = { requests: [] };
 
+/**
+ * The file as stored, shared by every reader and frozen (utils/json-kept.ts): read about 1,000
+ * times in 10 minutes on the live server (2026-11-21) while it changed a dozen times. Writes go
+ * through updateRequests, which reads its own copy under the lock.
+ */
+async function readRequestStore(options: { readErrors?: 'throw' } = {}): Promise<RequestStore> {
+  return await readJsonFileKept<RequestStore>(REQUESTS_FILE, EMPTY, options) as RequestStore;
+}
+
 // --- Writes, for the leader's requests copy (replication/kinds/requests.ts) ---
 const writeListeners = new Set<() => void>();
 
@@ -387,7 +397,7 @@ export function installAwayRequests(fn: ((rows: SessionRequest[]) => Promise<Ses
   awayRequests = fn;
 }
 async function readRows(): Promise<SessionRequest[]> {
-  const rows = (await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY)).requests ?? [];
+  const rows = (await readRequestStore()).requests ?? [];
   if (!awayRequests) return rows;
   try { return await awayRequests(rows); } catch { return rows; }
 }
@@ -398,7 +408,7 @@ async function readRows(): Promise<SessionRequest[]> {
  * the copy round skips this kind instead of removing the host's copy.
  */
 export async function listAllSessionRequests(): Promise<SessionRequest[]> {
-  return [...((await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY, { readErrors: 'throw' })).requests ?? [])];
+  return [...((await readRequestStore({ readErrors: 'throw' })).requests ?? [])];
 }
 
 function prune(requests: SessionRequest[]): SessionRequest[] {
@@ -674,7 +684,7 @@ export async function markRequestsReached(messageIds: readonly string[], now = D
   const ids = new Set(messageIds.filter(Boolean));
   if (ids.size === 0) return [];
   // A read first: almost no delivered message carries a request, and this runs on every delivery.
-  const rows = (await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY).catch(() => EMPTY)).requests ?? [];
+  const rows = (await readRequestStore().catch(() => EMPTY)).requests ?? [];
   if (!rows.some((r) => r.status === 'pending' && !!r.messageId && ids.has(r.messageId))) return [];
   const stamped: string[] = [];
   await updateRequests((store) => {
@@ -855,7 +865,7 @@ export async function lastReplyAt(
 ): Promise<string | undefined> {
   const askers = new Set(fromSessionIds);
   if (askers.size === 0 || !toTaskId) return undefined;
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
+  const store = await readRequestStore();
   let best: string | undefined;
   for (const r of store.requests ?? []) {
     if (r.forwardedTo || r.toTaskId !== toTaskId || !askers.has(r.fromSessionId)) continue;
@@ -870,7 +880,7 @@ export async function lastReplyAt(
 
 /** Every pending request (the host copy's query: rows whose two parties share a host). */
 export async function listPendingRequests(): Promise<SessionRequest[]> {
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
+  const store = await readRequestStore();
   return (store.requests ?? []).filter((r) => r.status === 'pending');
 }
 
@@ -1005,7 +1015,7 @@ export async function creditDowntime(now = Date.now(), clockFile = CLOCK_FILE, s
 
 /** Pending requests past their deadline (the sweeper's query). */
 export async function overdueRequests(now = Date.now()): Promise<SessionRequest[]> {
-  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
+  const store = await readRequestStore();
   return (store.requests ?? []).filter((r) => r.status === 'pending' && r.deadlineAt <= now);
 }
 
