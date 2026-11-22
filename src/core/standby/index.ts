@@ -28,7 +28,7 @@ export { checkTargetPlace } from './target-files.js'
 
 /** One batch from `home` to the local target `dir`. */
 export async function snapshotTo(home: string, dir: string, opts: Partial<Omit<BatchOptions, 'home' | 'transport'>> = {}): Promise<BatchOutcome> {
-  checkTargetPlace(home, dir)
+  await checkTargetPlace(home, dir)
   const transport = await localTransport(dir)
   // The home's own scratch (tmp/ is rebuildable): staging never reaches the copy.
   const stagingDir = opts.stagingDir ?? path.join(home, 'tmp', 'standby-staging')

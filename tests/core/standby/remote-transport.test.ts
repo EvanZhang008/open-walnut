@@ -265,6 +265,96 @@ describe('sending chunks', () => {
     await t.flush()
     for (const x of [a, b, c]) expect(fs.existsSync(path.join(sb.target, 'chunks', x.id.slice(0, 2), x.id))).toBe(true)
   })
+
+  const chunk = (n: number) => { const d = Buffer.alloc(1024 * 1024, n); return { id: sha256Hex(d), d } }
+  const onTarget = (id: string) => fs.existsSync(path.join(sb.target, 'chunks', id.slice(0, 2), id))
+  /** A link whose chunk writes wait for `open()` and are counted as they start. */
+  function gatedChunks(l: ReturnType<typeof fakeStandbyHost>, answer?: (n: number) => Record<string, unknown> | undefined) {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const g = {
+      started: 0,
+      open: () => release(),
+      link: { ...l.link, async send(cmd: string, params?: Record<string, unknown>, ms?: number) {
+        if (cmd === 'fs.writePart' && String(params?.path).includes('/chunks/')) {
+          const n = ++g.started
+          await gate
+          const refused = answer?.(n)
+          if (refused) return refused
+        }
+        return l.link.send(cmd, params, ms)
+      } },
+    }
+    return g
+  }
+
+  it('a chunk refused there drops the rest of the queue, wakes a put waiting for room, and the next read starts clean', async () => {
+    sb = await sandbox('remote-queue-fail')
+    const l = fakeStandbyHost(sb.root)
+    const g = gatedChunks(l, (n) => n === 1 ? { ok: false, error: 'fs.writePart failed: ENOSPC', code: 'io' } : undefined)
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, dir: sb.target, bufferBytes: 3 * 1024 * 1024, window: 1 })
+    await t.current()
+    const ids = Array.from({ length: 6 }, (_, i) => chunk(i))
+    // One in flight, two queued: the buffer is full, so the fourth put waits for room.
+    for (const x of ids.slice(0, 3)) await t.putChunk(x.id, x.d)
+    let woke = false
+    const waiting = t.putChunk(ids[3].id, ids[3].d).finally(() => { woke = true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(woke).toBe(false)
+    g.open()
+    // The refusal wakes it with the error, and every later put and the flush say the same.
+    await expect(waiting).rejects.toThrow(/ENOSPC/)
+    await expect(t.putChunk(ids[4].id, ids[4].d)).rejects.toThrow(/ENOSPC/)
+    await expect(t.flush()).rejects.toThrow(/ENOSPC/)
+    // The two queued behind it were dropped, never sent.
+    expect(g.started).toBe(1)
+    expect(ids.some((x) => onTarget(x.id))).toBe(false)
+    // The next read starts clean: it reads the chunk list there again and a new put goes through.
+    await t.current()
+    expect((await t.missing(ids.map((x) => x.id))).size).toBe(6)
+    await t.putChunk(ids[5].id, ids[5].d)
+    await t.flush()
+    expect(onTarget(ids[5].id)).toBe(true)
+  })
+
+  it('what a void batch left to send goes before the next read, and is not sent again', async () => {
+    sb = await sandbox('remote-queue-leftover')
+    const l = fakeStandbyHost(sb.root)
+    const g = gatedChunks(l)
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, dir: sb.target, window: 2 })
+    await t.current()
+    const ids = Array.from({ length: 4 }, (_, i) => chunk(10 + i))
+    for (const x of ids) await t.putChunk(x.id, x.d)
+    let read = false
+    const next = t.current().then(() => { read = true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(read).toBe(false)
+    g.open()
+    await next
+    expect((await t.missing(ids.map((x) => x.id))).size).toBe(0)
+    expect(ids.every((x) => onTarget(x.id))).toBe(true)
+    expect(g.started).toBe(4)
+  })
+
+  it('closed, it drops what waits to go and sends nothing more', async () => {
+    sb = await sandbox('remote-queue-close')
+    const l = fakeStandbyHost(sb.root)
+    const g = gatedChunks(l)
+    const t = new RemoteStandbyTarget({ connect: async () => g.link, dir: sb.target, window: 2 })
+    await t.current()
+    const ids = Array.from({ length: 6 }, (_, i) => chunk(20 + i))
+    for (const x of ids) await t.putChunk(x.id, x.d)
+    expect(g.started).toBe(2)
+    t.close()
+    g.open()
+    await new Promise((r) => setTimeout(r, 100))
+    // Only the two already on the wire finished there.
+    expect(g.started).toBe(2)
+    expect(ids.filter((x) => onTarget(x.id)).length).toBe(2)
+    await expect(t.putChunk(ids[0].id, ids[0].d)).rejects.toThrow(/closed/)
+    await expect(t.current()).rejects.toThrow(/closed/)
+    await expect(t.verify()).rejects.toThrow(/closed/)
+  })
 })
 
 describe('the receiving side', () => {
@@ -288,6 +378,11 @@ describe('the receiving side', () => {
     await expect(runReceiveOp('init', path.join(home, 'standby'), {}, home)).rejects.toThrow(/must not contain each other/)
     await expect(runReceiveOp('init', sb.root, {}, home)).rejects.toThrow(/must not contain each other/)
     expect(fs.existsSync(home)).toBe(false)
+    // A link that leads into the home is the home.
+    fs.mkdirSync(home)
+    fs.symlinkSync(home, path.join(sb.root, 'looks-elsewhere'))
+    await expect(runReceiveOp('init', path.join(sb.root, 'looks-elsewhere', 'standby'), {}, home)).rejects.toThrow(/must not contain each other/)
+    expect(fs.readdirSync(home)).toEqual([])
   })
 
   it('takes an upload or export path only inside the target\'s .incoming/', async () => {

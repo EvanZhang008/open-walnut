@@ -61,11 +61,27 @@ export function manifestPath(t: TargetPaths, batch: number): string {
 }
 
 /** Refuse a target inside the home (it would copy itself) or a home inside the target. */
-export function checkTargetPlace(home: string, dir: string): void {
-  const h = path.resolve(home)
-  const d = path.resolve(dir)
+export async function checkTargetPlace(home: string, dir: string): Promise<void> {
   const inside = (a: string, b: string) => a === b || a.startsWith(`${b}${path.sep}`)
-  if (inside(d, h) || inside(h, d)) throw new Error(`the standby target ${d} and the home ${h} must not contain each other`)
+  // As written and with symlinks resolved: a link to the home (or into it) is the home.
+  for (const [h, d] of [[path.resolve(home), path.resolve(dir)], [await realPart(home), await realPart(dir)]]) {
+    if (inside(d, h) || inside(h, d)) throw new Error(`the standby target ${path.resolve(dir)} and the home ${path.resolve(home)} must not contain each other`)
+  }
+}
+
+/** `p` with symlinks resolved in the part of it that exists; the rest appended as written. */
+async function realPart(p: string): Promise<string> {
+  const rest: string[] = []
+  for (let cur = path.resolve(p); ;) {
+    try {
+      return path.join(await fs.realpath(cur), ...rest)
+    } catch {
+      const up = path.dirname(cur)
+      if (up === cur) return path.resolve(p)
+      rest.unshift(path.basename(cur))
+      cur = up
+    }
+  }
 }
 
 /** A relative path of a batch, refused if it could leave the copy. */

@@ -78,6 +78,7 @@ const COMMAND_TIMEOUT_MS = 60_000
 const SHORT_RUN_MS = 2 * 60_000
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const nonce = () => crypto.randomBytes(6).toString('hex')
+const closedError = () => new Error('the standby target was closed (the standby stopped or its settings changed)')
 
 export interface RemoteStats {
   /** Daemon commands answered, and those sent again after a dropped link. */
@@ -106,6 +107,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
   private queuedBytes = 0
   private inflight = new Set<Promise<void>>()
   private failed: unknown = null
+  private closed = false
   private waiters: Array<() => void> = []
   private readonly dir: string
   private readonly incoming: string
@@ -129,10 +131,28 @@ export class RemoteStandbyTarget implements StandbyTransport {
     return this.link
   }
 
+  /**
+   * Stop: drop the chunks waiting to go and refuse every later call (the runner stopped, or its
+   * settings changed). Parts already on the wire finish there; nothing after them is sent.
+   */
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    this.failed ??= closedError()
+    for (const q of this.queue) this.queuedBytes -= q.data.length
+    this.queue = []
+    this.notify()
+  }
+
+  private open(): void {
+    if (this.closed) throw closedError()
+  }
+
   /** One daemon command, sent again over a new link while the link is down (only commands that may run twice). */
   private async call(cmd: string, params: Record<string, unknown>, timeoutMs = COMMAND_TIMEOUT_MS): Promise<Record<string, unknown>> {
     const until = Date.now() + (this.o.linkWaitMs ?? 120_000)
     for (let attempt = 0; ; attempt++) {
+      this.open()
       let reply: Record<string, unknown>
       try {
         reply = await (await this.conn()).send(cmd, params, timeoutMs)
@@ -190,6 +210,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
 
   /** `walnut standby receive <op>` there; its JSON answer. */
   private async receive<T>(op: string, args: string[], timeoutMs = SHORT_RUN_MS): Promise<T> {
+    this.open()
     const env = Object.entries(this.o.env ?? {}).map(([k, v]) => `${k}=${v}`)
     const argv = [...(env.length ? ['env', ...env] : []), ...(this.o.walnut ?? ['walnut']), 'standby', 'receive', op, this.dir, ...args]
     const run = await runScriptOnHost('standby', { script: 'exec "$@"\n', args: argv, timeoutMs, maxOutputBytes: 8 * 1024 * 1024 }, {
@@ -233,6 +254,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
   async current(): Promise<{ state: StandbyState; files: BatchFile[] }> {
     // What a void batch left to send still goes (the next batch need not send it); a failure forgets what the target holds.
     await this.settle()
+    this.open()
     if (this.failed) {
       this.failed = null
       this.reset()
@@ -290,6 +312,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
   }
 
   async putChunk(id: string, data: Buffer): Promise<void> {
+    this.open()
     // The caller may reuse its buffer once this returns.
     const own = Buffer.from(data)
     if (sha256(own) !== id) throw new Error(`chunk ${id} does not match its hash`)
@@ -309,6 +332,7 @@ export class RemoteStandbyTarget implements StandbyTransport {
   /** Send every chunk held; throws the first one that failed (and forgets what the target holds). */
   async flush(): Promise<void> {
     await this.settle()
+    this.open()
     if (this.failed) { const err = this.failed; this.failed = null; this.reset(); throw err }
   }
 

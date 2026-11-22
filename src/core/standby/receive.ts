@@ -195,7 +195,7 @@ export interface ReceiveOptions {
  * would copy itself, or write into the home), as a local target is.
  */
 export async function runReceiveOp(op: string, dir: string, o: ReceiveOptions, home?: string): Promise<unknown> {
-  checkTargetPlace(home ?? (await import('../../constants.js')).WALNUT_HOME, dir)
+  await checkTargetPlace(home ?? (await import('../../constants.js')).WALNUT_HOME, dir)
   if (op === 'init') {
     return receiveInit(dir, { exportTo: o.export, chunks: o.chunks, files: o.files, haveManifest: o.haveManifest ? JSON.parse(o.haveManifest) as ManifestRef : null })
   }

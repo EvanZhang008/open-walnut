@@ -4,6 +4,7 @@
  * drift report to Walnut Health once, and stops cleanly when the flag goes off.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { startStandbyRunner, type StandbySettings, type StandbyRunner } from '../../../src/core/standby/runner.js'
@@ -108,6 +109,41 @@ describe('standby runner', () => {
     expect(drift).toHaveLength(1)
     expect(drift[0].body).toContain(`standby-box:${sb.target}`)
     expect(fs.readFileSync(file, 'utf8')).toBe('# Memory\n')
+  }, 60_000)
+
+  it('stopped with chunks still waiting to go to a standby host, it sends nothing more there', async () => {
+    sb = await sandbox('remote-stop')
+    dbs.push(...seedHome(sb.home).dbs)
+    fs.writeFileSync(path.join(sb.home, 'big.bin'), crypto.randomBytes(12 * 1024 * 1024))
+    const host = fakeStandbyHost(sb.root)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let started = 0
+    const link = { ...host.link, async send(cmd: string, params?: Record<string, unknown>, ms?: number) {
+      if (cmd === 'fs.writePart' && String(params?.path).includes('/chunks/')) { started++; await gate }
+      return host.link.send(cmd, params, ms)
+    } }
+    const notices: unknown[] = []
+    runner = startStandbyRunner({
+      settings: async () => ({ on: true, home: sb.home, dir: sb.target, host: 'standby-box', intervalSeconds: 3600 }),
+      notify: async (n) => { notices.push(n); return true },
+      connect: async () => link,
+    })
+    await runner.reconcile()
+    const run = runner.runOnce()
+    for (let i = 0; i < 200 && started < 8; i++) await new Promise((r) => setTimeout(r, 25))
+    expect(started).toBe(8)
+    runner.stop()
+    runner = null
+    release()
+    const out = await run
+    expect(out?.ok).toBe(false)
+    await new Promise((r) => setTimeout(r, 200))
+    // Only the parts already on the wire went; no apply, no verify, no notice.
+    expect(started).toBe(8)
+    expect(host.log.some((e) => e.cmd === 'receive apply' || e.cmd === 'receive verify')).toBe(false)
+    expect(notices).toEqual([])
+    expect(writeGateEnabled()).toBe(false)
   }, 60_000)
 
   it('a standby host out of reach is reported behind once, with the last batch known there, without waiting out each step', async () => {

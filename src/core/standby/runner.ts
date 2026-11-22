@@ -55,6 +55,8 @@ interface StandbySite {
   current(): Promise<{ batch: number; takenAt: string } | null>
   /** The site's host stayed out of reach through the last call (a remote site only). */
   unreachable?(): boolean
+  /** Stop sending there (a remote site's queue of chunks): the runner stopped or its settings changed. */
+  close?(): void
 }
 
 function localSite(home: string, dir: string): StandbySite {
@@ -82,6 +84,7 @@ function remoteSite(home: string, host: string, dir: string, walnut: string[] | 
     },
     current: async () => (await target.state()).current,
     unreachable: () => target.unreachable,
+    close: () => target.close(),
   }
 }
 
@@ -148,6 +151,8 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         // A void batch is tried again soon; a host out of reach is not (the next tick tries).
         if (site.unreachable?.()) break
       }
+      // Stopped meanwhile: no verify, no read, no notice.
+      if (ended) return out
       const away = site.unreachable?.() === true
       let readErr: string | null = null
       if (!away) {
@@ -187,6 +192,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
       stop: () => {
         ended = true
         if (timer) clearTimeout(timer)
+        site.close?.()
         setWriteGateEnabled(false)
       },
     }

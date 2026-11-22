@@ -177,7 +177,7 @@ the daemon and the server are one program, every host has it.
 | Step | How it goes | Why that way |
 |---|---|---|
 | Read the target | `walnut standby receive init` (run by the daemon's `exec.script`) makes the target owner-only, finishes an apply a kill cut off, and writes into `.incoming/` the chunk ids it holds and its current files, only those the leader does not hold already; the leader reads that file with `fs.readRange` | One run and one read per batch; an unchanged batch reads about 100 bytes back |
-| Send chunks | `fs.writePart`, one 1 MiB chunk a part, eight in flight and up to 256 MiB held to send: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch; the batch reads its files right after its moment while a slow link sends (reading at the link's pace voided 4 of 5 batches under a steady writer at 20 Mbit/s) |
+| Send chunks | `fs.writePart`, one 1 MiB chunk a part, eight in flight and up to 256 MiB held to send: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch; the batch reads its files right after its moment while a slow link sends (reading at the link's pace voided 4 of 5 batches under a steady writer at 20 Mbit/s). A batch that changed more than the 256 MiB reads at the link's pace again once the buffer is full, so a large incremental batch over a slow link can still be void; the leader then holds the largest database being copied plus those 256 MiB |
 | Send the batch | an upload (`BatchUpload`: the files that differ from the target's batch, and the paths gone), gzipped, written the same way | An incremental batch sends its few changed entries, not a manifest of every file |
 | Make it current | `walnut standby receive apply` rebuilds the whole manifest from its own current batch and the upload, takes it only when its sha256 is the leader's, then runs `StandbyTarget.commit` and a verify pass | The same rules as a local target, word for word: every chunk and file checked, one switch, a kill or a full disk leaves the batch before whole |
 
@@ -186,7 +186,11 @@ that do the same thing twice are sent twice. A host Walnut does not know fails a
 target replaces a file's version it removes the chunks only the old version used, and the leader
 forgets them too, so a file put back to an old version sends them again. The receiving side
 refuses a target folder that lies in that machine's own Walnut home or holds it, as a local
-target is refused. An apply whose answer was lost (the link went
+target is refused, with symlinks resolved; "its own Walnut home" is the one the receive run
+sees (`OPEN_WALNUT_HOME` in the environment the daemon gives its scripts, else `~/.open-walnut`),
+so a host whose Walnut runs on another home must give its daemon that variable. Turning the
+standby off, or changing its host or folder, drops the chunks still waiting to go there: only
+the parts already on the wire finish. An apply whose answer was lost (the link went
 while it ran) is never sent again: the leader asks the target which batch it holds and takes
 the answer from there. A target another leader moved meanwhile refuses the upload (it is
 against another batch), and the next batch reads it again. A chunk the leader believed the
