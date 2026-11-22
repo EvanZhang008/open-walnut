@@ -61,6 +61,9 @@ const EXACT: Record<string, Exact> = {
   'components/passwords/LockScreens.tsx|input placeholder="Master password"': SECRET,
   'components/passwords/VaultBrowser.tsx|input placeholder="Search"': SECRET,
   'components/settings/inputs/SecretInput.tsx|input data-testid=testId': SECRET,
+  // An OAuth client id, and the exact address a provider's sign-in page landed on.
+  'components/settings/sections/CalendarSignInClient.tsx|input data-testid=`calendar-client-id-${accountId}`': MACHINE,
+  'components/settings/sections/CalendarSignInRow.tsx|input data-testid=`calendar-mail-sign-in-paste-${id}`': MACHINE,
   'components/settings/sections/PasswordsSection.tsx|input id="pw-confirm"': SECRET,
   'components/settings/sections/PasswordsSection.tsx|input id="pw-forever-pw"': SECRET,
   'components/settings/sections/PasswordsSection.tsx|input id="pw-new"': SECRET,
