@@ -30,7 +30,7 @@ import '@/styles/draft-v6-menus.css';
 const NARROW_PX = 760;
 
 export function DraftV6Body({
-  draft, panelRef, composer, notices, startWhy, onUpdate, onPathChange, onWalnutToggle, blockedRef, openWhereNonce,
+  draft, panelRef, composer, notices, startWhy, onUpdate, onPathChange, onWalnutToggle, blockedRef, onBlocked, openWhereNonce,
   tryChips, composerText, getComposer, openMenuNonce, onTaskFieldChange, onReturnFieldToWalnut, onSaveAsTask, saveBusy, quickTitle, quickLine,
   onCustomizeWalnut, onOpenAsk,
 }: {
@@ -47,6 +47,8 @@ export function DraftV6Body({
   onWalnutToggle: (walnut: boolean) => void;
   /** Written every render: the panel's Start reads it. */
   blockedRef: MutableRefObject<string | null>;
+  /** Told when that changes: the panel draws its send arrow off while Start is held. */
+  onBlocked?: (blocked: boolean) => void;
   /** Bumped by the owner when a Start needs a place (a draft with no folder): opens the Where menu. */
   openWhereNonce?: number;
   tryChips: readonly TryChip[];
@@ -68,6 +70,8 @@ export function DraftV6Body({
   const walnut = !!draft.walnut;
   const where = useDraftWhere(draft, { onUpdate, onPathChange });
   blockedRef.current = walnut ? null : where.blocked;
+  const isBlocked = !!blockedRef.current;
+  useEffect(() => { onBlocked?.(isBlocked); }, [isBlocked, onBlocked]);
   const [menu, setMenu] = useState<RowMenu>(null);
   const narrow = useNarrow(panelRef, NARROW_PX);
   const startError = useDraftWorkspace(draft.id).startError;
@@ -75,7 +79,7 @@ export function DraftV6Body({
   useEffect(() => { if (openWhereNonce && !walnut) setMenu({ kind: 'where', query: '' }); }, [openWhereNonce, walnut]);
 
   return (
-    <div className={`draft-v6-body${narrow ? ' is-narrow' : ''}${where.blocked && !walnut ? ' is-blocked' : ''}`} data-testid="draft-v6">
+    <div className={`draft-v6-body${narrow ? ' is-narrow' : ''}${isBlocked ? ' is-blocked' : ''}`} data-testid="draft-v6">
       <DraftModeTiles walnut={walnut} onPick={onWalnutToggle} />
       <div className="draft-v6-col">
         {walnut ? <QuickChatBlock title={quickTitle} line={quickLine} /> : (

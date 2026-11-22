@@ -11,6 +11,9 @@ export interface DraftV6State {
   v6: boolean;
   /** What the v6 row says Start cannot do as it stands (written by DraftV6Body every render). */
   blockedRef: MutableRefObject<string | null>;
+  /** The same, as state: the send arrow reads off while it holds (a click still explains). */
+  blocked: boolean;
+  setBlocked: (blocked: boolean) => void;
   /** Start was pressed while blocked: the reason, shown near the button for 5 s. */
   startWhy: string | null;
   clearWhy: () => void;
@@ -33,6 +36,7 @@ export function useDraftV6(eligible: boolean): DraftV6State {
   const blockedRef = useRef<string | null>(null);
   const [startWhy, setStartWhy] = useState<string | null>(null);
   const [whereNonce, setWhereNonce] = useState(0);
+  const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!startWhy) return;
     const t = setTimeout(() => setStartWhy(null), 5_000);
@@ -47,7 +51,7 @@ export function useDraftV6(eligible: boolean): DraftV6State {
     if (!draft.cwd && !ownFolder && !draft.fromProject) { setWhereNonce((n) => n + 1); return true; }
     return false;
   };
-  return { v6, blockedRef, startWhy, clearWhy: () => setStartWhy(null), whereNonce, holdsStart };
+  return { v6, blockedRef, blocked: v6 && blocked, setBlocked, startWhy, clearWhy: () => setStartWhy(null), whereNonce, holdsStart };
 }
 
 /**

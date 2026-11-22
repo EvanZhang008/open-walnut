@@ -82,11 +82,18 @@ test('a host change: Auto that cannot run there says why and blocks Start; a fol
     await shot(page, 'v6-start-blocked')
     await expect(draftComposer(page)).toHaveValue('Run it on the dev box')
     expect(starts.n).toBe(0)
+    // The send arrow reads off while Start is held (grey, aria-disabled); a click on it still explains.
+    const send = panel.locator('.wn-input-send')
+    await expect(send).toHaveAttribute('aria-disabled', 'true')
+    await send.click({ force: true })
+    await expect(panel.getByTestId('draft-v6-start-why')).toBeVisible()
+    expect(starts.n).toBe(0)
 
     // The line's way out: back on the project's own host.
     await line(panel).getByTestId('draft-v6-line-run').click()
     await expect(whereField(panel).getByTestId('draft-v6-host')).toContainText(LOCAL_NAME)
     await expect(panel.getByTestId('draft-v6-auto')).toContainText('New worktree')
+    await expect(send).not.toHaveAttribute('aria-disabled', 'true')
 
     // A folder known on this computer only, moved to the dev box: marked, and Start is blocked.
     await pickTypedPath(page, panel, APP())

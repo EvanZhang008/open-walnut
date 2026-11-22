@@ -277,8 +277,8 @@ function Parts({ parts }: { parts: LinePart[] }) {
 function WhereLineView({ where, narrow, startError, onPickFolder }: { where: DraftWhere; narrow: boolean; startError?: string; onPickFolder: () => void }) {
   const l = where.line;
   const host = where.hostName(where.hostKey);
-  const act = (label: string, onClick: () => void, testId: string, quiet = false) => (
-    <button type="button" className={`btn btn-sm${quiet ? ' btn-link' : ''} draft-v6-line-act`} data-testid={testId}
+  const act = (label: string, onClick: () => void, testId: string) => (
+    <button type="button" className="btn btn-link draft-v6-line-act" data-testid={testId}
       onMouseDown={(e) => e.preventDefault()} onClick={onClick}>{label}</button>
   );
   let body: ReactNode = null;
@@ -289,14 +289,14 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
     body = (<>
       <WhereIcon kind="ban" />
       <span className="draft-v6-line-text" data-testid="draft-project-start-error">{startError}</span>
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick', true)}
+      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'no-source') {
     tone = ' is-warn';
     body = (<>
       <WhereIcon kind="ban" />
       <span className="draft-v6-line-text">{l.reason}</span>
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick', true)}
+      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'off-host') {
     tone = ' is-warn';
@@ -304,7 +304,7 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
       <WhereIcon kind="gone" />
       <span className="draft-v6-line-text">This folder is on {where.hostName(l.other)}, not on {host}.</span>
       {act(`Run on ${where.hostName(l.other)}`, () => where.pickHost(l.other), 'draft-v6-line-run')}
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick', true)}
+      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'cannot') {
     tone = ' is-warn';
@@ -312,7 +312,7 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
       <WhereIcon kind="ban" />
       <span className="draft-v6-line-text">{l.reason}</span>
       {act(`Run on ${where.hostName(l.projectHost)}`, () => where.pickAuto(l.projectHost), 'draft-v6-line-run')}
-      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick', true)}
+      {act(`Pick a folder on ${host}`, onPickFolder, 'draft-v6-line-pick')}
     </>);
   } else if (l?.kind === 'last-used') {
     body = (<>
@@ -324,21 +324,21 @@ function WhereLineView({ where, narrow, startError, onPickFolder }: { where: Dra
           ago: (iso) => timeAgo(iso, { long: true }),
         })} />
       </span>
-      {!l.place.auto && !l.place.first && act('Back to Auto', where.backToAuto, 'draft-v6-back-to-auto', true)}
+      {!l.place.auto && !l.place.first && act('Back to Auto', where.backToAuto, 'draft-v6-back-to-auto')}
     </>);
   } else if (l?.kind === 'suggest') {
     body = (<>
       <WhereIcon kind="auto" />
       <span className="draft-v6-line-text">This folder is {l.project}’s code. Use a fresh workspace instead?</span>
       {act('Use fresh workspace', where.useFresh, 'work-in-suggest-use')}
-      {act('Keep', where.keepFolder, 'work-in-suggest-keep', true)}
+      {act('Keep', where.keepFolder, 'work-in-suggest-keep')}
     </>);
   } else if (l?.kind === 'moved') {
     const anchor = where.ps.source?.anchor ? tildePath(where.ps.source.anchor, knownHomeOf(where.ps.source.host === '__local__' ? null : where.ps.source.host)) : '';
     body = (<>
       <WhereIcon kind="auto" />
       <span className="draft-v6-line-text">Auto on {host}: {where.what.kind === 'git' ? `a new worktree from ${anchor}` : `a fresh workspace from ${anchor}`}.</span>
-      {act(`Back to ${where.hostName(l.projectHost)}`, () => where.pickAuto(l.projectHost), 'draft-v6-line-back', true)}
+      {act(`Back to ${where.hostName(l.projectHost)}`, () => where.pickAuto(l.projectHost), 'draft-v6-line-back')}
     </>);
   }
   return (

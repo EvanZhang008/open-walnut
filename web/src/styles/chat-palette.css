@@ -33,6 +33,7 @@
      person takes them back. */
   --chat-hue-accent: var(--accent);
   --chat-hue-accent-subtle: var(--accent-subtle);
+  --chat-hue-accent-text: var(--accent-text);
   --chat-hue-warning: var(--warning);
   --chat-hue-success: var(--success);
 }

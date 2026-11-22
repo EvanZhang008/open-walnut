@@ -128,7 +128,7 @@ export function DraftLowerRow({
           <SyncChoiceTag project={draft.project} local={local} onOpen={openMore} />
         )}
         {!walnut && (
-          <button type="button" className="btn btn-sm btn-ghost draft-v6-save" data-testid="draft-v6-save-todo" disabled={!composerText.trim() || saveBusy}
+          <button type="button" className="btn btn-sm draft-v6-save" data-testid="draft-v6-save-todo" disabled={!composerText.trim() || saveBusy}
             aria-busy={saveBusy || undefined} title="Save as task: creates a task from this text (first line becomes the title). No session starts."
             onMouseDown={(e) => e.preventDefault()} onClick={onSaveAsTask}>
             <span aria-hidden="true">{ICONS.ICON_CHECK}</span>Save as task

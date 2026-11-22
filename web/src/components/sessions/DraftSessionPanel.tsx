@@ -1014,6 +1014,7 @@ export function DraftSessionPanel({
       // duplicate. Walnut mode hides it too: it would file the QUESTION as a
       // Walnut/Focus task with no session to answer it.
       // v6: the send arrow says what it starts; Save as task moved to the lower row.
+      sendOff={v6s.blocked}
       sendSlot={v6 ? ({ canSend }: { canSend: boolean }) => <DraftV6SendLabel canSend={canSend} walnut={isWalnut} onClick={handleStartClick} />
         : !isBound && !isFork && !isWalnut ? (
         <button
@@ -1095,7 +1096,7 @@ export function DraftSessionPanel({
         <DraftV6Body draft={draft} panelRef={rootRef} composer={composer} startWhy={v6s.startWhy} onUpdate={onProjectStart!} onPathChange={onPathChange}
           notices={<>{launchNotice}{gateBar}{fallbackNotice}</>}
           onWalnutToggle={(walnut) => { onWalnutToggle?.(draft.id, walnut); v6s.clearWhy(); focusComposer(); }}
-          blockedRef={v6s.blockedRef} openWhereNonce={v6s.whereNonce + (draft.openPickerNonce ?? 0)}
+          blockedRef={v6s.blockedRef} onBlocked={v6s.setBlocked} openWhereNonce={v6s.whereNonce + (draft.openPickerNonce ?? 0)}
           // A seed replaces the composer's words, so it waits while there are words to lose.
           tryChips={WALNUT_SUGGESTS.map((t) => ({ label: t.label, icon: t.icon, onClick: () => { if (!text.trim()) setPrefill((p) => ({ text: t.text, nonce: p.nonce + 1 })); } }))}
           composerText={text} getComposer={getComposer} openMenuNonce={openMenuNonce}

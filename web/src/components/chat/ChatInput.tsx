@@ -288,6 +288,11 @@ interface ChatInputProps {
    * itself and so blurs it. The owner says why next to the composer.
    */
   sendBlocked?: boolean;
+  /**
+   * The send key reads off (grey, aria-disabled) while a click or Enter still runs onSend: the owner
+   * answers it with why it does not start (the v6 new task draft's Start on a place that cannot run).
+   */
+  sendOff?: boolean;
   isStreaming?: boolean;
   focusedTaskTitle?: string;
   /** Task object for inline context pill inside the input box */
@@ -469,7 +474,7 @@ export function ChatInput(props: ChatInputProps) {
   );
 }
 
-function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, label, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, label, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills, onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, sendOff, queueCount, placeholder, compact, light, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -2054,6 +2059,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       className="chat-send-btn-icon wn-input-send"
       onClick={handleSend}
       disabled={!canSend}
+      aria-disabled={sendOff && canSend ? true : undefined}
       {...(sendTestId ? { 'data-testid': sendTestId } : {})}
       type="button"
       aria-label={sendTitle}
