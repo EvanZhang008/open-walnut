@@ -871,7 +871,7 @@ struct TasksView: View {
         // In a focus space only the tasks inside it; the whole list otherwise. Its generation is
         // part of `boardInputsGen`, so entering or leaving rebuilds the bands.
         let rows = tasks.focusedTasks
-        let sessions = tasks.sessions
+        let sessions = tasks.focusedSessions
         let tierOf = tasks.taskTiers
         let tierOrder = tasks.taskTierOrder
         let customTiers = tasks.customTiers

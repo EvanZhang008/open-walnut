@@ -201,6 +201,10 @@ final class FocusSpaceScopeTests: XCTestCase {
         XCTAssertTrue(line.hasSuffix(" · 12 waiting outside"))
         XCTAssertEqual(FocusSpaceBanner.line(name: "Deep work", until: nil, outside: 0),
                        "Deep work · nothing waiting outside")
+        // Narrow or large text: a short detail, then the count alone; the count is never dropped.
+        XCTAssertTrue(FocusSpaceBanner.shortDetail(until: until, outside: 12).hasPrefix("12 outside · until "))
+        XCTAssertEqual(FocusSpaceBanner.shortDetail(until: nil, outside: 0), "none outside")
+        XCTAssertEqual(FocusSpaceBanner.countOnly(outside: 209), "209 outside")
     }
 
     func testTheLengthsTheMenuOffers() {

@@ -132,6 +132,36 @@ final class FocusSpacesStoreTests: XCTestCase {
         XCTAssertEqual(store.count(for: .sessions), 1)
     }
 
+    /// 2026-11-22 UI gate: in a focus the board gained rows. The board gives a pinned session
+    /// whose task it was not handed a row of its own, so every left-out task with a pinned session
+    /// came back as a session row. The board is fed the focus's sessions too.
+    func testTheBoardInAFocusShowsNoSessionRowOfATaskOutsideIt() {
+        let store = TasksStore()
+        let pinned = [task("w1", project: "Walnut", pinned: true), task("h1", project: "Home", pinned: true)]
+        let sessions = [session("s-w1", taskId: "w1"), session("s-h1", taskId: "h1"), session("s-none", taskId: nil)]
+        store._applyFeedMutationsForTesting([.snapshot(tasks: pinned, sessions: sessions)])
+        store.focusSpaceScope = FocusSpaceScope(projects: ["Walnut"])
+        XCTAssertEqual(store.focusedSessions.map(\.id), ["s-w1"])
+
+        let board = BoardModel.assemble(
+            tasks: store.focusedTasks, sessions: store.focusedSessions, tierOf: [:], tierOrder: [:],
+            customTiers: [], query: "", grouping: .tier
+        )
+        XCTAssertEqual(Set(board.bands.flatMap { $0.rows.map(\.id) }), ["w1"], "h1 never comes back as a session row")
+
+        store.focusSpaceScope = nil
+        XCTAssertEqual(store.focusedSessions.count, sessions.count, "no focus: every session")
+    }
+
+    private func session(_ id: String, taskId: String?) -> WalnutSession {
+        WalnutSession(
+            id: id, title: "s-\(id)", taskId: taskId, taskTitle: "t", project: nil,
+            host: "", processStatus: "idle", model: nil, mode: nil,
+            startedAt: "2026-11-22T00:00:00Z", lastActiveAt: "2026-11-22T00:00:00Z",
+            messageCount: 1, cwd: nil, pinned: true, focusTier: nil, description: nil
+        )
+    }
+
     // MARK: - FocusSpacesStore
 
     func testWithTheExperimentOffNothingIsAskedAndNothingNarrowed() async {

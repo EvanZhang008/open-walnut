@@ -80,6 +80,18 @@ final class TasksStore {
     /// The tasks the lists show: every held task, or in a focus only those inside it.
     var focusedTasks: [WalnutTask] { focusSlice.rows }
 
+    /// The sessions the board joins its rows with: in a focus only those of tasks inside it. The
+    /// board gives a pinned session whose task it was not handed a row of its own, so a session of
+    /// a task the focus leaves out would bring that task back as a session row.
+    var focusedSessions: [WalnutSession] {
+        let all = sessions // observed read first, as the slices do
+        guard focusSpaceScope != nil else { return all }
+        return all.filter { session in
+            guard let taskId = session.taskId, !taskId.isEmpty else { return false }
+            return isInFocusSpace(taskId)
+        }
+    }
+
     /// Open tasks outside the focus ("12 waiting outside"); 0 with no focus. Open as the open
     /// slice counts it, and not an org node (Main and the leads are hidden from task lists).
     var focusSpaceOutsideCount: Int { focusSlice.outside }

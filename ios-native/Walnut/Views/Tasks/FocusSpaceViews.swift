@@ -47,7 +47,8 @@ struct FocusSpaceMenu: View {
                 FocusSpaceGlyph(on: active != nil)
             }
         }
-        .accessibilityLabel("Focus")
+        // "Focus space", never bare "Focus": the board's pin tier chip is called Focus too.
+        .accessibilityLabel("Focus space")
         .accessibilityValue(active?.name ?? "Off")
         .accessibilityIdentifier("tasks.focus")
     }
@@ -93,20 +94,42 @@ private struct FocusSpaceGlyph: View {
 struct FocusSpaceBanner: View {
     @Environment(TasksStore.self) private var tasks
     @Environment(\.leadingDrawer) private var drawer
+    @Environment(\.colorScheme) private var colorScheme
     let focus: ActiveFocusSpace
+
+    /// One whole line: the name, then `detail`, neither cut (ViewThatFits picks one that fits).
+    private func bannerLine(_ detail: String) -> some View {
+        HStack(spacing: 0) {
+            Text(focus.name).fontWeight(.semibold)
+            Text(" · " + detail)
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
 
     /// The banner's words, in one place so they are tested alone.
     static func line(name: String, until: Date?, outside: Int) -> String {
         ([name] + [detail(until: until, outside: outside)]).joined(separator: " · ")
     }
 
-    /// The part after the name ("until 3:40 PM · 12 waiting outside"): it keeps its room, so a
-    /// long space name is what gets cut, never the count.
+    /// The part after the name ("until 3:40 PM · 12 waiting outside").
     static func detail(until: Date?, outside: Int) -> String {
         var parts: [String] = []
         if let until { parts.append("until \(until.formatted(date: .omitted, time: .shortened))") }
         parts.append(outside == 0 ? "nothing waiting outside" : "\(outside) waiting outside")
         return parts.joined(separator: " · ")
+    }
+
+    /// The same, short, for a narrow row or large text ("12 outside · until 3:40 PM").
+    static func shortDetail(until: Date?, outside: Int) -> String {
+        var parts = [outside == 0 ? "none outside" : "\(outside) outside"]
+        if let until { parts.append("until \(until.formatted(date: .omitted, time: .shortened))") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The shortest: only the count, which the banner never drops.
+    static func countOnly(outside: Int) -> String {
+        outside == 0 ? "none outside" : "\(outside) outside"
     }
 
     var body: some View {
@@ -115,14 +138,21 @@ struct FocusSpaceBanner: View {
             Image(systemName: "scope")
                 .foregroundStyle(Theme.tint)
                 .accessibilityHidden(true)
-            HStack(spacing: 0) {
-                Text(focus.name)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(" · " + Self.detail(until: focus.untilDate, outside: tasks.focusSpaceOutsideCount))
-                    .lineLimit(1)
-                    .layoutPriority(1)
+            // The longest line that fits: the whole detail, then a short one, then the name cut
+            // to make room for the count, which always shows.
+            let outside = tasks.focusSpaceOutsideCount
+            ViewThatFits(in: .horizontal) {
+                bannerLine(Self.detail(until: focus.untilDate, outside: outside))
+                bannerLine(Self.shortDetail(until: focus.untilDate, outside: outside))
+                HStack(spacing: 0) {
+                    Text(focus.name)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(" · " + Self.countOnly(outside: outside))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
@@ -140,7 +170,8 @@ struct FocusSpaceBanner: View {
         .font(.footnote)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.tint.opacity(0.12))
+        // Tinted glass reads on a light board at 12 %; a dark one needs more to be seen.
+        .background(Theme.tint.opacity(colorScheme == .dark ? 0.24 : 0.12))
         .modifier(BannerTypeCap(text: text))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tasks.focus.banner")
