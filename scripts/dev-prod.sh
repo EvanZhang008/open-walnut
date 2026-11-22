@@ -1851,10 +1851,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   preapproved_why="$host_why"
 fi
 
-# With the service launcher, the launcher stops the old server and starts this build as a trial (exits).
-if [[ "$SVC_MODE" == "launcher" ]]; then
-  svc_deploy
-fi
+# With the service launcher, the launcher stops the old server and starts this build as a trial
+# (svc_deploy, below the definitions it calls): the stop and the stray sweep here are not its.
+if [[ "$SVC_MODE" != "launcher" ]]; then
 
 # From here the old server is stopped (the bootout below is itself a stop): an exit leaves the dist to the rollback.
 STOP_STARTED=1
@@ -1980,6 +1979,7 @@ for spid in $stray_pids; do
     kill -9 "$spid" 2>/dev/null || true
   fi
 done
+fi # the old stop, not under the launcher
 
 # One launchd job for the given cli.js. launchd gives jobs a minimal PATH
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
@@ -2302,38 +2302,6 @@ snapshot_lkg() {
   mv "$LKG_DIR.tmp" "$LKG_DIR" || return 1
 }
 
-# First-output baseline: a candidate that appends NOTHING to the server log is
-# a process that never started (launchctl submit registering nothing, instant
-# module-init death) — judged in seconds below, not after the whole window.
-server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
-
-# The old server is stopped by now. Installing the launcher: its job starts this build (exits, unless
-# it could not be written or loaded: then the old way below). Taking it away: its job went with the
-# stop above, its plist and mark go now, and the old way follows.
-if [[ "$SVC_MODE" == "install" ]]; then
-  svc_first_start || SVC_MODE=plain
-elif [[ "$SVC_MODE" == "remove" ]]; then
-  rm -f "$SVC_PLIST" 2>/dev/null || true
-  svc_unmark
-  echo "Service launcher removed: the server runs as launchd job '$LAUNCH_LABEL' again."
-fi
-
-STAGE_IN_USE=1
-rehearsal_fail_armed=1
-launch_server "$SERVER_FILE"
-rehearsal_fail_armed=0
-
-stop_new_server() {
-  if (( use_launchd )); then
-    # A label launchd will not let go of cannot be loaded again: the rollback
-    # that follows starts under nohup instead (never an abort under set -e).
-    remove_launchd_job || use_launchd=0
-  elif [[ -n "$pid" ]]; then
-    kill -15 "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  fi
-}
-
 # ── Last-known-good rollback ── shared by EVERY post-kill failure exit. The
 # old server is already dead by the time any of these run, so exiting without
 # restoring service leaves :$PORT dark until a human notices (2026-08-23:
@@ -2429,6 +2397,44 @@ rollback_to_lkg() {
     echo "Rollback server not ready after 90s; left running in case it settles late." >&2
   fi
 }
+
+# The launcher path ends in svc_deploy (it exits): every function it calls is defined above.
+if [[ "$SVC_MODE" == "launcher" ]]; then
+  svc_deploy
+fi
+
+# First-output baseline: a candidate that appends NOTHING to the server log is
+# a process that never started (launchctl submit registering nothing, instant
+# module-init death) — judged in seconds below, not after the whole window.
+server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+
+# The old server is stopped by now. Installing the launcher: its job starts this build (exits, unless
+# it could not be written or loaded: then the old way below). Taking it away: its job went with the
+# stop above, its plist and mark go now, and the old way follows.
+if [[ "$SVC_MODE" == "install" ]]; then
+  svc_first_start || SVC_MODE=plain
+elif [[ "$SVC_MODE" == "remove" ]]; then
+  rm -f "$SVC_PLIST" 2>/dev/null || true
+  svc_unmark
+  echo "Service launcher removed: the server runs as launchd job '$LAUNCH_LABEL' again."
+fi
+
+STAGE_IN_USE=1
+rehearsal_fail_armed=1
+launch_server "$SERVER_FILE"
+rehearsal_fail_armed=0
+
+stop_new_server() {
+  if (( use_launchd )); then
+    # A label launchd will not let go of cannot be loaded again: the rollback
+    # that follows starts under nohup instead (never an abort under set -e).
+    remove_launchd_job || use_launchd=0
+  elif [[ -n "$pid" ]]; then
+    kill -15 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+}
+
 
 # Readiness window, default 180s (override: WALNUT_DEVPROD_READY_SECS). The old
 # 60s window was SMALLER than a real boot under machine load: 2026-08-22, two

@@ -285,19 +285,43 @@ describe('the deploy\'s switch through the launcher', () => {
 })
 
 describe('the deploy goes through the launcher only where it should', () => {
-  it('sources the lib, switches through the launcher before the old stop, and installs it after the old stop', () => {
+  it('sources the lib, leaves the old stop out of the launcher path, and installs it after the old stop', () => {
     expect(DEV_PROD).toContain('source "$REPO_ROOT/scripts/lib/devprod-launcher.sh"')
-    const deploy = DEV_PROD.indexOf('  svc_deploy\n')
+    const skip = DEV_PROD.indexOf('if [[ "$SVC_MODE" != "launcher" ]]; then\n')
     const stop = DEV_PROD.indexOf('STOP_STARTED=1\nuse_launchd=0')
+    const sweep = DEV_PROD.indexOf('stray_pids="$(pgrep')
+    const end = DEV_PROD.indexOf('fi # the old stop, not under the launcher\n')
     const drain = DEV_PROD.search(/^drain_active_turns\nwrite_planned_restart\nwrite_deploy_switch\n/m)
     expect(drain).toBeGreaterThan(-1)
-    expect(deploy).toBeGreaterThan(drain)
-    expect(stop).toBeGreaterThan(deploy)
+    // The old stop and the stray sweep (which would end the launcher's own server) run only off the launcher.
+    expect(skip).toBeGreaterThan(drain)
+    expect(stop).toBeGreaterThan(skip)
+    expect(sweep).toBeGreaterThan(stop)
+    expect(end).toBeGreaterThan(sweep)
+    const deploy = DEV_PROD.indexOf('  svc_deploy\n')
     const first = DEV_PROD.indexOf('svc_first_start || SVC_MODE=plain')
-    expect(first).toBeGreaterThan(stop)
+    expect(deploy).toBeGreaterThan(end)
+    expect(first).toBeGreaterThan(deploy)
     expect(DEV_PROD.indexOf('launch_server "$SERVER_FILE"\n', first)).toBeGreaterThan(first)
     // The sweep never removes a version the launcher names.
     expect(DEV_PROD).toMatch(/if svc_keeps_stage "\$old_stage"; then\n\s+continue/)
+  })
+
+  // 2026-11-22 rehearsal: svc_finish called snapshot_lkg before bash had read its definition
+  // ("snapshot_lkg: command not found"). Every dev-prod.sh function the lib calls is defined
+  // above each place dev-prod.sh enters the lib.
+  it('every dev-prod.sh function the lib calls is defined before dev-prod.sh calls into the lib', () => {
+    const lib = fs.readFileSync(path.join(REPO, 'scripts/lib/devprod-launcher.sh'), 'utf8')
+    const own = new Set([...lib.matchAll(/^([a-z_][a-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!))
+    const defs = new Map([...DEV_PROD.matchAll(/^([a-z_][a-z0-9_]*)\(\) \{/gm)].map((m) => [m[1]!, m.index!] as const))
+    const used = [...new Set([...lib.matchAll(/\b([a-z_][a-z0-9_]*)\b/g)].map((m) => m[1]!))].filter((n) => defs.has(n) && !own.has(n))
+    expect(used.length).toBeGreaterThan(5)
+    const sourced = DEV_PROD.indexOf('source "$REPO_ROOT/scripts/lib/devprod-launcher.sh"')
+    const entries = [...DEV_PROD.matchAll(/^\s*(?:if |elif )?!?\s*(svc_[a-z_]+)\b/gm)]
+      .filter((m) => m.index! > sourced && !['svc_init', 'svc_keeps_stage'].includes(m[1]!)).map((m) => [m[1]!, m.index!] as const)
+    expect(entries.map(([n]) => n)).toEqual(expect.arrayContaining(['svc_deploy', 'svc_first_start', 'svc_unmark']))
+    const late = entries.flatMap(([entry, at]) => used.filter((n) => defs.get(n)! > at).map((n) => `${entry} at ${at} calls ${n}, defined at ${defs.get(n)}`))
+    expect(late).toEqual([])
   })
 
   it('is the old deploy off macOS and with no launcher installed', () => {
