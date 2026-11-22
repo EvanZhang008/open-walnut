@@ -23,10 +23,10 @@
 .cal-side-header { flex-wrap: wrap; }
 .cal-side-header .cal-grid-controls { margin-left: auto; }
 .cal-side-header .cal-side-title { margin-right: 0; min-width: 40px; }
-/* The Agenda header: every button the same quiet 24 px square (the time scale's own buttons too),
-   in three groups: the day, the time scale, the panel. */
+/* The Agenda header: its own buttons are the family's quiet 24 px squares (btn btn-ghost btn-icon
+   btn-sm), and the time scale's buttons are drawn to match, in three groups: the day, the time
+   scale, the panel. */
 .cal-side-tools { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
-.cal-side-tool,
 .cal-side-header .cal-grid-controls button {
   display: inline-flex;
   align-items: center;
@@ -35,18 +35,13 @@
   height: 24px;
   padding: 0 4px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
   font-size: var(--font-size-sm);
-  text-decoration: none;
   cursor: pointer;
 }
-.cal-side-tool:hover,
-.cal-side-header .cal-grid-controls button:hover:not(:disabled) { background: var(--bg-secondary); color: var(--fg); }
-.cal-side-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.cal-side-tool svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.cal-side-tool.cal-side-today { font-weight: 600; }
+.cal-side-header .cal-grid-controls button:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, var(--bg)); color: var(--fg); }
 .cal-side-header .cal-grid-controls .cal-zoom-value { font-size: var(--font-size-xs); }
 .cal-side-header .cal-grid-controls .cal-hours-toggle { font-size: var(--font-size-xs); }
 .cal-side-header .cal-grid-controls .cal-hours-toggle[aria-pressed='true'] { color: var(--accent); }

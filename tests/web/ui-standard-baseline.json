@@ -707,7 +707,6 @@
     "components/calendar/CalendarContextMenu.tsx": 9,
     "components/calendar/CalendarGridControls.tsx": 4,
     "components/calendar/CalendarItemPopover.tsx": 5,
-    "components/calendar/CalendarSidePanel.tsx": 4,
     "components/calendar/CalendarToolbar.tsx": 5,
     "components/calendar/CalendarsPopover.tsx": 2,
     "components/calendar/EventCreateForm.tsx": 4,

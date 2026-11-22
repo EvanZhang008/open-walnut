@@ -133,29 +133,29 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
         </span>
         {/* Three groups of the same quiet buttons: the day, the time scale, the panel. */}
         <div className="cal-side-tools" role="group" aria-label="Day">
-          <button type="button" className="cal-side-tool" onClick={() => step(-1)} aria-label="Previous day" title="Previous day">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+          <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => step(-1)} aria-label="Previous day" title="Previous day">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
           </button>
           {!isToday && (
-            <button type="button" className="cal-side-tool cal-side-today" onClick={() => setDay(formatDateOnly(new Date()))}>
+            <button type="button" className="btn btn-ghost btn-sm cal-side-today" onClick={() => setDay(formatDateOnly(new Date()))}>
               Today
             </button>
           )}
-          <button type="button" className="cal-side-tool" onClick={() => step(1)} aria-label="Next day" title="Next day">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+          <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => step(1)} aria-label="Next day" title="Next day">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
           </button>
         </div>
         <CalendarGridControls />
         <div className="cal-side-tools" role="group" aria-label="Panel">
           <button
             type="button"
-            className="cal-side-tool cal-side-calendars"
+            className="btn btn-ghost btn-icon btn-sm cal-side-calendars"
             onClick={(event) => setCalsAnchor(event.currentTarget)}
             aria-label="Choose calendars"
             title="Choose which calendars to show"
             data-testid="cal-side-cals-btn"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <rect x="3" y="4" width="18" height="17" rx="2" />
               <line x1="3" y1="9" x2="21" y2="9" />
               <line x1="8" y1="2" x2="8" y2="6" />
@@ -165,13 +165,13 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
               <circle cx="15.5" cy="14" r="1.4" />
             </svg>
           </button>
-          <Link to={`/calendar?view=day&d=${day}`} className="cal-side-tool cal-side-expand" title="Open in Calendar" aria-label="Open in Calendar">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
+          <Link to={`/calendar?view=day&d=${day}`} className="btn btn-ghost btn-icon btn-sm cal-side-expand" title="Open in Calendar" aria-label="Open in Calendar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M15 3h6v6" /><path d="M10 14L21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
             </svg>
           </Link>
-          <button type="button" className="cal-side-tool" onClick={onClose} title="Close calendar panel" aria-label="Close calendar panel">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
+          <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onClose} title="Close calendar panel" aria-label="Close calendar panel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
           </button>
         </div>
       </div>
