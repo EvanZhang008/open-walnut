@@ -308,7 +308,7 @@ drawn by its own class (565 class names, 155 looks).
 - A state is a dot and a word (`NoticeStatus`); a task's state icon is `TaskStateIcon`. A count, a
   tag or a kind (Worker, Leader, Trigger, Cron, a pull request, a source, Beta) is the one `.badge`
   (`web/src/styles/badge.css`, class list from `badge()` in `web/src/components/common/badge.ts`).
-  Settings' `SettingsTag` follows it: a state tone (success, warning, error: Connected, Needs setup,
+  Settings' `SettingsTag` follows it: a state tone (success, warning, error: Ready, Needs setup,
   Failed) draws the dot and word, neutral and accent (Built-in, Recommended) the badge.
 - One look: 18 px tall, a soft rectangle (`--radius-xs`, 4 px, never a pill), padding 0 6 px, 11 px
   weight 500, normal case. A member class keeps only its place (flex, margin, max-width), never a

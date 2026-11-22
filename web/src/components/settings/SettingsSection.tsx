@@ -569,7 +569,7 @@ const SETTINGS_STATE_TONE: Record<'warning' | 'success' | 'error', NoticeTone> =
 }
 
 /**
- * A settings tag. A state (`Connected`, `Needs setup`, `Failed`: tone success, warning or error) is a
+ * A settings tag. A state (`Ready`, `Needs setup`, `Failed`: tone success, warning or error) is a
  * dot and a word, the one state look (`NoticeStatus`, standard.md "Status labels"); a kind or a mark
  * (`Built-in`, `Read only`, `Recommended`: neutral or accent) is the one `.badge`.
  */
