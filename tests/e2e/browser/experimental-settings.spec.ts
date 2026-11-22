@@ -2,9 +2,11 @@ import { test, expect } from '@playwright/test';
 
 test.use({ viewport: { width: 1200, height: 820 }, deviceScaleFactor: 1 });
 test.describe.configure({ mode: 'serial' });
-test.setTimeout(90_000);
+test.setTimeout(180_000);
 const SHOTS = process.env.WALNUT_TASK_DIR ? `${process.env.WALNUT_TASK_DIR}/evidence` : '/tmp/experimental-settings';
 const switchId = '#experimental-leader_status_follows_workers';
+/** After a reload the fixture's dev server serves every module again: on a busy host that took over 15 s (2026-11-22). */
+const AFTER_RELOAD = { timeout: 45_000 };
 const patch = (enabled: boolean) => ({ experimental: { leader_status_follows_workers: enabled } });
 
 test('an explicit experimental choice survives navigation and reload, then turns off again', async ({ page, request }) => {
@@ -23,7 +25,7 @@ test('an explicit experimental choice survives navigation and reload, then turns
     await page.getByTestId('settings-nav-experimental').click();
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     await page.reload();
-    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true', AFTER_RELOAD);
     await toggle.focus();
     await page.keyboard.press('Space');
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
@@ -54,4 +56,38 @@ test('a failed save restores the switch and a real retry succeeds', async ({ pag
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     await expect.poll(async () => (await (await request.get('/api/config')).json()).config.experimental.leader_status_follows_workers).toBe(true);
   } finally { await page.unroute('**/api/config'); await request.put('/api/config', { data: patch(false) }); }
+});
+
+test('"Every experiment on" turns on every switch never set alone, keeps one turned off, and turns back off', async ({ page, request }) => {
+  const everyId = '#experimental-every_experiment';
+  const voiceId = '#experimental-voice_conversation';
+  const flags = async () => (await (await request.get('/api/config')).json()).config.experimental ?? {};
+  const reset = { experimental: { every_experiment: false, voice_conversation: null, leader_status_follows_workers: false } };
+  await request.put('/api/config', { data: reset });
+  try {
+    await page.goto('/settings');
+    await page.getByTestId('settings-nav-experimental').click();
+    const every = page.locator(everyId);
+    const voice = page.locator(voiceId);
+    const leader = page.locator(switchId);
+    await expect(every).toHaveAttribute('aria-checked', 'false', AFTER_RELOAD);
+    await expect(voice).toHaveAttribute('aria-checked', 'false');
+    await every.click();
+    await expect(every).toHaveAttribute('aria-checked', 'true');
+    await expect(voice).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await flags()).every_experiment).toBe(true);
+    // The experiment the user turned off stays off; the rest follow.
+    await expect(leader).toHaveAttribute('aria-checked', 'false');
+    await page.reload();
+    await expect(every).toHaveAttribute('aria-checked', 'true', AFTER_RELOAD);
+    await expect(voice).toHaveAttribute('aria-checked', 'true');
+    // Voice was only implied: it is not frozen on disk.
+    expect((await flags()).voice_conversation).toBeUndefined();
+    await page.waitForTimeout(250);
+    await page.screenshot({ scale: 'css', path: `${SHOTS}/experimental-every-on.png` });
+    await every.click();
+    await expect(every).toHaveAttribute('aria-checked', 'false');
+    await expect(voice).toHaveAttribute('aria-checked', 'false');
+    await expect.poll(async () => (await flags()).every_experiment).toBe(false);
+  } finally { await request.put('/api/config', { data: reset }); }
 });

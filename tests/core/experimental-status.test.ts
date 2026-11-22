@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EXPERIMENTAL_FEATURES, experimentalEnabled, validExperimentalFlags } from '../../src/core/experimental.js';
+import { EVERY_EXPERIMENT, EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, effectiveExperimentalFlags, experimentalEnabled, validExperimentalFlags } from '../../src/core/experimental.js';
 import { workerStatus } from '../../src/core/worker-status.js';
 import { childrenByParent, completeStatusFacts, statusOf, type StatusFacts } from '../../src/core/user-status-sync.js';
 import type { Task } from '../../src/core/types.js';
@@ -31,6 +31,27 @@ describe('experimental choices', () => {
     }
     expect(validExperimentalFlags({ future_flag: true })).toBe(true);
     for (const bad of [null, [], true, 'true', { leader_status_follows_workers: 'false' }]) expect(validExperimentalFlags(bad)).toBe(false);
+  });
+
+  it('"every experiment on" turns on every experiment never set alone, and a choice of its own still wins', () => {
+    // The switch over all of them must never be taken for an experiment's own id.
+    expect(EXPERIMENTAL_FEATURES.map((f) => f.id)).not.toContain(EVERY_EXPERIMENT);
+    const [first, ...rest] = EXPERIMENTAL_FEATURES;
+    const flags = { [EVERY_EXPERIMENT]: true, [first.id]: false };
+    expect(experimentalEnabled(flags, first.id)).toBe(false);
+    for (const feature of rest) expect(experimentalEnabled(flags, feature.id)).toBe(true);
+    for (const feature of EXPERIMENTAL_FEATURES) expect(experimentalEnabled({ [EVERY_EXPERIMENT]: false }, feature.id)).toBe(feature.default);
+    expect(validExperimentalFlags(flags)).toBe(true);
+  });
+
+  it('the resolved map keeps unknown flags and gives every registered experiment its value', () => {
+    const out = effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true, chat_reading_split: false, future_flag: false });
+    expect(out.future_flag).toBe(false);
+    expect(out.chat_reading_split).toBe(false);
+    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(out[feature.id]).toBe(true);
+    const none = effectiveExperimentalFlags(undefined);
+    for (const feature of EXPERIMENTAL_FEATURES) expect(none[feature.id]).toBe(false);
+    for (const id of GRADUATED_EXPERIMENTS) expect(none[id]).toBe(true);
   });
 });
 

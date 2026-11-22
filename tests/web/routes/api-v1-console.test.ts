@@ -126,7 +126,12 @@ describe('GET /api/v1/config — allowlist projection', () => {
     await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + 'experimental:\n  project_first_start: true\n  chat_reading_split: false\n  odd_value: yes-please\n')
     const res = await request(createApp()).get('/api/v1/config')
     expect(res.status).toBe(200)
-    expect(res.body.config.experimental).toEqual({ project_first_start: true, chat_reading_split: false, camera_capture: true })
+    const flags = res.body.config.experimental
+    expect(flags).toMatchObject({ project_first_start: true, chat_reading_split: false, camera_capture: true })
+    expect(flags).not.toHaveProperty('odd_value')
+    // Every registered experiment is resolved for a phone that reads only `flags[id] === true`.
+    for (const feature of EXPERIMENTAL_FEATURES) expect(typeof flags[feature.id]).toBe('boolean')
+    expect(flags.voice_conversation).toBe(false)
   })
 
   it('tells an older phone that a graduated experiment is on, whatever an old choice on disk says', async () => {
@@ -136,6 +141,14 @@ describe('GET /api/v1/config — allowlist projection', () => {
     for (const id of GRADUATED_EXPERIMENTS) expect(res.body.config.experimental[id]).toBe(true)
     // A graduated id is no switch any more: it is not in the registry Settings lists.
     for (const id of GRADUATED_EXPERIMENTS) expect(EXPERIMENTAL_FEATURES.some((f) => f.id === id)).toBe(false)
+  })
+
+  it('resolves "every experiment on" for the phone, keeping an experiment turned off alone', async () => {
+    await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + 'experimental:\n  every_experiment: true\n  chat_reading_split: false\n')
+    const flags = (await request(createApp()).get('/api/v1/config')).body.config.experimental
+    expect(flags.chat_reading_split).toBe(false)
+    expect(flags.every_experiment).toBe(true)
+    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(flags[feature.id]).toBe(true)
   })
 })
 

@@ -235,9 +235,35 @@ export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];
 /** Unknown boolean flags stay on disk for newer versions, but have no effect here. */
 export type ExperimentalFlags = Record<string, boolean>;
 
+/**
+ * A key in the same flag map that names no experiment: on, every experiment whose own switch was
+ * never set reads as on, each new one included as soon as it ships (for people who build or test
+ * Walnut). An experiment's own choice still wins, so one that misbehaves can be turned off alone.
+ * An older Walnut keeps it as an unknown flag and ignores it.
+ */
+export const EVERY_EXPERIMENT = 'every_experiment';
+
+export function everyExperimentOn(flags: ExperimentalFlags | undefined): boolean {
+  return flags?.[EVERY_EXPERIMENT] === true;
+}
+
 export function experimentalEnabled(flags: ExperimentalFlags | undefined, id: ExperimentalFeatureId): boolean {
   const feature = EXPERIMENTAL_FEATURES.find((f) => f.id === id)!;
-  return typeof flags?.[id] === 'boolean' ? flags[id] : feature.default;
+  if (typeof flags?.[id] === 'boolean') return flags[id];
+  return everyExperimentOn(flags) || feature.default;
+}
+
+/**
+ * What a client that only reads `flags[id] === true` (the phone) should see: every stored boolean
+ * as it is, each registered experiment as `experimentalEnabled` reads it, and each graduated one on.
+ */
+export function effectiveExperimentalFlags(flags: ExperimentalFlags | undefined): ExperimentalFlags {
+  const out: ExperimentalFlags = {};
+  for (const [id, on] of Object.entries(flags ?? {})) if (typeof on === 'boolean') out[id] = on;
+  for (const feature of EXPERIMENTAL_FEATURES) out[feature.id] = experimentalEnabled(flags, feature.id);
+  // A switch that ended on is on for every client, whatever an old choice on disk says.
+  for (const id of GRADUATED_EXPERIMENTS) out[id] = true;
+  return out;
 }
 
 export function validExperimentalFlags(value: unknown): value is ExperimentalFlags {

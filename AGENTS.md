@@ -77,7 +77,7 @@ platform.
 
 New behavior that changes what users see by default ships behind an experimental flag.
 Add its id, name, description and default (`false`) to `src/core/experimental.ts`; Settings
-shows one switch per entry. Only an explicit choice enables it. Keep today's behavior when
+shows one switch per entry. Only an explicit choice enables it; its first switch, "Every experiment on" (`every_experiment`), is that choice for every experiment never set alone, new ones included. Keep today's behavior when
 the flag is off. When the experiment ends, remove its switch or change its registry default.
 Store overrides in `Config.experimental`, preserve unknown boolean flags for newer versions,
 and keep automated preference writes in the test run's own copy.

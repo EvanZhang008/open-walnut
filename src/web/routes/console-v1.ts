@@ -30,7 +30,7 @@ import { relayControlAction, sendV1Error as sendError } from './v1-control-relay
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionSkillRoutes } from '../../replica/companion-copy-routes.js'
 import { experimentalConfigView } from '../../core/experimental-prefs.js'
-import { GRADUATED_EXPERIMENTS } from '../../core/experimental.js'
+import { effectiveExperimentalFlags } from '../../core/experimental.js'
 import { processMemoryMb } from '../../core/observability/memory-ledger.js'
 
 export const consoleV1Router = Router()
@@ -100,13 +100,10 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
   return projection
 }
 
-/** The experiment switches as a client reads them (a test run's own choices included), booleans only. */
+/** The experiment switches as a client reads them (a test run's own choices included), booleans only, each registered one resolved and each graduated one on. */
 function experimentalFlagsOf(config: Parameters<typeof experimentalConfigView>[0]): Record<string, boolean> {
-  const out: Record<string, boolean> = {}
-  for (const [id, on] of Object.entries(experimentalConfigView(config).experimental ?? {})) if (typeof on === 'boolean') out[id] = on
-  // A switch that ended on is on for every client, whatever an old choice on disk says.
-  for (const id of GRADUATED_EXPERIMENTS) out[id] = true
-  return out
+  // Resolved here, so a phone that reads only `flags[id] === true` follows "every experiment on" too.
+  return effectiveExperimentalFlags(experimentalConfigView(config).experimental)
 }
 
 /** `config` with the companion's held config copy laid over it (top-level keys), else `config` as it is. */
