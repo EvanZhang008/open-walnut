@@ -56,13 +56,13 @@
   padding: 14px 16px 12px;
 }
 
-/* The bar's mic is the input box's key shape (styles/input-box.css): a rounded square, never a
-   circle, at the bar's larger size. */
+/* The bar's mic is the input box's key shape (styles/input-box.css): a circle, at the bar's
+   larger size. */
 .qb-mic {
   flex: none;
   width: 34px;
   height: 34px;
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   border: none;
   display: inline-flex;
   align-items: center;
@@ -86,7 +86,7 @@
   content: '';
   position: absolute;
   inset: -4px;
-  border-radius: var(--radius-md);
+  border-radius: 50%;
   border: 2px solid rgba(255, 69, 58, 0.45);
   animation: qb-ring 1.4s ease-out infinite;
 }

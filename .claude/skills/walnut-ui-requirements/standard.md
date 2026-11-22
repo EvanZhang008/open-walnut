@@ -47,7 +47,7 @@ card's answer row and tool row in `web/src/components/actions/ask-card.css`, use
 | Tool | `.ask-card-tools .btn` | Snooze, pin, paging arrows | transparent, no border, `--fg-muted`, corner 8 px, height 28 px, padding 0 6 px, 13 px; hover `--bg-hover` and `--fg`; Snooze reads "Snooze ▾"; an on pin turns `--accent` |
 | Send | inside the answer box | send a reply | 28 px circle, `var(--chat-hue-accent, var(--accent))`, white arrow; grey while the box is empty |
 
-Order in every card: the options or buttons first, then the answer box (34 px, corner 8 px,
+Order in every card: the options or buttons first, then the answer box (34 px, corner 12 px,
 `--bg-secondary`), with the tools on the box's line at its right; where the card is narrow (a
 Home row, a phone) the box takes the whole line and the tools the line under it, at the right. A
 card with no buttons is the box and its tools. Lines in the answer row are 8 px apart.
@@ -99,10 +99,10 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
 
 | Part | Look |
 |---|---|
-| Box | class `wn-input`; corner `--input-radius` (8 px, the buttons' corner); `--input-fill` (the fields' fill, below), a transparent 1 px edge that turns `--input-focus-edge` (`--border-strong`) on focus, no shadow, no ring |
+| Box | class `wn-input`; corner `--input-radius` (`--radius-md`, 12 px: rounded, never a pill); `--input-fill` (the fields' fill, below), a transparent 1 px edge that turns `--input-focus-edge` (`--border-strong`) on focus, no shadow, no ring |
 | One line (`is-line`) | 34 px tall with its edges, a button's height; 46 px on a phone (a 44 px key and the two edges); it grows with the text |
-| Mic, attach | 28 px rounded squares (corner 6 px), transparent, `--fg-muted`; `--bg-hover` on hover |
-| Send (`wn-input-send`) | the same 28 px rounded square, solid blue (`--chat-hue-accent`, blue even inside a chat), white arrow (`ICON_SEND`); grey while there is nothing to send |
+| Mic, attach | 28 px circles, transparent, `--fg-muted`; `--bg-hover` on hover |
+| Send (`wn-input-send`) | the same 28 px circle, solid blue (`--chat-hue-accent`, blue even inside a chat), white arrow (`ICON_SEND`); grey while there is nothing to send |
 | Phone keys | 44 px to tap, drawn 36 px, 4 px clear of the box's edge |
 | Drag a picture over | an accent edge and a 2 px dashed accent outline, the same on every box |
 | Unread | a session whose new reply is not read yet: one red edge, a faint red fill, and the placeholder says "New reply above, not read yet"; never a second red ring |
@@ -121,8 +121,7 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
 - Text grows with `fitRows` (`web/src/components/common/fit-rows.ts`), which reads the box's own
   padding; never a fixed `rows * 20 + 12`.
 - The quick bar (`web/src/components/quickbar/`) is a launcher panel, not a box in a page: its
-  panel keeps the dialog corner and its 34 px row; only its mic takes the key's shape (a rounded
-  square, `--radius-sm`).
+  panel keeps the dialog corner and its 34 px row; only its mic takes the key's shape (a circle).
 
 ### Fields
 
@@ -134,12 +133,12 @@ placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fie
 
 | Part | Look |
 |---|---|
-| Field | the bare `input, textarea, select`: corner `--input-radius` (8 px), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` on focus, no glow; keyboard focus adds a 2 px `--accent` ring (below) |
+| Field | the bare `input, textarea, select`: corner `--input-radius` (12 px), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` on focus, no glow; keyboard focus adds a 2 px `--accent` ring (below) |
 | Height | as tall as the buttons beside it: 34 px (`.btn`), or 28 px with `is-sm` beside `.btn-sm` (a toolbar, Settings, a plugin's small row, a lane or name rename); every one-line field 46 px on a phone (`.app-shell-navigation` or a portalled `.is-phone-layer`). Give a small field `is-sm`, never a height, and no vertical padding of its own. A text area's `min-height` is how many lines it starts with, not a look |
 | Placeholder | `--input-placeholder` (`--fg-notice`, 4.6:1 on the fill over white), never faded with opacity |
 | Error | one red edge (`aria-invalid="true"`), on every field |
 | A field with parts | `wn-field` on the box: an icon first (`wn-field-icon`), then the words, then a busy ring, a count, a unit (`wn-field-unit`) and its keys |
-| Keys (clear, mic) | the message box's rounded squares (`wn-field-key`, 28 px, 22 px in `is-sm`), never a circle |
+| Keys (clear, mic) | the message box's circles (`wn-field-key`, 28 px, 22 px in `is-sm`) |
 | Pick-one and suggestions | a `select` and an `input[list]` draw one chevron |
 
 - A search is `SearchField` (`web/src/components/common/SearchField.tsx`): the magnifier, the

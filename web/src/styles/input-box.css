@@ -17,11 +17,13 @@
  * Guard: tests/web/ui-standard-ratchet.test.ts (restyledInput, restyledField).
  */
 :root {
-  --input-radius: var(--radius-sm);   /* 8 px: the corner of the buttons beside it */
+  /* 12 px: rounded, never an oval pill. 2026-11-21 the user called the Threads pill box ugly;
+     2026-11-22 he asked why the 8 px corners and square keys replaced the round look he had. */
+  --input-radius: var(--radius-md);
   --input-line: 34px;                 /* one line, its 1 px edges included: a button's height */
   --input-key: 28px;                  /* the mic and send inside the box */
-  --input-key-radius: 6px;            /* the box's corner less the key's inset */
-  --input-key-hit-radius: calc(var(--input-key-radius) + 4px); /* a phone key's 4 px clear ring */
+  --input-key-radius: 50%;            /* the mic, send and clear keys are circles, as before 2026-11-21 */
+  --input-key-hit-radius: 50%;        /* a phone key's clear ring stays a circle */
   --input-line-sm: 28px;              /* a field in a row of small buttons (.btn-sm, Settings) */
   --input-key-sm: 22px;               /* the keys of such a field */
   /* Every box's and field's fill: the text colour over whatever is under it, so a field shows one
@@ -170,7 +172,7 @@
    Display menu, a flat bar in Mail, a tall white box on Apps, a darker bar in Settings' sidebar
    beside an outlined "Your name", round clear keys, a pale placeholder). A field is drawn as the
    message box: the same corner, fill, edge and focus, as tall as the buttons beside it (34 px, or
-   28 px with `is-sm` beside `.btn-sm`), its keys the same rounded squares. Only fields a person
+   28 px with `is-sm` beside `.btn-sm`), its keys the same circles. Only fields a person
    types or picks in: a checkbox, radio, range, colour or file input keeps the engine's own control
    (and its focus, below). Weightless (`:where`), so any rule of a place wins over it. */
 :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select) {
@@ -318,7 +320,7 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 }
 .wn-field-key svg { width: 12px; height: 12px; }
 .wn-field-key:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* A mic over a bare field's right end (MicField) is the same rounded square, no taller than the
+/* A mic over a bare field's right end (MicField) is the same circle, no taller than the
    size box-mic.css gives it: the mic is a `.btn`, whose 34 px min-height stood it out of a 28 px
    Settings field. */
 .mic-field:not(.wn-field) > .mic-field-mic .mic-btn { min-height: 0; border-radius: var(--input-key-radius); }
