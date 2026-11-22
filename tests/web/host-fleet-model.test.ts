@@ -56,6 +56,18 @@ describe('a full card', () => {
     for (const gone of ['system', 'sessions', 'spend', 'server']) expect(value(h, gone)).toBeUndefined()
     expect(statusKind(h)).toBe('connected')
   })
+
+  it('a host\'s one Walnut service: the same row, named Walnut service, the launcher facts as before', () => {
+    const launcher = { current: 'build bbbb', good: 'build aaaa', phase: 'committed' as const, watchedUntil: null, lastRollback: null }
+    const h = host({ daemon: { ...host().daemon!, launcher, serves: 'walnut-serve' } })
+    const row = value(h, 'daemon')!
+    expect(row).toMatchObject({ key: 'daemon', label: 'Walnut service', value: 'Build 0123456789ab' })
+    expect(row.title).toMatch(/^One program on the host that starts and keeps its sessions and runs Walnut's server there/)
+    expect(row.title).toContain('Kept running by its launcher: runs build bbbb, goes back to build aaaa')
+    const plain = value(host({ daemon: { ...host().daemon!, launcher } }), 'daemon')!
+    expect(plain.label).toBe('Session helper')
+    expect(plain.title.replace(/^The small program Walnut runs on the host to start and keep its sessions/, '')).toBe(row.title.replace(/^One program[^\n]*/, ''))
+  })
 })
 
 describe('missing readings say why', () => {

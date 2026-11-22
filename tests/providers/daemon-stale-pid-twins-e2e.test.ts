@@ -253,3 +253,46 @@ describe.each(TWINS)('daemon twin at --stop: $name', (twin) => {
     expect(kills.filter(([, sig]) => sig !== 0)).toEqual([[proc.pid, 'SIGTERM']])
   }, 60_000)
 })
+
+// S7-R2-L1 / L2 (2026-11-22 review): what a dead or replaced daemon leaves of the session registry.
+// Temp names carry the writer's pid, so each crash mid-write left one for good; and a zombie's stop
+// wrote its inventory over its successor's registry (only cleanup()'s write checked daemon.pid).
+describe.each(TWINS)("daemon twin and a dead daemon's registry files: $name", (twin) => {
+  const registryOf = (daemonDir: string) => path.join(daemonDir, 'sessions.json')
+  const until = async (check: () => boolean, ms = 10_000) => {
+    const end = Date.now() + ms
+    while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 50))
+  }
+
+  it('at --start, the registry temp files of a dead writer older than an hour are swept; a fresh one and other files stay', async () => {
+    const daemonDir = freshDaemonDir()
+    const registry = registryOf(daemonDir)
+    const old = [`${registry}.999999.tmp`, `${registry}.999999.sync.tmp`]
+    const fresh = `${registry}.999998.tmp`
+    const unrelated = path.join(daemonDir, 'notes.json.999999.tmp')
+    for (const f of [...old, fresh, unrelated]) fs.writeFileSync(f, '{}')
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    for (const f of [...old, unrelated]) fs.utimesSync(f, twoHoursAgo, twoHoursAgo)
+    const { port } = await boot(twin, daemonDir)
+    expect((await hello(port)).ok).toBe(true)
+    await until(() => old.every((f) => !fs.existsSync(f)))
+    expect(old.filter((f) => fs.existsSync(f))).toEqual([])
+    expect(fs.existsSync(fresh)).toBe(true)
+    expect(fs.existsSync(unrelated)).toBe(true)
+  }, 60_000)
+
+  it("a stop while daemon.pid names its successor never writes its inventory over the successor's registry", async () => {
+    const daemonDir = freshDaemonDir()
+    const { port, proc, exit } = await boot(twin, daemonDir)
+    expect((await hello(port)).ok).toBe(true)
+    const successor = spawn('sleep', ['60'], { stdio: 'ignore' })
+    children.push(successor)
+    const theirs = JSON.stringify({ version: 1, sessions: { theirs: { pid: successor.pid, startTime: null, args: ['claude'] } } })
+    fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(successor.pid))
+    fs.writeFileSync(registryOf(daemonDir), theirs)
+    proc.kill('SIGTERM') // this test's own child daemon
+    await exit
+    expect(fs.readFileSync(registryOf(daemonDir), 'utf8')).toBe(theirs)
+    expect(successor.exitCode).toBeNull()
+  }, 60_000)
+})

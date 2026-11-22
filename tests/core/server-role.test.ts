@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  _resetLeaderPresenceForTesting, _resetServerRoleForTesting, canStandIn, followerKind, hasLocalDaemon, isFollower, isHostReplica, leaderAnswers,
+  _resetLeaderPresenceForTesting, _resetServerRoleForTesting, _resetServiceRuntimeForTesting, canStandIn, holdServiceRuntime, serviceRuntime, followerKind, hasLocalDaemon, isFollower, isHostReplica, leaderAnswers,
   leaderPresence, onLeaderPresence, placement, resolveServerRole, role, runsSessions, setLeaderPresence,
 } from '../../src/core/server-role.js'
 import { _resetReplicaTargetsForTesting, onReplicaTargetsChanged, registerReplicaTarget, replicaTargets, type ReplicaTarget } from '../../src/core/replication/replica-targets.js'
@@ -128,6 +128,19 @@ describe('role and placement (env matrix)', () => {
     expect(role()).toBe('replica')
     _resetServerRoleForTesting()
     expect([role(), placement(), isHostReplica(), hasLocalDaemon()]).toEqual(['leader', 'mac', false, true])
+  })
+
+  it('a host replica has a local daemon only as the host\'s one Walnut service, which holds the runtime', () => {
+    process.env.WALNUT_ROLE = 'replica'
+    process.env.WALNUT_PLACEMENT = 'host'
+    try {
+      expect(hasLocalDaemon()).toBe(false)
+      holdServiceRuntime({ dir: '/tmp/d', home: '/leader', env: {} })
+      expect(serviceRuntime()).toEqual({ dir: '/tmp/d', home: '/leader', env: {} })
+      expect(hasLocalDaemon()).toBe(true)
+      expect(isHostReplica()).toBe(true)
+    } finally { _resetServiceRuntimeForTesting() }
+    expect(hasLocalDaemon()).toBe(false)
   })
 
   it.each([' replica', 'replica ', '\treplica\n'])('WALNUT_ROLE=%j: role() and isFollower() agree (both trim it)', (raw) => {

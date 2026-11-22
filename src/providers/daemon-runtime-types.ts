@@ -1,3 +1,5 @@
+import type { FollowerEntry } from './follower-entry-core.js'
+
 /**
  * The session daemon as a runtime a process creates (createDaemonRuntime in daemon-standalone.ts):
  * its options and its surface. Kept apart from that file so a server that creates one in its own
@@ -37,6 +39,20 @@ export interface DaemonRuntimeOptions {
    * finds by its command line; a server on the leader's own machine never writes one.
    */
   pidFile?: boolean
+  /**
+   * With listen false: what its hello says it is (`serves`). 'walnut-serve' only for a host's one
+   * Walnut service (a `walnut serve` process holding the runtime); default 'daemon'. A program is
+   * always 'daemon'.
+   */
+  serves?: 'daemon' | 'walnut-serve'
+  /**
+   * A host's one Walnut service: the follower home this very process is (src/binary/service-entry.ts).
+   * Its host-server supervisor starts no child for that home, and a follower spec the leader changes
+   * for it ends the runtime (exit), so the launcher starts the service again on the new spec.
+   */
+  selfHome?: string
+  /** With listen false: the launcher's facts for hello, from the process that writes its marks (serve-launcher-beat.ts). */
+  launcherFacts?: () => unknown
   /** The program that runs this daemon (the `walnut` shim re-runs it): its executable and script (argv[1], '' for none). */
   program?: { script: string }
   /** The umask every child is forked with (077 as the daemon always gave them); null leaves the process's own. */
@@ -51,6 +67,8 @@ export interface DaemonRuntimeOptions {
   onListening?: (port: number) => void
   /** Receives the crash reporter (log + exit breadcrumb) as early as it exists. */
   onCrashReporter?: (report: (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void) => void
+  /** The program's exit hook gets the log's synchronous flush (an in-process runtime flushes at its stop). */
+  onExitFlush?: (flush: () => void) => void
 }
 
 /** A message from the daemon to an in-process client: an answer (`id`, `ok`) or an event (`ev`). */
@@ -65,6 +83,40 @@ export interface DaemonClient {
   /** One command, answered by its reply frame (`ok`, `error`, ...). */
   request(cmd: string, params?: Record<string, unknown>): Promise<DaemonFrame>
   close(): void
+}
+
+/**
+ * What the follower server of a host's one Walnut service calls on the runtime in its own process
+ * (core/link/follower-link.ts createDirectFollowerLink): the follower entry's functions of
+ * `(home, params)`, each already inside the daemon's command lane and drain (what the same
+ * `follower.*` command gets on a socket), and `attach`, which seats the server as the follower of
+ * `home` with no `follower.hello` and no socket. Only the home the service serves is seated.
+ */
+export type FollowerSeatCalls = Pick<FollowerEntry,
+  'view' | 'sessions' | 'send' | 'permission' | 'peer' | 'op' | 'triggers' | 'triggerTest' | 'pending' | 'start'>
+export interface FollowerSeat extends FollowerSeatCalls {
+  /**
+   * The server follows `home` from now on: the client below is its one in-process link (the same
+   * commands and events a follower socket has: streams, `gateway-request`, `trigger-delivery`,
+   * `follower.report`, reads scoped to its Walnut). `hello` says what the follower socket's hello
+   * says. onClose runs once when the runtime closes the client (stop).
+   */
+  attach(home: string, hello: FollowerSeatHello, onFrame: (frame: DaemonFrame) => void, onClose?: () => void): DaemonClient
+  /**
+   * The home the client `attach` returned holds the seat of now: the Walnut's first home here,
+   * also after a declared move made the attached home its alias. Null once the seat is not its
+   * own any more (another follower took it, or the client closed): the server seats itself again.
+   * Every call above resolves its home the same way, as a follower socket's command is.
+   */
+  seatedAs(client: DaemonClient): string | null
+}
+/** What `follower.hello` carries besides the Walnut: which of the daemon's events this follower takes. */
+export interface FollowerSeatHello {
+  answersLocal?: boolean
+  deliversTriggers?: boolean
+  answersOnline?: boolean
+  /** The follower's host-call entry socket (host-call-entry.ts), when it answers local calls. */
+  callSocket?: unknown
 }
 
 export interface DaemonRuntime {
@@ -91,6 +143,8 @@ export interface DaemonRuntime {
   connect(onFrame: (frame: DaemonFrame) => void, onClose?: () => void): DaemonClient
   /** `--stop`, `--status`, `--prewarm-folds`: what the program prints, and its exit code. */
   cli: { stop(): Promise<number>; status(): Promise<number>; prewarmFolds(): number }
+  /** The seat of the follower server that holds this runtime in its own process (a host's one Walnut service). */
+  readonly follower: FollowerSeat
   /** A line in the daemon's own log. */
   log(level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>): void
 }

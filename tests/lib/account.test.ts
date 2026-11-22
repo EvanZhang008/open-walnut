@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { accountInfo, knownAccount, parsePasswdLine, resetAccountForTest } from '../../src/lib/account.js'
+import { accountInfo, knownAccount, parsePasswdLine, primeAccount, resetAccountForTest } from '../../src/lib/account.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const onBun = typeof (process.versions as { bun?: string }).bun === 'string'
@@ -117,6 +117,21 @@ describe('knownAccount', () => {
       const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', f), 'utf8')
       expect(src, f).toContain('knownAccount()')
       expect(src, f).not.toMatch(/accountInfo\(\)/)
+    }
+  })
+})
+
+// The lookup's steps are written once and run two ways (lookupSteps): the read ahead and the
+// synchronous lookup must find the same entry.
+describe('primeAccount', () => {
+  it('finds what accountInfo finds', async () => {
+    resetAccountForTest()
+    try {
+      const primed = await primeAccount()
+      resetAccountForTest()
+      expect(primed).toEqual(accountInfo())
+    } finally {
+      resetAccountForTest()
     }
   })
 })

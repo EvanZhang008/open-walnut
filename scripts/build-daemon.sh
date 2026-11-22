@@ -231,6 +231,7 @@ SOURCES=(
   src/providers/daemon-service-handback.ts
   src/providers/daemon-update-standin.ts
   src/providers/daemon-update-shell.ts
+  src/providers/daemon-live-sh.ts
   src/providers/daemon-service-boot-script.ts
   src/providers/daemon-service-cron.ts
   src/providers/daemon-service-cron-host.ts
@@ -259,6 +260,7 @@ SOURCES=(
   src/providers/git-commit-core.ts
   src/providers/offline-host-core.ts
   src/providers/offline-journal-core.ts
+  src/providers/host-journal-core.ts
   src/core/peers/envelope-kit.ts
   src/core/sessions/send-rules.ts
   src/providers/leader-core.ts
@@ -288,6 +290,11 @@ SOURCES=(
   src/providers/cli-owner-core.ts
   src/providers/cli-argv-files-core.ts
   src/providers/host-start-core.ts
+  src/providers/follower-entry-core.ts
+  src/providers/file-pool-deadline.ts
+  src/providers/registry-writer-core.ts
+  src/providers/log-appender-core.ts
+  src/binary/service-entry.ts
   src/providers/clock-host-start-core.ts
   src/core/sessions/open-items-text.ts
   src/core/human-inbox/letter-check.ts

@@ -23,6 +23,8 @@ export interface DaemonLockBanner {
   wsPort: number | null
   /** The runtime runs inside a Walnut server's process (experiment in_process_daemon): no door. */
   inProcess?: true
+  /** With inProcess: that server is a host's one Walnut service, run by the service launcher (src/binary/service-entry.ts). */
+  service?: true
 }
 
 export interface DaemonLockOwnerInfo {
@@ -32,6 +34,7 @@ export interface DaemonLockOwnerInfo {
   instanceId: string
   wsPort: number | null
   inProcess?: true
+  service?: true
 }
 
 export type DaemonLockConflictReason = 'foreign' | 'timeout' | 'malformed' | 'oversize' | 'unreachable' | 'listen'
@@ -96,6 +99,8 @@ export interface AcquireDaemonInstanceLockOptions {
   fs?: LockFsLike
   /** Says in the banner that the runtime runs inside a server's process (DaemonLockBanner.inProcess). */
   inProcess?: boolean
+  /** And that the server is the launcher's service (DaemonLockBanner.service). */
+  service?: boolean
 }
 
 export interface DaemonInstanceLockOwner {
@@ -151,6 +156,7 @@ export function buildDaemonLockBanner(info: DaemonLockOwnerInfo): DaemonLockBann
     instanceId: info.instanceId,
     wsPort: normalizeWsPort(info.wsPort),
     ...(info.inProcess ? { inProcess: true as const } : {}),
+    ...(info.inProcess && info.service ? { service: true as const } : {}),
   }
 }
 
@@ -174,6 +180,7 @@ export function parseDaemonLockBanner(line: string): DaemonLockBanner | null {
     instanceId: candidate.instanceId,
     wsPort: normalizeWsPort(candidate.wsPort),
     ...(candidate.inProcess === true ? { inProcess: true as const } : {}),
+    ...(candidate.inProcess === true && candidate.service === true ? { service: true as const } : {}),
   }
 }
 
@@ -237,6 +244,7 @@ async function probeExistingOwner(
   return {
     uid: banner.uid, dir: banner.dir, pid: banner.pid, instanceId: banner.instanceId, wsPort: banner.wsPort,
     ...(banner.inProcess ? { inProcess: true as const } : {}),
+    ...(banner.service ? { service: true as const } : {}),
   }
 }
 
@@ -285,7 +293,7 @@ export async function acquireDaemonInstanceLock(
     const clear = () => clearTimeout(timer)
     socket.on('error', clear)
     socket.on('close', clear)
-    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined })
+    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined, service: options.service ? true : undefined })
     try { socket.end(JSON.stringify(banner) + '\n') } catch { clear() }
   })
 

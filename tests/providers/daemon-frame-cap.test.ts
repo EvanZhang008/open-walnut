@@ -140,6 +140,7 @@ const WRITERS: Record<string, Record<string, string>> = {
   'src/host-server/daemon-link.ts': {
     'socket.send(JSON.stringify(frame))': 'stream frames: link-stream.ts cuts data into 48 KB pieces',
     "try { ws.send(JSON.stringify({ cmd: 'follower.report', report: body })) } catch { /* the next one */ }": 'a follower report: a few counts',
+    'socket.send(preflightFrame(cmd, params, id))': 'preflightFrame ran assertFrameFits on the frame it returns (the check the direct link shares)',
   },
   'src/providers/stream-lane.ts': {
     'ws.send(JSON.stringify(frame))': 'stream frames: link-stream.ts cuts data into 48 KB pieces',

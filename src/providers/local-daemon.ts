@@ -54,7 +54,7 @@ import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { resolveSessionHostLaunch } from './session-host.js'
 import { classifySessionHostStart } from './session-host-core.js'
 import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
-import { isHostReplica } from '../core/server-role.js'
+import { isHostReplica, serviceRuntime, type ServiceRuntime } from '../core/server-role.js'
 import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 import { execFileReplaced, singleFile } from '../lib/single-file.js'
 import { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
@@ -94,7 +94,9 @@ async function claudeCodeNotNeeded(): Promise<boolean> {
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
 // unaffected. Production sets nothing → /tmp/open-walnut, or ~/.cache/open-walnut
 // when another user on this machine owns that one (src/lib/daemon-dir.ts).
-const DEFAULT_DAEMON_DIR = localDaemonDirChoice().dir
+// A host's one Walnut service (src/binary/service-entry.ts) runs the runtime on the dir its launcher
+// named, never on the follower server's own run dir (its WALNUT_DAEMON_DIR).
+const DEFAULT_DAEMON_DIR = serviceRuntime()?.dir ?? localDaemonDirChoice().dir
 
 /** Patience for a daemon whose pid is alive but whose first hello timed out. */
 const BUSY_DAEMON_HELLO_MS = 15_000
@@ -372,6 +374,11 @@ export class LocalDaemon {
   }
   /** The daemon runs inside this server's process (in-process-daemon.ts). */
   get runsInProcess(): boolean { return !!this.inProcess && !this._inProcessDeclined && inProcessDaemonRunning() }
+  /** This instance is the runtime of a host's one Walnut service (server-role.ts serviceRuntime): its dir, its home. */
+  private get service(): ServiceRuntime | null {
+    const fact = serviceRuntime()
+    return fact && this.inProcess && path.resolve(fact.dir) === this.daemonDir ? fact : null
+  }
   /** The macOS bundle a daemon THIS instance spawned is attributed to. Null means
    *  "plain node/bun identity, or an adopted daemon whose identity we did not
    *  choose" — deliberately not a claim that no separation exists. */
@@ -384,7 +391,8 @@ export class LocalDaemon {
     // A host replica never starts or adopts a daemon: the host's daemon is the
     // one it follows, and a second one would take that host's sessions
     // (docs/plan/walnut-replica-servers-impl.md, WP1).
-    if (isHostReplica()) throw new Error('a host replica never starts or adopts a local session daemon')
+    // The host's one Walnut service is the exception: it holds the host's runtime itself.
+    if (isHostReplica() && !this.service) throw new Error('a host replica never starts or adopts a local session daemon')
     // Posture guard: only an instance running as the real user may claim the
     // production daemon (daemon-ownership.ts documents the two incidents this
     // encodes and the one posture that is deliberately still allowed). It must
@@ -428,8 +436,10 @@ export class LocalDaemon {
   /** The daemon in this process when the experiment says so (and it can be had), else a daemon program. */
   private async ensureRunningOrInProcess(): Promise<number> {
     if (this.inProcess && !this._inProcessDeclined && await this.inProcess()) {
+      const service = this.service
       const verdict = await ensureInProcessDaemon({
         dir: this.daemonDir,
+        ...(service ? { service: { home: service.home } } : {}),
         readPort: () => this.readPortFile(),
         alive: async (port) => (await this.ping(port)).alive,
         // A daemon program still serving the dir hands it over first (SIGTERM: the production dir
@@ -459,6 +469,8 @@ export class LocalDaemon {
         this._sessionHostApp = null
         return 0
       }
+      // The host's one Walnut service never runs a daemon program beside itself: its next start tries again.
+      if (service) throw new Error(`the service's daemon runtime did not start: ${verdict.why}`)
       this._inProcessDeclined = true
       log.session.warn('in-process daemon not started; using the daemon program that serves this dir', { dir: this.daemonDir, why: verdict.why })
     }
@@ -1670,8 +1682,11 @@ export class LocalDaemon {
     // Seen live 2026-07-05 (incident inc-1783280584117). The daemon itself never
     // needs these vars (it uses WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR /
     // WALNUT_HOME_OVERRIDE / HOME), so dropping them is always safe.
+    // A host's one Walnut service: what its launcher exported for the daemon, never the follower
+    // server's env (its role, its token, its run dir), which no session may inherit.
+    const service = this.service
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...(service ? service.env : process.env),
       WALNUT_DAEMON_DIR: this.daemonDir,
     }
     // Opt-in session-only cron policy (config session.cron_policy) — the daemon
@@ -1735,8 +1750,8 @@ export class LocalDaemon {
     delete env.WALNUT_DAEMON_KEEP_SESSIONS
     // The service daemon's state dir is its own (its triggers, hooks, host copies): a daemon
     // started here is never the service, and with this var inherited from a session of the
-    // service daemon it could reach that daemon's state.
-    delete env.WALNUT_DAEMON_STATE_DIR
+    // service daemon it could reach that daemon's state. The host's one service's runtime is that service.
+    if (!service) delete env.WALNUT_DAEMON_STATE_DIR
     for (const [key, value] of Object.entries(this.envOverrides)) {
       if (value === undefined) delete env[key]
       else env[key] = value

@@ -73,26 +73,26 @@ describe('L1.1 daemon-reaper: idempotent cleanup + broadcast', () => {
   })
 
   // R4 — persist happens before broadcast (crash-safe ordering)
-  it('persistRegistry fires before session_state broadcast', () => {
+  // The write itself runs off the thread (registry-writer-core.ts): the change is asked for
+  // before the broadcast, and the write that lands holds the session as dead.
+  it('persistRegistry fires before session_state broadcast', async () => {
     const core = createDaemonCore(ctx.deps)
     const session = makeTestSession({ pid: 1003 })
     ctx.sessions.set('sid4', session)
+    await core.persistRegistryDurable()
+    expect(Object.keys(core.readRegistry())).toEqual(['sid4'])
 
     const order: string[] = []
-    // Patch writeFileSync to record persist timing.
-    const originalWrite = fs.writeFileSync
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation((...args) => {
-      order.push('persist')
-      return originalWrite.apply(fs, args as Parameters<typeof fs.writeFileSync>)
-    })
+    const before = core.registryWriteStats().requests
     ctx.spies.broadcastSessionStateFn.mockImplementation(() => {
-      order.push('broadcast')
+      order.push(core.registryWriteStats().requests > before ? 'persist+broadcast' : 'broadcast')
     })
 
     core.reapSession('sid4', 1, 'ordering-test')
 
-    expect(order).toEqual(['persist', 'broadcast'])
-    writeSpy.mockRestore()
+    expect(order).toEqual(['persist+broadcast'])
+    await core.persistRegistryDurable()
+    expect(core.readRegistry()).toEqual({})
   })
 
   // R5 — orphanPollTimer cleared on reap

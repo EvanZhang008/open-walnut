@@ -1,9 +1,10 @@
 /**
- * The follower Link (link.ts): a host replica's loopback socket to its own
- * host's daemon. It wraps the host server's daemon link
- * (src/host-server/daemon-link.ts: follower.hello, follower.status polls,
- * streams, report) and adds what the Link interface asks: frames heard, events,
- * and doors on streams.
+ * The follower Link (link.ts): a host replica's link to its own host's daemon, in two forms.
+ *   createFollowerLink: a loopback socket. It wraps the host server's daemon link
+ *     (src/host-server/daemon-link.ts: follower.hello, follower.status polls, streams, report) and
+ *     adds what the Link interface asks: frames heard, events, and doors on streams.
+ *   createDirectFollowerLink (follower-link-direct.ts): a host's one Walnut service holds the
+ *     daemon runtime in its own process and calls it, with no socket and no hello.
  */
 
 import type { Duplex } from 'node:stream'
@@ -11,11 +12,10 @@ import type { IncomingStreamInfo } from '../../lib/link-stream.js'
 import { createDaemonLink, type DaemonLink, type DaemonLinkState, type FollowerView } from '../../host-server/daemon-link.js'
 import { createLinkEvents, type Link, type LinkDoor, type LinkPeerRole, type LinkState } from './link.js'
 
-export interface FollowerLinkOptions {
-  daemonDir: string
+/** What both forms of the link are told: the Walnut it follows and how the server answers around it. */
+export interface FollowerLinkWiring {
   walnutId: string
   home: string
-  token: string
   /** This host's name, for the peer field and logs. */
   host: string
   /** A stream the Mac (`primary`) opened to this server: where it is plugged in; null refuses it. */
@@ -34,6 +34,11 @@ export interface FollowerLinkOptions {
   helloExtra?: () => Record<string, unknown>
   /** A daemon event on the link (a `gateway-request`, a `trigger-delivery`). */
   onEvent?: (event: Record<string, unknown>) => void
+}
+
+export interface FollowerLinkOptions extends FollowerLinkWiring {
+  daemonDir: string
+  token: string
   /** Tests: a daemon link of their own. */
   daemonLink?: DaemonLink
 }
@@ -51,6 +56,8 @@ export interface FollowerLink extends Link {
   /** What the daemon advertised (its `hello`), or null before the first answer. */
   capabilities(): readonly string[] | null
 }
+
+export { createDirectFollowerLink, type DirectFollowerLinkOptions } from './follower-link-direct.js'
 
 export function createFollowerLink(opts: FollowerLinkOptions): FollowerLink {
   const now = opts.now ?? Date.now

@@ -37,7 +37,7 @@ describe('oneshot-v1 twin wiring', () => {
     for (const src of [standalone, source]) {
       for (const cmd of COMMANDS) expect(src).toContain(`case '${cmd}':`)
       expect(src).toContain('oneShot.dropClient(ws)')
-      expect(src).toMatch(/function cleanup\(\) \{\n {2}\/\/ One-shot claude runs[^\n]*\n {2}try \{ oneShot\.disposeAll\(\)/)
+      expect(src).toMatch(/function cleanup\([^)]*\) \{\n {2}\/\/ One-shot claude runs[^\n]*\n {2}try \{ oneShot\.disposeAll\(\)/)
     }
   })
 

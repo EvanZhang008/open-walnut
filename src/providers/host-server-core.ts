@@ -33,6 +33,16 @@
  * the fallback: it is no news that the primary works again. This works while
  * the Mac sleeps, which is when a replica's away code runs.
  *
+ * A host's one Walnut service (src/binary/service-entry.ts) IS the follower of one home (`self`):
+ * no child is started, adopted or stopped for it. Its spec and token are kept as for any other
+ * (follower.hello still takes that token, status and report work the same), and a configure that
+ * changes what runs (or removes it) saves the spec and asks the service to restart
+ * (`self.changed`), so the launcher starts it again on the new spec. Its settings change live.
+ * The service's home is one Walnut under every home a declared move made its alias here
+ * (`canonical`, walnut-scope-core.ts): a configure that names another of them is still the
+ * service's own, and its spec keeps the service's home, the one service-mode.json names, so the
+ * next `--service` start finds it (review A3b S34-L3: a second follower, then a daemon start).
+ *
  * How the daemon twins get it: daemon-standalone.ts imports
  * createHostServerSupervisor; daemon-source.ts inlines its `toString()` through
  * `__CREATE_HOST_SERVER__`. So the factory body references NOTHING at module
@@ -106,6 +116,8 @@ export interface HostServerDeps {
   startTimeOf: (pid: number) => string | null
   /** Signal a whole process group (`process.kill(-pid, sig)`). */
   killGroup: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
+  /** The pid file's reader: `heldServerAt` (the source twin inlines it; the factory references nothing at module scope). */
+  heldAt: typeof heldServerAt
   /** What every server starts with before the spec's env (PATH, the daemon's dir). */
   baseEnv: () => Record<string, string>
   /** A fresh secret (hex). */
@@ -116,6 +128,10 @@ export interface HostServerDeps {
    * `<log>.1` and emptied in place (the server appends, so it writes on at 0).
    */
   maxLogBytes?: number
+  /** The host's one Walnut service: the follower of `home` is this very process (pid). */
+  self?: { home: string; pid: number; changed: (why: string) => void }
+  /** The home a Walnut is keyed by here (walnut-scope-core.ts canonical); only the service's own home is matched by it. */
+  canonical?: (home: string) => string
 }
 
 export function createHostServerSupervisor(deps: HostServerDeps) {
@@ -164,6 +180,19 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     logPoll?: unknown
   }
   const entries = new Map<string, Entry>()
+
+  /** `home` names the service's own Walnut (the home it serves, or a home a declared move made the same). */
+  function isSelf(home: string): boolean {
+    const self = deps.self
+    if (!self) return false
+    if (self.home === home) return true
+    return !!deps.canonical && !!home && deps.canonical(home) === deps.canonical(self.home)
+  }
+
+  /** The entry for `home`: the service's own under its own home, whichever of its homes is named. */
+  function entryOf(home: string): Entry | undefined {
+    return entries.get(home) ?? (isSelf(home) ? entries.get(deps.self!.home) : undefined)
+  }
 
   function specFile(home: string): string { return path.join(deps.dir, `server-${deps.keyOf(home)}.json`) }
   function pidFile(home: string): string { return path.join(deps.dir, `server-${deps.keyOf(home)}.pid`) }
@@ -444,8 +473,40 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
    * The leader sets (or removes, with null) what runs for its Walnut.
    * `from.freshLink`: the first configure on this leader connection (the twins say).
    */
+  /** The service's own home: its spec is kept, nothing is started or stopped for it. */
+  function selfEntry(spec: HostServerSpec, token: string): Entry {
+    return { spec, token, state: 'running', since: deps.now(), pid: deps.self!.pid, restarts: 0, attempt: 0, gen: 0, program: 'primary', exitTimes: [] }
+  }
+
+  function configureSelf(named: string, raw: unknown): HostServerStatus {
+    const home = deps.self!.home
+    const prev = entries.get(home)
+    if (raw === null || raw === undefined) {
+      entries.delete(home)
+      try { fs.unlinkSync(specFile(home)) } catch { /* none */ }
+      deps.log('info', 'host server: removed (the service\'s own)', { home })
+      deps.self!.changed('the leader removed the follower')
+      return statusOf(undefined)
+    }
+    const asked = validate(raw)
+    if (asked.home !== named) throw new Error('server.configure: the spec belongs to another Walnut')
+    // Kept under the service's home, the one its mode file and its next start match.
+    const spec: HostServerSpec = { ...asked, home }
+    if (prev && runKey(prev.spec) === runKey(spec)) {
+      if (JSON.stringify(prev.spec.settings) !== JSON.stringify(spec.settings)) { prev.spec = spec; save(prev) }
+      return statusOf(prev)
+    }
+    const e = selfEntry(spec, deps.randomToken())
+    e.state = 'starting'
+    save(e)
+    entries.set(home, e)
+    deps.self!.changed('the leader changed what runs')
+    return statusOf(e)
+  }
+
   function configure(home: string, raw: unknown, from?: { freshLink?: boolean }): HostServerStatus {
     if (typeof home !== 'string' || !home) throw new Error('server.configure: missing home')
+    if (isSelf(home)) return configureSelf(home, raw)
     const prev = entries.get(home)
     if (raw === null || raw === undefined) {
       if (prev) {
@@ -506,6 +567,13 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         if (spec.fallback && f && typeof f.since === 'number' && typeof f.until === 'number') fallback = f
       } catch { continue }
       if (entries.has(spec.home)) continue
+      if (isSelf(spec.home)) {
+        const home = deps.self!.home
+        if (entries.has(home)) continue
+        entries.set(home, selfEntry({ ...spec, home }, token))
+        deps.log('info', 'host server: this service is the follower', { home, pid: deps.self!.pid })
+        continue
+      }
       const e: Entry = { spec, token, state: 'off', since: deps.now(), restarts: 0, attempt: 0, gen: 0, program: 'primary', exitTimes: [] }
       // The fallback hour an earlier daemon began keeps its end (one already over ends at once).
       if (fallback) {
@@ -514,10 +582,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         e.backTimer = deps.setTimer(() => { e.backTimer = undefined; toPrimary(e, 'the fallback hour is over') }, Math.max(0, fallback.until - deps.now()))
       }
       entries.set(spec.home, e)
-      let held: { pid?: unknown; startTime?: unknown } | null = null
-      try { held = JSON.parse(fs.readFileSync(pidFile(spec.home), 'utf8')) } catch { /* none */ }
-      const pid = typeof held?.pid === 'number' ? held.pid : 0
-      const startTime = typeof held?.startTime === 'string' ? held.startTime : null
+      const { pid, startTime } = deps.heldAt(fs, pidFile(spec.home))
       if (pid > 1 && startTime !== null && deps.startTimeOf(pid) === startTime) {
         e.pid = pid
         e.startTime = startTime
@@ -535,25 +600,25 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   return {
     configure,
     boot,
-    status: (home: string): HostServerStatus => statusOf(entries.get(home)),
+    status: (home: string): HostServerStatus => statusOf(entryOf(home)),
     /** Whether `token` is the one the server for `home` was started with. */
     tokenMatches: (home: string, token: unknown): boolean => {
-      const want = entries.get(home)?.token
+      const want = entryOf(home)?.token
       if (!want || typeof token !== 'string' || token.length !== want.length) return false
       let diff = 0
       for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i)
       return diff === 0
     },
     /** The settings the leader gave the server for `home`. */
-    settingsOf: (home: string): Record<string, unknown> => entries.get(home)?.spec.settings ?? {},
+    settingsOf: (home: string): Record<string, unknown> => entryOf(home)?.spec.settings ?? {},
     /** The program the leader configured for `home` (its node and `<appDir>/dist/cli.js`), or null: an ask's MCP mount (host-start-core.ts). */
     programOf: (home: string): { command: string; args: string[] } | null => {
-      const e = entries.get(home)
+      const e = entryOf(home)
       return e ? { command: e.spec.command, args: [...e.spec.args] } : null
     },
     /** The server says how it is (kept in memory only). False when too large or unknown. */
     report: (home: string, body: unknown): boolean => {
-      const e = entries.get(home)
+      const e = entryOf(home)
       if (!e || !body || typeof body !== 'object' || Array.isArray(body)) return false
       if (JSON.stringify(body).length > MAX_REPORT_CHARS) return false
       e.report = body as Record<string, unknown>
@@ -578,7 +643,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
      * fallback), absolute paths only; null when this Walnut runs nothing here.
      */
     logsOf: (home: string): { stdout: string; dirs: string[] } | null => {
-      const e = entries.get(home)
+      const e = entryOf(home)
       if (!e) return null
       const dirs: string[] = []
       for (const env of [e.spec.env, e.spec.fallback?.env]) {
@@ -591,3 +656,76 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
 }
 
 export type HostServerSupervisor = ReturnType<typeof createHostServerSupervisor>
+
+/**
+ * The pid file the supervisor keeps for a running server, `{ pid, startTime }`: pid 0 and no start
+ * time when it is missing or does not read. One reader for the supervisor's adoption at boot
+ * (`deps.heldAt`) and stopRecordedServer. Self-contained: the source twin inlines its text.
+ */
+export function heldServerAt(fs: Pick<typeof import('node:fs'), 'readFileSync'>, file: string): { pid: number; startTime: string | null } {
+  let held: { pid?: unknown; startTime?: unknown } | null = null
+  try { held = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { /* none */ }
+  const pid = typeof held?.pid === 'number' && Number.isSafeInteger(held.pid) ? held.pid : 0
+  return { pid, startTime: typeof held?.startTime === 'string' ? held.startTime : null }
+}
+
+/**
+ * The host's one Walnut service starting (src/binary/main.ts) ends the follower child an older
+ * daemon left for its home: it survives its daemon by design and still holds the data dir's lock
+ * and the port. The supervisor's own stop (stopRun): the recorded pid only while its start time
+ * still matches, SIGTERM to its group, SIGKILL after 10 s; then its pid file goes. The spec file is
+ * never touched: an older daemon put back by a rollback starts the follower from it again.
+ *
+ * A live pid whose start time cannot be read (ps timed out on a loaded Mac) is not "another
+ * process": asked again a few times, then `unknown`, signalled never and its pid file kept, so the
+ * next start (or a daemon put back) still finds the follower (review A3b S34-L1: the file went,
+ * and a rolled-back daemon started a second follower beside the one still running).
+ */
+export async function stopRecordedServer(o: {
+  pidFile: string
+  fs: Pick<typeof import('node:fs'), 'readFileSync' | 'rmSync'>
+  startTimeOf: (pid: number) => string | null
+  killGroup: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
+  /** Whether a pid names any process (default: signal 0; EPERM is a process too). */
+  exists?: (pid: number) => boolean
+  killAfterMs?: number
+  pollMs?: number
+  /** How often, and how far apart, an unreadable start time of a live pid is asked again. */
+  unknownTries?: number
+  unknownRetryMs?: number
+}): Promise<'none' | 'stopped' | 'killed' | 'stays' | 'unknown'> {
+  const { pid, startTime } = heldServerAt(o.fs, o.pidFile)
+  const exists = o.exists ?? ((p: number): boolean => {
+    try { process.kill(p, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
+  })
+  // 'yes' the recorded follower still runs, 'no' gone or another process, 'unknown' a live pid whose start time did not read.
+  const state = (): 'yes' | 'no' | 'unknown' => {
+    if (pid <= 1 || startTime === null) return 'no'
+    const now = o.startTimeOf(pid)
+    if (now !== null) return now === startTime ? 'yes' : 'no'
+    return exists(pid) ? 'unknown' : 'no'
+  }
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  const done = (verdict: 'none' | 'stopped' | 'killed' | 'stays' | 'unknown') => {
+    if (verdict !== 'stays' && verdict !== 'unknown') { try { o.fs.rmSync(o.pidFile, { force: true }) } catch { /* the next start tries again */ } }
+    return verdict
+  }
+  let first = state()
+  for (let i = 1; first === 'unknown' && i < (o.unknownTries ?? 3); i++) {
+    await pause(o.unknownRetryMs ?? 1_000)
+    first = state()
+  }
+  if (first === 'unknown') return done('unknown')
+  if (first === 'no') return done('none')
+  const wait = async (ms: number): Promise<boolean> => {
+    for (const end = Date.now() + ms; Date.now() < end;) {
+      if (state() === 'no') return true
+      await pause(o.pollMs ?? 100)
+    }
+    return state() === 'no'
+  }
+  try { o.killGroup(pid, 'SIGTERM') } catch { /* gone */ }
+  if (await wait(o.killAfterMs ?? 10_000)) return done('stopped')
+  try { o.killGroup(pid, 'SIGKILL') } catch { /* gone */ }
+  return done(await wait(2_000) ? 'killed' : 'stays')
+}

@@ -120,19 +120,22 @@ type Client = { frames: number } & ({ resends: string } | { exempt: string })
 const CLIENTS: Record<string, Client> = {
   'src/providers/daemon-connection.ts': { frames: 4, resends: 'send() is the loop over sendOnce (the payload); the other three are the dial (hello, the capability handshake, the probe role), before the link serves a command' },
   'src/web/ws/bridge-registry.ts': { frames: 2, resends: 'bridgeRequest and bridgeRequestPrepared both go through throughSwap' },
-  'src/host-server/daemon-link.ts': { frames: 1, resends: 'request() goes through the loop; the dial and status poll use the same call(), before any request' },
+  'src/host-server/daemon-link.ts': { frames: 2, resends: 'request() goes through the loop (swapResender, which the direct link shares); the dial and status poll use the same call(), before any request; the other frame is preflightFrame, the check both links take' },
   'src/commands/net.ts': { frames: 1, resends: 'daemonRpc is the loop over daemonRpcOnce' },
   'src/providers/local-daemon.ts': { frames: 3, exempt: 'its probes of the daemon on one port (hello, exec.list, the login-session check): they ask that daemon itself, and the next probe or ensureRunning asks the next one' },
   'src/providers/daemon-service-ready.ts': { frames: 1, exempt: 'the service check after a swap (daemonReady) says hello to learn which daemon serves; a draining one is the answer it looks for' },
   // A DaemonConnection command reaches an in-process runtime through send(), as the frame
   // daemon-connection.ts built inside its resendThroughSwap loop; this file builds a frame only in request().
   'src/providers/daemon-in-process-client.ts': { frames: 1, exempt: "request() is only the in-process runtime's serves check of itself (in-process-daemon.ts inProcessDaemonServesCheck: hello, then status): a drain of that very runtime is the answer it asks for" },
+  // No socket: a call of the runtime in this process, checked by daemon-link.ts preflightFrame (counted as a frame).
+  'src/core/link/follower-link-direct.ts': { frames: 1, resends: "request() goes through daemon-link.ts swapResender: a call the runtime's drain refuses (a service.update or service.handover pauses it, and a failed update resumes it) is sent again inside the caller's timeout, as on the socket link" },
   'src/providers/stream-lane.ts': { frames: 1, exempt: 'the lane dial (hello, stream.lane): a refusal drops the lane and its own redial reaches the next daemon' },
 }
 
 // A command frame: an object with an `id` key right before `cmd` (or a spread frame), the same
 // stringified with `cmd` first, or the prepared send's template. Comments are taken out first.
-const FRAME_G = /\{(?:[^{}]*?,)?\s*id\b(?:\s*:\s*[\w.]+)?\s*,\s*(?:cmd\b|\.\.\.frame\b)[^{}]*\}|JSON\.stringify\(\{[^{}]*\bcmd\b[^{}]*\bid\b|\{"id":\$\{[^}]+\},"cmd"/g
+// A call of the shared frame check (daemon-link.ts preflightFrame) counts too: a link with no socket still sends commands.
+const FRAME_G = /\{(?:[^{}]*?,)?\s*id\b(?:\s*:\s*[\w.]+)?\s*,\s*(?:cmd\b|\.\.\.frame\b)[^{}]*\}|JSON\.stringify\(\{[^{}]*\bcmd\b[^{}]*\bid\b|\{"id":\$\{[^}]+\},"cmd"|(?<!function )\bpreflightFrame\(/g
 const FRAME = new RegExp(FRAME_G.source)
 const code = (rel: string) => read(rel).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/.*$/gm, '$1')
 const DAEMON_SIDE = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
@@ -157,7 +160,7 @@ describe('every client of a daemon is listed', () => {
   it.each(found)('%s says how a drain refusal reaches its caller', (rel) => {
     const entry = CLIENTS[rel]
     expect(entry, `${rel} writes daemon command frames: send them through resendThroughSwap (daemon-drain-resend.ts) or list why its refusal is the answer`).toBeDefined()
-    if ('resends' in entry) expect(read(rel)).toMatch(/resendThroughSwap\(/)
+    if ('resends' in entry) expect(read(rel)).toMatch(/resendThroughSwap\(|swapResender\(/)
     expect(('resends' in entry ? entry.resends : entry.exempt).length).toBeGreaterThan(20)
     expect(code(rel).match(FRAME_G)?.length ?? 0, `${rel}: a frame write was added or removed; say how a drain refusal reaches its caller, then update the count`).toBe(entry.frames)
   })

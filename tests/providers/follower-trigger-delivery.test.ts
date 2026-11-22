@@ -237,9 +237,11 @@ describe('follower trigger delivery twin wiring', () => {
       expect(src).toMatch(/followerTriggers\.deliver\(\{ home: spec\.home, triggerId: id, taskId: spec\.taskId, text(: text)?, messageId(: messageId)? \}\)/)
       expect(src).not.toMatch(/offlineHost\.deliverTrigger\(spec\.home/)
       expect(src).toContain('followerTriggers.dropSocket(ws)')
-      expect(src).toContain('followerTriggers.answer(ws, cmd)')
+      // The follower's answer goes to the core from the socket it came on (through the follower entry).
+      expect(src).toMatch(/triggerAnswer: (\(ws, cmd\) => |function \(ws, cmd\) \{ return )followerTriggers\.answer\(ws, cmd\)/)
+      expect(src).toMatch(/followerEntry\.triggerDeliver\(ws, cmd\)/)
       expect(src).toMatch(/deliversTriggers === true \? (ws|f) : null/)
-      expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerMayWrite\(home\)/)
+      expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerEntry\.mayWrite\(home\)/)
       expect(src).toContain('offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId)')
       expect(src).toContain('offlineHost.liveSessionsOf(home)')
       // The fallback is counted with the gateway's own answers.

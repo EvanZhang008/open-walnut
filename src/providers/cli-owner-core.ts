@@ -89,8 +89,8 @@ export interface CliClaim {
   sid: string
   /** The spawn started: record its pid. */
   commit(pid: number, startTime: string | null): void
-  /** The spawn did not happen: give the claim back. */
-  release(): void
+  /** The spawn did not happen: give the claim back (only while the record is still this claim's). */
+  release(): Promise<void>
 }
 
 export interface CliOwner {
@@ -110,7 +110,7 @@ export interface CliOwner {
   /** The live holder of a sid, from its record and the process table, or null. */
   holderOf(sid: string, opts?: { exceptPid?: number }): Promise<CliOwnerHolder | null>
   /** Remove records whose process is gone. Returns how many went. */
-  prune(): number
+  prune(): Promise<number>
 }
 
 export function createCliOwner(deps: CliOwnerDeps): CliOwner {
@@ -154,13 +154,17 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
     return Object.assign(new Error(text), { code: 'SESSION_LIVE', errorKind: 'session_live', holder, sid })
   }
 
-  function readRecord(file: string): { rec: CliOwnerRecord | null; raw: string | null; mtimeMs: number } {
+  /** On fs.promises: a claim runs on the thread a server may share (in_process_daemon). */
+  async function readRecord(file: string): Promise<{ rec: CliOwnerRecord | null; raw: string | null; mtimeMs: number }> {
     let raw: string
     let mtimeMs = 0
     try {
-      mtimeMs = fs.statSync(file).mtimeMs
-      raw = fs.readFileSync(file, 'utf8')
+      mtimeMs = (await fs.promises.stat(file)).mtimeMs
+      raw = await fs.promises.readFile(file, 'utf8')
     } catch { return { rec: null, raw: null, mtimeMs } }
+    return parseRecord(raw, mtimeMs)
+  }
+  function parseRecord(raw: string, mtimeMs: number): { rec: CliOwnerRecord | null; raw: string | null; mtimeMs: number } {
     if (raw.length > MAX_RECORD_BYTES) return { rec: null, raw, mtimeMs }
     try {
       const rec = JSON.parse(raw) as CliOwnerRecord
@@ -335,42 +339,57 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
     deps.log('warn', 'cli owner: records unavailable; process table check only', { sid, error: (err as Error)?.message })
     const found = await scan(sid, exceptSet(opts))
     if (found && found.length > 0) throw refusal(sid, { kind: 'live', pid: found[0], self: false, unrecorded: true })
-    return { sid, commit() {}, release() {} }
+    return { sid, commit() {}, async release() {} }
+  }
+
+  // The records dir, made once per process (a mkdir per start was a synchronous call on the thread).
+  let recordsDirMade: Promise<void> | null = null
+  function makeRecordsDir(): Promise<void> {
+    if (!recordsDirMade) {
+      recordsDirMade = fs.promises.mkdir(recordsDir, { recursive: true, mode: 0o700 }).then(() => {}, (err) => { recordsDirMade = null; throw err })
+    }
+    return recordsDirMade
   }
 
   async function claim(sid: string, opts?: { exceptPid?: number; home?: string }): Promise<CliClaim> {
     if (!SID_RE.test(sid)) throw new Error('cli owner: bad session id')
-    try { fs.mkdirSync(recordsDir, { recursive: true, mode: 0o700 }) } catch (err) { return scanOnlyClaim(sid, opts, err) }
+    try { await makeRecordsDir() } catch (err) { return scanOnlyClaim(sid, opts, err) }
     const file = fileOf(sid)
     for (let attempt = 0; attempt < 4; attempt++) {
       const mine = makeRecord(sid, 'claiming', opts?.home)
-      let fd: number | null = null
+      let fh: import('node:fs/promises').FileHandle | null = null
       try {
-        fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600)
+        // O_WRONLY | O_CREAT | O_EXCL: of two daemons racing for one sid exactly one gets the file.
+        fh = await fs.promises.open(file, 'wx', 0o600)
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return scanOnlyClaim(sid, opts, err)
+        const code = (err as NodeJS.ErrnoException).code
+        // The dir went away under a dir made once (a cleanup): made again on the next try.
+        // That try counts as one of the four: harmless, a second ENOENT in a row is a dir that will not stay.
+        if (code === 'ENOENT') { recordsDirMade = null; try { await makeRecordsDir() } catch (e) { return scanOnlyClaim(sid, opts, e) } continue }
+        if (code !== 'EEXIST') return scanOnlyClaim(sid, opts, err)
       }
-      if (fd !== null) {
-        try { fs.writeSync(fd, JSON.stringify(mine)) } catch (err) {
-          try { fs.closeSync(fd) } catch { /* closed */ }
-          try { fs.unlinkSync(file) } catch { /* gone */ }
+      if (fh !== null) {
+        try { await fh.writeFile(JSON.stringify(mine)) } catch (err) {
+          try { await fh.close() } catch { /* closed */ }
+          try { await fs.promises.unlink(file) } catch { /* gone */ }
           return scanOnlyClaim(sid, opts, err)
         }
-        fs.closeSync(fd)
-        const ours = () => readRecord(file).rec?.nonce === mine.nonce
-        const release = () => { if (ours()) { try { fs.unlinkSync(file) } catch { /* gone */ } } }
+        await fh.close()
+        const release = async () => {
+          if ((await readRecord(file)).rec?.nonce === mine.nonce) { try { await fs.promises.unlink(file) } catch { /* gone */ } }
+        }
         const found = await scan(sid, exceptSet(opts))
         if (found === null) deps.log('warn', 'cli owner: process table unreadable; record check only', { sid })
         else if (found.length > 0) {
-          release()
+          await release()
           throw refusal(sid, { kind: 'live', pid: found[0], self: false, unrecorded: true })
         }
         // A breaker that misjudged our claim moved it aside while we scanned. It
         // puts a record it should not have moved back, so look again, take ours
         // back out, and claim afresh.
-        if (!ours()) {
+        if ((await readRecord(file)).rec?.nonce !== mine.nonce) {
           await new Promise((r) => setTimeout(r, 100))
-          release()
+          await release()
           continue
         }
         return {
@@ -383,7 +402,7 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
           release,
         }
       }
-      const { rec, raw, mtimeMs } = readRecord(file)
+      const { rec, raw, mtimeMs } = await readRecord(file)
       if (!rec) {
         // Unreadable: being written this instant (the O_EXCL create precedes its
         // write), or junk once it has stayed unreadable past the grace.
@@ -408,9 +427,9 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
   async function adopt(sid: string, pid: number, startTime: string | null, home?: string): Promise<'written' | 'kept' | 'conflict'> {
     if (!SID_RE.test(sid) || !Number.isSafeInteger(pid) || pid <= 1) return 'kept'
     try {
-      fs.mkdirSync(recordsDir, { recursive: true, mode: 0o700 })
+      await makeRecordsDir()
       const file = fileOf(sid)
-      const { rec, raw } = readRecord(file)
+      const { rec, raw } = await readRecord(file)
       if (rec && rec.state === 'running' && rec.cli?.pid === pid && rec.daemon.instance === deps.self.instance) return 'kept'
       if (rec && !(rec.state === 'running' && rec.cli?.pid === pid)) {
         const holder = await judge(rec)
@@ -430,7 +449,7 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
 
   async function holderOf(sid: string, opts?: { exceptPid?: number }): Promise<CliOwnerHolder | null> {
     if (!SID_RE.test(sid)) return null
-    const { rec } = readRecord(fileOf(sid))
+    const { rec } = await readRecord(fileOf(sid))
     if (rec) {
       const holder = await judge(rec)
       if (holder && holder.pid !== opts?.exceptPid) return holder
@@ -439,18 +458,18 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
     return found && found.length > 0 ? { kind: 'live', pid: found[0], self: false, unrecorded: true } : null
   }
 
-  function prune(): number {
+  async function prune(): Promise<number> {
     let names: string[]
-    try { names = fs.readdirSync(recordsDir) } catch { return 0 }
+    try { names = await fs.promises.readdir(recordsDir) } catch { return 0 }
     let removed = 0
     for (const name of names) {
       const file = path.join(recordsDir, name)
       if (name.includes('.stale-') || name.endsWith('.tmp')) {
-        try { if (deps.now() - fs.statSync(file).mtimeMs > CLAIM_TTL_MS) { fs.unlinkSync(file); removed++ } } catch { /* gone */ }
+        try { if (deps.now() - (await fs.promises.stat(file)).mtimeMs > CLAIM_TTL_MS) { await fs.promises.unlink(file); removed++ } } catch { /* gone */ }
         continue
       }
       if (!name.endsWith('.json')) continue
-      const { rec, raw, mtimeMs } = readRecord(file)
+      const { rec, raw, mtimeMs } = await readRecord(file)
       const dead = rec
         ? rec.state === 'running' ? !rec.cli || !deps.isAlive(rec.cli.pid)
           : deps.now() - rec.at > CLAIM_TTL_MS || !deps.isAlive(rec.daemon.pid)

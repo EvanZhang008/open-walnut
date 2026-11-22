@@ -37,6 +37,14 @@ function fnBody(src: string, name: string): string {
   return src.slice(start, src.indexOf('\n}', start))
 }
 
+/** The follower entry both twins call (follower-entry-core.ts): its functions sit one level in. */
+const entrySrc = fs.readFileSync(path.join(root, 'src/providers/follower-entry-core.ts'), 'utf-8')
+function entryFn(name: string): string {
+  const start = entrySrc.search(new RegExp(`\\n  (async )?function ${name}\\(`))
+  expect(start, name).toBeGreaterThan(-1)
+  return entrySrc.slice(start, entrySrc.indexOf('\n  }\n', start))
+}
+
 describe('leader protocol: both twins', () => {
   it('advertise leader-epoch-v1, leader-settings-v1 and follower-alone-v1 without requiring them (an old daemon just never lets the companion lead)', () => {
     for (const cap of ['leader-epoch-v1', 'leader-settings-v1', 'follower-alone-v1']) {
@@ -167,36 +175,29 @@ describe('leader protocol: both twins', () => {
       expect(src).toMatch(/case 'follower\.sessions': return cmdFollowerSessions\(/)
       expect(src).toMatch(/case 'follower\.send': return daemonCommands\.run\(/)
       expect(src).toMatch(/case 'follower\.permission': return daemonCommands\.run\(/)
-      // Its own socket, its own Walnut.
+      // Its own socket, its own Walnut: every follower handler checks the socket first, then
+      // calls the one entry both twins share (follower-entry-core.ts) for that home.
       expect(fnBody(src, 'followerHomeOf')).toMatch(/followerSockets\.get\(home\) === ws/)
-      expect(fnBody(src, 'cmdFollowerSessions')).toMatch(/offlineHost\.sessionsOf\(home\)/)
-      // A write: the follower's socket, then no server answering, then the session's owner.
-      const target = fnBody(src, 'followerWriteTarget')
-      const home = target.indexOf('followerHomeOf(ws)')
-      const answers = target.indexOf('followerMayWrite(home)')
-      const owner = target.indexOf('offlineHost.ownerOf(sid) !== home')
-      expect(home).toBeGreaterThan(-1)
-      expect(answers).toBeGreaterThan(home)
-      expect(owner).toBeGreaterThan(answers)
-      expect(target).toMatch(/errorKind: 'leader_answers'/)
-      // "Answers" is the window the host server routes by, so the page and the daemon agree;
-      // a primary unheard since this daemon started does not answer (D14), and the window
-      // is read in one place (followerQuietMs).
-      expect(fnBody(src, 'primaryAnswersFollower')).toMatch(/primarySocketOpen\(home\) && leaderBook\.heardSinceBoot\(home\) && leaderBook\.primaryAgeMs\(home\) < followerQuietMs\(\)/)
-      expect(fnBody(src, 'followerQuietMs')).toMatch(/return LEADER_QUIET_MS/)
+      for (const [fn, call] of [
+        ['cmdFollowerSessions', 'sessions(home)'], ['cmdFollowerSend', 'send(home, cmd)'], ['cmdFollowerPermission', 'permission(home, cmd)'],
+        ['cmdFollowerPeer', 'peer(home, cmd)'], ['cmdFollowerOp', 'op(home, cmd)'], ['cmdFollowerTriggers', 'triggers(home, cmd)'],
+        ['cmdFollowerTriggerTest', 'triggerTest(home, cmd)'], ['cmdFollowerPending', 'pending(home, cmd)'], ['cmdFollowerStart', 'start(home, cmd)'],
+      ] as const) {
+        const body = fnBody(src, fn)
+        const home = body.indexOf('followerHomeOf(ws)')
+        expect(home, fn).toBeGreaterThan(-1)
+        expect(body.indexOf('if (!home) return sendError(ws, id, '), fn).toBeGreaterThan(home)
+        expect(body.indexOf('followerEntry.' + call), fn).toBeGreaterThan(home)
+      }
+      expect(fnBody(src, 'sendFollowerAnswer')).toMatch(/if \(a\.ok\) return sendOk\(ws, id, a\.result\);?\s+sendError\(ws, id, a\.error, a\.extra\)/)
+      // The entry reads the twin's one quiet window and its own follower sockets.
+      expect(src).toMatch(/quietMs: LEADER_QUIET_MS,/)
+      expect(src).toMatch(/followerLinked: (\(home\) => |function \(home\) \{ return )followerSockets\.has\(home\)/)
+      expect(src).toMatch(/ownsDir: (\(\) => |function \(\) \{ return )ownsDaemonDir\(\)/)
       expect(src).not.toMatch(/FOLLOWER_LEADER_QUIET_MS/)
-      // While the Mac is back but still taking the journal, the journal stays the one writer.
-      expect(fnBody(src, 'followerMayWrite')).toMatch(/!primaryAnswersFollower\(home\) \|\| offlineHost\.pendingHandover\(home\)/)
-      // follower.op (journal v2): its own gate, in this order, then the core.
+      // follower.op (journal v2) and follower.pending are the follower's.
       for (const c of ['follower.op', 'follower.pending']) expect(list).toContain(`'${c}'`)
-      const fop = fnBody(src, 'cmdFollowerOp')
-      const order = ['followerHomeOf(ws)', 'followerMayWrite(home)', 'ownsDaemonDir()', 'offlineHost.handleFollowerWaiting(home,'].map((x) => fop.indexOf(x))
-      expect(order.every((x, i) => x > -1 && (i === 0 || x > order[i - 1]))).toBe(true)
-      expect(fop).toMatch(/why: 'not_owner'/)
-      expect(fnBody(src, 'cmdFollowerPending')).toMatch(/followerHomeOf\(ws\)[\s\S]*offlineHost\.pendingFor\(home, cmd\.sinceSeq\)/)
       expect(fnBody(src, 'cmdOfflineBlob')).toMatch(/origin === 'bridge' \|\| [\w.?]*origin === 'follower'/)
-      expect(fnBody(src, 'cmdFollowerSend')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.send'\)[\s\S]*offlineHost\.deliverHuman\(t\.home, t\.sid, cmd\.text, cmd\.messageId\)/)
-      expect(fnBody(src, 'cmdFollowerPermission')).toMatch(/followerWriteTarget\(ws, id, cmd, 'follower\.permission'\)[\s\S]*answerPermission\(t\.sid, cmd, 'follower\.permission'\)/)
       // read-history: a session id names a stream file and nothing else; a follower reads its own
       // Walnut's, owned as every follower read decides (the copy, then the journal).
       const rh = fnBody(src, 'cmdReadHistory')
@@ -372,13 +373,13 @@ describe('one quiet window, LEADER_QUIET_MS (replica plan C4, WP2)', () => {
   for (const [name, src] of Object.entries(twins)) {
     it(`${name}: follower writes and gateway routing read the one knob, parsed by envTimerMs (min 500, default 30 s)`, () => {
       expect(src).toMatch(/LEADER_QUIET_MS = envTimerMs\(process\.env\.WALNUT_LEADER_QUIET_MS, 30_?000, 500\)/)
-      // The follower view says the window, so the replica's presence counts by the daemon's own.
-      expect(fnBody(src, 'followerView')).toMatch(/quietMs: LEADER_QUIET_MS/)
+      // The follower entry gets the window (its view says it, so the replica's presence counts by
+      // the daemon's own, and its write and routing rules read it: the core checks below).
+      expect(src).toMatch(/quietMs: LEADER_QUIET_MS,/)
       // Gateway routing: a home with a linked follower calls a quiet primary away by the same window.
-      expect(fnBody(src, 'primaryQuietWithFollower')).toMatch(/followerSockets\.has\(home\) && leaderBook\.primaryAgeMs\(home\) >= LEADER_QUIET_MS/)
       const pick = fnBody(src, 'gatewayTargetFor')
       const silent = pick.indexOf('gateway: primary silent, answering here')
-      const quiet = pick.indexOf('if (target && home && primaryQuietWithFollower(home))')
+      const quiet = pick.indexOf('if (target && home && followerEntry.quietWithFollower(home))')
       expect(silent).toBeGreaterThan(-1)
       expect(quiet).toBeGreaterThan(silent)
       // Before the offline host decides who answers.
@@ -386,9 +387,35 @@ describe('one quiet window, LEADER_QUIET_MS (replica plan C4, WP2)', () => {
       expect(send.indexOf('gatewayTargetFor(home')).toBeGreaterThan(-1)
       expect(send.indexOf('gatewayTargetFor(home')).toBeLessThan(send.indexOf('offlineHost.hasHome(home)'))
       // The offline host's "a primary answers" check honours it too.
-      expect(src).toMatch(/GATEWAY_SILENT_BEATS\) return !primaryQuietWithFollower\(home\)/)
+      expect(src).toMatch(/GATEWAY_SILENT_BEATS\) return !followerEntry\.quietWithFollower\(home\)/)
     })
   }
+
+  it('the follower entry reads that window in one place, for its view, its writes and gateway routing', () => {
+    expect(entryFn('followerQuietMs')).toMatch(/return deps\.quietMs/)
+    // "Answers" is the window the host server routes by, so the page and the daemon agree; a
+    // primary unheard since this daemon started does not answer (D14).
+    expect(entryFn('primaryAnswers')).toMatch(/deps\.primarySocketOpen\(home\) && leaderBook\.heardSinceBoot\(home\) && leaderBook\.primaryAgeMs\(home\) < followerQuietMs\(\)/)
+    // While the Mac is back but still taking the journal, the journal stays the one writer.
+    expect(entryFn('mayWrite')).toMatch(/!primaryAnswers\(home\) \|\| offline\.pendingHandover\(home\)/)
+    expect(entryFn('quietWithFollower')).toMatch(/deps\.followerLinked\(home\) && leaderBook\.primaryAgeMs\(home\) >= deps\.quietMs/)
+    expect(entryFn('view')).toMatch(/quietMs: deps\.quietMs/)
+    // A write: no server answering, then the session's owner.
+    const target = entryFn('writeTarget')
+    const answers = target.indexOf('if (!mayWrite(home)) return leaderAnswers(name)')
+    const owner = target.indexOf('offline.ownerOf(sid) !== home')
+    expect(answers).toBeGreaterThan(-1)
+    expect(owner).toBeGreaterThan(answers)
+    // follower.op (journal v2): its own gate, in this order, then the core.
+    const fop = entryFn('op')
+    const order = ['if (!mayWrite(home))', 'if (!deps.ownsDir())', 'offline.handleFollowerWaiting(home,'].map((x) => fop.indexOf(x))
+    expect(order.every((x, i) => x > -1 && (i === 0 || x > order[i - 1]))).toBe(true)
+    expect(entrySrc).toMatch(/why: 'not_owner'/)
+    expect(entryFn('pending')).toMatch(/offline\.pendingFor\(home, cmd\.sinceSeq\)/)
+    expect(entryFn('send')).toMatch(/writeTarget\(home, cmd, 'follower\.send'\)[\s\S]*offline\.deliverHuman\(home, t\.sid, cmd\.text, cmd\.messageId\)/)
+    expect(entryFn('permission')).toMatch(/writeTarget\(home, cmd, 'follower\.permission'\)[\s\S]*deps\.answerPermission\(t\.sid, cmd, 'follower\.permission'\)/)
+    expect(entryFn('sessions')).toMatch(/offline\.sessionsOf\(home\)/)
+  })
 
   it('the follower allowlists of both twins are the same set (order may differ)', () => {
     expect(setEntries(twins.source, 'FOLLOWER_ALLOWED_COMMANDS')).toEqual(setEntries(twins.standalone, 'FOLLOWER_ALLOWED_COMMANDS'))

@@ -103,28 +103,35 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templateSrc).toMatch(/4096/)
   })
 
-  // P2 — atomic tmp → rename
-  it('both implementations do atomic writeFileSync(tmp) → fsyncSync → renameSync', () => {
-    const checkAtomic = (src: string) => {
-      const idxWrite = src.indexOf("writeFileSync(tmp")
-      const idxFsync = src.indexOf('fsyncSync')
-      const idxRename = src.indexOf('renameSync(tmp')
-      return idxWrite > 0 && idxFsync > idxWrite && idxRename > idxFsync
-    }
-    expect(checkAtomic(coreSrc)).toBe(true)
-    expect(checkAtomic(templateSrc)).toBe(true)
+  // P2 — one registry writer for both twins (registry-writer-core.ts, 2026-11-22): the bun twin
+  // imports it through daemon-core.ts, the JS twin inlines its text. Neither writes on its own.
+  const writerSrc = readFile(path.join(ROOT, 'src/providers/registry-writer-core.ts'))
+  it('both twins write the registry through the one registry writer', () => {
+    expect(coreSrc).toMatch(/createRegistryWriter\(\{/)
+    expect(templateSrc).toMatch(/var registryWriter = \(__CREATE_REGISTRY_WRITER__\)\(\{/)
+    expect(templateSrc).not.toMatch(/function persistRegistry\(strict/)
+    expect(coreSrc).not.toMatch(/fsyncSync/)
+  })
+
+  // P2a — atomic tmp → fsync → rename, async and sync
+  it('the registry writer does atomic write(tmp) → fsync → rename, async and in its exit write', () => {
+    const order = (src: string, marks: string[]) => marks.every((m, i) => i === 0 || src.indexOf(m) > src.indexOf(marks[i - 1]!)) && src.indexOf(marks[0]!) > 0
+    const asyncPart = writerSrc.slice(writerSrc.indexOf('async function writeAsync'), writerSrc.indexOf('function settle'))
+    expect(order(asyncPart, ["fsp.open(tmp", 'fh.sync()', 'fsp.rename(tmp'])).toBe(true)
+    // The sync write lands its own temp (written, fsynced) before it gives the async write up
+    // (++gen, the async temp unlinked), then renames (S7-M1, 2026-11-22 review).
+    const syncPart = writerSrc.slice(writerSrc.indexOf('function writeNow'), writerSrc.indexOf('function settle'))
+    expect(order(syncPart, ['writeFileSync(syncTmp', 'fsyncSync', '++gen', 'unlinkSync(tmp)', 'renameSync(syncTmp'])).toBe(true)
   })
 
   // P2b — envelope is {version:1, sessions:{}}
-  it('both implementations wrap in {version:1, sessions:...} envelope', () => {
-    expect(coreSrc).toMatch(/version:\s*1,\s*sessions/)
-    expect(templateSrc).toMatch(/version:\s*1,\s*sessions/)
+  it('the registry writer wraps in {version:1, sessions:...} envelope', () => {
+    expect(writerSrc).toMatch(/version:\s*1,\s*sessions/)
   })
 
   // P2c — only running+pid persisted
-  it('both implementations skip dead / pid-less sessions in persist', () => {
-    expect(coreSrc).toMatch(/state\s*!==\s*['"]running['"]\s*\|\|\s*!\s*s\.pid/)
-    expect(templateSrc).toMatch(/state\s*!==\s*['"]running['"]\s*\|\|\s*!\s*s\.pid/)
+  it('the registry writer skips dead / pid-less sessions in persist', () => {
+    expect(writerSrc).toMatch(/state\s*!==\s*['"]running['"]\s*\|\|\s*!\s*s\.pid/)
   })
 
   // P3 — orphan poll interval 1000ms
@@ -188,11 +195,14 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
   })
 
   // P4 — reconcile reap reasons
+  // One verdict for both twins: daemon-core.ts reconcileVerdict, inlined into the JS twin by text.
   it('both implementations use exact reconcile reason strings', () => {
     for (const reason of ['reconcile-dead', 'reconcile-not-ours', 'reconcile-pid-recycled']) {
       expect(coreSrc.includes(reason)).toBe(true)
-      expect(templateSrc.includes(reason)).toBe(true)
     }
+    expect(templateSrc).toMatch(/const reconcileVerdictCore = \(__RECONCILE_VERDICT__\);/)
+    expect(templateSrc).toMatch(/\['__RECONCILE_VERDICT__', reconcileVerdict\.toString\(\)\]/)
+    expect(templateSrc).not.toMatch(/return 'reconcile-dead'/)
   })
 
   // P4b — reconcile re-entrant guard (fix for timer leak bug)
@@ -237,12 +247,13 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     }
   })
 
-  // P5c — readStartTime reads /proc/<pid>/stat field 22 (index 19)
+  // P5c — readStartTime reads /proc/<pid>/stat field 22 (index 19), through the one reader
+  // (daemon-core.ts readProcStartTime), which the template carries as text.
   it('both implementations read /proc/<pid>/stat start_time at field index 19', () => {
-    expect(coreSrc).toMatch(/\/proc\//)
-    expect(coreSrc).toMatch(/fields\[19\]/)
-    expect(templateSrc).toMatch(/\/proc\//)
-    expect(templateSrc).toMatch(/fields\[19\]/)
+    expect(coreSrc).toMatch(/export function readProcStartTime[\s\S]{0,400}\/proc\/\$\{pid\}\/stat[\s\S]{0,300}split\(' '\)\[19\]/)
+    expect(templateSrc).toMatch(/const readProcStartTime = \(__READ_PROC_START_TIME__\);/)
+    expect(templateSrc).toMatch(/\['__READ_PROC_START_TIME__', readProcStartTime\.toString\(\)\]/)
+    expect(templateSrc).toMatch(/function readStartTime\(pid\) \{[\s\S]{0,300}readProcStartTime\(fs, pid\)/)
   })
 
   // P5d — idle scanner converges on reapSession (not inline cleanup)
@@ -1960,13 +1971,13 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // A state change caught inside the 50ms window would otherwise die with the
     // daemon; the connected walnut would only learn about it on the next pull.
     for (const src of [standaloneSrc, templateSrc]) {
-      const start = src.search(/function cleanup\(\)/)
+      const start = src.search(/function cleanup\(/)
       expect(start).toBeGreaterThan(-1)
       const body = src.slice(start, start + 3000)
       expect(body).toMatch(/if \(session\.snapshotTimer\) \{\s*\n\s*try \{ pushSnapshot\(sid, true\);? \} catch \{\}/)
     }
     // standalone clears the subscriber set in cleanup — the flush must come FIRST.
-    const saStart = standaloneSrc.search(/function cleanup\(\)/)
+    const saStart = standaloneSrc.search(/function cleanup\(/)
     const saBody = standaloneSrc.slice(saStart, saStart + 3000)
     const flushIdx = saBody.indexOf('pushSnapshot(sid, true)')
     const clearIdx = saBody.indexOf('session.subscribers.clear()')
@@ -3490,9 +3501,12 @@ describe('clock host start daemon parity', () => {
   })
 
   it('both journal a cut start\'s task before its session at boot', () => {
+    // The boot recovery is the follower entry's (follower-entry-core.ts recoverPendingAsks), both twins call it.
+    const entry = fs.readFileSync(path.join(__dirname, '../../src/providers/follower-entry-core.ts'), 'utf8')
+    expect(entry).toMatch(/p\.task \? offline\.noteRoutineTask\(p\.home, p\.task\.record, p\.task\.opId, p\.task\.jobId\) : null/)
+    expect(entry).toMatch(/task && !task\.ok \? task : offline\.noteSession\(p\.home, p\.record, p\.opId, p\.actor\)/)
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/p\.task \? offlineHost\.noteRoutineTask\(p\.home, p\.task\.record, p\.task\.opId, p\.task\.jobId\) : null/)
-      expect(src).toMatch(/task && !task\.ok \? task : offlineHost\.noteSession\(p\.home, p\.record, p\.opId, p\.actor\)/)
+      expect(src).toMatch(/followerEntry\.recoverPendingAsks\(\)/)
       expect(src).toMatch(/WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1'/)
       expect(src).toMatch(/cmd\.use === 'routine' \? 'routine' : 'ask'|cmd\.use === 'routine'/)
     }
@@ -3637,7 +3651,7 @@ describe('one CLI per session id parity (cli-owner-v1)', () => {
       expect(claim).toBeLessThan(body.indexOf("logMsg('warn', 'cmdStart: replacing existing session'"))
       expect(claim).toBeLessThan(body.indexOf('appendSpawnJournal('))
       expect(body.indexOf('commit(pid, sessionData.startTime)')).toBeGreaterThan(body.indexOf('const sessionData'))
-      expect(body).toMatch(/if \(!ownerCommitted( && ownerClaim\) ownerClaim\.release\(\)|\) ownerClaim\?\.release\(\))/)
+      expect(body).toMatch(/if \(!ownerCommitted( && ownerClaim\) await ownerClaim\.release\(\)|\) await ownerClaim\?\.release\(\))/)
       // The replaced process is waited out before the new one starts.
       expect(body.indexOf('waitForStoppedProcess(stoppedPid)')).toBeLessThan(Math.max(body.indexOf('mkfifo'), body.indexOf('prepareSpawnFiles(')))
     }

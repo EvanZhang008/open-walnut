@@ -1,7 +1,7 @@
 /**
  * Small keyed JSON files in WALNUT_HOME for per-host facts of this machine that must outlive
  * the server process (a deploy restarts it, a crash too): which build did not stay serving
- * where (daemon-build-backoff.ts), which host's old daemon was just stopped for an update with
+ * where (daemon-build-backoff.ts), which switch of a host's mode a build asked (below), which host's old daemon was just stopped for an update with
  * a copy kept to go back to (below), and the upload pace each host's connections learned
  * (upload-pace.ts).
  *
@@ -33,6 +33,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { readLegacyMachineId, readMachineId } from '../core/machine-id.js'
+import type { ServiceModeAsk } from './one-service-mode.js'
 
 /** Where a store file lives when no test names one: the machine-local part of the data home. */
 export function updateStoreFile(fileName: string): string {
@@ -235,3 +236,19 @@ const validProven = (e: unknown): e is ProvenRecord => {
 
 /** One entry per daemon dir; a year without a pass or an adopt is a build nobody runs any more. */
 export const provenBuilds = new KeyedUpdateStore<ProvenRecord>('daemon-update-proven.json', 'WALNUT_UPDATE_PROVEN_FILE', 365 * 24 * 3600_000, validProven)
+
+/**
+ * The switch of a host's mode a build last asked that ran (one-service-mode.ts ServiceModeAsk), per
+ * `ssh:<host>`. On disk: in memory only, every leader restart (a deploy, up to every 10 minutes) asked
+ * a host whose service would not take the switch again, each time a restart of the host's service.
+ * A week: a build lives less, and a newer build asks again anyway.
+ */
+export interface ServiceModeAskRecord extends ServiceModeAsk { at: number }
+
+const validModeAsk = (e: unknown): e is ServiceModeAskRecord => {
+  const a = e as ServiceModeAskRecord
+  return !!a && typeof a === 'object' && Number.isFinite(a.at) && typeof a.expected === 'string' && a.expected.length > 0
+    && (a.want === 'daemon' || a.want === 'walnut-serve') && (a.failed === undefined || typeof a.failed === 'string')
+}
+
+export const serviceModeAsks = new KeyedUpdateStore<ServiceModeAskRecord>('daemon-update-mode-asked.json', 'WALNUT_UPDATE_MODE_ASKED_FILE', 7 * 24 * 3600_000, validModeAsk)

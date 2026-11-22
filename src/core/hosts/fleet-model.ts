@@ -96,6 +96,11 @@ export interface FleetHost {
     throwaway?: boolean
     /** The host's launcher (the experiment service_launcher): absent when the daemon runs without one. */
     launcher?: FleetLauncher | null
+    /**
+     * The host's one Walnut service runs here (src/providers/one-service-mode.ts): the session helper and
+     * this Walnut's server in one program, said "Walnut service". Absent: the session helper on its own.
+     */
+    serves?: 'walnut-serve'
   } | null
   placement: {
     /**
@@ -338,7 +343,7 @@ export function fleetHostLine(h: FleetHost): string {
   // A count kept from an old reading says so, as the CPU and memory beside it do.
   if (h.sessions.running !== null) parts.push(`${h.sessions.running} sessions open${h.sessions.source === 'host' && h.now?.stale ? ' (last reading)' : h.sessions.source === 'records' ? " (Walnut's records)" : ''}`)
   if (h.spend) parts.push(`$${Math.round(h.spend.last30dUsd)} in 30 days (list price)`)
-  if (h.server) parts.push(h.server.enabled ? `Walnut server ${h.server.phaseLabel}` : 'no Walnut server')
+  if (h.server) parts.push(h.server.enabled ? `Walnut server ${h.server.phaseLabel}${h.daemon?.serves === 'walnut-serve' ? ' (one Walnut service with its session helper)' : ''}` : 'no Walnut server')
   else if (h.connection.kind === 'bridge') parts.push(CLOUD_BOX_HOST_SERVER_NOTE)
   if (h.placement.weight === 0) parts.push('placement never picks it (weight 0)')
   else if (h.placement.busy) parts.push('too busy for new sessions: ' + h.placement.reasons.join(', '))

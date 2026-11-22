@@ -9,11 +9,10 @@
  * Nothing here throws, and nothing waits for it (manager.ts calls it without waiting).
  */
 
-import { log } from '../../logging/index.js'
 import type { NewNotification } from '../notifications/store.js'
+import { healthConditions, hostLabel } from '../notifications/health-items.js'
 
-/** Last condition told per host this process; unknown after a restart (then a recovery reads the store once). */
-const told = new Map<string, 'raised' | 'clear'>()
+const conditions = healthConditions('host-server')
 
 export function hostServerHealthKey(hostKey: string): string {
   return `host-server:${hostKey}`
@@ -33,53 +32,17 @@ export function hostServerHealthItem(hostKey: string, label: string, message: st
   }
 }
 
-const source = { source: 'host-server' }
-
-/** One write at a time per host, in the order they came: a quick recovery never lands before the failure it recovers. */
-const queues = new Map<string, Promise<void>>()
-function inTurn(hostKey: string, step: () => Promise<void>): Promise<void> {
-  const next = (queues.get(hostKey) ?? Promise.resolve()).then(step)
-  queues.set(hostKey, next)
-  void next.finally(() => { if (queues.get(hostKey) === next) queues.delete(hostKey) })
-  return next
-}
-
 /** The host's follower did not start: raise (or count again) its item. `retries`: Walnut tries again by itself. */
 export function noteHostServerFailed(hostKey: string, message: string, retries: boolean): Promise<void> {
-  return inTurn(hostKey, () => raise(hostKey, message, retries))
-}
-
-async function raise(hostKey: string, message: string, retries: boolean): Promise<void> {
-  try {
-    const [{ upsertNotification }, { bus }, { getConfig }] = await Promise.all([import('../notifications/store.js'), import('../event-bus.js'), import('../config-manager.js')])
-    const label = (await getConfig()).hosts?.[hostKey]?.label?.trim() || hostKey
-    const { record, outcome } = await upsertNotification(hostServerHealthItem(hostKey, label, message, retries))
-    told.set(hostKey, 'raised')
-    if (outcome !== 'suppressed') bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], source)
-  } catch (err) {
-    log.session.warn('host server: the Walnut Health item could not be written', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
-  }
+  return conditions.raise(hostServerHealthKey(hostKey), async () => hostServerHealthItem(hostKey, await hostLabel(hostKey), message, retries))
 }
 
 /** The host's follower runs, or none is meant to run: its item, if any, recovers. */
 export function noteHostServerSettled(hostKey: string): Promise<void> {
-  return inTurn(hostKey, () => recover(hostKey))
-}
-
-async function recover(hostKey: string): Promise<void> {
-  if (told.get(hostKey) === 'clear') return
-  try {
-    const [{ recoverNotifications }, { bus }] = await Promise.all([import('../notifications/store.js'), import('../event-bus.js')])
-    const { recovered } = await recoverNotifications([hostServerHealthKey(hostKey)])
-    told.set(hostKey, 'clear')
-    for (const record of recovered) bus.emit('notification:updated', record, ['web-ui'], source)
-  } catch (err) {
-    log.session.warn('host server: the Walnut Health item could not be recovered', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
-  }
+  return conditions.recover(hostServerHealthKey(hostKey))
 }
 
 /** Tests only. */
 export function _resetHostServerHealthForTesting(): void {
-  told.clear()
-  queues.clear()
+  conditions.reset()
 }

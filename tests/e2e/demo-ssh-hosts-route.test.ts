@@ -14,8 +14,12 @@ import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 const account = vi.hoisted(() => ({ homedir: '' }))
-vi.mock('../../src/lib/account.js', () => ({
+vi.mock('../../src/lib/account.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/lib/account.js')>()),
   accountInfo: () => ({ username: 'demo-user', homedir: account.homedir, shell: '/bin/sh', uid: 501, gid: 20 }),
+  // The test's account is the one above: nothing is read ahead from the real user database.
+  primeAccount: async () => null,
+  knownAccount: () => null,
 }))
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-demo-ssh-hosts'))
 

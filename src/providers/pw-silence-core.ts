@@ -131,25 +131,44 @@ export function pwSilenceDir(taskDirRoot: string): string {
   return path.join(path.dirname(taskDirRoot), 'pw-silence')
 }
 
+/** Per dir: the file this process wrote or found as it should be, and a check of it in flight. */
+const ensuredPreloads = new Map<string, { file: string | null; pending: Promise<string | null> | null }>()
+
 /**
  * The preload file in `dir`, written (atomically) when missing or different; null when the
- * injection is off or the file cannot be had.
+ * injection is off or the file cannot be had. No synchronous file call: the daemon runs on a
+ * server's thread when it runs in process (in_process_daemon), and a session start made a read
+ * (and a mkdir for a new dir, 30 to 43 ms seen in D state) on it. Once the file is known good in this process, a
+ * start only checks it is still there (a --require of a missing file stops every Node program),
+ * and writes it again when it is gone. Concurrent starts share one check.
  */
-export function ensurePwSilencePreload(dir: string, env: NodeJS.ProcessEnv = process.env): string | null {
+export async function ensurePwSilencePreloadAsync(dir: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
   if (env.WALNUT_PW_SILENCE === '0') return null
-  try {
+  let slot = ensuredPreloads.get(dir)
+  if (!slot) { slot = { file: null, pending: null }; ensuredPreloads.set(dir, slot) }
+  if (slot.pending) return slot.pending
+  const known = slot.file
+  const current = slot
+  current.pending = (async () => {
     const file = path.join(dir, PW_SILENCE_PRELOAD_NAME)
-    const want = pwSilencePreloadSource()
-    let have: string | null = null
-    try { have = fs.readFileSync(file, 'utf8') } catch { /* none yet */ }
-    if (have !== want) {
-      fs.mkdirSync(dir, { recursive: true })
-      const tmp = `${file}.${process.pid}.tmp`
-      fs.writeFileSync(tmp, want, { mode: 0o644 })
-      fs.renameSync(tmp, file)
+    if (known) {
+      try { await fs.promises.access(file); return file } catch { /* gone: write it again */ }
     }
-    return fs.existsSync(file) ? file : null
-  } catch { return null }
+    try {
+      const want = pwSilencePreloadSource()
+      let have: string | null = null
+      try { have = await fs.promises.readFile(file, 'utf8') } catch { /* none yet */ }
+      if (have !== want) {
+        await fs.promises.mkdir(dir, { recursive: true })
+        const tmp = `${file}.${process.pid}.tmp`
+        await fs.promises.writeFile(tmp, want, { mode: 0o644 })
+        await fs.promises.rename(tmp, file)
+      }
+      await fs.promises.access(file)
+      return file
+    } catch { return null }
+  })().then((file) => { current.file = file; current.pending = null; return file })
+  return current.pending
 }
 
 type Token = { raw: string; value: string }

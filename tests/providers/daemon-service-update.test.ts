@@ -609,3 +609,51 @@ describe('the chunk dir line in a real shell', () => {
     expect(existsSync(d)).toBe(true)
   })
 })
+
+// Step 6 of the one-service plan: the leader's switch rides the update line (one-service-mode.ts),
+// in the words `walnut daemon update` reads (daemon-service-cli.ts SERVE_FLAG, NO_SERVE_FLAG).
+describe('the host\'s mode on the update line', () => {
+  const home = '/Users/someone/Library/Application Support/Open Walnut/data'
+  const quoted = `'${home}'`
+  let launcherBefore: string | undefined
+  beforeEach(() => { launcherBefore = process.env.WALNUT_SERVICE_LAUNCHER })
+  afterEach(() => { if (launcherBefore === undefined) delete process.env.WALNUT_SERVICE_LAUNCHER; else process.env.WALNUT_SERVICE_LAUNCHER = launcherBefore })
+
+  it('the CLI reads the same words the leader writes', async () => {
+    const { SERVE_FLAG, NO_SERVE_FLAG } = await import('../../src/providers/daemon-service-cli.js')
+    expect([SERVE_FLAG, NO_SERVE_FLAG]).toEqual(['--serve', '--no-serve'])
+  })
+
+  it('under the launcher, --serve names this Walnut\'s data dir, quoted for the shell', async () => {
+    process.env.WALNUT_SERVICE_LAUNCHER = '1'
+    const l = lab(undefined, 'user', 'serving', ` --launcher --serve ${quoted}`)
+    await updateRemoteDaemonService({ binary }, version, l, 'user', { serve: { home, on: true } })
+    expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged} --launcher --serve ${quoted}`])
+  })
+
+  it('without the launcher there is no service to run: no --serve', async () => {
+    process.env.WALNUT_SERVICE_LAUNCHER = '0'
+    const l = lab()
+    await updateRemoteDaemonService({ binary }, version, l, 'user', { serve: { home, on: true } })
+    expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged}`])
+  })
+
+  it('switching back says --no-serve, with or without the launcher', async () => {
+    for (const on of ['1', '0']) {
+      process.env.WALNUT_SERVICE_LAUNCHER = on
+      const extra = `${on === '1' ? ' --launcher' : ''} --no-serve ${quoted}`
+      const l = lab(undefined, 'user', 'serving', extra)
+      await updateRemoteDaemonService({ binary }, version, l, 'user', { serve: { home, on: false } })
+      expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged}${extra}`])
+    }
+  })
+
+  it('no word without an ask, and none for a home that is not an absolute path', async () => {
+    process.env.WALNUT_SERVICE_LAUNCHER = '1'
+    for (const opts of [{}, { serve: { home: 'relative/home', on: true } }]) {
+      const l = lab(undefined, 'user', 'serving', ' --launcher')
+      await updateRemoteDaemonService({ binary }, version, l, 'user', opts)
+      expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged} --launcher`])
+    }
+  })
+})

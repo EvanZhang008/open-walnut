@@ -143,12 +143,50 @@ refusals and the last put-back stay), since its versions are not what runs. With
 the next daemon update writes the plain config again, whole, also over a launcher unit an older
 Walnut put its daemon in; a host whose daemon is current keeps its launcher until then.
 
+## One Walnut service (experiments `in_process_daemon` and `service_launcher`)
+
+Under the launcher, `--service` can run the host's one Walnut service instead of the daemon: one
+Walnut's follower server holding the daemon runtime in its own process
+(`docs/reference/session-daemon.md`, "The Walnut service on a host"). One file in the install root
+decides it:
+
+| File | Written by | What |
+|---|---|---|
+| `service-mode.json` | `walnut daemon install\|update` only | `{ v: 1, home, exe }`: run the follower of `home` as the service, for the version `exe` only |
+
+`--service` reads it before it loads anything else (`src/binary/service-entry.ts`). No file, another
+version's file, no follower spec for `home` under `host-server/`, or any other doubt: it runs the
+daemon, with the reason in its log. Because the file names one version, a launcher that puts an
+older version back runs that one as a daemon, and an older binary never reads the file: a rollback
+needs no step of its own.
+
+`walnut daemon update --serve <home>` writes the file for the version it stages (and its proof boot
+starts that file as a service in throwaway dirs, `daemon-boot-proof.ts`); `--no-serve <home>` removes
+it; an update with neither carries the mode over to the new version. Only the Walnut whose `home` the
+file names may change it: another Walnut's `--serve` or `--no-serve` gets `not_service_owner` and the
+mode stays. The leader passes these words itself (`src/providers/one-service-mode.ts`); a person
+never needs to.
+
+The service, like a daemon, says where its door is in the daemon dir: `daemon.port`, `daemon.pid`
+(the service's pid) and `daemon.stamp`, `<pid> <start time>` of that pid
+(`src/providers/daemon-door.ts`, written before the port file). A leader's daemon checks over SSH
+(the start, update and isolation scripts) trust `daemon.pid` when the stamp names the same pid with
+the same start time, whatever its command line, and fall back to the command line patterns when
+there is no stamp (a daemon older than the stamp). The stamp is written right after `daemon.pid`,
+so a stamp older than `daemon.pid` is an earlier daemon's (an older daemon put back, which never
+touches the stamp) and counts as none; on Linux it also carries the boot id. A pid reused by another process fails the start
+time check (`src/providers/daemon-live-sh.ts`, `w_stamp`, `w_daemon`).
+
+The service writes the launcher's `heartbeat` and `ready` itself (`src/web/serve-launcher-beat.ts`);
+the runtime inside it writes none, so there is one writer. `ready` means the runtime adopted its
+sessions, the door answers, and the server answers `GET /api/v1/instance`.
+
 ## Commands on the host
 
 ```bash
 walnut daemon status                      # the installed service, its startup (boot, login, on-demand)
 walnut daemon install --yes --executable <daemon binary> [--launcher]
-walnut daemon update --yes --executable <daemon binary> [--launcher]
+walnut daemon update --yes --executable <daemon binary> [--launcher] [--serve <home> | --no-serve <home>]
 walnut daemon restart --yes
 walnut daemon uninstall --yes             # removes the service; running CLI sessions keep running
 ```

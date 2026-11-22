@@ -91,6 +91,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   lead('local.usage-watch', 'local/usage-watch.sqlite', 'sqlite', 'Real use on this server: hourly counts of tool calls, requests and page errors, the watches of shipped changes and the notes sent (names, sizes, times and codes only)'),
   lead('local.preview-storage', 'local/preview-storage', 'dir', 'Saved state of rich previews'),
   lead('local.quiet-held-push', 'local/quiet-held-push.json', 'file', 'Phone pushes held during quiet hours'),
+  mach('local.home', 'local/home.json', 'file', 'Where this data dir was on this machine, and the move it declared to its hosts'),
   mach('local.machine-id', 'local/machine-id', 'file', 'The id an older build made for daemon updates, read only to seed this machine\'s stable id'),
   mach('local.leader-switch', 'local/leader-switch', 'dir', 'The leader switch of this home: its steps and lock, the handed-over marker, the promotion record, permission log'),
   mach('local.restore-drill', 'local/restore-drill.json', 'file', 'The last restore drill of this machine\'s backups: when, which backup, each check'),

@@ -128,6 +128,54 @@ class LinkClosed extends Error {
   constructor(readonly reply: Record<string, unknown>) { super('the link to the daemon closed') }
 }
 
+/**
+ * The checks a command takes before it goes to its daemon, on this socket link or the direct link of
+ * a host's one Walnut service (core/link/follower-link-direct.ts): no parameter named like a frame
+ * key (it would re-address the command, and its answer would never come back), and a frame under
+ * the cap. Returns the frame's text; a refusal is marked notSent.
+ */
+export function preflightFrame(cmd: string, params: Record<string, unknown>, id: number): string {
+  try {
+    const clash = FRAME_KEYS.find((k) => k in params)
+    if (clash) throw new Error(`the ${cmd} command has a parameter named "${clash}", which is a frame key; rename it`)
+    const message = JSON.stringify({ id, cmd, ...params })
+    assertFrameFits(message, `the ${cmd} command`, 'its daemon')
+    return message
+  } catch (err) { throw notSent(err instanceof Error ? err : new Error(String(err))) }
+}
+
+/**
+ * A daemon swap is invisible to a follower link's callers, on either link: a refusal of the draining
+ * daemon (daemon-drain-resend.ts), or a request the swap left with no link, is sent again once the
+ * daemon answers again, inside the caller's own timeout. `once` sends on the link as it is (throws
+ * notSent with no link; answers `{ ok:false, error:'closed' }` when the link closed under it);
+ * `linked` says the link is up; `answered()` is the link's edge of a daemon answering again.
+ */
+export function swapResender(now: () => number, linked: () => boolean): {
+  request(cmd: string, once: (budget: number) => Promise<Record<string, unknown>>, timeoutMs: number): Promise<Record<string, unknown>>
+  answered(): void
+} {
+  const key = `host-server-link:${++linkSeq}`
+  let drainSeenAt = 0
+  return {
+    request: (cmd, once, timeoutMs) => resendThroughSwap(cmd, {
+      once: async (budget) => {
+        const reply = await once(budget)
+        if (reply.ok === false && reply.error === 'closed') throw new LinkClosed(reply)
+        return reply
+      },
+      failure: (err) => (wasNotSent(err) ? 'no-link' : err instanceof LinkClosed ? 'lost' : null),
+      swapUnderway: () => now() - drainSeenAt < DRAIN_SWAP_WINDOW_MS,
+      noteRefusal: () => { drainSeenAt = now() },
+      waitLink: (ms, fresh) => waitHostLink(key, ms, fresh ? () => false : linked),
+    }, timeoutMs).catch((err) => {
+      if (err instanceof LinkClosed) return err.reply
+      throw err
+    }),
+    answered: () => { drainSeenAt = 0; wakeHostLink(key) },
+  }
+}
+
 /** A view's `offlineAnswers`, kept only when it has the shape the daemon sends. */
 function offlineAnswersOf(raw: unknown): Pick<FollowerView, 'offlineAnswers'> {
   if (!raw || typeof raw !== 'object') return {}
@@ -140,10 +188,33 @@ function offlineAnswersOf(raw: unknown): Pick<FollowerView, 'offlineAnswers'> {
   return typeof r.total === 'number' && Number.isFinite(r.total) ? { offlineAnswers: { total: r.total, byOp: counts(r.byOp), byWhy: counts(r.byWhy) } } : {}
 }
 
+/**
+ * A follower.hello / follower.status answer as the view the follower keeps, or null when it is no
+ * answer of a known Walnut. The direct link (core/link/follower-link.ts) reads the daemon's own
+ * `entry.view(home)` through the same function, so both links hand over one shape.
+ */
+export function followerViewOf(m: Record<string, unknown>): FollowerView | null {
+  const v = m as unknown as FollowerView
+  if (typeof v.walnutId !== 'string') return null
+  const journal = (m as { journal?: { drainable?: unknown } }).journal
+  const drainable = Number(m.drainablePending ?? journal?.drainable)
+  return {
+    walnutId: v.walnutId, home: v.home, epoch: Number(v.epoch) || 0,
+    holder: v.holder === 'backup' ? 'backup' : 'primary', backup: v.backup === true,
+    primaryConnected: v.primaryConnected === true, primaryHeardAgoMs: Number(v.primaryHeardAgoMs) || 0,
+    takeoverMs: Number(v.takeoverMs) || 0,
+    bridge: { connected: v.bridge?.connected === true, companion: typeof v.bridge?.companion === 'string' ? v.bridge.companion : null },
+    settings: v.settings && typeof v.settings === 'object' && !Array.isArray(v.settings) ? v.settings : {},
+    ...(Number(v.quietMs) > 0 ? { quietMs: Number(v.quietMs) } : {}),
+    ...(Number.isFinite(drainable) && drainable > 0 ? { drainablePending: drainable } : {}),
+    ...offlineAnswersOf((m as { offlineAnswers?: unknown }).offlineAnswers),
+  }
+}
+
 export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   const now = opts.now ?? Date.now
-  const linkKey = `host-server-link:${++linkSeq}`
-  let drainSeenAt = 0
+  const linked = () => state === 'following' && !!ws && ws.readyState === WebSocket.OPEN
+  const swaps = swapResender(now, linked)
   const pollMs = opts.pollMs ?? 3_000
   let ws: WebSocket | null = null
   let state: DaemonLinkState = 'connecting'
@@ -177,12 +248,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${cmd} timed out`)) }, timeoutMs)
       pending.set(id, (m) => { clearTimeout(timer); resolve(m) })
       try {
-        // A parameter named like a frame key would re-address the command (its answer then never comes back).
-        const clash = FRAME_KEYS.find((k) => k in params)
-        if (clash) throw new Error(`the ${cmd} command has a parameter named "${clash}", which is a frame key; rename it`)
-        const message = JSON.stringify({ id, cmd, ...params })
-        assertFrameFits(message, `the ${cmd} command`, 'its daemon')
-        socket.send(message)
+        socket.send(preflightFrame(cmd, params, id))
       } catch (err) {
         clearTimeout(timer)
         pending.delete(id)
@@ -192,24 +258,9 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   }
 
   function take(m: Record<string, unknown>): void {
-    const v = m as unknown as FollowerView & { ok?: boolean }
-    if (m.ok !== true || typeof v.walnutId !== 'string') return
-    const journal = (m as { journal?: { drainable?: unknown } }).journal
-    const drainable = Number(m.drainablePending ?? journal?.drainable)
-    last = {
-      at: now(),
-      view: {
-        walnutId: v.walnutId, home: v.home, epoch: Number(v.epoch) || 0,
-        holder: v.holder === 'backup' ? 'backup' : 'primary', backup: v.backup === true,
-        primaryConnected: v.primaryConnected === true, primaryHeardAgoMs: Number(v.primaryHeardAgoMs) || 0,
-        takeoverMs: Number(v.takeoverMs) || 0,
-        bridge: { connected: v.bridge?.connected === true, companion: typeof v.bridge?.companion === 'string' ? v.bridge.companion : null },
-        settings: v.settings && typeof v.settings === 'object' && !Array.isArray(v.settings) ? v.settings : {},
-        ...(Number(v.quietMs) > 0 ? { quietMs: Number(v.quietMs) } : {}),
-        ...(Number.isFinite(drainable) && drainable > 0 ? { drainablePending: drainable } : {}),
-        ...offlineAnswersOf((m as { offlineAnswers?: unknown }).offlineAnswers),
-      },
-    }
+    const view = m.ok === true ? followerViewOf(m) : null
+    if (!view) return
+    last = { at: now(), view }
     try { opts.onView?.(last.view) } catch { /* a listener never breaks the link */ }
   }
 
@@ -293,8 +344,7 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
         take(hello)
         setState('following', '')
         // A daemon answers again: requests waiting out a swap go to it (daemon-drain-resend.ts).
-        drainSeenAt = 0
-        wakeHostLink(linkKey)
+        swaps.answered()
         error = null
         pollTimer = setInterval(() => {
           void call(socket, 'follower.status').then(take, () => { /* the next poll, or the close, says more */ })
@@ -330,24 +380,10 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
     },
     // A daemon swap is invisible here too: a refusal of the draining daemon, or a request the
     // swap left without a link, is sent again once the next daemon is followed.
-    request: (cmd, params = {}, timeoutMs) => {
-      const linked = () => state === 'following' && !!ws && ws.readyState === WebSocket.OPEN
-      return resendThroughSwap(cmd, {
-        once: async (budget) => {
-          if (!linked() || !ws) throw notSent(new Error('not linked to the daemon'))
-          const reply = await call(ws, cmd, params, budget)
-          if (reply.ok === false && reply.error === 'closed') throw new LinkClosed(reply)
-          return reply
-        },
-        failure: (err) => (wasNotSent(err) ? 'no-link' : err instanceof LinkClosed ? 'lost' : null),
-        swapUnderway: () => now() - drainSeenAt < DRAIN_SWAP_WINDOW_MS,
-        noteRefusal: () => { drainSeenAt = now() },
-        waitLink: (ms, fresh) => waitHostLink(linkKey, ms, fresh ? () => false : linked),
-      }, timeoutMs ?? CALL_TIMEOUT_MS).catch((err) => {
-        if (err instanceof LinkClosed) return err.reply
-        throw err
-      })
-    },
+    request: (cmd, params = {}, timeoutMs) => swaps.request(cmd, async (budget) => {
+      if (!linked() || !ws) throw notSent(new Error('not linked to the daemon'))
+      return call(ws, cmd, params, budget)
+    }, timeoutMs ?? CALL_TIMEOUT_MS),
     report: (body) => {
       if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return
       try { ws.send(JSON.stringify({ cmd: 'follower.report', report: body })) } catch { /* the next one */ }

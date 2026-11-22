@@ -202,10 +202,14 @@ describe('launch-mode ceiling on every start path', () => {
   it('every start a host\'s own server makes while the Mac is away meets the Mac\'s ceiling', () => {
     const starts: Record<string, number> = {}
     // The daemon twins answer the command; they do not send it.
+    // The direct follower link only carries a caller's call to the runtime (its table row names the
+    // command); the callers above cap it first, as they do over the socket link.
+    const CARRIERS: Record<string, number> = { 'src/core/link/follower-link-direct.ts': 1 }
     for (const { file, src } of files.filter(f => !f.file.startsWith('src/providers/'))) {
       // Any quoted name of the command in code (a link's call or request, any quote), comments aside.
       const code = src.split('\n').filter(l => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
       const n = (code.match(/['"`]follower\.start['"`]/g) ?? []).length
+      if (file in CARRIERS) { expect(n, `${file} carries follower.start a new way`).toBe(CARRIERS[file]); continue }
       if (n) starts[file] = n
     }
     expect(starts).toEqual(Object.fromEntries(Object.entries(FOLLOWER_STARTS).map(([f, v]) => [f, v.count])))

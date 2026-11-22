@@ -93,7 +93,9 @@ describe('host call entry twin wiring', () => {
     // The own same-host delivery (handleLocal) too, while a follower that takes those is linked; an
     // online hand-back relayed to the leader is never counted (its fallback is relayToPrimary).
     expect(send).toContain("if (followerGateway.answersOnline(home)) followerGateway.noteOwnAnswer(payload.name, 'follower_linked', callerSid)")
-    expect(fnBody(src, 'followerView')).toContain('offlineAnswers: followerGateway.ownAnswers()')
+    // follower.status: the shared follower entry's view (follower-entry-core.ts) says what the twin hands it.
+    expect(src).toMatch(/offlineAnswers: (\(\) => |function \(\) \{ return )followerGateway\.ownAnswers\(\)/)
+    expect(read('src/providers/follower-entry-core.ts')).toContain('offlineAnswers: deps.offlineAnswers(),')
     expect(fnBody(src, 'cmdServerStatus')).toContain('offlineAnswers: followerGateway.ownAnswers()')
   })
 })

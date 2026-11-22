@@ -6,6 +6,7 @@
 
 import path from 'node:path'
 import { IS_DEMO, WALNUT_HOME } from '../../constants.js'
+import type { FollowerFact } from '../../providers/one-service-mode.js'
 import { log } from '../../logging/index.js'
 import { isFollower } from '../server-role.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
@@ -357,6 +358,11 @@ export function _resetHostServerManagerForTesting(): void {
   tunnelSeen.clear()
   if (tunnelRecheck) clearTimeout(tunnelRecheck)
   tunnelRecheck = null
+}
+
+/** This Walnut's follower on a host, as the one Walnut service needs it (manager.ts followerFact); unknown before the manager runs. */
+export function hostFollowerFact(hostKey: string): FollowerFact {
+  return manager ? manager.followerFact(hostKey) : { kind: 'unknown' }
 }
 
 /** The host servers' views without making the manager (GET /api/replicas/status, WP14). */

@@ -82,6 +82,7 @@ function buildTwin(kind: Twin, world: World) {
     readStartTime: (pid: number) => (pid === PID ? world.liveStartTime : null),
     commandLineOf: (pid: number) => (pid === PID ? world.argv : ''),
     persistRegistry: () => { persisted++ },
+    persistRegistryDurable: async () => { persisted++ },
     reapSession: (sid: string) => { reaped.push(sid); const s = sessions.get(sid); if (s) s.state = 'dead' },
     isProcessGroupAlive: () => groupAlive,
     killProcessGroup: (_pid: number, sig: string) => { signals.push(sig); groupAlive = false },

@@ -206,6 +206,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/usage-watch.sqlite` | leader-data | no | Real use on this server: hourly counts of tool calls, requests and page errors, the watches of shipped changes and the notes sent (names, sizes, times and codes only) |
 | `~/.open-walnut/local/preview-storage/` | leader-data | no | Saved state of rich previews |
 | `~/.open-walnut/local/quiet-held-push.json` | leader-data | no | Phone pushes held during quiet hours |
+| `~/.open-walnut/local/home.json` | machine | no | Where this data dir was on this machine, and the move it declared to its hosts |
 | `~/.open-walnut/local/machine-id` | machine | no | The id an older build made for daemon updates, read only to seed this machine's stable id |
 | `~/.open-walnut/local/leader-switch/` | machine | no | The leader switch of this home: its steps and lock, the handed-over marker, the promotion record, permission log |
 | `~/.open-walnut/local/restore-drill.json` | machine | no | The last restore drill of this machine's backups: when, which backup, each check |
@@ -297,16 +298,16 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `$XDG_STATE_HOME/open-walnut/vault/browsers.json` | machine | yes | Keys of the browsers paired with this machine's vault |
 | `$XDG_STATE_HOME/open-walnut/secrets/` | machine | yes | This host's copy of the fleet secrets shared with it |
 | `$XDG_STATE_HOME/open-walnut/tasks/` | machine | no | Task working folders of sessions that ran on this machine: on purpose, they belong to the host a session runs on, and a leader switch does not move sessions |
-| `$XDG_STATE_HOME/open-walnut/machine-id` | machine | no | This machine's stable id: the holder id of a switchable leader's write permission (read only, made by the machine-id task) |
 | `$XDG_STATE_HOME/open-walnut/leader-instance/` | machine | no | The instance lock of a switchable leader: one leader server per machine id holds the write permission |
 | `$XDG_STATE_HOME/open-walnut/approvals/` | machine | yes | Wait tokens of approval asks made from this machine's shell |
 | `$XDG_STATE_HOME/open-walnut/net/` | machine | yes | This machine's host network identity (always under ~/.local/state) |
-| `$XDG_STATE_HOME/open-walnut/machine-id` | machine | no | This machine's stable id, sent in the daemon's hello (always under ~/.local/state) |
+| `$XDG_STATE_HOME/open-walnut/machine-id` | machine | no | This machine's stable id (always under ~/.local/state): sent in the daemon's hello, and the holder id of a switchable leader's write permission |
 | `$XDG_STATE_HOME/open-walnut/net-members.json` | machine | no | The companion's list of machines allowed on the host network |
 | `$XDG_STATE_HOME/open-walnut/clone-identity/` | machine | no | Pending clone identity marks of this machine's sessions |
 | `$XDG_STATE_HOME/open-walnut/daemon-previous/` | machine | no | The previous daemon build, kept for a rollback |
 | `$XDG_STATE_HOME/open-walnut/primary-daemon/` | machine | no | The tunnel daemon of this machine |
 | `~/.local/share/open-walnut/daemon/` | machine | no | The login service's daemon state and boot script |
+| `~/.local/share/open-walnut/daemon/service-mode.json` | machine | no | Whose follower the login service runs as the host's one Walnut service, and for which version (written only by walnut daemon install or update) |
 | `~/.local/share/open-walnut/bin/` | rebuildable | no | Voice input helper binaries, installed again on demand |
 | `~/.local/share/open-walnut/stt-llama/` | rebuildable | no | Local voice model runtime, installed again on demand |
 | `~/.local/share/open-walnut/stt-mlx/` | rebuildable | no | Local voice model runtime, installed again on demand |
@@ -318,6 +319,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.claude/.credentials.json` | machine | yes | The engine's subscription sign-in (Walnut only checks it exists) |
 | `~/.claude/debug/` | machine | no | The engine's debug logs |
 | `<runtime dir>/` | machine | no | Runtime files: the local daemon's port, pid and registry |
+| `<runtime dir>/daemon.stamp` | machine | no | The pid daemon.pid names and its start time, so a leader tells the daemon from a reused pid |
 | `<runtime dir>/` (and names matching `^open-walnut-[^/]+\.log$`) | rebuildable | no | Server and browser logs |
 | `<runtime dir>/streams/` | machine | no | Live session output streams |
 | `<runtime dir>/term/` | machine | no | Terminal sockets |

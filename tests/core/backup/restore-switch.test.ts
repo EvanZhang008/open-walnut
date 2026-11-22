@@ -13,6 +13,7 @@ import {
   applyPendingSwitch, cancelSwitch, deletePreviousData, lastSwitchDone, lastSwitchError, readPendingSwitch, requestSwitch, switchMarkerPath,
 } from '../../../src/core/backup/restore-switch.js';
 import { machineIdPath } from '../../../src/core/backup/local-state.js';
+import { homeRecordFile } from '../../../src/core/home-move.js';
 
 let root: string;
 let home: string;
@@ -31,6 +32,7 @@ beforeEach(async () => {
   restored = path.join(root, 'open-walnut-restored-2026-11-04T10-00-00');
   await put(path.join(home, 'notes', 'a.md'), 'live');
   await put(machineIdPath(home), `${'a'.repeat(32)}\n`);
+  await put(homeRecordFile(home), JSON.stringify({ machineId: 'f'.repeat(32), home, movedFrom: '/before' }));
   await put(path.join(restored, 'notes', 'a.md'), 'restored');
 });
 afterEach(async () => {
@@ -43,7 +45,7 @@ describe('restore switch', () => {
     expect(await read(path.join(home, 'notes', 'a.md'))).toBe('live');
   });
 
-  it('asked, then a start: the restored folder is the data folder, the old one kept aside, the writer id kept', async () => {
+  it('asked, then a start: the restored folder is the data folder, the old one kept aside, the writer id and home record kept', async () => {
     const p = await requestSwitch(home, restored, new Date('2026-11-04T10:05:00Z'));
     expect(p.aside).toBe(`${home}-before-restore-2026-11-04T10-05-00`);
     expect(await readPendingSwitch(home)).toMatchObject({ restored, aside: p.aside });
@@ -57,6 +59,8 @@ describe('restore switch', () => {
     expect(await read(path.join(p.aside, 'notes', 'a.md'))).toBe('live');
     expect(await exists(restored)).toBe(false);
     expect((await read(machineIdPath(home))).trim()).toBe('a'.repeat(32));
+    // The move this Walnut declared to its hosts stays its own (core/home-move.ts).
+    expect(JSON.parse(await read(homeRecordFile(home)))).toMatchObject({ home, movedFrom: '/before' });
     expect(await exists(switchMarkerPath(home))).toBe(false);
     // The pane says it once: where the previous data went. Done clears it.
     expect(await lastSwitchDone(home)).toMatchObject({ restored, aside: p.aside });

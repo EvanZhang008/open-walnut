@@ -407,29 +407,135 @@ where none exists. Tests: `tests/core/machine-id.test.ts`, `tests/core/hosts/mac
 ## A Walnut has one key on a host, whatever its data dir
 
 A host's daemon keys each Walnut's state by its first home there (`walnut-scope-core.ts`,
-`walnutScope.keyOf`, the ONE key every core takes). When a `leader.configure` that offers home moves
-(`walnutHomeMoves`, sent only under the one-service experiment) names a home this host does not
-know, and exactly one other home holds a leader record with that id and is not in use (no server
-socket or lane open, not heard within the takeover window), the new home becomes an alias of the
-first one (`<leader dir>/homes.json`, which older daemons never read). From then on
-every command's `home` (and the `home` inside a `spec` or `template`, a copy's `home`, a trigger
-def's `deliver`/`start` home) is read as the first home: the leader book's epoch, trigger memory
-(epoch, seq, seen), journals, copies, plugin jobs, the host server and the bridge link go on. What
-the new home's server pushed at connect, before its `leader.configure`, is folded into the first
-home (its trigger set, hooks, bridge link, copy, socket bindings). So a new home's first trigger
-checks wait for its `leader.configure` while an alias may still come: once a leader on this host
-offered home moves (kept in `homes.json`) and while that home has no leader record; at most 10
-minutes (`WALNUT_HOME_ALIAS_WAIT_MS`), then they run as its own. With the experiment off nothing
-waits. Only one home of a Walnut speaks at a time: while a live server socket speaks from one home,
-a server socket's command from another home of the same Walnut is refused (`another data dir speaks
-as this Walnut here`), and works again once the first is gone. No alias on a
-volatile id (`walnutIdVolatile`), over a home with a record of its own, while the first home is in
-use, from a test server's probe socket, or when two homes hold the id; a leader that sends no id
-keeps the path. No file is moved or rewritten, and every file's embedded `home` still hashes to its
-name, so a rollback reads every file as before; a rollback to a daemon without aliases reads the new
-home as a separate Walnut (its epoch starts at 0 and its trigger memory is empty). The served record (`daemon.serves.json`) keys the
-home the Walnut speaks from now, as its server computes. Tests: `tests/providers/walnut-scope-alias.test.ts`,
-`tests/providers/daemon-home-alias-twins-e2e.test.ts`.
+`walnutScope.keyOf`, the ONE key every core takes). A home move is declared, never inferred: the
+server keeps `local/home.json` (`src/core/home-move.ts`: this machine's id and the data dir's path).
+Same machine, another path, and the old path no longer holds a data dir with this Walnut's id: the
+data dir moved, and `leader.configure` carries `movedFrom` (the old path) and `formerHomes` (every
+path it used on this machine, newest first, at most 8) as the first per-home frame of every connect
+(`daemon-connection.ts` holds the other commands for it). An old path that still holds the id is a
+copy and declares nothing, unless it is the same folder (realpath: a symlink, HOME spelled two
+ways), which is a move from the other spelling; a copy or a restore on another machine declares
+nothing. A restore switch carries the record with the data folder. The record is kept whatever the
+one-service experiment (`in_process_daemon`) says, off the connect path; only the declaration waits
+for it, and with it known off a connect waits on nothing of this.
+
+On the host, `movedFrom` makes the new home an alias of the first one (`<leader dir>/homes.json`
+v2, which older daemons never read; land 1's v1 entries are dropped at first read) only when the
+host's leader record for the first former home it knows names the same Walnut id (a host that
+missed some moves follows from the one it knows), that home is where the Walnut is now there, the
+id is not volatile, and the new home has no record of its own. A declaration from a home that is
+not where the Walnut is now (a backup started after the move) is refused for good (`contested`):
+the first copy to move keeps the Walnut, and the two never take turns. A move the host keeps
+under a folder it cannot follow (`lost_trail`, `own_record`, ...) is said on the answer
+(`moveNotTaken`), and its server shows one Walnut Health item for that host. From then on every command's `home` (and the `home` inside a `spec`
+or `template`, a copy's `home`, a trigger def's `deliver`/`start` home) is read as the first home:
+the leader book's epoch, trigger memory (epoch, seq, seen), journals, copies, plugin jobs, the host
+server and the bridge link go on. The home the Walnut left is refused for good: a server socket that
+still speaks as it gets `walnut_home_busy` with `movedTo`, so two diverged copies never take turns on
+one Walnut's state, and its server shows one Walnut Health item for that host
+(`src/core/leader/home-busy-health.ts`). Another Walnut (another id) at a path one left gets
+`walnut_home_taken`, and its item says to run it from another data folder: the host keeps the
+first Walnut's state under that path, so it cannot be let in there. A declared move back flips it. A copy that declares nothing
+is a Walnut of its own by its path. No file is moved or rewritten, and every file's embedded `home`
+still hashes to its name, so a rollback reads every file as before; a rollback to a daemon without
+aliases reads the new home as a separate Walnut (its epoch starts at 0 and its trigger memory is
+empty). The served record (`daemon.serves.json`) keys the home the Walnut speaks from now. Tests:
+`tests/providers/walnut-scope-alias.test.ts`, `tests/providers/daemon-home-alias-twins-e2e.test.ts`,
+`tests/core/home-move.test.ts`.
+
+## The Walnut service on a host
+
+Behind the experiments `in_process_daemon` and `service_launcher` (both off by default), a host can
+run its session daemon and one Walnut's follower server as ONE process: the Walnut service. With
+them off every host runs two programs, the daemon and the follower child it starts, as before.
+
+**One process.** The launcher still runs `<install root>/versions/<sha>/<file> --service`, the same
+command line. That entry first reads `<install root>/service-mode.json` (`src/binary/service-entry.ts`,
+`{ v: 1, home, exe }`). With no file, or any doubt (another version's file, no follower spec for that
+home, a spec that is not the replica program, a spec running its fallback), it runs the daemon as
+always and logs why. Otherwise it runs the follower server of that home (`runWeb({ replica: true })`,
+the same entry as `walnut web --replica`) from the spec the daemon keeps for it
+(`host-server/server-<key>.json`, with its token), and the server holds the daemon runtime in its
+own process (`src/providers/in-process-daemon.ts`, mode `service`). Before it takes the data dir's
+lock it ends the follower child an older daemon left (`stopRecordedServer`, by pid and start time);
+the spec stays, for a rollback. The server is the one writer of the launcher's marks
+(`src/web/serve-launcher-beat.ts`): `ready` once the runtime adopted its sessions, the door answers
+and `GET /api/v1/instance` does. `service.update` and `service.handover` from `walnut daemon update`
+end the whole process, as they end a daemon. Agent CLIs stay detached and adopted from the registry,
+so their pids never change across the switch.
+
+**The follower calls the runtime directly.** In the service the follower link is
+`createDirectFollowerLink` (`src/core/link/follower-link-direct.ts`): it calls the runtime's
+`follower` seat (`DaemonRuntime.follower`, a `FollowerSeat`), the same `FollowerEntry` functions
+(`src/providers/follower-entry-core.ts`) the `follower.*` commands run on a socket. No socket, no
+`follower.hello`, no frame is built; the daemon log says `follower: the server in this process
+follows its leader`. A call the runtime's drain refuses (a `service.update` pauses it, and an update
+that fails resumes it) is sent again inside the caller's timeout, as on the socket link
+(`swapResender` in `src/host-server/daemon-link.ts`, which both links share with `preflightFrame`).
+
+**The door still serves everyone else**, with the same commands and handlers as a daemon program:
+`daemon.port`, `daemon.pid` (naming the service) and `daemon.stamp` (`src/providers/daemon-door.ts`).
+Its hello says `serves: 'walnut-serve'` and `serviceHome`; an older leader sees a daemon, since the
+command line is still `--service`. Through it:
+
+- old and new leaders (their session links, list, attach, send, `server.configure`, updates);
+- walnut-net: the net supervisor (`net-core.ts`) runs it on a config naming the door's port file;
+- hub forwards: a port in the machine's `hub-forwards.json` becomes a stream over a leader's link;
+- a second Walnut's follower server: the supervisor (`host-server-core.ts`) starts it as a child, as
+  before, and it says `follower.hello` with its token. The supervisor starts no child for the
+  service's own home (`selfHome`); a spec change for that home saves the spec and ends the service,
+  so the launcher starts it again on the new spec.
+
+One service per machine and daemon dir: a second one on the same dirs is refused with the reason
+(`AnotherServiceError`, or the data dir's instance lock naming the first) and the first is never
+stopped. Two services on two dir sets of one account are separate: neither lists, adopts or stops
+the other's sessions.
+
+**How the leader offers the switch** (`src/providers/one-service-mode.ts`). It wants the service on
+a host only when both experiments are on, the host's daemon already runs under the launcher (hello
+`launcher`), this Walnut already runs its full follower there (`web --replica`, the spec the
+service starts from), and this build's walnut file can go to the host (the daemon-only binary holds
+no server). Otherwise there is no offer, and Walnut Health says why, one item per host
+(`src/core/hosts/one-service-health.ts`, never a popup). A wanted mode that differs from the hello's
+`serves` is an update due, with the same holds and probation as a new build: the update line
+carries `--serve <home>` (only under the launcher) or `--no-serve <home>`
+(`daemon-service-update.ts`). Only the Walnut whose home the mode file names may change it; another
+Walnut's update is told `not_service_owner` and carries the mode over to the new version. For a host
+that serves as this Walnut's service, the host-server manager starts no separate follower there, and
+the hosts page and Settings say "Walnut service" (only for this Walnut's own: `servesThisWalnut`).
+
+The offer is the same `in_process_daemon` experiment that runs the Mac's own sessions in process: one
+choice, read live from the config for the offer (`hostServiceOfferWanted` in
+`src/providers/service-launcher-flag.ts`), never through `inProcessDaemonWanted()`, whose
+`WALNUT_IN_PROCESS_DAEMON` switch is one process's own runtime and must not switch every host
+(`WALNUT_HOST_SERVICE_OFFER=1|0` decides the offer alone for one process). A switch whose update ran
+is recorded per host and build (`daemon-update-mode-asked.json` in `WALNUT_HOME/local/`,
+`daemon-update-store.ts`): a host whose service chose the other mode, or whose update failed after
+its swap, is not asked again with that build, across leader restarts; a try the host held, deferred
+or refused as busy is asked again. A host replica never holds a `__local__` DaemonConnection
+(`assertLocalDialAllowed` in daemon-connection.ts): in the service that would be a full-trust
+client of the runtime with no owner scope, so its reads of its own host stay on the seat.
+
+**Upgrade and rollback.** An update with `--serve` stages the walnut file, proves it boots as a
+service in throwaway dirs (`daemon-boot-proof.ts`), writes the mode file naming that version, and
+the launcher runs it as a trial; the service adopts every session from the registry. Each way back
+uses machinery that already exists:
+
+- a trial that fails, or a crash in probation: the launcher puts the good version back; the mode
+  file names the new version only, so the old one runs as a daemon and starts the follower child
+  from the kept spec;
+- the experiments turned off: the next update carries `--no-serve`, the file goes, and the same
+  build restarts as daemon plus follower;
+- an older leader or binary: it never reads the file, so the host runs two programs again.
+
+**The machine id.** The service's hello carries the same `machineId` as the daemon it replaces
+(`~/.local/state/open-walnut/machine-id`, above), so the leader sees one machine before and after
+the switch, and the host keeps each Walnut's state by its Walnut id, as a daemon program does.
+
+Tests: `tests/binary/service-entry.test.ts`, `tests/providers/one-service-host-e2e.test.ts`,
+`tests/providers/one-service-lock.test.ts`, `tests/providers/one-service-door.test.ts`,
+`tests/providers/one-service-mode.test.ts`, `tests/providers/one-service-switch-chain.test.ts`,
+`tests/replica/follower-link-both.test.ts`.
 
 ## Keep the twins in sync, and auto-deploy
 

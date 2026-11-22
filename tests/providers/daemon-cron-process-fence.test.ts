@@ -132,6 +132,15 @@ function makeHarness(initialBootId?: string): Harness {
     appendFileSync: () => {},
     readdirSync: () => [] as string[],
     mkdirSync: () => undefined,
+    // The registry's async writer (registry-writer-core.ts): every write lands in `writes` too.
+    promises: {
+      open: async (p: unknown) => {
+        const at = String(p)
+        return { writeFile: async (body: unknown) => { writes.push({ path: at, body: String(body) }) }, sync: async () => {}, close: async () => {} }
+      },
+      rename: async () => {},
+      unlink: async (p: unknown) => { unlinked.push(String(p)) },
+    },
   } as unknown as typeof import('node:fs')
 
   const deps: DaemonCoreDeps<TestSession> = {
@@ -372,12 +381,13 @@ describe('reconcileRegistry boot fence', () => {
 // ════════════════════════════════════════════════════════════════════
 
 describe('reapSession group-signal fence', () => {
-  it('a confirmed empty process group is reaped without scheduling another signal', () => {
+  it('a confirmed empty process group is reaped without scheduling another signal', async () => {
     const core = createDaemonCore(h.deps)
     h.sessions.set('stopped', makeSession('stopped', { bootId: BOOT }))
     h.pidStartTime.set(4242, '900')
     core.reapSession('stopped', 0, 'stop-confirmed', true)
     expect(h.sessions.get('stopped')?.state).toBe('dead')
+    await core.persistRegistryDurable()
     expect(JSON.parse(h.writes.at(-1)!.body).sessions).toEqual({})
     expect(h.groupCalls).toEqual([])
     h.runTimeouts()
@@ -599,43 +609,51 @@ describe('persistRegistry bootId', () => {
     expect(() => createDaemonCore(h.deps).readRegistry()).toThrow()
   })
 
-  it('persists both the file and containing directory before returning', () => {
-    const synced: number[] = []
+  it('persists both the file and containing directory before returning', async () => {
+    const synced: string[] = []
     const opened: string[] = []
-    h.deps.fs.openSync = ((p: unknown) => { opened.push(String(p)); return opened.length }) as typeof h.deps.fs.openSync
-    h.deps.fs.fsyncSync = (fd: number) => { synced.push(fd) }
-    createDaemonCore(h.deps).persistRegistry()
-    expect(opened).toEqual([REGISTRY_FILE + '.tmp', '/fake/daemon'])
-    expect(synced).toEqual([1, 2])
+    const handle = (at: string) => ({ writeFile: async () => {}, sync: async () => { synced.push(at) }, close: async () => {} })
+    Object.assign(h.deps.fs, { promises: { ...h.deps.fs.promises, open: async (p: unknown) => { opened.push(String(p)); return handle(String(p)) } } })
+    await createDaemonCore(h.deps).persistRegistryDurable()
+    expect(opened).toEqual([`${REGISTRY_FILE}.${process.pid}.tmp`, '/fake/daemon'])
+    expect(synced).toEqual([`${REGISTRY_FILE}.${process.pid}.tmp`, '/fake/daemon'])
+    // The exit's synchronous write does both too.
+    const fds: string[] = []
+    h.deps.fs.openSync = ((p: unknown) => { fds.push(String(p)); return fds.length }) as typeof h.deps.fs.openSync
+    createDaemonCore(h.deps).persistRegistrySync()
+    expect(fds).toEqual([`${REGISTRY_FILE}.${process.pid}.sync.tmp`, '/fake/daemon'])
   })
 
-  it('does not hide a managed registry sync failure', () => {
+  it('does not hide a managed registry sync failure', async () => {
+    const handle = { writeFile: async () => {}, sync: async () => { throw new Error('sync failed') }, close: async () => {} }
+    Object.assign(h.deps.fs, { promises: { ...h.deps.fs.promises, open: async () => handle } })
+    await expect(createDaemonCore(h.deps).persistRegistryDurable()).rejects.toThrow('sync failed')
     h.deps.fs.fsyncSync = () => { throw new Error('sync failed') }
-    expect(() => createDaemonCore(h.deps).persistRegistry()).toThrow('sync failed')
+    expect(() => createDaemonCore(h.deps).persistRegistrySync()).toThrow('sync failed')
   })
 
-  it('writes the session bootId, and leaves it absent when untracked', () => {
+  it('writes the session bootId, and leaves it absent when untracked', async () => {
     const core = createDaemonCore(h.deps)
     h.sessions.set('sid-a', makeSession('sid-a', { pid: 7000, bootId: BOOT }))
     h.sessions.set('sid-b', makeSession('sid-b', { pid: 7001 }))
 
-    core.persistRegistry()
+    await core.persistRegistryDurable()
 
     const last = h.writes[h.writes.length - 1]
-    expect(last.path).toBe(REGISTRY_FILE + '.tmp')
+    expect(last.path).toBe(`${REGISTRY_FILE}.${process.pid}.tmp`)
     const parsed = JSON.parse(last.body) as { sessions: Record<string, RegistryEntry> }
     expect(parsed.sessions['sid-a'].bootId).toBe(BOOT)
     expect(parsed.sessions['sid-b'].bootId).toBeUndefined()
   })
 
-  it('a reconciled session carries the record bootId forward', () => {
+  it('a reconciled session carries the record bootId forward', async () => {
     const core = createDaemonCore(h.deps)
     h.registry['sid-carry'] = makeEntry({ pid: 7100, startTime: '900', bootId: BOOT })
     h.pidAlive.add(7100)
     h.pidStartTime.set(7100, '900')
 
-    core.reconcileRegistry()
-    core.persistRegistry()
+    await core.reconcileRegistry()
+    await core.persistRegistryDurable()
 
     const last = h.writes[h.writes.length - 1]
     const parsed = JSON.parse(last.body) as { sessions: Record<string, RegistryEntry> }
@@ -978,7 +996,7 @@ function buildProcessStopTwin(kind: 'standalone' | 'template') {
     readStartTime: startTime,
     killProcessGroup: groupSignal,
     isProcessGroupAlive: groupAlive,
-    reapSession: reaped, persistRegistry: persist,
+    reapSession: reaped, persistRegistry: persist, persistRegistryDurable: async () => { persist() },
     cancelTurnRetry: vi.fn(), clearTurnRetryStreak: vi.fn(), logMsg: vi.fn(), wsId: () => 1,
     // A reused pid is daemon-stop-missing-start-time-twins.test.ts's subject; here the pid is the CLI's.
     pidNowRunsAnotherProgram: () => false,

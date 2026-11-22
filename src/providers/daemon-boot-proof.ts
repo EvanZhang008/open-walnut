@@ -23,9 +23,19 @@
  * trial whose prover died (the CLI, the server, the SSH session) does not stay for good, and
  * proof dirs such a trial left behind are swept before the next one (2026-11-04 review: a
  * --service trial has no parent watchdog, and a full daemon stayed in /tmp/walnut-proof-*).
+ *
+ * `serve`: the version will run as a host's one Walnut service (src/binary/service-entry.ts), so it
+ * is proven as one: a throwaway follower spec (its own data and run dirs, a free port, a leader
+ * that never comes), the mode file naming this executable, a launcher dir; it must write the
+ * launcher's ready mark (sessions adopted, its door answering, GET /api/config answered), the mark
+ * the launcher commits a version by, as the Walnut server (`serves=walnut-serve`): a daemon program
+ * under a launcher writes that mark too, so a `--service` start that fell back to the daemon (the
+ * entry refused the spec, a mis-routed main) would otherwise pass a proof of a path it never ran.
  */
 import { spawn } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -44,6 +54,40 @@ export interface BootProofOptions {
   base?: string
   /** Set after the isolated env, never over its dirs: the compiled walnut file's runtime tree (WALNUT_RUNTIME_DIR; trialRuntimeDir when not given). */
   env?: Record<string, string>
+  /** Prove it as the host's one Walnut service (the header). */
+  serve?: boolean
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as net.AddressInfo).port
+      server.close(() => resolve(port))
+    })
+  })
+}
+
+/** The files a `--service` start reads to run as the host's one Walnut service, in a proof's dirs. */
+async function writeServeProof(dir: (name: string) => string, executable: string): Promise<string> {
+  const leader = dir('leader')
+  const data = dir('w')
+  const port = await freePort()
+  await fs.mkdir(path.join(dir('s'), 'host-server'), { recursive: true, mode: 0o700 })
+  await fs.mkdir(path.join(dir('s'), 'launcher'), { recursive: true, mode: 0o700 })
+  const spec = {
+    v: 1, home: leader, walnutId: 'boot-proof', command: executable, args: [], cwd: data, log: dir('follower.log'), port, settings: {},
+    env: {
+      OPEN_WALNUT_HOME: data, WALNUT_DAEMON_DIR: dir('r'), WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(port),
+      WALNUT_LEADER_HOME: leader, WALNUT_WALNUT_ID: 'boot-proof', WALNUT_HOST_LABEL: 'boot proof', WALNUT_NO_AUTO_UPDATE: '1',
+      // A replica's placement is the host by default (server-role.ts).
+      WALNUT_ROLE: 'replica', WALNUT_HOST_KEY: 'boot-proof',
+    },
+  }
+  await fs.writeFile(path.join(dir('s'), 'host-server', 'server-bootproof.json'), JSON.stringify({ spec, token: crypto.randomBytes(32).toString('hex') }), { mode: 0o600 })
+  await fs.writeFile(path.join(dir('s'), 'service-mode.json'), JSON.stringify({ v: 1, home: leader, exe: executable }), { mode: 0o600 })
+  return path.join(dir('s'), 'launcher')
 }
 
 /**
@@ -73,6 +117,25 @@ const LIFETIME_MARGIN_S = 30
 export const STALE_PROOF_MS = 15 * 60_000
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/** A serve proof's verdict when the file ran as the session daemon instead (its ready mark has no `serves=walnut-serve`). */
+export const SERVED_AS_DAEMON = 'it wrote the launcher\'s ready mark as the session daemon, not as the Walnut service'
+
+/**
+ * The proof of a version about to be staged, as the mode file says it will run: `asked`, its
+ * Walnut asked for the service with this update; `carried`, the mode came over from the version
+ * before with no word (another Walnut's update, an older leader). A carried mode on a file that
+ * runs only as the session daemon (a daemon-only binary never reads the mode) is no failure of
+ * the build: the mode goes (`dropMode`) and the file is proven as the daemon it runs as (review
+ * A3b S34-L5). An asked one must serve.
+ */
+export async function proveStagedBoot(o: BootProofOptions & { mode: 'asked' | 'carried' | null; dropMode: () => void }, prove: (o: BootProofOptions) => Promise<string | null> = proveDaemonBoot): Promise<string | null> {
+  const { mode, dropMode, ...proof } = o
+  const why = await prove({ ...proof, serve: mode !== null })
+  if (mode !== 'carried' || !why?.startsWith(SERVED_AS_DAEMON)) return why
+  dropMode()
+  return prove({ ...proof, serve: false })
+}
 
 /** null when the executable served as a daemon; else why not, in a sentence. */
 export async function proveDaemonBoot(o: BootProofOptions): Promise<string | null> {
@@ -105,6 +168,8 @@ async function trial(o: BootProofOptions): Promise<string | null> {
       WALNUT_DAEMON_LIFETIME_SECONDS: String(Math.ceil(((o.waitMs ?? BOOT_PROOF_WAIT_MS) + (o.aliveMs ?? BOOT_PROOF_ALIVE_MS)) / 1000) + LIFETIME_MARGIN_S),
     }
     for (const key of ['USER', 'LOGNAME', 'SHELL']) if (process.env[key]) env[key] = process.env[key]!
+    const launcherDir = o.serve ? await writeServeProof(dir, o.executable) : null
+    if (launcherDir) env.WALNUT_LAUNCHER_DIR = launcherDir
     for (const [key, value] of Object.entries(o.env ?? {})) if (!(key in env)) env[key] = value
     env.WALNUT_RUNTIME_DIR ??= trialRuntimeDir()
     const out = await fs.open(log, 'a', 0o600)
@@ -123,15 +188,26 @@ async function trial(o: BootProofOptions): Promise<string | null> {
     const deadline = performance.now() + (o.waitMs ?? BOOT_PROOF_WAIT_MS)
     let listening = false
     while (!end.exited && performance.now() < deadline) {
-      const port = Number((await fs.readFile(path.join(runtime, 'daemon.port'), 'utf8').catch(() => '')).trim())
-      if (Number.isInteger(port) && port > 0 && port <= 65535) { listening = true; break }
+      if (launcherDir) {
+        // The service: the launcher's ready mark, which it writes (whole, by rename) only once it serves.
+        const mark = await fs.readFile(path.join(launcherDir, 'ready'), 'utf8').catch(() => '')
+        if (mark) {
+          if (!/^serves=walnut-serve$/m.test(mark)) return `${SERVED_AS_DAEMON}${await said(log)}`
+          listening = true
+          break
+        }
+      } else {
+        const port = Number((await fs.readFile(path.join(runtime, 'daemon.port'), 'utf8').catch(() => '')).trim())
+        if (Number.isInteger(port) && port > 0 && port <= 65535) { listening = true; break }
+      }
       await pause(POLL_MS)
     }
-    if (end.exited) return `it ${end.exited} before it listened${await said(log)}`
-    if (!listening) return `it did not listen within ${Math.round((o.waitMs ?? BOOT_PROOF_WAIT_MS) / 1000)} s${await said(log)}`
+    const what = launcherDir ? 'was ready as the Walnut service' : 'listened'
+    if (end.exited) return `it ${end.exited} before it ${what}${await said(log)}`
+    if (!listening) return `it did not ${launcherDir ? 'write its ready mark as the Walnut service' : 'listen'} within ${Math.round((o.waitMs ?? BOOT_PROOF_WAIT_MS) / 1000)} s${await said(log)}`
     const until = performance.now() + (o.aliveMs ?? BOOT_PROOF_ALIVE_MS)
     while (!end.exited && performance.now() < until) await pause(POLL_MS)
-    if (end.exited) return `it listened, then ${end.exited}${await said(log)}`
+    if (end.exited) return `it ${what}, then ${end.exited}${await said(log)}`
     return null
   } finally {
     if (child) await stop(child, () => end.exited !== null)

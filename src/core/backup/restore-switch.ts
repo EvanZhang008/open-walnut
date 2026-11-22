@@ -12,11 +12,14 @@
  * machine's writer id (local/backup/machine-id, never backed up) moves with
  * the switch: it is the same computer, so it stays the writer of its backups.
  * A home with no such file is written by the machine's stable id, which lives
- * outside the data folder and so needs no carrying.
+ * outside the data folder and so needs no carrying. The home record
+ * (local/home.json, core/home-move.ts) moves too: a move this Walnut declared to
+ * its hosts is still its own after the restore.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { machineIdPath } from './local-state.js';
+import { homeRecordFile } from '../home-move.js';
 import { pidAlive, processStart } from '../self-update/install-lock.js';
 
 export interface PendingSwitch {
@@ -143,14 +146,16 @@ export async function deletePreviousData(home: string): Promise<string> {
   return aside;
 }
 
-async function carryMachineId(from: string, to: string): Promise<void> {
-  const src = machineIdPath(from);
-  const dst = machineIdPath(to);
-  if (await exists(dst)) return;
-  const id = await fs.readFile(src, 'utf8').catch(() => null);
-  if (id === null) return;
-  await fs.mkdir(path.dirname(dst), { recursive: true, mode: 0o700 });
-  await fs.writeFile(dst, id, { mode: 0o600 });
+/** This machine's own records in the data folder, which no backup holds: they stay with the computer. */
+async function carryMachineFiles(from: string, to: string): Promise<void> {
+  for (const fileOf of [machineIdPath, homeRecordFile]) {
+    const dst = fileOf(to);
+    if (await exists(dst)) continue;
+    const text = await fs.readFile(fileOf(from), 'utf8').catch(() => null);
+    if (text === null) continue;
+    await fs.mkdir(path.dirname(dst), { recursive: true, mode: 0o700 });
+    await fs.writeFile(dst, text, { mode: 0o600 });
+  }
 }
 
 /**
@@ -220,7 +225,7 @@ export async function applyPendingSwitch(home: string, deps: SwitchDeps = {}): P
     }
     return fail(`The switch failed (${err instanceof Error ? err.message : String(err)}); Walnut kept its data folder.`);
   }
-  await carryMachineId(p.aside, h).catch(() => {});
+  await carryMachineFiles(p.aside, h).catch(() => {});
   await fs.writeFile(switchDonePath(h), `${JSON.stringify({ restored: p.restored, aside: p.aside, at: new Date().toISOString() })}\n`).catch(() => {});
   await fs.rm(switchMarkerPath(h), { force: true }).catch(() => {});
   await fs.rm(switchErrorPath(h), { force: true }).catch(() => {});

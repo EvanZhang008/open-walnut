@@ -26,8 +26,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
-const { managedUpdate } = vi.hoisted(() => ({ managedUpdate: vi.fn() }))
+const { managedUpdate, followerFact } = vi.hoisted(() => ({ managedUpdate: vi.fn(), followerFact: vi.fn(() => ({ kind: 'unknown' })) }))
 vi.mock('../../src/providers/daemon-service-update.js', () => ({ updateRemoteDaemonService: managedUpdate }))
+// This Walnut's follower on the host, as the host-server manager knows it (one-service-mode.ts).
+vi.mock('../../src/core/host-server/index.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), hostFollowerFact: followerFact }))
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1005,5 +1007,202 @@ describe('a held update says so once, not every minute', () => {
     vi.advanceTimersByTime(30 * 60_000)
     expect(level('a connect was in progress', 'walnut-daemon-newer')).toBe('warn')
     priv(c).clearUpgradeRecheck()
+  })
+})
+
+// The host's one Walnut service (one-service-mode.ts): a mode that differs from what the hello
+// says is an update due, with the same holds as a new build; with the experiments off nothing new
+// is sent to a host that runs as the daemon.
+describe('the host\'s mode rides the managed update', () => {
+  const live = (c: DaemonConnection) => { state(c)._connected = true }
+  type Opts = { serve?: { home: string; on: boolean }; onStaged?: () => boolean | Promise<boolean> }
+  const optsOf = (call: number) => managedUpdate.mock.calls[call]![4] as Opts
+  let envBefore: Record<string, string | undefined>
+  beforeEach(() => {
+    envBefore = { a: process.env.WALNUT_HOST_SERVICE_OFFER, b: process.env.WALNUT_SERVICE_LAUNCHER }
+  })
+  afterEach(async () => {
+    for (const [k, v] of [['WALNUT_HOST_SERVICE_OFFER', envBefore.a], ['WALNUT_SERVICE_LAUNCHER', envBefore.b]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v
+    }
+    ;(await import('../../src/providers/in-process-daemon.js')).resetInProcessDaemonWantedForTests()
+  })
+  const experiments = async (on: boolean) => {
+    process.env.WALNUT_HOST_SERVICE_OFFER = on ? '1' : '0'
+    process.env.WALNUT_SERVICE_LAUNCHER = on ? '1' : '0'
+    ;(await import('../../src/providers/in-process-daemon.js')).resetInProcessDaemonWantedForTests()
+  }
+  const managedHost = (version: string) => {
+    const c = make()
+    stub(c, { probe: MANAGED, version })
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
+    vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
+    managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: Opts) => ((await opts?.onStaged?.()) === false ? 'held' : 'applied'))
+    return c
+  }
+
+  it('the current build on a host whose follower is ready: the update carries --serve, with the walnut file staged', async () => {
+    const { WALNUT_HOME: home } = await import('../../src/constants.js')
+    const c = managedHost(EXPECTED)
+    vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: 'walnut-serve' })
+    const source = vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: null, existing: '/slot/walnut' })
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(source).toHaveBeenCalledWith(true)
+    expect(optsOf(0).serve).toEqual({ home, on: true })
+    expect(state(c)._modeAsked).toEqual({ expected: EXPECTED, want: 'walnut-serve' })
+  })
+
+  it('the current build with nothing to change: no update at all', async () => {
+    const c = managedHost(EXPECTED)
+    vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: null })
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).not.toHaveBeenCalled()
+  })
+
+  it('a switch waits for host_exec runs, as a build does', async () => {
+    const c = managedHost(EXPECTED)
+    vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: 'walnut-serve' })
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: null, existing: '/slot/walnut' })
+    vi.spyOn(c, 'send').mockImplementation((async (cmd: string) => (cmd === 'exec.list' ? { ok: true, jobs: [{ jobId: 'hx-1', running: true }] } : { ok: true })) as never)
+    state(c)._capabilities = ['host-exec-v1']
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).not.toHaveBeenCalled()
+    expect(state(c).upgradeRecheckTimer).not.toBeNull()
+  })
+
+  it('experiments off: an older build updates with no mode word, and the follower is never asked', async () => {
+    await experiments(false)
+    const c = managedHost(OLD)
+    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    followerFact.mockClear()
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(optsOf(0)).not.toHaveProperty('serve')
+    expect(followerFact).not.toHaveBeenCalled()
+  })
+
+  it('experiments off: this Walnut\'s service is switched back with --no-serve; another Walnut\'s is left alone', async () => {
+    const { WALNUT_HOME: home } = await import('../../src/constants.js')
+    await experiments(false)
+    const ours = managedHost(EXPECTED)
+    vi.spyOn(priv(ours), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    state(ours)._servesAs = { serves: 'walnut-serve', serviceHome: home }
+    live(ours)
+    await priv(ours).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(optsOf(0).serve).toEqual({ home, on: false })
+
+    const theirs = managedHost(EXPECTED)
+    vi.spyOn(priv(theirs), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+    state(theirs)._servesAs = { serves: 'walnut-serve', serviceHome: '/home/other/.open-walnut' }
+    live(theirs)
+    await priv(theirs).recheckPostponedUpgrade()
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('a dist build with no walnut file for the host: no offer with this build, and the daemon binary is not marked failed', async () => {
+    const c = managedHost(EXPECTED)
+    // The real decision, with the follower ready and the experiments on.
+    await experiments(true)
+    followerFact.mockReturnValue({ kind: 'replica' })
+    state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+    vi.spyOn(priv(c), 'deployWalnutFile').mockImplementation(async () => priv(c).walnutFileUnfit('no such target'))
+    live(c)
+    await priv(c).recheckPostponedUpgrade()
+    expect(managedUpdate).not.toHaveBeenCalled()
+    expect((state(c)._serveUnfit as { expected: string }).expected).toBe(EXPECTED)
+    expect((state(c)._failedRuntimes as Map<string, string>).has('binary')).toBe(false)
+    // Asked again, this build gets no offer: nothing is due.
+    await expect(priv(c).serviceModeWant()).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/walnut file cannot go/) })
+    followerFact.mockReturnValue({ kind: 'unknown' })
+  })
+
+  it('a connect that finds the current build checks the mode, and a due switch runs as the update', async () => {
+    vi.useFakeTimers()
+    const c = make()
+    stub(c, { probe: probe(), version: EXPECTED })
+    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    const recheck = vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockResolvedValue(undefined)
+    const want = vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: 'walnut-serve' })
+    live(c)
+    state(c)._upgradeDeferred = true
+    state(c)._daemonVersion = EXPECTED
+    priv(c).startDeferredUpgrade()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(recheck).toHaveBeenCalledTimes(1)
+    want.mockResolvedValue({ want: null })
+    state(c)._upgradeDeferred = true
+    priv(c).startDeferredUpgrade()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(recheck).toHaveBeenCalledTimes(1)
+  })
+
+  // a3b land 2 review M1 and M2: only a switch whose update ran counts as asked, and that fact is
+  // on disk, so a held try is asked again and a leader restart does not restart the service again.
+  describe('a switch counts as asked only when its update ran, and that is kept on disk', () => {
+    let dir = ''
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-asked-'))
+      process.env.WALNUT_UPDATE_MODE_ASKED_FILE = path.join(dir, 'asked.json')
+    })
+    afterEach(() => {
+      delete process.env.WALNUT_UPDATE_MODE_ASKED_FILE
+      fs.rmSync(dir, { recursive: true, force: true })
+      followerFact.mockReturnValue({ kind: 'unknown' })
+    })
+    // The real decision: experiments on, this Walnut's follower ready, the daemon under the launcher.
+    const offered = async () => {
+      await experiments(true)
+      followerFact.mockReturnValue({ kind: 'replica' })
+      const c = managedHost(EXPECTED)
+      state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+      vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: null, existing: '/slot/walnut' })
+      live(c)
+      return c
+    }
+    const staged = (then: () => never | 'applied') => managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: Opts) => {
+      if ((await opts?.onStaged?.()) === false) return 'held'
+      return then()
+    })
+
+    it('refused as busy after it was staged: not recorded, the next check asks again', async () => {
+      const c = await offered()
+      staged(() => { throw new Error('daemon update refused: 1 host_exec run must finish first') })
+      await priv(c).recheckPostponedUpgrade().catch(() => {})
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(state(c)._modeAsked ?? null).toBeNull()
+      await expect(priv(c).serviceModeWant()).resolves.toEqual({ want: 'walnut-serve' })
+      priv(c).clearUpgradeRecheck()
+    })
+
+    it('failed after its swap began: recorded with the failure, and Health names it', async () => {
+      const c = await offered()
+      staged(() => { throw new Error('the new service did not answer in 120 s') })
+      await priv(c).recheckPostponedUpgrade().catch(() => {})
+      expect(state(c)._modeAsked).toMatchObject({ expected: EXPECTED, want: 'walnut-serve', failed: expect.stringMatching(/did not answer/) })
+      await expect(priv(c).serviceModeWant()).resolves.toMatchObject({ want: null, why: expect.stringMatching(/did not go through \(.*did not answer/) })
+      priv(c).clearUpgradeRecheck()
+    })
+
+    it('went through: a new leader process (a new connection) reads it from disk and asks nothing', async () => {
+      const first = await offered()
+      staged(() => 'applied')
+      await priv(first).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      await (await import('../../src/providers/daemon-update-store.js')).updateStoresSettled()
+      // The host's service chose the session helper anyway (service-entry.ts "any doubt").
+      const next = await offered()
+      await expect(priv(next).serviceModeWant()).resolves.toMatchObject({ want: null, why: expect.stringMatching(/took this build's update/) })
+      await priv(next).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+    })
   })
 })

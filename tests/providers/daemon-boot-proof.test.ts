@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { proveDaemonBoot, STALE_PROOF_MS, sweepProofDirs, trialRuntimeDir } from '../../src/providers/daemon-boot-proof.js'
+import { proveDaemonBoot, proveStagedBoot, SERVED_AS_DAEMON, STALE_PROOF_MS, sweepProofDirs, trialRuntimeDir } from '../../src/providers/daemon-boot-proof.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-boot-proof-test-')))
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -89,6 +89,55 @@ describe('the trial run of a new daemon executable', () => {
 
 // 2026-11-04 review 4: the CLI's trial (`walnut daemon update`) passed no WALNUT_RUNTIME_DIR, so
 // the compiled walnut file unpacked its whole runtime into the throwaway HOME on every update.
+describe('the trial of a version that will run as the host\'s one Walnut service (serve)', () => {
+  it('hands it a throwaway follower spec and a mode file naming it, and proceeds once it writes the launcher\'s ready mark', async () => {
+    const exe = fake('serves', [
+      `cp "$WALNUT_DAEMON_STATE_DIR/service-mode.json" '${seen()}.mode'`,
+      `cat "$WALNUT_DAEMON_STATE_DIR"/host-server/server-*.json > '${seen()}.spec'`,
+      `echo "$WALNUT_LAUNCHER_DIR" > '${seen()}.launcher'`,
+      'printf "pid=%s\\nserves=walnut-serve\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"', 'trap "exit 0" TERM', 'while :; do sleep 0.1; done',
+    ])
+    expect(await proveDaemonBoot({ ...opts(exe), serve: true })).toBeNull()
+    const mode = JSON.parse(fs.readFileSync(`${seen()}.mode`, 'utf8'))
+    expect(mode).toMatchObject({ v: 1, exe })
+    const saved = JSON.parse(fs.readFileSync(`${seen()}.spec`, 'utf8'))
+    expect(saved.spec.home).toBe(mode.home)
+    expect(saved.token).toMatch(/^[0-9a-f]{64}$/)
+    expect(saved.spec.env).toMatchObject({ WALNUT_ROLE: 'replica', WALNUT_NO_AUTO_UPDATE: '1' })
+    // Its data and run dirs are the trial's own, and the launcher dir is the state dir's.
+    const trial = path.dirname(path.dirname(fs.readFileSync(`${seen()}.launcher`, 'utf8').trim()))
+    expect(path.basename(trial)).toMatch(/^walnut-proof-/)
+    expect(saved.spec.env.OPEN_WALNUT_HOME.startsWith(`${trial}/`)).toBe(true)
+    expect(saved.spec.env.WALNUT_DAEMON_DIR.startsWith(`${trial}/`)).toBe(true)
+    expect(fs.existsSync(trial)).toBe(false)
+  })
+
+  // Review A3b S34-M2: a daemon program under a launcher writes the ready mark too, so a --service
+  // start that fell back to the daemon passed the proof of a server path it never ran.
+  it('refuses one that writes the ready mark as the session daemon', async () => {
+    const exe = fake('daemon-ready', [...LISTEN, 'printf "pid=%s\\nexe=x\\ninstance=i\\nat=1\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"', 'trap "exit 0" TERM', 'while :; do sleep 0.1; done'])
+    expect(await proveDaemonBoot({ ...opts(exe), serve: true })).toBe(SERVED_AS_DAEMON)
+  })
+
+  // Review A3b S34-L5: a mode carried over to a daemon-only file (another Walnut's update, an older
+  // leader) runs as the daemon; that is no failure of the build, but an asked service must serve.
+  it('a carried mode on a file that runs only as the daemon is dropped and the file proven as the daemon', async () => {
+    const exe = fake('daemon-only-ready', [...LISTEN, '[ -n "$WALNUT_LAUNCHER_DIR" ] && printf "pid=%s\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"', 'trap "exit 0" TERM', 'while :; do sleep 0.1; done'])
+    let dropped = 0
+    expect(await proveStagedBoot({ ...opts(exe), mode: 'carried', dropMode: () => { dropped++ } })).toBeNull()
+    expect(dropped).toBe(1)
+    expect(await proveStagedBoot({ ...opts(exe), mode: 'asked', dropMode: () => { dropped++ } })).toBe(SERVED_AS_DAEMON)
+    expect(dropped, 'an asked mode stays the build\'s failure').toBe(1)
+    expect(await proveStagedBoot({ ...opts(exe), mode: null, dropMode: () => { dropped++ } })).toBeNull()
+    expect(dropped).toBe(1)
+  })
+
+  it('refuses one that listens as a daemon but never writes the ready mark', async () => {
+    const exe = fake('daemon-only', [...LISTEN, 'trap "exit 0" TERM', 'while :; do sleep 0.1; done'])
+    expect(await proveDaemonBoot({ ...opts(exe), serve: true, waitMs: 800 })).toBe('it did not write its ready mark as the Walnut service within 1 s')
+  })
+})
+
 describe('the trial of the compiled walnut file finds its runtime tree outside the throwaway HOME', () => {
   it('a trial given no runtime dir gets the one the account uses, never one under its HOME', async () => {
     const exe = fake('runtime', [`env > '${seen()}'`, ...LISTEN, 'trap "exit 0" TERM', 'while :; do sleep 0.1; done'])

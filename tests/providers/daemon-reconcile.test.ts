@@ -19,6 +19,7 @@ import path from 'node:path'
 import {
   buildDeps,
   makeRegistryEntry,
+  makeTestSession,
   createDaemonCore,
   killWithDead,
   killWithEperm,
@@ -44,7 +45,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
   it('empty registry produces no sessions and no broadcasts', async () => {
     ctx = await buildDeps()
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
     expect(ctx.sessions.size).toBe(0)
     expect(ctx.spies.broadcastSessionStateFn).not.toHaveBeenCalled()
   })
@@ -62,7 +63,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
     })
 
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.size).toBe(3)
     expect(ctx.sessions.get('a')!.state).toBe('running')
@@ -82,7 +83,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       dead: makeRegistryEntry({ pid: 500 }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('dead')!.state).toBe('dead')
     expect(ctx.sessions.get('dead')!.exitReason).toBe('reconcile-dead')
@@ -95,7 +96,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       notours: makeRegistryEntry({ pid: 600 }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('notours')!.state).toBe('dead')
     expect(ctx.sessions.get('notours')!.exitReason).toBe('reconcile-not-ours')
@@ -111,7 +112,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       recycled: makeRegistryEntry({ pid: 700, startTime: 'original' }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('recycled')!.state).toBe('dead')
     expect(ctx.sessions.get('recycled')!.exitReason).toBe('reconcile-pid-recycled')
@@ -127,7 +128,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       legacy: makeRegistryEntry({ pid: 800, startTime: null }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('legacy')!.state).toBe('running')
   })
@@ -142,7 +143,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       mac: makeRegistryEntry({ pid: 900, startTime: 'was-set-on-linux' }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('mac')!.state).toBe('running')
   })
@@ -163,7 +164,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       alive: makeRegistryEntry({ pid: 1000, startTime: null, pipePath: pipeAlive }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(fs.existsSync(pipeAlive)).toBe(true)
     expect(fs.existsSync(pipeZombie)).toBe(false)
@@ -177,7 +178,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       s: makeRegistryEntry({ pid: 1100, startTime: null, parented: true }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('s')!.parented).toBe(false)
   })
@@ -192,7 +193,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       poll: makeRegistryEntry({ pid: 1200, startTime: null }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     // killFn called once during reconcile (pid probe)
     expect(ctx.spies.killFn).toHaveBeenCalledTimes(1)
@@ -212,8 +213,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
     })
     const core = createDaemonCore(ctx.deps)
 
-    core.reconcileRegistry()
-    core.reconcileRegistry()
+    await Promise.all([core.reconcileRegistry(), core.reconcileRegistry()])
 
     // Only one orphan poll timer should be set (startOrphanPoll is idempotent)
     expect(ctx.spies.setIntervalFn).toHaveBeenCalledTimes(1)
@@ -227,7 +227,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       bad2: makeRegistryEntry({ pid: -1 }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.size).toBe(0)
     expect(ctx.spies.broadcastSessionStateFn).not.toHaveBeenCalled()
@@ -260,7 +260,7 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
       alive2: makeRegistryEntry({ pid: 2004, startTime: null }),
     })
     const core = createDaemonCore(ctx.deps)
-    core.reconcileRegistry()
+    await core.reconcileRegistry()
 
     expect(ctx.sessions.get('alive1')!.state).toBe('running')
     expect(ctx.sessions.get('alive2')!.state).toBe('running')
@@ -272,41 +272,81 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
     expect(ctx.sessions.get('recycled')!.exitReason).toBe('reconcile-pid-recycled')
   })
 
-  // C14 — persist failing mid-reconcile doesn't halt subsequent entries
-  it('persistRegistry failure during one reap does not stop subsequent entries', async () => {
-    const deadPids = new Set([3001])
-    ctx = await buildDeps({
-      killImpl: (pid) => {
-        if (deadPids.has(pid)) {
-          const e = new Error('ESRCH') as NodeJS.ErrnoException
-          e.code = 'ESRCH'
-          throw e
-        }
-      },
-      readStartTimeImpl: () => null,
-    })
+  // C14 — a registry write that fails during the reconcile does not halt it. S7-L3 (2026-11-22
+  // review): this test asserted not.toThrow on the promise the async pass returns, and spied on
+  // writeFileSync, which the async writer never calls, so it tested nothing. The pass writes once,
+  // at its end (S7-M3), through fs.promises: that write fails here.
+  it('a registry write that fails at the end of the pass: every entry still reconciled, and the next write lands the inventory', async () => {
+    vi.useRealTimers()
+    ctx = await buildDeps({ killImpl: killWithDead(new Set([3001])), readStartTimeImpl: () => null })
     await writeRegistry({
       s1: makeRegistryEntry({ pid: 3000, startTime: null }),
-      s2: makeRegistryEntry({ pid: 3001 }),  // ESRCH → reap triggers persist
+      s2: makeRegistryEntry({ pid: 3001 }),  // ESRCH: reaped, which asks for a write
       s3: makeRegistryEntry({ pid: 3002, startTime: null }),
     })
-
-    // Make persistRegistry intermittent: throw on first call (reap for s2),
-    // then succeed.
-    let calls = 0
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation((...args) => {
-      calls++
-      if (calls === 1) throw new Error('EIO')
-      return fs.writeFileSync.wrappedMethod?.(...args)
+    const onDisk = () => Object.keys(JSON.parse(fs.readFileSync(ctx.registryFile, 'utf8')).sessions).sort()
+    const realRename = fs.promises.rename.bind(fs.promises)
+    let renames = 0
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      renames++
+      if (renames === 1) throw Object.assign(new Error('EIO: rename'), { code: 'EIO' })
+      return realRename(from, to)
     })
+    try {
+      const core = createDaemonCore(ctx.deps)
+      await expect(core.reconcileRegistry()).resolves.toBeUndefined()
+      expect(ctx.sessions.get('s1')!.state).toBe('running')
+      expect(ctx.sessions.get('s2')!.state).toBe('dead')
+      expect(ctx.sessions.get('s3')!.state).toBe('running')
+      // The pass's own write was made, and failed.
+      await vi.waitFor(() => expect(renames).toBeGreaterThanOrEqual(1))
+      // A write asked for after it takes the inventory again and lands it.
+      await core.persistRegistryDurable()
+      expect(renames).toBeGreaterThanOrEqual(2)
+      expect(onDisk()).toEqual(['s1', 's3'])
+    } finally {
+      renameSpy.mockRestore()
+      for (const session of ctx.sessions.values()) if (session.orphanPollTimer) clearInterval(session.orphanPollTimer as NodeJS.Timeout)
+    }
+  })
 
+  // S7-L3 + S7-M3 (2026-11-22 review): the async reconcile with an async fold that yields between
+  // entries. A reap in the middle wrote the entries reconciled so far, and every live CLI later in
+  // the pass was missing on disk until the next change.
+  it('async folds, a yield after every entry: one write at the end, every live CLI in it, and a start meanwhile keeps its record', async () => {
+    vi.useRealTimers()
+    ctx = await buildDeps({ killImpl: killWithDead(new Set([3001])), readStartTimeImpl: () => null })
+    await writeRegistry({
+      gone: makeRegistryEntry({ pid: 3001 }),
+      live1: makeRegistryEntry({ pid: 3002, startTime: null }),
+      started: makeRegistryEntry({ pid: 3003, startTime: null }),
+      live2: makeRegistryEntry({ pid: 3004, startTime: null }),
+    })
+    const writes: string[] = []
+    const onDisk = () => Object.keys(JSON.parse(fs.readFileSync(ctx.registryFile, 'utf8')).sessions).sort()
+    const seenDuringPass: string[][] = []
+    const sync = ctx.deps.createAdoptedSession
+    const startedRecord = makeTestSession({ pid: 4000, startTime: null })
+    ctx.deps.reconcileSliceMs = 0
+    ctx.deps.onRegistryWrite = (kind) => { writes.push(kind) }
+    ctx.deps.createAdoptedSession = async (sid, entry) => {
+      await new Promise((r) => setTimeout(r, 5))
+      seenDuringPass.push(onDisk())
+      // A start of this sid lands while its fold runs.
+      if (sid === 'started') ctx.sessions.set('started', startedRecord)
+      return sync(sid, entry)
+    }
     const core = createDaemonCore(ctx.deps)
-    expect(() => core.reconcileRegistry()).not.toThrow()
-
-    expect(ctx.sessions.get('s1')!.state).toBe('running')
-    expect(ctx.sessions.get('s2')!.state).toBe('dead')
-    expect(ctx.sessions.get('s3')!.state).toBe('running')
-
-    writeSpy.mockRestore()
+    await core.reconcileRegistry()
+    // The file stayed whole while the pass ran (the reap of "gone" wrote nothing partial).
+    for (const seen of seenDuringPass) expect(seen).toEqual(['gone', 'live1', 'live2', 'started'])
+    expect(ctx.sessions.get('gone')!.state).toBe('dead')
+    expect(ctx.sessions.get('started')).toBe(startedRecord)
+    await core.persistRegistryDurable()
+    expect(onDisk()).toEqual(['live1', 'live2', 'started'])
+    expect(JSON.parse(fs.readFileSync(ctx.registryFile, 'utf8')).sessions.started.pid).toBe(4000)
+    // One write for the pass (plus the durable one just asked for).
+    expect(writes.length).toBeLessThanOrEqual(2)
+    for (const session of ctx.sessions.values()) if (session.orphanPollTimer) clearInterval(session.orphanPollTimer as NodeJS.Timeout)
   })
 })

@@ -19,10 +19,13 @@ import { DAEMON_BINARIES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
 import os from 'node:os'
 import { readDaemonInstanceOwner, type DaemonLockOwnerInfo } from './daemon-instance-lock.js'
+import { serviceRuntime } from '../core/server-role.js'
 
 export { IN_PROCESS_DAEMON_URL }
 
 let wanted: Promise<boolean> | null = null
+/** What inProcessDaemonWanted answered, once it has (undefined until then). */
+let wantedNow: boolean | undefined
 
 /**
  * Does this process run its daemon in process? WALNUT_IN_PROCESS_DAEMON=1 or 0 decides for one
@@ -30,6 +33,8 @@ let wanted: Promise<boolean> | null = null
  */
 export function inProcessDaemonWanted(): Promise<boolean> {
   wanted ??= (async () => {
+    // A host's one Walnut service holds the runtime by what it is (src/binary/service-entry.ts).
+    if (serviceRuntime()) return true
     const forced = process.env.WALNUT_IN_PROCESS_DAEMON
     if (forced === '1' || forced === '0') return forced === '1'
     try {
@@ -38,12 +43,15 @@ export function inProcessDaemonWanted(): Promise<boolean> {
     } catch {
       return false
     }
-  })()
+  })().then((on) => { wantedNow = on; return on })
   return wanted
 }
 
+/** The answer without waiting (undefined until the first ask settled: the server's boot asks it). */
+export function inProcessDaemonWantedNow(): boolean | undefined { return wantedNow }
+
 /** Tests only: ask the switch again. */
-export function resetInProcessDaemonWantedForTests(): void { wanted = null }
+export function resetInProcessDaemonWantedForTests(): void { wanted = null; wantedNow = undefined }
 
 interface RuntimeModule { createDaemonRuntime(options: DaemonRuntimeOptions): DaemonRuntime | Promise<DaemonRuntime> }
 let provided: (() => Promise<RuntimeModule>) | null = null
@@ -95,7 +103,7 @@ export function inProcessRuntimeTarget(): { binaryPath: string; version: string 
   return { binaryPath: found, version }
 }
 
-interface Held { runtime: DaemonRuntime; dir: string; ended: boolean }
+interface Held { runtime: DaemonRuntime; dir: string; ended: boolean; service: boolean; port: number | null }
 let held: Held | null = null
 let starting: Promise<InProcessStart> | null = null
 let startingDir: string | null = null
@@ -116,8 +124,16 @@ export type InProcessStart = { kind: 'started'; dir: string } | { kind: 'existin
  * Start the in-process runtime for `dir` with `env` (the env a daemon program would get,
  * LocalDaemon.buildSpawnEnv). `existing`: another daemon still serves the dir (its instance lock),
  * and nothing was started.
+ *
+ * `service`: this process is a host's one Walnut service (src/binary/service-entry.ts), the
+ * follower of `home`. The runtime runs as the launcher's service (mode 'service', its state dir,
+ * daemon.pid naming this process, hello `serves: 'walnut-serve'`) and never starts a follower child
+ * for `home`: this server is that follower. When it ends itself (`service.update`, `service.handover`
+ * from `walnut daemon update`, a follower spec the leader changed) the whole service ends, as a daemon
+ * program would: SIGTERM to this process, whose handler stops the server (and writes the launcher's
+ * leaving mark) before it exits.
  */
-export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv }): Promise<InProcessStart> {
+export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv; service?: { home: string } }): Promise<InProcessStart> {
   if (closedForGood) return Promise.reject(new InProcessDaemonClosedError())
   if (held && !held.ended) {
     if (held.dir !== opts.dir) return Promise.reject(new Error(`an in-process daemon already serves ${held.dir}`))
@@ -128,10 +144,13 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
   if (!starting) startingDir = opts.dir
   starting ??= (async (): Promise<InProcessStart> => {
     const { module: { createDaemonRuntime }, script } = await loadRuntimeModule()
-    const entry: Held = { runtime: null as unknown as DaemonRuntime, dir: opts.dir, ended: false }
+    const service = opts.service
+    const entry: Held = { runtime: null as unknown as DaemonRuntime, dir: opts.dir, ended: false, service: !!service, port: null }
+    const launcherFacts = service ? (await import('../web/serve-launcher-beat.js')).serveLauncherFacts : undefined
     entry.runtime = await createDaemonRuntime({
       env: opts.env,
-      mode: 'start',
+      mode: service ? 'service' : 'start',
+      ...(service ? { pidFile: true, serves: 'walnut-serve' as const, selfHome: service.home, launcherFacts } : {}),
       listen: false,
       // The door stays open for everyone this server does not call directly (walnut-net, a
       // host's follower server, hub forwards, a leader's tunnel): turning the experiment on
@@ -143,7 +162,8 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
       exit: (code) => {
         entry.ended = true
         if (held === entry) held = null
-        log.session.warn('in-process daemon ended itself', { dir: opts.dir, code })
+        log.session.warn('in-process daemon ended itself', { dir: opts.dir, code, ...(service ? { service: true } : {}) })
+        if (service) process.kill(process.pid, 'SIGTERM')
       },
     })
     let started: Awaited<ReturnType<DaemonRuntime['start']>>
@@ -156,8 +176,9 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
       await entry.runtime.stop().catch(() => {})
       return { kind: 'existing', port: started.port }
     }
+    entry.port = started.port || null
     held = entry
-    log.session.info('in-process daemon started', { dir: opts.dir, version: entry.runtime.version })
+    log.session.info('in-process daemon started', { dir: opts.dir, version: entry.runtime.version, ...(service ? { service: true, port: entry.port } : {}) })
     return { kind: 'started', dir: opts.dir }
   })().finally(() => { starting = null; startingDir = null })
   return starting
@@ -173,6 +194,12 @@ export function inProcessDaemonConnect(): InProcessConnect | null {
 export function inProcessDaemonRunning(): boolean { return !!held && !held.ended }
 
 /**
+ * The runtime this process holds while it runs, or null: a host's one Walnut service takes the
+ * follower seat from it (replica/front.ts), which asks again until the runtime has started.
+ */
+export function inProcessDaemonRuntime(): DaemonRuntime | null { return held && !held.ended ? held.runtime : null }
+
+/**
  * The launcher's readiness check for the runtime (service-launcher-beat.ts daemonServesCheck), asked
  * of the runtime itself through a client of its own: hello as this very runtime, then status.
  * null when it answers right, else why not.
@@ -180,7 +207,14 @@ export function inProcessDaemonRunning(): boolean { return !!held && !held.ended
 export async function inProcessDaemonServesCheck(): Promise<string | null> {
   const entry = held && !held.ended ? held : null
   if (!entry) return 'the in-process daemon is not running'
-  const { daemonServesCheck } = await import('./service-launcher-beat.js')
+  const { askOwnPort, daemonServesCheck } = await import('./service-launcher-beat.js')
+  // A host's one service is reached by its leaders through the door: ready only once that answers.
+  if (entry.service) {
+    if (!entry.port) return 'the service\'s door is not listening'
+    const { WebSocket } = await import('#ws')
+    const ask = askOwnPort(entry.port, WebSocket as unknown as Parameters<typeof askOwnPort>[1])
+    return daemonServesCheck(ask, { instanceId: entry.runtime.instanceId, version: entry.runtime.version })
+  }
   const client = entry.runtime.connect(() => {})
   try {
     return await daemonServesCheck((cmd) => client.request(String(cmd.cmd), cmd), { instanceId: entry.runtime.instanceId, version: entry.runtime.version })
@@ -253,6 +287,8 @@ export async function ensureInProcessDaemon(deps: {
   env: () => Promise<NodeJS.ProcessEnv>
   /** Who holds the dir's lock (anotherServiceHolds): tests hand their own. */
   otherService?: () => Promise<{ pid: number } | null>
+  /** This process is a host's one Walnut service, the follower of `home` (startInProcessDaemon). */
+  service?: { home: string }
   /**
    * Folds the registry's streams in a child process first (fold-prewarm.ts), so the start adopts
    * from fresh checkpoints: in process its re-fold holds the server's thread (A3b measure: about
@@ -282,7 +318,7 @@ export async function ensureInProcessDaemon(deps: {
   }
   let started: InProcessStart
   try {
-    started = await startInProcessDaemon({ dir: deps.dir, env: await deps.env() })
+    started = await startInProcessDaemon({ dir: deps.dir, env: await deps.env(), ...(deps.service ? { service: deps.service } : {}) })
   } catch (err) {
     // While the server stops nothing starts, a daemon program in its place neither.
     if (err instanceof InProcessDaemonClosedError) throw err

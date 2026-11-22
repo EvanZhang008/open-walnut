@@ -58,7 +58,8 @@ import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import { getBuildInfo } from '../lib/build-info.js'
 import { placement, role, setLeaderPresence } from '../core/server-role.js'
-import { createFollowerLink, type FollowerLink } from '../core/link/follower-link.js'
+import { createDirectFollowerLink, createFollowerLink, type FollowerLink, type FollowerLinkWiring } from '../core/link/follower-link.js'
+import type { FollowerSeat } from '../providers/daemon-runtime-types.js'
 import { clearSelfHost, installSelfHost, isLocalHere } from './self-host.js'
 import type { HostServerEnv } from '../host-server/env.js'
 import type { Route } from '../host-server/route.js'
@@ -115,6 +116,13 @@ export interface ReplicaFrontOptions {
   writeBudgetMs?: number
   /** Tests: a follower link of their own (the daemon's view and the streams are the test's). */
   link?: FollowerLink
+  /**
+   * A host's one Walnut service (src/binary/service-entry.ts) holds the daemon runtime in this
+   * process: its follower seat, once the runtime runs (null before). The link then calls the
+   * runtime directly, with no socket and no follower.hello; this host's own reads go through it
+   * too, with the follower's owner scope (self-host.ts). Absent: the loopback socket to the daemon.
+   */
+  seat?: () => FollowerSeat | null
   /**
    * This replica answers its host's own `walnut` calls while the Mac is away (the
    * `host-local-calls` capability): it says so at follower.hello, takes the daemon's
@@ -203,8 +211,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   })
   const followSettings = followExposeSettings(expose, (m, d) => log.web.warn(m, d))
 
-  const link: FollowerLink = opts.link ?? createFollowerLink({
-    daemonDir: env.daemonDir, walnutId: env.walnutId, home: env.leaderHome, token: env.followerToken, host: env.label,
+  const wiring: FollowerLinkWiring = {
+    walnutId: env.walnutId, home: env.leaderHome, host: env.label,
     openTimeoutMs: OPEN_TIMEOUT_MS,
     ...(opts.pollMs ? { pollMs: opts.pollMs } : {}),
     accept: (info) => (info.from === 'primary' ? (stream: Duplex) => opts.acceptFromLeader(stream) : null),
@@ -222,8 +230,13 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       helloExtra: (): Record<string, unknown> => { const u = callSocket(); return u ? { callSocket: u } : {} },
     } : {}),
     log: (level, msg, data) => log.web[level](msg, data),
-  })
+  }
+  const link: FollowerLink = opts.link ?? (opts.seat
+    ? createDirectFollowerLink({ ...wiring, seat: opts.seat })
+    : createFollowerLink({ ...wiring, daemonDir: env.daemonDir, token: env.followerToken }))
   // The Mac's name for this host resolves to this link (self-host.ts, WP6).
+  // In a host's one Walnut service too: the stand-in goes through the in-process follower seat, whose
+  // follower origin keeps the owner scope (a real local connection would read every Walnut's sessions).
   installSelfHost({ aliases: env.hostKey ? [env.hostKey] : [], link })
   log.web.info('replica: self host', { host: env.label, hostKey: env.hostKey ?? null, home: env.leaderHome })
   link.on('view', (view) => {

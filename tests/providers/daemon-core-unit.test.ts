@@ -392,23 +392,25 @@ describe('reapSession', () => {
 // ════════════════════════════════════════════════════════════════════════
 
 describe('registry read/persist', () => {
-  it('persists only running sessions; roundtrips through readRegistry', () => {
+  it('persists only running sessions; roundtrips through readRegistry', async () => {
     const core = createDaemonCore(h.deps)
     h.sessions.set('alive', makeSession('alive', { pid: 100, state: 'running' }))
     h.sessions.set('dead', makeSession('dead', { pid: 200, state: 'dead' }))
     h.sessions.set('nopid', makeSession('nopid', { pid: 0, state: 'running' }))
 
     core.persistRegistry()
+    await core.persistRegistryDurable()
 
     const entries = core.readRegistry()
     expect(Object.keys(entries)).toEqual(['alive'])
     expect(entries.alive.pid).toBe(100)
   })
 
-  it('uses atomic rename — registry tmp file does not leak', () => {
+  it('uses atomic rename — registry tmp file does not leak', async () => {
     const core = createDaemonCore(h.deps)
     h.sessions.set('a', makeSession('a', { pid: 1 }))
     core.persistRegistry()
+    await core.persistRegistryDurable()
 
     expect(fs.existsSync(h.registryFile)).toBe(true)
     expect(fs.existsSync(h.registryFile + '.tmp')).toBe(false)
@@ -783,6 +785,7 @@ describe('handleSendRawCommand', () => {
     })
     expect(await core.handleSendRawCommand('raw-clears-pending', raw)).toEqual({ ok: true })
     expect(sess.pendingCtrl).toBeNull()
+    await core.persistRegistryDurable()
     expect(core.readRegistry()['raw-clears-pending']?.pendingCtrl).toBeUndefined()
 
     try { fs.closeSync((sess as unknown as { _readFd: number })._readFd) } catch {}

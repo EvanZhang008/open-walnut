@@ -5,7 +5,9 @@
  *
  *   walnut <command> ...             the CLI (data commands take the slim cli-fast entry)
  *   walnut __daemon --start          the session daemon (src/providers/daemon-standalone.ts);
- *                                    `--start`, `--stop`, `--status` and `--service` alone mean the same
+ *                                    `--start`, `--stop`, `--status` and `--service` alone mean the same;
+ *                                    `--service` is the host's one Walnut service instead when
+ *                                    the leader switched the host (src/binary/service-entry.ts)
  *   walnut __selftest                checks the file's own parts without a server (src/binary/selftest.ts)
  *   walnut __plugin-check ...        loads installed plugins without activating them (src/core/plugins/plugin-load-check.ts)
  *   walnut __session-host-approve -- <argv...>
@@ -69,7 +71,12 @@ if (first === '__selftest') {
   // `--status`), which a compiled Mac fills with the host's own walnut file. `--version`
   // stays the CLI's; the daemon's own is `walnut __daemon --version`.
   if (first === '__daemon') process.argv.splice(2, 1)
-  await (await import('../providers/daemon-standalone.js')).runDaemonProcess()
+  // The launcher's `--service`: the host's one Walnut service when the leader switched this host
+  // (service-entry.ts reads its mode file and spec before anything else loads), else the daemon.
+  const service = process.argv[2] === '--service' ? (await import('./service-entry.js')).decideServiceEntry(process.env, process.execPath) : null
+  if (service?.kind === 'daemon' && !service.quiet) process.stderr.write(`walnut --service: running as the session daemon (${service.why})\n`)
+  if (service?.kind === 'serve') await (await import('./service-entry.js')).runHostService(service, () => import('../providers/daemon-standalone.js'))
+  else await (await import('../providers/daemon-standalone.js')).runDaemonProcess()
 } else if (first === 'walnut' || first === 'wn') {
   // The daemon copies this file as its shim core and its PATH shim runs `<copy> walnut <args>`.
   const { runWalnutCli } = await import('../providers/wn-cli.js')

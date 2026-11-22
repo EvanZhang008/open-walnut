@@ -636,47 +636,46 @@ describe('ONE journal root per host in every mode, the same in both twins (evalu
 
 describe('both twins wire the migration the same way', () => {
   it('build it from that rule, run it after daemon.pid names them, and serve the gateway only after it', () => {
+    // One host journal for both twins (host-journal-core.ts): its store, the offline host on it,
+    // the migration and the minute sweep. The twins hand it their dirs and their ties.
+    const core = fs.readFileSync(path.join(ROOT, 'src/providers/host-journal-core.ts'), 'utf8')
+    expect(core).toMatch(/legacyDirs: deps\.legacyDirs,/)
+    expect(core).toMatch(/importLegacyLeaders: \(\) => deps\.importLegacyLeaders\(\)/)
+    expect(core).toMatch(/slicesMoved: \(\) => host\.reloadSlices\(\)/)
+    // The trigger holds are armed again after the boot migration, and after a late one
+    // (a v1 file left part way, or of a Walnut unknown at boot), outside the write that finished it.
+    expect(core).toMatch(/recordsMigrated: \(\) => deps\.rearm\(\)/)
+    expect(core).toMatch(/migrated: \(\) => \{ setTimeout\(\(\) => deps\.rearm\(\), 0\) \}/)
+    // Only daemon boot schedules the sweep; a fenced Demo never delivers its journals.
+    const fnAt = core.indexOf('function migrate(')
+    const fnEnd = core.indexOf('\n  }\n', fnAt)
+    const schedules = [...core.matchAll(/setInterval\(sweepTick, 60_?000\)/g)].map((m) => m.index ?? 0)
+    expect(schedules.length).toBe(1)
+    expect(schedules[0] > fnAt && schedules[0] < fnEnd, 'the sweep starts in migrate()').toBe(true)
+    expect(core.slice(fnAt, schedules[0])).toMatch(/migration\.boot\(\)/)
+    // Nothing at build time copies, imports or sweeps (the binary also runs as the walnut CLI).
+    const body = core.slice(core.indexOf('export function createHostJournal('))
+    expect(body).not.toMatch(/^  (const|let) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy|boot|sweep)\(/m)
     for (const file of ['daemon-standalone.ts', 'daemon-source.ts']) {
       const text = twinText(file)
       expect(text, file).toMatch(/legacyDirs: LEGACY_JOURNAL_DIRS,/)
       expect(text, file).toMatch(/legacyDirs: LEGACY_LEADER_DIRS,/)
       expect(text, file).toMatch(/importLegacyLeaders: (\(\) => |function \(\) \{ )leaderBook\.importLegacy\(\)/)
-      expect(text, file).toMatch(/slicesMoved: (\(\) => |function \(\) \{ )offlineHost\.reloadSlices\(\)/)
-      // The trigger holds are armed again after the boot migration, and after a late one
-      // (a v1 file left part way, or of a Walnut unknown at boot), outside the write that finished it.
-      expect(text, file).toMatch(/recordsMigrated: (\(\) => |function \(\) \{ )triggerHoldsChanged\(\)/)
-      expect(text, file).toMatch(/migrated: (\(\) => \{ setTimeout\(\(\) => |function \(\) \{ setTimeout\(function \(\) \{ )triggerHoldsChanged\(\)/)
+      expect(text, file).toMatch(/rearm: (\(\) => |function \(\) \{ )triggerHoldsChanged\(\)/)
+      expect(text, file).toMatch(/fenced: (\(\) => |function \(\) \{ return )demoQuiesce\.fenced/)
+      expect(text, file).toMatch(/createMigration: (createJournalMigration|\(__CREATE_JOURNAL_MIGRATION__\)),/)
       // Nothing moves v2 records between dirs: no state dir candidates, no conflict view.
       expect(text, file).not.toMatch(/stateDirs:|JOURNAL_STATE_CANDIDATES|conflictOf\(|journalMigration\.afterAck/)
-      // Only daemon boot schedules the sweep; a fenced Demo never delivers its journals.
-      const fnAt = text.indexOf('function migrateJournals(')
-      const fnEnd = text.indexOf('\n}\n', fnAt)
-      const schedules = [...text.matchAll(/setInterval\(offlineSweepTick, 60_?000\)/g)].map((m) => m.index ?? 0)
-      expect(schedules.length, file).toBe(1)
-      expect(schedules[0] > fnAt && schedules[0] < fnEnd, `${file}: the sweep starts in migrateJournals()`).toBe(true)
-      const tickAt = text.indexOf('function offlineSweepTick(')
-      const tickEnd = text.indexOf('\n}\n', tickAt) + 2
-      const sweeps = [...text.matchAll(/offlineHost\.sweep\(\)/g)].map((m) => m.index ?? 0)
-      expect(sweeps.length, file).toBe(1)
-      expect(sweeps[0] > tickAt && sweeps[0] < tickEnd, file).toBe(true)
-      const fence = { fenced: false }
-      let calls = 0
-      const tick = new Function('demoQuiesce', 'offlineHost',
-        text.slice(tickAt, tickEnd).replace('(): void', '()') + '\nreturn offlineSweepTick')(
-        fence, { sweep: () => { calls++; return Promise.resolve() } },
-      )
-      tick()
-      expect(calls, file).toBe(1)
-      fence.fenced = true
-      tick()
-      expect(calls, file).toBe(1)
+      // The twins never sweep or migrate on their own: only through the host journal.
+      expect(text, file).not.toMatch(/offlineHost\.sweep\(|setInterval\(offlineSweepTick/)
+      expect(text.split('hostJournal.migrate()').length - 1, file).toBe(1)
       // Nothing at module load copies, imports or sweeps (the binary also runs as the walnut CLI).
       expect(text, file).not.toMatch(/^(const|var) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy)\(/m)
-      expect(text, file).not.toMatch(/^offlineJournal\.(migrateSlices|sweepBlobs)\(/m)
+      expect(text, file).not.toMatch(/^hostJournal\.store\.(migrateSlices|sweepBlobs)\(/m)
       // daemon.pid is written directly (the JS twin) or through the door module (the bun twin,
       // daemon-door.ts publishDoorFiles, which writes it before daemon.port).
       const pid = Math.max(text.indexOf('fs.writeFileSync(PID_FILE, String(process.pid))'), text.indexOf('publishDoorFiles(fs, { pidFile: PID_FILE,'))
-      const migrate = text.indexOf('migrateJournals()', pid)
+      const migrate = text.indexOf('hostJournal.migrate()', pid)
       expect(pid, file).toBeGreaterThan(0)
       expect(migrate, file).toBeGreaterThan(pid)
       // The gateway listener of the --start path starts after the migration (no write ahead of the v1 records).
@@ -684,6 +683,38 @@ describe('both twins wire the migration the same way', () => {
       expect(gatewayStarts.length, file).toBeGreaterThan(0)
       for (const at of gatewayStarts) expect(at, `${file}: the gateway starts after the migration`).toBeGreaterThan(migrate)
     }
+  })
+
+  it('the minute sweep runs only unfenced, and only after migrate()', async () => {
+    const { createHostJournal } = await import('../../src/providers/host-journal-core.js')
+    const fence = { fenced: false }
+    let calls = 0
+    let boots = 0
+    const journal = createHostJournal({
+      fenced: () => fence.fenced,
+      createJournal: () => ({}),
+      createMigration: () => ({ boot: () => { boots++ } }),
+      createHost: () => ({ sweep: () => { calls++; return Promise.resolve(0) }, reloadSlices: () => {} }),
+      host: {}, log: () => {},
+    } as unknown as Parameters<typeof createHostJournal>[0])
+    expect(boots).toBe(0)
+    journal.sweepTick()
+    expect(calls).toBe(1)
+    fence.fenced = true
+    journal.sweepTick()
+    expect(calls).toBe(1)
+    // A sweep that fails is logged, never an unhandled rejection that ends the daemon.
+    const logs: string[] = []
+    const failing = createHostJournal({
+      fenced: () => false,
+      createJournal: () => ({}),
+      createMigration: () => ({ boot: () => {} }),
+      createHost: () => ({ sweep: () => Promise.reject(new Error('disk gone')), reloadSlices: () => {} }),
+      host: {}, log: (_l: string, msg: string) => { logs.push(msg) },
+    } as unknown as Parameters<typeof createHostJournal>[0])
+    failing.sweepTick()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(logs).toContain('offline host: the minute sweep failed')
   })
 
   it('the source twin inlines createJournalMigration once, and the generated text passes its build-time smoke', async () => {

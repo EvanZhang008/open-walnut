@@ -91,8 +91,22 @@ export function isHostReplicaProgram(): boolean {
   replicaProgram ??= isHostReplica() && (process.env.WALNUT_ROLE ?? '').trim() === 'replica'
   return replicaProgram
 }
-/** This server may run a local session daemon: the Mac, or the companion with cloud.exec on (checked by its caller). */
-export function hasLocalDaemon(): boolean { return current().placement !== 'host' }
+/**
+ * The daemon runtime this process holds as a host's one Walnut service (src/binary/service-entry.ts,
+ * set by its `--service` entry before the server's modules load): the runtime's own daemon dir,
+ * the follower home it serves, and the env a daemon program would have had. Null everywhere else.
+ */
+export interface ServiceRuntime { dir: string; home: string; env: Record<string, string> }
+let serviceRuntimeFact: ServiceRuntime | null = null
+export function holdServiceRuntime(fact: ServiceRuntime): void { serviceRuntimeFact = fact }
+export function serviceRuntime(): ServiceRuntime | null { return serviceRuntimeFact }
+/** Tests only. */
+export function _resetServiceRuntimeForTesting(): void { serviceRuntimeFact = null }
+/**
+ * This server may run a local session daemon: the Mac, the companion with cloud.exec on (checked by
+ * its caller), or a host's one Walnut service, which holds the host's runtime in its own process.
+ */
+export function hasLocalDaemon(): boolean { return current().placement !== 'host' || serviceRuntimeFact !== null }
 /** Sessions run where this server is: the Mac, or (WP12) the host. */
 export function runsSessions(): boolean { return current().placement !== 'cloud' }
 /**

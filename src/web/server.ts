@@ -88,7 +88,7 @@ import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
 import { CRON_FILE, IS_DEMO, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
 import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
-import { isCompanion, isFollower, isHostReplica, placement, role } from '../core/server-role.js'
+import { isCompanion, isFollower, isHostReplica, placement, role, serviceRuntime } from '../core/server-role.js'
 import { capabilityFacts, capabilityList, hasCapability } from '../core/capabilities.js'
 import { bootPolicy } from '../core/boot-policy.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
@@ -1273,9 +1273,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // presence, the report loop, the dispatcher), started BEFORE the heavy init,
   // so the Mac sees its first report within seconds of the spawn (WP2).
   if (isHostReplica()) {
-    const [{ createLeaderDoor }, { replicaDeviceCopy }, { startReplicaFront }, { followerSecrets }, ws] = await Promise.all([
+    const [{ createLeaderDoor }, { replicaDeviceCopy }, { startReplicaFront }, { followerSecrets }, ws, { inProcessDaemonRuntime }] = await Promise.all([
       import('../replica/leader-door.js'), import('../replica/auth.js'), import('../replica/front.js'),
-      import('../host-server/env.js'), import('./ws/handler.js'),
+      import('../host-server/env.js'), import('./ws/handler.js'), import('../providers/in-process-daemon.js'),
     ])
     const secrets = followerSecrets()
     const env = process.env
@@ -1296,6 +1296,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       ...((env.WALNUT_HOST_KEY ?? '').trim() ? { hostKey: (env.WALNUT_HOST_KEY ?? '').trim() } : {}),
       // This host's own `walnut` calls while the Mac is away (capabilities/host-local-calls.ts).
       localCalls: hasCapability('host-local-calls'),
+      // A host's one Walnut service holds the daemon runtime in this process: its link calls it directly.
+      ...(serviceRuntime() ? { seat: () => inProcessDaemonRuntime()?.follower ?? null } : {}),
     })
     const front = hostReplicaFront
     if (hasCapability('host-local-calls')) {
@@ -1750,7 +1752,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     throw await portInUseError(port)
   }
 
-  if (!bootPolicy('local-daemon')) {
+  // A host's one Walnut service holds the host's daemon runtime (src/binary/service-entry.ts): it
+  // starts it here as the Mac starts its in-process one, and its door serves the leaders.
+  if (!bootPolicy('local-daemon') && !serviceRuntime()) {
     log.web.info(isHostReplica()
       ? 'host replica: no local session daemon (it never starts or reaches one)'
       : 'cloud mode: no cloud-exec capability, no local session daemon')
@@ -1790,6 +1794,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       error: err instanceof Error ? err.message : String(err),
       recoveryKey: LOCAL_DAEMON_RECOVERY_KEY,
     })
+    // A host's one Walnut service without its runtime serves nothing it is for: the boot fails, and
+    // its launcher starts it again (with its backoff; a version in its trial is put back).
+    if (serviceRuntime()) throw err
     // Don't throw — remote sessions may still work, and user can fix daemon issues
   }
   // The paired cloud companion as an exec host ("Cloud"): read the pairing now

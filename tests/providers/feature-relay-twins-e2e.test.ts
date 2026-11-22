@@ -201,7 +201,12 @@ async function rig(twin: Twin, hostAlias = '__local__') {
   const { caller, port } = await boot(twin, cloud.port)
   await configure(caller, cloud.port, hostAlias)
   const bridge = await cloud.peer()
-  if (twin.wsClient) expect(daemonLogs().filter((f) => f.msg === 'bridge-conn-open').map((f) => f.wsClient)).toEqual([twin.wsClient])
+  if (twin.wsClient) {
+    // The daemon's log is appended off its thread (log-appender-core.ts): the line may land after the hello.
+    const opened = () => daemonLogs().filter((f) => f.msg === 'bridge-conn-open').map((f) => f.wsClient)
+    await until(() => opened().length > 0, 'the bridge-conn-open log line')
+    expect(opened()).toEqual([twin.wsClient])
+  }
   return { cloud, caller, port, bridge }
 }
 

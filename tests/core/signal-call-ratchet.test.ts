@@ -62,6 +62,8 @@ const EXEMPT = new Set([
  * own server), with the number of raw signal sites each may have.
  */
 const RAW_SIGNAL_BUDGET: Record<string, number> = {
+  'src/providers/in-process-daemon.ts': 1,         // a host's one Walnut service ends itself (SIGTERM to its own pid) when its runtime does
+  'src/binary/service-entry.ts': 2,                // its own pid at a trial's lifetime; the follower group an older daemon started, by its recorded pid + start time (stopRecordedServer)
   'src/core/plugins/plugin-hosts.ts': 1,           // a plugin script's own sh group on this machine, at its deadline or cap (host-script-core.ts)
   'src/commands/web-ephemeral.ts': 1,              // the ephemeral child it launched, on a failed launch
   'src/core/calendar/sources/eventkit.ts': 1,      // its own calendar-write helper's group, at the deadline

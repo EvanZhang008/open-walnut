@@ -49,7 +49,7 @@ describe('follower gateway twin wiring', () => {
       expect(src).toContain('followerGateway.settle(ws, relayId, followerGateway.responseOf(')
       expect(src).toContain('followerGateway.dropSocket(ws)')
       // One rule for "away": the hand-off asks the same test follower.op applies.
-      expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerMayWrite\(home\)/)
+      expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerEntry\.mayWrite\(home\)/)
       // A final refusal goes on to the companion while it leads (its forward is on the daemon's path).
       expect(src).toMatch(/leaderElsewhere: (\(home\) => |function \(home\) \{ return )leaderBook\.backupLead\(home\) !== null/)
       // A plugin job's call in the window waits for its leader or the follower, within its own deadline.
@@ -74,12 +74,16 @@ describe('follower gateway twin wiring', () => {
   })
 
   it('both twins start a task\'s plain session for a follower only for a Mac that drains task-start', () => {
+    // follower.start runs in the follower entry both twins share (follower-entry-core.ts start).
     for (const src of [standalone, source]) {
-      expect(src).toContain("cmd.run === 'task'")
-      expect(src).toContain('offlineHost.checkTaskStart(home, sid, cmd.actor)')
-      expect(src).toMatch(/taskRun \? hostStart\.planTask\(home, cmd/)
-      expect(src).toContain("cmd.run === 'task' ? offlineHost.checkTaskStart(home, p.sid, cmd.actor) : offlineHost.checkSession(home, p.sid, cmd.actor)")
+      expect(src).toMatch(/followerEntry\.start\(home, cmd\)/)
+      expect(src).toMatch(/offline: offlineHost, hostStart(: hostStart)?,/)
     }
+    const entry = read('src/providers/follower-entry-core.ts')
+    expect(entry).toContain("const taskRun = cmd.run === 'task'")
+    expect(entry).toContain('offline.checkTaskStart(home, sid, cmd.actor)')
+    expect(entry).toMatch(/taskRun \? hostStart\.planTask\(home, cmd/)
+    expect(entry).toContain("cmd.run === 'task' ? offline.checkTaskStart(home, p.sid, cmd.actor) : offline.checkSession(home, p.sid, cmd.actor)")
   })
 
   it('both twins read a gateway result\'s api one way, before either branch: the follower\'s answer too', () => {

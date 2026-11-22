@@ -10,6 +10,7 @@ import os from 'node:os'
 import { spawn } from 'node:child_process'
 import ts from 'typescript'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { createHostJournal } from '../../src/providers/host-journal-core.js'
 
 const ROOT = '/fixture/share/open-walnut-demo'
 const GEN = 'gen-1'
@@ -489,8 +490,21 @@ describe('demo.quiesce background wiring in both twins', () => {
         sites++
       }
     }
-    // runTrigger, runTriggerTest (checks), deliverFireOwn (delivery: deliverUnclaimedFires hands the fire to it, through the follower core), startUnclaimedRun (routine), offlineSweepTick.
-    expect(sites).toBe(5)
+    // runTrigger, runTriggerTest (checks), deliverFireOwn (delivery: deliverUnclaimedFires hands the fire to it, through the follower core), startUnclaimedRun (routine).
+    // The journal sweep is the host journal's (host-journal-core.ts sweepTick, checked below): the twins hand it the fence.
+    expect(sites).toBe(4)
+    expect(src).toMatch(/fenced: (\(\) => |function \(\) \{ return )demoQuiesce\.fenced/)
+  })
+
+  it('the host journal\'s minute sweep reads the fence the twins hand it first, and is its only sweep', () => {
+    const core = fs.readFileSync(path.resolve(__dirname, '../../src/providers/host-journal-core.ts'), 'utf8')
+    const sweeps = [...core.matchAll(/\bhost\.sweep\(/g)].map((m) => m.index!)
+    expect(sweeps).toHaveLength(1)
+    const tick = core.lastIndexOf('function sweepTick(', sweeps[0])
+    expect(tick).toBeGreaterThan(0)
+    const before = core.slice(tick, sweeps[0])
+    expect(before).toMatch(/if \(deps\.fenced\(\)\) return/)
+    expect(before.slice(before.indexOf('deps.fenced()'))).not.toMatch(/\bawait\b/)
   })
 
   it.each(twins)('%s: a check never starts but through runTrigger or runTriggerTest, and tick is the only clock that runs them', (_n, src) => {
@@ -561,8 +575,6 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
       applyCheckError: core.applyCheckError, decideCheck: core.decideCheck, applyCheckOutcome: core.applyCheckOutcome,
       triggerCheckCore: { ...core, runCheckProcess },
       triggerCadenceMs: () => 60_000, runClock: () => 'held', GATEWAY_SHIM_DIR: '/stub-shim',
-      // No home here waits for its leader.configure (walnut-scope-core.ts aliases).
-      heldForLeader: () => false,
       // A run's gateway token (trigger-caller-v1): each twin's own way of minting it.
       checkCallers: core.createCheckCallers(), checkCallerEnv: core.checkCallerEnv, GATEWAY_SOCK_PATH: '/stub-sock',
       checkRunCaller: () => ({ env: {}, release: () => {} }),
@@ -644,6 +656,14 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     for (const n of names) if (!found.has(n)) throw new Error('Missing ' + n)
     return names.map((n) => found.get(n)!).join('\n')
   }
+  /** The host journal factory as the source twin carries it (its inlined text, the one function). */
+  function hostJournalFromText(text: string): typeof createHostJournal {
+    const at = text.indexOf('function createHostJournal(')
+    const end = text.indexOf('\n}', at) + 2
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    // `__name`: the one bundler helper the generated daemon defines (daemon-source.ts INJECTED_HELPERS_SOURCE).
+    return new Function('__name', '"use strict"; return ' + text.slice(at, end))((f: unknown) => f) as typeof createHostJournal
+  }
   const twinTexts: Array<[string, string]> = [
     ['standalone', read('src/providers/daemon-standalone.ts')],
     ['source', getDaemonSource()],
@@ -665,16 +685,25 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
       sessionStartGate: { run: async (_sid: string, work: () => Promise<unknown>) => { await gateOpen.promise; return work() } },
       cancelTurnRetry: () => {},
       core: { handleSendCommand: send }, handleSendCommand: send,
-      offlineHost: { sweep: () => { sweeps.push(1); return Promise.resolve(0) } },
     }
-    const js = ts.transpileModule(extract(text, ['offlineSweepTick', 'deliverFromOfflineHost']) + '\nreturn { offlineSweepTick, deliverFromOfflineHost };', {
+    const js = ts.transpileModule(extract(text, ['deliverFromOfflineHost']) + '\nreturn { deliverFromOfflineHost };', {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const twin = new Function(...Object.keys(env), js)(...Object.values(env)) as {
-      offlineSweepTick: () => void
+    const delivery = new Function(...Object.keys(env), js)(...Object.values(env)) as {
       deliverFromOfflineHost: (sid: string, text: string, messageId: string) => Promise<{ ok: boolean; reason?: string }>
     }
+    // The minute sweep is the host journal's (host-journal-core.ts), as each twin wires it: the
+    // standalone twin imports it, the source twin inlines its text.
+    const make = text.includes('function createHostJournal(') ? hostJournalFromText(text) : createHostJournal
+    const journal = make({
+      fenced: () => fence.fenced,
+      createJournal: () => ({}),
+      createMigration: () => ({ boot: () => {} }),
+      createHost: () => ({ sweep: () => { sweeps.push(1); return Promise.resolve(0) }, reloadSlices: () => {} }),
+      host: {}, log: () => {},
+    } as unknown as Parameters<typeof createHostJournal>[0])
+    const twin = { offlineSweepTick: () => journal.sweepTick(), deliverFromOfflineHost: delivery.deliverFromOfflineHost }
     return {
       twin, fence, drain, sends, sweeps,
       openGate: () => gateOpen.resolve(), finishSend: () => sendDone.resolve(),
@@ -752,7 +781,7 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
 
   it.each(twinTexts)('%s: the offline host is wired to these two and the gate rechecks the fence before the send', (_n, text) => {
     const src = text
-    expect(src).toMatch(/offlineSweepTimer = setInterval\(offlineSweepTick, 60_?000\)/)
+    expect(src).toMatch(/fenced: (\(\) => |function \(\) \{ return )demoQuiesce\.fenced/)
     // `o`: a resend's options (a trigger fire again: dedupe by the line record, offline-host-core.ts).
     expect(src).toMatch(/deliver: (\(sid, text, messageId, o\) => |function \(sid, text, messageId, o\) \{ return )deliverFromOfflineHost\(sid, text, messageId, o\)/)
     const body = extract(src, ['deliverFromOfflineHost'])

@@ -16,7 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { passwdHome, semanticLaneDecision, type SemanticLaneInputs } from '../../src/core/search/semantic-default.js'
+import { semanticLaneDecision, type SemanticLaneInputs } from '../../src/core/search/semantic-default.js'
+import { parsePasswdLine } from '../../src/lib/account.js'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const TMP = ['/tmp', '/private/tmp', '/var/folders/xy/T']
@@ -142,6 +143,7 @@ describe('no index in src/ gets an embedder around the decision', () => {
 // The account home must come from the user database: the homedir Bun's
 // os.userInfo() reports is $HOME, so a fake HOME would pass for the account's own.
 describe('passwd home field', () => {
+  const passwdHome = (line: string, _platform: string) => parsePasswdLine(line)?.homedir ?? null
   it('reads the macOS id -P form (field 9)', () => {
     expect(passwdHome('evan:********:503:20::0:0:Zhang, Evan:/Users/evan:/bin/zsh\n', 'darwin')).toBe('/Users/evan')
   })

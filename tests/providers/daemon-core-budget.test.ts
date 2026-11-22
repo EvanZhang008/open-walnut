@@ -247,7 +247,8 @@ describe('owning daemon budget FIFO gate', () => {
   it('persists the graceful budget stop flag in the running registry', () => {
     const f = fixture(async () => 'budget_paused' as const)
     f.session.budgetGracefulStop = true
-    f.core.persistRegistry()
+    // The exit's synchronous write: the same body the async writes take (registry-writer-core.ts).
+    f.core.persistRegistrySync()
     const body = f.fakeFs.writeFileSync.mock.calls[0]?.[1]
     expect(JSON.parse(String(body)).sessions.sid.budgetGracefulStop).toBe(true)
   })

@@ -277,6 +277,8 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   // The daemon and its journal (dispatch.ts, offline-host-core.ts).
   daemon_needs_upgrade: 'This host\'s Walnut daemon is too old to keep changes; it updates on your Mac\'s next connect.',
   daemon_unreachable: 'This host\'s Walnut daemon did not answer.',
+  // A host replica never runs sessions on its own machine's daemon (daemon-connection.ts assertLocalDialAllowed).
+  no_local_daemon_in_replica: 'Sessions on this host start through your Mac.',
   not_queueable: 'This change cannot wait on this host until your Mac is back.',
   mac_too_old: 'Your Mac runs an older Walnut that cannot take this change later.',
   fields: 'Some of these fields can only be changed while your Mac answers.',

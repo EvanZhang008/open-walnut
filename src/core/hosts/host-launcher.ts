@@ -60,18 +60,11 @@ export async function noteLauncherRollback(hostKey: string, facts: LauncherFacts
   const key = `${hostKey}:${r.at}`
   if (told.has(key)) return
   told.add(key)
-  try {
-    const [{ upsertNotification }, { bus }, { getConfig }] = await Promise.all([import('../notifications/store.js'), import('../event-bus.js'), import('../config-manager.js')])
-    const label = (await getConfig()).hosts?.[hostKey]?.label?.trim() || hostKey
-    const item = launcherRollbackItem(hostKey, label, facts!)
-    if (!item) return
-    const { record, outcome } = await upsertNotification(item)
-    if (outcome !== 'suppressed') bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], { source: 'host-launcher' })
-    log.session.warn('host launcher: the daemon was put back to its previous version', { host: hostKey, from: r.from, to: r.to, reason: r.reason })
-  } catch (err) {
-    told.delete(key)
-    log.session.warn('host launcher: the Walnut Health item could not be written', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
-  }
+  const { hostLabel, raiseHealthItem } = await import('../notifications/health-items.js')
+  const item = launcherRollbackItem(hostKey, await hostLabel(hostKey), facts!)
+  if (!item) return
+  if (!(await raiseHealthItem(item, 'host-launcher'))) { told.delete(key); return }
+  log.session.warn('host launcher: the daemon was put back to its previous version', { host: hostKey, from: r.from, to: r.to, reason: r.reason })
 }
 
 /** Tests only. */

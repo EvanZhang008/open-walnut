@@ -22,7 +22,8 @@
  * (`host_get` from a session still on it, Set up), it is still found.
  */
 import { isCompanion } from '../server-role.js'
-import { IS_EPHEMERAL } from '../../constants.js'
+import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { servesThisWalnut } from '../../providers/one-service-mode.js'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { Config } from '../types.js'
@@ -100,6 +101,8 @@ export interface VitalsConn {
   readonly bootStart?: BootStartView | null
   /** The host's launcher, from hello (service-launcher-beat.ts); absent without one. */
   readonly launcher?: LauncherFacts | null
+  /** What the hello says runs there (one-service-mode.ts): a host's one Walnut service and whose, or the daemon. */
+  readonly servesAs?: { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null }
 }
 
 function fleetBootStart(b: BootStartView | null): FleetBootStart | null {
@@ -385,6 +388,8 @@ export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: 
       runtime: conn.remoteRuntime ?? null, vitals: conn.hasCapability(VITALS_CAPABILITY),
       bootStart: fleetBootStart(conn.bootStart ?? null),
       ...(conn.launcher ? { launcher: fleetLauncher(conn.launcher) } : {}),
+      // Only this Walnut's service: another Walnut's on the host leaves this Walnut's server a separate program there.
+      ...(servesThisWalnut(conn.servesAs, WALNUT_HOME) ? { serves: 'walnut-serve' as const } : {}),
       ...(IS_EPHEMERAL && !e.local ? { throwaway: true } : {}),
     } : null,
     declaredCapabilities: e.declared,

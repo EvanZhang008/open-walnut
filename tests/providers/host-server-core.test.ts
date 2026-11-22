@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostServerSupervisor, type HostServerDeps, type HostServerSpec } from '../../src/providers/host-server-core.js'
+import { createHostServerSupervisor, heldServerAt, type HostServerDeps, type HostServerSpec } from '../../src/providers/host-server-core.js'
 
 class FakeChild extends EventEmitter {
   constructor(public pid: number | undefined) { super() }
@@ -61,6 +61,7 @@ function deps(): HostServerDeps {
     log: () => {},
     startTimeOf: (pid) => procs.get(pid) ?? null,
     killGroup: (pid, signal) => { signals.push({ pid, signal }) },
+    heldAt: heldServerAt,
     baseEnv: () => ({ HOME: '/home/u', WALNUT_HOST_DAEMON_DIR: '/tmp/d' }),
     randomToken: () => `tok${String(++nextToken).padStart(61, '0')}`,
   }
@@ -392,5 +393,112 @@ describe('host server supervision: the fallback after a crash loop (WP2)', () =>
     expect(() => sup.configure('/h', spec({ fallback: { args: Array(65).fill('a'), env: {} } }))).toThrow(/fallback\.args/)
     expect(() => sup.configure('/h', spec({ fallback: { args: [], env: { WALNUT_FOLLOWER_TOKEN: 'x' } } }))).toThrow(/WALNUT_FOLLOWER_TOKEN/)
     expect(() => sup.configure('/h', spec({ fallback: { args: [], env: { 'BAD-KEY': 'v' } } }))).toThrow(/fallback\.env/)
+  })
+})
+
+describe('host server supervision: the host\'s one Walnut service is its own follower (self)', () => {
+  const selfDeps = (changes: string[]) => ({ ...deps(), self: { home: '/h', pid: 4242, changed: (why: string) => { changes.push(why) } } })
+
+  it('a new runtime keeps the service\'s spec and token, starts no child for it, and runs the others as before', () => {
+    const first = createHostServerSupervisor(deps())
+    first.configure('/h', spec())
+    first.configure('/other', spec({ home: '/other', port: 4100 }))
+    const token = spawned[0]!.env.WALNUT_FOLLOWER_TOKEN
+    timers = []
+    spawned = []
+    procs.delete(1000) // the old follower child was ended by the service's entry
+    const changes: string[] = []
+    const second = createHostServerSupervisor(selfDeps(changes))
+    second.boot()
+    expect(second.status('/h')).toMatchObject({ state: 'running', pid: 4242 })
+    expect(second.tokenMatches('/h', token)).toBe(true)
+    // The other Walnut's follower is adopted as before; nothing is started for the service's own home.
+    expect(spawned).toEqual([])
+    expect(second.status('/other')).toMatchObject({ state: 'running', pid: 1001 })
+    advance(60_000)
+    expect(spawned).toEqual([])
+    expect(signals).toEqual([])
+    expect(changes).toEqual([])
+  })
+
+  it('new settings change live; a spec that changes what runs, or none, restarts the service and never signals it', () => {
+    const first = createHostServerSupervisor(deps())
+    first.configure('/h', spec())
+    timers = []
+    spawned = []
+    const changes: string[] = []
+    const sup = createHostServerSupervisor(selfDeps(changes))
+    sup.boot()
+    sup.configure('/h', spec({ settings: { expose: { enabled: true } } }))
+    expect(sup.settingsOf('/h')).toEqual({ expose: { enabled: true } })
+    expect(changes).toEqual([])
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, `server-${Buffer.from('/h').toString('hex').slice(0, 16)}.json`), 'utf8'))
+    expect(saved.spec.settings).toEqual({ expose: { enabled: true } })
+
+    sup.configure('/h', spec({ port: 4001 }))
+    expect(changes).toEqual(['the leader changed what runs'])
+    const resaved = JSON.parse(fs.readFileSync(path.join(dir, `server-${Buffer.from('/h').toString('hex').slice(0, 16)}.json`), 'utf8'))
+    expect(resaved.spec.port).toBe(4001)
+    sup.configure('/h', null)
+    expect(changes).toEqual(['the leader changed what runs', 'the leader removed the follower'])
+    expect(fs.existsSync(path.join(dir, `server-${Buffer.from('/h').toString('hex').slice(0, 16)}.json`))).toBe(false)
+    expect(spawned).toEqual([])
+    expect(signals).toEqual([])
+  })
+  // Review A3b S34-L3: after a declared move /h -> /h2 the leader names /h2; the host keys the Walnut by /h.
+  it('a home a declared move made the service\'s own is the service: no second follower, and its spec keeps the service\'s home', () => {
+    const canonical = (home: string): string => (home === '/h2' ? '/h' : home)
+    const keyOf = (home: string): string => Buffer.from(canonical(home)).toString('hex').slice(0, 16)
+    const first = createHostServerSupervisor({ ...deps(), keyOf })
+    first.configure('/h', spec())
+    timers = []
+    spawned = []
+    procs.delete(1000)
+    const changes: string[] = []
+    const sup = createHostServerSupervisor({ ...selfDeps(changes), keyOf, canonical })
+    sup.boot()
+    const token = JSON.parse(fs.readFileSync(path.join(dir, `server-${keyOf('/h')}.json`), 'utf8')).token
+    // Its new home reads the service's own entry: status, token, settings.
+    expect(sup.status('/h2')).toMatchObject({ state: 'running', pid: 4242 })
+    expect(sup.tokenMatches('/h2', token)).toBe(true)
+    sup.configure('/h2', spec({ home: '/h2', settings: { expose: { enabled: true } } }))
+    expect(sup.settingsOf('/h2')).toEqual({ expose: { enabled: true } })
+    expect(changes).toEqual([])
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, `server-${keyOf('/h')}.json`), 'utf8'))
+    // The home service-mode.json names, so the next --service start finds this spec (service-entry.ts decideServiceEntry).
+    expect(saved.spec.home).toBe('/h')
+    expect(saved.spec.settings).toEqual({ expose: { enabled: true } })
+    // A change of what runs restarts the one service; nothing is ever started beside it.
+    sup.configure('/h2', spec({ home: '/h2', port: 4001 }))
+    expect(changes).toEqual(['the leader changed what runs'])
+    expect(JSON.parse(fs.readFileSync(path.join(dir, `server-${keyOf('/h')}.json`), 'utf8')).spec).toMatchObject({ home: '/h', port: 4001 })
+    expect(sup.homes()).toEqual(['/h'])
+    advance(60_000)
+    expect(spawned).toEqual([])
+    expect(signals).toEqual([])
+    // Without the alias the other home is another Walnut, as before.
+    const plain = createHostServerSupervisor({ ...selfDeps([]), dir: fs.mkdtempSync(path.join(dir, 'plain-')) })
+    plain.configure('/h2', spec({ home: '/h2', port: 4200 }))
+    expect(spawned).toHaveLength(1)
+  })
+})
+
+describe('the pid file has one reader (heldServerAt)', () => {
+  it('reads { pid, startTime }, and nothing from a missing, broken or odd file', () => {
+    const file = path.join(dir, 'server-x.pid')
+    expect(heldServerAt(fs, file)).toEqual({ pid: 0, startTime: null })
+    fs.writeFileSync(file, '{ half')
+    expect(heldServerAt(fs, file)).toEqual({ pid: 0, startTime: null })
+    fs.writeFileSync(file, JSON.stringify({ pid: 1.5, startTime: 7 }))
+    expect(heldServerAt(fs, file)).toEqual({ pid: 0, startTime: null })
+    fs.writeFileSync(file, JSON.stringify({ pid: 4321, startTime: 'st' }))
+    expect(heldServerAt(fs, file)).toEqual({ pid: 4321, startTime: 'st' })
+  })
+
+  it('the supervisor and stopRecordedServer both read through it (no second parser)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/host-server-core.ts'), 'utf8')
+    expect(src.match(/typeof held\?\.startTime === 'string'/g)).toHaveLength(1)
+    expect(src).toContain('deps.heldAt(fs, pidFile(spec.home))')
+    expect(src).toContain('heldServerAt(o.fs, o.pidFile)')
   })
 })

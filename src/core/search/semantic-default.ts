@@ -22,11 +22,15 @@
  * one started with HOME inside a slice clone downloaded a 2.3 GB speech model
  * into that fake HOME.
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { taskDirRoot } from '../../lib/task-dir.js';
+import { accountInfo, knownAccount, primeAccount } from '../../lib/account.js';
+
+// The account's home is read ahead, off the thread, as this module loads with the server: the
+// first daemon connect asks semanticLaneDecision, and its lookup was a synchronous child there.
+void primeAccount().catch(() => null);
 
 export type SemanticLaneReason = 'opt-in' | 'opt-out' | 'test-runner' | 'ephemeral' | 'temp-home' | 'task-dir' | 'fake-home' | 'default';
 
@@ -71,40 +75,31 @@ export function defaultTmpRoots(): string[] {
   return [...roots];
 }
 
-/**
- * Home directory field of a passwd entry (`name:pw:uid:gid:...`): field 6 in the
- * getent form, field 9 in the macOS `id -P` form (class, change, expire added).
- */
-export function passwdHome(line: string, platform: NodeJS.Platform): string | null {
-  const f = line.trim().split(':');
-  const home = platform === 'darwin' ? f[8] : f[5];
-  return home && path.isAbsolute(home) ? home : null;
-}
-
-let accountHomeCache: string | null | undefined;
+/** The answer when the entry was not known yet: looked up once, then kept (as before the read ahead). */
+let fallbackHome: string | null | undefined;
 /**
  * The account's home from the user database, never from $HOME. Bun's
  * os.userInfo().homedir returns $HOME (Node reads the passwd entry), so in the
  * Bun-built release a fake HOME looked like the account's own and the voice
- * model was downloaded into it (2026-10-27, release rehearsal).
+ * model was downloaded into it (2026-10-27, release rehearsal). The entry is
+ * lib/account.ts's, read ahead at load (primeAccount); asked before that read
+ * finished, it is looked up once and that answer kept until the entry is known:
+ * accountInfo() retries a lookup that could not run every 30 s with a spawnSync
+ * of up to 5 s, which on the server's thread would freeze every route each time.
  */
 function accountHomeDir(): string | null {
-  if (accountHomeCache !== undefined) return accountHomeCache;
+  const known = knownAccount();
+  if (known) return known.homedir;
+  if (fallbackHome !== undefined) return fallbackHome;
   let home: string | null = null;
-  try {
-    const out = process.platform === 'darwin'
-      ? execFileSync('/usr/bin/id', ['-P'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
-      : process.platform === 'linux'
-        ? execFileSync('getent', ['passwd', String(os.userInfo().uid)], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
-        : '';
-    home = passwdHome(out, process.platform);
-  } catch { /* fall back below */ }
-  if (!home) {
-    try { home = os.userInfo().homedir || null; } catch { home = null; }
-  }
-  accountHomeCache = home;
+  try { home = accountInfo().homedir; } catch { /* no entry, or the lookup could not run */ }
+  if (!home) { try { home = os.userInfo().homedir || null; } catch { home = null; } }
+  fallbackHome = home;
   return home;
 }
+
+/** Tests only: forget the kept answer. */
+export function resetAccountHomeForTest(): void { fallbackHome = undefined; }
 
 /** The task-dir root for this env and for the account home, plus this session's own task dir. */
 export function defaultTaskDirRoots(env: NodeJS.ProcessEnv, accountHome: string | null): string[] {

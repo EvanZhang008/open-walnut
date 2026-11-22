@@ -167,7 +167,7 @@ export interface LauncherBeat {
    * The service serves: the launcher may commit it. With `check`, only once it passes (asked again every
    * READY_RETRY_MS until it does; the launcher's trial time decides when it gave up).
    */
-  ready(info: { exe: string; instance?: string }, check?: () => Promise<string | null>): Promise<void>
+  ready(info: { exe: string; instance?: string; serves?: string }, check?: () => Promise<string | null>): Promise<void>
   /** One long thing for up to `seconds`: the launcher does not take a quiet heartbeat for a stall meanwhile. */
   busy(seconds: number): void
   /** The long thing is over. */
@@ -233,7 +233,8 @@ export function startLauncherBeat(opts: {
       }
       if (stopped) return
       try {
-        await writeWhole(path.join(dir, 'ready'), `pid=${pid}\nexe=${info.exe}\ninstance=${info.instance ?? ''}\nat=${Math.floor(Date.now() / 1000)}\n`)
+        // `serves`: what the process runs as, when it is not the session daemon (the boot proof's check, daemon-boot-proof.ts).
+        await writeWhole(path.join(dir, 'ready'), `pid=${pid}\nexe=${info.exe}\ninstance=${info.instance ?? ''}\n${info.serves ? `serves=${info.serves}\n` : ''}at=${Math.floor(Date.now() / 1000)}\n`)
       } catch (err) { warn(`launcher ready mark not written: ${(err as Error).message}`) }
       // The launcher commits within a tick: read its state again soon after.
       setTimeout(() => void refresh(), 2_000).unref?.()

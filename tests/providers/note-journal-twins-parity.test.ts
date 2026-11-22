@@ -51,7 +51,10 @@ describe('note-journal-v1: both twins', () => {
     })
 
     it(`${name}: follower.op reaches the offline host's handleFollower (note_put, note_delete there), waiting out a journal lock`, () => {
-      expect(fnBody(src, 'cmdFollowerOp')).toMatch(/await offlineHost\.handleFollowerWaiting\(home, \{ op: cmd\.op, args: cmd\.args, actor: cmd\.actor, opId: cmd\.opId/)
+      // Through the follower entry both twins share (follower-entry-core.ts op).
+      expect(fnBody(src, 'cmdFollowerOp')).toMatch(/await followerEntry\.op\(home, cmd\)/)
+      expect(src).toMatch(/offline: offlineHost,/)
+      expect(read('src/providers/follower-entry-core.ts')).toMatch(/await offline\.handleFollowerWaiting\(home, \{ op: cmd\.op, args: cmd\.args, actor: cmd\.actor, opId: cmd\.opId/)
     })
   }
 

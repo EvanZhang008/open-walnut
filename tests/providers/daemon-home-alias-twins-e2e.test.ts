@@ -1,28 +1,30 @@
 /**
- * One Walnut, one home, against BOTH real daemon twins (walnut-scope-core.ts aliases).
+ * One Walnut, one home, against BOTH real daemon twins (walnut-scope-core.ts declared moves).
  *
  * A host keyed every Walnut by its data dir, so a leader that came back from another path
- * (a new machine, a promoted standby, a moved dir) with the same instance id was a new
- * Walnut to it: epoch 1 again, its triggers re-reported everything with a fresh epoch,
- * its old set kept firing, its jobs and host server ran twice. Now the id names the Walnut
- * and the path is only where it is: the new home becomes an alias of the first one, whose
- * files and state go on as they were.
+ * with the same instance id was a new Walnut to it: epoch 1 again, its triggers re-reported
+ * everything with a fresh epoch, its old set kept firing, its jobs and host server ran twice.
+ * Now a server whose data dir moved DECLARES it (leader.configure's movedFrom, the connect's
+ * first frame), and the new home continues the first one, whose files and state go on as they
+ * were. Nothing is inferred: a copy that declares nothing is a Walnut of its own by its path.
  *
- * Covered: (0) no leader ever offered home moves (the experiment off): a new home's first
- * check runs at the normal delay; (a) upgrade continuity: the leader book's epoch, a trigger's
- * epoch and seq, its dedup memory, the host copy, plugin jobs; a set pushed under the new home
- * before its leader.configure waits for it, past the first-run delay, and never runs on fresh
- * memory; (a2) one home of a Walnut speaks at a time, in both orders, and the other works
- * once the first is gone; (g) a new Walnut's checks wait for its leader.configure and run right
- * after it; (b) a leader with no id keeps the path (two homes are two Walnuts); (c) after a
- * restart the alias holds and the set runs once; (d) the first home in use: no alias; a
- * volatile id: no alias; (e) a rollback reader (sha1 of the home each file embeds) finds every
- * file under its own name; (f) a home whose leader.configure never comes runs as its own
- * after the cap (WALNUT_HOME_ALIAS_WAIT_MS, shortened), said once.
+ * Covered: (a) a declared move continues the leader book's epoch, a trigger's epoch and seq,
+ * its dedup memory, the host copy, plugin jobs; (a2) the home it left is refused for good
+ * (`walnut_home_busy` with `movedTo`), while the new home is connected and after, a command
+ * and a copy alike; (a3) a declared move back flips it, and forth again; (g) a new Walnut's
+ * first check runs once at the normal delay, with no wait, on a host that holds a move;
+ * (b) a leader with no id keeps the path; (d) a copy that declares nothing, a volatile id and
+ * a move from a home of another Walnut stay Walnuts of their own; (c) after a restart the move
+ * holds and the set runs once; (f) a backup declaring the same move is refused for good (no
+ * turns), several hops are followed, another Walnut at a path one left reads `walnut_home_taken`,
+ * and a move the host cannot follow is said on the answer; (h) a backup that reached the host first
+ * gives way once the real copy's server says it is gone (`copyGone`), and the same Walnut's own
+ * record at the new path is not told; (e) a rollback reader (sha1 of the home each file embeds) finds
+ * every file under its own name.
  *
  * What's real: both daemon twins, their files, a node check script, the clocks. Mocked: nothing.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -114,7 +116,6 @@ for (const twin of ['standalone', 'source'] as const) {
     const HOME_VOLATILE = path.join(BASE, 'volatile')
     const HOME_PLAIN = path.join(BASE, 'plain')
     const HOME_NEW = path.join(BASE, 'new-walnut')
-    const HOME_LATE = path.join(BASE, 'late')
     const W = crypto.randomBytes(16).toString('hex')
     const W_LIVE = crypto.randomBytes(16).toString('hex')
     const W_NEW = crypto.randomBytes(16).toString('hex')
@@ -132,10 +133,8 @@ for (const twin of ['standalone', 'source'] as const) {
     const logLines = (msg: string, scope: string) => fs.readdirSync(RUN_DIR).filter((n) => /^daemon-.*\.log$/.test(n))
       .flatMap((n) => fs.readFileSync(path.join(RUN_DIR, n), 'utf-8').split('\n'))
       .filter((l) => l.includes(msg) && l.includes(`"scope":"${scope}"`))
-    const WAIT_LOG = "first checks wait for its leader.configure"
-    const CAP_LOG = 'no leader.configure came for a new home in time'
-    const BUSY = 'another data dir speaks as this Walnut here'
-    const configureLeader = (c: Client, home: string, walnutId: string) => c.rpc({ cmd: 'leader.configure', home, walnutId, backup: false, walnutHomeMoves: true })
+    const BUSY = 'this Walnut moved to another data dir'
+    const configureLeader = (c: Client, home: string, walnutId: string, movedFrom?: string) => c.rpc({ cmd: 'leader.configure', home, walnutId, backup: false, ...(movedFrom ? { movedFrom } : {}) })
     const slice = (home: string, hash: string, asOf: number) => ({ v: 1, home, hash, asOf, host: 'h', sessions: [], tasks: [], requests: [] })
     // One plugin job, every hour (its first run is an hour away): kept as a set, it never runs here.
     const JOBS = () => [{
@@ -156,8 +155,6 @@ for (const twin of ['standalone', 'source'] as const) {
         WALNUT_LEADER_TAKEOVER_MS: '500',
         ...extra,
       }
-      // The cap is the daemon's own (10 minutes) unless this start shortens it.
-      if (!extra.WALNUT_HOME_ALIAS_WAIT_MS) delete env.WALNUT_HOME_ALIAS_WAIT_MS
       delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID
       delete env.VITEST_POOL_ID; delete env.OPEN_WALNUT_HOME
       const [cmd, args] = twin === 'standalone'
@@ -212,24 +209,10 @@ for (const twin of ['standalone', 'source'] as const) {
     /** The new home's server, still connected after (a). */
     let bLive: Client
 
-    it('(0) no leader ever offered its home moves: a new home\'s first check runs at the normal delay', async () => {
-      const c = await client()
-      const pushedAt = Date.now()
-      expect(await c.rpc({ cmd: 'triggers.configure', home: HOME_PLAIN, config: { version: 1, triggers: [def('plain', FRESH)] } })).toMatchObject({ ok: true, count: 1 })
-      const f = await waitFor(() => c.fires('plain')[0], 20_000, 'the first fire of plain')
-      // The 5 s first-run delay and a tick, never the 10 minute cap of a wait for an alias.
-      expect(Date.now() - pushedAt).toBeLessThan(15_000)
-      expect(fs.existsSync(aliasFile()), 'nothing was offered: no alias file').toBe(false)
-      expect(logLines(WAIT_LOG, sha(HOME_PLAIN))).toEqual([])
-      await c.rpc({ cmd: 'triggers.ack', triggerId: 'plain', seq: f.seq, home: HOME_PLAIN })
-      await c.close()
-    }, 60_000)
-
     it('the Walnut at its first home: its epoch, its triggers, its copy and its jobs', async () => {
       const a = await client()
       expect(await configureLeader(a, HOME_A, W)).toMatchObject({ ok: true, epoch: 7 })
-      // The offer is kept: from now on a new home's first checks wait for its leader.configure.
-      expect(readJson(aliasFile())).toMatchObject({ v: 1, movesOffered: true })
+      expect(fs.existsSync(aliasFile()), 'nothing was declared: no alias file').toBe(false)
       expect(await a.rpc({ cmd: 'host.slice', slice: slice(HOME_A, 'copy-1', Date.now()) })).toMatchObject({ ok: true })
       expect(await a.rpc({ cmd: 'triggers.configure', home: HOME_A, config: { version: 1, triggers: SET() } })).toMatchObject({ ok: true, count: 2 })
       // Their first checks run by themselves a few seconds after the push.
@@ -241,27 +224,20 @@ for (const twin of ['standalone', 'source'] as const) {
       const jobs = await a.rpc({ cmd: 'jobs.configure', home: HOME_A, spec: { home: HOME_A, walnutId: W, jobs: JOBS() } })
       expect(jobs).toMatchObject({ ok: true, jobs: [{ job: 'poll', kind: 'every' }] })
       await a.close()
-      // Away: the socket closed and the takeover window passed.
-      await sleep(1_200)
     }, 60_000)
 
-    it('(a) the same id from another data dir continues it: no fresh epoch, no fire again, no second set', async () => {
+    it('(a) a declared move continues it: no fresh epoch, no fire again, no second set', async () => {
       const b = await client()
       bLive = b
       const runsBefore = { same: runsOf('same'), fresh: runsOf('fresh') }
-      // A server pushes its set and its copy at connect, before leader.configure says which Walnut it is.
+      // The connect's first frame declares the move (home-move.ts): the leader book's record goes on.
+      expect(await configureLeader(b, HOME_B, W, HOME_A)).toMatchObject({ ok: true, epoch: 7 })
+      expect(fs.existsSync(leaderFile(HOME_B)), 'no record of its own for the new home').toBe(false)
+      expect(readJson(aliasFile())).toMatchObject({ v: 2, aliases: { [HOME_B]: { to: HOME_A, walnutId: W } }, places: { [HOME_A]: HOME_B } })
+      // Then its set and its copy: the first home's, keyed by it.
       expect(await b.rpc({ cmd: 'triggers.configure', home: HOME_B, config: { version: 1, triggers: SET() } })).toMatchObject({ ok: true, count: 2 })
       expect(await b.rpc({ cmd: 'host.slice', slice: slice(HOME_B, 'copy-2', Date.now()) })).toMatchObject({ ok: true })
-      // Past the first-run delay (5 s) its checks are due, and the daemon says they wait instead:
-      // they never run on fresh memory, however late the leader.configure comes.
-      await waitFor(() => (logLines(WAIT_LOG, sha(HOME_B)).length > 0 ? true : undefined), 30_000, 'the wait for the leader.configure')
       expect({ same: runsOf('same'), fresh: runsOf('fresh') }).toEqual(runsBefore)
-      expect(b.fires('same')).toEqual([])
-
-      // The leader book's record goes on: epoch 7, not a new record at 1.
-      expect(await configureLeader(b, HOME_B, W)).toMatchObject({ ok: true, epoch: 7 })
-      expect(fs.existsSync(leaderFile(HOME_B)), 'no record of its own for the new home').toBe(false)
-      expect(readJson(aliasFile()).aliases[HOME_B]).toMatchObject({ to: HOME_A, walnutId: W })
 
       // The dedup memory went on: the item reported under the first home is not reported again.
       expect(await b.rpc({ cmd: 'triggers.run', triggerId: 'same', home: HOME_B })).toMatchObject({ ok: true, ran: true })
@@ -276,7 +252,7 @@ for (const twin of ['standalone', 'source'] as const) {
       expect(next.seq).toBe((firstFresh.seq as number) + 1)
       expect(await b.rpc({ cmd: 'triggers.ack', triggerId: 'fresh', seq: next.seq, home: HOME_B })).toMatchObject({ acked: true })
 
-      // The copy it sent before the alias is the Walnut's: a probe of it is held.
+      // The copy is the Walnut's: a probe of it is held, in the first home's file.
       expect(await b.rpc({ cmd: 'host.slice', home: HOME_B, hash: 'copy-2', asOf: Date.now() })).toMatchObject({ ok: true, have: true })
       expect(readJson(path.join(RUN_DIR, 'offline-host', `slice-${sha(HOME_A)}.json`))).toMatchObject({ home: HOME_A, hash: 'copy-2' })
 
@@ -289,35 +265,45 @@ for (const twin of ['standalone', 'source'] as const) {
       expect(readJson(path.join(RUN_DIR, 'plugin-jobs', jobFiles[0]!))).toMatchObject({ home: HOME_A, walnutId: W })
     }, 90_000)
 
-    it('(a2) one home of a Walnut speaks at a time, in both orders; the other works once the first is gone', async () => {
-      // The new home speaks (bLive): the first home comes back, it is refused, nothing of it mixes in.
+    it('(a2) the home it left is refused for good: while the new home is connected and after', async () => {
+      const expectRefused = (reply: Record<string, unknown>) => {
+        expect(reply).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: HOME_B })
+        expect(String(reply.error)).toBe(`${BUSY}: ${sha(HOME_A)}`)
+      }
       const a = await client()
-      const refused = await configureLeader(a, HOME_A, W)
-      expect(refused).toMatchObject({ ok: false, errorKind: 'walnut_home_busy' })
-      expect(String(refused.error)).toBe(`${BUSY}: ${sha(HOME_A)}`)
-      expect(await a.rpc({ cmd: 'triggers.configure', home: HOME_A, config: { version: 1, triggers: SET() } })).toMatchObject({ ok: false, errorKind: 'walnut_home_busy' })
+      expectRefused(await configureLeader(a, HOME_A, W))
+      expectRefused(await a.rpc({ cmd: 'triggers.configure', home: HOME_A, config: { version: 1, triggers: SET() } }))
+      // A copy names its home inside: refused the same way, and the Walnut's copy is untouched.
+      expectRefused(await a.rpc({ cmd: 'host.slice', slice: slice(HOME_A, 'copy-stale', Date.now()) }))
+      expect(readJson(path.join(RUN_DIR, 'offline-host', `slice-${sha(HOME_A)}.json`))).toMatchObject({ hash: 'copy-2' })
+      // The new home goes away: the old one is still refused, so two copies never take turns.
       await bLive.close()
-      await vi.waitFor(async () => expect(await configureLeader(a, HOME_A, W)).toMatchObject({ ok: true, epoch: 7 }), { timeout: 10_000, interval: 200 })
-
-      // The reverse: the first home speaks, the new home is refused until it is gone.
-      const b = await client()
-      expect(await configureLeader(b, HOME_B, W)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy' })
-      await a.close()
-      await vi.waitFor(async () => expect(await configureLeader(b, HOME_B, W)).toMatchObject({ ok: true, epoch: 7 }), { timeout: 10_000, interval: 200 })
-      // Still one Walnut: no record of its own for either refused attempt.
+      expectRefused(await configureLeader(a, HOME_A, W))
       expect(fs.existsSync(leaderFile(HOME_B))).toBe(false)
-      await b.close()
+      await a.close()
     }, 60_000)
 
-    it('(g) a new Walnut\'s checks wait for its leader.configure and run right after it', async () => {
+    it('(a3) a declared move back flips it, and a move forth again flips it back', async () => {
+      const a = await client()
+      expect(await configureLeader(a, HOME_A, W, HOME_B)).toMatchObject({ ok: true, epoch: 7 })
+      const b = await client()
+      expect(await configureLeader(b, HOME_B, W)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: HOME_A })
+      await a.close()
+      expect(await configureLeader(b, HOME_B, W, HOME_A)).toMatchObject({ ok: true, epoch: 7 })
+      const again = await client()
+      expect(await configureLeader(again, HOME_A, W)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: HOME_B })
+      for (const c of [again, b]) await c.close()
+    }, 60_000)
+
+    it('(g) a new Walnut\'s first check runs once at the normal delay, with no wait, on a host that holds a move', async () => {
       const c = await client()
+      const pushedAt = Date.now()
       expect(await c.rpc({ cmd: 'triggers.configure', home: HOME_NEW, config: { version: 1, triggers: [def('new-fresh', FRESH)] } })).toMatchObject({ ok: true, count: 1 })
-      await waitFor(() => (logLines(WAIT_LOG, sha(HOME_NEW)).length > 0 ? true : undefined), 30_000, 'the wait for the leader.configure')
-      expect(runsOf('new-fresh')).toBe(0)
-      // The wait ends at the event, not at a time: the check runs at the next tick.
-      expect(await configureLeader(c, HOME_NEW, W_NEW)).toMatchObject({ ok: true, epoch: 1 })
-      const f = await waitFor(() => c.fires('new-fresh')[0], 15_000, 'the first fire of new-fresh')
+      const f = await waitFor(() => c.fires('new-fresh')[0], 20_000, 'the first fire of new-fresh')
+      // The 5 s first-run delay and a tick: no leader.configure is waited for.
+      expect(Date.now() - pushedAt).toBeLessThan(15_000)
       expect(runsOf('new-fresh')).toBe(1)
+      expect(await configureLeader(c, HOME_NEW, W_NEW)).toMatchObject({ ok: true, epoch: 1 })
       await c.rpc({ cmd: 'triggers.ack', triggerId: 'new-fresh', seq: f.seq, home: HOME_NEW })
       await c.close()
     }, 60_000)
@@ -333,26 +319,35 @@ for (const twin of ['standalone', 'source'] as const) {
       await old.rpc({ cmd: 'triggers.ack', triggerId: 'old-fresh', seq: f.seq, home: HOME_OLD })
     }, 60_000)
 
-    it('(d) while the first home is in use a copy of its data dir stays apart, and a volatile id never aliases', async () => {
+    it('(d) a copy that declares nothing, a volatile id and a move from another Walnut\'s home stay apart', async () => {
       const live = await client()
-      expect(await live.rpc({ cmd: 'leader.configure', home: HOME_LIVE, walnutId: W_LIVE, backup: false, walnutHomeMoves: true })).toMatchObject({ ok: true, epoch: 1 })
+      expect(await configureLeader(live, HOME_LIVE, W_LIVE)).toMatchObject({ ok: true, epoch: 1 })
+      await live.close()
+      // A copy of its data dir (same id) that declares nothing is a Walnut of its own by its path.
       const copy = await client()
-      // The live home's socket is open: the copy is a Walnut of its own here.
-      expect(await copy.rpc({ cmd: 'leader.configure', home: HOME_COPY, walnutId: W_LIVE, backup: false, walnutHomeMoves: true })).toMatchObject({ ok: true, epoch: 1 })
+      expect(await configureLeader(copy, HOME_COPY, W_LIVE)).toMatchObject({ ok: true, epoch: 1 })
       expect(fs.existsSync(leaderFile(HOME_COPY))).toBe(true)
       expect(readJson(aliasFile()).aliases[HOME_COPY]).toBeUndefined()
-      // An id the leader keeps in memory only names no Walnut: the first home is away, still no alias.
+      // An id the leader keeps in memory only names no Walnut, even with a move declared.
       const vol = await client()
-      expect(await vol.rpc({ cmd: 'leader.configure', home: HOME_VOLATILE, walnutId: W, walnutIdVolatile: true, backup: false, walnutHomeMoves: true })).toMatchObject({ ok: true, epoch: 1 })
+      expect(await vol.rpc({ cmd: 'leader.configure', home: HOME_VOLATILE, walnutId: W, walnutIdVolatile: true, backup: false, movedFrom: HOME_A })).toMatchObject({ ok: true, epoch: 1 })
       expect(readJson(aliasFile()).aliases[HOME_VOLATILE]).toBeUndefined()
-      for (const c of [live, copy, vol]) await c.close()
+      // A move declared from a home whose record names another Walnut: not taken.
+      const wrong = await client()
+      expect(await configureLeader(wrong, HOME_PLAIN, W, HOME_LIVE)).toMatchObject({ ok: true, epoch: 1 })
+      expect(readJson(aliasFile()).aliases[HOME_PLAIN]).toBeUndefined()
+      expect(fs.existsSync(leaderFile(HOME_PLAIN))).toBe(true)
+      for (const c of [copy, vol, wrong]) await c.close()
     }, 60_000)
 
     it('(c) after a restart the new home is still the same Walnut, and its set runs once', async () => {
       await stopDaemon()
       await startDaemon()
       const b = await client()
+      // The move is kept: the new home is the Walnut, the first one still refused.
       expect(await configureLeader(b, HOME_B, W)).toMatchObject({ ok: true, epoch: 7 })
+      const a = await client()
+      expect(await configureLeader(a, HOME_A, W)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: HOME_B })
       expect(await b.rpc({ cmd: 'triggers.configure', home: HOME_B, config: { version: 1, triggers: SET() } })).toMatchObject({ ok: true, count: 2 })
       const before = runsOf('fresh')
       expect(await b.rpc({ cmd: 'triggers.run', triggerId: 'fresh', home: HOME_B })).toMatchObject({ ok: true, ran: true })
@@ -361,11 +356,99 @@ for (const twin of ['standalone', 'source'] as const) {
       expect(f.seq).toBe((firstFresh.seq as number) + 2)
       expect(runsOf('fresh') - before).toBe(1)
       expect(b.fires('fresh')).toHaveLength(1)
-      // One armed copy of the set: the one the new home pushed before its alias was left out at boot.
-      const log = fs.readdirSync(RUN_DIR).filter((n) => /^daemon-.*\.log$/.test(n)).map((n) => fs.readFileSync(path.join(RUN_DIR, n), 'utf-8')).join('\n')
-      expect(log).toContain(path.join(RUN_DIR, 'walnuts', sha(HOME_B), 'triggers.json'))
-      expect(log).toMatch(/triggers file ignored: its home does not match its dir/)
+      // One set: the move came before the new home pushed anything, so nothing was ever kept under its own key.
+      expect(fs.existsSync(path.join(RUN_DIR, 'walnuts', sha(HOME_B))), 'no scope dir of the new home').toBe(false)
+      for (const c of [a, b]) await c.close()
     }, 90_000)
+
+    it('(f) a backup that declares the same move never takes turns, several hops are followed, another Walnut at a left path reads taken', async () => {
+      const M = path.join(BASE, 'm', 'walnut')
+      const M1 = path.join(BASE, 'm1', 'walnut')
+      const MB = path.join(BASE, 'm-backup', 'walnut')
+      const C0 = path.join(BASE, 'c0')
+      const C2 = path.join(BASE, 'c2')
+      const W_M = crypto.randomBytes(16).toString('hex')
+      const W_C = crypto.randomBytes(16).toString('hex')
+      const W_Y = crypto.randomBytes(16).toString('hex')
+      for (const [h, w] of [[M, W_M], [C0, W_C]] as const) {
+        const first = await client()
+        expect(await configureLeader(first, h, w)).toMatchObject({ ok: true, epoch: 1 })
+        await first.close()
+      }
+      // M1: the real move, then a backup of M started later declaring the same move; they reconnect in turn.
+      const real = await client()
+      expect(await configureLeader(real, M1, W_M, M)).toMatchObject({ ok: true, epoch: 1 })
+      for (let i = 0; i < 2; i++) {
+        const backup = await client()
+        expect(await configureLeader(backup, MB, W_M, M)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: M1 })
+        expect(await backup.rpc({ cmd: 'triggers.configure', home: MB, config: { version: 1, triggers: [] } })).toMatchObject({ ok: false, errorKind: 'walnut_home_busy' })
+        await backup.close()
+        const again = await client()
+        expect(await configureLeader(again, M1, W_M, M)).toMatchObject({ ok: true, epoch: 1 })
+        await again.close()
+      }
+      expect(readJson(aliasFile()).places[M]).toBe(M1)
+      await real.close()
+      // M3: a new Walnut at the path M left is told it is another Walnut's, not "a copy".
+      const other = await client()
+      const taken = await configureLeader(other, M, W_Y)
+      expect(taken).toMatchObject({ ok: false, errorKind: 'walnut_home_taken', movedTo: M1 })
+      expect(String(taken.error)).toBe(`another Walnut used this data dir here and moved to another one: ${sha(M)}`)
+      await other.close()
+      // M2: this host missed the move C0 -> C1; the move C1 -> C2 lists both and is followed from C0.
+      const hop = await client()
+      expect(await hop.rpc({ cmd: 'leader.configure', home: C2, walnutId: W_C, backup: false, movedFrom: path.join(BASE, 'c1'), formerHomes: [path.join(BASE, 'c1'), C0] }))
+        .toMatchObject({ ok: true, epoch: 1 })
+      expect(readJson(aliasFile()).aliases[C2]).toMatchObject({ to: C0, walnutId: W_C })
+      // M2: a move this host cannot follow is said on the answer (the server raises a Walnut Health item).
+      await hop.close()
+      const lost = await client()
+      expect(await lost.rpc({ cmd: 'leader.configure', home: path.join(BASE, 'c9'), walnutId: W_C, backup: false, movedFrom: path.join(BASE, 'c8') }))
+        .toMatchObject({ ok: true, moveNotTaken: 'lost_trail' })
+      await lost.close()
+    }, 60_000)
+
+    it('(h) a backup that reached the host first gives the place to the real copy once that copy\'s server says it is gone; the same id at the new home is quiet', async () => {
+      const N = path.join(BASE, 'n', 'walnut')
+      const N1 = path.join(BASE, 'n1', 'walnut')
+      const NB = path.join(BASE, 'n-backup', 'walnut')
+      const W_N = crypto.randomBytes(16).toString('hex')
+      const first = await client()
+      expect(await configureLeader(first, N, W_N)).toMatchObject({ ok: true, epoch: 1 })
+      await first.close()
+      const backup = await client()
+      expect(await configureLeader(backup, NB, W_N, N)).toMatchObject({ ok: true, epoch: 1 })
+      await backup.close()
+      // The real copy comes later: refused while the backup may still live.
+      const real = await client()
+      expect(await configureLeader(real, N1, W_N, N)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: NB })
+      await real.close()
+      // Its server found the backup's folder gone: it takes the place, and the backup is the one refused.
+      const back = await client()
+      expect(await back.rpc({ cmd: 'leader.configure', home: N1, walnutId: W_N, backup: false, movedFrom: N, copyGone: NB })).toMatchObject({ ok: true, epoch: 1 })
+      await back.close()
+      expect(readJson(aliasFile()).places[N]).toBe(N1)
+      const later = await client()
+      expect(await configureLeader(later, N1, W_N, N)).toMatchObject({ ok: true, epoch: 1 })
+      await later.close()
+      const revived = await client()
+      expect(await configureLeader(revived, NB, W_N, N)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: N1 })
+      await revived.close()
+      // N2: a Walnut that moved with the switch off already has its own record at the new path: no moveNotTaken.
+      const S = path.join(BASE, 's', 'walnut')
+      const S1 = path.join(BASE, 's1', 'walnut')
+      const W_S = crypto.randomBytes(16).toString('hex')
+      for (const h of [S, S1]) {
+        const c = await client()
+        expect(await configureLeader(c, h, W_S)).toMatchObject({ ok: true })
+        await c.close()
+      }
+      const declared = await client()
+      const split = await configureLeader(declared, S1, W_S, S)
+      expect(split).toMatchObject({ ok: true })
+      expect(split).not.toHaveProperty('moveNotTaken')
+      await declared.close()
+    }, 60_000)
 
     it('(e) a rollback reader finds every file: each is named by the sha1 of the home it embeds', () => {
       const named = jsonFiles(BASE).flatMap((file) => {
@@ -388,17 +471,5 @@ for (const twin of ['standalone', 'source'] as const) {
       ]))
       expect(readJson(leaderFile(HOME_A))).toMatchObject({ home: HOME_A, walnutId: W, epoch: 7 })
     })
-
-    it('(f) a home whose leader.configure never comes runs as its own after the cap, said once', async () => {
-      // The cap shortened to 3 s (it is 10 minutes): past it the checks run on the home's own memory.
-      await stopDaemon()
-      await startDaemon({ WALNUT_HOME_ALIAS_WAIT_MS: '3000' })
-      const c = await client()
-      expect(await c.rpc({ cmd: 'triggers.configure', home: HOME_LATE, config: { version: 1, triggers: [def('late', FRESH), def('late-2', FRESH)] } })).toMatchObject({ ok: true, count: 2 })
-      await waitFor(() => c.fires('late')[0], 30_000, 'the first fire of late')
-      await waitFor(() => c.fires('late-2')[0], 30_000, 'the first fire of late-2')
-      expect(logLines(CAP_LOG, sha(HOME_LATE)), 'said once for the home, not per trigger').toHaveLength(1)
-      expect(fs.existsSync(leaderFile(HOME_LATE))).toBe(false)
-    }, 90_000)
   })
 }

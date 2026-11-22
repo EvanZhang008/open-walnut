@@ -21,13 +21,14 @@ import { moveDaemonState, unmanagedStateRoot } from './daemon-service-state-move
 import { localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { RESTART_MARK_NAME } from './daemon-restart-mark.js'
 import { OVER_BUSY_FLAG, OVER_BUSY_PLAIN_MS, OVER_BUSY_WAIT_MS } from './daemon-over-busy.js'
-import { proveDaemonBoot } from './daemon-boot-proof.js'
+import { proveStagedBoot } from './daemon-boot-proof.js'
 import { launchdSpawnsJobs } from './daemon-service-launchd.js'
 import { handBackStandIn } from './daemon-service-handback.js'
 import { daemonReady, daemonStays } from './daemon-service-ready.js'
 import { createLauncherControl } from './service-launcher-control.js'
 import { LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
 import { launcherKeeps, readLauncherFacts } from './service-launcher-beat.js'
+import { nextServiceMode, readServiceMode, SERVICE_MODE_FILE, writeServiceMode, type ServiceMode } from '../binary/service-entry.js'
 
 export { daemonReady, daemonStays, SERVICE_STAY_MS } from './daemon-service-ready.js'
 
@@ -40,6 +41,12 @@ export interface DaemonServiceCliOptions {
   overBusy?: boolean
   /** install, update: run the daemon under the launcher (the experiment service_launcher, service-launcher-script.ts). */
   launcher?: boolean
+  /**
+   * install, update: what `--service` runs for the Walnut of this home (src/binary/service-entry.ts):
+   * the host's one Walnut service (`--serve <home>`), or the session daemon again (`--no-serve <home>`).
+   * Unset: the mode stays as it is, carried over to the new version.
+   */
+  serve?: { home: string; on: boolean }
 }
 
 export function runDaemonServiceCommand(program: string, args: string[], input?: string, timeoutMs?: number): Promise<DaemonServiceCommandResult> {
@@ -170,10 +177,14 @@ export async function requestDaemonServiceUpdate(
   }
 }
 
-/** Refuses when the dir's lock is held by a daemon with no door: one inside a Walnut server's process. */
+/**
+ * Refuses when the dir's lock is held by a daemon inside a Walnut server's process, unless that
+ * server is the launcher's own service (a host's one Walnut service, its banner says `service`):
+ * that one an update hands over to and from as it does a daemon program.
+ */
 export async function refuseInProcessOwner(runtimeDir: string, read = readDaemonInstanceOwner): Promise<void> {
   const owner = await read({ runtimeDir, uid: os.userInfo().uid }).catch(() => null)
-  if (owner?.inProcess) {
+  if (owner?.inProcess && !owner.service) {
     throw new Error('A Walnut server runs the session daemon inside its own process for this dir (experiment in_process_daemon, pid '
       + `${owner.pid}). Turn the experiment off in Settings and restart Walnut, then install the service.`)
   }
@@ -323,8 +334,18 @@ export function servicePath(current: string | undefined, home: string): string {
 
 /** The server passes it when the experiment service_launcher is on (daemon-service-update.ts). */
 export const LAUNCHER_FLAG = '--launcher'
+/** The leader of `<home>` switches this host to its one Walnut service, or back (service-entry.ts). */
+export const SERVE_FLAG = '--serve'
+export const NO_SERVE_FLAG = '--no-serve'
+
 
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
+  const { action, options } = parseDaemonServiceArgs(args)
+  return runDaemonServiceCli(action, options)
+}
+
+/** `walnut daemon <action> [options]` as words, read the one way (the leader writes them: daemon-service-update.ts). */
+export function parseDaemonServiceArgs(args: string[]): { action: string; options: DaemonServiceCliOptions } {
   const action = args[0] ?? 'status'
   const options: DaemonServiceCliOptions = {}
   for (let i = 1; i < args.length; i++) {
@@ -332,6 +353,12 @@ export async function runDaemonServiceArgs(args: string[]): Promise<number> {
     else if (args[i] === '--sudo') options.sudo = true
     else if (args[i] === OVER_BUSY_FLAG) options.overBusy = true
     else if (args[i] === LAUNCHER_FLAG) options.launcher = true
+    else if (args[i] === SERVE_FLAG || args[i] === NO_SERVE_FLAG) {
+      const home = args[i + 1]
+      if (!home || !path.isAbsolute(home)) throw new Error(`${args[i]} requires the absolute data dir of the Walnut it is for`)
+      options.serve = { home, on: args[i] === SERVE_FLAG }
+      i++
+    }
     else if (args[i] === '--scope') {
       if (!args[i + 1]) throw new Error('--scope requires user, system or cron')
       options.scope = args[++i] as DaemonServiceScope
@@ -341,7 +368,7 @@ export async function runDaemonServiceArgs(args: string[]): Promise<number> {
     }
     else throw new Error(`Unknown daemon option: ${args[i]}`)
   }
-  return runDaemonServiceCli(action, options)
+  return { action, options }
 }
 
 export async function runDaemonServiceCli(action: string, options: DaemonServiceCliOptions): Promise<number> {
@@ -387,6 +414,8 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   if (system && action !== 'status') await system.preflight()
 
   // One action uses the same files from probe to verify (owners read once inside the lock), so its view never changes partway through.
+  // The mode before this action staged a version (prepareExecutable): back in place when it failed.
+  let modeBefore: ServiceMode | null | undefined
   const act = async (files: DaemonServiceFiles): Promise<number> => {
     const previousInstance = action === 'restart' || action === 'install' || action === 'update'
       ? await fs.readFile(path.join(runtimeDir, 'daemon.instance'), 'utf8').then((value) => value.trim()).catch((error) => {
@@ -404,7 +433,20 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       removeConfig: (target: string) => files.removeConfig(target),
       ready: (_status: unknown, executable?: string) => daemonReady(runtimeDir, executable, SERVICE_READY_WAIT_MS, previousInstance),
       ...(action === 'update' ? { stay: () => daemonStays(runtimeDir) } : {}),
-      proveBoot: (prepared: { executable: string; args: string[] }) => proveDaemonBoot({ ...prepared, path: servicePath(process.env.PATH, home) }),
+      // A version that will run as the host's one Walnut service is proven as one (daemon-boot-proof.ts).
+      proveBoot: async (prepared: { executable: string; args: string[] }) => {
+        const read = readServiceMode(root)
+        const mode = 'mode' in read && read.mode.exe === prepared.executable ? read.mode : null
+        return proveStagedBoot({
+          ...prepared, path: servicePath(process.env.PATH, home),
+          // Asked: its own Walnut said --serve with this update; else the mode came over from the version before.
+          mode: !mode ? null : options.serve?.on && options.serve.home === mode.home ? 'asked' : 'carried',
+          dropMode: () => {
+            process.stderr.write(`walnut daemon: ${prepared.executable} runs only as the session daemon; the service mode it was carried over with is dropped\n`)
+            writeServiceMode(root, null)
+          },
+        })
+      },
       launchdSpawns: () => launchdSpawnsJobs((program, args, timeout) => runDaemonServiceCommand(program, args, undefined, timeout), user.uid, DAEMON_SERVICE_LABEL),
       handover: async () => {
         const handedOver = await requestDaemonServiceHandover(runtimeDir, root)
@@ -415,7 +457,13 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root, options.overBusy ? { busyMs: OVER_BUSY_WAIT_MS, force: true } : {}),
       prepareExecutable: async () => {
         if (!options.executable) throw new Error('No standalone daemon binary supplied; build the daemon before installing')
-        return stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })
+        const staged = await stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })
+        const read = readServiceMode(root)
+        modeBefore = 'mode' in read ? read.mode : null
+        const next = nextServiceMode(modeBefore, options.serve, staged.executable)
+        if (next.note) process.stderr.write(`walnut daemon: ${next.note}\n`)
+        writeServiceMode(root, next.mode)
+        return staged
       },
     }
     const backend = scope === 'cron' ? 'cron' : platform === 'darwin' ? 'launchd' : 'systemd'
@@ -432,7 +480,10 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     }
     const configPath = manager.configPath(scope)
     const before = action === 'install' || action === 'update' ? await files.readConfig(configPath).catch(() => null) : null
-    const result = await manager[action as 'install' | 'update' | 'uninstall' | 'restart']({ scope })
+    // The version that runs on after a failure is the one before: so is its mode (service-entry.ts).
+    const restoreMode = () => { if (modeBefore !== undefined) { try { writeServiceMode(root, modeBefore) } catch { /* the entry reads a doubt as the daemon */ } } }
+    const result = await manager[action as 'install' | 'update' | 'uninstall' | 'restart']({ scope }).catch((error: unknown) => { restoreMode(); throw error })
+    if (!result.ok) restoreMode()
     if (result.ok && (action === 'install' || action === 'update')) {
       // Each update stages a new ~100 MB version: keep the running one and the one before it (the rollback).
       const after = await files.readConfig(configPath).catch(() => null)
@@ -457,6 +508,8 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       // The launcher's own files: its script (systemd, launchd; cron's is the boot script, removed above) and its dir.
       await fs.rm(path.join(root, LAUNCHER_SCRIPT_NAME), { force: true }).catch(() => {})
       await fs.rm(path.join(root, LAUNCHER_DIR_NAME), { recursive: true, force: true }).catch(() => {})
+      // No launcher, no service: a later install starts as the daemon unless its leader says otherwise.
+      await fs.rm(path.join(root, SERVICE_MODE_FILE), { force: true }).catch(() => {})
     }
     if (result.ok && action === 'uninstall') {
       // Tells the server not to set it up again (remote-boot-start.ts BOOT_SETUP_MARKER); a later install wins.

@@ -376,7 +376,16 @@ export class DaemonUpdateStageError extends Error {
  */
 export async function updateRemoteDaemonService(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user',
-  opts: { onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean; onBuildFailed?: (error: Error) => void | Promise<void> } = {},
+  opts: {
+    onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean; onBuildFailed?: (error: Error) => void | Promise<void>
+    /**
+     * What `--service` runs for this Walnut after the update (one-service-mode.ts serviceModeAsk): the
+     * host's one Walnut service (`--serve <home>`, under the launcher only, and only when the file
+     * staged is the walnut file) or the session daemon again (`--no-serve <home>`). Unset: no word,
+     * the host keeps its mode.
+     */
+    serve?: { home: string; on: boolean }
+  } = {},
 ): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
@@ -388,7 +397,8 @@ export async function updateRemoteDaemonService(
   try {
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
     // An overdue update goes over the daemon's own work (daemon-update-behind.ts); the launcher when its experiment is on.
-    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}${await serviceLauncherWanted() ? ' --launcher' : ''}`
+    const launcher = await serviceLauncherWanted()
+    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}${launcher ? ' --launcher' : ''}${serveWords(opts.serve, launcher)}`
     const update = io.serviceUpdate ? io.serviceUpdate.bind(io) : (u: ServiceUpdateSpec) => updateOverSsh(io, u)
     const answer = await update({ command, directory, executable, scope, build: expectedVersion }).catch((error: unknown) => {
       keep = (error as { keepStaging?: unknown } | null)?.keepStaging === true
@@ -406,6 +416,13 @@ export async function updateRemoteDaemonService(
     if (directory && !keep) await removeStaging(io, directory)
     if (chunks && applied) await removeVersionChunks(io, expectedVersion)
   }
+}
+
+/** The mode's words on the update line (service-entry.ts): the service only under the launcher, which starts it. */
+function serveWords(serve: { home: string; on: boolean } | undefined, launcher: boolean): string {
+  if (!serve || !serve.home.startsWith('/') || /[\u0000-\u001f]/.test(serve.home)) return ''
+  if (serve.on && !launcher) return ''
+  return ` ${serve.on ? '--serve' : '--no-serve'} ${shq(serve.home)}`
 }
 
 /**

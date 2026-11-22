@@ -13,6 +13,8 @@
  * tests/providers/daemon-start-cmd.test.ts.
  */
 
+import { DAEMON_BINARY_NAMES, START_READER_SH } from './daemon-live-sh.js'
+
 export interface DaemonStartCmdOpts {
   /** How the daemon runs on the remote host. */
   runtime: 'bun' | 'binary' | 'node'
@@ -33,27 +35,6 @@ function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-/** The daemon files the Mac starts in a daemon dir, as `<dir>/<name> --start` (the binary) or `<runtime> <dir>/daemon.cjs --start`. */
-const DAEMON_BINARY_NAMES = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64']
-
-/**
- * Shell helpers for "is this pid the daemon of that dir": `w_args <pid>` prints
- * its command line (Linux /proc; ps elsewhere, which a slim Linux image does not
- * have), and `w_daemon <pid> <dir>` is true when that line runs a daemon file of
- * `<dir>` the way the Mac starts one (the rule buildDaemonStopCmd applies), or
- * is an OS service's daemon (`<install root>/versions/<sha>/daemon --service`).
- * A pid file whose pid now names another process (a restarted container reuses
- * pids) is no live daemon: taking it for one pointed every connect at the dead
- * daemon's port, again on every try, until that process ended.
- */
-export const DAEMON_PID_SH: readonly string[] = [
-  `w_args() { if [ -r /proc/self/cmdline ]; then tr '\\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; else ps -o args= -p "$1" 2>/dev/null; fi; }`,
-  // /proc ends the line with one NUL (now a space); the leading space makes `<dir>/<binary> --start` a suffix match too.
-  'w_daemon() { a=$(w_args "$1"); a=" ${a% }"; case "$a" in '
-    + [...DAEMON_BINARY_NAMES, 'daemon.cjs'].map((name) => `*" $2/${name} --start"`).join('|')
-    + '|*"/daemon --service") return 0;; esac; return 1; }',
-]
-
 /**
  * Stops the unmanaged daemon in `dir` and confirms it is gone (prints
  * `walnut-daemon-stop-confirmed`). The pid is checked to be that daemon (its
@@ -73,13 +54,14 @@ export function buildDaemonStopCmd(dir = '/tmp/open-walnut', procRoot = '/proc')
     'ERROR_FILE=$(mktemp) || exit 1',
     'trap \'rm -f "$ERROR_FILE"\' EXIT',
     `PROC=${shq(procRoot)}`,
+    // The start-time readers every live check shares (daemon-live-sh.ts).
+    ...START_READER_SH,
     'if [ -r "$PROC/self/stat" ]; then',
-    // Field 22 (the start time) is the 20th after "<pid> (<comm>) "; comm may hold ") ", so strip to the last one.
     // A stat file that is there but parses empty is a failure (2), never "gone": only a pid with no stat is gone.
-    '  read_identity() { [ -r "$PROC/$PID/stat" ] || return 1; value=$(sed \'s/.*) //\' "$PROC/$PID/stat" 2>/dev/null | cut -d\' \' -f20); if [ -z "$value" ]; then [ -e "$PROC/$PID/stat" ] && return 2; return 1; fi; printf \'%s\\n\' "$value"; }',
+    '  read_identity() { [ -r "$PROC/$PID/stat" ] || return 1; value=$(w_stat_start "$PROC/$PID/stat"); if [ -z "$value" ]; then [ -e "$PROC/$PID/stat" ] && return 2; return 1; fi; printf \'%s\\n\' "$value"; }',
     '  read_command() { [ -r "$PROC/$PID/cmdline" ] || return 1; tr \'\\000\' \' \' < "$PROC/$PID/cmdline" | sed \'s/ *$//\'; }',
     'else',
-    '  read_identity() { value=$(ps -p "$PID" -o lstart= 2>"$ERROR_FILE"); code=$?; [ ! -s "$ERROR_FILE" ] || return 2; printf \'%s\\n\' "$value"; return "$code"; }',
+    '  read_identity() { value=$(w_ps_start "$PID" 2>"$ERROR_FILE"); code=$?; [ ! -s "$ERROR_FILE" ] || return 2; printf \'%s\\n\' "$value"; return "$code"; }',
     '  read_command() { ps -p "$PID" -o command= 2>"$ERROR_FILE"; }',
     'fi',
     'IDENTITY=$(read_identity); STATUS=$?',

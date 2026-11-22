@@ -2,7 +2,8 @@
  * `walnut service install` and the handover it asks for refuse while a Walnut server runs the
  * session daemon inside its own process for the dir (review S7, 2026-11-21). The runtime says so in
  * its lock banner (`inProcess`, review R2-N1): a daemon program still starting, its door not yet
- * published, is never taken for one.
+ * published, is never taken for one. The launcher's own service (a host's one Walnut service, its
+ * banner also says `service`) is let through: `walnut daemon update` hands over to and from it.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -41,6 +42,31 @@ describe('refuseInProcessOwner', () => {
         if (lock.kind === 'owner') await lock.release()
         fs.rmSync(runtimeDir, { recursive: true, force: true })
       }
+    }
+  })
+
+  it('lets the launcher\'s own service through (its banner says service), and only with inProcess', async () => {
+    const { refuseInProcessOwner } = await import('../../src/providers/daemon-service-cli.js')
+    const uid = os.userInfo().uid
+    const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-lock-'))
+    const lock = await acquireDaemonInstanceLock({ runtimeDir, uid, pid: process.pid, instanceId: 'd-service', inProcess: true, service: true })
+    try {
+      expect(lock.kind).toBe('owner')
+      const read = await readDaemonInstanceOwner({ runtimeDir, uid })
+      expect(read).toMatchObject({ inProcess: true, service: true })
+      await expect(refuseInProcessOwner(runtimeDir)).resolves.toBeUndefined()
+    } finally {
+      if (lock.kind === 'owner') await lock.release()
+      fs.rmSync(runtimeDir, { recursive: true, force: true })
+    }
+    // `service` alone (no inProcess) is no banner field a reader keeps.
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-lock-'))
+    const plain = await acquireDaemonInstanceLock({ runtimeDir: other, uid, pid: process.pid, instanceId: 'd-plain', service: true })
+    try {
+      expect((await readDaemonInstanceOwner({ runtimeDir: other, uid }))?.service).toBeUndefined()
+    } finally {
+      if (plain.kind === 'owner') await plain.release()
+      fs.rmSync(other, { recursive: true, force: true })
     }
   })
 })

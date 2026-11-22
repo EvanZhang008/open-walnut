@@ -31,7 +31,7 @@ import { statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from '#ws'
 import { IN_PROCESS_DAEMON_URL, InProcessDaemonSocket, isInProcessDaemonSocket } from './in-process-daemon-socket.js'
-import { inProcessDaemonConnect } from './in-process-daemon.js'
+import { inProcessDaemonConnect, inProcessDaemonWanted } from './in-process-daemon.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,16 +51,20 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { ACP_BUSY_FILE, acpTurnsHold } from './acp-upgrade-hold.js'
 import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
 import { DAEMON_BINARIES_DIR, IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
+import { settledHomeMove } from '../core/home-move.js'
 import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
-import { BACK_TRIES_MAX, pendingReplaces } from './daemon-update-store.js'
+import { BACK_TRIES_MAX, pendingReplaces, serviceModeAsks } from './daemon-update-store.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { buildRemotePreamble, sshAliasOptions, sshDestination } from './session-io.js'
-import { buildDaemonStartCmd, buildDaemonStopCmd, DAEMON_PID_SH } from './daemon-start-cmd.js'
+import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
+import { DAEMON_PID_SH } from './daemon-live-sh.js'
 import { filesCarryBuild, keepPreviousDaemon, restorePreviousDaemon, restorePreviousOutcome, trialStagedDaemon, type DaemonTrialOpts } from './daemon-trial-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { bootLines } from './daemon-update-shell.js'
 import { parseProbing, probingCheckScript } from './daemon-update-probation.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
+import { serviceModeAsk, serviceModeDue, serviceModeWantNow, servesAsHere, servesFromHello, type ServesAs, type ServiceModeAsk, type ServiceModeWant } from './one-service-mode.js'
+import { hostServiceOfferWanted, serviceLauncherWanted } from './service-launcher-flag.js'
 import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type UnreadUpdate } from './daemon-update-readback.js'
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
@@ -143,7 +147,7 @@ import { DRAIN_SWAP_WINDOW_MS, daemonSwapExpected, resendThroughSwap, waitHostLi
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
 import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
-import { isHostReplicaProgram } from '../core/server-role.js'
+import { isHostReplica, isHostReplicaProgram } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
@@ -858,6 +862,14 @@ export class DaemonConnection {
   private _serviceExecutable: string | null = null
   /** The host's launcher (hello `launcher`, service-launcher-beat.ts): its versions and last put-back. */
   private _launcher: LauncherFacts | null = null
+  /** What the hello says runs there (one-service-mode.ts): the daemon, or a host's one Walnut service and whose. */
+  private _servesAs: { serves: ServesAs; serviceHome: string | null } = { serves: 'daemon', serviceHome: null }
+  /** The home the host keeps this Walnut under after a declared move (leader.configure's homeHere), this connection. */
+  private _homeHere: string | null = null
+  /** This build's walnut file could not go to the host for the service: no offer with this build. */
+  private _serveUnfit: { expected: string; why: string } | null = null
+  /** The switch an update that ran last asked of this host (ServiceModeAsk; undefined: not read from disk yet). */
+  private _modeAsked: ServiceModeAsk | null | undefined = undefined
   private cronMetadataToken: object | null = null
   /** Cloud-bridge liveness from the last bridge.configure reply (null = unknown / disabled). */
   private _lastBridgeConnected: boolean | null = null
@@ -908,6 +920,8 @@ export class DaemonConnection {
   private hostSlicePaceTimer: ReturnType<typeof setTimeout> | null = null
   /** The Walnut was described to this daemon (leader.configure) on this connection. */
   private leaderConfigured = false
+  /** Commands wait for this while the connect declares a home move (declareHomeMoveFirst); null once done. */
+  private homeMoveGate: Promise<void> | null = null
   /** The routine spawn template this daemon process holds (clock-host-start-v1), by hash. */
   private routineTemplateHash: string | null = null
   /** This connection's first host-replica round was started. */
@@ -1612,6 +1626,8 @@ export class DaemonConnection {
   get daemonStartup(): string { return this._daemonStartup }
   get serviceExecutable(): string | null { return this._serviceExecutable }
   get launcher(): LauncherFacts | null { return this._launcher }
+  /** The hello's `serves` (a host's one Walnut service, or the daemon) and whose service it is. */
+  get servesAs(): { serves: ServesAs; serviceHome: string | null } { return servesAsHere(this._servesAs, WALNUT_HOME, this._homeHere) }
   /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
   get bootStart(): BootStartView | null { return this._bootStart?.state ?? null }
   /** Probe the host's boot start now, and set it up when due (the Overview's Set up button). */
@@ -1754,6 +1770,8 @@ export class DaemonConnection {
     const changed = this._connected !== value
     this._connected = value
     if (changed) this._connectionEpoch++
+    // A Walnut whose data dir moved says so before anything else goes to this daemon (home-move.ts).
+    if (changed) this.homeMoveGate = value ? this.declareHomeMoveFirst() : null
     // What went on the last connection's path says nothing about the next one (probe exemption).
     if (changed && value) this.sentPerSecond = []
     // Uploads waiting for the bulk channel meet the lost link now, not at the end of their wait.
@@ -2502,11 +2520,38 @@ export class DaemonConnection {
    * if the cloud companion held it (core/leader/). Binds the session socket to this
    * Walnut on the daemon. True once it has run on this connection.
    */
+  /**
+   * A Walnut whose data dir moved (home-move.ts, one-service experiment only) declares it on
+   * each connect before any other command: commands wait for it (send), so the host keys the set,
+   * the copy and the journal drain that follow by the Walnut's first home there, and no check
+   * runs on a fresh memory. A declaration that fails lets them go (they would go anyway).
+   */
+  private declareHomeMoveFirst(): Promise<void> | null {
+    // Nothing to declare (known after the process's first connect), or a link that describes no Walnut.
+    if (settledHomeMove() === null || this.isReadOnlyRemote || !this.hasCapability('leader-epoch-v1')) return null
+    const gate: Promise<void> = import('../core/leader/primary-leader.js')
+      .then((m) => m.declareHomeMove(this.leaderLink()))
+      .catch((err: unknown) => {
+        log.session.warn('DaemonConnection: the home move could not be declared; commands go on', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+      })
+      .finally(() => { if (this.homeMoveGate === gate) this.homeMoveGate = null })
+    return gate
+  }
+
+  /** This connection as the leader code (core/leader/) speaks to the host through it. */
+  private leaderLink(): import('../core/leader/primary-leader.js').LeaderHostConnection {
+    return {
+      hostKey: this.hostKey,
+      send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs),
+      noteHomeHere: (home) => { this._homeHere = home },
+    }
+  }
+
   private async configureLeaderOnce(): Promise<boolean> {
     if (this.leaderConfigured) return true
     if (!this.hasCapability('leader-epoch-v1')) return false
     const { configureHostLeader } = await import('../core/leader/primary-leader.js')
-    if (await configureHostLeader({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })) {
+    if (await configureHostLeader(this.leaderLink())) {
       this.leaderConfigured = true
       // A routine run may start on this host now (clock-host-start-v1): the set
       // goes again with its `start` fields (a no-op push when no routine has one).
@@ -2903,6 +2948,8 @@ export class DaemonConnection {
     params: Record<string, unknown> = {},
     timeoutMs: number = DaemonConnection.COMMAND_TIMEOUT_MS,
   ): Promise<DaemonCommandResult> {
+    // The connect's declared home move goes first: the host then keys what follows by the Walnut's first home.
+    if (this.homeMoveGate && cmd !== 'leader.configure' && cmd !== 'ping') await this.homeMoveGate
     const traced = typeof params.traceId === 'string' && params.traceId ? params : { ...params, traceId: crypto.randomBytes(4).toString('hex') }
     const host = this.hostKey
     // The pool may replace this instance in the swap: a resend goes to the one serving the host then.
@@ -3958,7 +4005,57 @@ export class DaemonConnection {
       },
       daemonKeeper: async (): Promise<string> => (await conn.daemonNames()).keeper,
       daemonNames: () => conn.daemonNames(),
+      // The hello's word: a host's one Walnut service is this Walnut's follower when its home is ours.
+      servesAs: () => conn.servesAs,
+      serviceModeChanged: () => { void conn.checkServiceMode() },
     }
+  }
+
+  /**
+   * The mode wanted for this host now (one-service-mode.ts): the facts of the hello, the
+   * host-server manager's word on this Walnut's follower there, and the experiments. With the
+   * experiments off and a host that runs as the daemon, nothing is read and nothing changes.
+   */
+  private serviceModeWant(): Promise<ServiceModeWant> {
+    return serviceModeWantNow({
+      ...this.servesAs, home: WALNUT_HOME, launcher: !!this._launcher, expected: this.getExpectedDaemonVersion(),
+      serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(),
+      inProcessWanted: () => hostServiceOfferWanted(),
+      launcherWanted: () => serviceLauncherWanted(),
+      follower: async () => (await import('../core/host-server/index.js')).hostFollowerFact(this.hostKey),
+      note: (w) => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOffer(this.hostKey, w)).catch(() => {}) },
+      noteOff: () => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOfferOff(this.hostKey)).catch(() => {}) },
+    })
+  }
+
+  /** The switch last asked of this host, from disk once per connection (a real server's only: ownUpdateRecord). */
+  private async modeAsked(): Promise<ServiceModeAsk | null> {
+    if (this._modeAsked === undefined) {
+      const kept = await this.ownUpdateRecord((k) => serviceModeAsks.read(k))
+      // A switch recorded meanwhile in this process is newer than the disk's.
+      if (this._modeAsked === undefined) this._modeAsked = kept && serviceModeAsks.fresh(kept) ? { expected: kept.expected, want: kept.want, ...(kept.failed ? { failed: kept.failed } : {}) } : null
+    }
+    return this._modeAsked
+  }
+
+  /** An update that ran asked this switch: kept in memory at once, on disk for a real server's connection. */
+  private recordModeAsked(ask: ServiceModeAsk): void {
+    this._modeAsked = ask
+    if (this.isolation.mode === 'shared') void serviceModeAsks.write(`ssh:${this.hostKey}`, { ...ask, at: Date.now() })
+  }
+
+  /**
+   * The host-server manager settled this host, or a connect found the build current: a switch of
+   * the mode that is due now runs as a daemon update (the same holds and probation as a new build).
+   */
+  async checkServiceMode(): Promise<void> {
+    if (this._destroyed || this.isReadOnlyRemote || IS_EPHEMERAL || !this._connected || this.hostKey === '__local__') return
+    const want = await this.serviceModeWant()
+    if (!serviceModeDue(want, this._servesAs.serves)) return
+    log.session.info('DaemonConnection: the host is to run as another mode; it goes with a daemon update', {
+      host: this.hostKey, serves: this._servesAs.serves, want: want.want,
+    })
+    void this.recheckPostponedUpgrade()
   }
 
   /** Drop one forward (a service probe found nothing behind it). */
@@ -4874,7 +4971,9 @@ export class DaemonConnection {
       this._gapHeld = null
 
       if (takeover.managed) {
-        if (remoteVersion !== expected) {
+        // A switch of the host's mode rides the update (one-service-mode.ts): read on a live link only, whose hello is current.
+        const modeDue = this._connected && serviceModeDue(await this.serviceModeWant(), this._servesAs.serves)
+        if (remoteVersion !== expected || modeDue) {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
@@ -5389,7 +5488,9 @@ export class DaemonConnection {
     if (!this._upgradeDeferred) return
     this._upgradeDeferred = false
     const expected = this.getExpectedDaemonVersion()
-    if (!expected || this.isReadOnlyRemote || this._daemonVersion === expected) return
+    if (!expected || this.isReadOnlyRemote) return
+    // The current build: only a switch of the mode may be due (one-service-mode.ts).
+    if (this._daemonVersion === expected) { void this.checkServiceMode(); return }
     if (this._daemonVersion && this.keepSharedDaemon(this._daemonServes, this._daemonVersion, expected)) return
     log.session.info('DaemonConnection: serving the running daemon; its update runs in the background', {
       host: this.hostKey, running: this._daemonVersion ?? '(unknown)', expected,
@@ -5620,12 +5721,22 @@ export class DaemonConnection {
       this.postponeUpgrade(`the new daemon could not be put on the host, so the running one keeps serving (${said})`, expected, remoteVersion, { attempt })
       return 'held'
     }
+    // The mode's words (one-service-mode.ts): the service needs the walnut file in the slot, not the daemon-only binary.
+    let serve = this._connected ? serviceModeAsk(await this.serviceModeWant(), { ...this.servesAs, home: WALNUT_HOME, homeHere: this._homeHere }) : undefined
     let source: ServiceDaemonSource
     try {
-      source = await this.serviceDaemonSource()
+      source = await this.serviceDaemonSource(serve?.on === true)
     } catch (error) {
-      return stageFailed(error)
+      // A compiled build has the walnut file only: then the build itself cannot go, as before.
+      if (serve?.on !== true || !(error instanceof WalnutFileUnavailableError) || !(await this.getLocalBinaryPath())) return stageFailed(error)
+      // No walnut file of this build for the host: no offer with this build (Walnut Health says why), the build goes as before.
+      this._serveUnfit = { expected, why: error.message.slice(0, 300) }
+      void this.serviceModeWant()
+      if (remoteVersion === expected) return false
+      serve = undefined
+      try { source = await this.serviceDaemonSource(false) } catch (again) { return stageFailed(again) }
     }
+    const asked: ServesAs | null = serve ? (serve.on ? 'walnut-serve' : 'daemon') : null
     let swapping = false
     let counted = false
     // The update's record, on disk from its launch: a server restarted during the update (a deploy)
@@ -5649,6 +5760,7 @@ export class DaemonConnection {
         overBusy: this.forceable(),
         // A build that failed holds its day before the staging dir (its record) is removed.
         onBuildFailed: (error) => this.recordRealDirFail({ expected, at: Date.now(), reason: error.message.slice(0, 300) }),
+        ...(serve ? { serve } : {}),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
@@ -5725,11 +5837,16 @@ export class DaemonConnection {
       if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
       // Shown on the host's status, as the host network's failures are.
       this._updateFailure = { at: Date.now(), expected, message: said.slice(0, 600), down: (error as { tailOutcome?: unknown }).tailOutcome === 'down' }
+      // A switch whose update failed after its swap began is not asked again with this build either
+      // (each try restarts the host's service); one held, deferred or refused as busy above is (M1).
+      if (asked && swapping) this.recordModeAsked({ expected, want: asked, failed: said.split('\n')[0].slice(0, 300) })
       throw new DaemonServiceNotReadyError(this.hostKey, `managed update did not complete: ${String(error)}`, takeover)
     }
     this._updateWaiting = false
     if (!swapping) this._lastUpgradeAttempt = { expected, at: Date.now() }
     this._updateFailure = null
+    // The switch went with an update that ran: not asked again with this build, whatever the host chose (M1).
+    if (asked && swapping) this.recordModeAsked({ expected, want: asked })
     return true
   }
 
@@ -5964,6 +6081,9 @@ export class DaemonConnection {
       this._serviceExecutable = typeof exe === 'string' && exe.startsWith('/') && exe.length < 1024 && !/[\u0000-\u001f]/.test(exe) ? exe : null
       this._launcher = launcherFactsFrom(res.launcher)
       if (this._launcher?.rollback) void noteLauncherRollback(this.hostKey, this._launcher)
+      this._servesAs = servesFromHello(res)
+      // Said again by this connection's leader.configure.
+      this._homeHere = null
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {
@@ -6870,8 +6990,19 @@ export class DaemonConnection {
    * compiled Mac the host's walnut file, put in the daemon slot here when the
    * slot does not hold it yet (deployWalnutFile: nothing is sent when it does).
    */
-  private async serviceDaemonSource(): Promise<ServiceDaemonSource> {
+  private async serviceDaemonSource(walnutFile = false): Promise<ServiceDaemonSource> {
     const binary = await this.getLocalBinaryPath()
+    // The host's one Walnut service runs the walnut file (it holds the server): a dist build puts it in the slot too.
+    if (binary && walnutFile) {
+      const before = this._failedRuntimes.get('binary')
+      try {
+        await this.deployWalnutFile()
+      } finally {
+        // A walnut file that does not run there says nothing of the daemon binary this build also has.
+        if (before === undefined) this._failedRuntimes.delete('binary'); else this._failedRuntimes.set('binary', before)
+      }
+      return { binary: null, existing: await this.getRemoteDaemonPath() }
+    }
     if (binary) return { binary, base: this._serviceExecutable, ...(this._runtime === 'binary' ? { existing: await this.getRemoteDaemonPath() } : {}) }
     if (!singleFile()) throw new Error('this Walnut build has no daemon file for the host')
     await this.deployWalnutFile()
@@ -7846,6 +7977,8 @@ export class DaemonConnection {
       describeRefusal?: (status: number, refusal: string | undefined, body: string) => string
     } = {},
   ): Promise<void> {
+    // Every socket of a connection opens here: a host replica's '__local__' one never does (assertLocalDialAllowed).
+    try { assertLocalDialAllowed(this.hostKey) } catch (err) { return Promise.reject(err) }
     return new Promise((resolve, reject) => {
       const url = typeof urlOrPort === 'string' ? urlOrPort : `ws://127.0.0.1:${urlOrPort}`
       this._lastWsUrl = url
@@ -10482,6 +10615,7 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
  * at the call site (remote-session-manager.ts).
  */
 export async function getDirectDaemonConnection(hostKey: string, wsUrl: string): Promise<DaemonConnection> {
+  assertLocalDialAllowed(hostKey)
   const poolKey = `direct:${wsUrl}`
   const existing = connectionPool.get(poolKey)
   if (existing?.connected) return existing
@@ -10507,6 +10641,22 @@ export async function getDirectDaemonConnection(hostKey: string, wsUrl: string):
 
   connectingPromises.set(poolKey, promise)
   return promise
+}
+
+/**
+ * A host replica (its follower server, and a host's one Walnut service, which holds the host's
+ * runtime in its own process) never holds a `__local__` connection: that is a full-trust client of
+ * the host's daemon with no follower origin, so no owner scope (it reads every Walnut's sessions on
+ * the host) and a normal connect would configure the runtime with the replica's home as a leader.
+ * Its own host's reads go through the follower link (self-host.ts, the in-process seat in the
+ * service). Checked before any start or pool entry (getDirectDaemonConnection, local-daemon-dial.ts)
+ * and where every socket of a connection opens (connectWebSocket: connect, connectDirect and the
+ * local reconnect all go through it), so no caller of getLocalDaemonConnection, and no new path to
+ * a '__local__' socket, reaches the runtime from a replica.
+ * Guard: tests/providers/replica-no-local-connection.test.ts (a3b land 2 review H1).
+ */
+export function assertLocalDialAllowed(hostKey: string): void {
+  if (hostKey === '__local__' && isHostReplica()) throw markLinkFailure(new NeedsLeaderError('no_local_daemon_in_replica'), 'no-link')
 }
 
 /**

@@ -19,6 +19,7 @@ import {
   daemonInstallRoot,
 } from './daemon-service-config.js'
 import { DAEMON_BOOT_PID_NAME } from './daemon-service-boot-script.js'
+import { DAEMON_STAMP_SH } from './daemon-live-sh.js'
 import { DAEMON_OWNERSHIP_NAME } from './daemon-service-files.js'
 
 /** How long the snapshot and the tail wait for a `walnut daemon` transaction to let go of the lock. */
@@ -195,10 +196,13 @@ export function loadedLines(): string[] {
  * as the daemon serving.
  */
 export const UP_LINE = [
+  // w_stamp: the daemon's own stamp of its pid and start time (daemon-live-sh.ts) settles it when there is one.
+  ...DAEMON_STAMP_SH,
   // The process's start (epoch s) from ps etime ([[dd-]hh:]mm:ss); nothing where ps has no -p.
   `t_pstart() { tz_e=$(ps -o etime= -p "$1" 2>/dev/null | tr -d ' '); case "$tz_e" in ""|*[!0-9:-]*) return 1;; esac; echo "$tz_e" | awk -F'[-:]' -v now="$(date +%s)" '{ s = $NF + 60 * $(NF - 1); if (NF > 2) s += 3600 * $(NF - 2); if (NF > 3) s += 86400 * $(NF - 3); print now - s }'; }`,
   't_up() { p=$(cat "$tr/daemon.pid" 2>/dev/null); case "$p" in ""|*[!0-9]*) return 1;; esac; [ "$p" -gt 1 ] && kill -0 "$p" 2>/dev/null && [ -s "$tr/daemon.port" ] || return 1',
   '  if [ -r "/proc/$p/stat" ]; then tz_s=$(cat "/proc/$p/stat" 2>/dev/null) || return 1; tz_s=${tz_s##*) }; case "$tz_s" in Z*|X*) return 1;; esac; fi',
+  '  w_stamp "$p" "$tr"; case $? in 0) return 0;; 1) return 1;; esac',
   '  tz_m=$(stat -c %Y "$tr/daemon.pid" 2>/dev/null || stat -f %m "$tr/daemon.pid" 2>/dev/null); tz_b=$(t_pstart "$p")',
   '  case "$tz_m" in ""|*[!0-9]*) return 0;; esac; case "$tz_b" in ""|*[!0-9]*) return 0;; esac',
   // Linux counts etime on the boot clock, so a wall clock set forward moves "now - etime" as far:

@@ -33,6 +33,7 @@
  * and the load, read the service as stopped, and the host was left with no job loaded).
  */
 import { DETACH_LINE, servicePreamble } from './daemon-update-shell.js'
+import { W_ARGS_SH } from './daemon-live-sh.js'
 
 /** How long a new service daemon is watched after its update's tail found it serving. */
 export const PROBATION_SECONDS = 15 * 60
@@ -80,6 +81,7 @@ const EOF = 'WALNUT_PROBATION_EOF'
  */
 export function probationRecordLines(): string[] {
   return [
+    W_ARGS_SH,
     `t_failed() { tf_b=\${tv_b-$(cat "$tsb/before.build" 2>/dev/null)}; [ -n "$tf_b" ] || return 0`,
     `  printf '%s\\n%s\\n%s\\n' "$tf_b" "$(date +%s)" "$1" > "$tb/${PROBATION_FAILED_NAME}.tmp" && mv -f "$tb/${PROBATION_FAILED_NAME}.tmp" "$tb/${PROBATION_FAILED_NAME}"; }`,
     // $tp_t: the end it counts to (the probation's, or the start's wait).
@@ -88,7 +90,7 @@ export function probationRecordLines(): string[] {
     `  [ "$tp_n" -le "$tp_t" ] && [ "$tp_n" -ge $((tp_s - ${PROBATION_STARTING_SECONDS})) ]; }`,
     't_probe_pid() { case "$tp_p" in ""|*[!0-9]*) return 1;; esac; [ "$tp_p" -gt 1 ] && kill -0 "$tp_p" 2>/dev/null || return 1',
     `  tp_u=$(cat "$tsb/before.until" 2>/dev/null); case "$tp_u" in ""|*[!0-9]*) [ -n "$(find "$tsb/probation.pid" -mmin -${Math.ceil((PROBATION_SECONDS + PROBATION_GRACE_SECONDS) / 60)} 2>/dev/null)" ] || return 1;; *) [ "$(date +%s)" -le $((tp_u + ${PROBATION_GRACE_SECONDS})) ] || return 1;; esac`,
-    `  if [ -r "/proc/$tp_p/cmdline" ]; then tp_a=$(tr '\\000' ' ' < "/proc/$tp_p/cmdline" 2>/dev/null); else tp_a=$(ps -ww -o args= -p "$tp_p" 2>/dev/null); fi`,
+    '  tp_a=$(w_args "$tp_p")',
     `  [ -z "$tp_a" ] && return 0; case "$tp_a" in *${PROBATION_SCRIPT_NAME}*) return 0;; esac; return 1; }`,
     't_busy() { t_probing && return 0; tp_k=$(cat "$tsb/before.until" 2>/dev/null); case "$tp_k" in ""|*[!0-9]*) return 1;; esac; tp_n=$(date +%s)',
     `  [ "$tp_k" -gt "$tp_n" ] && [ "$tp_k" -le $((tp_n + ${PROBATION_SECONDS})) ] && tp_t=$tp_k; }`,

@@ -245,7 +245,7 @@ describe('one rule in every reader: the TS CLI, the JS twin CLI and both user sh
       // Relays the server still has are answered after the drain (its answers still come), before the exit.
       // The bun twin (which can run inside the server's process) then reaps an isolated dir's CLIs
       // without blocking; the JS twin is always its own process and reaps them in cleanup().
-      expect(twin).toMatch(/drain failed[^\n]*\n\s+\/\/[^\n]*\n\s+releaseGatewayRelays\(\);?\n((\s+\/\/[^\n]*\n)+\s+if \(shouldReapOnExit\(\) && ownsDaemonDir\(\)\) \{\n\s+core\.holdRegistryForExit\(\)\n\s+await reapAllSessionGroups\(\)\n\s+\}\n)?\s+persistRegistry\(\)/)
+      expect(twin).toMatch(/drain failed[^\n]*\n\s+\/\/[^\n]*\n\s+releaseGatewayRelays\(\);?\n((\s+\/\/[^\n]*\n)+\s+if \(shouldReapOnExit\(\) && ownsDaemonDir\(\)\) \{\n\s+await core\.holdRegistryForExit\(\)\n\s+await reapAllSessionGroups\(\)\n\s+\}\n)?(\s+\/\/[^\n]*\n)*\s+let registrySaved = true;?\n(\s+if \(ownsDaemonDir\(\)\) \{\n)?\s+try \{\n\s+if \(settled === 'cap'\) persistRegistryNow\(\);?\n\s+else await persistRegistryDurable\(\)/)
       // ...with the mark fresh again when there is one to answer, and only then (a handover has none).
       expect(twin).toMatch(/function releaseGatewayRelays\(\)[^{]*\{\n\s+if \(gatewayRelayPending\.size === 0\) return;?\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
       // A relay's answer, and a read of a resumable host_exec run, are taken while it drains,

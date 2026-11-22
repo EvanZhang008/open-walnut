@@ -55,48 +55,50 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
     expect(core.readRegistry()).toEqual({})
   })
 
-  // G5 — atomic write sequence: writeFileSync → fsync → rename
-  it('persistRegistry uses atomic tmp → fsync → rename sequence', () => {
+  // G5 — atomic write sequence: write tmp → fsync → rename, off the thread (fs.promises),
+  // and the exit's synchronous write in the same order (registry-writer-core.ts).
+  it('persistRegistry uses atomic tmp → fsync → rename sequence', async () => {
     const core = createDaemonCore(ctx.deps)
     ctx.sessions.set('sid-atomic', makeTestSession({ pid: 2000, state: 'running' }))
 
     const order: string[] = []
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation((p) => {
-      order.push(`write:${String(p).endsWith('.tmp') ? 'tmp' : 'final'}`)
-    })
-    const fsyncSpy = vi.spyOn(fs, 'fsyncSync').mockImplementation(() => {
-      order.push('fsync')
-    })
-    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
-      order.push('rename')
-    })
-    vi.spyOn(fs, 'openSync').mockImplementation(() => 99)
-    vi.spyOn(fs, 'closeSync').mockImplementation(() => {})
+    vi.spyOn(fs.promises, 'open').mockImplementation((async (p: fs.PathLike) => ({
+      writeFile: async () => { order.push(`write:${String(p).endsWith('.tmp') ? 'tmp' : 'final'}`) },
+      sync: async () => { order.push('fsync') },
+      close: async () => {},
+    })) as unknown as typeof fs.promises.open)
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async () => { order.push('rename') })
 
     core.persistRegistry()
-
+    await core.persistRegistryDurable()
     expect(order).toEqual(['write:tmp', 'fsync', 'rename'])
+    vi.restoreAllMocks()
 
-    writeSpy.mockRestore()
-    fsyncSpy.mockRestore()
-    renameSpy.mockRestore()
+    const syncOrder: string[] = []
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((p) => { syncOrder.push(`write:${String(p).endsWith('.tmp') ? 'tmp' : 'final'}`) })
+    vi.spyOn(fs, 'fsyncSync').mockImplementation(() => { syncOrder.push('fsync') })
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { syncOrder.push('rename') })
+    vi.spyOn(fs, 'openSync').mockImplementation(() => 99)
+    vi.spyOn(fs, 'closeSync').mockImplementation(() => {})
+    core.persistRegistrySync()
+    expect(syncOrder).toEqual(['write:tmp', 'fsync', 'rename'])
   })
 
   // G6 — only running sessions with pid are persisted
-  it('persistRegistry skips dead sessions and pid-less sessions', () => {
+  it('persistRegistry skips dead sessions and pid-less sessions', async () => {
     const core = createDaemonCore(ctx.deps)
     ctx.sessions.set('live', makeTestSession({ pid: 3000, state: 'running' }))
     ctx.sessions.set('dead', makeTestSession({ pid: 3001, state: 'dead' }))
     ctx.sessions.set('no-pid', makeTestSession({ pid: null, state: 'running' }))
 
-    core.persistRegistry()
+    await core.persistRegistryDurable()
 
     const reg = JSON.parse(fs.readFileSync(ctx.registryFile, 'utf-8'))
     expect(Object.keys(reg.sessions)).toEqual(['live'])
   })
 
   // G7 — entry shape is exact
-  it('persisted entry contains exactly the RegistryEntry fields', () => {
+  it('persisted entry contains exactly the RegistryEntry fields', async () => {
     const core = createDaemonCore(ctx.deps)
     ctx.sessions.set('shape', makeTestSession({
       pid: 4000,
@@ -109,7 +111,7 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
       parented: false,
     }))
 
-    core.persistRegistry()
+    await core.persistRegistryDurable()
 
     const reg = JSON.parse(fs.readFileSync(ctx.registryFile, 'utf-8'))
     const entry = reg.sessions.shape
@@ -129,21 +131,21 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
     expect(entry.parented).toBe(false)
   })
 
-  it('keeps the original process stream boundary across registry writes', () => {
+  it('keeps the original process stream boundary across registry writes', async () => {
     const core = createDaemonCore(ctx.deps)
     const origin = { identity: 'boot:4000:99999:stream', offset: 150, startedAt: 1000 }
     ctx.sessions.set('origin', makeTestSession({ pid: 4000, cronMetadataOrigin: origin }))
-    core.persistRegistry()
+    await core.persistRegistryDurable()
     expect(core.readRegistry().origin.cronMetadataOrigin).toEqual(origin)
-    core.persistRegistry()
+    await core.persistRegistryDurable()
     expect(core.readRegistry().origin.cronMetadataOrigin).toEqual(origin)
   })
 
   // G8 — envelope format
-  it('persisted file has version + sessions envelope', () => {
+  it('persisted file has version + sessions envelope', async () => {
     const core = createDaemonCore(ctx.deps)
     ctx.sessions.set('sid', makeTestSession({ pid: 5000 }))
-    core.persistRegistry()
+    await core.persistRegistryDurable()
 
     const reg = JSON.parse(fs.readFileSync(ctx.registryFile, 'utf-8'))
     expect(reg.version).toBe(1)
@@ -151,25 +153,23 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
   })
 
   // G9 — disk full / write error surfaces as warn log, doesn't throw
-  it('persistRegistry logs warn and does not throw on write failure', () => {
+  it('persistRegistry logs warn and does not throw on write failure', async () => {
     const core = createDaemonCore(ctx.deps)
     ctx.sessions.set('sid', makeTestSession({ pid: 6000 }))
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
-      throw new Error('ENOSPC: no space left')
-    })
+    vi.spyOn(fs.promises, 'open').mockImplementation(async () => { throw new Error('ENOSPC: no space left') })
 
     expect(() => core.persistRegistry()).not.toThrow()
+    // Not a managed service: the write-ahead resolves, the failure is a warning.
+    await expect(core.persistRegistryDurable()).resolves.toBeUndefined()
     expect(ctx.spies.logger).toHaveBeenCalledWith(
       'warn',
       'registry persist failed',
       expect.objectContaining({ error: expect.stringContaining('ENOSPC') }),
     )
-
-    writeSpy.mockRestore()
   })
 
   // G10 — round-trip: persist then readRegistry returns same entries (sans spawnedAt)
-  it('persist → readRegistry round-trips entries (except spawnedAt timestamp)', () => {
+  it('persist → readRegistry round-trips entries (except spawnedAt timestamp)', async () => {
     const core = createDaemonCore(ctx.deps)
     ctx.sessions.set('a', makeTestSession({
       pid: 7000,
@@ -192,7 +192,7 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
       parented: false,
     }))
 
-    core.persistRegistry()
+    await core.persistRegistryDurable()
     const reg = core.readRegistry()
 
     expect(Object.keys(reg).sort()).toEqual(['a', 'b'])
@@ -202,5 +202,21 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
     expect(reg.a.parented).toBe(true)
     expect(reg.b.pid).toBe(7001)
     expect(reg.b.parented).toBe(false)
+  })
+
+  // S7-H1 (2026-11-22 review): a wedged fs pool (open() on a FIFO with no writer, a dead mount)
+  // never answers an async write. The write-ahead of a start, an update's strict write and the
+  // exit hold must still finish, with the spawned session on disk.
+  it('a file pool that never answers: the write-ahead and the exit hold finish, the session on disk', async () => {
+    const core = createDaemonCore({ ...ctx.deps, bootId: 'boot-1', registryAsyncDeadlineMs: 30 })
+    // Wedged means every pool call waits, the deadline's probe (a stat, file-pool-deadline.ts) included.
+    vi.spyOn(fs.promises, 'open').mockImplementation((() => new Promise(() => {})) as unknown as typeof fs.promises.open)
+    vi.spyOn(fs.promises, 'stat').mockImplementation((() => new Promise(() => {})) as unknown as typeof fs.promises.stat)
+    ctx.sessions.set('spawned', makeTestSession({ pid: 7100, state: 'running', bootId: 'boot-1' } as Parameters<typeof makeTestSession>[0]))
+    await core.persistRegistryDurable(true)
+    expect(Object.keys(core.readRegistry())).toEqual(['spawned'])
+    ctx.sessions.set('second', makeTestSession({ pid: 7101, state: 'running' }))
+    await core.holdRegistryForExit()
+    expect(Object.keys(core.readRegistry()).sort()).toEqual(['second', 'spawned'])
   })
 })

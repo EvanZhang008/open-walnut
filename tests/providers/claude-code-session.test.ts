@@ -3933,6 +3933,10 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
     const claudeSessionId = await liveSession!.sessionReady;
     expect(claudeSessionId).toBeTruthy();
     await waitForResult(collected);
+    // The mock CLI exits after its result: wait for that exit (as the test above does), so the
+    // second turn is one cold resume.
+    for (let i = 0; i < 500 && liveSession!.processEndCount === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(liveSession!.processEndCount).toBeGreaterThan(0);
 
     const collected2 = collectEvents();
     await enqueueMessage(claudeSessionId, 'slow:2000 second turn');
@@ -3949,6 +3953,12 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
       if (!openPromise) await new Promise((r) => setTimeout(r, 10));
     }
     expect(openPromise).toBeDefined();
+    // Interrupt the turn once it runs: the turn opens while its cold resume is still being prepared,
+    // and an interrupting send (send-now) cancels no batch still preparing, by design: the prepared
+    // batch then goes out and its turn answers. Sent in that window, the interrupt found no process
+    // and the turn ended with its result, whenever the prepare took a few more event-loop turns.
+    for (let i = 0; i < 500 && !(liveSession!.processStatus === 'running' && liveSession!.processPid); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(liveSession!.processStatus).toBe('running');
 
     bus.emit(EventNames.SESSION_SEND, {
       sessionId: claudeSessionId,

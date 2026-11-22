@@ -20,6 +20,8 @@ import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { dirname, join as pathJoin } from 'node:path'
 import { userLineContent } from './user-line-images-core.js'
 import { networkCausedAuthError } from './network-cause-core.js'
+import { createRegistryWriter } from './registry-writer-core.js'
+import { armFilePoolDeadline } from './file-pool-deadline.js'
 import { lineFateScan, lineFateVerdict, lineReachedSession, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineReached, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
 
 // ── Shared types ──
@@ -209,9 +211,22 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
   /**
    * Factory for materializing an adopted (orphan) session. Core calls this
    * during reconcileRegistry so the adapter can fill in its own extra fields
-   * (watchers: new Map(), proc: null, offset: 0, ...).
+   * (watchers: new Map(), proc: null, offset: 0, ...). May fold the stream
+   * asynchronously (daemon-standalone.ts: stream-fold-core.ts foldFile).
    */
-  createAdoptedSession: (sid: string, entry: RegistryEntry) => S
+  createAdoptedSession: (sid: string, entry: RegistryEntry) => S | Promise<S>
+  /** How long the boot reconcile runs before it gives the loop back (setImmediate), ms. Default 8. */
+  reconcileSliceMs?: number
+  /** Each registry write as it starts (registry-writer-core.ts onWrite; tests, the stall bench). */
+  onRegistryWrite?: (kind: 'async' | 'sync' | 'hold') => void
+  /** An async registry write in flight longer than this is made synchronously (a wedged pool; tests shorten it). Default 2000. */
+  registryAsyncDeadlineMs?: number
+  /**
+   * How long the pool probe at that deadline may take before the pool counts as wedged
+   * (file-pool-deadline.ts; default 500 ms). A runtime inside a server's process passes a longer
+   * one: there a sync write runs on the web server's thread, so a busy pool must not read as wedged.
+   */
+  poolProbeMs?: number
   /**
    * C1 session-snapshot hooks (docs/plan/session-snapshot-source-of-truth.md §4).
    * Optional so unit-test fixtures and pre-C1 adapters keep working unchanged.
@@ -351,13 +366,25 @@ export function validLineFateQuery(sid: unknown, uuid: unknown, messageIds: unkn
 
 export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   readRegistry: () => Record<string, RegistryEntry>
-  persistRegistry: (strict?: boolean) => void
+  /** A change to remember: written soon, coalesced, off the thread (registry-writer-core.ts). Never throws. */
+  persistRegistry: () => void
+  /**
+   * Resolves once a write that took the inventory after this call is on disk: the write-ahead
+   * before a spawn answers ok, and every reply that says a registry change happened. `strict`
+   * (default: a managed service) rejects when the write could not be made durable.
+   */
+  persistRegistryDurable: (strict?: boolean) => Promise<void>
+  /** One synchronous write now: a process that exits before an await could finish (the bail, the exit cleanup). */
+  persistRegistrySync: (opts?: { strict?: boolean; unlessClean?: boolean }) => void
   /** Write the registry once and keep it through an exit's reap (daemon-standalone.ts stopDaemon). */
-  holdRegistryForExit: () => void
+  holdRegistryForExit: () => Promise<void>
+  /** How many registry writes ran (async, sync) and how many changes asked for one. */
+  registryWriteStats: () => { async: number; sync: number; requests: number }
   readStartTime: (pid: number) => string | null
   reapSession: (sid: string, code: number, reason: string, groupExited?: boolean) => void
   startOrphanPoll: (sid: string) => void
-  reconcileRegistry: () => void
+  /** The boot reconcile: async, gives the loop back every reconcileSliceMs, liveness before each fold. */
+  reconcileRegistry: () => Promise<void>
   broadcastSessionState: (sid: string, state: 'running' | 'dead', extra?: Record<string, unknown>) => void
   /**
    * Strict-ack send handler. Takes sid + message, returns the SendResult the
@@ -439,6 +466,41 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
 }
 
 /**
+ * Why a registry entry is reaped at boot, or null when it is a live CLI of ours to adopt: the
+ * boot fence (supervised mode only: a pid from another boot may belong to someone else, so it is
+ * refused before probing), kill(pid, 0), then the start time (pid recycling; in supervised mode
+ * the identity must be proven before adoption). Read before the entry's fold.
+ * Self-contained: the source twin inlines it by toString() (daemon-source.ts __RECONCILE_VERDICT__).
+ */
+export function reconcileVerdict(
+  entry: { pid: number; startTime?: string | null; bootId?: string | null },
+  io: { bootId: string | null | undefined; kill: (pid: number, sig: number) => void; startTimeOf: (pid: number) => string | null },
+): string | null {
+  const pid = entry.pid
+  const currentBoot = io.bootId
+  if (currentBoot && (!entry.bootId || entry.bootId !== currentBoot)) {
+    return entry.bootId ? 'reconcile-previous-boot' : 'reconcile-identity-unknown'
+  }
+  try {
+    io.kill(pid, 0)
+  } catch (err) {
+    const errCode = err && (err as { code?: string }).code
+    if (errCode === 'EPERM') return 'reconcile-not-ours'
+    // An unknown errno must not be taken as death.
+    if (errCode !== 'ESRCH') return 'reconcile-identity-unknown'
+    return 'reconcile-dead'
+  }
+  if (entry.startTime) {
+    const current = io.startTimeOf(pid)
+    if (current && current !== entry.startTime) return 'reconcile-pid-recycled'
+    if (currentBoot && !current) return 'reconcile-identity-unknown'
+  } else if (currentBoot) {
+    return 'reconcile-identity-unknown'
+  }
+  return null
+}
+
+/**
  * Keeps this daemon's own runtime files in its dir (2026-11-02). The temp cleanup removes
  * files nobody touched for days from /tmp (macOS after 3, systemd-tmpfiles after 10 on many
  * Linuxes) while the daemon runs, and a server or a join that comes later sees no daemon
@@ -483,7 +545,9 @@ export function keepRuntimeFiles(io: {
   for (const { file, text } of io.files) {
     try { io.fs.utimesSync(file, io.now, io.now) } catch (err) {
       if (!gone(err)) continue
-      try { io.fs.writeFileSync(file, text); restored.push(file) } catch { /* the dir is gone or not writable */ }
+      // Dated `now` like the files freshened above: a daemon.pid newer than daemon.stamp reads as
+      // an earlier daemon's stamp (daemon-live-sh.ts w_stamp), never this daemon's.
+      try { io.fs.writeFileSync(file, text); restored.push(file); try { io.fs.utimesSync(file, io.now, io.now) } catch { /* written */ } } catch { /* the dir is gone or not writable */ }
     }
   }
   try { io.fs.utimesSync(io.registryFile, io.now, io.now) } catch (err) {
@@ -665,60 +729,35 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     return {}
   }
 
+  // The write-ahead inventory (registry-writer-core.ts): coalesced async writes, one sync write
+  // for an exit, and the exit hold (a stop that reaps without blocking writes the registry once
+  // first and keeps it: the reaped CLIs' exits must not drop them from it, as the old synchronous
+  // reap never let them; the next daemon reads the sessions it may resume there).
+  const registryWriter = createRegistryWriter({
+    fs,
+    dirname,
+    file: registryFile,
+    sessions,
+    now: clock,
+    strict: () => !!deps.bootId,
+    log: (level, msg, meta) => logger(level, msg, meta),
+    onWrite: deps.onRegistryWrite,
+    pid: process.pid,
+    asyncDeadlineMs: deps.registryAsyncDeadlineMs,
+    armDeadline: deps.poolProbeMs ? (o) => armFilePoolDeadline({ ...o, probeMs: deps.poolProbeMs }) : armFilePoolDeadline,
+  })
   /**
-   * A stop that reaps without blocking (daemon-standalone.ts stopDaemon) writes the registry once
-   * first and keeps it: the reaped CLIs' exits must not drop them from it, as the old synchronous
-   * reap never let them (the next daemon reads the sessions it may resume there).
+   * The boot reconcile writes once, at its end: a reap in the middle of it wrote the entries
+   * reconciled so far, and every live CLI later in the pass was missing on disk until the next
+   * change (a daemon dying then left them out, and the next one's .pgid sweep killed them).
    */
-  let registryHeldForExit = false
-  function holdRegistryForExit(): void {
-    persistRegistry()
-    registryHeldForExit = true
+  let reconciling = 0
+  let reconcileAsked = false
+  function persistRegistry(): void {
+    if (reconciling > 0) { reconcileAsked = true; return }
+    registryWriter.request()
   }
-
-  function persistRegistry(strict = !!deps.bootId): void {
-    if (registryHeldForExit) return
-    const out: Record<string, RegistryEntry> = {}
-    for (const [sid, s] of sessions) {
-      if (s.state !== 'running' || !s.pid) continue
-      out[sid] = {
-        pid: s.pid,
-        startTime: s.startTime,
-        pipePath: s.pipePath,
-        jsonlPath: s.jsonlPath,
-        pgidPath: s.pgidPath,
-        cwd: s.cwd,
-        args: s.args,
-        spawnedAt: new Date(clock()).toISOString(),
-        parented: s.parented,
-        mode: s.mode,
-        pendingCtrl: s.pendingCtrl ?? undefined,
-        ...(s.budgetGracefulStop ? { budgetGracefulStop: true } : {}),
-        // Carry the retry streak across daemon restarts (budget continuity).
-        turnRetry: s.turnRetry ?? undefined,
-        bootId: s.bootId ?? undefined,
-        cliVersion: s.cliVersion ?? undefined,
-        cronMetadataOrigin: s.cronMetadataOrigin,
-      }
-    }
-    const body = JSON.stringify({ version: 1, sessions: out })
-    const tmp = registryFile + '.tmp'
-    try {
-      fs.writeFileSync(tmp, body, { mode: 0o600 })
-      try {
-        const fd = fs.openSync(tmp, 'r+')
-        try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-      } catch (error) { if (strict) throw error }
-      fs.renameSync(tmp, registryFile)
-      if (strict) {
-        const directory = fs.openSync(dirname(registryFile), 'r')
-        try { fs.fsyncSync(directory) } finally { fs.closeSync(directory) }
-      }
-    } catch (err) {
-      logger('warn', 'registry persist failed', { error: (err as Error).message })
-      if (strict) throw err
-    }
-  }
+  function holdRegistryForExit(): Promise<void> { return registryWriter.hold() }
 
   function broadcastSessionState(
     sid: string,
@@ -1009,8 +1048,24 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * Startup reconcile. Reads on-disk registry, probes each pid, and adopts
    * the living ones as orphans or reaps the dead/recycled/not-ours ones.
    * Also sweeps zombie FIFOs out of the streams directory.
+   *
+   * Async (2026-11-22): it ran as one synchronous loop, each entry's stream
+   * folded on the thread (~10 ms per MB not yet folded), which in a server that
+   * runs the daemon runtime in process held every route for seconds. Each
+   * entry's verdict (boot fence, liveness, start time) is now read before its
+   * fold, the adapter's fold may be async (one pass for both states:
+   * stream-fold-core.ts), and the loop gives the thread back every
+   * reconcileSliceMs. A dead entry is still folded: its record keeps serving
+   * the session's last snapshot.
    */
-  function reconcileRegistry(): void {
+  async function reconcileRegistry(): Promise<void> {
+    reconciling++
+    try { await reconcilePass() } finally {
+      reconciling--
+      if (reconciling === 0 && reconcileAsked) { reconcileAsked = false; persistRegistry() }
+    }
+  }
+  async function reconcilePass(): Promise<void> {
     const registry = readRegistry()
     // Every adoptable entry's start time in ONE read (one `ps` on macOS) instead
     // of one blocking spawn per entry: a deploy restart adopts every live CLI,
@@ -1025,7 +1080,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       }
     }
     const startTimeOf = (pid: number): string | null => prefetched?.get(pid) ?? readStartTimeFn(pid)
+    const sliceMs = deps.reconcileSliceMs ?? 8
+    let sliceStart = clock()
     for (const [sid, entry] of Object.entries(registry)) {
+      if (clock() - sliceStart >= sliceMs) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        sliceStart = clock()
+      }
       const pid = entry.pid
       if (!pid || pid <= 0) continue
 
@@ -1034,52 +1095,18 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // the existing orphanPollTimer and re-broadcast adopted=true.
       if (sessions.has(sid)) continue
 
-      // Materialize session record first so reapSession has something to act
-      // on. Adapter's factory fills in its own extra fields (watchers, ...).
-      const session = createAdoptedSession(sid, entry)
+      const verdict = reconcileVerdict(entry, { bootId: deps.bootId, kill: killFn, startTimeOf })
+
+      // Materialize session record so reapSession has something to act on.
+      // Adapter's factory fills in its own extra fields (watchers, the fold).
+      const made = createAdoptedSession(sid, entry)
+      const session = made instanceof Promise ? await made : made
+      // A start of this sid while the fold ran keeps its own record.
+      if (sessions.has(sid)) continue
       if (entry.bootId && session.bootId == null) session.bootId = entry.bootId
       sessions.set(sid, session)
-
-      // Boot fence (supervised mode only): a pid from another boot may belong to someone else, so refuse before probing.
-      const currentBoot = deps.bootId
-      if (currentBoot) {
-        if (!entry.bootId || entry.bootId !== currentBoot) {
-          reapSession(sid, -1, entry.bootId ? 'reconcile-previous-boot' : 'reconcile-identity-unknown')
-          continue
-        }
-      }
-
-      // Is the pid alive and ours?
-      try {
-        killFn(pid, 0)
-      } catch (err) {
-        const errCode = (err as NodeJS.ErrnoException).code
-        if (errCode === 'EPERM') {
-          reapSession(sid, -1, 'reconcile-not-ours')
-          continue
-        }
-        if (errCode !== 'ESRCH') {
-          // An unknown errno must not be taken as death.
-          reapSession(sid, -1, 'reconcile-identity-unknown')
-          continue
-        }
-        reapSession(sid, -1, 'reconcile-dead')
-        continue
-      }
-
-      // Alive and ours: verify start_time to catch pid recycling; in supervised mode the identity must be proven before adoption.
-      if (entry.startTime) {
-        const current = startTimeOf(pid)
-        if (current && current !== entry.startTime) {
-          reapSession(sid, -1, 'reconcile-pid-recycled')
-          continue
-        }
-        if (currentBoot && !current) {
-          reapSession(sid, -1, 'reconcile-identity-unknown')
-          continue
-        }
-      } else if (currentBoot) {
-        reapSession(sid, -1, 'reconcile-identity-unknown')
+      if (verdict) {
+        reapSession(sid, -1, verdict)
         continue
       }
 
@@ -1756,7 +1783,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   return {
     readRegistry,
     persistRegistry,
+    persistRegistryDurable: (strict?: boolean) => registryWriter.durable(strict),
+    persistRegistrySync: (opts?: { strict?: boolean; unlessClean?: boolean }) => registryWriter.writeSync(opts),
     holdRegistryForExit,
+    registryWriteStats: () => registryWriter.stats(),
     readStartTime: readStartTimeFn,
     reapSession,
     startOrphanPoll,
@@ -1770,12 +1800,6 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   }
 }
 
-/**
- * Default readStartTime implementation — reads /proc/<pid>/stat field 22 on
- * Linux, returns null on macOS and anywhere /proc isn't available.
- *
- * Exposed so the Bun adapter and unit-test fixtures can share one impl.
- */
 /** A daemon observes the engine's confirmed permission mode before it answers
  * subsequent requests. Unknown values retain the last known restrictive mode. */
 export function observedPermissionMode(event: unknown): SessionMode | null {
@@ -2764,20 +2788,17 @@ export function turnRetryGiveUpText(reason: string, errorText: string | null): s
     + 'Send a message to resume this session manually.'
 }
 
+/**
+ * A pid's start time, the daemon's process identity: Linux /proc (readProcStartTime), else
+ * `ps -o lstart=` under LANG=C, as written (registry entries recorded by older daemons compare
+ * against this exact text, so it never changes recipe). null: gone, or ps did not answer.
+ */
 export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number, use: ChildProcessUse<'execSync'> = {}): string | null {
-  // Linux: /proc/<pid>/stat field 22 (kernel start time in clock ticks)
-  try {
-    const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8')
-    const rparen = raw.lastIndexOf(')')
-    if (rparen < 0) return null
-    // After ") ", field[0]=state, ..., start_time is at index 19.
-    const fields = raw.slice(rparen + 2).split(' ')
-    return fields[19] ?? null
-  } catch {}
   // A Linux host answers from /proc alone: no entry there is a pid that is gone.
   // Asking ps as well printed "ps: not found" into the daemon's stderr on every
   // check where procps is not installed (slim container images).
-  if (hasProcFs(fs)) return null
+  const proc = readProcStartTime(fs, pid)
+  if (proc !== undefined) return proc
   // macOS: ps -p <pid> -o lstart= (e.g. "Thu May  6 18:59:15 2026")
   // Force LANG=C so localized day/month names don't break startTime comparisons
   // when the daemon starts under one locale but reconciles under another.
@@ -2824,18 +2845,19 @@ export function argvNamesSession(argv: string, sid: string, spawnArgs?: unknown)
   return true
 }
 
-/** Whether this host has a Linux /proc (every pid answers there, ps is never needed). */
-export function hasProcFs(fs: typeof import('node:fs')): boolean {
-  try { return fs.existsSync('/proc/self/stat') } catch { return false }
-}
-
-/** Linux /proc start time; `undefined` when /proc is unavailable (macOS). */
-function readProcStartTime(fs: typeof import('node:fs'), pid: number): string | null | undefined {
+/**
+ * The one reader of a Linux process start time: /proc/<pid>/stat field 22 (clock ticks since boot;
+ * "<pid> (<comm>) " comes first and comm may hold ") ", so the fields start after the last one).
+ * null: no such pid; `undefined`: no /proc (macOS), ask ps. Every start-time check of the daemon
+ * twins, the supervisor, the service entry and daemon.stamp reads it (the shell twin is
+ * daemon-live-sh.ts w_stat_start). Self-contained.
+ */
+export function readProcStartTime(fs: Pick<typeof import('node:fs'), 'readFileSync' | 'existsSync'>, pid: number): string | null | undefined {
   try {
     const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8')
     const rparen = raw.lastIndexOf(')')
     if (rparen < 0) return null
-    return raw.slice(rparen + 2).split(' ')[19] ?? null
+    return raw.slice(rparen + 2).split(' ')[19] || null
   } catch {
     return fs.existsSync('/proc/self/stat') ? null : undefined
   }

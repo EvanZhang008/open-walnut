@@ -98,6 +98,7 @@ const FILES: Record<string, string> = {
   HOME_DIR: 'host: the account\'s home',
   PID_FILE: 'host: this daemon\'s pid',
   PORT_FILE: 'host: this daemon\'s port',
+  STAMP_FILE: 'host: the pid and start time that make daemon.pid this dir\'s (daemon-live-sh.ts)',
   WRITES_PID_FILE: 'host: a flag (does this runtime write PID_FILE), not a path',
   VERSION_FILE: 'host: this daemon\'s version',
   SERVES_FILE: 'host: which Walnuts this daemon serves, by key, with its capabilities (served-walnuts-core.ts)',

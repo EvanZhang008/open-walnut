@@ -314,6 +314,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-handback.ts',
   'src/providers/daemon-update-standin.ts',
   'src/providers/daemon-update-shell.ts',
+  'src/providers/daemon-live-sh.ts',
   'src/providers/daemon-service-boot-script.ts',
   'src/providers/daemon-service-cron.ts',
   'src/providers/daemon-service-cron-host.ts',
@@ -358,6 +359,8 @@ export const DAEMON_SOURCE_FILES = [
   // import-or-inline rule (docs/plan/daemon-first-hosts.md).
   'src/providers/offline-host-core.ts',
   'src/providers/offline-journal-core.ts',
+  // The journal store, offline host, boot migration and sweep wired once for both twins: same rule.
+  'src/providers/host-journal-core.ts',
   'src/core/peers/envelope-kit.ts',
   // The send rules it runs as the server does (reply default, wake, deadlines): same rule.
   'src/core/sessions/send-rules.ts',
@@ -406,6 +409,14 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/cli-argv-files-core.ts',
   // A new ask while the Mac is away (replica-start-v1): same import-or-inline rule.
   'src/providers/host-start-core.ts',
+  // What the Walnut server on a host asks its daemon (follower.*): same import-or-inline rule.
+  'src/providers/follower-entry-core.ts',
+  // Registry writes and log appends (both twins: import or inline): same rule.
+  'src/providers/file-pool-deadline.ts',
+  'src/providers/registry-writer-core.ts',
+  'src/providers/log-appender-core.ts',
+  // What the --service entry runs, the daemon or the Walnut service (bundled in daemon-service-cli.cjs).
+  'src/binary/service-entry.ts',
   // A routine run started on its host while the Mac is away (clock-host-start-v1): same rule.
   'src/providers/clock-host-start-core.ts',
   'src/core/sessions/open-items-text.ts',

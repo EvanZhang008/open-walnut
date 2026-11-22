@@ -36,9 +36,12 @@ describe('link frames: a field never takes a frame key', () => {
 
   it('the follower link refuses a parameter named like a frame key before it sends', () => {
     expect([...FRAME_KEYS]).toEqual(['id', 'cmd'])
-    const call = fnBody(read('src/host-server/daemon-link.ts'), 'call')
-    expect(call.indexOf('FRAME_KEYS')).toBeGreaterThan(-1)
-    expect(call.indexOf('FRAME_KEYS')).toBeLessThan(call.indexOf('JSON.stringify({ id, cmd, ...params })'))
+    // One check both follower links take (the socket link's call, the direct link's ask).
+    const pre = fnBody(read('src/host-server/daemon-link.ts'), 'preflightFrame')
+    expect(pre.indexOf('FRAME_KEYS')).toBeGreaterThan(-1)
+    expect(pre.indexOf('FRAME_KEYS')).toBeLessThan(pre.indexOf('JSON.stringify({ id, cmd, ...params })'))
+    expect(fnBody(read('src/host-server/daemon-link.ts'), 'call')).toMatch(/socket\.send\(preflightFrame\(cmd, params, id\)\)/)
+    expect(fnBody(read('src/core/link/follower-link-direct.ts'), 'ask')).toMatch(/preflightFrame\(cmd, params, 0\)/)
   })
 
   it('no follower command a host server sends names a frame key at its top level', () => {

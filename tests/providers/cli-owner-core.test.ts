@@ -170,7 +170,7 @@ describe('claim', () => {
 
   it('a released claim (spawn failed) frees the sid at once', async () => {
     const c = await owner('a', 100).claim(SID)
-    c.release()
+    await c.release()
     await expect(owner('b', 200).claim(SID)).resolves.toBeTruthy()
   })
 
@@ -178,7 +178,7 @@ describe('claim', () => {
     const c = await owner('a', 100).claim(SID)
     clock += 121_000
     const d = await owner('b', 200).claim(SID) // broke the expired one
-    c.release()
+    await c.release()
     procs.set(301, { startTime: 'cli', args: cliArgs(SID) })
     d.commit(301, 'cli')
     expect(await refusal(owner('a', 100).claim(SID))).toMatchObject({ pid: 301, instance: 'b' })
@@ -308,7 +308,7 @@ describe('the process table check', () => {
     // One whose environ names another config dir does not.
     procs.set(scripted, { startTime: 's', args: cliArgs(SID), environ: 'PATH=/usr/bin\0HOME=/home/other\0' })
     const claim = await o.claim(SID)
-    claim.release()
+    await claim.release()
     // One that writes into this config dir does.
     procs.set(scripted, { startTime: 's', args: cliArgs(SID), environ: `PATH=/usr/bin\0HOME=${HOME}\0` })
     expect(await refusal(o.claim(SID))).toMatchObject({ pid: scripted })
@@ -336,7 +336,7 @@ describe('adopt and prune', () => {
     procs.set(300, { startTime: 'cli-1', args: cliArgs(SID) })
     const sid2 = '99999999-1111-4111-8111-111111111111'
     ;(await a.claim(sid2)).commit(301, 'gone')
-    expect(a.prune()).toBe(1)
+    expect(await a.prune()).toBe(1)
     expect(await refusal(owner('b', 200).claim(SID))).toMatchObject({ pid: 300 })
   })
 })

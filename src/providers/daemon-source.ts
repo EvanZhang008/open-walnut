@@ -54,6 +54,7 @@ import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import { createSendRules } from '../core/sessions/send-rules.js'
 import { createOfflineHostCore, OFFLINE_MAX_RECORDS } from './offline-host-core.js'
 import { createJournalMigration, createOfflineJournal } from './offline-journal-core.js'
+import { createHostJournal } from './host-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
 import { createServedWalnuts } from './served-walnuts-core.js'
@@ -69,7 +70,7 @@ import { createFollowerGateway } from './follower-gateway-core.js'
 import { createHostCallTokens } from './host-call-token-core.js'
 import { createHostCallClient } from './host-call-client-core.js'
 import { createFollowerTriggerDelivery } from './follower-trigger-delivery-core.js'
-import { createHostServerSupervisor } from './host-server-core.js'
+import { createHostServerSupervisor, heldServerAt } from './host-server-core.js'
 import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createPluginJobHarness } from './plugin-job-harness.js'
 import { createPluginJobDoor } from './plugin-job-door.js'
@@ -81,11 +82,16 @@ import { createPtyStreams } from './pty-stream-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
-import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles, observedPermissionMode, validLineFateQuery } from './daemon-core.js'
+import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles, observedPermissionMode, readProcStartTime, reconcileVerdict, validLineFateQuery } from './daemon-core.js'
+import { stampDoor } from './daemon-door.js'
 import { userLineContent } from './user-line-images-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
+import { createRegistryWriter } from './registry-writer-core.js'
+import { createLogAppender } from './log-appender-core.js'
+import { armFilePoolDeadline } from './file-pool-deadline.js'
 import { createHostStart } from './host-start-core.js'
+import { createFollowerEntry } from './follower-entry-core.js'
 import { createClockHostStart } from './clock-host-start-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
@@ -304,6 +310,7 @@ export function getDaemonSource(): string {
     ['__CREATE_OFFLINE_HOST__', createOfflineHostCore.toString()],
     ['__CREATE_OFFLINE_JOURNAL__', createOfflineJournal.toString()],
     ['__CREATE_JOURNAL_MIGRATION__', createJournalMigration.toString()],
+    ['__CREATE_HOST_JOURNAL__', createHostJournal.toString()],
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_WALNUT_SCOPE__', createWalnutScope.toString()],
     ['__CREATE_SERVED_WALNUTS__', createServedWalnuts.toString()],
@@ -320,6 +327,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_CALL_CLIENT__', createHostCallClient.toString()],
     ['__CREATE_FOLLOWER_TRIGGER_DELIVERY__', createFollowerTriggerDelivery.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
+    ['__HELD_SERVER_AT__', heldServerAt.toString()],
     ['__CREATE_PLUGIN_JOBS__', createPluginJobSupervisor.toString()],
     ['__CREATE_PLUGIN_JOB_HARNESS__', createPluginJobHarness.toString()],
     ['__CREATE_PLUGIN_JOB_DOOR__', createPluginJobDoor.toString()],
@@ -335,8 +343,12 @@ export function getDaemonSource(): string {
     ['__CREATE_CLI_ARGV_FILES__', createCliArgvFiles.toString()],
     ['__CREATE_STREAM_COMPACT__', createStreamCompact.toString()],
     ['__CREATE_STREAM_FOLD__', createStreamFold.toString()],
+    ['__CREATE_REGISTRY_WRITER__', createRegistryWriter.toString()],
+    ['__CREATE_LOG_APPENDER__', createLogAppender.toString()],
+    ['__ARM_FILE_POOL_DEADLINE__', armFilePoolDeadline.toString()],
     ['__OBSERVED_PERMISSION_MODE__', observedPermissionMode.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
+    ['__CREATE_FOLLOWER_ENTRY__', createFollowerEntry.toString()],
     ['__CREATE_CLOCK_HOST_START__', createClockHostStart.toString()],
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
     ['__CREATE_OPEN_ITEMS_TEXT__', createOpenItemsText.toString()],
@@ -392,6 +404,9 @@ export function getDaemonSource(): string {
     ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
     ['__CREATE_NOTICE_ONCE__', createNoticeOnce.toString()],
     ['__KEEP_RUNTIME_FILES__', keepRuntimeFiles.toString()],
+    ['__RECONCILE_VERDICT__', reconcileVerdict.toString()],
+    ['__STAMP_DOOR__', stampDoor.toString()],
+    ['__READ_PROC_START_TIME__', readProcStartTime.toString()],
     ['__USER_LINE_CONTENT__', userLineContent.toString()],
     ['__NETWORK_CAUSED_AUTH_ERROR__', networkCausedAuthError.toString()],
   ]
@@ -596,7 +611,7 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const sup = createHostServer({
         fs: noDir, path, spawn: () => { throw new Error('no spawn') }, dir: '/nonexistent', keyOf: () => 'k', now: () => 0,
         setTimer: () => 0, clearTimer: () => {}, log: () => {}, startTimeOf: () => null, killGroup: () => {}, baseEnv: () => ({}),
-        randomToken: () => 't'.repeat(64),
+        randomToken: () => 't'.repeat(64), heldAt: heldServerAt,
       })
       sup.boot()
       let refused = false
@@ -2119,6 +2134,8 @@ function backfillSpawnJournal() {
 
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port');
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid');
+// daemon.pid's start time, by which a leader knows that pid is still this daemon (daemon-door.ts stampDoor).
+const STAMP_FILE = path.join(DAEMON_DIR, 'daemon.stamp');
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance');
 // Hint that the LIVE daemon is service-managed: same instance id as
 // daemon.instance, so a reader can tell a stale hint from the current one.
@@ -2356,13 +2373,20 @@ const DAEMON_INSTANCE_ID = (function() {
   const hash = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 8);
   return 'd-' + process.pid + '-' + hash;
 })();
+// The deadline rule of the async log and registry writes (file-pool-deadline.ts): before LOG_FILE,
+// so the first log line that can be written has it.
+const armFilePoolDeadline = (__ARM_FILE_POOL_DEADLINE__);
 const LOG_FILE = path.join(DAEMON_DIR, 'daemon-' + DAEMON_INSTANCE_ID + '.log');
 
 // ── Logging ──
+// Appended off the thread, one write at a time (log-appender-core.ts); an error line, and the
+// exit paths, write what is queued synchronously. Keep in sync with daemon-standalone.ts.
+var logAppender = null;
+process.once('exit', function () { try { if (logAppender) logAppender.flushSync(); } catch (e) { /* exiting */ } });
 function logMsg(level, msg, data) {
-  // debug lines (cmd_recv per status poll) are each a SYNCHRONOUS append —
-  // 60k+ writes/day of polling noise. Env opt-in only; info/warn/error always
-  // land. Keep in sync with daemon-standalone.ts.
+  // debug lines (cmd_recv per status poll) are 60k+ writes/day of polling
+  // noise. Env opt-in only; info/warn/error always land. Keep in sync with
+  // daemon-standalone.ts.
   if (level === 'debug' && process.env.WALNUT_DAEMON_DEBUG !== '1') return;
   const entry = JSON.stringify({
     ts: new Date().toISOString(),
@@ -2371,7 +2395,11 @@ function logMsg(level, msg, data) {
     instanceId: DAEMON_INSTANCE_ID,
     ...data,
   });
-  try { fs.appendFileSync(LOG_FILE, entry + '\\n'); } catch {}
+  // In a try: a line logged before this module's state exists (its first lines) is dropped, as before.
+  try {
+    if (!logAppender) logAppender = (__CREATE_LOG_APPENDER__)({ fs: fs, file: LOG_FILE, armDeadline: armFilePoolDeadline });
+    logAppender.append(entry + '\\n', level === 'error');
+  } catch {}
   if (level === 'error') console.error(msg, data || '');
 }
 
@@ -2501,54 +2529,35 @@ function readRegistry() {
   if (daemonBootId) throw new Error('session registry has an unexpected shape: ' + REGISTRY_FILE);
   return {};
 }
-function persistRegistry(strict = !!daemonBootId) {
-  const out = {};
-  for (const [sid, s] of sessions) {
-    if (s.state !== 'running' || !s.pid) continue;
-    out[sid] = {
-      pid: s.pid,
-      startTime: s.startTime,
-      // Supervision identity: a pid+startTime pair only proves identity within
-      // one boot, and a resume needs the CLI version it recorded.
-      bootId: s.bootId,
-      cliVersion: s.cliVersion,
-      cronMetadataOrigin: s.cronMetadataOrigin,
-      pipePath: s.pipePath,
-      jsonlPath: s.jsonlPath,
-      pgidPath: s.pgidPath,
-      cwd: s.cwd,
-      args: s.args,
-      spawnedAt: new Date().toISOString(),
-      parented: s.parented,
-      mode: s.mode,
-      pendingCtrl: s.pendingCtrl || undefined,
-      turnRetry: s.turnRetry || undefined,
-      ...(s.budgetGracefulStop ? { budgetGracefulStop: true } : {}),
-    };
-  }
-  const body = JSON.stringify({ version: 1, sessions: out });
-  const tmp = REGISTRY_FILE + '.tmp';
-  try {
-    fs.writeFileSync(tmp, body, { mode: 0o600 });
-    try {
-      const fd = fs.openSync(tmp, 'r+');
-      try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    } catch (err) {
-      // A service that cannot fsync has no write-ahead registry at all; the
-      // caller must fail rather than believe the session was recorded.
-      if (strict) throw err;
-    }
-    fs.renameSync(tmp, REGISTRY_FILE);
-    if (strict) {
-      const directory = fs.openSync(path.dirname(REGISTRY_FILE), 'r');
-      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    }
-  } catch (err) {
-    if (strict) throw err;
-    logMsg('warn', 'registry persist failed', { error: err.message });
-  }
+// The write-ahead inventory (registry-writer-core.ts): coalesced async writes, one sync write for
+// an exit. Keep in sync with daemon-core.ts persistRegistry.
+var registryWriter = (__CREATE_REGISTRY_WRITER__)({
+  fs: fs, dirname: path.dirname, file: REGISTRY_FILE,
+  sessions: { entries: function () { return sessions.entries(); } },
+  now: Date.now,
+  strict: function () { return !!daemonBootId; },
+  log: function (level, msg, meta) { logMsg(level, msg, meta); },
+  pid: process.pid,
+  armDeadline: armFilePoolDeadline,
+});
+var reconcilingRegistry = 0;
+var reconcileWriteAsked = false;
+/** A change to remember: written soon, coalesced, off the thread (once at the end of the boot reconcile). Never throws. */
+function persistRegistry() {
+  if (reconcilingRegistry > 0) { reconcileWriteAsked = true; return; }
+  registryWriter.request();
 }
+/**
+ * Resolves once a write that took the inventory after this call is on disk (the write-ahead
+ * before a spawn answers ok); strict (default: a managed service) rejects when it could not be
+ * made durable, as the synchronous write threw.
+ */
+function persistRegistryDurable(strict) { return registryWriter.durable(strict); }
+/** One synchronous write now: the exit cleanup (a process may exit right after). */
+function persistRegistryNow(opts) { registryWriter.writeSync(opts); }
 
+// The Linux reader (daemon-core.ts readProcStartTime, injected as text): undefined where there is no /proc.
+const readProcStartTime = (__READ_PROC_START_TIME__);
 /**
  * Kernel start time of a pid: /proc/<pid>/stat field 22 on Linux, ps -o lstart=
  * on macOS. LANG=C so a localized month name can never make two readings of one
@@ -2556,17 +2565,10 @@ function persistRegistry(strict = !!daemonBootId) {
  */
 function readStartTime(pid) {
   if (!Number.isInteger(pid) || pid <= 1) return null;
-  try {
-    const raw = fs.readFileSync('/proc/' + pid + '/stat', 'utf-8');
-    const rparen = raw.lastIndexOf(')');
-    if (rparen >= 0) {
-      const fields = raw.slice(rparen + 2).split(' ');
-      if (fields[19]) return fields[19];
-    }
-  } catch {}
   // Linux answers from /proc alone: no entry is a pid that is gone. Asking ps too
   // printed "ps: not found" into stderr on every check where procps is missing.
-  if (hasProcFs()) return null;
+  const proc = readProcStartTime(fs, pid);
+  if (proc !== undefined) return proc;
   try {
     const env = Object.assign({}, process.env, { LANG: 'C' });
     const out = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf-8', timeout: 2000, env: env, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -3400,7 +3402,31 @@ function pushSnapshot(sid, immediate) {
 }
 
 // ── Startup reconcile (Phase C, primitive P4) ──
-function reconcileRegistry() {
+// Why a registry entry is reaped at boot, or null when it is a live CLI of ours to adopt
+// (daemon-core.ts reconcileVerdict, injected as text: one rule for both twins). Read before the
+// entry's fold.
+const reconcileVerdictCore = (__RECONCILE_VERDICT__);
+function reconcileVerdict(entry, prefetched) {
+  return reconcileVerdictCore(entry, {
+    bootId: daemonBootId,
+    kill: function (pid, sig) { process.kill(pid, sig); },
+    startTimeOf: function (pid) { return (prefetched && prefetched.get(pid)) || readStartTime(pid); },
+  });
+}
+
+// Async: each entry's verdict before its fold, one async pass folds both states (stream-fold-core.ts),
+// and the loop gives the thread back every RECONCILE_SLICE_MS. Keep in sync with daemon-core.ts.
+const RECONCILE_SLICE_MS = 8;
+// One registry write for the whole pass, at its end (daemon-core.ts reconcileRegistry): a reap in
+// the middle wrote only the entries reconciled so far. Keep in sync with daemon-core.ts.
+async function reconcileRegistry() {
+  reconcilingRegistry++;
+  try { await reconcilePass(); } finally {
+    reconcilingRegistry--;
+    if (reconcilingRegistry === 0 && reconcileWriteAsked) { reconcileWriteAsked = false; persistRegistry(); }
+  }
+}
+async function reconcilePass() {
   const registry = readRegistry();
   // One start-time read for every adoptable entry (see daemon-core reconcileRegistry).
   let prefetched = null;
@@ -3409,7 +3435,12 @@ function reconcileRegistry() {
       .filter((sid) => !sessions.has(sid) && registry[sid] && registry[sid].startTime)
       .map((sid) => registry[sid].pid));
   } catch { prefetched = null; }
+  let sliceStart = Date.now();
   for (const sid of Object.keys(registry)) {
+    if (Date.now() - sliceStart >= RECONCILE_SLICE_MS) {
+      await new Promise(function (resolve) { setImmediate(resolve); });
+      sliceStart = Date.now();
+    }
     const entry = registry[sid];
     const pid = entry.pid;
     if (!pid || pid <= 0) continue;
@@ -3418,13 +3449,19 @@ function reconcileRegistry() {
     // repeated reconcile calls).
     if (sessions.has(sid)) continue;
 
+    const verdict = reconcileVerdict(entry, prefetched);
+
     // Adopt at the CURRENT end of the stream file, not 0 — a new daemon
     // generation must never replay history it didn't stream itself. The offset
     // is the fold rebuild's COMPLETE-line boundary, NOT a raw stat().size: if
     // the CLI was mid-write during adopt, a raw size starts the watcher MID-LINE
     // and the completed line is never folded whole (contract §4 boundary rule).
+    // One async pass folds both states from the checkpoint (stream-fold-core.ts).
     // Keep in sync with daemon-standalone.ts createAdoptedSession (CLAUDE.md).
-    const adoptFold = rebuildFoldStateFromJsonl(entry.jsonlPath); // C1: streamed, whale-safe
+    const folded = await streamFold.foldFile(entry.jsonlPath, Date.now());
+    // A start of this sid while the fold ran keeps its own record.
+    if (sessions.has(sid)) continue;
+    const adoptFold = { state: folded.fold, boundary: folded.boundary };
     const session = {
       proc: null,
       pipePath: entry.pipePath,
@@ -3432,8 +3469,10 @@ function reconcileRegistry() {
       pgidPath: entry.pgidPath,
       pid,
       offset: adoptFold.boundary,
-      taskState: rebuildTaskStateFromJsonl(entry.jsonlPath, Date.now()),
+      taskState: folded.task,
       foldState: adoptFold.state,
+      // The checkpoint the fold just left (or found): a death right after needs no other.
+      foldCheckpointV: folded.checkpointV || undefined,
       watcher: null,
       subscribers: new Set(),
       exitCode: null,
@@ -3489,43 +3528,8 @@ function reconcileRegistry() {
       if (cronProcessStart !== null && cronArmed) session.cronMetadataOrigin.byTime = true;
     }
     sessions.set(sid, session);
-
-    // Boot fence (supervised mode only): a pid from another boot may belong to a
-    // stranger, so it is refused BEFORE the liveness probe, never signalled.
-    const currentBoot = daemonBootId;
-    if (currentBoot && (!entry.bootId || entry.bootId !== currentBoot)) {
-      reapSession(sid, -1, entry.bootId ? 'reconcile-previous-boot' : 'reconcile-identity-unknown');
-      continue;
-    }
-
-    let alive = false;
-    try { process.kill(pid, 0); alive = true; } catch (err) {
-      const errCode = err && err.code;
-      if (errCode === 'EPERM') {
-        reapSession(sid, -1, 'reconcile-not-ours');
-        continue;
-      }
-      if (errCode !== 'ESRCH') {
-        // An unknown errno is not proof of death.
-        reapSession(sid, -1, 'reconcile-identity-unknown');
-        continue;
-      }
-      reapSession(sid, -1, 'reconcile-dead');
-      continue;
-    }
-
-    if (alive && entry.startTime) {
-      const current = (prefetched && prefetched.get(pid)) || readStartTime(pid);
-      if (current && current !== entry.startTime) {
-        reapSession(sid, -1, 'reconcile-pid-recycled');
-        continue;
-      }
-      if (currentBoot && !current) {
-        reapSession(sid, -1, 'reconcile-identity-unknown');
-        continue;
-      }
-    } else if (alive && currentBoot) {
-      reapSession(sid, -1, 'reconcile-identity-unknown');
+    if (verdict) {
+      reapSession(sid, -1, verdict);
       continue;
     }
 
@@ -4891,6 +4895,8 @@ function dispatchCommand(ws, id, cmd) {
         startup: SERVICE_MODE ? 'service' : 'on-demand',
       },
       instanceId: DAEMON_INSTANCE_ID,
+      // A daemon program (twin of daemon-standalone.ts, whose runtime may also be a host's Walnut service).
+      serves: 'daemon',
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
       ...(launcherBeat && launcherBeat.facts() ? { launcher: launcherBeat.facts() } : {}),
       startedAt: DAEMON_START_TS,
@@ -4994,7 +5000,7 @@ async function cmdServiceHandover(ws, id, cmd) {
   if (updating) serviceUpdateRequested = true;
   try {
     if (updating) await cronRuntime?.close();
-    persistRegistry(true);
+    await persistRegistryDurable(true);
     if (!updating) await cronRuntimeCore.prepareDaemonServiceHandover({
       ...location, home: HOME_DIR, platform: process.platform,
       pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: handoverHooks(),
@@ -5670,7 +5676,7 @@ var JOURNAL_TEST_DIR = !IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR : un
 var JOURNAL_ROOT = JOURNAL_TEST_DIR || (JOURNAL_HOST_DAEMON ? JOURNAL_PROD_STATE_DIR : DAEMON_DIR);
 var OFFLINE_HOST_DIR = path.join(JOURNAL_ROOT, 'offline-host');
 var LEADER_BOOK_DIR = path.join(JOURNAL_ROOT, 'leader');
-// Which homes name a Walnut kept here under another home (walnut-scope-core.ts aliases).
+// Which homes name a Walnut kept here under another home (walnut-scope-core.ts declared moves).
 // Beside the leader book, whose records the aliases follow; an older daemon never reads it.
 var HOME_ALIASES_FILE = path.join(LEADER_BOOK_DIR, 'homes.json');
 // Where a v1 daemon (1fe1fd194 and older) kept its journal and leader book: its own
@@ -5702,65 +5708,6 @@ function ownsDaemonDir() {
 var OFFLINE_JOURNAL_MAX = !IS_PROD_DAEMON_DIR && /^[1-9][0-9]{0,6}$/.test(process.env.WALNUT_TEST_OFFLINE_MAX_RECORDS || '')
   ? Number(process.env.WALNUT_TEST_OFFLINE_MAX_RECORDS) : __OFFLINE_MAX_RECORDS__;
 
-function createJournalStore(dir) {
-  return (__CREATE_OFFLINE_JOURNAL__)({
-    fs: fs, path: path, dir: dir,
-    maxRecords: OFFLINE_JOURNAL_MAX,
-    now: function () { return Date.now(); },
-    randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
-    keyOf: walnutScope.keyOf,
-    sha256: function (body) { return crypto.createHash('sha256').update(body).digest('hex'); },
-    log: function (level, msg, data) { logMsg(level, msg, data); },
-    startTimeOf: function (pid) { return hostServerStartTime(pid); },
-    isOwner: ownsDaemonDir,
-    // One long-lived store per dir: the append fd stays open between appends.
-    keepOpen: true,
-    // A v1 file the boot migration left (part way, or of a Walnut it did not know) finished
-    // later: arm the trigger holds again, after the write or configure that finished it.
-    migrated: function () { setTimeout(function () { triggerHoldsChanged(); }, 0); },
-  });
-}
-// Building the store reads and writes nothing: this text runs for every use of the
-// daemon (the walnut CLI, --status, --stop). Only migrateJournals() below, after
-// daemon.pid names this process, copies, imports or sweeps (twin of daemon-standalone.ts).
-var offlineJournal = createJournalStore(OFFLINE_HOST_DIR);
-
-// The boot migration, shared with daemon-standalone.ts (offline-journal-core.ts
-// createJournalMigration): legacy slices and leader records, then the v1 journals. The
-// journal root is the same in every mode, so no v2 journal elsewhere is taken.
-var journalMigration = (__CREATE_JOURNAL_MIGRATION__)({
-  path: path,
-  journal: offlineJournal,
-  dir: OFFLINE_HOST_DIR,
-  legacyDirs: LEGACY_JOURNAL_DIRS,
-  importLegacyLeaders: function () { leaderBook.importLegacy(); },
-  slicesMoved: function () { offlineHost.reloadSlices(); },
-  // loadTriggersAtBoot ran before the migration: a pause or delete made offline under the
-  // old daemon holds from this boot on. Twin of daemon-standalone.ts.
-  recordsMigrated: function () { triggerHoldsChanged(); },
-  ignoredTestDir: IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR || null : null,
-  log: function (level, msg, data) { logMsg(level, msg, data); },
-});
-
-// Every v1 journal an older daemon left moves here, once daemon.pid names
-// us; then the offline host's minute sweep starts. Never at module load: this script also
-// answers CLI uses, and a long one must not read or write the journals every minute. Twin
-// of daemon-standalone.ts.
-var offlineSweepTimer = null;
-function migrateJournals() {
-  journalMigration.boot();
-  if (!offlineSweepTimer) {
-    offlineSweepTimer = setInterval(offlineSweepTick, 60000);
-    if (offlineSweepTimer.unref) offlineSweepTimer.unref();
-  }
-}
-
-// A stopping Demo's sweep would deliver journaled messages into sessions past its fence.
-function offlineSweepTick() {
-  if (demoQuiesce.fenced) return;
-  offlineHost.sweep().catch(function () {});
-}
-
 // trigger-resume-once: the one line uuid of a message delivered under one id on every try (a
 // trigger fire), whether it goes into a live CLI or starts a stopped one (line-fate-core.ts
 // lineUuidOf). Mirror daemon-standalone.ts.
@@ -5786,90 +5733,108 @@ function deliverFromOfflineHost(sid, text, messageId, o) {
   return demoQuiesce.isDemo && !daemonCommands.closed ? daemonCommands.admit(work) : work();
 }
 
-var offlineHost = (__CREATE_OFFLINE_HOST__)({
+// The journal store, the offline host on it, the boot migration and the minute sweep
+// (host-journal-core.ts, inlined; shared with daemon-standalone.ts). Building it reads the
+// slices and writes nothing: this text runs for every use of the daemon (the walnut CLI,
+// --status, --stop). Only its migrate(), after daemon.pid names this process, copies,
+// imports or sweeps.
+var hostJournal = (__CREATE_HOST_JOURNAL__)({
   fs: fs, path: path,
   dir: OFFLINE_HOST_DIR,
-  journal: offlineJournal,
+  legacyDirs: LEGACY_JOURNAL_DIRS,
   maxRecords: OFFLINE_JOURNAL_MAX,
-  drainsOf: function (home) { return leaderBook.drainsFor(home); },
   now: function () { return Date.now(); },
   randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
+  sha256: function (body) { return crypto.createHash('sha256').update(body).digest('hex'); },
   keyOf: walnutScope.keyOf,
   canonical: walnutScope.canonical,
-  kit: (__CREATE_ENVELOPE_KIT__)(),
-  rules: (__CREATE_SEND_RULES__)(),
-  boards: (__CREATE_BOARD_OFFLINE__)(),
-  openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
-  replica: hostReplica,
-  search: (__CREATE_OFFLINE_SEARCH__)(),
-  // A session's letter to the user is saved here while its Walnut is away (a Mac that drains letters).
-  letters: (__CREATE_LETTER_CHECK__)(),
-  // A trigger created here gets the label the server would give it. Twin of daemon-standalone.ts.
-  labels: (__CREATE_TRIGGER_LABEL__)(),
-  // How a trigger's watches reads, the server's own rule (trigger-watches.ts). Twin of daemon-standalone.ts.
-  watches: (__CREATE_TRIGGER_WATCHES__)(),
-  // Which session here takes a trigger fire: the rule the host's own server applies too. Twin of daemon-standalone.ts.
-  triggerTarget: (__PICK_HOST_TRIGGER_TARGET__),
-  // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
-  triggers: {
-    armed: function () {
-      if (!triggerCheckCore) return [];
-      // Clock routines are not triggers a session lists, pauses or tests here.
-      return [...armedTriggers.values()].filter(function (e) { return !!e.def.check; }).map(function (e) {
-        var row = {
-          def: e.def,
-          status: {
-            nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
-            lastRunAtMs: e.state.lastRunAtMs, lastFireAtMs: e.state.lastFireAtMs, pendingFires: e.state.pendingFires.length,
-          },
-        };
-        if (e.home) row.home = e.home;
-        return row;
+  startTimeOf: function (pid) { return readStartTime(pid); },
+  isOwner: ownsDaemonDir,
+  ignoredTestDir: IS_PROD_DAEMON_DIR ? process.env.WALNUT_JOURNAL_DIR || null : null,
+  importLegacyLeaders: function () { leaderBook.importLegacy(); },
+  rearm: function () { triggerHoldsChanged(); },
+  fenced: function () { return demoQuiesce.fenced; },
+  createJournal: (__CREATE_OFFLINE_JOURNAL__),
+  createMigration: (__CREATE_JOURNAL_MIGRATION__),
+  createHost: (__CREATE_OFFLINE_HOST__),
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  host: {
+    drainsOf: function (home) { return leaderBook.drainsFor(home); },
+    kit: (__CREATE_ENVELOPE_KIT__)(),
+    rules: (__CREATE_SEND_RULES__)(),
+    boards: (__CREATE_BOARD_OFFLINE__)(),
+    openItems: (__CREATE_OPEN_ITEMS_TEXT__)(),
+    replica: hostReplica,
+    search: (__CREATE_OFFLINE_SEARCH__)(),
+    // A session's letter to the user is saved here while its Walnut is away (a Mac that drains letters).
+    letters: (__CREATE_LETTER_CHECK__)(),
+    // A trigger created here gets the label the server would give it. Twin of daemon-standalone.ts.
+    labels: (__CREATE_TRIGGER_LABEL__)(),
+    // How a trigger's watches reads, the server's own rule (trigger-watches.ts). Twin of daemon-standalone.ts.
+    watches: (__CREATE_TRIGGER_WATCHES__)(),
+    // Which session here takes a trigger fire: the rule the host's own server applies too. Twin of daemon-standalone.ts.
+    triggerTarget: (__PICK_HOST_TRIGGER_TARGET__),
+    // The checks run here: their ops answer here while the Walnut is away (walnut-trigger).
+    triggers: {
+      armed: function () {
+        if (!triggerCheckCore) return [];
+        // Clock routines are not triggers a session lists, pauses or tests here.
+        return [...armedTriggers.values()].filter(function (e) { return !!e.def.check; }).map(function (e) {
+          var row = {
+            def: e.def,
+            status: {
+              nextRunAtMs: e.nextRunAtMs, running: e.running, consecutiveErrors: e.state.consecutiveErrors,
+              lastRunAtMs: e.state.lastRunAtMs, lastFireAtMs: e.state.lastFireAtMs, pendingFires: e.state.pendingFires.length,
+            },
+          };
+          if (e.home) row.home = e.home;
+          return row;
+        });
+      },
+      test: function (check, triggerId, home) { return runTriggerTest(check, triggerId, home || ''); },
+      changed: function () { triggerHoldsChanged(); },
+      cwdOf: function (sid) { var s = sessions.get(sid); return s ? s.cwd : undefined; },
+      // A trigger created here is checked as a pushed one is, before it is journaled. Twin of daemon-standalone.ts.
+      validate: function (def) { var r = triggerCheckCore.validateTriggerDef(def); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
+    },
+    isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
+    turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
+    pendingPrompt: function (sid) { var s = sessions.get(sid); return (s && s.pendingCtrl && s.pendingCtrl.toolName) || null; },
+    // The same gate and turn-retry reset a server send goes through (cmdSend).
+    deliver: function (sid, text, messageId, o) { return deliverFromOfflineHost(sid, text, messageId, o); },
+    // A stopped session started again for a trigger fire (trigger-host-resume-v1).
+    resume: function (home, sid, text, messageId, taskId) { return resumeForTrigger(home, sid, text, messageId, taskId); },
+    streamOffset: function (sid) {
+      var s = sessions.get(sid);
+      try { return s ? fs.statSync(s.jsonlPath).size : undefined; } catch (e) { return undefined; }
+    },
+    onJournal: function (home) {
+      for (const client of wsClients) {
+        if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home: home });
+      }
+    },
+    // The gateway's own test for "the server answers this Walnut" (sendGatewayRequest).
+    serverAnswers: function (home) {
+      if (leaderBook.backupLead(home)) return false;
+      for (const client of wsClients) {
+        if (client.origin === 'bridge' || gatewayClientHomes.get(client) !== home) continue;
+        if ((client.missedBeats || 0) < GATEWAY_SILENT_BEATS) return !followerEntry.quietWithFollower(home);
+      }
+      return false;
+    },
+    // A reply or notice for a session on another host: only the companion, while
+    // it leads, can carry it there (twin of daemon-standalone.ts).
+    relay: function (home, req) {
+      return new Promise(function (resolve) {
+        var sent = forwardToBackup(home, 'leader.deliverText', req.fromSessionId || '', req, function (resp) {
+          resolve(resp.ok ? { ok: true } : { ok: false, reason: resp.error.message });
+        });
+        if (!sent) resolve({ ok: false, reason: 'no server leads this Walnut right now' });
       });
     },
-    test: function (check, triggerId, home) { return runTriggerTest(check, triggerId, home || ''); },
-    changed: function () { triggerHoldsChanged(); },
-    cwdOf: function (sid) { var s = sessions.get(sid); return s ? s.cwd : undefined; },
-    // A trigger created here is checked as a pushed one is, before it is journaled. Twin of daemon-standalone.ts.
-    validate: function (def) { var r = triggerCheckCore.validateTriggerDef(def); return r.ok ? { ok: true } : { ok: false, error: r.error }; },
-  },
-  log: function (level, msg, data) { logMsg(level, msg, data); },
-  isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
-  turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
-  pendingPrompt: function (sid) { var s = sessions.get(sid); return (s && s.pendingCtrl && s.pendingCtrl.toolName) || null; },
-  // The same gate and turn-retry reset a server send goes through (cmdSend).
-  deliver: function (sid, text, messageId, o) { return deliverFromOfflineHost(sid, text, messageId, o); },
-  // A stopped session started again for a trigger fire (trigger-host-resume-v1).
-  resume: function (home, sid, text, messageId, taskId) { return resumeForTrigger(home, sid, text, messageId, taskId); },
-  streamOffset: function (sid) {
-    var s = sessions.get(sid);
-    try { return s ? fs.statSync(s.jsonlPath).size : undefined; } catch (e) { return undefined; }
-  },
-  onJournal: function (home) {
-    for (const client of wsClients) {
-      if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home: home });
-    }
-  },
-  // The gateway's own test for "the server answers this Walnut" (sendGatewayRequest).
-  serverAnswers: function (home) {
-    if (leaderBook.backupLead(home)) return false;
-    for (const client of wsClients) {
-      if (client.origin === 'bridge' || gatewayClientHomes.get(client) !== home) continue;
-      if ((client.missedBeats || 0) < GATEWAY_SILENT_BEATS) return !primaryQuietWithFollower(home);
-    }
-    return false;
-  },
-  // A reply or notice for a session on another host: only the companion, while
-  // it leads, can carry it there (twin of daemon-standalone.ts).
-  relay: function (home, req) {
-    return new Promise(function (resolve) {
-      var sent = forwardToBackup(home, 'leader.deliverText', req.fromSessionId || '', req, function (resp) {
-        resolve(resp.ok ? { ok: true } : { ok: false, reason: resp.error.message });
-      });
-      if (!sent) resolve({ ok: false, reason: 'no server leads this Walnut right now' });
-    });
   },
 });
+var offlineHost = hostJournal.host;
 
 // ── Leader book: who leads this host's work, the primary or (while it is away)
 // the cloud companion (leader-core.ts, inlined; docs/plan/walnut-control-plane.md).
@@ -5933,92 +5898,74 @@ function cmdLeaderConfigure(ws, id, cmd) {
   try {
     var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true, drains: cmd.drains });
     bindGatewayClientHome(ws, rec.home);
-    sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS });
+    var notTaken = moveNotTaken.get(cmd);
+    // A home a declared move made an alias: the server hears the home this host keeps its Walnut under. Twin of daemon-standalone.ts.
+    var aliased = homeNamedAs.has(cmd);
+    sendOk(ws, id, Object.assign({ epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS }, notTaken ? { moveNotTaken: notTaken } : {}, aliased ? { homeHere: rec.home } : {}));
   } catch (err) {
     sendError(ws, id, err.message);
   }
 }
 
 // ── One Walnut, one home (walnut-scope-core.ts aliases) ──
-// A Walnut is named by its instance id; its data dir is only where it is now. A leader that
-// comes back from another data dir with the id this host keeps under its first home
-// continues that home's state. Mirror daemon-standalone.ts (full rationale there).
-
-/** The longest a new home's first trigger checks wait for its leader.configure (heldForLeader); tests shorten it. */
-var HOME_ALIAS_WAIT_MS = envTimerMs(process.env.WALNUT_HOME_ALIAS_WAIT_MS, 600000, 100);
-/** The home each live server socket named (as it came): one home of a Walnut speaks at a time. */
-var serverSocketPlaces = new WeakMap();
-
-/** The homes the live server sockets other than except named (lazy: read only while an alias exists). */
-function* serverPlaces(except) {
-  for (const client of wsClients) {
-    var place = client !== except && isServerClient(client) ? serverSocketPlaces.get(client) : undefined;
-    if (place) yield place;
-  }
-}
+// A Walnut is named by its instance id; its data dir is only where it is now. A leader whose
+// data dir moved says so (leader.configure's movedFrom), and the new home continues the first
+// home's state here. Nothing is inferred. Mirror daemon-standalone.ts (full rationale there).
 
 /**
  * The command as the daemon reads it: its home names the Walnut's first home here (a copy).
- * leader.configure (the one command that carries walnutHomeMoves) may first make its home an
- * alias. A server socket's command is refused (null, answered here) while another home of the
- * same Walnut speaks from a live server socket. Mirror daemon-standalone.ts.
+ * leader.configure may first declare a move (server sockets only). A server socket that speaks
+ * as a home its Walnut moved away from is refused for good (null, answered here). Mirror
+ * daemon-standalone.ts.
  */
 function adoptCommandHome(ws, cmd) {
   var home = walnutScope.askedHome(cmd);
   if (!home) return cmd;
-  var server = isServerClient(ws);
-  if (cmd.cmd === 'leader.configure' && server) {
-    var adoption = walnutScope.adopt({
-      home: home, walnutId: cmd.walnutId, volatile: cmd.walnutIdVolatile === true, offered: cmd.walnutHomeMoves === true,
-      hasRecord: function (h) { return leaderBook.recordOf(h) !== null; },
-      homesWith: function (w) { return leaderBook.homesWith(w); },
-      inUse: homeInUse,
+  var notTaken = '';
+  if (cmd.cmd === 'leader.configure' && cmd.movedFrom !== undefined && isServerClient(ws)) {
+    var move = walnutScope.declareMove({
+      home: home, movedFrom: cmd.movedFrom, formerHomes: cmd.formerHomes, walnutId: cmd.walnutId, volatile: cmd.walnutIdVolatile === true, copyGone: cmd.copyGone,
+      recordIdOf: function (h) { var rec = leaderBook.recordOf(h); return rec ? rec.walnutId : null; },
+      homes: function () { return leaderBook.homes(); },
     });
-    if (adoption.aliased) foldAliasedHome(adoption.from, adoption.to);
-    else if (adoption.why.indexOf('first_home_in_use') === 0 || adoption.why === 'several_homes') {
-      logMsg('warn', 'walnut home: a known Walnut came from another data dir; kept apart', { why: adoption.why, home: walnutScope.pathKeyOf(home) });
-    }
+    if (move.moved && move.aliased) foldAliasedHome(home, move.to);
+    else if (!move.moved) logMsg('warn', 'walnut home: a declared move was not taken; the home stays a Walnut of its own', { why: move.why, home: walnutScope.pathKeyOf(home) });
+    // Its server hears it (leader.configure's moveNotTaken) and says so in Walnut Health.
+    if (!move.moved && walnutScope.moveNotTakenTold(move.why)) notTaken = move.why;
   }
-  if (server && !HOME_IS_A_PLACE.has(cmd.cmd)) {
-    if (walnutScope.speakingElsewhere(home, serverPlaces(ws))) {
-      var key = walnutScope.keyOf(home);
-      logMsg('warn', 'walnut home: refused, another data dir speaks as this Walnut here', { cmd: cmd.cmd, walnut: key, home: walnutScope.pathKeyOf(home) });
-      sendError(ws, typeof cmd.id === 'number' ? cmd.id : null, 'another data dir speaks as this Walnut here: ' + key, { errorKind: 'walnut_home_busy' }, 'warn');
-      return null;
-    }
-    serverSocketPlaces.set(ws, home);
-  }
-  walnutScope.noteAsked(home);
+  if (!HOME_IS_A_PLACE.has(cmd.cmd) && refuseMovedHome(ws, cmd, home)) return null;
   var canon = walnutScope.canonical(home);
-  if (canon === home || HOME_IS_A_PLACE.has(cmd.cmd)) return cmd;
+  if (canon === home || HOME_IS_A_PLACE.has(cmd.cmd)) {
+    if (notTaken) moveNotTaken.set(cmd, notTaken);
+    return cmd;
+  }
   // What the command carries names the Walnut too: a host server's or the jobs' spec, a spawn template.
   var out = Object.assign({}, cmd, { home: canon });
   ['spec', 'template'].forEach(function (field) {
     var inner = cmd[field];
     if (inner && typeof inner === 'object' && inner.home === home) out[field] = Object.assign({}, inner, { home: canon });
   });
+  if (notTaken) moveNotTaken.set(out, notTaken);
+  homeNamedAs.set(out, home);
   return out;
 }
 
 /** Commands whose home is a place on this machine, never a Walnut's name. */
 var HOME_IS_A_PLACE = new Set(['demo.quiesce']);
+/** A leader.configure whose declared move was not taken, with why (adoptCommandHome to cmdLeaderConfigure). */
+var moveNotTaken = new WeakMap();
+/** A command whose home adoptCommandHome replaced by the Walnut's first home here, with the home it named. */
+var homeNamedAs = new WeakMap();
 
-/** Why the Walnut kept under home is still in use here (its primary's socket or lane is open, or it spoke lately). */
-function homeInUse(home) {
-  // Bound, or only pushing so far (its leader.configure is still to come).
-  if (primarySocketOpen(home)) return 'socket_open';
-  for (const place of serverPlaces()) if (walnutScope.canonical(place) === home) return 'socket_open';
-  for (const client of wsClients) if (client.origin === 'lane' && client.laneHome === home) return 'lane_open';
-  if (leaderBook.heardSinceBoot(home) && leaderBook.primaryAgeMs(home) < LEADER_TAKEOVER_MS) return 'heard_lately';
-  return null;
-}
-
-/**
- * Whether home may yet turn out to be another home's alias: a leader here ever offered its home
- * moves (never with the one-service experiment off) and no leader record names it yet.
- */
-function homeAliasMayCome(home) {
-  return !!home && walnutScope.movesOffered() && !leaderBook.recordOf(home);
+/** A server socket that speaks as a home its Walnut moved away from (or another Walnut left): refused for good. Mirror daemon-standalone.ts. */
+function refuseMovedHome(ws, cmd, home) {
+  var refusal = isServerClient(ws) ? walnutScope.refusalOf(home, cmd.walnutId, function (h) { var rec = leaderBook.recordOf(h); return rec ? rec.walnutId : null; }) : null;
+  if (!refusal) return false;
+  var key = walnutScope.keyOf(home);
+  var taken = refusal.errorKind === 'walnut_home_taken';
+  logMsg('warn', taken ? 'walnut home: refused, another Walnut used this data dir and moved' : 'walnut home: refused, this Walnut moved to another data dir', { cmd: cmd.cmd, walnut: key, home: walnutScope.pathKeyOf(home) });
+  sendError(ws, typeof cmd.id === 'number' ? cmd.id : null, (taken ? 'another Walnut used this data dir here and moved to another one' : 'this Walnut moved to another data dir') + ': ' + key, { errorKind: refusal.errorKind, movedTo: refusal.movedTo }, 'warn');
+  return true;
 }
 
 /** from just became an alias of to: what its server set up here before is to's. */
@@ -6044,7 +5991,8 @@ function foldAliasedHome(from, to) {
 function foldTriggerScope(from, to) {
   var scope = triggerScopes.get(from);
   if (!scope) return;
-  // Its entries waited for this (heldForLeader), so they never ran: their fresh memory goes.
+  // A declared move comes before the set, so this is only a set pushed when the declaration
+  // did not get through: its fresh memory goes, the first home's carries on.
   [armedTriggers, drainingTriggers].forEach(function (map) {
     Array.from(map.entries()).forEach(function (pair) { if (pair[1].home === from) map.delete(pair[0]); });
   });
@@ -6110,26 +6058,20 @@ function foldBridgeLink(from, to) {
 var HOST_SERVER_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'host-server')
   : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-server') : path.join(DAEMON_DIR, 'host-server');
-function hostServerStartTime(pid) {
-  if (!hasProcFs()) return readStartTime(pid);
-  try {
-    var raw = fs.readFileSync('/proc/' + pid + '/stat', 'utf-8');
-    return raw.slice(raw.lastIndexOf(')') + 2).split(' ')[19] || null;
-  } catch (e) {
-    return null;
-  }
-}
 var hostServers = (__CREATE_HOST_SERVER__)({
   fs: fs, path: path,
   spawn: function (command, args, opts) { return spawn(command, args, opts); },
   dir: HOST_SERVER_DIR,
   keyOf: walnutScope.keyOf,
+  // The service's own home under any home a declared move made the same Walnut. Twin of daemon-standalone.ts.
+  canonical: function (home) { return walnutScope.canonical(home); },
   now: function () { return Date.now(); },
   setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
   clearTimer: function (t) { clearTimeout(t); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
-  startTimeOf: hostServerStartTime,
+  startTimeOf: readStartTime,
   killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
+  heldAt: (__HELD_SERVER_AT__),
   baseEnv: function () {
     var env = { PATH: process.env.PATH || '', HOME: process.env.HOME || HOME_DIR, WALNUT_HOST_DAEMON_DIR: DAEMON_DIR };
     if (process.env.LANG) env.LANG = process.env.LANG;
@@ -6164,8 +6106,8 @@ var followerGateway = (__CREATE_FOLLOWER_GATEWAY__)({
     return f && f.answersLocal === true ? f : null;
   },
   answersOnline: function (ws) { return ws.answersOnline === true; },
-  // One rule for "the leader is away": the test follower.op applies (followerMayWrite).
-  mayWrite: function (home) { return followerMayWrite(home); },
+  // One rule for "the leader is away": the test follower.op applies (followerEntry.mayWrite).
+  mayWrite: function (home) { return followerEntry.mayWrite(home); },
   // The companion leading takes what the follower refuses (forwardToBackup on the daemon's path).
   leaderElsewhere: function (home) { return leaderBook.backupLead(home) !== null; },
   now: function () { return Date.now(); },
@@ -6188,7 +6130,7 @@ var followerTriggers = (__CREATE_FOLLOWER_TRIGGER_DELIVERY__)({
     var f = followerSockets.get(home);
     return f && f.deliversTriggers === true ? f : null;
   },
-  mayWrite: function (home) { return followerMayWrite(home); },
+  mayWrite: function (home) { return followerEntry.mayWrite(home); },
   send: function (ws, ev, data) { try { sendEvent(ws, ev, data); return true; } catch (e) { return false; } },
   liveSids: function (home) { return offlineHost.liveSessionsOf(home); },
   own: function (fire) { return deliverFireOwn(fire); },
@@ -6214,46 +6156,11 @@ function deliverFireTo(fire, target) {
   return offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId);
 }
 
-// What a follower of home is told about its leader. Twin of daemon-standalone.ts.
-function followerView(home) {
-  var rec = leaderBook.recordOf(home);
-  if (!rec) return null;
-  var age = leaderBook.primaryAgeMs(home);
-  var companion = null;
-  var link = bridgeLinkFor(home);
-  try { if (link && link.config && link.config.enabled && link.config.url) companion = new URL(link.config.url.replace(/^ws/, 'http')).origin; } catch (e) { companion = null; }
-  return {
-    walnutId: rec.walnutId,
-    home: home,
-    epoch: rec.epoch,
-    holder: rec.holder,
-    backup: rec.backup,
-    // A primary this daemon has not heard since it started is not answering yet (D14).
-    primaryConnected: primarySocketOpen(home) && leaderBook.heardSinceBoot(home) && age < LEADER_TAKEOVER_MS,
-    primaryHeardAgoMs: age,
-    heardSinceBoot: leaderBook.heardSinceBoot(home),
-    takeoverMs: LEADER_TAKEOVER_MS,
-    // The window this daemon calls the Mac away by (the replica's presence reads it).
-    quietMs: LEADER_QUIET_MS,
-    bridge: { connected: !!(link && link.adapter), companion: companion },
-    settings: hostServers.settingsOf(home),
-    ...followerJournalView(home),
-    // The calls this daemon still answered itself while the follower was there (followerGateway.noteOwnOffline).
-    offlineAnswers: followerGateway.ownAnswers(),
-  };
-}
-
-// Journal v2 in the follower view (twin of daemon-standalone.ts).
-function followerJournalView(home) {
-  var stats = offlineHost.journalStats(home);
-  return { journal: stats, drainablePending: stats.drainable };
-}
-
 function cmdFollowerHello(ws, id, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, 'follower.hello: not over the bridge');
   if (gatewayClientHomes.has(ws)) return sendError(ws, id, 'follower.hello: this socket already speaks for a leader');
   var home = typeof cmd.home === 'string' ? cmd.home : '';
-  var view = home ? followerView(home) : null;
+  var view = home ? followerEntry.view(home) : null;
   if (!view || view.walnutId !== cmd.walnutId) {
     try { ws.send(JSON.stringify({ id: id, ok: false, error: 'this host does not know that Walnut yet: its leader has not connected here', errorKind: 'unknown_walnut' })); } catch (e) {}
     return;
@@ -6276,7 +6183,7 @@ function cmdFollowerHello(ws, id, cmd) {
 function cmdFollowerReport(ws, cmd) {
   var home = ws.followerHome;
   if (!home || followerSockets.get(home) !== ws) return;
-  hostServers.report(home, cmd.report);
+  followerEntry.report(home, cmd.report);
   // Whether it takes a same-host send while the leader answers (its host_call_entry experiment, on or off).
   if (cmd.report && typeof cmd.report === 'object' && 'answersOnline' in cmd.report) ws.answersOnline = cmd.report.answersOnline === true;
   // The entry's socket as the follower says it now (its experiment turned on or off).
@@ -6543,7 +6450,7 @@ function openStreamNow(ws, cmd) {
 }
 
 function cmdFollowerStatus(ws, id) {
-  var view = ws.followerHome ? followerView(ws.followerHome) : null;
+  var view = ws.followerHome ? followerEntry.view(ws.followerHome) : null;
   if (!view) return sendError(ws, id, 'follower.status: send follower.hello first');
   sendOk(ws, id, view);
 }
@@ -6639,7 +6546,7 @@ var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
   setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
   clearTimer: function (t) { clearTimeout(t); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
-  startTimeOf: hostServerStartTime,
+  startTimeOf: readStartTime,
   alive: function (pid) { try { process.kill(pid, 0); return true; } catch (e) { return !!(e && e.code === 'EPERM'); } },
   bootTime: function () { var up = os.uptime(); return up > 0 ? Date.now() - up * 1000 : null; },
   randomToken: function () { return crypto.randomBytes(32).toString('hex'); },
@@ -6863,122 +6770,54 @@ function followerHomeOf(ws) {
   return home && followerSockets.get(home) === ws ? home : null;
 }
 
+// A follower call's answer on its socket (follower-entry-core.ts FollowerAnswer). Twin of daemon-standalone.ts.
+function sendFollowerAnswer(ws, id, a) {
+  if (a.ok) return sendOk(ws, id, a.result);
+  sendError(ws, id, a.error, a.extra);
+}
+
 function cmdFollowerSessions(ws, id) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.sessions: send follower.hello first');
-  var copy = offlineHost.sessionsOf(home);
-  if (!copy) return sendOk(ws, id, { host: '', asOf: null, sessions: [] });
-  var list = copy.sessions.map(function (s) {
-    var live = sessions.get(s.sid);
-    var running = !!live && live.state === 'running';
-    var lastActiveAt;
-    try { if (live) lastActiveAt = fs.statSync(live.jsonlPath).mtime.toISOString(); } catch (e) {}
-    var pc = running ? live.pendingCtrl : null;
-    var req = (pc && pc.request) || {};
-    var prompt = null;
-    if (pc && req.subtype === 'can_use_tool') {
-      prompt = { requestId: pc.reqId, toolName: pc.toolName || (typeof req.tool_name === 'string' ? req.tool_name : 'tool'), input: req.input || {} };
-      if (typeof req.decision_reason === 'string') prompt.reason = req.decision_reason;
-    }
-    var row = Object.assign({}, s, { state: !running ? 'stopped' : (live.foldState && live.foldState.turnActive ? 'working' : 'idle') });
-    if (prompt) row.prompt = prompt;
-    if (lastActiveAt) row.lastActiveAt = lastActiveAt;
-    return row;
-  });
-  sendOk(ws, id, { host: copy.host, asOf: copy.asOf, sessions: list });
+  sendOk(ws, id, followerEntry.sessions(home));
 }
 
 // Same window as the host server's route (host-server/route.ts LEADER_QUIET_MS)
 // and a host replica's presence: one window, LEADER_QUIET_MS (knob
-// WALNUT_LEADER_QUIET_MS). Twin of daemon-standalone.ts.
+// WALNUT_LEADER_QUIET_MS); the rules that read it are follower-entry-core.ts's. Twin of daemon-standalone.ts.
 var LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30000, 500);
-// The follower-write quiet window, read in ONE place (twin of daemon-standalone.ts).
-function followerQuietMs() {
-  return LEADER_QUIET_MS;
-}
-function primaryAnswersFollower(home) {
-  // A primary unheard since this daemon started does not answer (D14).
-  return primarySocketOpen(home) && leaderBook.heardSinceBoot(home) && leaderBook.primaryAgeMs(home) < followerQuietMs();
-}
-
-// While a follower of home is linked, a primary not heard within LEADER_QUIET_MS
-// is away for gateway routing too. Twin of daemon-standalone.ts.
-function primaryQuietWithFollower(home) {
-  return followerSockets.has(home) && leaderBook.primaryAgeMs(home) >= LEADER_QUIET_MS;
-}
-
-// A follower may write while no server answers its Walnut, or while its server is back
-// but still taking the journal (twin of daemon-standalone.ts followerMayWrite).
-function followerMayWrite(home) {
-  return !primaryAnswersFollower(home) || offlineHost.pendingHandover(home);
-}
-
-function followerWriteTarget(ws, id, cmd, name) {
-  var home = followerHomeOf(ws);
-  if (!home) { sendError(ws, id, name + ': send follower.hello first'); return null; }
-  if (!followerMayWrite(home)) { sendError(ws, id, name + ': your Mac answers again; write through it', { errorKind: 'leader_answers' }); return null; }
-  var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
-  if (!sid || offlineHost.ownerOf(sid) !== home) { sendError(ws, id, name + ': not a session of this Walnut on this host', { errorKind: 'not_found' }); return null; }
-  return { home: home, sid: sid };
-}
 
 async function cmdFollowerSend(ws, id, cmd) {
-  var t = followerWriteTarget(ws, id, cmd, 'follower.send');
-  if (!t) return;
-  var r = await offlineHost.deliverHuman(t.home, t.sid, cmd.text, cmd.messageId);
-  if (r.ok) return sendOk(ws, id, { delivered: true, messageId: r.result.messageId });
-  sendError(ws, id, 'follower.send: ' + r.error.message, { errorKind: r.error.code });
+  var home = followerHomeOf(ws);
+  if (!home) return sendError(ws, id, 'follower.send: send follower.hello first');
+  sendFollowerAnswer(ws, id, await followerEntry.send(home, cmd));
 }
 
 // The follower's pick for a trigger fire it was offered (follower-trigger-delivery-core.ts). Twin of daemon-standalone.ts.
 async function cmdFollowerTriggerDeliver(ws, id, cmd) {
   if (!followerHomeOf(ws)) return sendError(ws, id, 'follower.trigger.deliver: send follower.hello first');
-  var r = await followerTriggers.answer(ws, cmd);
-  if (r.ok) return sendOk(ws, id, r.result);
-  sendError(ws, id, 'follower.trigger.deliver: ' + r.message, { errorKind: r.code });
+  sendFollowerAnswer(ws, id, await followerEntry.triggerDeliver(ws, cmd));
 }
 
 async function cmdFollowerPermission(ws, id, cmd) {
-  var t = followerWriteTarget(ws, id, cmd, 'follower.permission');
-  if (!t) return;
-  var r = await answerPermission(t.sid, cmd, 'follower.permission');
-  if (!r.ok) return sendError(ws, id, 'follower.permission: ' + r.error, { errorKind: r.errorKind });
-  sendOk(ws, id, { status: 'resolved', requestId: cmd.requestId, allow: r.allow });
+  var home = followerHomeOf(ws);
+  if (!home) return sendError(ws, id, 'follower.permission: send follower.hello first');
+  sendFollowerAnswer(ws, id, await followerEntry.permission(home, cmd));
 }
 
 // A message between two of this Walnut's sessions here that the follower decided
-// ('follower-peer-v1'): an online one passes whoever leads, anything else only while the
-// follower may write. Twin of daemon-standalone.ts cmdFollowerPeer.
+// ('follower-peer-v1'). Twin of daemon-standalone.ts cmdFollowerPeer.
 async function cmdFollowerPeer(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.peer: send follower.hello first');
-  if (cmd.online !== true && !followerMayWrite(home)) return sendError(ws, id, 'follower.peer: your Mac answers again; write through it', { errorKind: 'leader_answers' });
-  // The companion leads: it delivers a message to another host now, so nothing is held for later.
-  if (cmd.kind === 'hold' && leaderBook.backupLead(home)) return sendError(ws, id, 'follower.peer: the cloud companion leads; it routes this message', { errorKind: 'needs_leader', detail: { why: 'companion_leads' } });
-  if (!ownsDaemonDir()) {
-    return sendError(ws, id, 'follower.peer: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } });
-  }
-  var r = await offlineHost.handleFollowerPeer(home, cmd);
-  if (r.ok) return sendOk(ws, id, r.result);
-  sendError(ws, id, 'follower.peer: ' + r.error.message, Object.assign({ errorKind: r.error.code },
-    r.error.detail !== undefined ? { detail: r.error.detail } : {}, r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}));
+  sendFollowerAnswer(ws, id, await followerEntry.peer(home, cmd));
 }
 
-// The replica's write while the Mac is away (replica-ops-v1, journal v2). Its own gate:
-// the follower's own Walnut, the quiet window unless the Mac is still taking the
-// journal, and the daemon dir's owner. Twin of daemon-standalone.ts cmdFollowerOp.
+// The replica's write while the Mac is away (replica-ops-v1, journal v2). Twin of daemon-standalone.ts cmdFollowerOp.
 async function cmdFollowerOp(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.op: send follower.hello first');
-  if (!followerMayWrite(home)) return sendError(ws, id, 'follower.op: your Mac answers again; write through it', { errorKind: 'leader_answers' });
-  if (!ownsDaemonDir()) {
-    return sendError(ws, id, 'follower.op: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } });
-  }
-  // Waits out another process's journal lock (about 1.3 s) before it answers.
-  var r = await offlineHost.handleFollowerWaiting(home, { op: cmd.op, args: cmd.args, actor: cmd.actor, opId: cmd.opId, base: cmd.base });
-  if (r.ok) return sendOk(ws, id, r.result);
-  sendError(ws, id, 'follower.op: ' + r.error.message, Object.assign({ errorKind: r.error.code },
-    r.error.detail !== undefined ? { detail: r.error.detail } : {}, r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}));
+  sendFollowerAnswer(ws, id, await followerEntry.op(home, cmd));
 }
 
 // The follower's read of its Walnut's triggers here, and its trigger_test ('follower-triggers-v1'):
@@ -6986,23 +6825,20 @@ async function cmdFollowerOp(ws, id, cmd) {
 function cmdFollowerTriggers(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.triggers: send follower.hello first');
-  sendOk(ws, id, offlineHost.followerTriggers(home, cmd.triggerId));
+  sendOk(ws, id, followerEntry.triggers(home, cmd));
 }
 
 async function cmdFollowerTriggerTest(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.trigger.test: send follower.hello first');
-  var r = await offlineHost.followerTriggerTest(home, { actor: cmd.actor, args: cmd.args });
-  if (r.ok) return sendOk(ws, id, r.result);
-  sendError(ws, id, 'follower.trigger.test: ' + r.error.message, Object.assign({ errorKind: r.error.code },
-    r.error.detail !== undefined ? { detail: r.error.detail } : {}, r.error.retryAfterMs !== undefined ? { retryAfterMs: r.error.retryAfterMs } : {}));
+  sendFollowerAnswer(ws, id, await followerEntry.triggerTest(home, cmd));
 }
 
 // What is pending for the follower's Walnut (its overlay; read only, own Walnut only).
 function cmdFollowerPending(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.pending: send follower.hello first');
-  sendOk(ws, id, offlineHost.pendingFor(home, cmd.sinceSeq));
+  sendOk(ws, id, followerEntry.pending(home, cmd));
 }
 
 // A new ask while the Mac is away ('replica-start-v1', host-start-core.ts; WP12). Twin of
@@ -7043,72 +6879,61 @@ function cmdLeaderSpawnTemplate(ws, id, cmd) {
   }
 }
 
-// A follower.start answer: the reply, or the refusal with its kind (a retry gets the same one).
-function sendStartAnswer(ws, id, a, duplicate) {
-  if (a.ok) return sendOk(ws, id, duplicate ? Object.assign({}, a.reply, { duplicate: true }) : a.reply);
-  sendError(ws, id, a.error, a.extra);
-}
-
-function startRefusal(error) {
-  return {
-    ok: false, error: 'follower.start: ' + error.message,
-    extra: Object.assign({ errorKind: error.code }, error.detail !== undefined ? { detail: error.detail } : {}, error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
-  };
-}
-
-// The replica's new ask while the Mac is away: every check, then the CLI from the
-// template, then its session record. check: true runs the checks only (the replica
-// journals the ask's task after they pass). Twin of daemon-standalone.ts cmdFollowerStart.
+// The replica's new ask while the Mac is away (follower-entry-core.ts start). Twin of
+// daemon-standalone.ts cmdFollowerStart.
 async function cmdFollowerStart(ws, id, cmd) {
   var home = followerHomeOf(ws);
   if (!home) return sendError(ws, id, 'follower.start: send follower.hello first');
-  if (!followerMayWrite(home)) return sendError(ws, id, 'follower.start: your Mac answers again; start the ask through it', { errorKind: 'leader_answers' });
-  if (!ownsDaemonDir()) {
-    return sendError(ws, id, 'follower.start: this daemon no longer owns its directory', { errorKind: 'journal_unwritable', detail: { why: 'not_owner' } });
-  }
-  var sid = typeof cmd.sid === 'string' ? cmd.sid : '';
-  var check = cmd.check === true;
-  // A retry (its answer lost, or asked again while the CLI still starts): the first
-  // attempt's answer once it comes, never a second plan or a second CLI.
-  var first = sid ? hostStart.firstStart(home, sid) : null;
-  if (first === 'taken') return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
-  if (first) {
-    logMsg('info', 'follower.start: asked again, answered by the first start', { home: home, sid: sid, check: check });
-    if (check) return sendOk(ws, id, { sid: sid, checked: true, duplicate: true });
-    return sendStartAnswer(ws, id, await first, true);
-  }
-  if (sid && offlineHost.ownerOf(sid) === home) {
-    logMsg('info', 'follower.start: asked again, started once', { home: home, sid: sid });
-    return sendOk(ws, id, check ? { sid: sid, checked: true, duplicate: true } : { sid: sid, duplicate: true });
-  }
-  if (sid && (sessions.has(sid) || journaledIds().has(sid))) return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
-  // A plain session of a task made here (run: 'task'): only a Mac that drains task-start. Twin of daemon-standalone.ts.
-  var taskRun = cmd.run === 'task';
-  if (taskRun) {
-    var taskRoom = offlineHost.checkTaskStart(home, sid, cmd.actor);
-    if (!taskRoom.ok || check) return taskRoom.ok ? sendOk(ws, id, { sid: sid, checked: true }) : sendStartAnswer(ws, id, startRefusal(taskRoom.error));
-  }
-  if (check) {
-    var no = hostStart.precheck(home, cmd);
-    if (no) return sendStartAnswer(ws, id, startRefusal(no));
-    var room = offlineHost.checkSession(home, sid, cmd.actor);
-    if (!room.ok) return sendStartAnswer(ws, id, startRefusal(room.error));
-    return sendOk(ws, id, { sid: sid, checked: true });
-  }
-  var startHost = typeof cmd.host === 'string' ? cmd.host : '';
-  var planned = taskRun ? hostStart.planTask(home, cmd, startHost) : hostStart.plan(home, cmd, startHost);
-  if (!planned.ok) return sendStartAnswer(ws, id, startRefusal(planned));
-  var p = planned.plan;
-  var answer = hostStart.once(home, p.sid, function () { return startHostAsk(home, p, cmd); });
-  if (answer === 'taken') return sendError(ws, id, 'follower.start: that session id is taken on this host', { errorKind: 'bad_request' });
-  sendStartAnswer(ws, id, await answer);
+  sendFollowerAnswer(ws, id, await followerEntry.start(home, cmd));
 }
 
-// One ask's start: refusals before the CLI, the record after it runs (a failed start leaves none).
 // Tests only (never in the real daemon dir): die right after a host ask's CLI is spawned, before its record.
 var DIE_AFTER_ASK_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ASK_SPAWN === '1';
 // Tests only (never in the real daemon dir): die right after a routine run's CLI is spawned, before its records.
 var DIE_AFTER_ROUTINE_SPAWN = !IS_PROD_DAEMON_DIR && process.env.WALNUT_TEST_DIE_AFTER_ROUTINE_SPAWN === '1';
+
+// How a start made on this host (a follower's ask, a routine run) runs its CLI: one set for
+// both cores. Twin of daemon-standalone.ts.
+var hostStartSessions = {
+  ran: function (sid) { return sessions.has(sid) || livedHere(sid); },
+  spawn: function (home, taskId, p) {
+    return sessionStartGate.run(p.sid, function () {
+      return startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home: home, task: taskId } });
+    });
+  },
+  stop: function (sid) { var s = sessions.get(sid); if (s && s.pid) killProcessGroup(s.pid, 'SIGTERM'); },
+};
+
+// What this host's own Walnut server asks its daemon (follower-entry-core.ts, inlined;
+// shared with daemon-standalone.ts): the cmdFollower* handlers check the socket speaks for
+// the home and send what it answers. Twin of daemon-standalone.ts.
+var followerEntryDeps = {
+  fs: fs, leaderBook: leaderBook, offline: offlineHost, hostStart: hostStart,
+  primarySocketOpen: function (home) { return primarySocketOpen(home); },
+  followerLinked: function (home) { return followerSockets.has(home); },
+  bridgeLink: function (home) { return bridgeLinkFor(home); },
+  settingsOf: function (home) { return hostServers.settingsOf(home); },
+  reportServer: function (home, said) { hostServers.report(home, said); },
+  offlineAnswers: function () { return followerGateway.ownAnswers(); },
+  triggerAnswer: function (ws, cmd) { return followerTriggers.answer(ws, cmd); },
+  takeoverMs: LEADER_TAKEOVER_MS,
+  quietMs: LEADER_QUIET_MS,
+  ownsDir: function () { return ownsDaemonDir(); },
+  session: function (sid) { return sessions.get(sid); },
+  sidTaken: function (sid) { return sessions.has(sid) || journaledIds().has(sid); },
+  ran: hostStartSessions.ran,
+  spawn: hostStartSessions.spawn,
+  stop: hostStartSessions.stop,
+  marker: function (sid, text, messageId) {
+    var started = sessions.get(sid);
+    if (started) appendUserMarkerLine(sid, started, text, messageId, false);
+  },
+  answerPermission: function (sid, raw, label) { return answerPermission(sid, raw, label); },
+  randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+};
+if (DIE_AFTER_ASK_SPAWN) followerEntryDeps.afterAskSpawn = function () { process.kill(process.pid, 'SIGKILL'); };
+var followerEntry = (__CREATE_FOLLOWER_ENTRY__)(followerEntryDeps);
 
 // A claude-code routine's run while the Mac is away ('clock-host-start-v1',
 // clock-host-start-core.ts): the trigger tick hands it a due fire of a clock def with
@@ -7121,15 +6946,11 @@ var clockHostStartDeps = {
     noteSession: function (home, rec, opId) { return offlineHost.noteSessionWaiting(home, rec, opId); },
     knowsSession: function (home, sid) { return offlineHost.knowsSession(home, sid); },
   },
-  primaryAnswers: function (home) { return primaryAnswersFollower(home); },
+  primaryAnswers: function (home) { return followerEntry.primaryAnswers(home); },
   ownsDir: function () { return ownsDaemonDir(); },
-  ran: function (sid) { return sessions.has(sid) || livedHere(sid); },
-  spawn: function (home, taskId, p) {
-    return sessionStartGate.run(p.sid, function () {
-      return startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home: home, task: taskId } });
-    });
-  },
-  stop: function (sid) { var s = sessions.get(sid); if (s && s.pid) killProcessGroup(s.pid, 'SIGTERM'); },
+  ran: hostStartSessions.ran,
+  spawn: hostStartSessions.spawn,
+  stop: hostStartSessions.stop,
   marker: function (sid, text, messageId) {
     var started = sessions.get(sid);
     if (started) appendUserMarkerLine(sid, started, text, messageId, false);
@@ -7144,92 +6965,10 @@ var clockHostStartDeps = {
 if (DIE_AFTER_ROUTINE_SPAWN) clockHostStartDeps.afterSpawn = function () { process.kill(process.pid, 'SIGKILL'); };
 var clockHostStart = (__CREATE_CLOCK_HOST_START__)(clockHostStartDeps);
 
-// Asks a daemon death cut between their CLI and their session record (startHostAsk keeps
-// each start on disk until its record is): one whose CLI ran is journaled now, under the
-// same op id, so the Mac adopts it; one that never started leaves nothing. Runs at boot,
-// after the sessions are adopted and before any client connects. Keep in sync with daemon-standalone.ts.
-function recoverPendingAsks() {
-  var list = hostStart.pendingStarts();
-  for (var i = 0; i < list.length; i++) {
-    var p = list[i];
-    try {
-      var ran = sessions.has(p.sid) || livedHere(p.sid);
-      if (ran && offlineHost.ownerOf(p.sid) !== p.home) {
-        // A routine run's own task goes first (clock-host-start-v1): its session record names it.
-        var task = p.task ? offlineHost.noteRoutineTask(p.home, p.task.record, p.task.opId, p.task.jobId) : null;
-        var saved = task && !task.ok ? task : offlineHost.noteSession(p.home, p.record, p.opId, p.actor);
-        if (saved.ok) {
-          logMsg('info', 'startup: an ask cut before its session record is journaled now', { home: p.home, sid: p.sid, taskId: p.record.taskId });
-        } else {
-          var s = sessions.get(p.sid);
-          if (s && s.pid) killProcessGroup(s.pid, 'SIGTERM');
-          logMsg('warn', 'startup: an ask cut before its session record could not be kept, the CLI is stopped', { home: p.home, sid: p.sid, code: saved.error.code });
-        }
-      }
-    } catch (err) {
-      logMsg('warn', 'startup: a pending ask was not recovered', { sid: p.sid, error: err && err.message });
-    }
-    hostStart.releasePending(p.home, p.sid);
-  }
-}
-
-async function startHostAsk(home, p, cmd) {
-  var release = hostStart.begin(home);
-  try {
-    var room = cmd.run === 'task' ? offlineHost.checkTaskStart(home, p.sid, cmd.actor) : offlineHost.checkSession(home, p.sid, cmd.actor);
-    if (!room.ok) return startRefusal(room.error);
-    // The request's op id names its task-create too (the same request): the session record takes its own.
-    var opId = typeof cmd.opId === 'string' && /^[A-Za-z0-9_-]{1,72}$/.test(cmd.opId) ? cmd.opId + '-session' : 'session-' + p.sid;
-    // On disk before the CLI runs: a daemon that dies before the record below is kept
-    // journals it at its next boot (recoverPendingAsks), so the Mac still adopts the ask.
-    try {
-      var pending = { sid: p.sid, record: p.record, opId: opId };
-      if (cmd.actor !== undefined) pending.actor = cmd.actor;
-      hostStart.holdPending(home, pending);
-    } catch (err) {
-      return startRefusal({ code: 'journal_unwritable', message: 'this host could not keep the start: ' + (err && err.message) });
-    }
-    try {
-      await sessionStartGate.run(p.sid, function () {
-        return startSessionProcess({ cmd: 'start', sid: p.sid, args: p.args, cwd: p.cwd, message: p.message, resume: false, mode: p.mode, origin: { home: home, task: p.taskId } });
-      });
-    } catch (err) {
-      hostStart.releasePending(home, p.sid);
-      throw err;
-    }
-    if (DIE_AFTER_ASK_SPAWN) process.kill(process.pid, 'SIGKILL');
-    var saved = await offlineHost.noteSessionWaiting(home, p.record, opId, cmd.actor);
-    hostStart.releasePending(home, p.sid);
-    if (!saved.ok) {
-      // Nothing would tell the Mac about this CLI: it must not run unseen. Not stamped as an
-      // intentional stop (only the idle scan, cmdStop and a budget pause are): no record names
-      // this session, so how its death reads matters to no one.
-      var s = sessions.get(p.sid);
-      if (s && s.pid) killProcessGroup(s.pid, 'SIGTERM');
-      logMsg('warn', 'follower.start: the session record was not kept, the CLI is stopped', { home: home, sid: p.sid, code: saved.error.code });
-      return startRefusal(saved.error);
-    }
-    var messageId = typeof cmd.messageId === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(cmd.messageId) ? cmd.messageId : 'qm-ask-' + crypto.randomBytes(8).toString('hex');
-    if (p.message) {
-      try {
-        var started = sessions.get(p.sid);
-        if (started) appendUserMarkerLine(p.sid, started, p.message, messageId, false);
-      } catch (err) { logMsg('warn', 'follower.start: no turn-start marker', { sid: p.sid, error: err && err.message }); }
-    }
-    logMsg('info', 'follower.start: an ask started on this host while the Mac is away', { home: home, sid: p.sid, taskId: p.taskId, mode: p.mode, seq: saved.result.seq });
-    return { ok: true, reply: { sid: p.sid, taskId: p.taskId, mode: p.mode, cwd: p.cwd, messageId: messageId, seq: saved.result.seq } };
-  } catch (err) {
-    logMsg('warn', 'follower.start: the ask did not start', { home: home, sid: p.sid, taskId: p.taskId, error: err && err.message });
-    return { ok: false, error: 'follower.start: ' + (err && err.message), extra: { errorKind: 'internal' } };
-  } finally {
-    release();
-  }
-}
-
 // A note body a journal record names (journal-v2): at most 2 MB per reply. Trusted only.
 function cmdOfflineBlob(ws, id, cmd) {
   if (ws.origin === 'bridge' || ws.origin === 'follower') return sendError(ws, id, 'offline.blob: trusted clients only');
-  var r = offlineJournal.readBlob(cmd.sha, cmd.offset);
+  var r = hostJournal.store.readBlob(cmd.sha, cmd.offset);
   if (!r.ok) return sendError(ws, id, 'offline.blob: ' + r.message, { errorKind: r.code });
   sendOk(ws, id, r);
 }
@@ -7248,6 +6987,8 @@ function cmdHostSlice(ws, id, cmd) {
     var slice = typeof cmd.sliceGz === 'string'
       ? JSON.parse(zlib.gunzipSync(Buffer.from(cmd.sliceGz, 'base64')).toString('utf8'))
       : cmd.slice;
+    // A copy from a home its Walnut moved away from is refused, as every command naming it is.
+    if (slice && typeof slice.home === 'string' && refuseMovedHome(ws, cmd, slice.home)) return;
     // The copy names its Walnut by the home its server has now: it is kept under the first one here.
     var sliceHome = slice && typeof slice.home === 'string' ? walnutScope.canonical(slice.home) : '';
     if (sliceHome && sliceHome !== slice.home) slice = Object.assign({}, slice, { home: sliceHome });
@@ -7427,8 +7168,8 @@ function gatewayTargetFor(home, say) {
     if (say) logMsg('info', 'gateway: primary silent, answering here', { callerSid: say.callerSid, op: say.op, missedBeats: target.missedBeats });
     target = null;
   }
-  // A follower is linked: the same quiet window as its writes (primaryQuietWithFollower).
-  if (target && home && primaryQuietWithFollower(home)) {
+  // A follower is linked: the same quiet window as its writes (followerEntry.quietWithFollower).
+  if (target && home && followerEntry.quietWithFollower(home)) {
     if (say) logMsg('info', 'gateway: primary quiet, answering here', { callerSid: say.callerSid, home: home, op: say.op, quietMs: LEADER_QUIET_MS });
     target = null;
   }
@@ -7845,7 +7586,7 @@ function sendPluginJobGatewayRequest(home, capability, payload, respond, caller,
     if (!isServerClient(client) || isQuietTrustedClient(client)) continue;
     if (gatewayClientHomes.get(client) === home) target = client;
   }
-  if (target && ((target.missedBeats || 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || primaryQuietWithFollower(home))) target = null;
+  if (target && ((target.missedBeats || 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || followerEntry.quietWithFollower(home))) target = null;
   if (!target) {
     // This host's own Walnut server answers it while its leader is away (its answer is final);
     // while the leader's quiet window is not over yet, the call waits for one of the two.
@@ -8282,7 +8023,7 @@ async function cmdAcpStart(ws, id, cmd) {
     WALNUT_CALL_SOCKET: '',
     WALNUT_CALL_TOKEN: '',
   }, hostCallTokens.envFor(cmd.home, params.env && typeof params.env.WALNUT_SESSION_ID === 'string' && params.env.WALNUT_SESSION_ID ? params.env.WALNUT_SESSION_ID : params.sid),
-  { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', ...pwSilenceAcpOptions(params.env) });
+  { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '', ...pwSilenceAcpOptions(params.env, await pwSilenceFile()) });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
     if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts');
@@ -8770,7 +8511,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Keep in sync with daemon-standalone.ts.
       OPEN_WALNUT_API_URL: sessionWalnutApiUrl(settingsEnvOf(launch.args)),
       // The page silencer, first in NODE_OPTIONS. Keep in sync with daemon-standalone.ts.
-      ...pwSilenceOptions(process.env.NODE_OPTIONS, process.env.BUN_OPTIONS),
+      ...pwSilenceOptions(process.env.NODE_OPTIONS, process.env.BUN_OPTIONS, await pwSilenceFile()),
       PATH: sessionPathWithShim((launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || ''), walnutThroughGateway(settingsEnvOf(launch.args))),
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
@@ -8896,8 +8637,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   cronMetadata.configure(sid, cronProcess(sessionData), cronMetadataConfig);
   cronMetadata.state(sid, cronProcess(sessionData), false, !resume);
   // Write-ahead: a service that cannot record the spawn must not report success,
-  // or a crash right after it orphans a CLI nothing knows about.
-  try { persistRegistry(); } catch (err) {
+  // or a crash right after it orphans a CLI nothing knows about. Awaited: the
+  // write runs off the thread, the answer waits for it.
+  try { await persistRegistryDurable(); } catch (err) {
     if (SERVICE_MODE) throw err;
   }
 
@@ -8917,7 +8659,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     throw error;
   }
   } catch (error) {
-    if (!ownerCommitted && ownerClaim) ownerClaim.release();
+    if (!ownerCommitted && ownerClaim) await ownerClaim.release();
     throw error;
   }
 }
@@ -9035,7 +8777,7 @@ async function recordAdoptedOwners() {
       const owned = namedSessionId(session.args || []) || sid;
       await cliOwner.adopt(owned, session.pid, session.startTime || null, session.spawnInfo && session.spawnInfo.home);
     }
-    const removed = cliOwner.prune();
+    const removed = await cliOwner.prune();
     if (removed > 0) logMsg('info', 'cli owner: removed records of ended CLIs', { removed: removed });
   } catch (err) {
     logMsg('warn', 'cli owner: startup records failed', { error: err && err.message });
@@ -10487,7 +10229,7 @@ function tickTriggers() {
   if (demoQuiesce.fenced) return;
   var now = Date.now();
   for (const entry of armedTriggers.values()) {
-    if (entry.running || entry.nextRunAtMs > now || heldForLeader(entry, now)) continue;
+    if (entry.running || entry.nextRunAtMs > now) continue;
     runTrigger(entry).catch(function (err) {
       logMsg('error', 'trigger run threw', { id: entry.def.id, error: err && err.message });
     });
@@ -10556,36 +10298,10 @@ function armTriggerSet(home, defs, now) {
     var state = draining ? draining.state : readTriggerState(home, defs[d].id, now);
     // A deliberate re-arm gets a fresh error budget, as the server's resume does. Boot preserves it.
     state.consecutiveErrors = 0;
-    var armed = newArmedTrigger(home, defs[d], state, now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining);
-    if (homeAliasMayCome(home)) armed.waitsForLeader = true;
-    armedTriggers.set(key, armed);
+    armedTriggers.set(key, newArmedTrigger(home, defs[d], state, now + TRIGGER_FIRST_RUN_DELAY_MS, now, !!draining));
   }
   if (drainingChanged) persistTriggersFile(home);
   return released;
-}
-
-// A new home's first check waits while it may yet be another home's alias (homeAliasMayCome):
-// its leader.configure ends the wait (an alias folds the set first), HOME_ALIAS_WAIT_MS caps it.
-// Mirror daemon-standalone.ts.
-var leaderWaitLogged = new Set();
-/** When a home's checks first waited, this boot: a re-arm never starts its cap again. */
-var leaderWaitSince = new Map();
-function heldForLeader(entry, now) {
-  if (!entry.waitsForLeader) return false;
-  if (homeAliasMayCome(entry.home)) {
-    if (!leaderWaitSince.has(entry.home)) leaderWaitSince.set(entry.home, entry.armedAtMs);
-    var held = now - leaderWaitSince.get(entry.home) < HOME_ALIAS_WAIT_MS;
-    // Said once per home: that its checks wait, and that the cap ended the wait.
-    var said = (held ? 'wait\u0000' : 'cap\u0000') + entry.home;
-    if (!leaderWaitLogged.has(said)) {
-      leaderWaitLogged.add(said);
-      if (held) logMsg('info', "triggers: a new home's first checks wait for its leader.configure", { scope: walnutScope.label(entry.home) });
-      else logMsg('warn', 'triggers: no leader.configure came for a new home in time; its checks run as its own', { scope: walnutScope.label(entry.home), waitedMs: now - leaderWaitSince.get(entry.home) });
-    }
-    if (held) return true;
-  }
-  entry.waitsForLeader = false;
-  return false;
 }
 
 // A session paused, resumed or deleted a trigger here: arm every Walnut's set by it now.
@@ -12248,6 +11964,8 @@ async function sendSessionMessage(ws, id, cmd) {
 const noticeOnce = (__CREATE_NOTICE_ONCE__)();
 // This daemon's own runtime files kept in its dir (daemon-core.ts keepRuntimeFiles, injected as text).
 const keepRuntimeFiles = (__KEEP_RUNTIME_FILES__);
+// daemon.stamp, daemon.pid's start time (daemon-door.ts stampDoor, injected as text).
+const stampDoor = (__STAMP_DOOR__);
 // A user line's pictures as image blocks (user-line-images-core.ts, injected as text),
 // read only from Walnut's picture folders on this host (PICTURE_ROOTS, set beside DAEMON_DIR).
 const userLineContent = (__USER_LINE_CONTENT__);
@@ -12794,9 +12512,7 @@ function recordMissingStartTime(sid, session) {
     return false;
   }
   session.startTime = startTime;
-  try { persistRegistry(); } catch (error) {
-    logMsg('warn', 'process identity: start time recorded in memory, registry not persisted', { sid, pid, error: String(error) });
-  }
+  persistRegistry();
   logMsg('info', 'process identity: recorded the missing start time (its command line names the session)', { sid, pid, startTime });
   return true;
 }
@@ -12858,8 +12574,9 @@ function stopSessionProcess(ws, id, sid) {
     if (!error || error.code !== 'ESRCH') return sendError(ws, id, 'stop: process liveness is unknown; refusing to signal');
     if (isProcessGroupAlive(pid)) return sendError(ws, id, 'stop: process group still exists without its original leader; stop confirmation is pending');
     reapSession(sid, 0, 'stop-confirmed', true);
-    try { persistRegistry(); } catch (failure) { return sendError(ws, id, 'stop: registry persistence failed: ' + String(failure)); }
-    return sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' });
+    return persistRegistryDurable().then(
+      function () { return sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' }); },
+      function (failure) { return sendError(ws, id, 'stop: registry persistence failed: ' + String(failure)); });
   }
   if (!session.startTime) recordMissingStartTime(sid, session);
   const originalStartTime = session.startTime;
@@ -12876,8 +12593,9 @@ function stopSessionProcess(ws, id, sid) {
     logMsg('info', 'cmdStop: the recorded process is gone; its pid runs another program now (not signalled)', {
       sid, pid, recordedStartTime: originalStartTime || null, state: session.state,
     });
-    try { persistRegistry(); } catch (failure) { return sendError(ws, id, 'stop: registry persistence failed: ' + String(failure)); }
-    return sendOk(ws, id, { stopped: true, noop: true, reason: 'pid_reused' });
+    return persistRegistryDurable().then(
+      function () { return sendOk(ws, id, { stopped: true, noop: true, reason: 'pid_reused' }); },
+      function (failure) { return sendError(ws, id, 'stop: registry persistence failed: ' + String(failure)); });
   }
   if (!sameProcess()) {
     logMsg('warn', 'cmdStop: process identity is unknown; refusing to signal', {
@@ -12924,7 +12642,8 @@ function stopSessionProcess(ws, id, sid) {
       if (!isProcessGroupAlive(pid)) {
         if (sessions.get(sid) === session) {
           reapSession(sid, 0, 'stop-confirmed', true);
-          try { persistRegistry(); } catch (error) { return reply('stop: registry persistence failed: ' + String(error)); }
+          persistRegistryDurable().then(function () { reply(); }, function (error) { reply('stop: registry persistence failed: ' + String(error)); });
+          return;
         }
         return reply();
       }
@@ -13764,7 +13483,8 @@ const FS_WRITE_PRECONDITION_MAX_BYTES = 32 * 1024 * 1024;
 // rename; the live write that would have renamed it is long gone.
 const FS_WRITE_TEMP_STALE_MS = 60 * 60 * 1000;
 
-// Remove .name.walnut-*.tmp siblings an interrupted atomic write left behind.
+// Remove the temp siblings an interrupted atomic write left behind (fs.write's .name.walnut-*.tmp, the
+// registry's sessions.json.<pid>.tmp swept at boot).
 // Best effort. PARITY: daemon-standalone sweepStaleWriteTemps.
 async function sweepStaleWriteTemps(dir, prefix) {
   let names = [];
@@ -15045,17 +14765,26 @@ async function cmdTranscriptRestore(ws, id, cmd) {
 // Every session starts with the page silencer's preload in NODE_OPTIONS and BUN_OPTIONS (pw-silence-core.ts,
 // carried by the task-dir-core sidecar; an older sidecar adds nothing). Mirrors daemon-standalone.ts.
 const PW_SILENCE_DIR = taskDirCore && TASK_DIR_ROOT && typeof taskDirCore.pwSilenceDir === 'function' ? taskDirCore.pwSilenceDir(TASK_DIR_ROOT) : null;
-function pwSilenceOptions(node, bun) {
+// The preload file for a session start, checked without a synchronous file call
+// (pw-silence-core.ts ensurePwSilencePreloadAsync); a sidecar older than that has only its sync check.
+async function pwSilenceFile() {
+  if (!PW_SILENCE_DIR || !taskDirCore) return null;
+  try {
+    if (typeof taskDirCore.ensurePwSilencePreloadAsync === 'function') return await taskDirCore.ensurePwSilencePreloadAsync(PW_SILENCE_DIR);
+    return taskDirCore.ensurePwSilencePreload(PW_SILENCE_DIR);
+  } catch (err) { return null; }
+}
+function pwSilenceOptions(node, bun, file) {
   const none = { NODE_OPTIONS: node == null ? undefined : node, BUN_OPTIONS: bun == null ? undefined : bun };
   if (!PW_SILENCE_DIR || typeof taskDirCore.pwSilenceSessionEnv !== 'function') return none;
-  try { return taskDirCore.pwSilenceSessionEnv(none.NODE_OPTIONS, none.BUN_OPTIONS, taskDirCore.ensurePwSilencePreload(PW_SILENCE_DIR)); } catch (err) { return none; }
+  try { return taskDirCore.pwSilenceSessionEnv(none.NODE_OPTIONS, none.BUN_OPTIONS, file); } catch (err) { return none; }
 }
 // A key the engine's env names wins over the daemon's own, null and '' meaning cleared.
 function ownOrDaemon(env, key) {
   return env && Object.prototype.hasOwnProperty.call(env, key) ? (env[key] == null ? '' : env[key]) : process.env[key];
 }
-function pwSilenceAcpOptions(env) {
-  const o = pwSilenceOptions(ownOrDaemon(env, 'NODE_OPTIONS'), ownOrDaemon(env, 'BUN_OPTIONS'));
+function pwSilenceAcpOptions(env, file) {
+  const o = pwSilenceOptions(ownOrDaemon(env, 'NODE_OPTIONS'), ownOrDaemon(env, 'BUN_OPTIONS'), file);
   return { NODE_OPTIONS: o.NODE_OPTIONS || '', BUN_OPTIONS: o.BUN_OPTIONS || '' };
 }
 // Fleet secrets sidecar (secrets-core.cjs): the secrets the user shared with this
@@ -17427,7 +17156,8 @@ function exitDaemon(code) {
   end();
 }
 
-function cleanup() {
+/** opts.registrySaved: the stop wrote the registry just before. */
+function cleanup(opts) {
   // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
   try { oneShot.disposeAll(); } catch {}
   // MCP servers started for tasks on other hosts end with the daemon (host-mcp-v1). Mirrors daemon-standalone.ts.
@@ -17495,7 +17225,10 @@ function cleanup() {
   // forever. Keep in sync with daemon-standalone.ts.
   if (ownsFiles && shouldReapOnExit()) reapAllSessionGroupsSync();
 
-  try { persistRegistry(); } catch {}
+  // Synchronous: a process may exit right after; a stop that just wrote it
+  // (registrySaved) writes again only when something changed since. Only while the dir is ours:
+  // a zombie's old inventory must never replace its successor's.
+  if (ownsFiles) { try { persistRegistryNow({ unlessClean: !!(opts && opts.registrySaved) }); } catch {} }
   // Stop all agent subs
   for (const [, sub] of agentSubs) {
     clearInterval(sub.timer);
@@ -17507,6 +17240,7 @@ function cleanup() {
   if (ownsFiles) {
     try { fs.unlinkSync(PORT_FILE); } catch {}
     try { fs.unlinkSync(PID_FILE); } catch {}
+    try { fs.unlinkSync(STAMP_FILE); } catch {}
     try { fs.unlinkSync(INSTANCE_ID_FILE); } catch {}
     try { fs.unlinkSync(SERVICE_FILE); } catch {}
     try { fs.unlinkSync(VERSION_FILE); } catch {}
@@ -17518,6 +17252,8 @@ function cleanup() {
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')); } catch {} // retired alias, older daemons wrote it
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) });
+  // The process may exit right after: the queued log lines go now.
+  if (logAppender) logAppender.flushSync();
 }
 
 // ── Main ──
@@ -17799,7 +17535,10 @@ async function startDaemon() {
   // A service must not carry on from a failed reconcile: an empty registry there
   // means adoptable CLIs would be treated as if they never existed.
   await budgetStopsReady.catch(function () {});
-  try { reconcileRegistry(); } catch (err) {
+  // The registry's temp files a dead daemon left mid-write (sessions.json.<pid>.tmp and
+  // .<pid>.sync.tmp, one per crash): older than an hour, so never a live writer's. Not awaited.
+  void sweepStaleWriteTemps(path.dirname(REGISTRY_FILE), path.basename(REGISTRY_FILE) + '.');
+  try { await reconcileRegistry(); } catch (err) {
     logMsg('error', 'reconcileRegistry failed', { error: err && err.message });
     if (SERVICE_MODE) throw err;
   }
@@ -17824,7 +17563,7 @@ async function startDaemon() {
   try { backfillSpawnJournal(); } catch (err) {
     logMsg('warn', 'spawn journal backfill failed', { error: err.message });
   }
-  recoverPendingAsks();
+  followerEntry.recoverPendingAsks();
   logMsg('info', 'startup: complete — sessions ready', {
     totalSessions: sessions.size,
     sids: [...sessions.keys()],
@@ -17948,8 +17687,11 @@ async function startDaemon() {
     // The lock banner is what a second starter reads, so it must carry the live
     // ws port before any client can be told about it.
     if (daemonInstanceLock) daemonInstanceLock.publish(port);
-    // daemon.pid before daemon.port: a starter that sees the port file reads the pid next.
+    // daemon.pid, then daemon.stamp, then daemon.port: a starter that sees the port file reads the pid next,
+    // and a leader trusts the pid by its stamp, never older than the pid file (twin of daemon-door.ts publishDoorFiles).
+    try { fs.unlinkSync(STAMP_FILE); } catch {}
     fs.writeFileSync(PID_FILE, String(process.pid));
+    stampDoor(fs, { pidFile: PID_FILE, stampFile: STAMP_FILE }, process.pid, { procStart: function (pid) { return readProcStartTime(fs, pid); }, execFile: execFile, env: process.env });
     // daemon.port by rename, so a reader that sees the file reads the whole port, never the empty
     // file between its creation and its write (CI 43535674084: ws://127.0.0.1:NaN).
     const portTmp = PORT_FILE + '.' + process.pid + '.tmp';
@@ -17959,8 +17701,8 @@ async function startDaemon() {
     if (netSupervisor) netSupervisor.start();
     // Hub forwards listen once the links they ride can come (hub-forward-v1).
     hubForwards.start();
-    // daemon.pid names us now: the journal writes are ours (journal v2 migration).
-    migrateJournals();
+    // daemon.pid names us now: the journal writes are ours (journal v2 migration), then the minute sweep.
+    hostJournal.migrate();
     // Agent gateway: second (unix-socket) listener + on-PATH walnut shim. Both
     // additive: failures log a warning and never abort daemon startup. Started only
     // after the migration, as in daemon-standalone.ts --start (one synchronous block
@@ -18048,7 +17790,7 @@ async function startDaemon() {
         { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
       ];
       if (SERVICE_MODE) files.push({ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID });
-      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), SERVES_FILE, BRIDGE_FILE].concat([...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)), touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
+      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), STAMP_FILE, SERVES_FILE, BRIDGE_FILE].concat([...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)), touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
       if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored: restored });
     }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : 3600000 /* RUNTIME_KEEP_MS */);
     runtimeKeepTimer.unref();
@@ -18149,8 +17891,18 @@ async function startDaemon() {
       if (failed) logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) });
       // Answers that came while it drained went out; the rest are told now.
       releaseGatewayRelays();
-      persistRegistry();
-      cleanup();
+      // Past the drain cap the file pool may be wedged: written here. A write that fails is
+      // logged and the exit cleanup tries once more; the stop always goes on. Only while daemon.pid
+      // is ours or gone (cleanup()'s ownsFiles rule): a zombie's stop never writes its inventory
+      // over its successor's registry.
+      let registrySaved = true;
+      if (ownsDaemonDir()) {
+        try {
+          if (settled === 'cap') persistRegistryNow();
+          else await persistRegistryDurable();
+        } catch (error) { registrySaved = false; logMsg('error', 'daemon shutdown: registry write failed', { error: String(error) }); }
+      }
+      cleanup({ registrySaved: registrySaved });
       try { httpServer.close(); } catch {}
       if (daemonInstanceLock) await daemonInstanceLock.release();
       // Work still stuck in a file call (a FIFO no one reads) holds a libuv pool thread, and a

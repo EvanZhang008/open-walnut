@@ -143,8 +143,8 @@ describe('remote write paths ratchet', () => {
     // The update records on disk are the real server's: every read of one goes through the one
     // helper, which reads only for a real server's connection.
     expect(dc).toMatch(/private ownUpdateRecord<T>\(read: \(key: string\) => Promise<T \| null>\): Promise<T \| null> \{\n {4}return this\.isolation\.mode === 'shared' \?/)
-    const reads = dc.match(/(?:readBuildBackoff|unreadUpdates\.read|pendingReplaces\.read)\(/g) ?? []
-    const helped = dc.match(/this\.ownUpdateRecord\(\(k\) => (?:readBuildBackoff|unreadUpdates\.read|pendingReplaces\.read)\(k\)\)/g) ?? []
+    const reads = dc.match(/(?:readBuildBackoff|unreadUpdates\.read|pendingReplaces\.read|serviceModeAsks\.read)\(/g) ?? []
+    const helped = dc.match(/this\.ownUpdateRecord\(\(k\) => (?:readBuildBackoff|unreadUpdates\.read|pendingReplaces\.read|serviceModeAsks\.read)\(k\)\)/g) ?? []
     expect(reads.length).toBeGreaterThan(0)
     expect(helped.length, 'an update record read that is not through ownUpdateRecord').toBe(reads.length)
     expect(dc).toMatch(/opts\.isolated = \{ root, runtimeDir: isolatedLayout\(root\)\.runtimeDir \}/)

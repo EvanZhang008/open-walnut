@@ -123,25 +123,106 @@ export function watchBackupLeaderSetting(): () => void {
 export interface LeaderHostConnection {
   hostKey: string
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+  /**
+   * The home the host keeps this Walnut under when a declared move made this data dir its alias
+   * there (leader.configure's `homeHere`), else null: the name the host's own service and its mode
+   * file use for this Walnut (one-service-mode.ts).
+   */
+  noteHomeHere?(home: string | null): void
 }
 
 /**
- * Describe the Walnut to one host and hold the lead there. Runs after the
- * offline handover, so what the host did alone is already taken back.
+ * How this Walnut describes itself to a host (leader.configure). `formerHomes`: the data dirs it
+ * declares it moved from, newest first (home-move.ts, under the one-service experiment only); the
+ * first goes as `movedFrom` too.
  */
-export async function configureHostLeader(conn: LeaderHostConnection): Promise<HostLeaderState | null> {
+async function leaderDescription(formerHomes: string[] | null): Promise<Record<string, unknown>> {
   const backup = await backupLeaderAllowed()
   // `drains`: the journal v2 kinds this Mac applies (journal-v2); a daemon writes them only then.
   const { MAC_DRAINS } = await import('../offline-merge/apply-v2.js')
   const id = await walnutId()
-  // An id this process keeps in memory only names no Walnut a host may continue (walnut-scope-core.ts adopt).
+  // An id this process keeps in memory only names no Walnut a host may continue (walnut-scope-core.ts).
   const { isVolatileInstanceId } = await import('../device-auth.js')
   const volatile = isVolatileInstanceId(id) ? { walnutIdVolatile: true } : {}
-  // A host may take this home for the Walnut it already keeps under another one (walnut-scope-core.ts
-  // adopt) only under the one-service experiment, until its real-host evidence is in.
-  const { inProcessDaemonWanted } = await import('../../providers/in-process-daemon.js')
-  const moves = (await inProcessDaemonWanted()) ? { walnutHomeMoves: true } : {}
-  const reply = await conn.send('leader.configure', { home: WALNUT_HOME, walnutId: id, backup, drains: [...MAC_DRAINS], ...volatile, ...moves }, 15_000)
+  const move = formerHomes && formerHomes.length > 0 ? { movedFrom: formerHomes[0], formerHomes } : {}
+  return { home: WALNUT_HOME, walnutId: id, backup, drains: [...MAC_DRAINS], ...volatile, ...move }
+}
+
+/**
+ * A Walnut whose data dir moved tells a host first, before any other frame of the connect
+ * (daemon-connection.ts holds them for this), so the host keys everything that follows by the
+ * Walnut's first home there: no set, copy or journal drain ever lands under the new path.
+ * Sends nothing when no move is declared. It goes before the offline handover; that is safe:
+ * the host answers a session's call itself while its journal still holds what the Mac has not
+ * taken (offline-host-core.ts pendingHandover), as it does after the host.slice probe binds.
+ */
+export async function declareHomeMove(conn: LeaderHostConnection): Promise<void> {
+  const { homeMoveToDeclare } = await import('../home-move.js')
+  const formers = await homeMoveToDeclare()
+  if (!formers) return
+  const reply = await describeTo(conn, formers)
+  await noteHomeAnswer(conn, reply, true)
+}
+
+/**
+ * leader.configure, once more when the host refused a declared move because another copy of this
+ * Walnut declared one there first (walnut_home_busy: it is where the Walnut is now there, at
+ * `movedTo`, a data dir on this machine, since a move is declared only from the machine its
+ * record names). When that folder no longer holds this Walnut's id (deleted, renamed, or another
+ * Walnut's now), that copy is gone: the description goes again naming it (`copyGone`), and the
+ * host gives this copy the place (walnut-scope-core.ts declareMove). Two live copies stay as the
+ * host has them: a person picks one (the Health item says how, home-busy-health.ts).
+ */
+async function describeTo(conn: LeaderHostConnection, formers: string[] | null): Promise<Record<string, unknown>> {
+  const description = await leaderDescription(formers)
+  const reply = await conn.send('leader.configure', description, 15_000)
+  const at = reply.movedTo
+  if (!formers || reply.errorKind !== 'walnut_home_busy' || typeof at !== 'string' || !at.startsWith('/') || at === WALNUT_HOME) return reply
+  if (description.walnutIdVolatile === true || typeof description.walnutId !== 'string') return reply
+  const { walnutGoneAt } = await import('../device-store.js')
+  if (!(await walnutGoneAt(at, description.walnutId))) return reply
+  log.leader.info('home move: the copy of this Walnut a host follows is gone from this machine; this copy takes its place', { host: conn.hostKey, gone: at })
+  return conn.send('leader.configure', { ...description, copyGone: at }, 15_000)
+}
+
+/** A host's `homeHere` (an absolute path other than this data dir), else null. */
+function homeHereOf(reply: Record<string, unknown>): string | null {
+  const h = reply.homeHere
+  return typeof h === 'string' && h.startsWith('/') && h.length <= 1024 && !/[\u0000-\u001f]/.test(h) && h !== WALNUT_HOME ? h : null
+}
+
+/**
+ * What a host said of this Walnut's description, as Walnut Health items (home-busy-health.ts): it
+ * refused this data dir (the Walnut moved elsewhere there, or another Walnut left this path), or
+ * it took the description but not the declared move. An answer that says neither clears them.
+ */
+async function noteHomeAnswer(conn: LeaderHostConnection, reply: Record<string, unknown>, declared: boolean): Promise<void> {
+  const hostKey = conn.hostKey
+  if (reply.ok === true) conn.noteHomeHere?.(homeHereOf(reply))
+  const { noteHomeBusy, noteHomeServed, noteMoveNotTaken, noteMoveTaken } = await import('./home-busy-health.js')
+  const movedTo = typeof reply.movedTo === 'string' ? reply.movedTo : ''
+  if (reply.errorKind === 'walnut_home_busy' || reply.errorKind === 'walnut_home_taken') noteHomeBusy(hostKey, movedTo, reply.errorKind === 'walnut_home_taken' ? 'taken' : declared ? 'contested' : 'busy')
+  else if (reply.ok === true) {
+    noteHomeServed(hostKey)
+    if (declared && typeof reply.moveNotTaken === 'string') noteMoveNotTaken(hostKey, reply.moveNotTaken)
+    else if (declared) noteMoveTaken(hostKey)
+  }
+}
+
+/**
+ * Describe the Walnut to one host and hold the lead there. Runs after the
+ * offline handover, so what the host did alone is already taken back (a declared home move
+ * went first, declareHomeMove). With the one-service experiment known off it waits on nothing
+ * of the home move.
+ */
+export async function configureHostLeader(conn: LeaderHostConnection): Promise<HostLeaderState | null> {
+  const { homeMoveToDeclare, settledHomeMove } = await import('../home-move.js')
+  const known = settledHomeMove()
+  // Known: no wait (with the experiment off, the record is still kept in the background).
+  if (known === null) void homeMoveToDeclare()
+  const formers = known === undefined ? await homeMoveToDeclare() : known
+  const reply = await describeTo(conn, formers)
+  await noteHomeAnswer(conn, reply, !!formers)
   if (reply.ok !== true) {
     log.leader.warn('leader: host refused the Walnut description', { host: conn.hostKey, error: String(reply.error ?? '') })
     return null

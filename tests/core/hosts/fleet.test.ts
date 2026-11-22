@@ -384,3 +384,18 @@ describe('a machine in config twice (found in ~/.ssh/config, then joined)', () =
     }
   }, 20_000)
 })
+
+// a3b land 2 review L4: a host that runs a SECOND Walnut's one service still runs this Walnut's
+// server as a separate program there: the card says "Walnut service" only for this Walnut's own.
+describe('the card names the one Walnut service only when it is this Walnut\'s', () => {
+  it.each([
+    ['this Walnut\'s service', { serves: 'walnut-serve', serviceHome: WALNUT_HOME }, 'walnut-serve'],
+    ['another Walnut\'s service', { serves: 'walnut-serve', serviceHome: '/home/other/.open-walnut' }, undefined],
+    ['a service whose home was not said', { serves: 'walnut-serve', serviceHome: null }, undefined],
+    ['the daemon', { serves: 'daemon', serviceHome: null }, undefined],
+  ] as const)('%s', async (_what, servesAs, serves) => {
+    dev.conn.servesAs = servesAs
+    const card = await getFleetHost('devbox')
+    expect(card?.daemon?.serves).toBe(serves)
+  })
+})

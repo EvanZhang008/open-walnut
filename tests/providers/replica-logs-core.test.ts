@@ -18,7 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createReplicaLogs } from '../../src/providers/replica-logs-core.js'
-import { createHostServerSupervisor, type HostServerDeps } from '../../src/providers/host-server-core.js'
+import { createHostServerSupervisor, heldServerAt, type HostServerDeps } from '../../src/providers/host-server-core.js'
 import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -160,6 +160,7 @@ describe('the supervisor caps a running server\'s stdout log by size', () => {
       log: (_l, msg, data) => { logs.push({ msg, data }) },
       startTimeOf: (pid) => procs.get(pid) ?? null,
       killGroup: () => {},
+      heldAt: heldServerAt,
       baseEnv: () => ({ HOME: '/home/u' }),
       randomToken: () => 't'.repeat(64),
       maxLogBytes: 1000,

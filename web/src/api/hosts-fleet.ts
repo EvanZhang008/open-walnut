@@ -45,6 +45,8 @@ export interface FleetHost {
       current: string; good: string; phase: 'committed' | 'trial' | 'probation'; watchedUntil: number | null;
       lastRollback: { at: number; from: string; reason: string } | null;
     } | null;
+    /** The host's one Walnut service runs here: its session helper and Walnut server are one program. Absent otherwise. */
+    serves?: 'walnut-serve';
   } | null;
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
   /** What the host can do (src/core/hosts/capabilities.ts); absent from a server older than it. */

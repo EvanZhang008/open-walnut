@@ -6,6 +6,9 @@ import { createDaemonCommandDrain } from '../../src/providers/daemon-command-dra
 import { createDemoDaemonQuiesce } from '../../src/providers/demo-daemon-quiesce-core.js'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { createRegistryWriter } from '../../src/providers/registry-writer-core.js'
+import { armFilePoolDeadline } from '../../src/providers/file-pool-deadline.js'
+import { reconcileVerdict } from '../../src/providers/daemon-core.js'
 import { createHostFix } from '../../src/providers/host-fix-core.js'
 import { createClaudeInstall } from '../../src/providers/claude-install-core.js'
 import { createClaudeDownload } from '../../src/providers/claude-download-core.js'
@@ -130,7 +133,8 @@ const STOP_REAP_OFF = 'const shouldReapOnExit = () => false; const ownsDaemonDir
 const stopDaemonSource = (source: string) => {
   if (/function exitDaemon\(/.test(source)) {
     const exit = `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
-    return `let shutdown = null; ${exit}const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`
+    // The stop's registry write is made only while daemon.pid is ours (daemon-stale-pid-twins-e2e covers a successor's).
+    return `let shutdown = null; const ownsDaemonDir = () => true; ${exit}const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`
   }
   if (!source.includes(STANDALONE_SHUTDOWN)) throw new Error('standalone: requestDaemonShutdown no longer exits with stopDaemon\'s code')
   const options = "const options = { exit: (code) => process.exit(code), hardExit: () => process.kill(process.pid, 'SIGKILL') };"
@@ -224,43 +228,47 @@ describe.each([
     const turnRetry = { attempts: 2, streakStartedAt: 100, lastAttemptAt: 200, lastHandledV: 300 }
     const sessions = new Map([['session', { state: 'running', pid: 4242, turnRetry }]])
     const writeFileSync = vi.fn()
-    const registryFs = { writeFileSync, openSync: () => 123, fsyncSync: vi.fn(), closeSync: vi.fn(), renameSync: vi.fn() }
-    const registrySource = _kind === 'standalone' ? fs.readFileSync(path.resolve('src/providers/daemon-core.ts'), 'utf8') : source
-    const persist = compile<() => void>(`${extract(registrySource, 'persistRegistry')}\nreturn persistRegistry;`, {
-      sessions, fs: registryFs, deps: { bootId: 'boot' }, daemonBootId: 'boot', clock: () => 0, registryHeldForExit: false,
-      registryFile: '/fixture/sessions.json', REGISTRY_FILE: '/fixture/sessions.json',
-      dirname: path.dirname, path, logger: vi.fn(), logMsg: vi.fn(),
+    const registryFs = { writeFileSync, unlinkSync: vi.fn(), openSync: () => 123, fsyncSync: vi.fn(), closeSync: vi.fn(), renameSync: vi.fn(), promises: fs.promises }
+    // Both twins write through the one registry writer (registry-writer-core.ts): the bun twin
+    // imports it into daemon-core.ts, the JS twin inlines its text.
+    if (_kind === 'standalone') expect(fs.readFileSync(path.resolve('src/providers/daemon-core.ts'), 'utf8')).toMatch(/createRegistryWriter\(\{/)
+    else expect(source).toMatch(/var registryWriter = \(function createRegistryWriter\(/)
+    const writer = createRegistryWriter({
+      fs: registryFs as unknown as typeof fs, dirname: path.dirname, file: '/fixture/sessions.json', sessions, now: () => 0,
+      strict: () => true, log: vi.fn(), armDeadline: armFilePoolDeadline,
     })
-    persist()
+    writer.writeSync()
     expect(JSON.parse(writeFileSync.mock.calls[0][1]).sessions.session.turnRetry).toEqual(turnRetry)
   })
 
-  it('preserves the retry budget when adopting a live CLI without scheduling another message', () => {
+  it('preserves the retry budget when adopting a live CLI without scheduling another message', async () => {
     const turnRetry = { attempts: 2, streakStartedAt: 100, lastAttemptAt: 200, lastHandledV: 300 }
     const entry = { pid: 4242, startTime: 'start', bootId: 'boot', jsonlPath: '/fixture/session.jsonl', args: ['cli'], turnRetry }
     const sessions = new Map<string, { turnRetry?: typeof turnRetry; turnRetryTimer?: unknown }>()
-    const rebuildFoldStateFromJsonl = () => ({ boundary: 400, state: {} })
-    const rebuildTaskStateFromJsonl = () => ({})
+    // The adopt folds both states in one async pass (stream-fold-core.ts foldFile).
+    const streamFold = { foldFile: async () => ({ fold: {}, task: {}, boundary: 400, checkpointV: 0 }) }
     if (_kind === 'standalone') {
-      const adopt = compile<(sid: string, value: typeof entry) => { turnRetry?: typeof turnRetry }>(
+      const adopt = compile<(sid: string, value: typeof entry) => Promise<{ turnRetry?: typeof turnRetry }>>(
         `return ${extract(source, 'createAdoptedSession')};`,
         // The adopt also stamps a cron origin; neither call is what this test is
         // about, so both are stubbed to their "nothing known" answers.
-        { rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map() },
+        { streamFold, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map() },
       )
-      sessions.set('session', adopt('session', entry))
+      sessions.set('session', await adopt('session', entry))
     } else {
-      const reconcile = compile<() => void>(`${extract(source, 'reconcileRegistry')}\nreturn reconcileRegistry;`, {
-        readRegistry: () => ({ session: entry }), sessions, rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl,
+      // The verdict is daemon-core.ts reconcileVerdict, inlined as text; the pass writes once at its end.
+      const reconcile = compile<() => Promise<void>>(`const reconcileVerdictCore = (${reconcileVerdict.toString()});\n${extract(source, 'reconcileVerdict')}\nconst RECONCILE_SLICE_MS = 8;\nlet reconcilingRegistry = 0;\nlet reconcileWriteAsked = false;\n${extract(source, 'reconcileRegistry')}\n${extract(source, 'reconcilePass')}\nreturn reconcileRegistry;`, {
+        readRegistry: () => ({ session: entry }), sessions, streamFold, persistRegistry: vi.fn(),
         daemonBootId: 'boot', reapSession: vi.fn(), logMsg: vi.fn(), fs: { readdirSync: () => [] },
         STREAMS_DIR: '/fixture', process: { kill: vi.fn() }, readStartTime: () => 'start', readStartTimeAsync: async () => 'start',
+        readStartTimes: () => new Map([[4242, 'start']]),
         logStateTransition: vi.fn(), startOrphanPoll: vi.fn(), broadcastSessionState: vi.fn(),
         processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }),
         // Adopting a live CLI locks its stdin FIFO write-only (LIVE_FIFO_MODE); no FIFO here.
         lockLiveFifo: () => true,
         budgetStopGroups: new Map(),
       })
-      reconcile()
+      await reconcile()
     }
     expect(sessions.get('session')?.turnRetry).toEqual(turnRetry)
     expect(sessions.get('session')?.turnRetryTimer).toBeUndefined()
@@ -395,7 +403,7 @@ describe.each([
         prepareDaemonServiceHandover: prepare, cronRuntimeCore: { prepareDaemonServiceHandover: prepare },
         // The runtime's child functions and env, handed to the handover's probes (daemon-child-spawn.ts).
         childUse: {},
-        persistRegistry: (strict: boolean) => {
+        persistRegistryDurable: async (strict: boolean) => {
           expect(strict).toBe(true)
           order.push('persist')
           if (fault === 'persist') throw new Error('registry refused')
@@ -625,7 +633,7 @@ describe.each([
       noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(() => cron.promise) },
       netSupervisor: { stop: vi.fn(async () => {}) },
-      persistRegistry: () => { order.push('persist') },
+      persistRegistryDurable: async () => { order.push('persist') },
       cleanup: () => { order.push('cleanup') },
       server: { stop: () => { order.push('server') } },
       httpServer: { close: () => { order.push('server') } },
@@ -649,7 +657,9 @@ describe.each([
     expect(hostFix.cancel).toHaveBeenCalledTimes(1)
   })
 
-  it('shutdown ends after its drain limit when a command never settles, saving the registry first', async () => {
+  // S7-H1 (2026-11-22 review): past the cap the file pool may be wedged (the very case the cap is
+  // for), and an await of an async registry write there never returned: the stop hung half shut.
+  it('shutdown ends after its drain limit when a command never settles, saving the registry first, synchronously', async () => {
     const daemonCommands = createDrain()
     daemonCommands.run(() => new Promise(() => {}))
     const exited = deferred<number>()
@@ -659,7 +669,9 @@ describe.each([
       daemonCommands, hostFix: { cancel: vi.fn(() => false) }, hostExec: idleHostExec(), RESUMABLE_RUN_ENDED: 'resumable run ended', releaseGatewayWaiters: vi.fn(),
       releaseGatewayRelays: () => { order.push('relays') }, noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(async () => {}) }, netSupervisor: { stop: vi.fn(async () => {}) },
-      persistRegistry: () => { order.push('persist') }, cleanup: () => { order.push('cleanup') },
+      // A wedged pool: an async write never settles.
+      persistRegistryDurable: () => new Promise(() => {}), persistRegistryNow: () => { order.push('persist') },
+      cleanup: () => { order.push('cleanup') },
       server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
       process: {
@@ -676,6 +688,30 @@ describe.each([
     expect(logMsg).toHaveBeenCalledWith('warn', expect.stringContaining('after the drain limit'), { limitMs: 50 })
   })
 
+  // S7-L2: a strict registry write that fails rejected past cleanup(): no exit write, no pid or
+  // port removal, no lock release.
+  it('shutdown still cleans up and exits when the registry write fails', async () => {
+    const exited = deferred<number>()
+    const order: string[] = []
+    const logMsg = vi.fn()
+    const stop = compile<() => void>(stopDaemonSource(source), {
+      daemonCommands: createDrain(), hostFix: { cancel: vi.fn(() => false) }, hostExec: idleHostExec(), RESUMABLE_RUN_ENDED: 'resumable run ended', releaseGatewayWaiters: vi.fn(),
+      releaseGatewayRelays: vi.fn(), noteRestarting: vi.fn(),
+      cronRuntime: { close: vi.fn(async () => {}) }, netSupervisor: { stop: vi.fn(async () => {}) },
+      persistRegistryDurable: async () => { throw new Error('EIO: fsync') }, persistRegistryNow: vi.fn(),
+      cleanup: (opts: { registrySaved?: boolean }) => { order.push(`cleanup:${opts.registrySaved}`) },
+      server: { stop: () => {} }, httpServer: { close: () => {} },
+      daemonInstanceLock: { release: async () => { order.push('release') } },
+      process: { exit: (code: number) => { order.push(`exit:${code}`); exited.resolve(code) }, env: {} },
+      serviceUpdateRequested: false, logMsg,
+    })
+    stop()
+    await exited.promise
+    // The exit cleanup writes again (registrySaved false), and the lock is still let go.
+    expect(order).toEqual(['cleanup:false', 'release', 'exit:0'])
+    expect(logMsg).toHaveBeenCalledWith('error', 'daemon shutdown: registry write failed', { error: expect.stringContaining('EIO') })
+  })
+
   it.each([false, true])('shutdown stops a Claude Code install in flight at once, even when cancel throws (%s)', async (throws) => {
     const daemonCommands = createDrain()
     const claude = claudeFixInFlight()
@@ -686,7 +722,7 @@ describe.each([
     const stop = compile<() => void>(stopDaemonSource(source), {
       daemonCommands, hostFix, hostExec: idleHostExec(), RESUMABLE_RUN_ENDED: 'resumable run ended', releaseGatewayWaiters: vi.fn(), noteRestarting: vi.fn(), releaseGatewayRelays: vi.fn(),
       cronRuntime: { close: async () => {} }, netSupervisor: { stop: async () => {} },
-      persistRegistry: () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
+      persistRegistryDurable: async () => {}, cleanup: () => {}, server: { stop: () => {} }, httpServer: { close: () => {} },
       daemonInstanceLock: { release: async () => {} },
       process: { exit: (code: number) => exited.resolve(code), env: {} }, serviceUpdateRequested: false, logMsg,
     })
@@ -723,7 +759,7 @@ describe.each([
     const cleanup = compile<() => void>(`${extract(source, 'stopSessionWatcher')}\n${extract(source, 'cleanup')}\nreturn cleanup;`, {
       sessions, cronRuntime: null, usageBudget, budgetControl, stopBridge: vi.fn(), vscodeServerCore: null, triggerTickTimer: null,
       runtimeKeepTimer: null,
-      shouldReapOnExit: () => false, reapAllSessionGroupsSync, persistRegistry,
+      shouldReapOnExit: () => false, reapAllSessionGroupsSync, persistRegistryNow: persistRegistry, logAppender: null,
       clearInterval: (timer: unknown) => { cleared.add(timer); order.push(String(timer)) },
       fs: { readFileSync: () => '4242', unlinkSync: vi.fn() }, process: { pid: 4242, kill },
       path, agentSubs: new Map(), logMsg: vi.fn(), DAEMON_START_TS: 0,
@@ -911,7 +947,7 @@ describe('standalone ACP command lifetime', () => {
       // acpStart hands the session the secrets the user shared with this host (secrets-core.ts).
       secretsSessionEnv: () => ({}), SECRETS_ROOT: '/fixture/secrets',
       // acpStart starts the agent with the test-browser silencer preload (pw-silence-core.ts).
-      pwSilenceAcpOptions: () => ({}),
+      pwSilenceAcpOptions: () => ({}), pwSilenceFile: async () => null,
       // acpStart hands the worker its host-call entry (host-call-entry-v1); this frame names no home.
       hostCallTokens: { envFor: () => ({}) },
       demoQuiesce: noDemoQuiesce(),

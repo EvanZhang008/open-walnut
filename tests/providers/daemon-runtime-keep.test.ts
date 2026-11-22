@@ -40,6 +40,9 @@ describe('keepRuntimeFiles', () => {
     expect(r.persisted).toBe(1)
     expect(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8')).toBe('41234')
     expect(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8')).toBe('4242')
+    // Dated like the stamp it freshens: a daemon.pid newer than daemon.stamp reads as an earlier
+    // daemon's stamp (daemon-live-sh.ts w_stamp; review A3b S34-M1).
+    expect(fs.statSync(path.join(dir, 'daemon.pid')).mtimeMs).toBe(NOW.getTime())
   })
 
   it('freshens the times of files that are there, so a cleanup by age never finds them old', () => {

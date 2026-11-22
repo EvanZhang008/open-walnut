@@ -61,7 +61,6 @@ describe('audienceOf: the rule', () => {
  */
 const STORE_WRITERS: Record<string, { calls: number; what: string }> = {
   'web/server.ts': { calls: 3, what: 'publishErrorNotification (health unless its caller names a reason), the cron receipt (user), the permission ask (user)' },
-  'core/hosts/host-launcher.ts': { calls: 1, what: 'a host\'s launcher put its daemon back to the previous version (health, kind operation-error, no needsYou)' },
   'core/hooks/actions.ts': { calls: 1, what: 'a hook the person configured with a notify action (user, kind hook)' },
   'core/overview-maintainer.ts': { calls: 1, what: 'a new skill receipt (user, kind skill, never toasts)' },
   'core/routines/executors/session.ts': { calls: 1, what: 'the person\'s own routine (user, kind cron, feed only)' },
@@ -81,7 +80,7 @@ const STORE_WRITERS: Record<string, { calls: number; what: string }> = {
   'core/hosts/found-host-alert.ts': { calls: 1, what: 'a found host the person said Connect to that cannot be added (user, own-action)' },
   'core/notifications/apply-companion-cards.ts': { calls: 1, what: 'the cloud companion\'s own cards, as it wrote them (their reason comes along)' },
   'core/offline-merge/journal-fill.ts': { calls: 1, what: 'a host journal that came near full or refused writes while the Mac was away (health)' },
-  'core/host-server/health-item.ts': { calls: 1, what: 'a host\'s follower server that did not start (health)' },
+  'core/notifications/health-items.ts': { calls: 1, what: 'Walnut Health items about hosts (health, kind operation-error, no needsYou): a launcher that put its daemon back, a follower server that did not start, a host that refused a moved copy of this Walnut' },
 }
 
 // Namespaced calls count too (`store.upsertNotification(`); chat-history's own addNotification is the

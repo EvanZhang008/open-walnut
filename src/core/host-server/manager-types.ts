@@ -46,6 +46,13 @@ export interface HostServerHost {
   daemonKeeper?(): Promise<string>
   /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
   readonly daemonInstanceId?: string | null
+  /**
+   * What the hello says runs there (one-service-mode.ts): 'walnut-serve' is a host's one Walnut
+   * service, the follower of `serviceHome` itself. Absent (an older connection): the daemon.
+   */
+  servesAs?(): { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null }
+  /** This Walnut's follower there settled (manager.ts followerFact): a switch of the host's mode may be due. */
+  serviceModeChanged?(): void
 }
 
 export interface HostServerSettings {

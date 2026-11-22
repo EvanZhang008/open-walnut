@@ -176,7 +176,12 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     const value = [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : 'build not reported yet', reboot, launcher.value].filter(Boolean).join(', ');
     const how = !h.local && d.startsAfterReboot && d.reboot ? `\nAfter a reboot: ${d.reboot.replace(/`/g, '')}` : '';
     // "Walnut helper Version 0123456789ab" read as jargon (2026-11-05 review): what it does, then its build.
-    rows.push({ key: 'daemon', label: 'Session helper', value: value.charAt(0).toUpperCase() + value.slice(1), title: `The small program Walnut runs on the host to start and keep its sessions${how}${launcher.title}` });
+    // A host's one Walnut service is the session helper and Walnut's server in one program.
+    const service = d.serves === 'walnut-serve';
+    rows.push({
+      key: 'daemon', label: service ? 'Walnut service' : 'Session helper', value: value.charAt(0).toUpperCase() + value.slice(1),
+      title: `${service ? 'One program on the host that starts and keeps its sessions and runs Walnut\'s server there' : 'The small program Walnut runs on the host to start and keep its sessions'}${how}${launcher.title}`,
+    });
   }
   return rows;
 }

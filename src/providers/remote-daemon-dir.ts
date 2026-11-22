@@ -21,7 +21,7 @@
 
 import path from 'node:path'
 import { shq } from './remote-sh.js'
-import { DAEMON_PID_SH } from './daemon-start-cmd.js'
+import { DAEMON_PID_SH } from './daemon-live-sh.js'
 
 export const PROD_REMOTE_DAEMON_DIR = '/tmp/open-walnut'
 /** Relative to $HOME on the host. Both daemon twins recognise it as a production dir. */

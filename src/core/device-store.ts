@@ -211,8 +211,8 @@ export function tombstone(auth: LockedAuth, hashes: readonly string[]): void {
 /** auth.json as every rule reads it: brought up to date, owner decided. */
 export type DeviceRegistry = { devices: readonly DeviceRecord[]; owner: CompanionOwner | null }
 
-function authFilePath(): string {
-  return path.join(WALNUT_HOME, 'auth.json')
+function authFilePath(home: string = WALNUT_HOME): string {
+  return path.join(home, 'auth.json')
 }
 
 export function sha256Hex(input: string): string {
@@ -612,6 +612,33 @@ export async function getInstanceId(): Promise<string> {
     await saveAuth(fileOf({ instanceId, devices: auth.devices, owner: auth.owner ?? null, ...keptRevoked(auth.revokedHashes) }))
     return instanceId
   })
+}
+
+/**
+ * The Walnut id the data dir at `home` holds, read the way this process reads its own (auth.json,
+ * else auth.json.bak when auth.json is missing or does not parse): null when none is there,
+ * undefined when neither reads (a doubt). Never writes: it reads another data dir.
+ */
+async function heldInstanceId(home: string): Promise<string | null | undefined> {
+  const main = await readAuthFile(authFilePath(home))
+  if (main.kind === 'ok') return main.auth.instanceId ?? null
+  const bak = await readAuthFile(`${authFilePath(home)}.bak`)
+  if (bak.kind === 'ok') return bak.auth.instanceId ?? null
+  return main.kind === 'unreadable' || bak.kind === 'unreadable' ? undefined : null
+}
+
+/** The Walnut id the data dir at `home` holds, or null (home-move.ts asks it of the one this Walnut used before). */
+export async function instanceIdAt(home: string): Promise<string | null> {
+  return (await heldInstanceId(home)) ?? null
+}
+
+/**
+ * Whether the data dir at `home` is gone as a copy of the Walnut `id`: it holds no id, or
+ * another one. A data dir that does not read is a doubt, never gone (primary-leader.ts).
+ */
+export async function walnutGoneAt(home: string, id: string): Promise<boolean> {
+  const held = await heldInstanceId(home)
+  return held !== undefined && held !== id
 }
 
 /**

@@ -54,7 +54,6 @@ const BASELINE: Record<string, number> = {
   // line, and a stand-in's command line at an update's handback. None runs on a clock.
   'src/providers/daemon-standalone.ts': 3,
   'src/providers/host-runtime-core.ts': 2,
-  'src/core/search/semantic-default.ts': 2,
   'src/providers/session-io.ts': 1,
   'src/providers/pw-noactivate-core.ts': 1,
   'src/core/companion-build/shim.ts': 1,
@@ -169,5 +168,18 @@ describe('event-loop blocking ratchet', () => {
     const count = (re: RegExp) => (text.match(re) ?? []).length;
     expect(count(/\breadSync\(/g), 'a new readSync( in daemon-standalone.ts: read asynchronously (fs.promises / the tailer)').toBeLessThanOrEqual(9);
     expect(count(/\bAtomics\.wait\(/g), 'a new Atomics.wait( in daemon-standalone.ts: wait with a timer').toBeLessThanOrEqual(2);
+  });
+
+  // 2026-11-22 (land 2 step 7): the registry's durable writes and the daemon log moved off the
+  // thread (registry-writer-core.ts, log-appender-core.ts). Only their one exit-path sync write
+  // stays, inside those cores; the runtime itself may not fsync or append synchronously again.
+  it('daemon runtime: no synchronous fsync, and appendFileSync call sites do not grow', async () => {
+    const fs = await import('node:fs');
+    const read = (f: string) => fs.readFileSync(path.join(repoRoot, f), 'utf8');
+    const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
+    for (const f of ['src/providers/daemon-core.ts', 'src/providers/daemon-standalone.ts']) {
+      expect(count(read(f), /\bfsyncSync\(/g), `${f}: a synchronous fsync on the thread; write through registry-writer-core.ts`).toBe(0);
+    }
+    expect(count(read('src/providers/daemon-standalone.ts'), /\bappendFileSync\(/g), 'a new appendFileSync( in daemon-standalone.ts: append through log-appender-core.ts or fs.promises').toBeLessThanOrEqual(4);
   });
 });

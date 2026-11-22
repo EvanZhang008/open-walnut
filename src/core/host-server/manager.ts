@@ -71,6 +71,7 @@ import { FOLLOWER_FLOORS, judgeFollowerRoom, roomProbeScript, type FollowerGateR
 import { createTryLater, inWords, type TryLaterKind } from './try-later.js'
 import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
 import { pluginsKeepingTasks } from '../plugins/plugin-task-visibility.js'
+import { servesThisWalnut, type FollowerFact } from '../../providers/one-service-mode.js'
 
 export type {
   HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps,
@@ -527,6 +528,16 @@ export function createHostServerManager(deps: ManagerDeps) {
     return { rec, working }
   }
 
+  /** The host runs as this Walnut's one service: the program last kept as working, sent as it is. */
+  function serviceHolds(host: HostServerHost): { rec: HostRecord; working: WorkingProgram } | null {
+    if (!servesThisWalnut(host.servesAs?.(), deps.home)) return null
+    const rec = readState()[host.hostKey]
+    if (!rec || !Number.isInteger(rec.publicPort) || !rec.working || !isReplica(rec.working)) return null
+    heldUntil.delete(host.hostKey)
+    notices.delete(host.hostKey)
+    return { rec, working: rec.working }
+  }
+
   async function reconcileOnce(hostKey: string, retry = false, soft = false): Promise<void> {
     let host = hosts.get(hostKey)
     if (await deps.frozen?.()) return
@@ -634,7 +645,10 @@ export function createHostServerManager(deps: ManagerDeps) {
         }
         known = judged.target
       }
-      const held = await heldBuild(host, replica, retry)
+      // A host's one Walnut service is this Walnut's follower itself (one-service-mode.ts): no app of
+      // its own is installed there; the spec is still sent (the service starts from it, and a daemon
+      // put back starts the follower from it), and its status is read over the same server.status.
+      const held = (replica ? serviceHolds(host) : null) ?? await heldBuild(host, replica, retry)
       if (held) {
         set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: held.rec.publicPort })
         await deps.holdTunnelPort(`host-server:${hostKey}`)
@@ -899,6 +913,25 @@ export function createHostServerManager(deps: ManagerDeps) {
     return true
   }
 
+  /**
+   * This Walnut's follower on the host as the one Walnut service needs it (one-service-mode.ts): the
+   * full follower program running (the spec the service starts from), none (why), or not settled.
+   */
+  function followerFact(hostKey: string): FollowerFact {
+    const v = views.get(hostKey)
+    if (!v || !lastSettings.has(hostKey)) return { kind: 'unknown' }
+    if (v.phase === 'running') {
+      if (v.program === 'replica') return { kind: 'replica' }
+      return {
+        kind: 'none',
+        why: v.program === 'fallback' ? 'its Walnut server runs its fallback program after a crash loop' : 'its Walnut server is the plain host server, not the full follower',
+      }
+    }
+    if (v.phase === 'off') return { kind: 'none', why: 'no Walnut server of this Walnut runs there' }
+    if (v.phase === 'not-eligible' || v.phase === 'unsupported') return { kind: 'none', why: v.message ?? 'no Walnut server of this Walnut runs there' }
+    return { kind: 'unknown' }
+  }
+
   function reconcile(hostKey: string, opts: { retry?: boolean; soft?: boolean } = {}): Promise<void> {
     if (opts.retry) retries.add(hostKey)
     if (!opts.soft) hard.add(hostKey)
@@ -921,6 +954,8 @@ export function createHostServerManager(deps: ManagerDeps) {
         if (phase === 'error' && failed && tryLater.pending(hostKey) !== 'login') deps.health?.failed(hostKey, failed.message, failed.triesAgain)
         // Also with the experiment off: an item raised while it was on clears once nothing fails.
         else if (phase === 'running' || phase === 'off' || phase === 'not-eligible') deps.health?.settled(hostKey)
+        // This Walnut's follower there is known now: the host's mode may be due a switch (one-service-mode.ts).
+        if (followerFact(hostKey).kind !== 'unknown') hosts.get(hostKey)?.serviceModeChanged?.()
       } while (rerun.has(hostKey))
     })().finally(() => {
       running.delete(hostKey)
@@ -973,6 +1008,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       return p ? { command: p.command, args: [...p.args] } : null
     },
     view: (hostKey: string): HostServerView => ({ ...view(hostKey) }),
+    followerFact,
     /** Ask the host server to start its tunnel again now (a new retry count in its settings). */
     async retryExpose(hostKey: string): Promise<void> {
       const host = hosts.get(hostKey)
