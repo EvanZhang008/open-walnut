@@ -163,7 +163,8 @@ export function writeClusterLogs(c: ReplicaCluster, label: string): string {
   try {
     for (const n of fs.readdirSync(path.join(c.base, 'hd')).filter((n) => /^daemon-.*\.log$/.test(n))) daemon += fs.readFileSync(path.join(c.base, 'hd', n), 'utf8').slice(-400_000)
   } catch { /* gone */ }
-  const l = c.logs()
+  // REPLICA_CLUSTER_LOG_WHOLE=1: the replica's whole server log, not its tail.
+  const l = c.logs(process.env.REPLICA_CLUSTER_LOG_WHOLE === '1' ? { whole: true } : undefined)
   fs.writeFileSync(out, `--- mac ---\n${l.mac}\n--- replica ---\n${l.replica}\n--- host daemon ---\n${daemon}\n`)
   return out
 }

@@ -10,17 +10,27 @@
  *                (setTestDaemonUrl), the seam tests/e2e/host-runs-sessions-e2e.test.ts uses until
  *                the one-service host does that itself; and a probe in its process
  *
- * The probes only read (and the host's door port is the leader door itself, for a send made on the
- * host while the Mac is away). Each listens on 127.0.0.1:0 and names its port in a file of the
+ * The probes only read, but for the Mac's /delete (and the host's door port is the leader door
+ * itself, for a send made on the host while the Mac is away).
+ *
+ * The replica's ACP engines run the scripted adapter (tests/providers/mock-acp-agent.mjs) through an
+ * ACP worker built from this checkout (acp-worker-bundle.ts), and Codex runs on its direct
+ * app-server path against tests/providers/mock-codex-app-server.mjs (CODEX_PATH): the
+ * setTestAcpArtifacts seam, as the server's ACP e2e tests use it. Each listens on 127.0.0.1:0 and names its port in a file of the
  * cluster's own base: `<base>/mh/mac-probe.json`, `<replica data>/cluster-probe.json`.
  *
  *   Mac   GET /events?sid=   the bus events of a session this process saw: name, when, source,
  *                            late, and a hash of the data (its data too when small)
+ *         GET /delete?sid=   deletes the Mac's row of a session (deleteSessionRecords), as a
+ *                            retention sweep does: the one probe that writes
+ *         GET /drops?host=   the deletes of the host's sessions it has not answered yet
+ *         GET /acp?sid=      what the Mac's runner answers for an ACP session (findAcpSession)
  *         GET /parses?sid=   how many CLI lines of it this process parsed (line-parse-count.ts)
  *         GET /judge?sid=    judgeOf and the judging host
  *         GET /side?host=    the leader side: on, linked to the host, judging its starts
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
  *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit and records
+ *         GET /row?sid=      the host's own row of a session (null: none)
  *         GET /events?sid=   the host's own bus events of a session (as above)
  *         GET /live          is a leader linked and caught up
  */
@@ -78,6 +88,9 @@ const lpc = await import(${url('src/providers/line-parse-count.ts')})
 const jo = await import(${url('src/core/sessions/judge-of.ts')})
 const lb = await import(${url('src/core/session-channel/leader-boot.ts')})
 const sdb = await import(${url('src/core/session-db.ts')})
+const trk = await import(${url('src/core/session-tracker.ts')})
+const drp = await import(${url('src/core/session-channel/leader-drops.ts')})
+const ccs = await import(${url('src/providers/claude-code-session.ts')})
 const probeFile = (await import('node:path')).join((await import('node:path')).dirname(c.WALNUT_HOME), 'mac-probe.json')
 ${SERVE('probeFile')}
 await serveProbe({
@@ -86,6 +99,12 @@ await serveProbe({
   '/judge': (q) => ({ judge: jo.judgeOf(q.get('sid')), host: jo.judgingHostOf(q.get('sid')) }),
   '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), judges: !!s && s.hostJudges(q.get('host')) } },
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
+  '/delete': async (q) => ({ removed: await trk.deleteSessionRecords(new Set([q.get('sid')]), 'cluster-probe') }),
+  '/drops': (q) => ({ sids: drp.leaderDropsOf(q.get('host')) }),
+  '/acp': (q) => {
+    const a = ccs.sessionRunner.findAcpSession(q.get('sid'))
+    return { found: !!a, hostJudged: a?.hostJudged === true, kind: a?.kind ?? null, processStatus: a?.processStatus ?? null, workerLive: a?.workerLive ?? null, engineId: a?.engineId ?? null }
+  },
 })
 `
 
@@ -106,10 +125,18 @@ if (!(argv[0] === 'web' && argv.includes('--replica'))) {
   const { runWeb } = await import(${url('src/commands/web.ts')})
   await runWeb({ replica: true })
   const rt = process.env.WALNUT_DAEMON_DIR
+  // Codex on its direct app-server path, against the scripted app-server (the runtime's env is read at its start).
+  process.env.WALNUT_CODEX_TRANSPORT = 'app-server'
+  process.env.CODEX_PATH = ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-codex-app-server.mjs'))}
+  process.env.CODEX_HOME = rt + '/codex-home'
+  ;(await import('node:fs')).mkdirSync(process.env.CODEX_HOME, { recursive: true })
+  if (process.env.REPLICA_CLUSTER_LOG_DIR) process.env.MOCK_CODEX_LOG = process.env.REPLICA_CLUSTER_LOG_DIR + '/codex-requests.jsonl'
   const ipd = await import(${url('src/providers/in-process-daemon.ts')})
   await ipd.startInProcessDaemon({ dir: rt, env: { ...process.env, WALNUT_STREAMS_DIR: rt + '/streams', WALNUT_LEGACY_STREAMS_DIR: rt + '/no-legacy', WALNUT_SPAWN_JOURNAL: rt + '/spawn-journal.jsonl', WALNUT_DAEMON_KEEP_SESSIONS: '1' } })
   const { sessionRunner } = await import(${url('src/providers/claude-code-session.ts')})
   sessionRunner.setTestDaemonUrl(ipd.IN_PROCESS_DAEMON_URL)
+  const { acpWorkerBundle } = await import(${url('tests/helpers/acp-worker-bundle.ts')})
+  sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, ${JSON.stringify(path.join(ROOT, 'tests/providers/mock-acp-agent.mjs'))}] })
   const { getHostReplicaLeaderDoor } = await import(${url('src/web/server.ts')})
   const door = getHostReplicaLeaderDoor()
   const boot = await import(${url('src/core/session-channel/host-boot.ts')})
@@ -130,6 +157,7 @@ if (!(argv[0] === 'web' && argv.includes('--replica'))) {
       return { running: true, logId: h.log.logId, head: h.log.head, floor: h.log.floor, acked: h.log.acked, permit: h.log.permit, recs }
     },
     '/events': (q) => eventsOf(q.get('sid')),
+    '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
     '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
   }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 }
