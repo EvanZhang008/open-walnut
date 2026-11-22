@@ -195,3 +195,10 @@
 .session-control-option:has(.session-control-option-icon) {
   grid-template-columns: 24px minmax(0, 1fr);
 }
+
+/* The model pill opens the model picker: the menu triggers' small caret after its words. */
+.composer-model-pill-caret {
+  margin-left: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}

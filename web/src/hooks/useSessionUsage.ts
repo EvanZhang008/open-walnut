@@ -108,7 +108,7 @@ function fmtTokens(n: number): string {
  * picker (2026-08-23).
  */
 export function contextBadgeTitle(usage: SessionUsage, percent: number): string {
-  const parts = [`Context: ${percent}%`];
+  const parts = [`Context ${percent}% used`];
   if (usage.inputTokens != null && usage.stopsAt != null) {
     // Auto-compact is off: the percentage is of the stop, and the stop is what to know.
     parts.push(`${fmtTokens(usage.inputTokens)} / ${fmtTokens(usage.stopsAt)}, where this session stops: auto-compact is off, so from there every message gets "Prompt is too long" until it is compacted`);

@@ -14,6 +14,7 @@ import {
 } from './session-cost-format';
 import { useOpenSessionUsage, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
 import { budgetSummary } from './session-usage-model';
+import { FoldWarnDot } from './PickerFoldBar';
 import '@/styles/session-cost.css';
 
 /** The comparison's long first read answers `pending`: asked again this many times, this often. */
@@ -36,15 +37,17 @@ interface Props {
   fold?: boolean;
 }
 
-/** The session's budget in one line, with the way to set or change it. */
+const BUDGET_PAUSED = 'Budget reached: the session is paused';
+
 /** A dot on the picker's Cost toggle while the session's budget has paused it: seen without opening. */
 export function BudgetPausedMark({ sessionId }: { sessionId: string }) {
   const usage = useSessionBudgetUsage(sessionId, false);
   const data = usage.data?.sessionId === sessionId ? usage.data : null;
   if (data?.budget.state !== 'paused') return null;
-  return <span className="model-picker-fold-dot" role="img" aria-label="Budget reached: the session is paused" title="Budget reached: the session is paused" data-testid="cost-budget-paused" />;
+  return <FoldWarnDot reason={BUDGET_PAUSED} testId="cost-budget-paused" />;
 }
 
+/** The session's budget in one line, with the way to set or change it. */
 function BudgetRow({ sessionId }: { sessionId: string }) {
   const usage = useSessionBudgetUsage(sessionId, false);
   const open = useOpenSessionUsage();
@@ -53,8 +56,10 @@ function BudgetRow({ sessionId }: { sessionId: string }) {
   const paused = data?.budget.state === 'paused';
   return (
     <div className="session-cost-budget" data-testid="session-cost-budget" data-state={data?.budget.state ?? 'error'}>
-      <span className={paused ? 'session-cost-warn' : undefined}>
-        Budget <strong data-testid="session-cost-budget-summary">{data ? budgetSummary(data) : <span className="session-cost-muted">{usage.error}</span>}</strong>
+      <span className="session-cost-budget-label">Budget</span>
+      <span className="session-cost-budget-value">
+        {paused && <FoldWarnDot reason={BUDGET_PAUSED} testId="session-cost-budget-paused" />}
+        <strong data-testid="session-cost-budget-summary">{data ? budgetSummary(data) : <span className="session-cost-muted">{usage.error}</span>}</strong>
       </span>
       {data && open && (
         <button type="button" className="session-cost-budget-edit" onClick={() => open(sessionId)}>
@@ -246,15 +251,14 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
     <div className={`model-picker-details session-cost${fold ? ' session-cost-fold' : ''}`} data-testid="session-cost" data-status={cost?.status ?? (error ? 'error' : 'loading')}>
       {fold ? (
         <div className="session-cost-fold-head">
-          {/* The whole sentence only where the toggle had to shorten it ("$141+", "n/a"). */}
-          {(!cost || costHeadline(cost) !== costToggleValue(cost)) && (
-            <span className="session-cost-title">
-              <strong data-testid="session-cost-total">{cost ? costHeadline(cost) : error ?? 'calculating…'}</strong>
-              {cost?.status === 'unavailable' && cost.reason && (
-                <span className="session-cost-muted session-cost-reason" data-testid="session-cost-reason">{cost.reason}</span>
-              )}
-            </span>
-          )}
+          {/* "This session $102 · span 1d 17h · model time 2h 38m": the whole sentence where the toggle
+              had to shorten it ("$141 + 4 requests without a price"). */}
+          <span className="session-cost-title">
+            This session <strong data-testid="session-cost-total">{cost ? costHeadline(cost) : error ?? 'calculating…'}</strong>
+            {cost?.status === 'unavailable' && cost.reason && (
+              <span className="session-cost-reason" data-testid="session-cost-reason">{cost.reason}</span>
+            )}
+          </span>
           {times && (
             <span className="session-cost-times" data-testid="session-cost-times"
               title="Span: first to last request. Model time: the time the model spent answering, subagents included.">
@@ -290,10 +294,11 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
         )}
       </button>
       )}
+      {shown && cost && cost.models.map((m) => <ModelRow key={`${m.model}:${m.speed}`} m={m} />)}
       {budgetRow && <BudgetRow sessionId={sessionId} />}
       {shown && cost && (
-        <div className="session-cost-body">
-          {cost.models.map((m) => <ModelRow key={`${m.model}:${m.speed}`} m={m} />)}
+        <>
+          <CostComparison sessionId={sessionId} models={compareModels ?? []} actualUsd={cost.status === 'priced' ? cost.totalUsd : null} />
           <div className="session-cost-foot session-cost-muted">
             Priced per request from {engineName(cost.engine)}&apos;s own usage records ({cost.responses} requests
             {cost.engine === 'claude' ? ', subagents included' : ''}).
@@ -301,8 +306,7 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
               ? ` ${engineName(cost.engine)}'s own estimate, from its built-in prices: ${fmtUsd(cost.engineCostUsd)}.`
               : ''}
           </div>
-          <CostComparison sessionId={sessionId} models={compareModels ?? []} actualUsd={cost.status === 'priced' ? cost.totalUsd : null} />
-        </div>
+        </>
       )}
     </div>
   );

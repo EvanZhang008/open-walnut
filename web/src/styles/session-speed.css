@@ -1,90 +1,126 @@
-/* Turn speed readout: the one-line row inside the composer's model picker
-   (under the live-settings strip), or standalone when a caller places it so.
-   Owned by components/sessions/SessionSpeedReadout.tsx. The class name
-   .session-speed-readout is load-bearing: e2e specs locate the row by it.
+/* Turn speed in the model picker's Speed fold (components/sessions/SessionSpeedReadout.tsx),
+   design A (2026-11-21): the session's average on one line, then a small table, Model | Tokens |
+   First token | Speed | Time, one row for the turn and one per subagent model, hairlines between
+   rows, no grey blocks, no indent. Numbers are right-aligned in tabular figures so a ticking clock
+   never jitters a column; the label and model cells may wrap in a narrow popover, the numbers
+   never break. The class names .session-speed-readout and .session-speed-lane are load-bearing:
+   e2e specs locate the rows by them. */
 
-   The slots keep one order on every panel so two panels side by side compare at
-   a glance. The row wraps rather than clips: at two columns on a 1280px window a
-   column is ~300px and the six slots do not fit on one line, and a clipped row
-   lost exactly the two slots at its end (time, cost). Each slot is unbreakable,
-   so a wrap only ever moves whole slots to the next line. Tabular digits keep
-   the ticking clocks from jittering the row's width. */
+.session-speed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg);
+}
 
-.session-speed-readout {
+.session-speed-average {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 6px;
-  margin: 4px 8px 0;
-  padding: 3px 6px;
-  border-radius: 6px;
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  min-width: 0;
+  gap: 0 4px;
+  color: var(--fg-notice);
 }
 
-/* Inside the picker the row matches the live strip above it: same padding,
-   radius and font size, no outer margin (the strip's margin-bottom spaces it). */
-.session-speed-readout-picker {
-  margin: 0 0 8px;
-  padding: 6px 10px;
-  font-size: var(--font-size-sm);
-  line-height: 16px;
-  background: var(--bg-secondary);
+.session-speed-average-value {
+  color: var(--fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-speed-average-value + span::before {
+  content: '· ';
+}
+
+.session-speed-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-speed-table th,
+.session-speed-table td {
+  padding: 4px 0 4px 8px;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: baseline;
+  font-weight: 400;
+}
+
+.session-speed-table thead th {
+  font-size: var(--font-size-xs);
+  color: var(--fg-notice);
+  /* "First token" may take two lines so the numbers keep their room. */
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+/* Names wrap between words only. */
+.session-speed-word {
+  white-space: nowrap;
+}
+
+.session-speed-table tbody th,
+.session-speed-table tbody td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* The row's label and its model read left and may wrap; every number stays on one line. */
+.session-speed-table th:first-child {
+  padding-left: 0;
+  text-align: left;
+  white-space: normal;
+}
+
+.session-speed-table th:nth-child(2),
+.session-speed-table .session-speed-model-cell {
+  text-align: left;
+  white-space: normal;
 }
 
 .session-speed-kicker {
-  flex: 0 0 auto;
-  opacity: 0.75;
-  margin-right: 2px;
+  color: var(--fg);
 }
 
 .session-speed-model {
   color: var(--fg);
-  font-weight: 600;
-  flex: 0 0 auto;
 }
 
-.session-speed-stat {
-  flex: 0 0 auto;
+/* State words after a label ("partial", "last call", "running") and under a model ("→ Opus next
+   call"): small and grey, readable as body text. */
+.session-speed-states {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
 }
 
-/* The dot separator lives in CSS so the DOM holds only the values. */
-.session-speed-stat::before {
-  content: "·";
-  margin-right: 6px;
-  opacity: 0.55;
+.session-speed-state {
+  font-size: var(--font-size-xs);
+  color: var(--fg-notice);
 }
 
-.session-speed-label {
-  opacity: 0.75;
+.session-speed-next {
+  display: block;
 }
 
-/* An estimate (~) and a still-waiting clock read a shade lighter than a final
-   number, so the eye learns which slots have settled. */
-.session-speed-stat.is-estimate,
-.session-speed-stat.is-pending {
-  opacity: 0.7;
+/* A clock still waiting reads grey until it settles. */
+.session-speed-table td.is-pending {
+  color: var(--fg-notice);
 }
 
-.session-speed-readout.is-live .session-speed-model::after {
-  content: "";
+/* A row still running: a small accent dot before its state. */
+.session-speed-dot {
   display: inline-block;
   width: 6px;
   height: 6px;
-  margin-left: 6px;
   border-radius: 50%;
   background: var(--accent);
-  vertical-align: middle;
   animation: session-speed-pulse 1.2s ease-in-out infinite;
-}
-
-.session-speed-flag {
-  color: var(--warning);
 }
 
 @keyframes session-speed-pulse {
@@ -93,48 +129,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-speed-readout.is-live .session-speed-model::after {
+  .session-speed-dot {
     animation: none;
   }
 }
 
-/* A subagent row sits right under the main row, a little inset, so the eye
-   reads it as part of the same turn: the main model first, then each model
-   its agents ran on. */
-.session-speed-readout.has-lanes {
-  margin-bottom: 2px;
-}
-
-.session-speed-lane {
-  margin-left: 12px;
-}
-
-.session-speed-readout-picker.session-speed-lane {
-  margin: 0 0 2px 12px;
-}
-
-/* The last agent row keeps the strip's spacing before whatever follows. */
-.session-speed-readout-picker.session-speed-lane.is-last {
-  margin-bottom: 8px;
-}
-
-/* The session's average on its model sits first, a little tighter to the
-   last-turn row under it; the note after the rows says what it averages. */
-.session-speed-readout-picker.session-speed-average {
-  margin-bottom: 4px;
-}
-
-/* The average's number reads like the row's model name: the strong value of the line. */
-.session-speed-average-value {
-  flex: 0 0 auto;
-  color: var(--fg);
-  font-weight: 600;
-}
-
-/* Secondary sentence text: 12 px on the 4 px grid. */
+/* What the average covers, under the table. */
 .session-speed-note {
-  margin: 0 0 8px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  line-height: 16px;
+  color: var(--fg-notice);
 }

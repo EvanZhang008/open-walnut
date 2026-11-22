@@ -1,24 +1,26 @@
-/* Claude subscription limits: the block in the Switch Model popover (under the
-   turn speed row) and the dot on the composer's model pill. Owned by
+/* Claude subscription limits: the group in the model picker's Speed fold (under the
+   turn speed table, no box of its own) and the dot on the composer's model pill. Owned by
    components/sessions/SubscriptionLimitReadout.tsx. One line per window; each
    slot is unbreakable, so a narrow popover wraps whole slots, never a number. */
 
 .subscription-limit-readout {
-  margin: 0 0 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-notice);
   font-size: var(--font-size-sm);
-  line-height: 17px;
+  line-height: 16px;
   font-variant-numeric: tabular-nums;
   min-width: 0;
 }
 
+/* A small header, as the fold's other groups have (model-picker-folds.css). */
 .subscription-limit-kicker {
-  opacity: 0.75;
   font-size: var(--font-size-xs);
-  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .subscription-limit-host {
@@ -56,7 +58,7 @@
 }
 
 .subscription-limit-age {
-  opacity: 0.7;
+  color: var(--fg-notice);
 }
 
 .subscription-limit-row.is-warning .subscription-limit-value {

@@ -17968,7 +17968,10 @@ a.task-kebab-info:hover {
   padding: 12px 8px;
   border-right: 1px solid var(--border);
   background: var(--bg-secondary);
-  overflow: hidden;
+  /* A short picker scrolls the rail rather than cutting its last item (the + below). */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
   transition: width 160ms cubic-bezier(0.2, 0, 0, 1), box-shadow 160ms ease;
 }
 
@@ -18051,7 +18054,8 @@ a.task-kebab-info:hover {
   cursor: not-allowed;
   background: transparent;
 }
-.provider-rail-item-locked > .provider-rail-icon,
+/* The engine's own mark fades; its lock badge does not, so the lock reads at a glance. */
+.provider-rail-item-locked > .provider-rail-icon > svg:first-child,
 .provider-rail-item-locked > .provider-rail-label {
   opacity: 0.35;
   filter: grayscale(1);
@@ -18226,22 +18230,30 @@ a.task-kebab-info:hover {
 
 /* Requested-but-not-applied effort (CLI override/downgrade) — amber outline */
 
-/* Live-truth strip: CLI's actual runtime settings pulled via get_settings on open */
+/* Live-truth strip: CLI's actual runtime settings pulled via get_settings on open. The first
+   line of the picker's Details fold: words on the popover, no box (design A, 2026-11-21). */
 .model-picker-live {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  border-radius: 6px;
+  gap: 8px;
+  padding: 4px 0;
   font-size: var(--font-size-sm);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
+  line-height: 16px;
+  color: var(--fg-notice);
+}
+
+.model-picker-live strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.model-picker-live .model-picker-refresh {
+  margin-left: auto;
 }
 
 .model-picker-live-dot {
-  color: var(--success);
-  font-size: 9px;
+  color: var(--success, #34c759);
+  font-size: 8px;
 }
 
 .model-picker-live-warn {
@@ -18284,8 +18296,19 @@ a.task-kebab-info:hover {
 
 .model-picker-details-title {
   font-weight: 600;
-  color: var(--fg);
-  margin-bottom: 3px;
+  color: var(--fg, inherit);
+  margin-bottom: 4px;
+}
+
+/* In the picker's Details fold a group's title is a small header, its number beside it. */
+.model-picker-fold .model-picker-details-title {
+  font-weight: 400;
+  padding-top: 4px;
+}
+
+.model-picker-details-title + .model-picker-details-row,
+.model-picker-details-row + .model-picker-details-title {
+  margin-top: 4px;
 }
 
 .model-picker-details-row {
@@ -18295,18 +18318,20 @@ a.task-kebab-info:hover {
   padding: 1px 0;
 }
 
+.model-picker-fold .model-picker-details-row {
+  padding: 4px 0;
+}
+
 .model-picker-details-row > span:last-child {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 /* Origin note under the context total (e.g. "window capped by
-   CLAUDE_CODE_AUTO_COMPACT_WINDOW") — quieter than a data row, and its value
-   is prose, so it may wrap. */
-.model-picker-details-note {
-  color: var(--fg-muted);
-  font-style: italic;
-  margin-bottom: 3px;
+   CLAUDE_CODE_AUTO_COMPACT_WINDOW"): its label quieter than a data row's, and its
+   value is prose, so it may wrap. */
+.model-picker-details-note > span:first-child {
+  color: var(--fg-notice);
 }
 
 .model-picker-details-note > span:last-child {
@@ -18314,11 +18339,6 @@ a.task-kebab-info:hover {
   text-align: right;
 }
 
-.model-picker-details-version {
-  margin-top: 8px;
-  border-top: 1px solid var(--border);
-  padding-top: 6px;
-}
 
 .model-picker-option-requested {
   color: var(--warning);
@@ -18373,7 +18393,7 @@ a.task-kebab-info:hover {
 
 .model-picker-col-title {
   font-size: var(--font-size-xs);
-  color: var(--fg-muted);
+  color: var(--fg-notice);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 4px 8px 3px;
@@ -19225,7 +19245,7 @@ td.usage-share-col {
   flex: 1;
   height: 6px;
   background: var(--bg-tertiary);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
   min-width: 40px;
 }
@@ -19699,7 +19719,7 @@ td.usage-share-col {
   font-weight: 600;
   color: var(--on-accent);
   background: var(--accent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   line-height: 1;
 }
 
@@ -29303,7 +29323,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 22px;
   padding: 0 4px;
   border: none;
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--fg);
   font-size: var(--font-size-sm);
@@ -30931,7 +30951,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   gap: 5px;
   height: 22px;
   padding: 0 9px;
-  border-radius: 11px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: none;
   color: var(--fg-muted);

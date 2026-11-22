@@ -45,11 +45,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.session-cost-body {
-  margin-top: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.session-cost > .session-cost-model:first-of-type {
+  margin-top: 4px;
 }
 
 .session-cost-model-row {
@@ -101,11 +98,11 @@
 }
 
 .session-cost-muted {
-  color: var(--fg-muted);
+  color: var(--fg-notice);
 }
 
 .session-cost-warn {
-  color: var(--warning);
+  color: var(--priority-important-text);
 }
 
 .session-cost-foot {
@@ -224,6 +221,18 @@
   font-variant-numeric: tabular-nums;
 }
 
+.session-cost-budget-label {
+  color: var(--fg-notice);
+}
+
+/* The amount sits right after its label; the way to change it at the right. */
+.session-cost-budget-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+}
+
 .session-cost-budget-edit {
   border: none;
   background: none;
@@ -238,4 +247,73 @@
 .session-cost-budget-edit:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* ── The model picker's Cost fold (design A, 2026-11-21): the total on one line, then light rows
+   with a hairline between them, no card. ── */
+.session-cost-fold-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  padding-bottom: 8px;
+  color: var(--fg-notice);
+}
+
+.session-cost-fold .session-cost-title {
+  color: var(--fg-notice);
+}
+
+.session-cost-fold .session-cost-title strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.session-cost-fold .session-cost-times::before {
+  content: '· ';
+}
+
+.session-cost-fold .session-cost-model,
+.session-cost-fold .session-cost-budget,
+.session-cost-fold .session-cost-compare {
+  margin: 0;
+  border-top: 1px solid var(--border);
+}
+
+.session-cost-fold .session-cost-model-row,
+.session-cost-fold .session-cost-compare-head {
+  padding: 4px 0;
+  min-height: 28px;
+}
+
+.session-cost-fold .session-cost-model-row {
+  gap: 8px;
+}
+
+.session-cost-fold .session-cost-model-meta {
+  color: var(--fg-notice);
+}
+
+.session-cost-fold .session-cost-budget {
+  align-items: center;
+  min-height: 28px;
+  margin-top: 0;
+  padding: 4px 0;
+}
+
+.session-cost-fold .session-cost-foot {
+  margin-top: 0;
+  padding-top: 8px;
+}
+
+/* The fold scrolls as one (model-picker-folds.css); the block keeps no cap and cuts no words. */
+.model-picker-fold .model-picker-details.session-cost {
+  max-height: none;
+  overflow: visible;
+}
+
+.session-cost-fold .session-cost-title,
+.session-cost-fold .session-cost-model-name {
+  white-space: normal;
+  overflow: visible;
 }

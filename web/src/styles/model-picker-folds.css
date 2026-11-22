@@ -1,5 +1,7 @@
 /* The model picker's fold bar (components/sessions/PickerFoldBar.tsx): under the Model | Effort
-   columns, the Cost / Speed / Details toggles (the shared .btn .btn-sm) and the open fold. */
+   columns, the Cost / Speed / Details toggles and the open fold. The toggles are the button
+   family's Tool role (`.ask-card-tools .btn`, components/actions/ask-card.css); this file only
+   lays them out and styles the words inside them. Design A, 2026-11-21. */
 .model-picker-folds {
   margin-top: 8px;
   padding-top: 8px;
@@ -8,26 +10,43 @@
 
 .model-picker-folds-bar {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px;
   min-width: 0;
 }
 
+/* Details, and any state word before it, at the right. The group takes the room the toggles
+   leave; where "Not running" and Details do not fit on the toggles' line, Details stays on it
+   and the word goes under it (wrap-reverse), and where not even Details fits, the group moves
+   to a line of its own. Nothing is ever cut at the picker's edge. */
 .model-picker-folds-end {
-  margin-left: auto;
-  display: inline-flex;
+  flex: 1 1 0%;
+  min-width: min-content;
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0 4px;
 }
 
+.model-picker-folds-end > .model-picker-folds-status {
+  line-height: 28px;
+}
+
+/* A state of the session ("Not running"), a label, never a control: muted, readable as text. */
 .model-picker-folds-status {
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+  color: var(--fg-notice);
   white-space: nowrap;
 }
 
+/* The toggle's word reads as text (the tool's muted grey is too faint for a label on white). */
 .model-picker-fold-label {
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
 }
 
+/* Inside a toggle: the word stays the tool's muted colour, the number reads in bold. */
 .model-picker-fold-value {
   color: var(--fg);
   font-weight: 600;
@@ -35,8 +54,13 @@
   white-space: nowrap;
 }
 
-.model-picker-fold-caret {
+/* "avg" after the speed: back to the toggle's quiet colour and weight. */
+.model-picker-fold-unit {
   color: var(--fg-muted);
+  font-weight: 400;
+}
+
+.model-picker-fold-caret {
   font-size: var(--font-size-xs);
 }
 
@@ -54,49 +78,73 @@
   margin-right: 4px;
 }
 
-/* The open fold: its blocks keep their own looks, laid one under the other. */
+/* The open fold: light rows on the popover itself, no boxes. One scroll at most, up and down,
+   so an open fold never grows the picker past about one and a half times its size. */
 .model-picker-fold {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
+  padding: 0 8px 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
 }
 
-.model-picker-fold > .model-picker-details,
-.model-picker-fold > .model-picker-live,
-.model-picker-fold > .launch-source-note {
+/* The blocks a fold holds lose their own cards here: the fold is the card. */
+.model-picker-fold .model-picker-details {
   margin: 0;
+  padding: 0;
+  max-height: none;
+  overflow: visible;
+  background: none;
+  font-size: var(--font-size-sm);
+  color: var(--fg);
+}
+
+.model-picker-fold .launch-source-note {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+/* Small headers of a fold's groups ("Context", "Session", "Where these come from"). */
+.model-picker-fold .launch-source-note-title,
+.model-picker-details-kicker {
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  line-height: 16px;
+  color: var(--fg-notice);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .model-picker-fold-speed:empty::before {
   content: 'No turn measured yet.';
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
+  color: var(--fg-notice);
 }
 
-/* The one line above the choices when the CLI is not running what was asked. */
+/* The one line above the choices when the CLI is not running what was asked: a dot and words. */
 .model-picker-warn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   margin-bottom: 8px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
+  padding: 0 8px 8px;
+  border-bottom: 1px solid var(--border);
   font-size: var(--font-size-sm);
+  line-height: 16px;
   color: var(--fg);
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.model-picker-warn .model-picker-fold-dot {
+  align-self: center;
 }
 
 /* In-place pickers (no popout) keep a close button, alone at the top right. */
 .model-picker-header-bare {
   justify-content: flex-end;
   margin-bottom: 4px;
-}
-
-.session-cost-fold-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.session-cost-fold-head:empty {
-  display: none;
 }

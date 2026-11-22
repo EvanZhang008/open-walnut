@@ -273,11 +273,11 @@ async function assertFinalReadout(page: Page, request: APIRequestContext, sid: s
   await expect(r).toHaveAttribute('data-live', 'false')
   await expect(r.getByTestId('speed-model')).toHaveText(model)
   // The CLI's own count, and the "~" of the interim estimate is gone.
-  await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
+  await expect(r.getByTestId('speed-tokens')).toHaveText('50')
   await expect(r.getByTestId('speed-duration')).toHaveText('9.0s')
   // Cost lives in the picker's session cost line, not in the turn readout.
   await expect(r.getByTestId('speed-cost')).toHaveCount(0)
-  await expect(r.getByTestId('speed-ttft')).toHaveText(/^first \d+(\.\d)?s$/)
+  await expect(r.getByTestId('speed-ttft')).toHaveText(/^\d+(\.\d)?s$/)
   await expect(r.getByTestId('speed-flag')).toHaveCount(0)
   const tpsText = (await r.getByTestId('speed-tps').textContent())?.trim() ?? ''
   const m = tpsText.match(/^(\d+) tok\/s$/)
@@ -351,7 +351,7 @@ test('two panels side by side show a live readout each, then final numbers', asy
     const r = readoutIn(page)
     await expect(r).toBeVisible()
     await expect(r.getByTestId('speed-model')).toHaveText(model)
-    await expect(r.getByTestId('speed-ttft')).toHaveText(/^first \d/, { timeout: 6_000 })
+    await expect(r.getByTestId('speed-ttft')).toHaveText(/^\d/, { timeout: 6_000 })
     await clipShot(page, `two-panels-live-${label}`)
     const live = await report(`live-${label}`, sid, page)
     expect(live.live, `${label} is live while its turn streams`).toBe('true')
@@ -389,7 +389,7 @@ test('reload keeps the last turn\'s readout', async ({ page, request }) => {
   await expect(col).toHaveCount(1, { timeout: 30_000 })
   await openPicker(page, col)
   await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 30_000 })
-  await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50 tok')
+  await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50')
   await closeModelPicker(page)
 
   // The final is written onto the record asynchronously; the cold load below
@@ -414,7 +414,7 @@ test('reload keeps the last turn\'s readout', async ({ page, request }) => {
   const r = readoutIn(page)
   await expect(r).toBeVisible({ timeout: 30_000 })
   await expect(r).toHaveAttribute('data-live', 'false')
-  await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
+  await expect(r.getByTestId('speed-tokens')).toHaveText('50')
   await expect(r.getByTestId('speed-model')).toHaveText('Opus 5.5')
   await report('after-reload', sid, page)
   await clipShot(page, 'after-reload')
@@ -454,11 +454,11 @@ test('a subagent on another model gets its own row under the main one, live then
 
   // Final: still an estimate (the CLI counts no agent), no status flag (done), a rate.
   await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 60_000 })
-  await expect(lane.getByTestId('speed-lane-tokens')).toHaveText(/^~\d+ tok$/)
+  await expect(lane.getByTestId('speed-lane-tokens')).toHaveText(/^~[\d,]+$/)
   await expect(lane.getByTestId('speed-lane-status')).toHaveCount(0)
   await expect(lane.getByTestId('speed-lane-tps')).toHaveText(/^~\d+ tok\/s$/)
-  await expect(lane.getByTestId('speed-lane-first')).toContainText('first')
-  await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50 tok')
+  await expect(lane.getByTestId('speed-lane-first')).toHaveText(/^\d+(\.\d)?s$/)
+  await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50')
   await clipShot(page, 'agent-lane-final')
   await closeModelPicker(page)
 
@@ -467,7 +467,7 @@ test('a subagent on another model gets its own row under the main one, live then
   const colAfter = columnFor(page, sid)
   await expect(colAfter.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
   await openPicker(page, colAfter)
-  await expect(picker(page).getByTestId('speed-lane').getByTestId('speed-lane-tokens')).toHaveText(/^~\d+ tok$/, { timeout: 30_000 })
+  await expect(picker(page).getByTestId('speed-lane').getByTestId('speed-lane-tokens')).toHaveText(/^~[\d,]+$/, { timeout: 30_000 })
   await expect(picker(page).getByTestId('speed-lane').getByTestId('speed-lane-model')).toHaveText('Haiku 5.5')
 })
 
@@ -492,7 +492,7 @@ test('a model switched mid-turn: the row says it takes the next call, then names
   await sendSpeedTurn(page, request, sid, 'chunk-delay:500 stream-partial-speed')
   await openPicker(page, col)
   const r = readoutIn(page)
-  await expect(r.getByTestId('speed-tokens')).toHaveText('30 tok', { timeout: 30_000 })
+  await expect(r.getByTestId('speed-tokens')).toHaveText('30', { timeout: 30_000 })
   await expect(r).toHaveAttribute('data-live', 'true')
   await expect(r.getByTestId('speed-model')).toHaveText('Fable 5.1')
   await expect(r.getByTestId('speed-next-model')).toHaveCount(0)
@@ -512,7 +512,7 @@ test('a model switched mid-turn: the row says it takes the next call, then names
   await expect(r).toHaveAttribute('data-live', 'false', { timeout: 60_000 })
   await expect(r.getByTestId('speed-model')).toHaveText(/^Fable 5\.1 \u2192 Opus/)
   await expect(r.getByTestId('speed-next-model')).toHaveCount(0)
-  await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
+  await expect(r.getByTestId('speed-tokens')).toHaveText('50')
   await clipShot(page, 'switch-final')
   await closeModelPicker(page)
 

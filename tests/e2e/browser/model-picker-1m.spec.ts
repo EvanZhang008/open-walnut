@@ -359,6 +359,8 @@ test.describe('ModelPicker CLI catalog', () => {
     const synthetic = picker.locator('[data-testid="picker-out-of-catalog"]')
     await expect(synthetic).toBeVisible()
     await expect(synthetic).toHaveAttribute('title', /not in this session's selectable catalog/)
+    // Named as every other row is, never the raw id ("sonnet-4-6 1M").
+    await expect(synthetic.locator('.model-picker-row-name')).toHaveText('Sonnet 4.6 1M')
 
     // No CATALOG row is active — the synthetic row is the only active-styled one
     // in the Model column (the Effort column marks its own active row).
@@ -445,7 +447,7 @@ test.describe('ModelPicker CLI catalog', () => {
 
     input = await openSessionPanel(page)
     picker = await openModelPicker(page, input)
-    await expect(picker.getByTestId('picker-fold-status')).toHaveText('○ Not running')
+    await expect(picker.getByTestId('picker-fold-status')).toHaveText('Session not running')
     await picker.getByTestId('picker-fold-details').click()
     await expect(picker.getByTestId('picker-live-strip')).toContainText('Not live — showing saved settings')
     const saved = picker.getByTestId('picker-out-of-catalog')

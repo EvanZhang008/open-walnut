@@ -6,10 +6,17 @@
  * cost 点开之后，它就可以显示具体的 ... token speed ... 点开之后再显示详细的"; design v2,
  * picked on thread th-17fc2b89c52c).
  *
- * A fold may carry a warning (context nearly full): a dot on its toggle, the reason as its title,
- * so what needs a look is visible without opening anything.
+ * The toggles are the button family's Tool role (standard.md: `.ask-card-tools .btn`, the quiet
+ * "Snooze ▾" key): a muted word, its number in bold, a small caret; the open one takes the
+ * family's pressed look (design A, 2026-11-21, after "the button is so ugly also the 2 bar below
+ * is so bad"). Details always keeps its name; a state such as "Not running" is a muted word of
+ * its own beside it, never in its place.
+ *
+ * A fold may carry a warning (context nearly full, budget reached): a dot on its toggle with the
+ * reason as its accessible name and title, so what needs a look is visible without opening anything.
  */
 import React from 'react';
+import '@/components/actions/ask-card.css';
 import '@/styles/model-picker-folds.css';
 
 export type PickerFoldId = 'cost' | 'speed' | 'details';
@@ -22,13 +29,20 @@ export interface PickerFold {
   value?: React.ReactNode;
   /** What opens under the bar. */
   content: React.ReactNode;
-  /** Something in this fold needs a look: a dot on the toggle, this sentence as its title. */
+  /** Something in this fold needs a look: a dot on the toggle, this sentence as its name and title. */
   warn?: string | null;
+  /** What the number counts ("This session's cost so far"), the toggle's title when nothing warns. */
+  title?: string;
+}
+
+/** The warning dot of a toggle or a row: an image whose name is the reason. */
+export function FoldWarnDot({ reason, testId }: { reason: string; testId?: string }) {
+  return <span className="model-picker-fold-dot" role="img" aria-label={reason} title={reason} data-testid={testId} />;
 }
 
 export function PickerFoldBar({ folds, status }: {
   folds: PickerFold[];
-  /** A state line beside the toggles ("Not running"), not a control. */
+  /** A state word beside the toggles ("Not running"), not a control. */
   status?: React.ReactNode;
 }) {
   // A popover's open fold is a passing thing: every open starts with all folds closed.
@@ -46,14 +60,14 @@ export function PickerFoldBar({ folds, status }: {
     <button
       key={f.id}
       type="button"
-      className="btn btn-sm"
+      className="btn"
       data-testid={`picker-fold-${f.id}`}
       aria-expanded={fold === f.id}
       aria-controls={fold === f.id ? `picker-fold-body-${f.id}` : undefined}
-      title={f.warn ?? undefined}
+      title={f.warn ?? f.title}
       onClick={() => setFold((v) => (v === f.id ? null : f.id))}
     >
-      {f.warn && <span className="model-picker-fold-dot" role="img" aria-label={f.warn} />}
+      {f.warn && <FoldWarnDot reason={f.warn} />}
       <span className="model-picker-fold-label">{f.label}</span>
       {f.value !== undefined && <strong className="model-picker-fold-value">{f.value}</strong>}
       <span className="model-picker-fold-caret" aria-hidden>{fold === f.id ? '▴' : '▾'}</span>
@@ -61,10 +75,12 @@ export function PickerFoldBar({ folds, status }: {
   );
   return (
     <div className="model-picker-folds" data-testid="picker-folds">
-      <div className="model-picker-folds-bar">
+      <div className="model-picker-folds-bar ask-card-tools">
         {main.map(toggle)}
-        {status && <span className="model-picker-folds-status" data-testid="picker-fold-status">{status}</span>}
-        {details && <span className="model-picker-folds-end">{toggle(details)}</span>}
+        <span className="model-picker-folds-end">
+          {status && <span className="model-picker-folds-status" data-testid="picker-fold-status">{status}</span>}
+          {details && toggle(details)}
+        </span>
       </div>
       {current && (
         <div id={`picker-fold-body-${current.id}`} className={`model-picker-fold model-picker-fold-${current.id}`} data-testid={`picker-fold-body-${current.id}`}>

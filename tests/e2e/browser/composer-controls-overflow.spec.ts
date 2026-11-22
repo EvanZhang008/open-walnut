@@ -103,7 +103,8 @@ test('a tighter column keeps the model name and drops the percentage, which come
   await clampColumn(page, null);
   await page.setViewportSize({ width: 2200, height: 800 });
   await expect(model.locator('.composer-model-pill-short')).toHaveCount(0);
-  await expect(model).toHaveText(/^Fable 5\.1 45% · High$/);
+  // The wide pill: name, percentage, effort, and the menu caret.
+  await expect(model).toHaveText(/^Fable 5\.1 45% · High▾$/);
   await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
 });
 

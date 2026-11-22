@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { SessionSpeedTotal, SessionTurnSpeed } from '@open-walnut/core';
 import { foldTurnSpeed } from '@open-walnut/speed-totals';
 import { turnSpeedStore, useTurnSpeed } from '@/stores/turn-speed-store';
@@ -8,12 +8,13 @@ import { parseAcpModelId } from './acp-model-id';
 import '@/styles/session-speed.css';
 
 /**
- * The speed readout row of a session: model, output tokens, time to first
- * token, tokens per second, turn wall time. One line, the same slots in
- * the same order on every panel, so two panels side by side (Session panels =
- * 2) compare at a glance. It lives in the composer's model picker (the row
- * under the live-settings strip), next to the model it describes, rather than
- * as a permanent row above the composer (user decision, 2026-09-30).
+ * The speed readout of a session, in the model picker's Speed fold: the session's average on its
+ * model on top, then a small table (Model | Tokens | First token | Speed | Time) with one row for
+ * the turn ("This turn" while it runs, "Last turn" once final, its state as a small grey word:
+ * partial, stopped, last call) and one row per model the turn's subagents ran on (design A,
+ * 2026-11-21: "the 2 bar below is so bad"). The same columns on every panel, so two panels side
+ * by side (Session panels = 2) compare at a glance. It lives in the picker, next to the model it
+ * describes, rather than as a permanent row above the composer (user decision, 2026-09-30).
  *
  * Live while a turn streams (the server emits a frame at every message
  * boundary and throttled in between; this row ticks its clocks locally), then
@@ -38,8 +39,6 @@ interface SessionSpeedReadoutProps {
     model?: string; acpModel?: string; process_status?: string; lastTurnSpeed?: SessionTurnSpeed;
     speedTotals?: Record<string, SessionSpeedTotal>;
   } | null | undefined;
-  /** Where the row sits: inside the model picker (default) or on its own. */
-  placement?: 'picker' | 'standalone';
   /** Names the turn's model when its id does not prettify (an ACP engine's
    *  "openai.gpt-6.1-sol"); undefined falls back to formatModelName. */
   modelLabel?: (model: string | undefined) => string | undefined;
@@ -130,7 +129,11 @@ export function SessionSpeedHeadline({ sessionId, session }: Pick<SessionSpeedRe
   const average = sessionAverage(session, t.speed, (m) => formatModelName(m) || undefined);
   if (average) {
     const { tps, turns } = average.avg;
-    return <span data-testid="speed-headline" title={`${AVERAGE_NOTE} ${turns} turn${turns === 1 ? '' : 's'} counted.`}>{tps} avg</span>;
+    return (
+      <span data-testid="speed-headline" title={`${AVERAGE_NOTE} ${turns} turn${turns === 1 ? '' : 's'} counted.`}>
+        {tps} <span className="model-picker-fold-unit">avg</span>
+      </span>
+    );
   }
   const r = computeReadout(t.speed, t.clock);
   const text = r.tps ?? (r.live ? '…' : '—');
@@ -140,7 +143,29 @@ export function SessionSpeedHeadline({ sessionId, session }: Pick<SessionSpeedRe
   return <span data-testid="speed-headline" title={why}>{text}</span>;
 }
 
-export function SessionSpeedReadout({ sessionId, session, placement = 'picker', modelLabel }: SessionSpeedReadoutProps) {
+/** A count in the Tokens column: the header names the unit, the cell keeps the "~" of an estimate. */
+const bare = (tokens: string) => tokens.replace(/ tok$/, '');
+
+/** A name that may wrap between its words but never inside one ("GPT-6.2-" / "Sol" read badly). */
+function Words({ text }: { text: string }) {
+  const words = text.split(' ');
+  return <>{words.map((w, i) => <React.Fragment key={i}>{i > 0 && ' '}<span className="session-speed-word">{w}</span></React.Fragment>)}</>;
+}
+
+/** A row's state words after its label ("partial", "last call", "running"), small and grey. */
+function StateWords({ words, dot }: { words: { text: string; testId: string; title?: string }[]; dot?: boolean }) {
+  if (words.length === 0 && !dot) return null;
+  return (
+    <span className="session-speed-states">
+      {dot && <span className="session-speed-dot" aria-hidden />}
+      {words.map((w) => <span key={w.testId} className="session-speed-state" data-testid={w.testId} title={w.title}>{w.text}</span>)}
+    </span>
+  );
+}
+
+const LAST_CALL_TITLE = 'The engine reports usage for its last model call only: tokens and tok/s describe that call.';
+
+export function SessionSpeedReadout({ sessionId, session, modelLabel }: SessionSpeedReadoutProps) {
   const t = useTurnReadout(sessionId, session);
   if (!t) return null;
   const { speed, clock } = t;
@@ -152,16 +177,15 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
     (m) => modelLabel?.(m) || formatModelName(m) || undefined);
   const model = slot.label || formatModelName(session?.model) || 'Model';
   const label = (m: string) => modelLabel?.(m) || formatModelName(m) || undefined;
-  const average = placement === 'picker' ? sessionAverage(session, speed, label) : null;
+  const average = sessionAverage(session, speed, label);
+  const lastCall = speed.tokenScope === 'last-call';
   const title = [
     'Measured by Walnut from the CLI stream.',
     speed.models && speed.models.length > 1 ? 'The model was switched during this turn: the row names each model it ran on, in order; the numbers cover all of them.' : '',
     slot.next ? `Switched to ${slot.next}: it takes over from this turn's next model call.` : '',
-    'first: your message to the first visible token (a fresh session includes its startup). tok/s: CLI output tokens, thinking included, over the time the model spent generating (tool runs excluded).',
+    'First token: your message to the first visible token (a fresh session includes its startup). Speed: CLI output tokens, thinking included, over the time the model spent generating (tool runs excluded).',
     r.partial ? 'This turn was only partly observed (server attached mid-turn), so tok/s covers what it saw.' : '',
-    speed.tokenScope === 'last-call'
-      ? `The engine reports usage for its last model call only: tokens and tok/s describe that call (1 of ${speed.messages}).`
-      : '',
+    lastCall ? `The engine reports usage for its last model call only: tokens and tok/s describe that call (1 of ${speed.messages}).` : '',
     usageBreakdown(speed),
     r.tokensEstimated || r.tpsEstimated
       ? (r.live
@@ -170,81 +194,88 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       : '',
   ].filter(Boolean).join(' ');
 
-  const laneTitle = 'Subagents of this turn, one row per model. A subagent does not stream: first is its first whole message, '
-    + 'tok/s is its tokens over the time each of its model calls took (its own tool runs excluded). Its tokens are always '
+  const laneTitle = 'Subagents of this turn, one row per model. A subagent does not stream: First token is its first whole message, '
+    + 'Speed is its tokens over the time each of its model calls took (its own tool runs excluded). Its tokens are always '
     + 'an estimate (characters ÷ 4 of its messages and final answer): the CLI reports no output count for an agent.';
 
-  return (<>
-    {average && (
-      <div className="session-speed-readout session-speed-readout-picker session-speed-average" data-testid="speed-average"
-        aria-label={`Average ${average.avg.tps} over ${average.avg.turns} turns on ${label(average.model) ?? average.model}`}>
-        <span className="session-speed-kicker">Average</span>
-        <span className="session-speed-average-value" data-testid="speed-average-tps">{average.avg.tps}</span>
-        <span className="session-speed-stat" data-testid="speed-average-scope">
-          {average.avg.turns.toLocaleString('en-US')} turn{average.avg.turns === 1 ? '' : 's'} on {label(average.model) ?? average.model}
-        </span>
-      </div>
-    )}
-    <div
-      className={`session-speed-readout session-speed-readout-${placement}${r.live ? ' is-live' : ''}${r.interrupted ? ' is-interrupted' : ''}${lanes.length ? ' has-lanes' : ''}`}
-      data-testid="session-speed-readout"
-      data-live={r.live ? 'true' : 'false'}
-      title={title}
-      aria-label={`Turn speed: ${model}${slot.next ? `, ${slot.next} from the next call` : ''}, ${r.tokens}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}`}
-    >
-      <span className="session-speed-kicker">{r.live ? 'This turn' : 'Last turn'}</span>
-      <span className="session-speed-model" data-testid="speed-model">{model}</span>
-      {slot.next && (
-        <span className="session-speed-stat session-speed-label" data-testid="speed-next-model">
-          {'\u2192'} {slot.next} next call
-        </span>
-      )}
-      <span className={`session-speed-stat${r.tokensEstimated ? ' is-estimate' : ''}`} data-testid="speed-tokens">
-        {r.tokens}{speed.tokenScope === 'last-call' && <span className="session-speed-label"> last call</span>}
-      </span>
-      {r.ttft && (
-        <span className={`session-speed-stat${r.ttftPending ? ' is-pending' : ''}`} data-testid="speed-ttft">
-          <span className="session-speed-label">first</span> {r.ttft}
-        </span>
-      )}
-      {r.tps && (
-        <span className={`session-speed-stat${r.tpsEstimated ? ' is-estimate' : ''}`} data-testid="speed-tps">{r.tps}</span>
-      )}
-      {r.duration && (
-        <span className="session-speed-stat" data-testid="speed-duration">{r.duration}</span>
-      )}
-      {r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">stopped</span>}
-      {r.partial && !r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">partial</span>}
-    </div>
-    {lanes.map((lane, i) => {
-      const name = (lane.model && (modelLabel?.(lane.model) || formatModelName(lane.model))) || lane.label || 'Agent';
-      const live = lane.status === 'running';
-      return (
-        <div
-          key={lane.key}
-          className={`session-speed-readout session-speed-readout-${placement} session-speed-lane${live ? ' is-live' : ''}${i === lanes.length - 1 ? ' is-last' : ''}`}
-          data-testid="speed-lane"
-          data-model={lane.model ?? ''}
-          data-live={live ? 'true' : 'false'}
-          title={laneTitle}
-          aria-label={`Subagent${lane.count > 1 ? 's' : ''} on ${name}: ${lane.tokens}${lane.first ? `, first message ${lane.first}` : ''}${lane.tps ? `, ${lane.tps}` : ''}${lane.duration ? `, ${lane.duration}` : ''}, ${lane.status}`}
-        >
-          <span className="session-speed-kicker">{lane.count > 1 ? `Agents ×${lane.count}` : 'Agent'}</span>
-          <span className="session-speed-model" data-testid="speed-lane-model">{name}</span>
-          <span className={`session-speed-stat${lane.tokensEstimated ? ' is-estimate' : ''}`} data-testid="speed-lane-tokens">{lane.tokens}</span>
-          {lane.first && (
-            <span className={`session-speed-stat${lane.firstPending ? ' is-pending' : ''}`} data-testid="speed-lane-first">
-              <span className="session-speed-label">first</span> {lane.first}
-            </span>
-          )}
-          {lane.tps && <span className={`session-speed-stat${lane.tpsEstimated ? ' is-estimate' : ''}`} data-testid="speed-lane-tps">{lane.tps}</span>}
-          {lane.duration && <span className="session-speed-stat" data-testid="speed-lane-duration">{lane.duration}</span>}
-          {lane.status !== 'done' && (
-            <span className={`session-speed-stat${live ? ' session-speed-label' : ' session-speed-flag'}`} data-testid="speed-lane-status">{lane.status}</span>
-          )}
+  // One label per row, by its state: "This turn" while it runs, "Last turn" once it is final.
+  const turnWords = [
+    ...(r.interrupted ? [{ text: 'stopped', testId: 'speed-flag' }] : r.partial ? [{ text: 'partial', testId: 'speed-flag' }] : []),
+    ...(lastCall ? [{ text: 'last call', testId: 'speed-scope', title: LAST_CALL_TITLE }] : []),
+  ];
+
+  return (
+    <div className="session-speed" data-testid="session-speed">
+      {average && (
+        <div className="session-speed-average" data-testid="speed-average"
+          aria-label={`Average ${average.avg.tps} over ${average.avg.turns} turns on ${label(average.model) ?? average.model}`}>
+          <span>Session average</span>
+          <strong className="session-speed-average-value" data-testid="speed-average-tps">{average.avg.tps}</strong>
+          <span data-testid="speed-average-scope">
+            {average.avg.turns.toLocaleString('en-US')} turn{average.avg.turns === 1 ? '' : 's'} on {label(average.model) ?? average.model}
+          </span>
         </div>
-      );
-    })}
-    {average && <div className="session-speed-note" data-testid="speed-average-note">{AVERAGE_NOTE}</div>}
-  </>);
+      )}
+      <table className="session-speed-table" data-testid="session-speed-table">
+        <thead>
+          <tr>
+            <th scope="col" aria-label="Run" />
+            <th scope="col">Model</th>
+            <th scope="col">Tokens</th>
+            <th scope="col">First token</th>
+            <th scope="col">Speed</th>
+            <th scope="col">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            className={`session-speed-readout${r.live ? ' is-live' : ''}${r.interrupted ? ' is-interrupted' : ''}`}
+            data-testid="session-speed-readout"
+            data-live={r.live ? 'true' : 'false'}
+            title={title}
+            aria-label={`Turn speed: ${model}${slot.next ? `, ${slot.next} from the next call` : ''}, ${r.tokens}${lastCall ? ' (last call)' : ''}${r.ttft ? `, first token ${r.ttft}` : ''}${r.tps ? `, ${r.tps}` : ''}${r.duration ? `, ${r.duration}` : ''}`}
+          >
+            <th scope="row">
+              <span className="session-speed-kicker"><Words text={r.live ? 'This turn' : 'Last turn'} /></span>{' '}
+              <StateWords words={turnWords} dot={r.live} />
+            </th>
+            <td className="session-speed-model-cell">
+              <span className="session-speed-model" data-testid="speed-model"><Words text={model} /></span>
+              {slot.next && <span className="session-speed-state session-speed-next" data-testid="speed-next-model">{'→'} {slot.next} next call</span>}
+            </td>
+            <td data-testid="speed-tokens">{bare(r.tokens)}</td>
+            <td className={r.ttftPending ? 'is-pending' : undefined} data-testid={r.ttft ? 'speed-ttft' : undefined}>{r.ttft}</td>
+            <td data-testid={r.tps ? 'speed-tps' : undefined}>{r.tps}</td>
+            <td data-testid={r.duration ? 'speed-duration' : undefined}>{r.duration}</td>
+          </tr>
+          {lanes.map((lane) => {
+            const name = (lane.model && (modelLabel?.(lane.model) || formatModelName(lane.model))) || lane.label || 'Agent';
+            const live = lane.status === 'running';
+            return (
+              <tr
+                key={lane.key}
+                className={`session-speed-lane${live ? ' is-live' : ''}`}
+                data-testid="speed-lane"
+                data-model={lane.model ?? ''}
+                data-live={live ? 'true' : 'false'}
+                title={laneTitle}
+                aria-label={`Subagent${lane.count > 1 ? 's' : ''} on ${name}: ${lane.tokens}${lane.first ? `, first message ${lane.first}` : ''}${lane.tps ? `, ${lane.tps}` : ''}${lane.duration ? `, ${lane.duration}` : ''}, ${lane.status}`}
+              >
+                <th scope="row">
+                  <span className="session-speed-kicker"><Words text={lane.count > 1 ? `Agents ×${lane.count}` : 'Agent'} /></span>{' '}
+                  <StateWords dot={live} words={lane.status === 'done' ? [] : [{ text: lane.status, testId: 'speed-lane-status' }]} />
+                </th>
+                <td className="session-speed-model-cell"><span className="session-speed-model" data-testid="speed-lane-model"><Words text={name} /></span></td>
+                <td data-testid="speed-lane-tokens">{bare(lane.tokens)}</td>
+                <td className={lane.firstPending ? 'is-pending' : undefined} data-testid={lane.first ? 'speed-lane-first' : undefined}>{lane.first}</td>
+                <td data-testid={lane.tps ? 'speed-lane-tps' : undefined}>{lane.tps}</td>
+                <td data-testid={lane.duration ? 'speed-lane-duration' : undefined}>{lane.duration}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {average && <div className="session-speed-note" data-testid="speed-average-note">{AVERAGE_NOTE}</div>}
+    </div>
+  );
 }

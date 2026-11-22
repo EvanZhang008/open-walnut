@@ -175,8 +175,8 @@ test('prices the same usage on other models, the picker\'s and popular ones', as
   await expect(picker.getByTestId('picker-fold-cost')).toHaveText(/^Cost\s*\$117/)
   const block = (await openPickerFold(picker, 'cost')).getByTestId('session-cost')
   await expect(block).toHaveAttribute('data-status', 'priced')
-  // The toggle already says the whole total ("$117"): the fold does not repeat it.
-  await expect(block.getByTestId('session-cost-total')).toHaveCount(0)
+  // The fold's first line is the total with its times (design A): "Total $117 · span ...".
+  await expect(block.getByTestId('session-cost-total')).toHaveText('$117')
   const compare = block.getByTestId('session-cost-compare')
   // Nothing is asked until the section is opened.
   expect(asked).toEqual([])
@@ -223,7 +223,8 @@ test('an unreadable session says why, with nothing to open', async ({ page }) =>
   await expect(block.getByTestId('session-cost-reason')).toHaveText('Goose keeps only session totals, without the cache detail a price needs.')
   // Nothing priced, nothing listed: no model rows, no usage-records line, no comparison.
   await expect(block.getByTestId('session-cost-model')).toHaveCount(0)
-  await expect(block.locator('.session-cost-body')).toHaveCount(0)
+  await expect(block.getByTestId('session-cost-compare')).toHaveCount(0)
+  await expect(block).not.toContainText('usage records')
 })
 
 test('the real route settles on an answer for a session with no transcript', async ({ page }) => {

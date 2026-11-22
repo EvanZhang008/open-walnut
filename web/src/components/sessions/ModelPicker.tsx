@@ -30,6 +30,14 @@ import { PickerFoldBar, type PickerFold } from './PickerFoldBar';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 
 const EFFORTS = SESSION_EFFORTS;
+
+/** What every effort level trades, after the level's own line: one sentence for every engine. */
+const EFFORT_NOTE = 'Higher effort: more reasoning, slower and costlier; applies from the next message.';
+/** An effort row's tooltip: "X-High: Extended exploration (select models only). Higher effort: ...". */
+export function effortTitle(label: string, description?: string | null): string {
+  const what = description && description !== label ? `${label}: ${description.replace(/\.$/, '')}.` : `${label}.`;
+  return `${what} ${EFFORT_NOTE}`;
+}
 /** Context at or past this share of the window puts a dot on the Details toggle. */
 const CONTEXT_WARN_PCT = 90;
 
@@ -53,7 +61,9 @@ export function catalogRowLabel(m: SessionModelCatalogEntry): string {
   if (m.value === 'default') {
     return versioned ? `Default (${versioned})` : (m.displayName || 'Default');
   }
-  return versioned ?? m.displayName ?? m.value;
+  // A display name that is itself an id ("opus-5-5", "sonnet-1m", "opus") is read as one.
+  const name = m.displayName || m.value;
+  return versioned ?? (/^[a-z]/.test(name) ? shortModelLabel(name) : name);
 }
 
 // ── Provider rail (the picker's LEFT pane) ──────────────────────────────────
@@ -228,8 +238,8 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
             aria-disabled={locked || undefined}
             aria-label={label}
             className={`provider-rail-item${isActive ? ' provider-rail-item-active' : ''}${locked ? ' provider-rail-item-locked' : ''}${activeUnavailable ? ' provider-rail-item-unavailable' : ''}`}
-            // The name shows in the widened rail; the tooltip only says why an engine is locked.
-            title={locked ? reason! : activeUnavailable ?? undefined}
+            // The engine's name, and why it cannot be picked when it cannot.
+            title={locked ? `${label}: ${reason}` : activeUnavailable ? `${label}: ${activeUnavailable}` : label}
             data-provider={id}
             onClick={() => { if (!isActive && !locked) onSwitch?.(id); }}
           >
@@ -268,6 +278,7 @@ function RailMoreEnginesLink({ onClose }: { onClose?: () => void }) {
       type="button"
       className="provider-rail-item provider-rail-more"
       aria-label="More engines in Settings"
+      title="More engines in Settings"
       data-testid="provider-rail-more"
       onClick={() => { onClose?.(); navigate('/settings#sessions'); }}
     >
@@ -293,8 +304,16 @@ function rememberLiveAcpCatalog(sessionId: string, models: CodexModelInfo[]): vo
   while (liveAcpCatalogs.size > LIVE_ACP_CATALOG_CAP) liveAcpCatalogs.delete(liveAcpCatalogs.keys().next().value!);
 }
 
-function shortModelLabel(raw?: string | null): string {
+/**
+ * A model id as a row, the mismatch line or a capability note names it: the display name every
+ * other row uses ("global.anthropic.claude-opus-5-5[1m]" → "Opus 5.5 1M", beside "Opus 1M"; the
+ * raw "opus-5-5 1M" read as a different model, 2026-11-21), else the id without its provider
+ * prefix and version tail ("mythos-1", a custom model with no family to name).
+ */
+export function shortModelLabel(raw?: string | null): string {
   if (!raw) return '—';
+  const named = formatModelName(raw);
+  if (named && named !== raw) return named;
   const is1m = raw.includes('[1m]');
   const short = raw.replace(/^.*\.claude-/, '').replace(/[-_]v\d+.*$/, '').replace(/\[1m\]/g, '');
   return `${short}${is1m ? ' 1M' : ''}`;
@@ -665,11 +684,17 @@ export function ModelPicker({
   // the pill's own click is exempt (it already toggles).
   const popRef = React.useRef<HTMLDivElement>(null);
   const popped = !!anchorRef;
+  // Inside the pill's own session column when it fits there, never over the task list beside it
+  // (2026-11-21 audit at 1280 px: the picker reached 49 px past the column's left edge); the hook
+  // falls back to the window when the column is too narrow for it.
+  const columnRef = React.useMemo<React.RefObject<HTMLElement | null>>(() => ({
+    get current() { return anchorRef?.current?.closest<HTMLElement>('.session-panel') ?? null; },
+  }), [anchorRef]);
   const placement = useMenuPlacement(popped, anchorRef ?? popRef, popRef, {
     // Centered ON the clicked pill (user call 2026-08-15), flipped up from
-    // the bottom mode bar, clamped to the viewport by the hook.
+    // the bottom mode bar, clamped to the column, else the viewport, by the hook.
     // The pill leaving the page is no close the user made: a host may tell it apart.
-    preferSide: 'up', align: 'center', margin: 12, onAnchorLost: onAnchorLost ?? onClose,
+    preferSide: 'up', align: 'center', margin: 12, onAnchorLost: onAnchorLost ?? onClose, boundsRef: columnRef,
   });
   React.useEffect(() => {
     if (!popped) return;
@@ -848,7 +873,7 @@ export function ModelPicker({
         <div className="model-picker-details" data-testid="picker-acp-context">
           <div className="model-picker-details-block">
             <div className="model-picker-details-title">
-              Context {fmtTokens(acpContext.used)}
+              <span className="model-picker-details-kicker">Context</span> {fmtTokens(acpContext.used)}
               {acpContext.size ? ` / ${fmtTokens(acpContext.size)} (${Math.round(acpContext.used / acpContext.size * 100)}%)` : ''}
             </div>
             <div className="model-picker-details-row model-picker-details-note">
@@ -926,7 +951,7 @@ export function ModelPicker({
                 return (
                 <div className="model-picker-details-block">
                   <div className="model-picker-details-title">
-                    Context — {fmtTokens(cu.totalTokens)} / {details.windows?.estimate ? '~' : ''}{fmtTokens(modelMax)}
+                    <span className="model-picker-details-kicker">Context</span> {fmtTokens(cu.totalTokens)} / {details.windows?.estimate ? '~' : ''}{fmtTokens(modelMax)}
                     {pct != null ? ` (${pct}%)` : ''}
                     {details.windows?.estimate ? ' · estimate' : ''}
                   </div>
@@ -934,7 +959,7 @@ export function ModelPicker({
                     <div className="model-picker-details-row model-picker-details-note">
                       <span>auto-compacts at</span>
                       <span>
-                        {fmtTokens(compactAt)}{compactPct != null ? ` — ${compactPct}% used` : ''}
+                        {fmtTokens(compactAt)}{compactPct != null ? `, ${compactPct}% used` : ''}
                         {cu.autocompactSource === 'env' ? ' (CLAUDE_CODE_AUTO_COMPACT_WINDOW)' : ''}
                       </span>
                     </div>
@@ -950,6 +975,9 @@ export function ModelPicker({
                 </div>
                 );
               })()}
+              {(details.usage?.total_lines_added != null || details.binaryVersion?.version) && (
+                <div className="model-picker-details-title model-picker-details-kicker">Session</div>
+              )}
               {details.usage?.total_lines_added != null && (
                 <div className="model-picker-details-row">
                   <span>Lines changed</span>
@@ -976,17 +1004,17 @@ export function ModelPicker({
     const folds: PickerFold[] = [];
     if (sessionId) {
       folds.push({
-        id: 'cost', label: 'Cost', value: <><BudgetPausedMark sessionId={sessionId} />{costToggleLabel(costRead)}</>,
+        id: 'cost', label: 'Cost', title: 'What this session cost so far, priced per request', value: <><BudgetPausedMark sessionId={sessionId} />{costToggleLabel(costRead)}</>,
         content: <SessionCostBlock sessionId={sessionId} read={costRead} fold liveApiMs={o.liveApiMs ?? null} compareModels={o.compare} />,
       });
       folds.push({
-        id: 'speed', label: 'Speed', value: speedHeadline ?? '—',
+        id: 'speed', label: 'Speed', title: "This session's speed on its model, in output tokens per second", value: speedHeadline ?? '—',
         content: <div className="model-picker-fold-speed">{renderedSpeedReadout}</div>,
       });
     }
     if (o.details) folds.push({ id: 'details', label: 'Details', content: o.details, warn: o.detailsWarn });
     const status = o.notRunning
-      ? <span title="The session process is not running: these settings apply when it starts again.">○ Not running</span>
+      ? <span title="The session process is not running: these settings apply when it starts again.">Session not running</span>
       : o.note ? <span>{o.note}</span> : null;
     return <PickerFoldBar folds={folds} status={status} />;
   };
@@ -1167,7 +1195,7 @@ export function ModelPicker({
                   disabled={disabled}
                   title={disabled
                     ? `Not offered by ${acpActiveFamily?.label ?? 'this model'}`
-                    : e.description}
+                    : effortTitle(e.label, e.description)}
                   onClick={() => {
                     if (!active && variant && variant.modelId !== acpCurrent) onAcpSwitch(variant.modelId);
                   }}
@@ -1190,7 +1218,7 @@ export function ModelPicker({
                   className={`model-picker-row${active ? ' model-picker-row-active' : ''}${active ? ' picker-row-current' : ''}`}
                   role="option"
                   aria-selected={active}
-                  title={option.description ?? option.name}
+                  title={effortTitle(option.name, option.description)}
                   onClick={() => { if (!active) onAcpEffortControl?.(option.value); }}
                 >
                   <span className="model-picker-row-name">{option.name}</span>
@@ -1228,7 +1256,8 @@ export function ModelPicker({
       {applied && (modelMismatch || effortMismatch) && (
         <div className="model-picker-warn" role="status" data-testid="picker-mismatch"
           title="The CLI is using different settings than requested (env override or unsupported value silently downgraded/ignored).">
-          ⚠ Requested{modelMismatch ? ` ${requestedRow ? catalogRowLabel(requestedRow) : shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` effort ${requestedEffort}` : ''} not applied: running {shortModelLabel(applied.model)}{appliedEffort ? ` · ${appliedEffort}` : ''}
+          <span className="model-picker-fold-dot" aria-hidden />
+          <span>Requested{modelMismatch ? ` ${requestedRow ? catalogRowLabel(requestedRow) : shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` effort ${requestedEffort}` : ''} not applied: running {shortModelLabel(applied.model)}{appliedEffort ? ` · ${appliedEffort}` : ''}</span>
         </div>
       )}
 
@@ -1333,7 +1362,7 @@ export function ModelPicker({
                 ? 'Max needs Fable 5 / Opus 4.6+ / Sonnet 4.6'
                 : requestedNotApplied
                 ? 'You requested this level but the CLI is not using it'
-                : e.description;
+                : effortTitle(e.label, e.description);
               return (
                 <button
                   key={e.id}

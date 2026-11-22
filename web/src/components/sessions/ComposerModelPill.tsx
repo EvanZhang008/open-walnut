@@ -396,9 +396,10 @@ export function ComposerModelPill({
       {renderLabel(
         withEngineName(engineUi.displayName, acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName)),
         contextPercent != null && (
-          <span className="session-detail-context-pct" data-condensed-detail> {contextPercent}%</span>
+          <span className="session-detail-context-pct" data-condensed-detail title={`Context ${contextPercent}% used`}> {contextPercent}%</span>
         ),
       )}
+      {!fit.condensed && <PillCaret />}
     </button>
   ) : (
     // No rawModel yet ≠ no pill: a todo-launcher quick start (empty first
@@ -461,6 +462,7 @@ export function ComposerModelPill({
           </span>
         );
       })()}
+      {!fit.condensed && <PillCaret />}
     </button>
   );
 
@@ -510,4 +512,10 @@ export function ComposerModelPill({
       )}
     </>
   );
+}
+
+/** The pill opens a menu, so it carries the menu triggers' caret ("Snooze ▾"); a condensed
+ *  row has room for the family word alone and leaves it out. */
+function PillCaret() {
+  return <span className="composer-model-pill-caret" aria-hidden>▾</span>;
 }

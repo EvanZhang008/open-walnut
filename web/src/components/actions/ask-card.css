@@ -132,6 +132,9 @@
   border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: var(--font-size-md); box-shadow: none;
 }
 .ask-card-tools .btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+/* A tool that opens something (Snooze ▾'s menu, the model picker's Cost / Speed / Details) reads
+   pressed while what it opened is shown. */
+.ask-card-tools .btn[aria-expanded='true'] { background: var(--bg-hover); color: var(--fg); }
 
 /* Put aside: its dot and words go grey; it needs nothing of him until then. */
 .ask-card.is-snoozed :is(.ask-card-question, .ask-card-detail) { color: var(--fg-muted); }
