@@ -99,17 +99,7 @@ export const COLUMN_MODEL_IN_MENU = 220;
  * panel need not be on screen).
  */
 export async function clampColumn(page: Page, px: number | null, opts: { exact?: boolean } = {}): Promise<void> {
-  const width = !opts.exact && (px === COLUMN_NAME_ONLY || px === COLUMN_MODEL_IN_MENU)
-    ? await page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`).evaluate((panel, width) => {
-      const column = panel.closest('.main-page-session-column')!;
-      const bar = panel.querySelector('.composer-controls-bar')!;
-      const spacer = bar.parentElement?.querySelector('.chat-input-controls-spacer');
-      const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0);
-      const chrome = column.getBoundingClientRect().width - available;
-      return Math.round(chrome + (width === 260 ? 120 : 80));
-    }, px)
-    : px;
-  await page.evaluate((width) => {
+  const setWidth = (width: number | null) => page.evaluate((width) => {
     const id = 'pw-column-clamp';
     let style = document.getElementById(id) as HTMLStyleElement | null;
     if (!style) { style = document.createElement('style'); style.id = id; document.head.appendChild(style); }
@@ -117,6 +107,30 @@ export async function clampColumn(page: Page, px: number | null, opts: { exact?:
       width: ${width}px !important; max-width: ${width}px !important; min-width: 0 !important; flex: 0 0 ${width}px !important;
     }`;
   }, width);
+  if (opts.exact || (px !== COLUMN_NAME_ONLY && px !== COLUMN_MODEL_IN_MENU)) { await setWidth(px); return; }
+  // A named shape is the controls row's room (120 or 80 px), not a column width. The column
+  // around the composer is not a fixed amount: in a wide panel the chat's centred reading column
+  // (--chat-column) leaves a gutter that a narrower column takes first (2026-11-22: one guess from
+  // a wide panel left the row its full room). So clamp, measure the row, and correct until it fits.
+  const room = px === COLUMN_NAME_ONLY ? 120 : 80;
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`);
+  const measure = () => panel.evaluate(async (panel) => {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const column = panel.closest('.main-page-session-column')!;
+    const bar = panel.querySelector('.composer-controls-bar')!;
+    const spacer = bar.parentElement?.querySelector('.chat-input-controls-spacer');
+    return { column: column.getBoundingClientRect().width, row: bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0) };
+  });
+  let m = await measure();
+  let width = Math.round(m.column - m.row + room);
+  for (let i = 0; i < 6; i++) {
+    await setWidth(width);
+    m = await measure();
+    const off = Math.round(m.row - room);
+    if (Math.abs(off) <= 1) return;
+    width -= off;
+  }
+  throw new Error(`clampColumn: the controls row kept ${Math.round(m.row)} px, wanted ${room}`);
 }
 
 export const barOf = (panel: Locator) => panel.locator('.composer-controls-bar').last();
