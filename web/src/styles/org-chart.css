@@ -112,14 +112,11 @@
 .oc-card-headline > .oc-role { align-self: center; }
 .oc-card-main > .oc-card-title { font-weight: 650; font-size: var(--font-size-md); line-height: 1.3; }
 .oc-card-headline > .oc-card-title { flex: 0 1 auto; font-weight: 650; font-size: var(--font-size-md); line-height: 1.3; }
-.oc-doing { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 1.4; }
-/* After a name, on its line: how many it has and what it is doing; it gives way, the name never. */
+/* Under a name: what it is doing (its newest working task's title, a router's latest line). Read whole:
+   .wn-title wraps it (2026-11-21, the UI audit: "Text Sen…" at 1024). */
+.oc-doing { color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 1.4; }
+/* After a name, on its line: how many it has (.wn-fixed: never cut; a long name moves it under). */
 .oc-now {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-muted);
   font-size: var(--font-size-sm);
   font-weight: 400;
@@ -143,7 +140,7 @@
   font-size: var(--font-size-xs);
   font-weight: 500;
 }
-.oc-card-line { margin-top: 1px; font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oc-card-line { margin-top: 1px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .oc-vps {
   display: grid;
   /* Wide enough for a task's title to read whole (2026-11-08, the user: "更宽一些"). */
@@ -259,9 +256,8 @@
   background: var(--accent);
   color: var(--on-accent);
   font-size: var(--font-size-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* What the drop would do, whole: it wraps over the card's bottom rather than cut a VP's name. */
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 .oc-own {

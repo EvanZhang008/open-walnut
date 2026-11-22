@@ -8,8 +8,8 @@
 .org-leaders.is-chart .org-leaders-list { margin-left: 5px; padding-left: 6px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }
 
 .org-leaders-toggle {
-  display: flex; align-items: center; gap: 4px; width: max-content; max-width: 100%; padding: 3px 5px 3px 3px;
-  border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
+  display: flex; align-items: center; gap: 4px; width: max-content; max-width: 100%; padding: 2px 6px 2px 2px; line-height: 20px;
+  border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
 .org-leaders-toggle:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg); }
 .org-leaders-chevron { flex: none; width: 12px; font-size: var(--font-size-xs); text-align: center; }
@@ -18,10 +18,11 @@
 .org-leaders.is-list .org-leaders-toggle:hover .org-leaders-chevron { background: transparent; }
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }
-.org-leaders-project { padding: 4px 3px 1px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
+.org-leaders-project { padding: 4px 2px 1px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
 /* A Director's title wraps (.wn-title, OrgLeaders.tsx): the fold, dot, avatar, eye and "leads N" stay level
-   with its first line, and each level steps in only LEVEL_INDENT_PX (2026-11-21, the UI audit). */
-.org-leader { display: flex; align-items: flex-start; min-width: 0; border-radius: 6px; }
+   with its first line, and each level steps in only LEVEL_INDENT_PX (2026-11-21, the UI audit). On the
+   2px grid: the first line's middle is 13px down the row; every mark below is placed on it. */
+.org-leader { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-xs); }
 .org-leader:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .org-leader[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .org-leader-fold {
@@ -31,33 +32,34 @@
 .org-leader-fold:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .org-leader-fold.is-none { cursor: default; }
 .org-leader-open {
-  flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 5px; padding: 3px 3px 3px 1px;
+  flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 6px; padding: 2px 2px 2px 1px;
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
-.org-leader-open > i { flex: none; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; }
+.org-leader-open > i { flex: none; width: 6px; height: 6px; margin-top: 8px; border-radius: 50%; }
+.org-leader-open > .org-leader-avatar { margin-top: 1px; }
 /* Below about 8em the eye and "leads N" move to the next line, at its end, so the title keeps its words. */
-.org-leader-open > .org-leader-title { flex: 1 1 8em; padding-top: 2px; line-height: 16px; overflow-wrap: break-word; }
+.org-leader-open > .org-leader-title { flex: 1 1 8em; padding-top: 2px; line-height: 18px; overflow-wrap: break-word; }
 .org-leader-title + :is(.org-leader-eye, .org-leader-leads) { margin-left: auto; }
-.org-leader-eye { flex: none; display: inline-flex; height: 20px; align-items: center; color: var(--fg-muted); opacity: .85; }
+.org-leader-eye { flex: none; display: inline-flex; height: 22px; align-items: center; color: var(--fg-muted); opacity: .85; }
 .org-leader-eye svg { width: 12px; height: 12px; }
-.org-leader-leads { flex: none; color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 20px; }
+.org-leader-leads { flex: none; color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 22px; }
 .org-leaders-toggle:focus-visible, .org-leader-open:focus-visible, .org-leader-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* "+ New Director": the last row of an opened fold and of the DIRECTORS section (OrgNewDirector.tsx). */
 .org-new-director {
-  display: flex; align-items: center; gap: 5px; width: max-content; max-width: 100%; padding: 3px 5px 3px 15px;
-  border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; width: max-content; max-width: 100%; padding: 2px 6px 2px 14px; line-height: 20px;
+  border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--accent); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
 .org-new-director:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .org-new-director:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.org-new-director-form { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 3px 2px 14px; min-width: 0; }
+.org-new-director-form { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 2px 2px 14px; min-width: 0; }
 .org-new-director-input {
-  flex: 1 1 120px; min-width: 0; height: 24px; padding: 0 7px; border: 1px solid var(--accent); border-radius: 6px;
+  flex: 1 1 120px; min-width: 0; height: 24px; padding: 0 8px; border: 1px solid var(--accent); border-radius: var(--radius-xs);
   background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-sm);
 }
 .org-new-director-input:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
 .org-new-director-project {
-  flex: 0 1 auto; max-width: 45%; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: 6px;
+  flex: 0 1 auto; max-width: 45%; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-xs);
   background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-sm);
 }
 .org-new-director-error { flex-basis: 100%; color: var(--error); font-size: var(--font-size-sm); }
@@ -67,7 +69,7 @@
 /* The DIRECTORS section (OrgDirectorSection.tsx, the "sections" layout): a row the size of a VP's. */
 .org-avatar.is-director { width: 26px; height: 26px; margin: 4px; border-radius: 50%; font-size: var(--font-size-xs); }
 .org-channel.is-director.is-open { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.org-director-dot { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; vertical-align: 1px; }
+.org-director-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; }
 .org-directors-new { padding: 2px 0 4px; }
 .org-directors-new .org-new-director { padding-left: 8px; }
 .org-directors-new .org-new-director-form { padding-left: 6px; }

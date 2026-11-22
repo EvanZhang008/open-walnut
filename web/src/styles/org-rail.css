@@ -90,7 +90,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-task-row > .org-task-ring { flex: none; display: inline-flex; color: var(--fg-muted); }
 .org-task-row > .org-task-ring svg { width: 10px; height: 10px; }
 .org-task-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.org-task-title, .org-task-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The title wraps in full (.wn-title, text-fit.css); the note is metadata and cuts (.wn-meta). */
 .org-task-note { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .org-task-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .org-task-time { font-size: var(--font-size-xs); color: var(--fg-muted); }
@@ -148,23 +148,24 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 /* In the Org list: the watched tasks of a row's work under it, its own children. A guide line hangs from the
    avatar's centre; each child sits a little in from it, less than the row's own name. */
 .org-watched { position: relative; margin: -2px 0 4px 25px; padding-left: 4px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); display: flex; flex-direction: column; }
-.org-watched-item { display: flex; align-items: flex-start; min-width: 0; border-radius: 6px; }
+.org-watched-item { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-xs); }
 .org-watched-item:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 /* Open beside the page: the selected row's accent, lighter. No frame. */
 .org-watched-item[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .org-watched-item[data-open]:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .org-watched-open {
-  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 6px; padding: 3px 3px;
-  border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); line-height: 16px; text-align: left; cursor: pointer;
+  flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 6px; padding: 2px;
+  border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); line-height: 18px; text-align: left; cursor: pointer;
 }
-/* The title wraps (.wn-title): the dot, the eye and the × stay level with its first line. */
-.org-watched-open > i { flex: none; width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; }
+/* The title wraps (.wn-title): the dot, the eye and the × stay level with its first line, whose middle
+   is 11px down the row (2px of padding and half its 18px line). */
+.org-watched-open > i { flex: none; width: 6px; height: 6px; margin-top: 6px; border-radius: 50%; }
 /* Why it hangs here: an eye, a lock, or both in one glyph, centred on the guide line like a tree's node
    (the list's own background cuts the line around it), so the dot and the title keep about their places. Thin
    and muted: it reads as a label, and the dot stays the state. */
 .org-watched-why {
-  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 15px;
-  margin: 3.5px 0 0 -11.25px; padding: 0; border: 0; border-radius: var(--radius-xs); background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 14px;
+  margin: 4px 0 0 -11.25px; padding: 0; border: 0; border-radius: var(--radius-xs); background: var(--bg-secondary); color: var(--fg-muted); opacity: .85;
 }
 /* A lock is a button: it unlocks the panel, and an open lock locks it again. */
 .org-watched-why.is-lock { cursor: pointer; font: inherit; }
@@ -172,7 +173,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-watched-item[data-relock] .org-watched-why { opacity: .6; }
 .org-watched-why svg { width: 12px; height: 12px; }
 .org-watched-item:hover .org-watched-why { color: var(--fg); opacity: 1; }
-.org-watched-item .org-watched-why.is-lock:hover { color: var(--accent, var(--accent)); }
+.org-watched-item .org-watched-why.is-lock:hover { color: var(--accent); }
 .org-watched-item[data-state="done"] .org-watched-title { color: var(--fg-muted); text-decoration: line-through; }
 .org-watched-open:focus-visible, .org-watched-stop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-xs); }
 .org-watched-stop {

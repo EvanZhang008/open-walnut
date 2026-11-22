@@ -132,7 +132,7 @@
 }
 .mail-correct-sample { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .mail-correct-sample-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mail-correct-sample-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-correct-sample-subject { min-width: 0; }
 .mail-correct-sample-meta { color: var(--fg-muted); }
 .mail-correct-shadow { margin: 0; padding-left: 28px; font-size: var(--font-size-sm); color: var(--fg-secondary); overflow-wrap: anywhere; }
 .mail-correct-recipients { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }

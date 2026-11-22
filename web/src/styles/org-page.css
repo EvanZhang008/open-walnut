@@ -91,18 +91,21 @@
 }
 .org-channel.is-main.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 .org-channel-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.org-channel-top { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; }
-/* The name keeps its own width so the +N chip follows it; the time takes the line's end. A narrow list
-   moves the chip and the time under the name before it breaks a word of it. */
-.org-channel-top > .org-channel-name { flex: 0 1 auto; overflow-wrap: break-word; }
+/* The name's line: the name (.wn-title, wraps), then its tail (+N, the time, the count badge) as one
+   group level with the name's FIRST line (both 20px tall). A list too narrow for the name and the tail
+   side by side moves the whole tail under the name, at the line's end, before it breaks a word of the
+   name (2026-11-21, the UI audit: the badge sat below the first line, beside the avatar's middle). */
+.org-channel-top { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 6px; line-height: 20px; }
+.org-channel-top > .org-channel-name { flex: 1 1 8em; overflow-wrap: break-word; }
+.org-channel-tail { display: flex; align-items: center; gap: 6px; height: 20px; margin-left: auto; }
 .org-channel-led {
   flex-shrink: 0;
-  padding: 0 5px;
+  padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
-  line-height: 15px;
+  line-height: 16px;
 }
 .org-detail-led { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .org-detail-led::before { content: '· '; }
@@ -126,12 +129,11 @@
   color: var(--fg-muted);
 }
 .org-channel-latest.is-alert { color: var(--error); }
-.org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 3px; color: var(--accent); }
+.org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 4px; color: var(--accent); }
 
+/* In the name's tail (.org-channel-tail): level with the name's first line. */
 .org-badge {
   flex: none;
-  /* Level with the middle of the row's top: a 34px avatar beside the name and its first line. */
-  margin-top: 7px;
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
@@ -210,11 +212,12 @@
 .org-detail-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .org-router-setup { padding: 20px; overflow-y: auto; min-width: 0; color: var(--fg); background: var(--bg); }
 /* A readable column (2026-11-21, the UI audit: two short radio labels in a box across the whole pane).
-   The form itself still fills the pane, so it scrolls at the pane's edge. */
+   The form itself still fills the pane, so it scrolls at the pane's edge. A box is as wide as what it
+   holds (two radios: about 240px), never the column's whole width, and the actions sit right under it. */
 .org-router-setup > * { max-width: 640px; box-sizing: border-box; }
 .org-router-setup > label { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
-.org-router-setup fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.org-router-setup fieldset label { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.org-router-setup fieldset { width: fit-content; min-width: min(240px, 100%); max-width: min(640px, 100%); margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.org-router-setup fieldset label { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .org-router-setup p { font-size: var(--font-size-md); color: var(--fg-secondary); }
 .org-router-setup .btn { margin-right: 8px; }
 /* A router's own settings (OrgRouterSettings): folded inline under its header, never a menu. Open, it
@@ -248,7 +251,7 @@
 .org-router-overview-checked-line { display: block; }
 .org-router-overview-next { margin-top: 8px !important; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-chat-start-actions { display: flex; gap: 8px; }
-.org-router-setup-actions { display: flex; gap: 8px; margin-top: 4px; }
+.org-router-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .org-router-setup-actions .btn { margin-right: 0; }
 .org-page.is-phone .org-router-settings-head { padding: 8px 12px; }
 .org-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -354,7 +357,7 @@
   cursor: pointer;
 }
 .org-team-item:hover { box-shadow: 0 0 0 1px var(--border); }
-.org-team-ring { flex: none; width: 11px; height: 11px; margin-top: 3px; border-radius: 50%; border: 2px solid; }
+.org-team-ring { flex: none; width: 11px; height: 11px; margin-top: 4px; border-radius: 50%; border: 2px solid; }
 .org-team-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 /* The title wraps (.wn-title); the note is metadata and stays one line (.wn-meta). */
 /* Where the task stands, in its status's words. */

@@ -24,7 +24,8 @@
   align-items: start;
   overflow-wrap: anywhere;
 }
-.mail-route-reader > .mail-route-mark { margin-top: calc(0.7em - 3px); }
+/* The mark on the first line's middle: half of what the line is taller than the 6px mark. */
+.mail-route-reader > .mail-route-mark { margin-top: calc((1lh - 6px) / 2); }
 
 /* The reader's first layer, above the decision: which router processed it, in the line's own quiet
    type, its words starting under the decision's (6px mark + 4px gap). */

@@ -94,7 +94,7 @@ function OptionRow(props: StepRuleProps & { option: RuleOption; name: string }) 
           {option.samples.slice(0, 5).map((sample) => (
             <li key={`${sample.accountId}/${sample.messageId}`} className="mail-correct-sample" data-testid="mail-correct-sample">
               <span className="mail-correct-sample-sender">{sample.sender}</span>
-              <span className="mail-correct-sample-subject">{sample.subject || '(no subject)'}</span>
+              <span className="mail-correct-sample-subject wn-title">{sample.subject || '(no subject)'}</span>
               <span className="mail-correct-sample-meta">{shortDate(sample.at)} · {props.groupLabel(sample.currentGroup)}</span>
             </li>
           ))}

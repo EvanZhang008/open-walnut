@@ -157,8 +157,8 @@ function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude
                 : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}
               <NodeAvatar taskId={t.id} name={t.title} size={20} className="org-task-avatar" />
               <span className="org-task-text">
-                <span className="org-task-title">{orgDisplayTitle(t)}</span>
-                {note && <AgentText compact inline {...(noteField ? taskTextSource(t, noteField) : { unknownSource: true })} text={note} className="org-task-note" testId="org-task-note" />}
+                <span className="org-task-title wn-title">{orgDisplayTitle(t)}</span>
+                {note && <AgentText compact inline {...(noteField ? taskTextSource(t, noteField) : { unknownSource: true })} text={note} className="org-task-note wn-meta" testId="org-task-note" />}
               </span>
               <span className="org-task-side">
                 {at && <span className="org-task-time">{timeAgo(at, { now })}</span>}

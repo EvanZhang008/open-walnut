@@ -119,9 +119,9 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
         }}
       >
         <span className="oc-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
-        <span className="oc-project-name">{p.name}</span>
+        <span className="oc-project-name wn-title">{p.name}</span>
         {/* How many it has (none: nothing said); opened, its tasks are there to see instead. */}
-        {!open && p.row.counts.open > 0 && <span className="oc-now" data-testid="org-chart-project-now">{p.row.counts.open} open</span>}
+        {!open && p.row.counts.open > 0 && <span className="oc-now wn-fixed" data-testid="org-chart-project-now">{p.row.counts.open} open</span>}
       </div>
       {open && (
         <ul className="oc-tasks" id={detailId} data-testid="org-chart-tasks">
@@ -142,7 +142,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
                 onClick={() => { onLeave(); openTask(t.id); }}
               >
                 <span className={`oc-task-icon is-${t.state}${t.snoozed ? ' is-snoozed' : ''}`} role="img" aria-label={stateName(t)} data-testid="org-chart-task-icon">{stateIcon(t)}</span>
-                <span className="oc-task-title">{t.title}</span>
+                <span className="oc-task-title wn-title">{t.title}</span>
               </button>
             </li>
           ))}

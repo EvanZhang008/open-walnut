@@ -123,7 +123,6 @@ const PASSING: Record<string, string> = {
   'components/common/FileContentView.tsx#searchOpen': 'the find bar, a passing search',
   'components/common/FileContentView.tsx#barStep': 'how many tools the document bar folds into its menu, measured from the bar width and the file name each render, not a choice',
   'components/common/NotificationPanel.tsx#detailOpen': 'one letter\'s raw detail unfolded',
-  'components/common/NotificationPanel.tsx#expanded': 'one letter unfolded',
   'components/common/NotificationPanel.tsx#openLetterId': 'a letter read inside the notification panel, a popover',
   'components/common/NotificationPanel.tsx#openSeen': 'bookkeeping of one opening of the panel',
   'components/common/OfficePreview.tsx#activeSheet': 'the sheet of the file open now; the next file opens on its first',

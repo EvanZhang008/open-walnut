@@ -1013,16 +1013,29 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // The Quick question slot opening beside open columns (the rail, a task shown in it, a
   // draft giving it back): the slot gets at least one column's share of the row
-  // (sessionAreaPctBesideChat). Only on the opening itself, so a later drag stays the user's.
+  // (sessionAreaPctBesideChat). Only on the opening itself, and never over a width the user
+  // dragged on this divider (2026-11-22 review: the cap overwrote it for good): his split
+  // beside the slot is kept across a close, a reopen and a reload. The cap is for now only,
+  // never stored, so the width a caller set (the graduated one) comes back when the slot closes.
   const prevChatVisibleRef = useRef(chatVisible);
+  const cappedBesideChatRef = useRef(false);
   useEffect(() => {
     const opened = chatVisible && !prevChatVisibleRef.current;
+    const closed = !chatVisible && prevChatVisibleRef.current;
     prevChatVisibleRef.current = chatVisible;
+    if (closed && cappedBesideChatRef.current) {
+      cappedBesideChatRef.current = false;
+      sessionPanel.restore();
+      return;
+    }
     if (!opened || phoneLayout) return;
     const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
     const cap = sessionAreaPctBesideChat(count);
-    if (count > 0 && sessionPanel.pct > cap) sessionPanel.setPct(cap);
-  }, [chatVisible]); // eslint-disable-line react-hooks/exhaustive-deps -- only the opening counts
+    if (count > 0 && !sessionPanel.dragged && sessionPanel.pct > cap) {
+      cappedBesideChatRef.current = true;
+      sessionPanel.setPct(cap, { save: false });
+    }
+  }, [chatVisible]); // eslint-disable-line react-hooks/exhaustive-deps -- only the opening and closing count
 
   // Swap in the layout saved for THIS column count. Layouts are stored per count,
   // so opening a 3rd panel doesn't destroy the 2-column split the user tuned —

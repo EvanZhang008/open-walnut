@@ -54,8 +54,8 @@ export function OrgChartCeo({ main, line, onOpenChat, more }: CeoProps) {
       <div className="oc-card-btn" data-testid="org-chart-ceo" aria-expanded={open} aria-controls="oc-detail-ceo" title={open ? 'Hide the CEO\'s actions' : 'Show the CEO\'s actions'} {...pressable(toggle)}>
         <OrgAvatar row={main} size={34} />
         <span className="oc-card-main">
-          <span className="oc-card-title">CEO</span>
-          <span className="oc-doing" data-testid="org-chart-ceo-now">{line}</span>
+          <span className="oc-card-title wn-title">CEO</span>
+          <span className="oc-doing wn-title" data-testid="org-chart-ceo-now">{line}</span>
         </span>
       </div>
       {open && (
@@ -123,12 +123,12 @@ export function OrgChartVp({ card: c, line, className, zone, draggable, onDragSt
           <OrgAvatar row={c.row} size={30} />
           <span className="oc-card-main">
             <span className="oc-card-headline">
-              <span className="oc-card-title" data-testid="org-chart-vp-name">{c.name}</span>
+              <span className="oc-card-title wn-title" data-testid="org-chart-vp-name">{c.name}</span>
               <span className="oc-role">{VP_LABEL}</span>
-              <span className="oc-now" data-testid="org-chart-vp-now">{line.open} open</span>
+              <span className="oc-now wn-fixed" data-testid="org-chart-vp-now">{line.open} open</span>
             </span>
-            {/* What it is doing now: its newest task at work, one line the card's width. */}
-            {line.doing && <span className="oc-doing" data-testid="org-chart-vp-doing" title={line.words ? `${line.doing}: ${line.words}` : line.doing}>{line.doing}</span>}
+            {/* What it is doing now: its newest task at work, its title whole (it wraps). */}
+            {line.doing && <span className="oc-doing wn-title" data-testid="org-chart-vp-doing" title={line.words ? `${line.doing}: ${line.words}` : line.doing}>{line.doing}</span>}
           </span>
         </div>
       </div>

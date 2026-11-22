@@ -47,9 +47,11 @@ test('Org rows and Board cards widen whole at their own height, at narrow and wi
         const before = (await row.boundingBox())!
         const next = await followingOf(row, `org-${theme}-${width}`)
         const tops = next ? await topsOf([next]) : []
+        // A task title never cuts (standard.md, "Text that does not fit"): it wraps in full, so
+        // there is nothing to peek, and hovering leaves the row and the one below where they are.
+        const title = row.locator('.org-task-title')
+        expect(await title.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis'), `org ${theme} ${width}: the title is whole`).toBe(true)
         await row.hover({ position: { x: 16, y: 5 } })
-        await expectWidensInPlace(row, before, { label: `org ${theme} ${width}`, theme })
-        await expect.poll(() => openInRow(row.locator('.org-task-title'))).toBe(true)
         if (next) await expectStill([next], tops, `org ${theme} ${width}: the row below`)
         await page.screenshot({ path: info.outputPath(`org-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)

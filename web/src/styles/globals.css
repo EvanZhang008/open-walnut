@@ -9450,13 +9450,13 @@ body.walnut-dragging {
 }
 .home-empty-pane-title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--fg-secondary);
 }
 .home-empty-pane-hint {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
   color: var(--fg-muted);
 }

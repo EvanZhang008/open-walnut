@@ -391,10 +391,10 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                 <div className="oc-card-btn" data-testid="org-chart-router-open" title={`Open ${r.name}`} {...pressable(() => pick(r.key))}>
                   <span className="oc-card-main">
                     <span className="oc-card-headline">
-                      <span className="oc-card-title" data-testid="org-chart-router-name">{r.name}</span>
+                      <span className="oc-card-title wn-title" data-testid="org-chart-router-name">{r.name}</span>
                       <span className="oc-role">Router</span>
                     </span>
-                    <span className="oc-doing" data-testid="org-chart-router-line">{r.latest}</span>
+                    <span className="oc-doing wn-title" data-testid="org-chart-router-line">{r.latest}</span>
                   </span>
                 </div>
               </li>

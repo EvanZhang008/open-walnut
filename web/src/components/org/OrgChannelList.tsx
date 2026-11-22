@@ -98,18 +98,21 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
         <span className="org-channel-top">
           {/* A VP the user named goes by that name, as on the org chart. */}
           <span className="org-channel-name wn-title">{shownName(row)}</span>
-          {!!row.led?.length && (
-            <span className="org-channel-led wn-fixed" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
-          )}
-          {/* The time of the line under it (when that news was written), else of the last move. */}
-          <span className="org-channel-time wn-fixed">{shortAgo(row.latestAt || row.lastAt, now)}</span>
+          {/* +N, the time and the count: one group on the name's first line, under it when narrow. */}
+          <span className="org-channel-tail wn-fixed">
+            {!!row.led?.length && (
+              <span className="org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
+            )}
+            {/* The time of the line under it (when that news was written), else of the last move. */}
+            <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
+            {badge}
+          </span>
         </span>
         <span className={`org-channel-latest wn-title${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
           {/* A pinned thread named on the line wears the Threads card's pin. */}
           {row.latestPinned && <ThreadPinIcon size={11} className="org-channel-pin" />}{row.latest}
         </span>
       </span>
-      {badge}
     </button>
   );
 }

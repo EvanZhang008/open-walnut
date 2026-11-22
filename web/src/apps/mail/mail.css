@@ -500,10 +500,13 @@
 
 /* ── the folder header ── */
 
+/* A narrow list moves the counts and controls to a second line rather than break the name's word
+   ("ALL INBOX / ES" at the 260px list, 2026-11-21 review). */
 .mail-list-section {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   margin: 0;
   padding: 9px 12px 5px;
   font-size: var(--font-size-xs);
@@ -512,7 +515,12 @@
   color: var(--fg-muted);
 }
 
-/* .wn-title: the folder's name wraps rather than cut (text-fit.css). */
+/* .wn-title: the folder's name wraps rather than cut (text-fit.css), between words only: never
+   narrower than its longest word, so the items after it move under it first. */
+.mail-list-section > .mail-list-section-name {
+  min-width: auto;
+  overflow-wrap: break-word;
+}
 .mail-list-section-name {
   font-weight: 700;
   color: var(--fg-secondary);
@@ -648,7 +656,9 @@
   letter-spacing: 0.03em;
 }
 
+/* A size container: an open group's rows stack below a width (mail-groups.css, .mail-kid). */
 .mail-rows {
+  container: mail-rows / inline-size;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1191,17 +1201,17 @@
   height: 20px;
 }
 
-/* Two clauses, one line, separated by a REAL GAP. A trailing space at the end of an inline box is
-   dropped in layout, so "58 more folders, " + "6 with unread" rendered as "58 more folders,6 with
-   unread" at every width where both fitted, and `textContent` still held the space, so no DOM assertion
-   could ever see it. The gap is a layout fact instead. The unread clause keeps its width and the label
-   is the item that gives up characters: the number this row exists to admit is the one that must survive
-   a narrow pane. */
+/* Two clauses separated by a REAL GAP. A trailing space at the end of an inline box is dropped in
+   layout, so "58 more folders, " + "6 with unread" rendered as "58 more folders,6 with unread" at every
+   width where both fitted, and `textContent` still held the space, so no DOM assertion could ever see it.
+   The gap is a layout fact instead. Never cut (2026-11-21, the UI review: "58 more fo…" in a narrow
+   pane): the clauses share one line while it holds both, as it does at the 204px and 232px panes; a
+   narrower pane puts the unread clause on a second line, and a label longer than the line wraps. */
 .mail-tail-text {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: baseline;
   /* 3px, not 4: a real gap (a trailing space at the end of an inline box is dropped in layout, which is how
      this row once rendered "58 more folders,6 with unread"), and every pixel over that belongs to the
@@ -1212,13 +1222,9 @@
 
 .mail-tail-label {
   /* `0 1 auto`, so the clause sits right after the comma instead of being pushed to the far edge of the
-     row: `58 folders,` with 60px of air before `202 unread` reads as a broken sentence. It still shrinks
-     (and only it) when the pane is too narrow for both. */
+     row: `58 folders,` with 60px of air before `202 unread` reads as a broken sentence. */
   flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mail-tail-unread {

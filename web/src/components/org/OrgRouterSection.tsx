@@ -62,14 +62,16 @@ function RouterRow({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; 
       <span className="org-channel-mid">
         <span className="org-channel-top">
           <span className="org-channel-name wn-title">{row.name}</span>
-          <span className="org-channel-time wn-fixed">{shortAgo(row.latestAt || row.lastAt, now)}</span>
+          <span className="org-channel-tail wn-fixed">
+            <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
+            {own > 0 && <span className="org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>}
+          </span>
         </span>
         {/* Its area, Paused or Active (or that it runs its own loop), and how many VPs it links to (buildChannels writes the line). */}
         <span className={`org-channel-latest wn-title${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-router-line">
           {row.latest}
         </span>
       </span>
-      {own > 0 && <span className="org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>}
     </button>
   );
 }

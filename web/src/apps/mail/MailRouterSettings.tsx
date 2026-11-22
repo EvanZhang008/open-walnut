@@ -128,7 +128,7 @@ function MailRouterBlockView({ block, router, tasks, tasksLoading }: { block: Ma
   return (
     <div className="mail-router-block" data-testid="mail-router-block" data-router-id={block.routerId}>
       <div className="mail-router-head">
-        <span className="mail-router-name">{block.name}</span>
+        <span className="mail-router-name wn-title">{block.name}</span>
         {block.state && <span className={`mail-router-state is-${block.state.toLowerCase()}`} data-testid="mail-router-state">{block.state}</span>}
         <span className="mail-router-actions">
           <OrgLink routerId={block.routerId} />
