@@ -39,6 +39,8 @@ import { OrgTopicsSection, useOrgTopicRows } from '@/components/topics/OrgTopics
 import { topicKey } from '@/components/topics/topic-model';
 import { OrgReorgReminder } from './OrgReorgReminder';
 import { OrgSettingsMenu } from './OrgSettingsMenu';
+import { FitButton } from '@/components/common/HeaderFit';
+import { ICON_ORG_CHART } from '@/components/common/Icons';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
@@ -287,14 +289,16 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
   };
   return (
     <aside className="org-list" aria-label={orgName.settings.name}>
-      <header className="org-list-head">
-        <h1 className="org-list-title">
+      <header className="org-list-head" data-fit-header="">
+        <h1 className="org-list-title" data-fit-title="">
           <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />
         </h1>
-        <span className="org-list-actions">
-          {/* Outside the listbox (which holds only options), so Up and Down never stop on it. */}
-          {onNewRouter && <button type="button" className="btn btn-sm" data-testid="org-new-router" onClick={onNewRouter} title="A router sits beside the VPs; it starts paused">New router</button>}
-          <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="The CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
+        <span className="org-list-actions" data-fit-actions="">
+          {/* Org chart is an icon with its name on hover (2026-11-21, the user: "org chart need to
+              be an icon with hover over"); New router lives in the Routers heading ("no new
+              router,put it sin the router section"). Two icons and the title fit the narrowest
+              list the divider allows, so this header needs no More (header-fit.css only). */}
+          <FitButton icon={ICON_ORG_CHART} label="Org chart" iconOnly step={1} data-testid="org-open-chart" onClick={onOpenChart} title="Org chart: the CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP" />
           <OrgSettingsMenu />
         </span>
       </header>
@@ -334,7 +338,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         ))}
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
-        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={onMenu} />
+        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={onMenu} onNewRouter={onNewRouter} />
         <OrgTopicsSection topics={topics} selectedKey={selectedKey} now={now} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>

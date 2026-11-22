@@ -41,7 +41,7 @@ export function OrgSettingsMenu() {
       <button
         ref={btnRef}
         type="button"
-        className={`btn btn-sm org-settings-btn${on ? '' : ' is-off'}`}
+        className={`btn ${on ? 'btn-icon' : 'btn-sm btn-ghost'} org-settings-btn${on ? '' : ' is-off'}`}
         data-testid="org-settings"
         aria-haspopup="dialog"
         aria-expanded={open}

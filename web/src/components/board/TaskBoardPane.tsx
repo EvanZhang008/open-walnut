@@ -73,6 +73,7 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { linkAgentHtml } from '../../../../src/lib/agent-html-refs';
 import { parseAgentRef } from '@/utils/agent-ref-open';
 import '@/styles/task-board.css';
+import '@/styles/header-fit.css';
 
 export interface TaskBoardPaneProps {
   taskId: string;
@@ -675,8 +676,9 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
         onPick={() => setFileChoices(null)}
         onCancel={cancelFileChoices}
       />}
-      <div className="task-board-bar">
+      <div className="task-board-bar" data-fit-header="">
         <span
+          data-fit-title=""
           className={`task-board-bar-title${barTitle.shared ? ' task-board-bar-title-shared' : ''}`}
           title={barTitle.tooltip}
           data-testid="board-title"
@@ -686,15 +688,15 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
           <BoardViewToggle view={shownView} hasPage={hasPage} attention={toggleAttention} onPick={pickView} />
         )}
         {board && shownView === 'custom' && (
-          <span className="task-board-bar-sub" title={new Date(board.updated_at).toLocaleString()} data-testid="board-meta">
+          <span className="task-board-bar-sub" data-fit-sub="" title={new Date(board.updated_at).toLocaleString()} data-testid="board-meta">
             v{board.version} · updated {timeAgo(board.updated_at, { long: true })} by {boardWriterLabel(board.updated_by, ownerId)}
           </span>
         )}
         <AwaySyncMark item={payload} className="away-sync-board" />
-        <div className="task-board-bar-right">
+        <div className="task-board-bar-right" data-fit-actions="">
           <button
             type="button"
-            className="session-diff-refresh task-board-refresh"
+            className="btn btn-icon task-board-refresh"
             onClick={reload}
             title="Reload the board"
             aria-label="Reload the board"

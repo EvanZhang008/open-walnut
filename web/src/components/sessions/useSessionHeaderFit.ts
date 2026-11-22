@@ -45,6 +45,10 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   // task list or the owner read lands): it leaves just before Terminal, so arriving it
   // never pushes Terminal into "..." (2026-10-26).
   board: { kind: 'chip', priority: 6.1, name: 'Board' },
+  // Threads (the user's own requests to this task) joins once the task keeps threads; it was
+  // drawn without a line here, so the fit never priced it and a narrow column cut it under the
+  // window buttons (2026-11-21). It leaves after Terminal and Board, before Files.
+  threads: { kind: 'chip', priority: 5, name: 'Threads' },
   // The App this session opened beside its chat (Drawing): a tab once opened, like Files
   // (2026-11-20, the user: "I want the draw actually open an like file tab kind of thing").
   // It joins only after the person opened it, and leaves before the host's own chips.

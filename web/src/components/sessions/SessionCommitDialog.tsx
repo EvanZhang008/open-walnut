@@ -21,6 +21,8 @@ import { SessionCommitRepo } from '@/components/sessions/SessionCommitRepo';
 import { errorText } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
 import '@/styles/session-commit.css';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_REFRESH } from '@/components/common/Icons';
 
 
 export interface CommitConfirm { repoRoot: string; kind: 'push' | 'pr' }
@@ -36,6 +38,7 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<CommitConfirm | null>(null);
   const loadSeq = useRef(0);
+  const headRef = useHeaderFit();
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
@@ -131,12 +134,11 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
         data-testid="session-commit-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="scd-head">
-          <div className="app-modal-title">Commit this session's changes</div>
-          <div className="scd-head-actions">
-            <button type="button" className="btn scd-reload" onClick={() => void load()} disabled={loading} title="Read the repositories again">
-              {loading ? 'Reading…' : 'Reload'}
-            </button>
+        <div className="scd-head" ref={headRef} data-fit-header="">
+          <div className="app-modal-title" data-fit-title="">Commit this session's changes</div>
+          <div className="scd-head-actions" data-fit-actions="">
+            <FitButton icon={ICON_REFRESH} label={loading ? 'Reading…' : 'Reload'} className="scd-reload" onClick={() => void load()} disabled={loading} title="Read the repositories again" />
+            <HeaderFitMore testId="scd-more" />
             <button type="button" className="scd-close" onClick={onClose} aria-label="Close">×</button>
           </div>
         </div>

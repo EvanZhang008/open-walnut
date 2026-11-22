@@ -21,7 +21,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
   flex-shrink: 0;
@@ -39,7 +39,6 @@
 .task-board-bar-title-shared {
   flex-shrink: 1;
   min-width: 0;
-  max-width: 55%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

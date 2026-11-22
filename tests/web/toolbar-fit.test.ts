@@ -34,6 +34,17 @@ describe('nextToolbarFold', () => {
   });
 
   it('never unfolds on an unknown cost (a step it has not measured)', () => {
-    expect(at({ step: 2, roomPx: 1000, unfoldCostPx: 0 })).toBe(2);
+    expect(at({ step: 2, roomPx: 1000, unfoldCostPx: undefined })).toBe(2);
+  });
+
+  it('unfolds a step that cost nothing once there is room (the More button in place of one icon)', () => {
+    expect(at({ step: 2, roomPx: MIN + RESERVE + HYST, unfoldCostPx: 0 })).toBe(1);
+    expect(at({ step: 2, roomPx: MIN + RESERVE + HYST - 1, unfoldCostPx: 0 })).toBe(2);
+  });
+
+  it('unfolds on the room the row has, not on a kept box that does not grow (a header title)', () => {
+    // A title 40 px wide needing 40: its box never grows, the row has 200 to spare.
+    expect(at({ step: 1, roomPx: 240, fieldPx: 40, minPx: 40, reservePx: 0, unfoldCostPx: 60 })).toBe(0);
+    expect(at({ step: 0, roomPx: 240, fieldPx: 39, minPx: 40, reservePx: 0, unfoldCostPx: 0 })).toBe(1);
   });
 });

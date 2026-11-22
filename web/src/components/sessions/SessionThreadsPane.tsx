@@ -14,6 +14,8 @@ import type { ImageAttachment } from '@/api/chat';
 import { OrgThreads } from '@/components/org/OrgThreads';
 import type { OrgThreadsState } from '@/components/org/useOrgThreads';
 import { setTaskThreads } from './session-threads-model';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_EYE_OFF } from '@/components/common/Icons';
 import '@/styles/session-threads.css';
 
 export function SessionThreadsPane({ task, sessionId, threads, barRightSlot }: {
@@ -28,6 +30,7 @@ export function SessionThreadsPane({ task, sessionId, threads, barRightSlot }: {
   const { send } = useSessionSend(sessionId);
   const store = useTaskStoreActions();
   const [failed, setFailed] = useState(false);
+  const barRef = useHeaderFit();
   const [now, setNow] = useState(() => Date.now());
   // "3 min ago" stays true while the pane is open.
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(id); }, []);
@@ -39,13 +42,14 @@ export function SessionThreadsPane({ task, sessionId, threads, barRightSlot }: {
   };
   return (
     <div className="session-threads-pane" data-testid="session-threads-pane">
-      <div className="session-threads-bar">
-        <span className="session-threads-bar-title">Threads</span>
-        <span className="session-threads-bar-sub">Your requests to this task, one per subject</span>
-        <div className="session-threads-bar-right">
+      <div className="session-threads-bar" ref={barRef} data-fit-header="">
+        <span className="session-threads-bar-title" data-fit-title="">Threads</span>
+        <span className="session-threads-bar-sub" data-fit-sub="">Your requests to this task, one per subject</span>
+        <div className="session-threads-bar-right" data-fit-actions="">
           {failed && <span className="session-threads-error" role="alert">Did not save. Try again.</span>}
-          <button type="button" className="btn btn-sm" onClick={() => void turnOff()} data-testid="session-threads-off"
-            title="Stop filing your messages to this task as threads">Turn off</button>
+          <FitButton icon={ICON_EYE_OFF} label="Turn off" onClick={() => void turnOff()} data-testid="session-threads-off"
+            title="Turn off: stop filing your messages to this task as threads" />
+          <HeaderFitMore />
           {barRightSlot}
         </div>
       </div>

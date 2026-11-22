@@ -24,6 +24,7 @@ import { useSessionLetters } from '@/hooks/useSessionLetters';
 import { LetterEnvelopeRow } from './LetterEnvelopeRow';
 import { LetterView, type LetterFileTarget } from './LetterView';
 import '@/styles/human-inbox.css';
+import '@/styles/header-fit.css';
 
 interface SessionInboxPaneProps {
   sessionId: string;
@@ -106,15 +107,15 @@ export function SessionInboxPane({
 
   return (
     <div className="session-inbox-pane">
-      <div className="session-inbox-bar">
-        <span className="session-inbox-bar-title">Inbox</span>
-        <span className="session-inbox-bar-sub">
+      <div className="session-inbox-bar" data-fit-header="">
+        <span className="session-inbox-bar-title" data-fit-title="">Inbox</span>
+        <span className="session-inbox-bar-sub" data-fit-sub="">
           {letters.length === 0
             ? 'letters this session wrote to you'
             : `${letters.length} letter${letters.length === 1 ? '' : 's'}`}
           {unreadCount > 0 ? ` · ${unreadCount} unread` : ''}
         </span>
-        <div className="session-inbox-bar-right">{barRightSlot}</div>
+        <div className="session-inbox-bar-right" data-fit-actions="">{barRightSlot}</div>
       </div>
 
       {readerId ? (

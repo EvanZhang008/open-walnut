@@ -25,6 +25,7 @@ import { MicInput } from '@/components/common/BoxMic';
 import { useFocusView } from '@/focus-spaces/useFocusView';
 import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { taskIconState } from '@/utils/task-icon-state';
+import '@/styles/header-fit.css';
 
 function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, folded, onFold, tierLabel, moving, snoozed }: {
   family: BoardFamily; mode: HomeBoardMode; onOpen: (task: Task) => void; snoozed: (task: Task) => boolean;
@@ -331,7 +332,7 @@ export function HomeBoardSheet() {
     if (e.shiftKey && current <= 0) { e.preventDefault(); items.at(-1)?.focus(); }
     else if (!e.shiftKey && current === items.length - 1) { e.preventDefault(); items[0]?.focus(); }
   }} role="dialog" aria-modal="true" aria-label="Task board" data-testid="home-board" data-mode={mode}>
-    <header className="home-board-head"><h1>Board</h1><span className="home-board-count">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
+    <header className="home-board-head" data-fit-header=""><h1 data-fit-title="">Board</h1><span className="home-board-count" data-fit-sub="">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
       <div className="home-board-controls"><SegmentedControl className="home-board-mode" aria-label="Group board" value={mode} onChange={setMode} options={BOARD_MODES} />
         <MicInput fieldClassName="home-board-search" data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} setText={setQuery} />
         <button type="button" className="home-board-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>

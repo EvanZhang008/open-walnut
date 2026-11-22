@@ -126,7 +126,7 @@ describe('the Routers section in the Org list', () => {
   })
 
   it('selects a router like a node: onSelect, never onOpenTask', () => {
-    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} onMenu=\{onMenu\} \/>/)
+    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} onMenu=\{onMenu\} onNewRouter=\{onNewRouter\} \/>/)
     expect(section).not.toMatch(/onOpenTask/)
   })
 
@@ -148,10 +148,11 @@ describe('the Routers section in the Org list', () => {
     expect(listCode).not.toMatch(/routers\.map\(\(r\) => \(?\s*<Row/)
   })
 
-  it('fetches nothing, refreshes nothing, and offers no create action this round', () => {
+  it('fetches nothing and refreshes nothing; its only action is the page\'s own New router', () => {
     expect(section).not.toMatch(/\bapiGet\b|\bfetch\w*\(|useEffect|setInterval|setTimeout|\/api\//)
     expect(section).not.toMatch(/\bitems\b|\.account\b|\.message\b/)
-    expect(section).not.toMatch(/Create|New router|Add router/i)
+    expect(section).not.toMatch(/Create|Add router/i)
+    expect(section).toContain('onClick={onNewRouter}')
   })
 })
 
@@ -443,12 +444,16 @@ describe('router settings in the page (source guards)', () => {
     expect(settings).not.toMatch(/OrgTaskRail|OrgBrief|OrgThreads|useOrgThreads|teamColumns/)
   })
 
-  it('New router sits outside the listbox, so Up and Down never stop on it', () => {
-    const button = list.indexOf('data-testid="org-new-router"')
-    const listbox = list.indexOf('role="listbox"')
-    expect(button).toBeGreaterThan(-1)
-    expect(button).toBeLessThan(listbox)
-    expect(list.slice(listbox)).not.toContain('org-new-router')
+  // 2026-11-21, the user: "no new router,put it sin the router section".
+  it('New router is a + on the Routers heading, no option, and gone from the list header', () => {
+    const head = list.slice(list.indexOf('<header className="org-list-head"'), list.indexOf('</header>'))
+    expect(head).not.toContain('org-new-router')
+    expect(list).toContain('onNewRouter={onNewRouter}')
+    const section = code(read('web/src/components/org/OrgRouterSection.tsx'))
+    const heading = section.slice(section.indexOf('data-testid="org-routers-head"'), section.indexOf('{rows.map('))
+    expect(heading).toContain('data-testid="org-new-router"')
+    // Up and Down walk option rows only, so they never stop on it.
+    expect(heading).not.toContain('role="option"')
   })
 })
 

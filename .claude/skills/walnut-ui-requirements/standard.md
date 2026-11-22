@@ -74,6 +74,12 @@ Slots inside a key: `.btn-value` (a bold value) and `.btn-caret` (▾, turns ove
 `data-r2` keeps a key's width when its label flips (Refresh / Refreshing...). Copy is always
 `components/common/CopyButton.tsx`. Pills are not buttons: no `999px` corner on a key.
 
+A header row (a title and buttons in one line) follows the header rule in
+`components/common/HeaderFit.tsx`: as it narrows, a subtitle gives way, then the buttons' words
+fold to icons (`FitButton`), then they go into one More menu (`HeaderFitMore`), and only then does
+the title cut, with its full text on hover. `tests/web/header-fit-ratchet.test.ts` counts the
+header rows not on it yet; `tests/e2e/browser/header-fit-sweep.spec.ts` sweeps the widths.
+
 Source: the whole-card design the user picked on 2026-11-21 from ten drawn on his own data ("2 is
 good": the options as a list of rows), after "Ack button should be blue, or recommended option
 should be blue also" and "I like P1 button" (the quiet grey keys and "Snooze ▾" of his Needs you

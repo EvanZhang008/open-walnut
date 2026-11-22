@@ -14,6 +14,7 @@ import type { NotificationSection } from '@/contexts/notifications';
 import { QuietToggle } from './QuietToggle';
 import { badge, type BadgeTone } from './badge';
 import '@/components/actions/ask-card.css';
+import '@/styles/header-fit.css';
 
 /** Rail tabs: the notification sections plus the ambient System zone. */
 export type RailSection = NotificationSection | 'system';
@@ -39,9 +40,9 @@ export function NotificationPanelHeader({ section, category, canClear, onClear, 
   const base = CLEAR_LABEL[section];
   const label = section === 'errors' && category ? `Clear ${category} errors` : base;
   return (
-    <div className="notification-panel-header">
-      <span className="notification-panel-title">Notifications</span>
-      <div className="ask-card-tools nfc-header-tools" role="group" aria-label="Notification tools">
+    <div className="notification-panel-header" data-fit-header="">
+      <span className="notification-panel-title" data-fit-title="">Notifications</span>
+      <div className="ask-card-tools nfc-header-tools" role="group" aria-label="Notification tools" data-fit-actions="">
         {label && canClear && (
           <button
             type="button"

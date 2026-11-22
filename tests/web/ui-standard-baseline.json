@@ -605,7 +605,6 @@
     "components/apps-page/plugin-detail-sections.tsx": 1,
     "components/board/BoardReplyDock.tsx": 1,
     "components/board/BoardStatusView.tsx": 4,
-    "components/board/TaskBoardPane.tsx": 1,
     "components/board/kanban/KanbanAddLane.tsx": 1,
     "components/board/kanban/KanbanAddTask.tsx": 1,
     "components/board/kanban/KanbanCard.tsx": 3,

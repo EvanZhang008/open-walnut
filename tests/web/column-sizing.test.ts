@@ -252,9 +252,13 @@ describe("Home's row: the pane just opened gets its share", () => {
 
   it('the task panel width is a share of the window less the collapsed rail, never of Home itself', () => {
     // Expanding the sidebar narrows Home; a share of the viewport does not move with it.
-    expect(todoPanelWidth(25)).toBe('calc((100vw - var(--home-rail-width, 56px)) * 0.25)');
-    expect(todoPanelWidth(33.37)).toBe('calc((100vw - var(--home-rail-width, 56px)) * 0.3337)');
+    expect(todoPanelWidth(25)).toBe('max(224px, (100vw - var(--home-rail-width, 56px)) * 0.25)');
+    expect(todoPanelWidth(33.37)).toBe('max(224px, (100vw - var(--home-rail-width, 56px)) * 0.3337)');
     expect(todoPanelWidth(25)).not.toMatch(/%/);
+  });
+
+  it('the task panel is never narrower than its toolbar needs', () => {
+    expect(todoPanelWidth(10)).toMatch(/^max\(224px, /);
   });
 });
 

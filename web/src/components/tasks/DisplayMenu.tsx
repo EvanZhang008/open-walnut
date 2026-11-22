@@ -75,6 +75,8 @@ export function DisplayButton(props: DisplayButtonProps) {
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
         data-fit-button="1"
+        // Its menu opens from it, so it never goes into the toolbar's More menu.
+        data-fit-keep=""
       >
         {ICON_SLIDERS}
         <span className="tp-btn-label" data-fit-label="">Display</span>

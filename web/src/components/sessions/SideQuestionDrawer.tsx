@@ -94,6 +94,7 @@ import {
 } from '@/stores/side-threads';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { Chip, DisclosureButton } from '@/components/controls';
+import '@/styles/header-fit.css';
 
 interface SideQuestionDrawerProps {
   /** The PARENT Claude session id. Drawer is disabled until the session has one. */
@@ -700,9 +701,9 @@ function SideQuestionDrawerBody({
           onDragLeave={(e) => e.stopPropagation()}
           onDrop={(e) => e.stopPropagation()}
         >
-          <div className="side-question-popover-header">
-            <span className="side-question-popover-title">Side threads</span>
-            <span className="side-question-popover-hint">multi-turn · kept out of the chat</span>
+          <div className="side-question-popover-header" data-fit-header="">
+            <span className="side-question-popover-title" data-fit-title="">Side threads</span>
+            <span className="side-question-popover-hint" data-fit-sub="">multi-turn · kept out of the chat</span>
             <button
               type="button"
               className="btn btn-icon btn-sm task-action-btn side-question-fullscreen"

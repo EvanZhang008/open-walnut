@@ -20,7 +20,7 @@
 }
 
 /* The Org list's group: the section label as its siblings draw it, a small + at its end. */
-.org-topics-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.org-topics-head, .org-routers-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .topic-group-avatar { position: relative; display: inline-block; flex: none; }
 .topic-group-avatar-slot { position: absolute; display: inline-flex; }
 .topic-group-avatar-slot.is-back { left: 0; top: 0; }

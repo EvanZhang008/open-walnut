@@ -118,6 +118,8 @@ export const ICON_NEW_TAB = <svg width="14" height="14" viewBox="0 0 16 16" fill
 /** Clock with a back arrow: a file's version history. */
 export const ICON_HISTORY = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 8a6 6 0 1 0 1.8-4.3"/><polyline points="2 2 2 4.5 4.5 4.5"/><path d="M8 5v3.2l2.2 1.4"/></svg>;
 /** Three dots: more actions. */
+/** Three boxes joined as a tree: the org chart (the CEO over the VPs). */
+export const ICON_ORG_CHART = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><rect x="5.5" y="1.5" width="5" height="4" rx="1"/><rect x="1.5" y="10.5" width="5" height="4" rx="1"/><rect x="9.5" y="10.5" width="5" height="4" rx="1"/><path d="M8 5.5v2.5M4 10.5V8h8v2.5"/></svg>;
 export const ICON_MORE = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="12.5" cy="8" r="1.25"/></svg>;
 /** Arrow into a tray: download. */
 export const ICON_DOWNLOAD = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v8.5M4.5 7L8 10.5 11.5 7"/><path d="M2.5 13.5h11"/></svg>;

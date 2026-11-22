@@ -1,0 +1,41 @@
+/*
+ * The header rule (components/common/HeaderFit.tsx): a title and its buttons in one row never
+ * cover each other. useHeaderFit sets data-toolbar-fold (the buttons' words fold to icons,
+ * toolbar-fit.css) and then data-fit-overflow (the buttons go into the More menu). The title
+ * cuts its text with an ellipsis only after both.
+ */
+[data-fit-header] { display: flex; align-items: center; min-width: 0; }
+[data-fit-header] [data-fit-title] {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A title whose text is one control (a rename button) cuts inside that control. A flex title
+   lets it shrink; a percent max-width would feed back into the title's own size and cut it early. */
+[data-fit-header] [data-fit-title] > :only-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A subtitle gives way first: it takes only the room left over (flex-basis 0), so the title never
+   loses even a sub-pixel (which already shows its ellipsis) while the subtitle still shows. */
+[data-fit-header] [data-fit-sub] {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-fit-header] [data-fit-actions] { display: flex; align-items: center; flex: none; }
+
+.header-fit-icon { display: inline-flex; align-items: center; justify-content: center; }
+
+/* The More button shows only while the buttons are put away into it (a header or a toolbar).
+   `.btn[data-fit-more]` outranks the shared `.btn { display: inline-flex }`, which a bare
+   attribute selector only ties (and loses to on load order). */
+[data-fit-more], .btn[data-fit-more] { display: none; }
+[data-fit-overflow='true'] [data-fit-more], [data-fit-overflow='true'] .btn[data-fit-more] { display: inline-flex; }
+[data-fit-overflow='true'] [data-fit-button]:not([data-fit-keep]) { display: none; }

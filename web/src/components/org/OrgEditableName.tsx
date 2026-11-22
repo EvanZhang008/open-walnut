@@ -31,7 +31,7 @@ export function OrgEditableName({ value, label, onSave, className = '', testId, 
         type="button"
         className={`org-name-edit ${className}${failed ? ' is-failed' : ''}`}
         data-testid={testId}
-        title={failed ? `Not saved. Click to rename ${label} again.` : `Rename ${label}`}
+        title={failed ? `Not saved. Click to rename ${label} again.` : `${value}. Click to rename.`}
         onClick={(e) => { e.stopPropagation(); setDraft(value); setFailed(false); cancelled.current = false; setEditing(true); }}
       >{value}</button>
     );

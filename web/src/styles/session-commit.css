@@ -16,8 +16,8 @@
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
-.scd-head .app-modal-title { flex: 1; min-width: 0; }
-.scd-head-actions { display: flex; align-items: center; gap: 8px; }
+.scd-head .app-modal-title { flex: 0 1 auto; min-width: 0; }
+.scd-head-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .scd-close {
   border: none;
   background: transparent;

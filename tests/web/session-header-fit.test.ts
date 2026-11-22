@@ -417,3 +417,26 @@ describe('guard: no ResizeObserver callback renders React synchronously', () => 
     expect(Object.keys(ALLOWED).filter((f) => !both.includes(f)), 'a listed file no longer has both: drop it').toEqual([]);
   });
 });
+
+// Class guard (2026-11-21): the Threads chip was drawn on the tool row with no TOOL_ITEMS line,
+// so the fit never priced it and a narrow column cut "Threads" under the window buttons. Every
+// item the source puts on the row by a literal id must be one the fit knows.
+describe('every tool row item is priced by the fit', () => {
+  it('each literal data-header-id in web/src has a TOOL_ITEMS entry', async () => {
+    const { readFileSync, readdirSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const root = join(__dirname, '../../web/src');
+    const ids = new Map<string, string>();
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (p.endsWith('.tsx')) for (const m of readFileSync(p, 'utf8').matchAll(/data-header-id=\{?"([a-z-]+)"/g)) ids.set(m[1], p);
+      }
+    };
+    walk(root);
+    expect(ids.size).toBeGreaterThan(5);
+    const unknown = [...ids].filter(([id]) => !TOOL_ITEMS[id]).map(([id, f]) => `${id} (${f})`);
+    expect(unknown, 'add each to TOOL_ITEMS in useSessionHeaderFit.ts with its kind and priority').toEqual([]);
+  });
+});

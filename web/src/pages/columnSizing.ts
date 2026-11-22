@@ -187,15 +187,20 @@ export function sessionAreaShownPct(userPct: number | null, count: number, besid
 /** The collapsed rail's width when `--home-rail-width` cannot be read (globals.css sets 56px). */
 const HOME_RAIL_DEFAULT_PX = 56;
 
+/** The task panel's least width: its toolbar's readable search, Display, More and Hide. */
+export const TODO_PANEL_MIN_PX = 224;
+
 /**
  * The task panel's CSS width for its stored share `pct`. The share is of the window
  * less the collapsed rail (`--home-rail-width` on `.main-page`), so it reads the same
  * as before with the rail collapsed, and expanding the sidebar takes its room from
  * the columns beside the panel, never from the task list. A plain `pct%` was a share
  * of Home's own width, which shrank with the sidebar and cut more of every row.
+ * Never under TODO_PANEL_MIN_PX: 10% of a 1024 window was 102 px (2026-11-21), and the
+ * panel and what is laid beside it read this one value.
  */
 export function todoPanelWidth(pct: number): string {
-  return `calc((100vw - var(--home-rail-width, ${HOME_RAIL_DEFAULT_PX}px)) * ${Math.round(pct * 100) / 10000})`;
+  return `max(${TODO_PANEL_MIN_PX}px, (100vw - var(--home-rail-width, ${HOME_RAIL_DEFAULT_PX}px)) * ${Math.round(pct * 100) / 10000})`;
 }
 
 /**

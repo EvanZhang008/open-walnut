@@ -32,9 +32,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 14px 8px;
+  /* 4 px grid; the buttons are the shared Tool look (HeaderFit.tsx), 28 px with 4 px between. */
+  padding: 12px 12px 8px;
 }
-.org-list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.org-list-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .org-settings-btn { display: inline-flex; align-items: center; gap: 4px; }
 .org-settings-btn.is-off { color: var(--error); }
 .org-settings-off { font-size: var(--font-size-xs); font-weight: 600; }

@@ -16,6 +16,7 @@ import { timeAgo } from '@/utils/time';
 import { stateCountLabel } from '@open-walnut/user-status';
 import { askCount, type ChannelRow, type ChannelState } from './org-channels-model';
 import { OrgAvatar } from './OrgAvatar';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Paused',
@@ -76,16 +77,31 @@ function RouterRow({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; 
   );
 }
 
-export function OrgRouterSection({ rows, selectedKey, now, onSelect, onMenu }: {
+export function OrgRouterSection({ rows, selectedKey, now, onSelect, onMenu, onNewRouter }: {
   rows: readonly ChannelRow[];
   selectedKey: string | null;
   now: number;
   onSelect: (key: string) => void;
   onMenu?: RouterMenu;
+  /** New router, a + on this heading (2026-11-21, the user: "no new router,put it sin the router
+   *  section"). It is no option: the list's Up and Down walk option rows only, so they skip it. */
+  onNewRouter?: () => void;
 }) {
   return (
     <div className="org-routers" role="group" aria-label={ROUTERS_SECTION_LABEL} data-testid="org-routers" data-count={rows.length}>
-      <div className="org-list-section" role="presentation" data-testid="org-routers-head">{routersHeading(rows.length)}</div>
+      <div className="org-list-section org-routers-head" role="presentation" data-testid="org-routers-head">
+        <span>{routersHeading(rows.length)}</span>
+        {onNewRouter && (
+          <button
+            type="button"
+            className="btn btn-sm btn-icon"
+            data-testid="org-new-router"
+            aria-label="New router"
+            title="New router: a router sits beside the VPs; it starts paused"
+            onClick={onNewRouter}
+          >{ICON_PLUS}</button>
+        )}
+      </div>
       {rows.map((r) => (
         <div key={r.key} className="org-channel-wrap" role="presentation">
           <RouterRow row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
