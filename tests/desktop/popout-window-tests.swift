@@ -136,6 +136,8 @@ struct PopoutWindowTests {
         precondition(parentPid != nil && childPid != nil && parentPid != childPid)
         print("Independent WebContent PIDs: parent \(parentPid!), child \(childPid!)")
         delegate.recyclePopout(first)
+        // The swap first empties the old page in its own process, then builds the new one.
+        try await wait { (firstWindow.contentView as? WKWebView).map { $0 !== oldChild } ?? false }
         let recycled = firstWindow.contentView as! WKWebView
         precondition(recycled !== oldChild)
         precondition(delegate.popoutWindows.count == 2)
