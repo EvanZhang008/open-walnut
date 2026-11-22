@@ -766,7 +766,7 @@ test.describe('Question map', () => {
     const panel = await openAt(page, 1100)
     const map = mapOf(panel)
     await expect(map).toHaveAttribute('data-shape', 'panel')
-    const files = panel.locator('button.session-action-chip', { hasText: /^Files$/ })
+    const files = panel.locator('button.session-header-tool', { hasText: /^Files$/ })
     await files.click()
     await expect(panel.locator('.session-panel-split.is-changed-open')).toBeVisible({ timeout: 15_000 })
     // The chat column is narrower than the 1100px column was, and the shape is

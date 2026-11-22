@@ -511,7 +511,7 @@ test('the terminal docked under Changed and Files; a path opens in Files; a sele
   await expect(page.getByTestId('terminal-dock-frame')).toHaveClass(/is-full/)
   await page.getByTestId('terminal-dock').click()
   await expect(page.getByTestId('terminal-dock-frame')).toHaveClass(/is-docked/)
-  await expect(page.locator('.session-panel [data-header-id="changed"]')).toHaveClass(/session-action-chip-active/)
+  await expect(page.locator('.session-panel [data-header-id="changed"]')).toHaveAttribute('aria-pressed', 'true')
   // Hide from the dock's own header.
   await page.getByTestId('terminal-undock').click()
   await expect(page.getByTestId('terminal-dock-frame')).toHaveCount(0)

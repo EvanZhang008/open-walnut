@@ -29,7 +29,7 @@ test('completed plan session shows Plan chip and Execute buttons in the homepage
   const panel = await openSessionOnHome(page, 'pw-plan-session-completed')
 
   // The Plan action chip renders whenever a plan actually exists for the session
-  const planChip = panel.locator('.session-action-chip', { hasText: 'Plan' }).first()
+  const planChip = panel.locator('.session-header-tool', { hasText: 'Plan' }).first()
   await expect(planChip).toBeVisible({ timeout: 5000 })
 
   // Open the plan popup → Execute button should be visible (planCompleted=true)
@@ -60,6 +60,6 @@ test('normal session does NOT show Plan chip or Execute button', async ({ page }
   await expect(modePill).not.toHaveClass(/plan-active/)
 
   // No Plan chip (no plan exists) and no Execute button
-  await expect(panel.locator('.session-action-chip', { hasText: 'Plan' })).not.toBeVisible()
+  await expect(panel.locator('.session-header-tool', { hasText: 'Plan' })).not.toBeVisible()
   await expect(panel.locator('.execute-plan-btn')).not.toBeVisible()
 })

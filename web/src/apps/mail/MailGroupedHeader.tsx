@@ -9,6 +9,7 @@
  */
 import { useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { Chip } from '@/components/controls';
 import type { MailGroupsScope } from '@/api/mail-groups';
 import { loadMailMessages } from './mail-actions';
 import { formatCount } from './mail-format';
@@ -105,8 +106,11 @@ export function MailGroupedHeader({ name, unread, explain, ai, unreadOnly, onUnr
           <span className="mail-grouped-spin" aria-hidden="true" />
           {sortingText(ai!.pending)}
         </span>
-      ) : unread > 0 ? (
-        <span className="mail-grouped-unread wn-fixed" data-testid="mail-grouped-unread" title={explain}>{unreadWord(unread)}</span>
+      ) : unread > 0 || unreadOnly ? (
+        // The same control as All mail's unread count (MailMessageList): a filter chip, on while
+        // only unread mail shows; kept while it is on, so the way out never goes.
+        <Chip pressed={unreadOnly} className="mail-unread-chip mail-grouped-unread wn-fixed" data-testid="mail-grouped-unread"
+          title={explain} onClick={() => onUnreadOnly(!unreadOnly)}>{unreadWord(unread)}</Chip>
       ) : null}
       {ai?.state === 'down' && (
         <span className="mail-grouped-no-ai" data-testid="mail-grouped-no-ai" title={SORTED_WITHOUT_AI_TITLE}>

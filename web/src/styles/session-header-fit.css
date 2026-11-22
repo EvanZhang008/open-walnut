@@ -18,9 +18,22 @@
 .session-header-item { display: inline-flex; align-items: center; flex-shrink: 0; }
 .session-header-item:empty { display: none; }
 
-/* Two classes each: this file is bundled before globals.css (the component
-   imports it), so a single class would lose to .session-action-chip / .task-kebab-menu. */
-.session-action-chip.session-header-more-btn { padding: 1px 5px; letter-spacing: 0.06em; }
+/* The tool row's keys are the button family's quiet key (HEADER_TOOL_CLASS, header-record-gate.ts),
+   drawn by buttons.css alone: the view a key opens is its on look (`aria-pressed`), and "..." holding
+   an open view or its open menu is the same (`data-on`). */
+
+/* A key that cannot act yet keeps its place and its text and only stops reacting: Fork and Board
+   while the session record loads, or for good. The opacity eases, so the usual 100 ms wait for the
+   record reads as the key settling in, not as a flash. Two classes: buttons.css's are single. */
+.btn.session-header-tool { transition: background-color 0.12s, color 0.12s, opacity 0.15s; }
+
+/* A key whose feature the host cannot give yet: still there and clickable, its view says why. */
+.btn.session-header-tool-unavailable:not([aria-pressed='true']) {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.btn.session-header-more-btn { letter-spacing: 0.06em; }
 .task-kebab-menu.session-header-more-menu { min-width: 150px; }
 .task-kebab-item .session-header-more-name { flex: 1 1 auto; }
 .task-kebab-item .session-header-more-value { color: var(--fg-muted); font-size: var(--font-size-xs); }

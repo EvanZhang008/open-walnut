@@ -161,7 +161,7 @@ test('an unconfirmed End keeps the terminal with a notice; a second End and Try 
   // Try again, now with the real stop: the terminal ends and closes.
   await notice.getByRole('button', { name: 'Try again' }).click()
   await expect(term).toBeHidden({ timeout: 30_000 })
-  await expect(chip).not.toHaveClass(/session-action-chip-active/)
+  await expect(chip).not.toHaveAttribute('aria-pressed', 'true')
   // The server agrees nothing is left to end.
   expect(await rpc(page, 'terminal:kill', { terminalId: sid })).toEqual({ killed: true })
   expect(errors).toEqual([])
@@ -189,8 +189,8 @@ test('a slow End that answers after the user moved to Files leaves Files open', 
   // Past the delay and the answer: Files stays, and no terminal view came back.
   await page.waitForTimeout(7_000)
   await expect(files).toBeVisible()
-  await expect(filesChip).toHaveClass(/session-action-chip-active/)
-  await expect(chip).not.toHaveClass(/session-action-chip-active/)
+  await expect(filesChip).toHaveAttribute('aria-pressed', 'true')
+  await expect(chip).not.toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.session-terminal-panel')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/files-kept-${browserName}.png`, clip: { x: 0, y: 0, width: 1280, height: 400 } })
 

@@ -117,7 +117,7 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   const record = await (await page.request.get(`/api/sessions/${sessionId}`)).json() as { host?: string; session?: { host?: string } }
   expect(record.host ?? record.session?.host).toBe(CLOUD)
   // Cloud has no SSH, and still a terminal: it rides the daemon tunnel, so the tab is there.
-  const chips = column.locator('.session-action-chip')
+  const chips = column.locator('.session-header-tool')
   await expect(chips.filter({ hasText: 'Files' })).toBeVisible()
   await expect(chips.filter({ hasText: 'Terminal' })).toBeVisible()
   const status = await (await page.request.get('/api/hosts/status')).json() as { hosts: Array<{ host: string; terminal?: boolean }> }

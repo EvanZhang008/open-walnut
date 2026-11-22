@@ -248,7 +248,7 @@ test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files op
   await expect(chat.locator('.chat-input-textarea')).toBeVisible()
   await expect(chat).not.toHaveClass(/has-host-header/)
   await shot(page, 'files')
-  await chat.locator('.session-action-chip[data-header-id="files"]').click()
+  await chat.locator('.session-header-tool[data-header-id="files"]').click()
   await expect(chat).not.toHaveClass(/is-changed-open/)
   // Its view closed, it stays full screen on the chat (the user's 2026-10-27 rule); Esc leaves it,
   // and the node's header holds the chat's controls again.

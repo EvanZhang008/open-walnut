@@ -129,7 +129,7 @@ import { useStoreTask, useTaskStoreActions } from '@/contexts/TasksContext';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { SessionForkButton } from './SessionForkButton';
-import { headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
+import { HEADER_TOOL_CLASS, headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
 import { useTaskControlSlot } from './useTaskControlSlot';
 import { useBoardTab } from './useBoardTab';
 import { noteShownTask, panelTaskCopy } from './panel-task-copy';
@@ -3298,8 +3298,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               <>
                 <ChangedChip sessionId={sessionId} active={activeView === 'changed'} hidden={hid('changed')} onToggle={toggleView} />
                 <button
-                  className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
-                  data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
+                  type="button"
+                  className={HEADER_TOOL_CLASS}
+                  aria-pressed={activeView === 'files'}
                   onClick={() => toggleView('files')}
                   title="Browse the session working directory, full-screen alongside the chat"
                   data-header-id="files"
@@ -3308,8 +3309,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   Files
                 </button>
                 <button
-                  className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}${terminalBlockedWhy ? ' session-action-chip-unavailable' : ''}`}
-                  data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
+                  type="button"
+                  className={`${HEADER_TOOL_CLASS}${terminalBlockedWhy ? ' session-header-tool-unavailable' : ''}`}
+                  aria-pressed={activeView === 'terminal'}
                   onClick={() => toggleView('terminal')}
                   title={terminalBlockedWhy ? `${terminalBlockedWhy}. Open to see how to fix it.` : 'Open a terminal in the session working directory, full-screen alongside the chat'}
                   data-header-id="terminal"
@@ -3326,14 +3328,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     Drawn, it is disabled until the record lands; a spacer once drawn
                     if the task goes. */}
                 {taskSlot === 'spacer' && boardDrawn.current.drawn && (
-                  <button type="button" className="session-action-chip" data-header-id="board" data-hidden={hid('board')} {...TASK_SLOT_SPACER}>
+                  <button type="button" className={HEADER_TOOL_CLASS} data-header-id="board" data-hidden={hid('board')} {...TASK_SLOT_SPACER}>
                     Board
                   </button>
                 )}
                 {boardChipLive && (
                   <button
-                    className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
-                    data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
+                    type="button"
+                    className={HEADER_TOOL_CLASS}
+                    aria-pressed={activeView === 'board'}
                     onClick={() => { if (!boardWaitReason) toggleView('board'); }}
                     disabled={!!boardWaitReason}
                     title={boardWaitReason ?? "The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"}
@@ -3346,8 +3349,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 )}
                 {threadsOn && (
                   <button
-                    className={`session-action-chip${activeView === 'threads' ? ' session-action-chip-active' : ''}`}
-                    data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
+                    type="button"
+                    className={HEADER_TOOL_CLASS}
+                    aria-pressed={activeView === 'threads'}
                     onClick={() => toggleView('threads')}
                     title="Your requests to this task, one thread per subject, beside the chat"
                     data-testid="session-threads-chip"
@@ -3361,8 +3365,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     the first open on (kept per session and place); the ⋮ menu's row opens it first. */}
                 {keptPaneApp && (
                   <button
-                    className={`session-action-chip${activeView === 'app' ? ' session-action-chip-active' : ''}`}
-                    data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
+                    type="button"
+                    className={HEADER_TOOL_CLASS}
+                    aria-pressed={activeView === 'app'}
                     onClick={() => openAppView(keptPaneApp.key, { toggle: true })}
                     title={`${keptPaneApp.title} beside the chat`}
                     data-testid="session-app-chip"
@@ -3384,8 +3389,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             {(hasPlanContent || showExecuteButtons) && (
               <>
                 <button
-                  className={`session-action-chip${planPopoverOpen ? ' session-action-chip-active' : ''}`}
-                  data-choice-exempt="opens the Plan and Execute popup; active while it is open"
+                  type="button"
+                  className={HEADER_TOOL_CLASS}
+                  aria-pressed={planPopoverOpen}
                   onClick={() => setPlanPopoverOpen(o => !o)}
                   title="Plan & Execute"
                   data-header-id="plan"
@@ -4481,9 +4487,10 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
   const gitGlance = useSessionGitGlance(sessionId);
   return (
     <button
-      className={`session-action-chip${active ? ' session-action-chip-active' : ''}`}
+      type="button"
+      className={HEADER_TOOL_CLASS}
+      aria-pressed={active}
       onClick={() => onToggle('changed')}
-      data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
       title={changedChipTitle(gitGlance)}
       data-header-id="changed"
       data-hidden={hidden}

@@ -187,7 +187,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
         onMouseDown={(e) => e.stopPropagation()}
       >
         {onCreateEvent && (
-          <SegmentedControl
+          <SegmentedControl size="sm"
             className="cal-create-tabs"
             aria-label="New item kind"
             fill

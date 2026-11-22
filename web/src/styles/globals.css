@@ -19284,31 +19284,9 @@ td.usage-share-col {
   color: var(--accent);
 }
 
-/* A header chip that cannot act yet keeps its place and its text and only stops
-   reacting: Fork and Board while the session record loads, or for good (no
-   task, an engine without forking). The opacity eases, so the usual 100 ms wait
-   for the record reads as the chip settling in, not as a flash. */
-.session-meta-row-2 .session-action-chip {
-  transition: background 0.15s, color 0.15s, opacity 0.15s;
-}
-.session-meta-row-2 .session-action-chip:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-.session-meta-row-2 .session-action-chip:disabled:not(.session-action-chip-active) {
-  background: transparent;
-  color: var(--fg-muted);
-}
-
 .session-action-chip-active {
   background: var(--accent-subtle);
   color: var(--accent);
-}
-/* A chip whose feature the host cannot give yet: still there and clickable, its view says why. */
-.session-action-chip-unavailable:not(.session-action-chip-active) {
-  color: var(--fg-muted);
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
 }
 
 .session-action-chip-count {
@@ -22216,7 +22194,8 @@ a.tag-chip:focus-visible,
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 9px;
+  /* 24 px, centred in the 32 px tab strip. */
+  padding: 3px 8px;
   font-size: var(--font-size-sm);
   font-weight: 600;
   border: 1px solid var(--border);
@@ -25773,30 +25752,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .sdc-strip-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sdc-strip-meta { flex: 0 0 auto; white-space: nowrap; }
 
-/* Ignore-whitespace toggle (same shape as the ✦ AI toggle). */
-.session-diff-ws-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  padding: 3px 6px;
-  min-height: 23px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.session-diff-ws-toggle:hover:not(:disabled) { color: var(--fg); }
-.session-diff-ws-toggle.is-active {
-  /* On reads like a selected segment (Auto/Split/Unified): filled, with a tick. */
-  color: var(--on-accent);
-  border-color: var(--accent);
-  background: var(--accent);
-}
-.session-diff-ws-toggle.is-active:hover:not(:disabled) { color: var(--on-accent); }
-.session-diff-ws-toggle:disabled { opacity: 0.45; cursor: default; }
 .session-diff-ws-only, .session-diff-not-rebuilt { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 
 /* Viewed marks: the count by the title, the file header's checkbox, the tree. */
@@ -26326,23 +26281,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   flex: 0 0 auto;
   margin-left: 2px;
 }
-/* Toolbar ✦ toggle */
-.session-diff-ai-toggle {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  padding: 3px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.session-diff-ai-toggle.is-active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 /* Rendered-markdown view of a changed .md file */
 .session-diff-rendered {
   padding: 24px 32px 80px;

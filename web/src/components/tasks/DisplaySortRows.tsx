@@ -30,7 +30,7 @@ export function Segmented<K extends string>({ label, choices, value, onPick }: {
   onPick(key: K): void;
 }) {
   return (
-    <SegmentedControl
+    <SegmentedControl size="sm"
       className="tp-seg dm-seg"
       aria-label={label}
       horizontalKeys

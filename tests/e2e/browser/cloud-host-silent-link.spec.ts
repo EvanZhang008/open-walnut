@@ -139,7 +139,7 @@ test('a connected companion that went silent: Files, the slash menu and the fold
 
   // 1. The Files tab: its listing answers "Reconnecting to Cloud" in place.
   let t0 = Date.now()
-  await column.locator('.session-action-chip').filter({ hasText: 'Files' }).click()
+  await column.locator('.session-header-tool').filter({ hasText: 'Files' }).click()
   const explorer = column.locator('.session-file-explorer')
   const filesAnswer = explorer.getByText('Reconnecting to Cloud').first()
   await expect(filesAnswer).toBeVisible({ timeout: BOUND_MS + 6_000 })
@@ -355,7 +355,7 @@ test('a file still arriving on a slow link: the viewer says it is loading from C
   await loadHome(page)
   const column = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(column).toBeVisible({ timeout: 60_000 })
-  await column.locator('.session-action-chip').filter({ hasText: 'Files' }).click()
+  await column.locator('.session-header-tool').filter({ hasText: 'Files' }).click()
   const explorer = column.locator('.session-file-explorer')
   // Files opens on the host's HOME; the file sits in the session's folder.
   await expect(explorer).toBeVisible({ timeout: 60_000 })
@@ -413,7 +413,7 @@ test('a ⌘S save and a new folder nobody answers: plain words when the browser 
   await loadHome(page)
   const column = page.locator(`${REAL_PANEL}[data-session-id="${cloudSessionId}"]`)
   await expect(column).toBeVisible({ timeout: 90_000 })
-  await column.locator('.session-action-chip').filter({ hasText: 'Files' }).click({ timeout: 15_000 })
+  await column.locator('.session-header-tool').filter({ hasText: 'Files' }).click({ timeout: 15_000 })
   const explorer = column.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 60_000 })
   await goToSessionFolder(explorer)

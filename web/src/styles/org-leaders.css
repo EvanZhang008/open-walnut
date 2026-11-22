@@ -10,7 +10,7 @@
 /* The fold is the shared DisclosureButton; these only place it. */
 .org-leaders-toggle { width: max-content; max-width: 100%; }
 /* In the list the chevron sits on the guide line, where a kept row's eye sits (its fill hides the line). */
-.org-leaders.is-list .org-leaders-toggle > .wn-disclosure-chevron { width: 13px; margin-left: -8.25px; border-radius: 4px; background: var(--bg-secondary); }
+.org-leaders.is-list .org-leaders-toggle > .wn-disclosure-chevron { width: 13px; margin-left: -8.25px; border-radius: var(--radius-xs); background: var(--bg-secondary); }
 .org-leaders.is-list .org-leaders-toggle:hover > .wn-disclosure-chevron { background: transparent; }
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }

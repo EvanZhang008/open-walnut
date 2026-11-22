@@ -139,7 +139,7 @@ describe('SessionForkButton: drawn when the session may have a task, waiting unt
   it('a spacer: the same chip and text (so the same width), inert, unnamed, out of reach', () => {
     for (const session of [null, { ...RECORD, taskId: '' }]) {
       const chip = fork({ slot: 'spacer', session, loading: session === null })
-      expect(chip.html).toMatch(/^<button[^>]*class="session-action-chip"/)
+      expect(chip.html).toMatch(/^<button[^>]*class="btn btn-ghost btn-sm session-header-tool"/)
       expect(chip.text).toBe('Fork')
       expect(chip.disabled).toBe(true)
       expect(chip.html).toContain('data-header-spacer="true"')
@@ -176,7 +176,7 @@ describe('SessionHeaderMoreMenu: spacers fold like the rest but are never listed
 
   it('with only spacers folded, keeps its place as one more spacer, the same chip', () => {
     const html = menu(['board', 'fork'], TASK_SLOT_IDS)
-    expect(html).toMatch(/^<button[^>]*class="session-action-chip session-header-more-btn"/)
+    expect(html).toMatch(/^<button[^>]*class="btn btn-ghost btn-sm session-header-tool session-header-more-btn"/)
     expect(html).toContain('data-header-more="true"')
     expect(html).toContain('data-header-spacer="true"')
     expect(html).toContain('aria-hidden="true"')

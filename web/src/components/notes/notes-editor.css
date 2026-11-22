@@ -740,6 +740,8 @@ mark.notes-search-mark {
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
+  /* The tabs' height, with tabs open or none: the AI button sits centred in the same 32 px. */
+  min-height: 32px;
   padding: 0 8px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -758,7 +760,7 @@ mark.notes-search-mark {
 
 /* No tabs open → still show a strip so the trailing AI button has a home (and the
    editor pane's top edge stays consistent between the two states). */
-.notes-tab-strip-empty { justify-content: flex-end; padding-bottom: 4px; }
+.notes-tab-strip-empty { justify-content: flex-end; }
 
 /* Right-aligned trailing controls. `margin-left:auto` pins them right when the
    tabs fit; `position:sticky; right:0` keeps them visible once the strip scrolls
@@ -772,9 +774,9 @@ mark.notes-search-mark {
   align-items: center;
   gap: 4px;
   padding-left: 8px;
-  padding-bottom: 4px;
   background: var(--bg-secondary);
-  /* Its fill covers the strip's line: it draws the line again. */
+  /* Its fill covers the strip's line: it draws the line again, at the strip's own bottom (it
+     stretches to the strip's height, so the two are one line). */
   box-shadow: inset 0 -1px 0 var(--border);
 }
 

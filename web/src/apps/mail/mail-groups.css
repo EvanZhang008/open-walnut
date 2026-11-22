@@ -23,7 +23,8 @@
   text-transform: none;
 }
 
-.mail-grouped-unread { flex-shrink: 0; margin-left: auto; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The unread filter chip (the shared Chip): placed only. */
+.mail-grouped-unread { flex-shrink: 0; margin-left: auto; font-variant-numeric: tabular-nums; }
 .mail-grouped-sorting { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); }
 .mail-grouped-no-ai { color: var(--fg-muted); }
 .mail-grouped-unread + .mail-grouped-no-ai::before,

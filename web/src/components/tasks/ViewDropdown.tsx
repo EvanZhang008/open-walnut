@@ -469,7 +469,7 @@ function TimeSection({ query, patchQuery }: {
     <>
       <div className="vd-field">
         <span className="vd-label">Time basis</span>
-        <SegmentedControl
+        <SegmentedControl size="sm"
           fill
           aria-label="Time basis"
           value={query.timeBasis}
@@ -508,7 +508,7 @@ function TimeSection({ query, patchQuery }: {
           </div>
           <div className="vd-field">
             <span className="vd-label">Unit</span>
-            <SegmentedControl
+            <SegmentedControl size="sm"
               fill
               aria-label="Unit"
               value={query.timeCustomUnit}
@@ -612,7 +612,7 @@ function TriStateField({ label, value, onChange }: {
   return (
     <div className="vd-field">
       <span className="vd-label">{label}</span>
-      <SegmentedControl
+      <SegmentedControl size="sm"
         fill
         aria-label={label}
         value={choices.find((c) => c.v === value)?.key ?? 'any'}

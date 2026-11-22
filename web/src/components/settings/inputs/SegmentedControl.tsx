@@ -41,6 +41,8 @@ export interface SegmentedControlProps<V extends string> {
   className?: string
   /** Stretch to the container's width, each segment the same width. */
   fill?: boolean
+  /** `sm`: segments padded 0 8 px, for a menu row or a popover (as ToggleSwitch's `sm`). */
+  size?: 'md' | 'sm'
   /** Only Left/Right/Home/End move the pick: Up and Down are left to a menu that moves between its rows. */
   horizontalKeys?: boolean
   /** A pick of the segment already shown as picked calls onChange too: for a control whose shown
@@ -71,6 +73,7 @@ export function SegmentedControl<V extends string>({
   name,
   className,
   fill,
+  size,
   horizontalKeys,
   reselect,
   'data-testid': testId,
@@ -124,7 +127,7 @@ export function SegmentedControl<V extends string>({
       aria-disabled={disabled ? true : undefined}
       data-testid={testId}
       title={title}
-      className={`wn-seg settings-segmented${fill ? ' wn-seg-fill' : ''}${className ? ` ${className}` : ''}`}
+      className={`wn-seg settings-segmented${fill ? ' wn-seg-fill' : ''}${size === 'sm' ? ' wn-seg-sm' : ''}${className ? ` ${className}` : ''}`}
     >
       {options.map((opt, i) => {
         const selected = opt.value === value

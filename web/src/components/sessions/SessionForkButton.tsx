@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { SessionRecord } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
-import { recordGateReason, TASK_SLOT_SPACER, type TaskControlSlot } from './header-record-gate';
+import { HEADER_TOOL_CLASS, recordGateReason, TASK_SLOT_SPACER, type TaskControlSlot } from './header-record-gate';
 
 /**
  * SessionForkButton — the standalone "Fork" action that stays OUTSIDE the
@@ -84,7 +84,7 @@ export function SessionForkButton({ sessionId, session, loading, slot, sourceTit
   // The chip was on the row and the session turned out to have no task: its
   // place stays, empty, so Changed and Files stay where the person aimed.
   if (slot === 'spacer') {
-    return <button type="button" className="session-action-chip" {...TASK_SLOT_SPACER}>Fork</button>;
+    return <button type="button" className={HEADER_TOOL_CLASS} {...TASK_SLOT_SPACER}>Fork</button>;
   }
   // Forking resumes the source conversation in a second process, which the
   // engine itself has to support (claude --fork-session); ACP adapters have no
@@ -103,7 +103,8 @@ export function SessionForkButton({ sessionId, session, loading, slot, sourceTit
 
   return (
     <button
-      className="session-action-chip"
+      type="button"
+      className={HEADER_TOOL_CLASS}
       onClick={handleForkClick}
       onContextMenu={handleContextMenu}
       disabled={!!unsupportedReason || !!waitingReason}

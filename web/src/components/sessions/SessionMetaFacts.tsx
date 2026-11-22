@@ -13,6 +13,7 @@ import { PluginSlotFact, PluginSlots, type SlotEntry } from '@/plugins/PluginSlo
 import { useNavigationList } from '@/hooks/useNavigationPreference';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { SLOT_ID_PREFIX } from './useSessionHeaderFit';
+import { HEADER_TOOL_CLASS } from './header-record-gate';
 import { openable } from './session-server-label';
 
 /** The host's own fact among them: the web pages the session's servers serve (pin key). */
@@ -103,8 +104,8 @@ function PinnedWebServers({ sessionId, hid, webOpen, onOpenWeb }: { sessionId: s
     <span className="session-header-item" data-header-id={id} data-header-name="Web servers" data-hidden={hid(id)}>
       <button
         type="button"
-        className={`session-action-chip${webOpen ? ' session-action-chip-active' : ''}`}
-        data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
+        className={HEADER_TOOL_CLASS}
+        aria-pressed={!!webOpen}
         onClick={onOpenWeb}
         data-header-value={`${n} running`}
         data-testid="session-web-servers-chip"

@@ -70,6 +70,16 @@ export function taskControlSlot(presence: HeaderTaskPresence, drawnBefore: boole
 export const TASK_SLOT_IDS: ReadonlySet<string> = new Set(['fork', 'board', 'watch', 'locate']);
 
 /**
+ * The look of every key on the header's tool row (Fork, Changed, Files, Terminal, Board, Threads,
+ * the App, Plan, Web and "..."): the quiet key of the button family (buttons.css), 28 px. A key
+ * that opens a view beside the chat is an on/off key (`aria-pressed`, the family's on look), never
+ * a tab: a second click closes the view and the chat stays (2026-11-22 review: they read as pills
+ * beside the segmented controls of the same screen). `session-header-tool` is the hook specs and
+ * the row's CSS find them by.
+ */
+export const HEADER_TOOL_CLASS = 'btn btn-ghost btn-sm session-header-tool';
+
+/**
  * What a spacer adds to the element it stands in for. CSS makes it invisible
  * and unclickable (`[data-header-spacer]`, session-header-fit.css); it is out
  * of the tab order and of the accessibility tree; it carries no name, no

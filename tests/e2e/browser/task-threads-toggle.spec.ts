@@ -111,7 +111,7 @@ test('a leader turns Threads on from its menu, files his asks there, and turns t
   const pane = page.getByTestId('session-threads-pane')
   await expect(pane).toBeVisible({ timeout: 15_000 })
   await expect(chip).toBeVisible()
-  await expect(chip).toHaveClass(/session-action-chip-active/)
+  await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(async () => (await api<{ task: { threads_on?: boolean } }>('GET', `/api/tasks/${leader}`)).task.threads_on).toBe(true)
   await expect(pane.getByTestId('org-threads-empty')).toBeVisible()
 

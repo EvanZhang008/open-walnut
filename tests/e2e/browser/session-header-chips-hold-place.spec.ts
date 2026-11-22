@@ -502,7 +502,7 @@ async function aimAtFilesAcrossNoTask(page: Page, panel: Locator, panelSel: stri
   if (shot) await shootHeader(page, panel, `${shot}-loaded`)
 
   await page.mouse.click(aim.x, aim.y)
-  await expect(panel.locator('.session-action-chip-active'), `${when}: the click aimed at Files opens Files`).toHaveText(['Files'])
+  await expect(panel.locator('.session-header-tool[aria-pressed="true"]'), `${when}: the click aimed at Files opens Files`).toHaveText(['Files'])
   await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 10_000 })
   return reading
 }
@@ -513,7 +513,7 @@ async function aimAtFilesAcrossNoTask(page: Page, panel: Locator, panelSel: stri
  * follows it to put the column back where it was.
  */
 async function closeViewAndFullScreen(panel: Locator) {
-  const active = panel.locator('.session-meta-row-2 .session-action-chip-active')
+  const active = panel.locator('.session-meta-row-2 .session-header-tool[aria-pressed="true"]')
   if (await active.count()) {
     await active.first().click()
     await expect(active).toHaveCount(0)
@@ -621,7 +621,7 @@ test('a click aimed at Files while the session record loads opens Files', async 
     console.log(`AIMED ${test.info().project.name} files ${JSON.stringify(before.files)} -> ${JSON.stringify(after.files)} moved=${JSON.stringify(moved(before, after))}`)
 
     await page.mouse.click(aim.x, aim.y)
-    await expect(panel.locator('.session-action-chip-active'), 'the chip under the click is the one the person aimed at').toHaveText(['Files'])
+    await expect(panel.locator('.session-header-tool[aria-pressed="true"]'), 'the chip under the click is the one the person aimed at').toHaveText(['Files'])
     await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 10_000 })
     expect(moved(before, after), 'nothing on the tool row moves when the record lands').toEqual([])
   } finally {
@@ -707,7 +707,7 @@ test('Fork, Board and Locate wait disabled in their places, then work once the r
     await page.waitForTimeout(400)
     await expect(page.locator('.main-page-session-column .draft-session-panel')).toHaveCount(0)
     await expect(page.getByTestId('task-board-pane')).toHaveCount(0)
-    await expect(panel.locator('.session-action-chip-active')).toHaveCount(0)
+    await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveCount(0)
     await page.mouse.move(0, 0)
     const before = await rowBoxes(panel)
 
@@ -732,7 +732,7 @@ test('Fork, Board and Locate wait disabled in their places, then work once the r
 
     // And now they act: Board opens the task's Board beside the chat.
     await board.click()
-    await expect(board).toHaveClass(/session-action-chip-active/)
+    await expect(board).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('task-board-pane')).toBeVisible({ timeout: 15_000 })
   } finally {
     await hold.dispose()
@@ -764,7 +764,7 @@ test('a plan session: Plan is on the row from the first frame, after the chips e
     expect(after.plan!.x, 'Plan sits after Terminal').toBeGreaterThan(after.terminal!.x)
 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-    await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+    await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveText(['Files'])
     await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 10_000 })
     // Plan still opens its popup.
     await plan.click()
@@ -884,7 +884,7 @@ test('a record that fails to load leaves the chips in place, saying why they can
     expect(moved(before, await rowBoxes(panel))).toEqual([])
     // Files reads the folder on its own and still opens.
     await panel.locator('button[data-header-id="files"]').click()
-    await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+    await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveText(['Files'])
   } finally {
     await hold.dispose()
   }
@@ -914,7 +914,7 @@ test('a session known to have no task shows no Fork or Board, before or after it
 
     // The live chips act as ever.
     await panel.locator('button[data-header-id="files"]').click()
-    await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+    await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveText(['Files'])
   } finally {
     await hold.dispose()
   }
@@ -1090,7 +1090,7 @@ test('a prefix chat reference to a session already open folds into its column an
     await shootHeader(page, open, '11-prefix-folded')
 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-    await expect(open.locator('.session-action-chip-active'), 'the click aimed at Files opens Files').toHaveText(['Files'])
+    await expect(open.locator('.session-header-tool[aria-pressed="true"]'), 'the click aimed at Files opens Files').toHaveText(['Files'])
     // Closing Files (and its full screen) renders the panel again: still no task control drawn,
     // nothing moved.
     await closeViewAndFullScreen(open)
@@ -1153,7 +1153,7 @@ test('a task deleted while its session is open: Fork and Board stop acting and k
       await expectSpacers(page, panel, `task deleted, ${px}px`)
       await shootHeader(page, panel, px === 340 ? '10-task-deleted' : '10-task-deleted-760')
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
-      await expect(panel.locator('.session-action-chip-active')).toHaveText(['Files'])
+      await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveText(['Files'])
       // A click in the panel marks its task read: never the deleted one (until 2026-10-11 the panel kept
       // its fetched copy of the task and sent it a write on every click).
       await page.waitForTimeout(500)

@@ -597,7 +597,7 @@ test.describe('Draw in the composer (drawing_app)', () => {
     await expect(panel.locator('.session-panel-chat-col')).toBeVisible();
     const chip = panel.getByTestId('session-app-chip');
     await expect(chip).toHaveText('Drawing');
-    await expect(chip).toHaveClass(/session-action-chip-active/);
+    await expect(chip).toHaveAttribute('aria-pressed', 'true');
     await shot(page, 'tab-open');
 
     // A few strokes: saved in this task's own folder.

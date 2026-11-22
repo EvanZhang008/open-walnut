@@ -83,8 +83,8 @@ function watchErrors(page: Page): { errors: string[]; failed: string[] } {
 /** The terminal view open on a panel: its header chip is a toggle, so press it only when the view is not on (a reload restores it a moment later). */
 async function openTerminalView(panel: Locator): Promise<void> {
   const chip = panel.locator('[data-header-id="terminal"]').first()
-  if (!(await chip.evaluate((el) => el.classList.contains('session-action-chip-active')))) await chip.click()
-  await expect(chip).toHaveClass(/session-action-chip-active/)
+  if (!(await chip.evaluate((el) => el.getAttribute('aria-pressed') === 'true'))) await chip.click()
+  await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect(panel.locator('.session-terminal-panel')).toBeVisible({ timeout: 30_000 })
 }
 

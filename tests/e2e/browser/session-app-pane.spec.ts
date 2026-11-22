@@ -137,7 +137,7 @@ test('the ⋮ menu opens a plugin App beside the chat, kept across a reload, per
   await chip.click()
   await expect(pane(page)).toHaveCount(1)
   await expect(page.getByTestId('pane-fixture-doc')).toHaveText('plans/b.sketch')
-  await expect(chip).toHaveClass(/session-action-chip-active/)
+  await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect(panel.locator('.session-panel-chat-col')).toBeVisible()
   await shot(page, '3-chip-brings-it-back')
   await chip.click()

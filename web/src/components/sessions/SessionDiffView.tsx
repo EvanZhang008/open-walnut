@@ -2977,7 +2977,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <div className="session-diff-toolbar-actions">
           <button
             type="button"
-            className={`session-diff-ws-toggle${ignoreWhitespace ? ' is-active' : ''}`}
+            // An on/off key of the button family: on is its accent tint (aria-pressed), as Find and AI.
+            className="btn btn-ghost btn-sm session-diff-ws-toggle"
             onClick={toggleIgnoreWhitespace}
             aria-pressed={ignoreWhitespace}
             aria-label="Hide whitespace changes"
@@ -2997,6 +2998,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               the loading/error/empty states, where an open bar can't render. */}
           {!empty && (
             <button
+              type="button"
               className="btn btn-ghost btn-sm"
               onClick={() => (searchOpen ? closeSearch() : openSearch())}
               title="Find in diff (⌘F)"
@@ -3004,7 +3006,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             >Find</button>
           )}
           <button
-            className={`session-diff-ai-toggle${aiSummaryOn ? ' is-active' : ''}`}
+            type="button"
+            className="btn btn-ghost btn-sm session-diff-ai-toggle"
             onClick={toggleAiSummary}
             title={aiSummaryOn ? 'AI summaries on — click to hide' : 'AI summaries off — click to show a short AI blurb per file'}
             aria-pressed={aiSummaryOn}

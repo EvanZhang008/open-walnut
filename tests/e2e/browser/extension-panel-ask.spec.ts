@@ -76,7 +76,7 @@ test('Ask is a plain chat about the page, before and after the first question', 
   await shot(panel, 'd12-thinking')
   await expect(v.getByText('Hello! I processed your message', { exact: false }).first()).toBeVisible({ timeout: 60_000 })
   // None of a coding session's controls are on screen.
-  for (const word of ['Changed', 'Files', 'Terminal']) await expect(v.locator('.session-action-chip', { hasText: word })).toBeHidden()
+  for (const word of ['Changed', 'Files', 'Terminal']) await expect(v.locator('.session-header-tool', { hasText: word })).toBeHidden()
   // Its mode and model are picked here as in every composer (2026-11-09, the user: "why can't i choose
   // model, and mode etc"), and nothing else of a session's controls row (reply style, side thread, note).
   await expect(v.locator('.is-plain-chat-pickers .mode-toggle-pill')).toHaveCount(1)

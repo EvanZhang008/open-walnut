@@ -78,7 +78,7 @@ export function OrgSettingsMenu() {
               <div className="org-settings-stops-head">Directors</div>
               <div className="org-settings-row is-stacked">
                 <span className="org-settings-label"><strong>Layout</strong><span className="org-answer-q">{directorsLayoutHelp(dir.layout)}</span></span>
-                <SegmentedControl aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
+                <SegmentedControl size="sm" aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
               </div>
               <div className="org-settings-row">
                 <label htmlFor="org-settings-directors-projects" className="org-settings-label">

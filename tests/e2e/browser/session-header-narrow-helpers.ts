@@ -360,10 +360,10 @@ export function headerNarrowTests(): void {
     await shootHeader(panel, '180-more', 220)
     await more.getByTestId('session-header-more-item-files').click()
     await expect(more).toHaveCount(0)
-    await expect(panel.locator('[data-header-id="files"]')).toHaveClass(/session-action-chip-active/, { timeout: 10_000 })
+    await expect(panel.locator('[data-header-id="files"]')).toHaveAttribute('aria-pressed', 'true', { timeout: 10_000 })
     await expect(panel.locator('[data-header-id="files"]')).toBeVisible()
     await page.keyboard.press('Escape')
-    await expect(panel.locator('[data-header-id="files"]')).not.toHaveClass(/session-action-chip-active/, { timeout: 10_000 })
+    await expect(panel.locator('[data-header-id="files"]')).not.toHaveAttribute('aria-pressed', 'true', { timeout: 10_000 })
     const back180 = await settleAt(page, panel, 180)
     expect(back180.toolRow.hidden).toEqual(states[180].toolRow.hidden)
 

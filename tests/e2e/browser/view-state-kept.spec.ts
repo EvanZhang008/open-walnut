@@ -121,7 +121,7 @@ async function goHome(page: Page): Promise<void> {
 }
 
 async function openFile(panel: Locator): Promise<void> {
-  await panel.locator('.session-action-chip', { hasText: /^Files$/ }).click()
+  await panel.locator('.session-header-tool', { hasText: /^Files$/ }).click()
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 20_000 })
   // Files opens on the host's HOME; the file sits in the session's folder.
@@ -138,7 +138,7 @@ async function openFile(panel: Locator): Promise<void> {
 async function expectKept(panel: Locator): Promise<void> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await expect(panel).toHaveClass(FS, { timeout: 20_000 })
-  await expect(panel.locator('.session-action-chip.session-action-chip-active')).toHaveText('Files')
+  await expect(panel.locator('.session-header-tool[aria-pressed="true"]')).toHaveText('Files')
   const explorer = panel.locator('.session-file-explorer')
   await expect(explorer).toBeVisible({ timeout: 20_000 })
   await expect(explorer.getByTestId('fv-doc-bar')).toContainText(FILE, { timeout: 20_000 })

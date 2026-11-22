@@ -277,7 +277,7 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await page.keyboard.press('Escape')
   const webChip2 = panel.getByTestId('session-web-servers-chip')
   await expect(webChip2).toHaveText(/Web\s*2/)
-  await expect(webChip2).toHaveClass(/session-action-chip-active/)
+  await expect(webChip2).toHaveAttribute('aria-pressed', 'true')
   await panel.getByRole('button', { name: 'More actions' }).click()
   await (await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-details')).getByTestId('session-fact-web-servers').getByTestId('session-fact-pin').click()
   await page.keyboard.press('Escape')

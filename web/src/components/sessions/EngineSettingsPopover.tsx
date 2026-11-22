@@ -31,6 +31,7 @@ import {
   type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { LOCAL_HOST, type EngineSettingsWriteScope } from '@/api/engine-settings';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { findItem, sessionsGroup } from '@/hooks/engine-settings-model';
@@ -200,10 +201,10 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   // A segment is a label over a hidden radio: its mouse press focuses the label and its click
   // focuses and checks the radio (label activation). Both would blur the draft into the old scope,
   // so a guarded press cancels them before the segment sees them.
-  const onScopeMouseDown = useCallback((e: ReactMouseEvent) => {
+  const onScopeMouseDown = useLeanCallback((e: ReactMouseEvent) => {
     if (suppressClickRef.current) e.preventDefault();
   }, []);
-  const onScopeClickCapture = useCallback((e: ReactMouseEvent) => {
+  const onScopeClickCapture = useLeanCallback((e: ReactMouseEvent) => {
     if (!suppressClickRef.current) return;
     suppressClickRef.current = false;
     e.preventDefault();
@@ -410,7 +411,7 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
             onMouseDownCapture={onScopeMouseDown}
             onClickCapture={onScopeClickCapture}
           >
-            <SegmentedControl
+            <SegmentedControl size="sm"
               className="engine-settings-scope"
               aria-label="Save changes to"
               value={scope}

@@ -21,7 +21,7 @@
     "components/sessions/DraftSessionPanel.tsx": 2,
     "components/sessions/DraftTaskMenu.tsx": 1,
     "components/sessions/PhoneSessionHeaderRows.tsx": 1,
-    "components/sessions/SessionDiffView.tsx": 3,
+    "components/sessions/SessionDiffView.tsx": 1,
     "components/sessions/SessionFileExplorer.tsx": 1,
     "components/sessions/SessionKebabSection.tsx": 4,
     "components/sessions/SessionMenuOpen.tsx": 1,

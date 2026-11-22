@@ -31,7 +31,7 @@ export function CustomTime({ c, w, origin }: { c: FilterBarController; w: Filter
           if (Number.isFinite(n) && n > 0) write({ customValue: n });
         }}
       />
-      <SegmentedControl
+      <SegmentedControl size="sm"
         className="tp-seg"
         aria-label="Custom window unit"
         horizontalKeys
@@ -49,7 +49,7 @@ export function CustomTime({ c, w, origin }: { c: FilterBarController; w: Filter
 export function TimeBasis({ c, w, origin }: { c: FilterBarController; w: FilterWriter; origin: FilterOrigin }) {
   // No window set: the basis reads as a choice, not as a live filter (F21).
   return (
-    <SegmentedControl
+    <SegmentedControl size="sm"
       className={`tp-seg fb-time-basis${c.state.time.preset === null ? ' is-unset' : ''}`}
       aria-label="Time basis"
       horizontalKeys

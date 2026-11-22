@@ -69,7 +69,7 @@ test('Code and Inbox are menu actions, never persistent header chips', async ({ 
   await page.setViewportSize({ width: 1280, height: 800 })
   await openHome(page)
   const panel = await openHomepageSession(page)
-  const chips = panel.locator('.session-action-chip')
+  const chips = panel.locator('.session-header-tool')
   await expect(chips.filter({ hasText: /^(Code|Inbox)/ })).toHaveCount(0)
   for (const name of ['Changed', 'Files', 'Terminal']) {
     await expect(chips.filter({ hasText: new RegExp(`^${name}$`) })).toBeVisible()
@@ -166,7 +166,7 @@ for (const width of [1280, 820]) {
     await expect(panel.locator('.session-inbox-pane')).toHaveCount(0)
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
     await expect(draft).toHaveValue('Keep this unsent message')
-    await expect(panel.locator('.session-action-chip').filter({ hasText: /^(Code|Inbox)/ })).toHaveCount(0)
+    await expect(panel.locator('.session-header-tool').filter({ hasText: /^(Code|Inbox)/ })).toHaveCount(0)
     expect(ensureRequests).toHaveLength(1)
     expect(pageErrors).toEqual([])
   })

@@ -199,7 +199,11 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  /* Never wider than its container: in a row beside a label it shrinks and scrolls instead of
+     running past the edge (2026-11-22 review: the Display menu clipped "Auto"). */
   max-width: 100%;
+  min-width: 0;
+  flex-shrink: 1;
   padding: 2px;
   overflow-x: auto;
   border-radius: var(--radius-sm);
@@ -273,6 +277,11 @@
   outline-offset: -2px;
 }
 
+/* In a menu row or a popover (size="sm"): the same track and thumb, narrower segments. */
+.wn-seg.wn-seg-sm > .wn-seg-item:not(.wn-seg-icon) {
+  padding: 0 8px;
+}
+
 .wn-seg-item.wn-seg-icon {
   width: 28px;
   padding: 0;
@@ -297,6 +306,14 @@
 
 .wn-seg[aria-disabled='true'] .wn-seg-item {
   cursor: default;
+}
+
+/* A disabled control's pick still reads (its thumb's fill stays), but nothing about it stands out:
+   no lift, muted words. The same in a ControlGroup that is off (its controls are disabled). */
+.wn-seg[aria-disabled='true'] .wn-seg-item[aria-checked='true'] {
+  color: var(--fg-muted);
+  /* A hairline instead of the lift: the pick is still found, nothing about it pops. */
+  box-shadow: 0 0 0 1px var(--border);
 }
 
 /* One segment that can't be picked now (its title says why). */
@@ -466,6 +483,11 @@
 .toggle-switch.settings-switch:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* A disabled switch is flat: its knob loses the lift a switch that takes a click has. */
+.toggle-switch.settings-switch:disabled .toggle-thumb {
+  box-shadow: none;
 }
 
 .toggle-switch.settings-switch[aria-busy='true'] {
@@ -644,6 +666,15 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   width: 100%;
 }
 
+/* In a line of small text (DisclosureButton `inline`): the line's size and height, so the row does
+   not grow by the button's 24 px. */
+.wn-disclosure.wn-disclosure-inline {
+  min-height: 16px;
+  padding: 0 4px;
+  font-size: inherit;
+  line-height: 16px;
+}
+
 /* The chevron alone (a tree row's fold): a 20 px square, no label. */
 .wn-disclosure.wn-disclosure-icon {
   justify-content: center;
@@ -726,11 +757,6 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   color: var(--fg-muted);
   border-color: var(--border-strong);
   background-color: transparent;
-}
-
-.wn-group[data-off='true'] .wn-seg-item[aria-checked='true'] {
-  color: var(--fg-muted);
-  box-shadow: none;
 }
 
 fieldset:disabled .wn-seg {

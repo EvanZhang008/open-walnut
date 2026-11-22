@@ -106,9 +106,9 @@ test('the Changed chip shows no count, in the header, in "..." and its menu; its
   await expect(menuRow).toHaveText('Changed')
   // Opened from the menu, Changed reads "Open" there and lights "...", still with no number.
   await menuRow.click()
-  await expect(panel.locator('[data-header-id="changed"].session-action-chip-active')).toHaveCount(1)
+  await expect(panel.locator('[data-header-id="changed"][aria-pressed="true"]')).toHaveCount(1)
   await expect(more).toHaveText('···')
-  await expect(more).toHaveClass(/session-action-chip-active/)
+  await expect(more).toHaveAttribute('data-on', 'true')
   await more.click()
   await expect(menuRow).toHaveAttribute('data-state', 'Open')
   await expect(menuRow.locator('.session-header-more-name')).toHaveText('Changed')

@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { ICON_MINIMIZE } from '../common/Icons';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
-import { TASK_SLOT_SPACER } from './header-record-gate';
+import { HEADER_TOOL_CLASS, TASK_SLOT_SPACER } from './header-record-gate';
 
 // A synchronous fit must not recreate the composer's observers during resize delivery.
 export function SessionHeaderToolRow({ rowRef, children }: {
@@ -63,7 +63,7 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   const disabled = button instanceof HTMLButtonElement && button.disabled ? (button.title || 'Unavailable') : null;
   const label = button.getAttribute('aria-label') ?? '';
   let value = '';
-  if (button.classList.contains('session-action-chip-active')) value = 'Open';
+  if (button.getAttribute('aria-pressed') === 'true') value = 'Open';
   // A pinned plugin fact's row shows what the chip says, so hiding it costs nothing: its
   // `data-header-value` when it gives one (the time pill's exact "You 2h 46m · Agent 8h 26m"
   // behind its "2h" and "8h"), else its text.
@@ -145,7 +145,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
   // counted it), as one more spacer.
   if (ids.length === 0) {
     return (
-      <button type="button" className="session-action-chip session-header-more-btn" data-header-more="true" {...TASK_SLOT_SPACER}>
+      <button type="button" className={`${HEADER_TOOL_CLASS} session-header-more-btn`} data-header-more="true" {...TASK_SLOT_SPACER}>
         <span aria-hidden="true">···</span>
       </button>
     );
@@ -158,10 +158,10 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
       <button
         ref={buttonRef}
         type="button"
-        // Changed folded in here and open: "..." reads as the open view's chip.
-        className={`session-action-chip session-header-more-btn${open || (ids.includes('changed') && changed.value === 'Open') ? ' session-action-chip-active' : ''}`}
+        className={`${HEADER_TOOL_CLASS} session-header-more-btn`}
+        // Open, or holding the open Changed view: "..." reads on, as the open view's key would.
+        data-on={open || (ids.includes('changed') && changed.value === 'Open') ? 'true' : undefined}
         data-header-more="true"
-        data-choice-exempt="opens the More menu of folded header items; active while it is open"
         data-testid="session-header-more-btn"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-haspopup="menu"

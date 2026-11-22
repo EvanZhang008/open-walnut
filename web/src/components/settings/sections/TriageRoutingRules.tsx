@@ -260,7 +260,7 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
       heading={ROUTING_COPY.heading}
       data-testid="triage-routing-rules"
       headingTrailing={
-        <SettingsButton variant="text" data-testid="triage-rule-add" disabled={!rules}
+        <SettingsButton variant="ghost" data-testid="triage-rule-add" disabled={!rules}
           onClick={() => openEditor(NEW)}>{ROUTING_COPY.add}</SettingsButton>
       }
       footer={ROUTING_COPY.help}
@@ -321,13 +321,13 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
                 <span className="trr-confirm-q">Remove this rule?</span>
                 <SettingsButton variant="danger" autoFocus aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete-confirm"
                   onClick={() => { setRemoving(null); void act(() => deleteTriageRule(rule.id)); }}>Remove</SettingsButton>
-                <SettingsButton variant="text" onClick={() => setRemoving(null)}>Keep</SettingsButton>
+                <SettingsButton variant="ghost" onClick={() => setRemoving(null)}>Keep</SettingsButton>
               </>
             ) : (
               <>
-                <SettingsButton variant="text" aria-label={`Edit rule: ${rule.matchText}`} data-testid="triage-rule-edit"
+                <SettingsButton variant="ghost" aria-label={`Edit rule: ${rule.matchText}`} data-testid="triage-rule-edit"
                   onClick={() => openEditor(rule.id)}>Edit</SettingsButton>
-                <SettingsButton variant="text" aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete"
+                <SettingsButton variant="ghost" aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete"
                   onClick={() => setRemoving(rule.id)}>Remove</SettingsButton>
               </>
             )}

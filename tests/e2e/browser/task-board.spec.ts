@@ -173,7 +173,7 @@ test('the Board tab: a lead only, live components, threads, re-render, marks and
   const worker = await createTask(workerTitle, { project: leaderTask.project ?? '', pinned: false, parent_task_id: leader })
   await expect(chip).toBeVisible({ timeout: 15_000 })
   await chip.click()
-  await expect(chip).toHaveClass(/session-action-chip-active/)
+  await expect(chip).toHaveAttribute('aria-pressed', 'true')
   const pane = page.getByTestId('task-board-pane')
   await expect(pane.getByTestId('board-status')).toBeVisible({ timeout: 15_000 })
   await expect(pane.locator(`[data-testid="board-status-row"][data-task-id="${worker}"]`)).toBeVisible({ timeout: 15_000 })
@@ -381,7 +381,7 @@ test('the Board tab: a lead only, live components, threads, re-render, marks and
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   // Locating yields the full-screen sheet (as the header's Locate does), which closes the tab.
   await expect(pane).toHaveCount(0)
-  await expect(chip).not.toHaveClass(/session-action-chip-active/)
+  await expect(chip).not.toHaveAttribute('aria-pressed', 'true')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-5-located.png` })
 
   expect(pageErrors).toEqual([])

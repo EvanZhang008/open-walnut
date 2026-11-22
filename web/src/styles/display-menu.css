@@ -45,7 +45,8 @@
 .dm-row-label { color: var(--fg); white-space: nowrap; }
 /* The label never shrinks; the segments (the shared SegmentedControl) size to their words. */
 .dm-row-label { flex-shrink: 0; }
-.dm-seg { flex: none; }
+/* The segments may shrink (and scroll) but never run past the menu's edge. */
+.dm-seg { flex: 0 1 auto; }
 /* The Collapse all slot. */
 .dm-context { --dm-row-h: 32px; min-height: var(--dm-row-h); }
 .dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tp-muted); font-size: var(--font-size-sm); }

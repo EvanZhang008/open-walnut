@@ -26,6 +26,8 @@ export interface DisclosureButtonProps extends ButtonHTMLAttributes<HTMLButtonEl
   block?: boolean
   /** After the label, e.g. a count. */
   trailing?: ReactNode
+  /** Inside a line of small text (a row's 16 px info line): the line's own size, no taller. */
+  inline?: boolean
 }
 
 /**
@@ -33,14 +35,14 @@ export interface DisclosureButtonProps extends ButtonHTMLAttributes<HTMLButtonEl
  * square. The chevron turns by `expanded` itself, so a row that carries its open state another way
  * (a listbox option, which takes no aria-expanded: pass `aria-expanded={undefined}`) turns it too.
  */
-export function DisclosureButton({ expanded, block, trailing, className, children, ...rest }: DisclosureButtonProps) {
+export function DisclosureButton({ expanded, block, trailing, inline, className, children, ...rest }: DisclosureButtonProps) {
   const iconOnly = children === undefined || children === null || children === false
   return (
     <button
       type="button"
       aria-expanded={expanded}
       {...rest}
-      className={`wn-disclosure${block ? ' wn-disclosure-block' : ''}${iconOnly ? ' wn-disclosure-icon' : ''}${className ? ` ${className}` : ''}`}
+      className={`wn-disclosure${block ? ' wn-disclosure-block' : ''}${inline ? ' wn-disclosure-inline' : ''}${iconOnly ? ' wn-disclosure-icon' : ''}${className ? ` ${className}` : ''}`}
     >
       <DisclosureChevron open={expanded} />
       {!iconOnly && <span className="wn-disclosure-label">{children}</span>}

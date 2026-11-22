@@ -54,6 +54,7 @@ export function FoldSummaryLine({ host, entries, ctl }: { host: Task; entries: r
     <span className="worker-fold-line" data-testid="worker-fold-line">
       <DisclosureButton
         className="worker-fold-toggle"
+        inline
         data-testid="worker-fold-toggle"
         expanded={open}
         title={open ? 'Hide the team' : 'Show the team'}

@@ -360,7 +360,7 @@ test('the Board frame forwards its link clicks and right-clicks to the same hand
     const col = await openColumn(page)
     const chip = col.getByTestId('session-board-chip')
     await expect(chip).toBeVisible({ timeout: 15_000 })
-    if (!/session-action-chip-active/.test((await chip.getAttribute('class')) ?? '')) await chip.click()
+    if (!(await chip.getAttribute('aria-pressed')) === 'true') await chip.click()
     const pane = page.getByTestId('task-board-pane')
     await showCustomBoard(pane)
     const frame = page.frameLocator('.task-board-frame')

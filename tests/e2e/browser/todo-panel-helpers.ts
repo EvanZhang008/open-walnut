@@ -186,8 +186,8 @@ export async function goToSessionFolder(explorer: Locator): Promise<void> {
  * click in that moment closes the view it was about to show.
  */
 export async function showSessionFiles(panel: Locator): Promise<Locator> {
-  const chip = panel.locator('.session-action-chip[data-header-id="files"]')
-  if (!(await chip.evaluate((el) => el.classList.contains('session-action-chip-active')))) {
+  const chip = panel.locator('.session-header-tool[data-header-id="files"]')
+  if (!(await chip.evaluate((el) => el.getAttribute('aria-pressed') === 'true'))) {
     await panel.getByRole('button', { name: 'Files', exact: true }).click()
   }
   const explorer = panel.locator('.session-file-explorer')

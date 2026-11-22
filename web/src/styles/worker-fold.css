@@ -35,7 +35,9 @@
 }
 /* One-line rows (a project's folds): the line sits after the pills. */
 .status-section-card:not(.status-card-two-line) > .worker-fold-line { flex: 0 1 auto; }
-.worker-fold-toggle { flex: none; }
+/* The team's count reads in the team colour, bold, as the Worker and Leader pills (two classes, so
+   it wins over the shared single-class rule whichever file loads first). */
+.wn-disclosure.worker-fold-toggle { flex: none; color: var(--worker-fold-ink); font-weight: 600; }
 .worker-fold-mix { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--error); font-weight: 500; }
 
 /* A leader the view does not hold, drawn for its workers: quieter than the rows around it. */

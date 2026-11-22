@@ -281,7 +281,7 @@ for (const width of [1440, 900]) {
     // A link in the list still opens what it opens (a file opens in Files).
     await tags.click()
     await flyout.locator('.tag-chip', { hasText: MATRIX }).first().click()
-    await expect(panel.locator('.session-action-chip-active', { hasText: 'Files' }).or(panel.locator('[data-header-id="files"].session-action-chip-active'))).toHaveCount(1, { timeout: 10_000 })
+    await expect(panel.locator('.session-header-tool[aria-pressed="true"]', { hasText: 'Files' }).or(panel.locator('[data-header-id="files"][aria-pressed="true"]'))).toHaveCount(1, { timeout: 10_000 })
     expect(errors).toEqual([])
   })
 }

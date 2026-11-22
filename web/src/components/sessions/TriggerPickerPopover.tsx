@@ -311,7 +311,7 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
       </label>
       <div className="trigger-picker-field">
         <span className="trigger-picker-label" aria-hidden="true">Check every</span>
-        <SegmentedControl
+        <SegmentedControl size="sm"
           className="trigger-picker-every"
           aria-label="Check every"
           value={every}
