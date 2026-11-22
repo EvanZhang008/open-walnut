@@ -56,7 +56,7 @@ const GATES = new Set(['assertVoiceHere', 'voiceOffHere']);
 /** `<file>#<function>` → how many process calls it holds, and why they run no voice. */
 const EXEMPT: Record<string, { calls: number; why: string }> = {
   'src/core/stt/audio-convert.ts#probeFfmpeg': { calls: 1, why: 'ffmpeg -version: finds ffmpeg, converts nothing' },
-  'src/core/stt/audio-convert.ts#toHeardWav': { calls: 1, why: 'converts audio a request brought; ffmpeg loads no model and records nothing' },
+  'src/core/stt/audio-convert.ts#decodeToWavFile': { calls: 1, why: 'converts audio a request brought (a clip, or a take heard ahead); ffmpeg loads no model and records nothing' },
   'src/core/stt/detect.ts#whichBinary': { calls: 1, why: 'detection: which' },
   'src/core/stt/detect.ts#getVersion': { calls: 1, why: 'detection: <binary> --version, which loads no model' },
   'src/core/stt/detect.ts#detectUv': { calls: 1, why: 'detection: uv --version' },
