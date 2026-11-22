@@ -35,6 +35,19 @@ reopens a task); with no watch, the Walnut project's lead; with no lead, the fix
 recipient gets the day's first note at once and the rest at most every 4 hours, each note row
 written before it is sent and marked sent only after the session took it.
 
+A page failure rings only for one cause the page alone can see. A request that never reached the
+server never rings: one the page's connection queue gave up on (`rejected`), and one that failed
+with a network error (`failed`: the server was down, restarting or asleep, or the network was), whose
+cause rings on its own or is not Walnut's; nor does a failure of a request whose route already rings
+for server errors. A request the browser itself refused (`refused by the browser`: no network error
+in its error text) is the page's own fault and rings like a thrown error. A request that timed out
+waits one minute: one route timing out alone rings by its route; when three or more different
+requests timed out within a minute of it, the server or the network stalled, and that stall counts
+once as `page requests timed out together` (so a stall that recurs rings as one note); within two
+minutes of the server's start it rings nothing. All of them still show in the Page errors table.
+2026-11-22, replayed on the day's 360 page failures: 11 kinds rang before, 1 rings now (the threads
+route timing out, which was also a slow read).
+
 ## Watches and the completion check
 
 A task that ships (a land, deploy, push to main or publish its session ran, or `usage_watch`

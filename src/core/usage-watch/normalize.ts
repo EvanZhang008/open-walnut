@@ -97,7 +97,18 @@ export interface PageErrorKind {
   route?: string
   /** A failed or timed-out request (true), or a thrown error in the page (false). */
   request: boolean
+  /**
+   * How a request went wrong: `rejected` (the page's connection queue gave up; never sent),
+   * `failed` (a network error: it never reached the server), `timed out`, or `refused` (the
+   * browser would not send it: a fault of the page itself).
+   */
+  how?: PageRequestHow
 }
+
+export type PageRequestHow = 'rejected' | 'failed' | 'timed out' | 'refused'
+
+/** A fetch that threw for the network (Chromium, WebKit, Firefox), not for the request itself. */
+const NETWORK_ERROR_RE = /Failed to fetch|Load failed|NetworkError|network connection was lost|Could not connect|ERR_[A-Z_]{4,}/i
 
 /**
  * A page's error line as a kind, or null when it is neither a failed request nor an uncaught
@@ -109,11 +120,17 @@ export function pageErrorKind(message: string, args: string | undefined, templat
   if (fail) {
     // A request held in the page's queue while the page was in the background never was a problem.
     if (fail[3] === 'rejected' && /page suspended/.test(fail[4] ?? '')) return null
-    const how = fail[3] === 'rejected' ? 'rejected' : /time(?:d)? ?out|timeout/i.test(fail[4] ?? '') ? 'timed out' : 'failed'
+    // A fetch that threw with no network error in its error text was refused by the browser itself
+    // (an invalid header, a GET with a body): with no error text at all it reads as the network's.
+    const err = String(args ?? '')
+    const how: PageRequestHow = fail[3] === 'rejected' ? 'rejected'
+      : /time(?:d)? ?out|timeout/i.test(fail[4] ?? '') ? 'timed out'
+        : !err.trim() || NETWORK_ERROR_RE.test(err) ? 'failed' : 'refused'
+    const words = how === 'refused' ? 'refused by the browser' : `${how} in the page`
     const route = templates.match(fail[1]!, fail[2]!)
     return route
-      ? { kind: `${route} ${how} in the page`, route, request: true }
-      : { kind: `${fail[1]} unknown request ${how} in the page`, request: true }
+      ? { kind: `${route} ${words}`, route, request: true, how }
+      : { kind: `${fail[1]} unknown request ${words}`, request: true, how }
   }
   if (!text.startsWith('[uncaught]') && !text.startsWith('[unhandledrejection]')) return null
   const all = `${text} ${String(args ?? '').slice(0, 2_000)}`

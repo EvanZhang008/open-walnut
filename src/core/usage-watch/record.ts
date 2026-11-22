@@ -47,6 +47,23 @@ export function setWatchedOps(ops: Iterable<string>): void {
 /** Server errors by route this hour, so a page failure of the same cause is not alarmed twice. */
 const routeErrorsAt = new Map<string, number>()
 
+/**
+ * A page request that timed out is held this long before it may ring: when several different
+ * requests time out within it, the server or the network stalled, which rings on its own; one
+ * route timing out alone is that route's (2026-11-22: the threads route, also a slow read).
+ */
+const OUTAGE_WINDOW_MS = 60_000
+const OUTAGE_KINDS = 3
+/** Right after this server started, a page's timed-out requests are the restart's. */
+const START_GRACE_MS = 2 * 60_000
+const MAX_HELD = 2_000
+/** Timeouts of several requests together count once under this kind: a stall that recurs still rings. */
+export const STALL_KIND = 'page requests timed out together'
+let startedAt = 0
+/** In arrival order; a judged entry is context only (a failure that never rings, or one already counted). */
+let held: { at: number; kind: string; judged: boolean }[] = []
+let lastStallAt = -Infinity
+
 function hourOf(t: number): number {
   return Math.floor(t / HOUR_MS) * HOUR_MS
 }
@@ -151,16 +168,48 @@ export function recordPageError(k: PageErrorKind, now = Date.now()): void {
   addCall(agg, { cls: 'error', chars: 0, ms: 0 })
   // The same cause rang on its route this hour (server errors): counted here, alarmed there.
   const sameCause = k.route ? now - (routeErrorsAt.get(k.route) ?? 0) < HOUR_MS : false
-  // A request the page's connection queue gave up on was never sent: a restart or a held route
-  // fills the queue, and that cause rings on its own (slow reads, server errors, Walnut Health's
-  // server alarms). Shown in the table, never rung (2026-11-22: a deploy's restart made 19 at once).
-  const unsent = / rejected in the page$/.test(k.kind)
-  if (!sameCause && !unsent) count('usage.page.errors', 1, { kind: labelValue(k.kind) })
+  // A request the page's connection queue gave up on (rejected) was never sent, and one that
+  // failed never reached the server (a network error: it was down, restarting or asleep, or the
+  // network was): their cause rings on its own (slow reads, server errors, Walnut Health's server
+  // alarms) or is not Walnut's. Shown in the table, never rung (2026-11-22: a restart made 19 at
+  // once, and a sleeping Mac's page nine at one instant). A timed-out one can be its route's: it
+  // waits a minute (settlePageFailures). A thrown error, or a request the browser refused, rings.
+  const hold = (judged: boolean) => { if (held.length < MAX_HELD) held.push({ at: now, kind: k.kind, judged }) }
+  if (!k.request || k.how === 'refused') { if (!sameCause) count('usage.page.errors', 1, { kind: labelValue(k.kind) }) }
+  else if (k.how === 'rejected') { /* a hung route fills the queue: never context for its own timeouts */ }
+  // Context for the window only: what failed with it, what came right after a restart.
+  else if (k.how !== 'timed out' || sameCause || now - startedAt < START_GRACE_MS) hold(true)
+  else hold(false)
   event({ at: now, kind: 'page', name: k.kind, problem: k.request ? 'request_failed' : 'error' })
+}
+
+/** Rings the held page timeouts whose window has passed: alone by their route, together once as a stall. */
+export function settlePageFailures(now = Date.now()): void {
+  for (let i = 0; i < held.length; i++) {
+    const f = held[i]!
+    if (f.judged || now - f.at < OUTAGE_WINDOW_MS) continue
+    f.judged = true
+    if (kindsNear(i) < OUTAGE_KINDS) count('usage.page.errors', 1, { kind: labelValue(f.kind) })
+    else if (f.at - lastStallAt > OUTAGE_WINDOW_MS) {
+      lastStallAt = f.at
+      count('usage.page.errors', 1, { kind: STALL_KIND })
+    }
+  }
+  held = held.filter((f) => now - f.at < 2 * OUTAGE_WINDOW_MS)
+}
+
+/** Different kinds within the window of held[i] (arrival order), counted up to OUTAGE_KINDS. */
+function kindsNear(i: number): number {
+  const at = held[i]!.at
+  const kinds = new Set<string>([held[i]!.kind])
+  for (let j = i - 1; j >= 0 && at - held[j]!.at <= OUTAGE_WINDOW_MS && kinds.size < OUTAGE_KINDS; j--) kinds.add(held[j]!.kind)
+  for (let j = i + 1; j < held.length && held[j]!.at - at <= OUTAGE_WINDOW_MS && kinds.size < OUTAGE_KINDS; j++) kinds.add(held[j]!.kind)
+  return kinds.size
 }
 
 /** Writes what this process counted since the last flush (also on shutdown). */
 export function flushUsage(now = Date.now()): void {
+  settlePageFailures(now)
   const rows = [...pending.values()]
   pending = new Map()
   const evs = events
@@ -198,6 +247,7 @@ function reportBadArgShares(now: number): void {
 }
 
 export function startUsageRecorder(): void {
+  if (!active) startedAt = Date.now()
   active = true
   if (timer) return
   timer = setInterval(() => { try { flushUsage() } catch { /* the store logs its own failure */ } }, FLUSH_MS)
@@ -209,10 +259,14 @@ export function stopUsageRecorder(): void {
   timer = null
   active = false
   try { flushUsage() } catch { /* shutting down */ }
+  held = []
 }
 
-export function _resetUsageRecorderForTesting(on = true): void {
+export function _resetUsageRecorderForTesting(on = true, started = 0): void {
   active = on
+  startedAt = started
+  held = []
+  lastStallAt = -Infinity
   pending = new Map()
   events = []
   routeErrorsAt.clear()

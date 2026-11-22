@@ -14,7 +14,7 @@ import type { RouteAlarmInput, RouteAlarmResult } from '../../../src/core/health
 import { USAGE_ALARMS, usageTargetOf } from '../../../src/core/health-monitor/usage-alarms.js'
 import { USAGE_COUNTERS } from '../../../src/core/usage-watch/counters.js'
 import { count } from '../../../src/core/observability/metrics.js'
-import { _resetUsageRecorderForTesting, recordPageError } from '../../../src/core/usage-watch/record.js'
+import { _resetUsageRecorderForTesting, STALL_KIND, recordPageError, settlePageFailures } from '../../../src/core/usage-watch/record.js'
 
 const START = Date.parse('2026-11-21T10:00:30Z')
 let dir: string
@@ -88,18 +88,65 @@ describe('real-use alarms', () => {
     expect(unitFor('% of calls', 1)).toBe('% of calls')
   })
 
-  it('page requests the connection queue gave up on never ring; failed ones do', async () => {
+  it('page requests that never reached the server never ring; timed-out ones do', async () => {
     _resetUsageRecorderForTesting(true)
     try {
       const h = await harness(async () => ({ handled: true, delivered: true, taskId: 'vp', detail: 'delivered' }))
       // 2026-11-22: a deploy's restart left 19 requests unsent in an open page at once.
-      await h.minutes(3, (i) => {
-        if (i !== 0) return
-        for (let n = 0; n < 19; n++) recordPageError({ kind: 'GET unknown request rejected in the page', request: true }, h.now())
-        for (let n = 0; n < 5; n++) recordPageError({ kind: 'GET /api/x failed in the page', route: 'GET /api/x', request: true }, h.now())
+      await h.minutes(4, (i) => {
+        if (i === 0) {
+          for (let n = 0; n < 19; n++) recordPageError({ kind: 'GET unknown request rejected in the page', request: true, how: 'rejected' as const }, h.now())
+          // A sleeping Mac's page: nine requests failed with a network error at one instant.
+          for (let n = 0; n < 9; n++) recordPageError({ kind: 'GET unknown request failed in the page', request: true, how: 'failed' as const }, h.now())
+          for (let n = 0; n < 5; n++) recordPageError({ kind: 'GET /api/x timed out in the page', route: 'GET /api/x', request: true, how: 'timed out' as const }, h.now())
+        }
+        if (i === 1) settlePageFailures(h.now())
       })
       expect(h.m.alarms['usage.page{kind=GET unknown request rejected in the page}']?.state ?? 'none').not.toBe('ALARM')
-      expect(h.m.alarms['usage.page{kind=GET /api/x failed in the page}']?.state).toBe('ALARM')
+      expect(h.m.alarms['usage.page{kind=GET unknown request failed in the page}']?.state ?? 'none').not.toBe('ALARM')
+      expect(h.m.alarms['usage.page{kind=GET /api/x timed out in the page}']?.state).toBe('ALARM')
+    } finally { _resetUsageRecorderForTesting(false) }
+  })
+
+  it('many requests timing out together, or right after a restart, never ring; one route timing out alone does', async () => {
+    // 2026-11-22: the lead got notes for every route an open page lost at once.
+    const kinds = ['GET /api/a', 'GET /api/b', 'GET /api/c'].map((r) => ({ kind: `${r} timed out in the page`, route: r, request: true, how: 'timed out' as const }))
+    _resetUsageRecorderForTesting(true)
+    try {
+      const h = await harness(async () => ({ handled: true, delivered: true, taskId: 'vp', detail: 'delivered' }))
+      await h.minutes(9, (i) => {
+        // A stall: three routes time out in the same minute, five times each.
+        if (i === 0) for (const k of kinds) for (let n = 0; n < 5; n++) recordPageError(k, h.now())
+        // One route hangs while the rest answer: it times out alone, once a minute (from two minutes on,
+        // outside the stall's window).
+        if (i >= 2 && i <= 6) recordPageError({ kind: 'GET /api/slow timed out in the page', route: 'GET /api/slow', request: true, how: 'timed out' as const }, h.now())
+        settlePageFailures(h.now())
+      })
+      for (const k of kinds) expect(h.m.alarms[`usage.page{kind=${k.kind}}`]?.state ?? 'none', k.kind).not.toBe('ALARM')
+      // One stall is one count of its own kind, not one per route: it rings only when it recurs.
+      expect(h.m.alarms[`usage.page{kind=${STALL_KIND}}`]?.state ?? 'none').not.toBe('ALARM')
+      expect(h.m.alarms['usage.page{kind=GET /api/slow timed out in the page}']?.state).toBe('ALARM')
+    } finally { _resetUsageRecorderForTesting(false) }
+    // A stall that recurs (five times in six hours) rings once, as itself.
+    _resetUsageRecorderForTesting(true)
+    try {
+      const h = await harness(async () => ({ handled: true, delivered: true, taskId: 'vp', detail: 'delivered' }))
+      await h.minutes(12, (i) => {
+        if (i % 2 === 0 && i <= 8) for (const k of kinds) recordPageError(k, h.now())
+        settlePageFailures(h.now())
+      })
+      expect(h.m.alarms[`usage.page{kind=${STALL_KIND}}`]?.state).toBe('ALARM')
+      for (const k of kinds) expect(h.m.alarms[`usage.page{kind=${k.kind}}`]?.state ?? 'none', k.kind).not.toBe('ALARM')
+    } finally { _resetUsageRecorderForTesting(false) }
+    // Within two minutes of the server's start, a timeout is the restart's.
+    _resetUsageRecorderForTesting(true, START)
+    try {
+      const h = await harness(async () => ({ handled: true, delivered: true, taskId: 'vp', detail: 'delivered' }))
+      await h.minutes(4, (i) => {
+        if (i === 0) for (let n = 0; n < 5; n++) recordPageError({ kind: 'GET /api/x timed out in the page', route: 'GET /api/x', request: true, how: 'timed out' as const }, h.now())
+        settlePageFailures(h.now())
+      })
+      expect(h.m.alarms['usage.page{kind=GET /api/x timed out in the page}']?.state ?? 'none').not.toBe('ALARM')
     } finally { _resetUsageRecorderForTesting(false) }
   })
 

@@ -61,7 +61,7 @@ describe('routeTemplateOf', () => {
       .toBe('GET unknown request rejected in the page')
     t.resolveWith((m, u) => routeTemplateOf(app.router, m, u))
     expect(pageErrorKind('[api] GET /api/routines/mwo4xvsv-ec9a rejected after 60000ms in the connection queue (pool saturated)', '', t))
-      .toEqual({ kind: 'GET /api/routines/:id rejected in the page', route: 'GET /api/routines/:id', request: true })
+      .toEqual({ kind: 'GET /api/routines/:id rejected in the page', route: 'GET /api/routines/:id', request: true, how: 'rejected' })
     // A path no route takes stays unknown (it may hold a file name).
     expect(pageErrorKind('[api] GET /api/notes/My%20private%20file.md FAILED after 5ms', '', t)?.kind).toBe('GET unknown request failed in the page')
   })

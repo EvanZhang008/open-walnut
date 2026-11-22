@@ -9,6 +9,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import { setUsageWatchFile, readHours, readEvents, closeUsageWatchStore, markAlive } from '../../../src/core/usage-watch/store.js'
+import { addObserveTap } from '../../../src/core/observability/metrics.js'
 import { usageReport } from '../../../src/core/usage-watch/report.js'
 import { _resetUsageRecorderForTesting, flushUsage, recordConfirmedCut, recordHttp, recordOpCall, recordPageError } from '../../../src/core/usage-watch/record.js'
 import { TemplateMatcher, agentCutChars, failureClass, pageErrorKind, registeredTemplate, walnutOpOfToolCall } from '../../../src/core/usage-watch/normalize.js'
@@ -92,7 +93,7 @@ describe('what is kept', () => {
     t.add('GET', '/api/sessions/:id')
     t.add('GET', '/api/sessions/search')
     expect(pageErrorKind('[api] GET /api/sessions/abc-123?x=1 FAILED after 15000ms (timeout 15000ms)', '', t))
-      .toEqual({ kind: 'GET /api/sessions/:id timed out in the page', route: 'GET /api/sessions/:id', request: true })
+      .toEqual({ kind: 'GET /api/sessions/:id timed out in the page', route: 'GET /api/sessions/:id', request: true, how: 'timed out' })
     expect(pageErrorKind('[api] GET /api/sessions/search FAILED after 20ms', '', t)?.kind).toBe('GET /api/sessions/search failed in the page')
     // A path no answered template matches is never kept as itself (it may hold a file name).
     expect(pageErrorKind('[api] GET /api/notes/My%20private%20file.md FAILED after 5ms', '', t)?.kind).toBe('GET unknown request failed in the page')
@@ -103,6 +104,26 @@ describe('what is kept', () => {
     expect(thrown).toEqual({ kind: 'TypeError in the ThreadCard chunk', request: false })
     expect(JSON.stringify(thrown)).not.toContain('secret')
     expect(pageErrorKind('[app] something the app logged', '', t)).toBeNull()
+    // A network error never reached the server; anything else the browser threw is the page's own.
+    for (const err of ['TypeError: Failed to fetch', 'TypeError: Load failed', 'TypeError: NetworkError when attempting to fetch resource.']) {
+      expect(pageErrorKind('[api] GET /api/sessions/search FAILED after 3ms', err, t)?.how, err).toBe('failed')
+    }
+    expect(pageErrorKind('[api] GET /api/sessions/search FAILED after 0ms', "TypeError: Failed to execute 'fetch' on 'Window': Invalid value", t))
+      .toEqual({ kind: 'GET /api/sessions/search refused by the browser', route: 'GET /api/sessions/search', request: true, how: 'refused' })
+  })
+
+  it('the minute flush rings a timeout once its minute has passed, never before', () => {
+    const seen: string[] = []
+    const off = addObserveTap((name, _v, labels) => { if (name === 'usage.page.errors') seen.push(labels?.kind ?? '') })
+    try {
+      recordPageError({ kind: 'GET /api/x timed out in the page', route: 'GET /api/x', request: true, how: 'timed out' }, T0)
+      flushUsage(T0 + 30_000)
+      expect(seen).toEqual([])
+      flushUsage(T0 + 61_000)
+      expect(seen).toEqual(['GET /api/x timed out in the page'])
+      flushUsage(T0 + 200_000)
+      expect(seen).toHaveLength(1)
+    } finally { off() }
   })
 
   it('classes a failed call by what the op answered', () => {
