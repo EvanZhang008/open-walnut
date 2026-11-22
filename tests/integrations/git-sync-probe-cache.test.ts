@@ -142,6 +142,7 @@ import {
   isRepoAsync,
   isGitAvailableAsync,
   getLastSyncAtAsync,
+  getCloudRemoteCredentials,
   getCloudRemoteCredentialsAsync,
   initSync,
   setRemote,
@@ -193,6 +194,19 @@ describe('cloud pairing reads', () => {
     expect(await getCloudRemoteCredentialsAsync({ strict: true })).toEqual({
       domain: 'cloud.example.invalid', token: 'fixture-credential', secure: true,
     });
+  });
+
+  it('the blocking read (cloud setup) is strict on request too: a failed git throws, an absent remote is none', () => {
+    h.failRemoteRead = true;
+    expect(() => getCloudRemoteCredentials({ strict: true })).toThrow('git exited');
+    expect(getCloudRemoteCredentials()).toBeNull();
+    h.failRemoteRead = false;
+    h.remoteUrl = 'https://device:fixture-credential@cloud.example.invalid/git/data';
+    expect(getCloudRemoteCredentials({ strict: true })).toEqual({ domain: 'cloud.example.invalid', token: 'fixture-credential', secure: true });
+    h.hasRemote = false;
+    expect(getCloudRemoteCredentials({ strict: true })).toBeNull();
+    h.isRepo = false;
+    expect(() => getCloudRemoteCredentials({ strict: true })).toThrow('git exited');
   });
 
   it('an absent remote is a confirmed unpair, while a failed remote list is unknown', async () => {

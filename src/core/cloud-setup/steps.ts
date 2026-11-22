@@ -159,7 +159,8 @@ function sleep(ms: number): Promise<void> {
 
 /** True when the data repo's cloud remote already points at this host. */
 function remoteAlreadyPointsAt(host: string): boolean {
-  const creds = getCloudRemoteCredentials()
+  // Strict: an unreadable remote fails the step (retried), never reads as "not wired yet".
+  const creds = getCloudRemoteCredentials({ strict: true })
   return creds?.domain === host
 }
 
@@ -175,7 +176,8 @@ async function preflight(ctx: StepContext, force: boolean): Promise<StepOutcome>
   if (state.domainMode === 'own-domain' && !state.domain) {
     throw new Error('own-domain mode requires a domain')
   }
-  if (!force && getCloudRemoteCredentials()) {
+  // Strict: a remote git cannot read now is never "none", or a second companion is built.
+  if (!force && getCloudRemoteCredentials({ strict: true })) {
     throw new Error(
       'Cloud sync is already configured on this machine — replacing an existing companion '
       + 'is not supported in this version. Remove the cloud git remote first, or start with force.',

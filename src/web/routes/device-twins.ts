@@ -139,7 +139,12 @@ async function postToCloud(
 
 /** True = done (removed, nothing there, or a build that never copies); false = try again. */
 async function unadoptOnCloud(hash: string): Promise<boolean> {
-  const cloud = await getCloudPairingEndpointAsync()
+  // Strict: an unreadable pairing is "try again", never "nothing there" (the copy would stay).
+  const cloud = await getCloudPairingEndpointAsync({ strict: true }).catch((err: Error) => {
+    log.web.warn('devices: the cloud pairing could not be read; removing the companion copy of a revoked pairing waits for the next try', { error: err.message })
+    return undefined
+  })
+  if (cloud === undefined) return false
   if (!cloud || isOwnCloudCredential(hash, cloud)) return true
   try {
     const res = await postToCloud(cloud, '/api/devices/unadopt', { token_hash: hash })

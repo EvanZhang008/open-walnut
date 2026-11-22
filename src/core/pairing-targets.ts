@@ -170,15 +170,22 @@ export async function getPairingTargets(consoleOrigin: string, port: number): Pr
 }
 
 /** The cloud companion's origin + the credential that can mint devices on it. */
-export function getCloudPairingEndpoint(): { origin: string; token: string } | null {
-  const cloud = getCloudRemoteCredentials()
+export function getCloudPairingEndpoint(options?: { strict?: boolean }): { origin: string; token: string } | null {
+  const cloud = getCloudRemoteCredentials(options)
   if (!cloud) return null
   return { origin: `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`, token: cloud.token }
 }
 
-/** Async twin of getCloudPairingEndpoint for request paths (no blocking git spawn). */
-export async function getCloudPairingEndpointAsync(): Promise<{ origin: string; token: string } | null> {
-  const cloud = await getCloudRemoteCredentialsAsync()
+/**
+ * Async twin of getCloudPairingEndpoint for request paths (no blocking git spawn).
+ * `strict` throws when the pairing cannot be read (git timed out or failed) instead of
+ * answering null: a caller that acts on "no companion" (moves the machines' relay, marks a
+ * copy on the companion removed) takes strict, so a slow read never reads as unpaired
+ * (2026-11-22: at load 400 a failed read moved every machine to the public relay, and the
+ * Mac lost clouddev and olddev for 33 minutes). tests/core/pairing-read-strict.test.ts.
+ */
+export async function getCloudPairingEndpointAsync(options?: { strict?: boolean }): Promise<{ origin: string; token: string } | null> {
+  const cloud = await getCloudRemoteCredentialsAsync(options)
   if (!cloud) return null
   return { origin: `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`, token: cloud.token }
 }

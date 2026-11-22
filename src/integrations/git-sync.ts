@@ -3367,7 +3367,22 @@ const LAST_SYNC_CACHE_MS = 30_000;
  * the companion's git endpoint (credentialed + /git/ path) — a plain GitHub
  * origin must never be mistaken for a bridge target.
  */
-export function getCloudRemoteCredentials(): { domain: string; token: string; secure: boolean } | null {
+/**
+ * The companion pairing in the data repo's remote, or null when there is none. `strict`
+ * throws when git cannot answer (timed out, a lock) instead of reading that as "none": a
+ * caller that acts on "no companion" takes it (tests/core/pairing-read-strict.test.ts).
+ */
+export function getCloudRemoteCredentials(options?: { strict?: boolean }): { domain: string; token: string; secure: boolean } | null {
+  if (options?.strict) {
+    if (!fs.existsSync(path.join(WALNUT_HOME, '.git'))) return null;
+    const remotes = new Set(git('remote').split('\n'));
+    for (const remote of ['cloud', 'origin']) {
+      if (!remotes.has(remote)) continue;
+      const parsed = parseCloudRemoteUrl(git(`remote get-url ${remote}`));
+      if (parsed) return parsed;
+    }
+    return null;
+  }
   for (const remote of ['cloud', 'origin']) {
     const parsed = parseCloudRemoteUrl(gitSafe(`remote get-url ${remote}`));
     if (parsed) return parsed;

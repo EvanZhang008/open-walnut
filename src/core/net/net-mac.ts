@@ -62,7 +62,13 @@ let appliedRelay: RelayChoice | null = null
 
 async function companionPaired(): Promise<boolean> {
   const { getCloudPairingEndpointAsync } = await import('../pairing-targets.js')
-  return !!(await getCloudPairingEndpointAsync())
+  // Strict: an unreadable pairing fails the sync; read as "none" it would move every
+  // machine to another relay than this Mac's.
+  try {
+    return !!(await getCloudPairingEndpointAsync({ strict: true }))
+  } catch (err) {
+    throw new NetError(503, 'pairing_unreadable', `This machine could not read its cloud companion pairing just now (${(err as Error).message}); nothing was changed. Try again in a minute.`)
+  }
 }
 
 /** The relay as config says now (not as of the last sync): what Settings shows. */
@@ -85,7 +91,7 @@ export async function companionCall(p: string, init: { method: 'GET' | 'POST' | 
   const [{ getCloudPairingEndpointAsync }, { machineProofHeaders }] = await Promise.all([
     import('../pairing-targets.js'), import('../../integrations/cloud-bridge-config.js'),
   ])
-  const cloud = await getCloudPairingEndpointAsync()
+  const cloud = await getCloudPairingEndpointAsync({ strict: true })
   if (!cloud) throw new NetError(400, 'no_companion', 'Adding machines goes through your cloud companion; pair one first (Settings > Phones & Cloud).')
   const res = await fetch(`${cloud.origin}/api/v1${p}`, {
     method: init.method,
@@ -237,7 +243,13 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }): Promise<NetState
       const cfg = await getConfig() as { net?: { enabled?: boolean; relay?: unknown }; hosts?: Record<string, unknown> }
       state.enabled = cfg.net?.enabled === true
       // Read even while the network is off: a pick made before the first machine is kept.
-      state.companion = await companionPaired()
+      // A read that fails while the network is off changes nothing and is no error.
+      try {
+        state.companion = await companionPaired()
+      } catch (err) {
+        if (!state.enabled) return { ...state }
+        throw err
+      }
       state.relay = relayChoice(cfg.net?.relay, state.companion)
       // A pick made before a companion was paired is void: unpaired later, the machines that
       // joined through it are on its relay, and an old No relay would cut them off unchecked.
@@ -422,11 +434,14 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
   const endpoint = def.endpoint
   removing.add(endpoint)
   try {
+    // Read before anything is marked: a pairing that cannot be read fails Remove with nothing
+    // changed (marked first, the next sync would finish half of it, never telling the machine).
+    const paired = await companionPaired()
     // Kept in config first, so a restart halfway finishes the removal, never undoes it.
     await markRemoving(endpoint, true)
     // The companion forgets it first: if that fails, nothing else has changed, and the
     // machine keeps running (a machine told first would be cut off with its row still here).
-    if (await companionPaired()) {
+    if (paired) {
       let res: Awaited<ReturnType<typeof companionCall>>
       try {
         res = await companionCall(`/net/members/${endpoint}`, { method: 'DELETE' })

@@ -59,7 +59,8 @@ async function readPairing(): Promise<Pairing | null> {
   try {
     if ((await getConfig()).cloud_bridge?.enabled === false) return null
   } catch { /* unreadable config: the remote decides, as for the bridge */ }
-  const pairing = await getCloudRemoteCredentialsAsync()
+  // Strict: git that cannot answer throws (the caller keeps what it had), never "unpaired".
+  const pairing = await getCloudRemoteCredentialsAsync({ strict: true })
   // An ephemeral server runs on a COPY of the real data dir, pairing and
   // cached machine token included: dialling that companion would put a test
   // server on the real Mac's daemon on the box. Only a loopback companion (one
