@@ -176,6 +176,41 @@ configuration repair, so respawn affected sessions.
   tokens. Slim sessions and asks a host
   starts from its spawn template while the Mac is away do not get them.
 
+### Default model and effort
+
+- Walnut keeps two settings of its own, Settings > Sessions "Default model" and
+  "Default effort" (config `launch_defaults.model`, `launch_defaults.effort`; the older
+  `agent.session_effort` still reads as the effort). Both are unset by default,
+  and then Walnut passes no `--model` and no `--effort`: Claude Code's own
+  settings decide, as before.
+- Set, every Claude Code spawn that has no value of its own takes them, through
+  one rule (`src/core/sessions/claude-launch-defaults.ts`, guarded by
+  `tests/core/sessions/claude-launch-defaults-ratchet.test.ts`): a new task from
+  the web, the phone or an agent's `task_create`/`task_start`, a restart, a
+  compaction's respawn, a cold resume, an engine switch's new session, and a
+  start a host makes while the Mac is away (the setting is its own top-level
+  key so a host's config copy carries it; a host on an older Walnut refuses
+  only that row). Walnut's own lanes take neither (Ask Walnut, a plugin's
+  `ai.run`, `subagent_run`, the cloud chat, a side thread, a profiled session):
+  they run on what their starter chose (the older `agent.session_effort` no
+  longer reaches `ai.run` or `subagent_run` either). Main, a VP and a lead are
+  task sessions and take them. The SDK start (`handleStartSdk`) names
+  no model or effort at all, a pick included.
+- A session keeps the effort it first ran on (it is recorded on the session):
+  changing the setting later changes new sessions, not ones already started.
+- Effort: a pick at create or a switch in the session (both recorded on the
+  session) > the project's `default_effort` > `launch_defaults.effort` > none. Model: a
+  pick > `launch_defaults.model` > none; a resume or fork keeps its conversation's model,
+  and a project's `default_model` still rides its `default_engine`.
+- Why the effort default matters (CLI 2.1.322, from its own code): once the
+  user's `~/.claude/settings.json` holds `modelSettings` (which `/effort` writes,
+  per model), its top-level `effortLevel` is a legacy value that only older
+  models take. A newer model with no `modelSettings` entry runs at its own
+  default: on one setup Fable 5.2 ran at `medium` while the file said
+  `effortLevel: "high"`. A `--effort` flag wins over every settings layer.
+- `GET /api/sessions/claude-default-efforts` lists, per model, the effort the CLI
+  applied in the newest session Walnut gave none; the settings row shows it.
+
 ## Debugging
 
 - Probe configuration with an isolated `CLAUDE_CONFIG_DIR` and home directory.

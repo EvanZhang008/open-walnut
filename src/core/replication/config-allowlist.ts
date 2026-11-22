@@ -40,6 +40,9 @@ const ALLOW: Record<string, AllowSpec> = {
   // The fallback engine: a new task the companion starts while the default engine is out of
   // usage falls back by the same rule as on the Mac (core/agents/fallback-engine.ts).
   defaults: { priority: true, platform: true, project: true, engine: true, fallback_engine: { engine: true, model: true, model_label: true } },
+  // The default Claude Code model and effort: a task a replica starts while the Mac is away
+  // spawns on them as the Mac's would (sessions/claude-launch-defaults.ts).
+  launch_defaults: { model: true, effort: true },
   provider: { type: true, model: true, bedrock_region: true },
   // Where each engine sends its requests, and its default model: a Codex session the
   // companion starts must use the Mac's provider (providers/codex-engine-source.ts).

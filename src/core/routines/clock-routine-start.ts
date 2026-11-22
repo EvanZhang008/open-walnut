@@ -53,7 +53,11 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
   // routine naming no engine or mode of its own.
   let start: Awaited<ReturnType<typeof import('../sessions/fresh-claude-start.js').freshClaudeStart>>;
   try {
-    start = await (await import('../sessions/fresh-claude-start.js')).freshClaudeStart({ config, host, cwd, task: { title, project } });
+    // The project's default effort, as a routine run on the Mac takes it (sessions/claude-launch-defaults.ts).
+    const projectEffort = (await (await import('../sessions/project-launch-defaults.js')).projectLaunchDefaultsOf(project).catch(() => ({ effort: undefined }))).effort;
+    start = await (await import('../sessions/fresh-claude-start.js')).freshClaudeStart({
+      config, host, cwd, task: { title, project }, ...(projectEffort ? { defaults: { effort: projectEffort } } : {}),
+    });
   } catch (err) {
     // A run without its context would differ from this Mac's: it stays here.
     log.cron.warn('clock placement: no session context for a routine run on its host; it stays the Mac\'s to start', { host, jobId: job.id, error: err instanceof Error ? err.message : String(err) });
@@ -64,7 +68,7 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     home, host, title, project, cwd,
     message: (await import('../sessions/send-frame.js')).frameAsWalnut(message, 'routine', `routine:${job.id}:${job.name}`),
     mode: start.mode, modeNamed: false,
-    ...(model ? { model } : {}), ...(start.effort ? { effort: start.effort } : {}), ...(start.context ? { context: start.context } : {}),
+    ...(model ?? start.model ? { model: model ?? start.model } : {}), ...(start.effort ? { effort: start.effort } : {}), ...(start.context ? { context: start.context } : {}),
   });
   if (!spec.ok) {
     log.cron.debug('clock placement: a routine run cannot start on its host', { host, jobId: job.id, error: spec.error });

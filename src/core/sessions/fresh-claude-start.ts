@@ -13,7 +13,8 @@
  * it, deterministic (default-engine.ts hostStartDefaultEngine). Anything but Claude Code is no
  * start (null). The model only with the project's own engine.
  * The mode: the project's when it names one (`modeNamed`), else what the engine's own settings
- * on that host choose (resolveClaudeLaunchMode). The effort: the configured session effort.
+ * on that host choose (resolveClaudeLaunchMode). The model and effort: the launch defaults every
+ * spawn takes (claude-launch-defaults.ts: the project's effort, Walnut's default model and effort).
  * The context: the session context this Mac appends, built for a task whose id is
  * START_TASK_TOKEN (the host mints it) and whose title the caller gives (a routine's literal
  * title, or a title token for a project's new task that the host fills in at the create:
@@ -23,7 +24,7 @@
  */
 
 import { START_TASK_TOKEN } from '../../providers/trigger-clock-core.js';
-import { VALID_SESSION_EFFORT_IDS, type SessionEffort, type SessionMode, type Task } from '../types.js';
+import type { SessionEffort, SessionMode, Task } from '../types.js';
 import type { ProjectLaunchDefaults } from './project-launch-defaults.js';
 
 export interface FreshClaudeStart {
@@ -35,13 +36,7 @@ export interface FreshClaudeStart {
   context: string;
 }
 
-type EngineConfig = { defaults?: { engine?: unknown }; agent?: { session_effort?: unknown } } | null | undefined;
-
-/** The effort a fresh session starts with: the configured session effort when it is one. */
-export function configuredSessionEffort(config: EngineConfig): SessionEffort | undefined {
-  const e = config?.agent?.session_effort;
-  return typeof e === 'string' && VALID_SESSION_EFFORT_IDS.has(e) ? e as SessionEffort : undefined;
-}
+type EngineConfig = { defaults?: { engine?: unknown }; launch_defaults?: { model?: unknown; effort?: unknown } | null; agent?: { session_effort?: unknown } } | null | undefined;
 
 /** A fresh session of these defaults on `host` runs on Claude Code (with the project's model, when its engine is the one): else null. */
 export async function freshClaudeEngine(config: EngineConfig, host: string, defaults: ProjectLaunchDefaults = {}): Promise<{ model?: string } | null> {
@@ -79,6 +74,9 @@ export async function freshClaudeStart(o: {
   const context = await freshStartContext(o.task, o.cwd, o.host);
   const named = o.defaults?.mode;
   const mode = named ?? (await (await import('../../providers/claude-launch-mode.js')).resolveClaudeLaunchMode(o.host, o.cwd)).mode;
-  const effort = configuredSessionEffort(o.config);
-  return { mode, modeNamed: named !== undefined, ...(engine.model ? { model: engine.model } : {}), ...(effort ? { effort } : {}), context };
+  // The same rule as every spawn on this Mac (claude-launch-defaults.ts).
+  const { model, effort } = (await import('./claude-launch-defaults.js')).pickClaudeSpawnDefaults({
+    config: o.config, projectEffort: o.defaults?.effort, model: engine.model,
+  });
+  return { mode, modeNamed: named !== undefined, ...(model ? { model } : {}), ...(effort ? { effort } : {}), context };
 }

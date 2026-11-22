@@ -22,16 +22,17 @@ import { patchProjectLocal, type ProjectRegistryRow, type ProjectRowPatch } from
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useFallbackModels } from '@/components/settings/sections/FallbackEngineRow';
 import { engineName } from '@/components/settings/sections/DefaultEngineRow';
-import { launchSourceWords, useGlobalDefaultEngine } from '@/utils/launch-source';
+import { launchSourceWords, useGlobalClaudeLaunchDefaults, useGlobalDefaultEngine } from '@/utils/launch-source';
+import { EFFORT_CHOICES, effortName } from '@/components/settings/sections/claude-launch-defaults-select';
 import { engineEntry } from '@/utils/engines';
 import { LaunchSourceTag } from '@/components/sessions/LaunchSourceNote';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { useExperimental } from '@/hooks/useExperimental';
 
-type Field = 'default_engine' | 'default_model' | 'default_mode' | 'isolated_workspace';
+type Field = 'default_engine' | 'default_model' | 'default_effort' | 'default_mode' | 'isolated_workspace';
 
 const PATCH_KEY: Record<Field, keyof ProjectRowPatch> = {
-  default_engine: 'defaultEngine', default_model: 'defaultModel', default_mode: 'defaultMode', isolated_workspace: 'isolatedWorkspace',
+  default_engine: 'defaultEngine', default_model: 'defaultModel', default_effort: 'defaultEffort', default_mode: 'defaultMode', isolated_workspace: 'isolatedWorkspace',
 };
 
 export function ProjectLaunchDefaults({ project, row }: { project: string; row: ProjectRegistryRow | null }) {
@@ -42,6 +43,8 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
   const engine = row?.defaultEngine;
   const model = engine ? row?.defaultModel : undefined;
   const mode = row?.defaultMode;
+  const effort = row?.defaultEffort;
+  const globalLaunch = useGlobalClaudeLaunchDefaults();
   const isolation = row?.isolatedWorkspace;
   const globalIsolation = useExperimental('isolated_workspace_by_default');
   const models = useFallbackModels(engine ?? null);
@@ -79,9 +82,10 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
     }
   }, [project]);
 
-  const any = !!(engine || mode || isolation);
+  const any = !!(engine || mode || effort || isolation);
   const engineFrom = engine ? 'project' : 'global';
   const modeFrom = mode ? 'project' : 'global';
+  const effortFrom = effort ? 'project' : 'global';
   const modelFrom = model ? 'project' : 'global';
 
   return (
@@ -93,8 +97,8 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
           className="project-launch-defaults-clear"
           data-testid="project-launch-defaults-clear"
           disabled={!any || busy}
-          onClick={() => { void save({ default_engine: null, default_model: null, default_mode: null, isolated_workspace: null }); }}
-          title="Clear this project's engine, model and permission mode: new tasks use the global defaults (Settings > Sessions)"
+          onClick={() => { void save({ default_engine: null, default_model: null, default_effort: null, default_mode: null, isolated_workspace: null }); }}
+          title="Clear this project's engine, model, effort and permission mode: new tasks use the global defaults (Settings > Sessions)"
         >
           Use global defaults
         </button>
@@ -137,6 +141,24 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         {engine && !model
           ? <span className="launch-source-tag is-placeholder" aria-hidden="true" />
           : <LaunchSourceTag row={{ source: modelFrom, words: launchSourceWords(modelFrom, model ? project : undefined) }} />}
+      </div>
+
+      <div className="detail-setting-row">
+        <label className="detail-setting-label" htmlFor={`pld-effort-${project}`}>Effort</label>
+        <select
+          id={`pld-effort-${project}`}
+          className="detail-setting-select"
+          data-testid="project-default-effort"
+          value={effort ?? ''}
+          disabled={busy || !startsClaude}
+          // Reasoning effort is a Claude Code setting; another engine carries its own in its model.
+          title={startsClaude ? 'Claude Code sessions of this project start at this effort unless they have their own' : 'Effort applies to Claude Code sessions'}
+          onChange={(e) => { void save({ default_effort: e.target.value || null }); }}
+        >
+          <option value="">Global: {globalLaunch.effort ? effortName(globalLaunch.effort) : 'Claude Code decides'}</option>
+          {EFFORT_CHOICES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <LaunchSourceTag row={{ source: effortFrom, words: launchSourceWords(effortFrom, effort ? project : undefined) }} />
       </div>
 
       <div className="detail-setting-row">

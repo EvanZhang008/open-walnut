@@ -59,6 +59,7 @@ test('the project details set its launch defaults, say where each comes from, an
   const engine = block.getByTestId('project-default-engine')
   const model = block.getByTestId('project-default-model')
   const mode = block.getByTestId('project-default-mode')
+  const effort = block.getByTestId('project-default-effort')
   const workspace = block.getByTestId('project-isolated-workspace')
   // Nothing set: every row is the global default, named, and the model waits for an engine.
   await expect(engine.locator('option:checked')).toHaveText(/^Global: /)
@@ -67,7 +68,9 @@ test('the project details set its launch defaults, say where each comes from, an
   await expect(mode.locator('option:checked')).toHaveText(`Global: ${await mode.locator(`option[value="${launchMode}"]`).innerText()}`)
   await expect(model).toBeDisabled()
   await expect(workspace.locator('option:checked')).toHaveText(/^Global: /)
-  await expect(block.locator('.launch-source-tag')).toHaveText(['Global', 'Global', 'Global', 'Global'])
+  // Effort: Walnut's default (Settings > Sessions), unset here, so Claude Code decides.
+  await expect(effort.locator('option:checked')).toHaveText('Global: Claude Code decides')
+  await expect(block.locator('.launch-source-tag')).toHaveText(['Global', 'Global', 'Global', 'Global', 'Global'])
   await expect(block.getByTestId('project-launch-defaults-clear')).toBeDisabled()
   await block.screenshot({ path: `${SHOTS}/settings-global.png` })
 
@@ -77,20 +80,21 @@ test('the project details set its launch defaults, say where each comes from, an
   await model.selectOption({ index: 1 })
   const pickedModel = await model.inputValue()
   expect(pickedModel).not.toBe('')
+  await effort.selectOption('high')
   await mode.selectOption('accept')
   await workspace.selectOption('off')
-  await expect.poll(async () => metaOf(page)).toMatchObject({ default_engine: 'claude', default_model: pickedModel, default_mode: 'accept', isolated_workspace: 'off' })
-  await expect(block.locator('.launch-source-tag')).toHaveText(['Project', 'Project', 'Project', 'Project'])
+  await expect.poll(async () => metaOf(page)).toMatchObject({ default_engine: 'claude', default_model: pickedModel, default_effort: 'high', default_mode: 'accept', isolated_workspace: 'off' })
+  await expect(block.locator('.launch-source-tag')).toHaveText(['Project', 'Project', 'Project', 'Project', 'Project'])
   await expect(block.locator('.launch-source-tag').first()).toHaveAttribute('title', `Default of project ${PROJECT}`)
   await block.screenshot({ path: `${SHOTS}/settings-project.png` })
 
-  // One click back to the global defaults: all four go, on the server too.
+  // One click back to the global defaults: all five go, on the server too.
   await block.getByTestId('project-launch-defaults-clear').click()
-  await expect(block.locator('.launch-source-tag')).toHaveText(['Global', 'Global', 'Global', 'Global'])
+  await expect(block.locator('.launch-source-tag')).toHaveText(['Global', 'Global', 'Global', 'Global', 'Global'])
   await expect.poll(async () => {
     const m = await metaOf(page)
-    return [m.default_engine, m.default_model, m.default_mode, m.isolated_workspace]
-  }).toEqual([undefined, undefined, undefined, undefined])
+    return [m.default_engine, m.default_model, m.default_effort, m.default_mode, m.isolated_workspace]
+  }).toEqual([undefined, undefined, undefined, undefined, undefined])
   await expect(model).toBeDisabled()
   // The folder is still the project's: only the launch values went.
   expect((await metaOf(page)).default_cwd).toBe(cwd)

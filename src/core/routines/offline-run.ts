@@ -166,7 +166,7 @@ export interface OfflineRunDeps {
   orgEnabled(): Promise<boolean>;
   ownerSessions(taskId: string): Promise<DeliverySessionCandidate[]>;
   /** The host may start a run as this server would (configured, Claude Code engine, no session server), or why not. */
-  hostReady(host: string): Promise<{ effort?: string } | string>;
+  hostReady(host: string): Promise<{ effort?: string; model?: string } | string>;
   /** Its fleet capability tags; null when no card was read for it. */
   hostTags(host: string): Promise<readonly string[] | null>;
   /**
@@ -381,7 +381,7 @@ export async function offlineRoutineStartOf(job: CronJob, host: string, deps: Of
       home: deps.home, host, title, project: RUN_PROJECT, cwd,
       message: (await import('../sessions/send-frame.js')).frameAsWalnut(promptOf(job), 'routine', `routine:${job.id}:${job.name}`),
       mode: await deps.launchMode(host, cwd), modeNamed: false,
-      ...(ready.effort ? { effort: ready.effort } : {}), context,
+      ...(ready.model ? { model: ready.model } : {}), ...(ready.effort ? { effort: ready.effort } : {}), context,
     });
     return spec.ok ? spec.spec : no(spec.error);
   } catch (err) {
@@ -432,17 +432,19 @@ function realDeps(): OfflineRunDeps {
       return await getSessionsForTask(taskId).catch(() => []);
     },
     async hostReady(host) {
-      const [{ getConfig, isFallbackConfig }, { freshClaudeEngine, configuredSessionEffort }] = await Promise.all([
-        import('../config-manager.js'), import('../sessions/fresh-claude-start.js'),
+      const [{ getConfig, isFallbackConfig }, { freshClaudeEngine }, { pickClaudeSpawnDefaults }] = await Promise.all([
+        import('../config-manager.js'), import('../sessions/fresh-claude-start.js'), import('../sessions/claude-launch-defaults.js'),
       ]);
       const config = await getConfig();
       if (isFallbackConfig(config)) return 'the config could not be read';
       if (!config.hosts?.[host]) return 'the host is not configured';
       // This is a new daemon-owned worker, not the owner's SDK conversation.
       // The primary's session-server setting does not disable the trusted CLI template.
-      if (!(await freshClaudeEngine(config, host))) return 'its engine is not Claude Code';
-      const effort = configuredSessionEffort(config);
-      return effort ? { effort } : {};
+      const engine = await freshClaudeEngine(config, host);
+      if (!engine) return 'its engine is not Claude Code';
+      // The same rule as every spawn (sessions/claude-launch-defaults.ts).
+      const { model, effort } = pickClaudeSpawnDefaults({ config, model: engine.model });
+      return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
     },
     hostTags: async (host) => (await (await env()).capabilities(host))?.tags ?? null,
     async notesBlocker(host, notes) {

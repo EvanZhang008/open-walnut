@@ -12,7 +12,7 @@ import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
-import { isInboxProject, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
+import { isInboxProject, SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
@@ -695,8 +695,9 @@ defineOp({
   description:
     'Merge execution defaults into one project registry row: default_cwd, default_host, and the ' +
     'launch defaults a new task of the project starts on when its start names none (default_engine, ' +
-    'default_model of that engine, default_mode). A start that names its own engine, model or mode wins; ' +
-    'unset values fall back to the global defaults. claude_plugins_off lists Claude Code plugins ' +
+    'default_model of that engine, default_mode) and default_effort, the reasoning effort of its Claude Code ' +
+    'sessions. A start that names its own engine, model, effort or mode wins; ' +
+    'unset values fall back to the global defaults (Settings > Sessions; unset there = Claude Code decides). claude_plugins_off lists Claude Code plugins ' +
     '(name@marketplace) the project\'s Claude Code sessions start without, so their skills, agents and ' +
     'MCP servers stay out of each request; the user\'s own plugin settings are not changed. ' +
     'isolated_workspace says whether the project\'s code tasks start in an isolated workspace by default (on, off, or null to follow the global setting). ' +
@@ -709,6 +710,7 @@ defineOp({
     default_engine: z.enum(SESSION_ENGINE_IDS).nullable().optional().describe('Default coding engine for new tasks; null clears it (and its model)'),
     default_model: z.string().nullable().optional().describe('Default model id of default_engine; needs default_engine; null clears it'),
     default_mode: z.enum(SESSION_MODE_IDS).nullable().optional().describe('Default permission mode for new tasks; null clears it'),
+    default_effort: z.enum(SESSION_EFFORT_IDS as [typeof SESSION_EFFORT_IDS[number], ...typeof SESSION_EFFORT_IDS[number][]]).nullable().optional().describe('Default reasoning effort of the project\'s Claude Code sessions (also on a restart or resume of a session that has none of its own); null clears it'),
     isolated_workspace: z.enum(['on', 'off']).nullable().optional().describe('on: a new task of this project whose folder is a repository starts in its own isolated workspace (a git worktree, or a workspace plugin\'s); off: in the folder itself; null follows the global setting (Settings > Experimental)'),
     workspace_source: z.object({
       provider: z.string().min(1).describe('A workspace provider id (workspace_providers lists them), or "auto" for the one that claims the folder'),
@@ -722,7 +724,7 @@ defineOp({
   handler: async (args, call) => {
     const { name, ...body } = args;
     if (Object.values(body).every((v) => v === undefined)) {
-      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode, isolated_workspace, workspace_source, claude_plugins_off');
+      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_effort, default_mode, isolated_workspace, workspace_source, claude_plugins_off');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
   },

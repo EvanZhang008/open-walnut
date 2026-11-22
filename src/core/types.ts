@@ -1563,6 +1563,14 @@ export interface Config {
    *  Bitwarden every day at 04:00 (core/vault/sources/bitwarden/run.ts), off unless set. `sources`: the
    *  sync sources the person added in Settings (core/vault/sources/index.ts), e.g. ['bitwarden']. */
   passwords?: { auto_lock_minutes?: number; unlock_for?: 'idle' | '1h' | '12h' | '48h' | 'restart' | 'always'; bitwarden_daily?: boolean; sources?: string[] };
+  /**
+   * The Claude Code model and reasoning effort a task's session spawns with when nobody picked
+   * one for it (Settings > Sessions; core/sessions/claude-launch-defaults.ts). Unset = none: no
+   * --model / --effort, so Claude Code's own settings decide. A pick at create, the session's
+   * own (a switch in it) and the project's default_effort win over these. Its own top-level key
+   * (not under `defaults`) so a replica that predates it refuses only this row of the copy.
+   */
+  launch_defaults?: { model?: string; effort?: SessionEffort };
   defaults: {
     priority: TaskPriority;
     /** Default platform/source for new tasks created via quick-add. Unset = 'local'

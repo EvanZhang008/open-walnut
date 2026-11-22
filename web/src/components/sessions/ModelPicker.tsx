@@ -337,6 +337,9 @@ interface ModelPickerProps {
   onEffortDefault?: () => void;
   /** What the Default row means on this surface (its tooltip). */
   effortDefaultTitle?: string;
+  /** The level the Default row starts at, when Walnut knows it (a project's or Walnut's default):
+   *  shown beside "Default", so the row says what applies. */
+  effortDefaultLevel?: string;
   onClose: () => void;
   /** The anchor pill left the page (a re-layout): defaults to onClose. */
   onAnchorLost?: () => void;
@@ -361,7 +364,7 @@ interface ModelPickerProps {
    *  default decides). Picking it calls onSwitch('') — the draft caller maps
    *  '' back to undefined. Also hides the catalog's own 'default' row, which
    *  would duplicate it. */
-  autoRow?: { resolvedLabel: string; active: boolean };
+  autoRow?: { resolvedLabel: string; active: boolean; label?: string; title?: string };
   /** DRAFT on the fallback engine: said after the ACP pane's current model ("· fallback"). */
   acpCurrentNote?: string;
   /** POP OUT of the host column: portal to <body>, placed by useMenuPlacement
@@ -397,7 +400,7 @@ interface ModelPickerProps {
 const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onEffortDefault, effortDefaultTitle, onClose, onAnchorLost, switchNote, sourceNote, speedReadout, speedHeadline,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onEffortDefault, effortDefaultTitle, effortDefaultLevel, onClose, onAnchorLost, switchNote, sourceNote, speedReadout, speedHeadline,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow, acpCurrentNote,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
@@ -776,7 +779,7 @@ export function ModelPicker({
 
   type ClaudeModelRow =
     | { kind: 'current'; model: string }
-    | { kind: 'auto'; resolvedLabel: string; active: boolean }
+    | { kind: 'auto'; resolvedLabel: string; active: boolean; label?: string; title?: string }
     | { kind: 'catalog'; model: SessionModelCatalogEntry };
   const claudeModelRows = sortByModelStrength<ClaudeModelRow>([
     ...(liveModel && !activeRow && !autoRow
@@ -1263,10 +1266,10 @@ export function ModelPicker({
                   data-testid="picker-auto-row"
                   role="option"
                   aria-selected={row.active}
-                  title="No --model flag — the CLI/config default decides"
+                  title={row.title ?? 'No --model flag — the CLI/config default decides'}
                   onClick={() => { if (!row.active) onSwitch(''); }}
                 >
-                  <span className="model-picker-row-name">{row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto'}</span>
+                  <span className="model-picker-row-name">{row.label ?? (row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto')}</span>
                 </button>
               );
             }
@@ -1310,7 +1313,10 @@ export function ModelPicker({
                 title={effortDefaultTitle ?? 'No --effort at start: Claude Code\'s own settings decide'}
                 onClick={() => { if (currentEffort !== undefined) onEffortDefault(); }}
               >
-                <span className="model-picker-row-name">Default</span>
+                <span className="model-picker-row-name">
+                  Default
+                  {effortDefaultLevel && <span className="model-picker-row-group" data-testid="effort-default-level"> · {effortDefaultLevel}</span>}
+                </span>
               </button>
             )}
             {EFFORTS.map((e) => {

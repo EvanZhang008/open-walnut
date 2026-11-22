@@ -10,7 +10,7 @@
  * encodeURIComponent'd and the rename target rides in the request BODY.
  */
 
-import type { SessionEngine, SessionMode } from '@open-walnut/core';
+import type { SessionEffort, SessionEngine, SessionMode } from '@open-walnut/core';
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
 
 export interface ProjectCounts {
@@ -28,6 +28,9 @@ export interface ProjectMetadata {
   default_engine?: SessionEngine;
   default_model?: string;
   default_mode?: SessionMode;
+  /** Claude Code's reasoning effort for the project's sessions, under a pick or the session's own
+   *  (server: src/core/sessions/claude-launch-defaults.ts). */
+  default_effort?: SessionEffort;
   /** 'on': this project's code tasks start in an isolated workspace; 'off': never; absent follows
    *  the global setting (server: src/core/workspaces/default-isolation.ts). */
   isolated_workspace?: 'on' | 'off';

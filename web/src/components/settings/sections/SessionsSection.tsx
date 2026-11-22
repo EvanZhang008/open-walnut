@@ -15,6 +15,7 @@ import { EngineSplitRow } from './EngineSplitRow';
 import { DefaultEngineRow } from './DefaultEngineRow';
 import { PickerEnginesGroup } from './PickerEnginesGroup';
 import { FallbackEngineRow } from './FallbackEngineRow';
+import { ClaudeLaunchDefaultsRow } from './ClaudeLaunchDefaultsRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
 import { MessageHintsGroup } from './MessageHintsGroup';
 import { HistoryRemoteGroup } from './HistoryRemoteGroup';
@@ -140,10 +141,11 @@ export function SessionsSection({ config, onSave }: Props) {
 
   return (
     <SettingsSection id="sessions" title="Sessions">
-      {/* Session model is a RUNTIME choice made in the session picker; Walnut
-          keeps no config-time default model, so there is no picker here. */}
+      {/* A session's model and effort are picked in its picker; the two Claude Code
+          defaults below are the user's own fallback, Not set unless they set them. */}
       <SettingsGroup>
         <DefaultEngineRow config={config} save={save} />
+        <ClaudeLaunchDefaultsRow config={config} save={save} />
         <ClaudeDefaultModeRow config={config} />
         <FallbackEngineRow config={config} save={save} />
       </SettingsGroup>

@@ -25,20 +25,24 @@
  * which engine is the default here.
  */
 import {
-  INBOX_PROJECT, isInboxProject, resolveModelSwitchValue, SESSION_MODES, VALID_SESSION_MODE_IDS,
-  type SessionEngine, type SessionMode,
+  INBOX_PROJECT, isInboxProject, resolveModelSwitchValue, SESSION_EFFORT_IDS, SESSION_MODES, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODE_IDS,
+  type SessionEffort, type SessionEngine, type SessionMode,
 } from '../types.js';
 import { isKnownEngine } from '../agents/engine-registry.js';
 import { checkWorkspaceSourceShape } from '../workspaces/project-source.js';
 
-/** The three metadata keys, in the order the settings list them. */
-export const PROJECT_LAUNCH_DEFAULT_KEYS = ['default_engine', 'default_model', 'default_mode'] as const;
+/** The metadata keys, in the order the settings list them. */
+export const PROJECT_LAUNCH_DEFAULT_KEYS = ['default_engine', 'default_model', 'default_effort', 'default_mode'] as const;
 
 export interface ProjectLaunchDefaults {
   engine?: SessionEngine;
   /** A model of `engine`'s catalog (raw picker value); never present without `engine`. */
   model?: string;
   mode?: SessionMode;
+  /** Claude Code's reasoning effort for the project's sessions (`default_effort`). Not part of the
+   *  engine pair: it tunes whatever Claude Code model runs, and every spawn applies it the same way
+   *  (claude-launch-defaults.ts), beneath an effort the launch or the session chose. */
+  effort?: SessionEffort;
 }
 
 /** Where one launch value came from. `fallback`: the default engine was out of usage. */
@@ -77,7 +81,9 @@ export function readProjectLaunchDefaults(meta: Record<string, unknown> | null |
   const model = engine && rawModel && rawModel !== 'default' && modelOk(rawModel) ? rawModel : undefined;
   const mode = typeof meta.default_mode === 'string' && VALID_SESSION_MODE_IDS.has(meta.default_mode)
     ? meta.default_mode as SessionMode : undefined;
-  return { ...(engine ? { engine } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}) };
+  const effort = typeof meta.default_effort === 'string' && VALID_SESSION_EFFORT_IDS.has(meta.default_effort)
+    ? meta.default_effort as SessionEffort : undefined;
+  return { ...(engine ? { engine } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}), ...(effort ? { effort } : {}) };
 }
 
 /**
@@ -218,7 +224,7 @@ export async function pickLaunchDefaults(o: {
  *   model unless the same patch names one (the old model named the old engine).
  * - default_model needs an engine (in the patch or already set) and a model id
  *   the launch path takes.
- * - default_mode must be a permission mode id.
+ * - default_mode must be a permission mode id; default_effort an effort level.
  */
 export function checkLaunchDefaultsPatch(
   current: Record<string, unknown>,
@@ -256,6 +262,11 @@ export function checkLaunchDefaultsShape(patch: Record<string, unknown>): Record
   if (Object.hasOwn(out, 'isolated_workspace') && out.isolated_workspace !== undefined
     && out.isolated_workspace !== 'on' && out.isolated_workspace !== 'off') {
     throw new ProjectSettingsError(`isolated_workspace must be "on" or "off" (null follows the global setting), not ${JSON.stringify(out.isolated_workspace)}`);
+  }
+  if (Object.hasOwn(out, 'default_effort') && out.default_effort !== undefined) {
+    if (typeof out.default_effort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(out.default_effort)) {
+      throw new ProjectSettingsError(`default_effort must be one of: ${SESSION_EFFORT_IDS.join(', ')}`);
+    }
   }
   if (Object.hasOwn(out, 'default_mode') && out.default_mode !== undefined) {
     if (typeof out.default_mode !== 'string' || !VALID_SESSION_MODE_IDS.has(out.default_mode)) {

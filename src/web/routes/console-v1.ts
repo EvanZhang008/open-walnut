@@ -74,6 +74,10 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
       ...(config.defaults?.platform ? { platform: config.defaults.platform } : {}),
       ...(config.defaults?.project !== undefined ? { project: config.defaults.project } : {}),
     },
+    launch_defaults: {
+      ...(config.launch_defaults?.model ? { model: config.launch_defaults.model } : {}),
+      ...(config.launch_defaults?.effort ? { effort: config.launch_defaults.effort } : {}),
+    },
     provider: {
       type: config.provider?.type,
       ...(config.provider?.model ? { model: config.provider.model } : {}),

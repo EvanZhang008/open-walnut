@@ -12,7 +12,8 @@
  * a setting, and over the global one.
  */
 import { useEffect, useState } from 'react';
-import { DEFAULT_SESSION_MODE, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { DEFAULT_SESSION_MODE, SESSION_MODE_LABELS, type SessionEffort, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { currentDefaultEffort, currentDefaultModel } from '@/components/settings/sections/claude-launch-defaults-select';
 import { fetchConfig } from '@/api/config';
 import { useEvent } from '@/hooks/useWebSocket';
 import type { ProjectLaunchDefaults } from '@/hooks/useProjectRegistry';
@@ -236,4 +237,26 @@ export function useGlobalDefaultEngine(): SessionEngine {
     return () => { live = false; };
   }, [gen]);
   return engine;
+}
+
+/**
+ * Walnut's own default model and effort of Claude Code sessions (Settings > Sessions:
+ * `launch_defaults.model`, `launch_defaults.effort`, the older `agent.session_effort`), read like the default
+ * engine. Absent = Not set: Claude Code's own settings decide.
+ */
+export function useGlobalClaudeLaunchDefaults(): { model?: string; effort?: SessionEffort } {
+  const [value, setValue] = useState<{ model?: string; effort?: SessionEffort }>({});
+  const [gen, setGen] = useState(0);
+  useEvent('config:changed', () => setGen((g) => g + 1));
+  useEffect(() => {
+    let live = true;
+    fetchConfig().then((c) => {
+      if (!live) return;
+      const model = currentDefaultModel(c) || undefined;
+      const effort = currentDefaultEffort(c) || undefined;
+      setValue({ ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+    }, () => {});
+    return () => { live = false; };
+  }, [gen]);
+  return value;
 }

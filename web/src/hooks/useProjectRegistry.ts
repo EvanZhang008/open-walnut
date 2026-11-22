@@ -28,7 +28,7 @@ import { wsClient } from '@/api/ws';
 import { fetchWithRetry } from '@/utils/fetch-retry';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { fetchProjects, type ProjectListResponse, type ProjectSummary, type StartSource } from '@/api/projects';
-import { INBOX_PROJECT, isInboxProject, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { INBOX_PROJECT, isInboxProject, type SessionEffort, type SessionEngine, type SessionMode } from '@open-walnut/core';
 
 /** One registry row, flattened to what the UI actually reads. */
 export interface ProjectRegistryRow {
@@ -42,6 +42,8 @@ export interface ProjectRegistryRow {
   /** A model of `defaultEngine`; never set without it. */
   defaultModel?: string;
   defaultMode?: SessionMode;
+  /** Claude Code's reasoning effort for its sessions (`default_effort`); absent follows Settings > Sessions. */
+  defaultEffort?: SessionEffort;
   /** Its code tasks start in an isolated workspace ('on') or never do ('off'); absent follows the global setting. */
   isolatedWorkspace?: 'on' | 'off';
   /** Where a new task of it gets its code (server: project-source.ts); absent: the folder flow. */
@@ -53,6 +55,8 @@ export interface ProjectLaunchDefaults {
   engine?: SessionEngine;
   model?: string;
   mode?: SessionMode;
+  /** Claude Code's effort for the project's sessions; not part of the engine pair. */
+  effort?: SessionEffort;
 }
 
 export interface UseProjectRegistryReturn {
@@ -185,6 +189,7 @@ function toRows(data: Pick<ProjectListResponse, 'projects' | 'inbox'>): ProjectR
     ...(p.metadata?.default_engine ? { defaultEngine: p.metadata.default_engine } : {}),
     ...(p.metadata?.default_engine && p.metadata.default_model ? { defaultModel: p.metadata.default_model } : {}),
     ...(p.metadata?.default_mode ? { defaultMode: p.metadata.default_mode } : {}),
+    ...(p.metadata?.default_effort ? { defaultEffort: p.metadata.default_effort } : {}),
     ...(p.metadata?.isolated_workspace === 'on' || p.metadata?.isolated_workspace === 'off' ? { isolatedWorkspace: p.metadata.isolated_workspace } : {}),
     ...(p.start_source ? { startSource: p.start_source } : {}),
   })));
@@ -199,7 +204,7 @@ function rowsEqual(a: readonly ProjectRegistryRow[], b: readonly ProjectRegistry
     if (x.name !== y.name || x.source !== y.source || x.favorite !== y.favorite
       || x.defaultCwd !== y.defaultCwd || x.defaultHost !== y.defaultHost
       || x.defaultEngine !== y.defaultEngine || x.defaultModel !== y.defaultModel || x.defaultMode !== y.defaultMode
-      || x.isolatedWorkspace !== y.isolatedWorkspace
+      || x.defaultEffort !== y.defaultEffort || x.isolatedWorkspace !== y.isolatedWorkspace
       || JSON.stringify(x.startSource) !== JSON.stringify(y.startSource)) return false;
   }
   return true;
@@ -440,6 +445,7 @@ export interface ProjectRowPatch {
   defaultEngine?: SessionEngine | null;
   defaultModel?: string | null;
   defaultMode?: SessionMode | null;
+  defaultEffort?: SessionEffort | null;
   isolatedWorkspace?: 'on' | 'off' | null;
   source?: string;
   favorite?: boolean;
@@ -470,6 +476,10 @@ export function patchProjectLocal(name: string, patch: ProjectRowPatch): (ok: bo
     if (patch.defaultMode !== undefined) {
       if (patch.defaultMode) next.defaultMode = patch.defaultMode;
       else delete next.defaultMode;
+    }
+    if (patch.defaultEffort !== undefined) {
+      if (patch.defaultEffort) next.defaultEffort = patch.defaultEffort;
+      else delete next.defaultEffort;
     }
     if (patch.isolatedWorkspace !== undefined) {
       if (patch.isolatedWorkspace) next.isolatedWorkspace = patch.isolatedWorkspace;
@@ -614,7 +624,7 @@ function rowOf(snap: Snapshot, project: string | null | undefined): ProjectRegis
 /** A row's launch defaults with the project they come from; empty when it sets none. */
 function launchDefaultsOf(row: ProjectRegistryRow | null): ProjectLaunchDefaults & { project?: string } {
   const d = launchDefaultsOfRow(row);
-  return row && (d.engine || d.mode) ? { ...d, project: row.name } : {};
+  return row && (d.engine || d.mode || d.effort) ? { ...d, project: row.name } : {};
 }
 
 /** A row's launch defaults; empty when it sets none. */
@@ -623,6 +633,7 @@ export function launchDefaultsOfRow(row: ProjectRegistryRow | null | undefined):
   return {
     ...(row.defaultEngine ? { engine: row.defaultEngine } : {}),
     ...(row.defaultEngine && row.defaultModel ? { model: row.defaultModel } : {}),
+    ...(row.defaultEffort ? { effort: row.defaultEffort } : {}),
     ...(row.defaultMode ? { mode: row.defaultMode } : {}),
   };
 }

@@ -656,6 +656,28 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
 
+    // Settings > Sessions, "Default model" and "Default effort" of Claude Code sessions
+    // (core/sessions/claude-launch-defaults.ts). A key sent as null is removed (Claude Code decides).
+    if (body.launch_defaults !== undefined && body.launch_defaults !== null) {
+      const launch = body.launch_defaults as { model?: unknown; effort?: unknown }
+      if (typeof launch !== 'object' || Array.isArray(launch)
+        || Object.keys(launch).some((k) => k !== 'model' && k !== 'effort')) {
+        res.status(400).json({ error: 'launch_defaults takes model and effort only' })
+        return
+      }
+      const { isClaudeLaunchModel } = await import('../../core/sessions/claude-launch-defaults.js')
+      if (launch.model !== undefined && launch.model !== null && !isClaudeLaunchModel(launch.model)) {
+        res.status(400).json({ error: 'launch_defaults.model must be a Claude Code model id or alias' })
+        return
+      }
+      const { VALID_SESSION_EFFORT_IDS } = await import('../../core/types.js')
+      if (launch.effort !== undefined && launch.effort !== null
+        && (typeof launch.effort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(launch.effort))) {
+        res.status(400).json({ error: `launch_defaults.effort must be one of: ${[...VALID_SESSION_EFFORT_IDS].join(', ')}` })
+        return
+      }
+    }
+
     if (body.external_session_import !== undefined) {
       const config = body.external_session_import
       const rules = config?.excluded_cwds

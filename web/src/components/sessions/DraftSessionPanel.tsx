@@ -73,11 +73,13 @@ import { DraftFallbackNotice, draftFallbackPill, useDraftFallback } from './Draf
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { useAcpModelName } from './engine-default-model';
 import { LaunchSourceNote } from './LaunchSourceNote';
+import { effortName as effortLabel } from '@/components/settings/sections/claude-launch-defaults-select';
 import { useFallbackModels } from '@/components/settings/sections/FallbackEngineRow';
 import { engineName } from '@/components/settings/sections/DefaultEngineRow';
 import { useProjectLaunchDefaults } from '@/hooks/useProjectRegistry';
 import { projectGroupKey } from '@/utils/project-display';
 import {
+  useGlobalClaudeLaunchDefaults,
   defaultEngineRuns, draftLaunchChoice, draftLaunchPayload, launchSourceRows, unnamedLaunchIsNotClaude, useGlobalDefaultEngine, type LaunchSourceRow,
 } from '@/utils/launch-source';
 import { fetchEngineModelCatalog } from '@/api/sessions';
@@ -181,7 +183,7 @@ function effortFor(model: string, effort: SessionEffort | undefined): SessionEff
  * provider is clickable (the engine is still a choice here), and picking an ACP
  * engine clears the model (ACP discovers models at session start).
  */
-function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote }: {
+function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackLabel, fallbackEngine, fallbackModel, sourceNote, projectEffort }: {
   meta: QuickStartTaskMeta;
   onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   host?: string | null;
@@ -199,6 +201,8 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   fallbackModel?: string;
   /** Where the engine, model and mode come from (the picker's top note); absent = say nothing. */
   sourceNote?: React.ReactNode;
+  /** The draft's project's own default effort (its settings), under a pick here. */
+  projectEffort?: SessionEffort;
 }) {
   const [open, setOpen] = useState(false);
   // The provider tab the picker shows while the launch is on the fallback: it opens on the
@@ -245,11 +249,23 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   // Auto, sent as 'default' so the server can tell "reset to Auto" from "no
   // pick" (which launches on the Ask Walnut launch memory instead).
   const isAuto = !meta.model || meta.model === 'default';
+  // Walnut's own defaults (Settings > Sessions), under the draft's picks; Ask Walnut keeps its own,
+  // and a fork keeps its source session's model.
+  const globalLaunch = useGlobalClaudeLaunchDefaults();
+  const defaultModel = walnut || fork ? undefined : globalLaunch.model;
+  const nameOfModel = (m: string) => options.find((o) => o.value === m)?.label ?? formatModelName(m);
   const selectedLabel = !isAuto
     // A remembered id the option list does not carry (yet) reads as a model
     // name, never as a provider id like "global.anthropic.claude-..." (N10).
-    ? options.find((o) => o.value === meta.model)?.label ?? formatModelName(meta.model)
+    ? nameOfModel(meta.model!)
+    : defaultModel ? `Default (${nameOfModel(defaultModel)})`
     : autoResolved ? `Auto (${autoResolved})` : 'Auto';
+  // What the effort picker's Default row starts at: the project's, else Walnut's, else Claude Code's own.
+  const effortDefault = projectEffort
+    ? { level: effortLabel(projectEffort), title: 'No level picked here: the project\'s default effort applies (its settings)' }
+    : globalLaunch.effort
+      ? { level: effortLabel(globalLaunch.effort), title: 'No level picked here: Walnut\'s default effort applies (Settings > Sessions)' }
+      : { level: undefined, title: 'No --effort at start: Claude Code\'s own settings decide (Settings > Sessions sets a default)' };
   // Named as the picker's row and a running session's composer name it (the engine's own name).
   const acpModelName = useAcpModelName(engine, cwd || undefined, meta.model, acpModels);
   const acpPillLabel = meta.model ? acpModelName ?? shortAcpModelName(meta.model) : entry.displayName;
@@ -328,7 +344,8 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
             // Ask Walnut's launch without a level takes its remembered one (else medium), not the CLI's.
             effortDefaultTitle: walnut
               ? 'No level picked here: the quick question starts at the level its last one used (medium the first time)'
-              : 'No --effort at start: Walnut\'s session effort setting when set, else Claude Code\'s own settings decide',
+              : effortDefault.title,
+            ...(!walnut && effortDefault.level ? { effortDefaultLevel: effortDefault.level } : {}),
           } : {})}
           // A draft can still change provider — flipping clears the model: the
           // catalogs don't overlap, and an ACP engine has no pre-start rows.
@@ -346,7 +363,14 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
               ? 'A quick question runs on the claude engine (the Personal AI profile rides its system prompt)'
               : hostEngineLockReason(engineEntry(catalog, provider), host, hostEngines))}
           // While Auto starts on the fallback, its row says so ("Auto (Codex, fallback)").
-          autoRow={{ resolvedLabel: fallbackLabel ? fallbackLabel.replace(/ \(fallback\)$/, ', fallback') : autoResolved, active: runsAuto }}
+          autoRow={{
+            resolvedLabel: fallbackLabel ? fallbackLabel.replace(/ \(fallback\)$/, ', fallback') : autoResolved, active: runsAuto,
+            // No pick runs on Walnut's default model (Settings > Sessions): the row says so, as the pill does.
+            ...(defaultModel && !fallbackLabel ? {
+              label: `Default (${nameOfModel(defaultModel)})`,
+              title: 'No model picked here: the session starts on the default model set in Settings > Sessions',
+            } : {}),
+          }}
           // ACP draft: selection lands in meta.model (same field the claude
           // pane uses — the launch payload already carries it) and rides the
           // spawn as acpConfig. '' = back to the engine's default.
@@ -1196,6 +1220,7 @@ export function DraftSessionPanel({
                 fallbackLabel={onFallback ? draftFallbackPill(fallbackNow) : null}
                 fallbackEngine={onFallback?.engine ?? null}
                 fallbackModel={onFallback?.model}
+                projectEffort={projectDefaults.effort}
               />
               {/* No "Start ↵" here: the composer's send arrow (and Enter) already
                   starts the session, and two buttons for one action read as two

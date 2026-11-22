@@ -86,6 +86,7 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   outbound: 'merge',
   passwords: 'merge',
   defaults: 'merge',
+  launch_defaults: 'merge',
   provider: 'merge',
   usage: 'merge',
   agent: 'merge',

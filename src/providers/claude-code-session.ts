@@ -14573,12 +14573,21 @@ export class SessionRunner {
     const { getConfig } = await import('../core/config-manager.js')
     const config = await getConfig()
 
-    // Resolve model: explicit caller (picker) value ONLY. There is deliberately NO
-    // config-time default — "Auto" (undefined) means send() passes no --model and
-    // Claude Code uses its own settings-layer default. Model is a runtime choice.
-    const resolvedModel = model
-    // Resolve effort: explicit caller value > config default > undefined (no --effort, API default)
-    const resolvedEffort = data.effort ?? config.agent?.session_effort
+    // Model and effort: the caller's pick, else the project's and Walnut's own defaults
+    // (Settings > Sessions; both unset until the user sets them), else none, so Claude
+    // Code's settings decide. One rule for every spawn (core/sessions/claude-launch-defaults.ts).
+    // A fork continues its parent's conversation, so it takes no default model. Walnut's own
+    // lanes (Ask Walnut, ai.run, subagent_run, a side thread) take no default at all.
+    const { resolveClaudeSpawnDefaults, takesLaunchDefaults } = await import('../core/sessions/claude-launch-defaults.js')
+    const userSpawn = takesLaunchDefaults(data)
+    const spawnDefaults = await resolveClaudeSpawnDefaults({
+      config: userSpawn ? config : null, project: userSpawn ? project ?? null : null, model, effort: data.effort, keepsModel: isFork,
+    })
+    const resolvedModel = spawnDefaults.model
+    const resolvedEffort = spawnDefaults.effort
+    if (spawnDefaults.from.model !== 'own' && resolvedModel || spawnDefaults.from.effort !== 'own' && resolvedEffort) {
+      log.session.info('spawn takes a launch default', { taskId, project, from: spawnDefaults.from, model: resolvedModel ?? null, effort: resolvedEffort ?? null })
+    }
 
     // Resolve SSH host config if specified
     let sshTarget: SshTarget | undefined
@@ -15611,6 +15620,7 @@ export class SessionRunner {
     const live = this.findSessionByClaudeId(sessionId)
     let areaBound = !!live?.areaId
     let currentAreaProfile: import('../core/types.js').SessionProfile | undefined
+    let resumeRecord: SessionRecord | null | undefined
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
       // An unreadable session store cannot say whether this was an area session.
@@ -15618,6 +15628,7 @@ export class SessionRunner {
         areaBound = true
         throw error
       })
+      resumeRecord = record
       if (!record) {
         if (areaBound || await taskMayBeInArea(live?.taskId)) {
           areaBound = true
@@ -15740,6 +15751,27 @@ export class SessionRunner {
     } catch (err) {
       log.session.warn('resolveResumeArgs: failed to read record', { sessionId, areaBound, error: err instanceof Error ? err.message : String(err) })
       if (areaBound) throw err
+    }
+    // The session's own effort (recorded at its start or by a switch in it) wins; a session that
+    // has none takes the project's and Walnut's default effort, the same rule as a fresh start
+    // (core/sessions/claude-launch-defaults.ts). A resume continues its conversation, so no
+    // default model goes under it. An isolated area session resumes exactly as its policy says,
+    // and Walnut's own lanes as their starter chose: no default under either.
+    if (!areaBound) try {
+      const { getConfig } = await import('../core/config-manager.js')
+      const { resolveClaudeSpawnDefaults, takesLaunchDefaults } = await import('../core/sessions/claude-launch-defaults.js')
+      const userSpawn = takesLaunchDefaults(resumeRecord)
+      const spawnDefaults = await resolveClaudeSpawnDefaults({
+        config: userSpawn ? await getConfig() : null, project: userSpawn ? resumeRecord?.project ?? null : null,
+        model: resolvedModel, effort: resolvedEffort, keepsModel: true,
+      })
+      if (spawnDefaults.from.effort !== 'own' && spawnDefaults.effort || spawnDefaults.from.model !== 'own' && spawnDefaults.model) {
+        log.session.info('resume takes a launch default', { sessionId, from: spawnDefaults.from, model: spawnDefaults.model ?? null, effort: spawnDefaults.effort ?? null })
+      }
+      resolvedModel = spawnDefaults.model
+      resolvedEffort = spawnDefaults.effort
+    } catch (err) {
+      log.session.warn('resolveResumeArgs: launch defaults unread; the resume runs on its own values', { sessionId, error: err instanceof Error ? err.message : String(err) })
     }
     return {
       model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile,

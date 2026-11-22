@@ -70,8 +70,9 @@ setting that exists on one machine only.
 
 **Walnut never sets an engine's own defaults.** The default model and settings of an underlying
 agent (Claude Code, Codex and the rest) belong to that agent's own settings; Walnut only passes a
-model someone chose and lists each engine's models, so it stays generic and works the same on every
-platform.
+model or effort someone chose (a pick, or the user's own default in Settings > Sessions, unset until
+they set it: `src/core/sessions/claude-launch-defaults.ts`) and lists each engine's models, so it
+stays generic and works the same on every platform.
 
 ## Experimental behavior
 

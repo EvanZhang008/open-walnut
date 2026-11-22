@@ -1157,6 +1157,19 @@ sessionsRouter.get('/host-model-catalogs', async (_req: Request, res: Response, 
   }
 })
 
+// GET /api/sessions/claude-default-efforts: Claude Code's own effort per model as last seen
+// (sessions Walnut gave no --effort; core/sessions/claude-launch-defaults.ts). Settings >
+// Sessions shows it beside "Default effort". Before '/:sessionId'.
+sessionsRouter.get('/claude-default-efforts', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { listRecentSessionRecords } = await import('../../core/session-tracker.js')
+    const { observedClaudeDefaultEfforts } = await import('../../core/sessions/claude-launch-defaults.js')
+    res.json({ models: observedClaudeDefaultEfforts(await listRecentSessionRecords(2000)) })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/status?ids=<provider-id,...> — bounded snapshot hydration.
 // Registered before /:sessionId so "status" is never interpreted as an ID.
 sessionsRouter.get('/status', async (req: Request, res: Response, next: NextFunction) => {

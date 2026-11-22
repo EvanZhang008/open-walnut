@@ -42,6 +42,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     user: { name: 'Marina' },
     org: { name: 'Marina Labs', founder_title: 'Chair' },
     defaults: { priority: 'backlog', platform: 'local', project: 'Acme', engine: 'claude' },
+    launch_defaults: { model: 'sonnet', effort: 'high' },
     provider: { type: 'bedrock', model: 'acme-model-large', bedrock_region: 'us-west-2', bedrock_bearer_token: bearer },
     providers: { acme: { type: 'openai', api_key: provKey, headers: { Authorization: `Bearer ${header}` } }, marina: { type: 'bedrock', credential_process: credProc } },
     engines: { alt: { command: 'claude', env: { ANTHROPIC_API_KEY: engineKey } } },
